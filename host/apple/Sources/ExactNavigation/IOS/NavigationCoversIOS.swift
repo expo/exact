@@ -561,6 +561,11 @@ extension NavigationHost {
         return localInsets.wanted != wanted
     }
 
+    func padsTop(_ route: RouteController) -> Bool {
+        guard case .edges(let edges)? = covers[route.node.id] else { return false }
+        return edges.top > 0.5 && route.collapseScroll == nil
+    }
+
     // MARK: The development check (LLP 1075.003 §3.5)
 
     /// The delegate slots Exact keeps (LLP 1075.003 §3.5): every stack's,

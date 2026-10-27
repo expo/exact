@@ -319,7 +319,7 @@ component Messages
                 if data.threads.length == 0
                   text "No Results" font-size=20 font-weight=600 text-align="center" margin-top=70
               text (data.connected ? "OpenRouter connected" : "AI connects through your Mac") font-size=11 class=Secondary text-align="center" padding=12
-              box height="env(safe-area-inset-bottom)" flex-shrink=0
+              box height="var(--exact-safe-area-inset-bottom)" flex-shrink=0
           if entry.name == "thread"
             column testId="conversation" flex=1 min-height=0 width="100%" inert=(selected != "" or choosing or panel)
               row height=44 padding-left=16 padding-right=16 align-items="center" justify-content="space-between" flex-shrink=0 z-index=3
@@ -379,7 +379,7 @@ component Messages
                             box width=2 height=8 border-radius=1 background-color="-exact-secondary-label"
                             box width=2 height=4 border-radius=1 background-color="-exact-secondary-label"
                 if not editing
-                  box height="calc(env(safe-area-inset-bottom) - 18px)" min-height=0 flex-shrink=0
+                  box height="calc(var(--exact-safe-area-inset-bottom) - 18px)" min-height=0 flex-shrink=0
           if entry.name == "reader"
             column testId="reader" flex=1 min-height=0 width="100%" inert=(selected != "" or choosing or panel)
               row height=44 padding-left=16 padding-right=16 align-items="center" gap=16

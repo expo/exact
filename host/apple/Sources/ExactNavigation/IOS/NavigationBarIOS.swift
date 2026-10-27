@@ -1061,9 +1061,8 @@ extension NavigationHost {
         // here while it pushes the scroller down (`MenusIOS`), and a title
         // must not collapse with a scroller that is no longer the route's top.
         let flowing = Self.flowingTopContent
-        let whole = wantsWholeView && presenter.viewportFit != "cover"
         let node = shape.map { shape in kids.firstIndex { $0 === shape.header }.flatMap { kids[($0 + 1)...].first(where: flowing) } }
-            ?? (shows || whole ? kids.first(where: flowing) : nil)
+            ?? (shows || wantsWholeView ? kids.first(where: flowing) : nil)
         var riders: [NodeView] = []
         #if os(iOS)
         if #available(iOS 26.0, *), shape?.level == 1, let scroller, !RouteGeometry.transparentBar(c.node),
@@ -1074,8 +1073,7 @@ extension NavigationHost {
         for old in c.ridingBars where !riders.contains(where: { $0 === old }) { old.controlRide = 0; old.applyTransform() }
         c.ridingBars = riders
         c.rideBars()
-        let covered: Bool
-        if case .edges(let edges)? = covers[c.node.id] { covered = edges.top > 0.5 } else { covered = false }
+        let covered = padsTop(c)
         let ordinary = shape?.authored.isEmpty != false ? node.flatMap { Self.topScroller($0, target: scroller) } : nil
         let arranged = scroller.flatMap { node in arrangementScrollers(in: c, top: true).contains(where: { $0 === node }) ? node : nil }
         let target = !riders.isEmpty ? (covered ? nil : scroller) : (ordinary ?? arranged)
@@ -1205,7 +1203,7 @@ extension NavigationHost {
         // cover goes is at the edge either way.
         let peers = arrangementScrollers(in: c, top: false)
         let peer = contentScroller(of: c).flatMap { node in peers.contains(where: { $0 === node }) ? node : nil } ?? peers.first
-        let target = presented || presenter.viewportFit != "cover" ? (Self.bottomScroller(in: c.node, cover: c.bottomClearance, lifting: c.liftedBottomRows) ?? peer) : nil
+        let target = Self.bottomScroller(in: c.node, cover: c.bottomClearance, lifting: c.liftedBottomRows) ?? peer
         let projects = !c.nativeContentScrollEdges.contains(.bottom)
         guard c.edgeScroll !== target || (projects && c.contentScrollView(for: .bottom) !== c.automaticBottomScroll) else { return }
         if let old = c.edgeScroll, old !== target { c.safeArea.release(old.scrollView) }

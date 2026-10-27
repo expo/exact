@@ -371,6 +371,8 @@ package protocol NavigationHosting: AnyObject {
     func reportCovers()
     func fitOwner()
     func insetByUIKit(_ node: NodeView) -> Bool
+    /// Whether the kernel pads `route`'s top by its cover: a route whose title's scroller goes under the bar does not.
+    func padsTop(_ route: any RouteSurface) -> Bool
     /// A route's primary scroller's adjusted inset changed (`RouteSafeArea`).
     func adjustedInsetChanged(_ node: NodeView)
     /// The correction a route's opted-out edges hold in `scroll`'s insets (`RouteSafeArea`).
@@ -692,6 +694,7 @@ package final class NoNavigation: NavigationHosting {
         #endif
         return false
     }
+    package func padsTop(_ route: any RouteSurface) -> Bool { false }
     /// No route turns an edge's clearance off without navigation.
     package func adjustedInsetChanged(_ node: NodeView) {}
     package func safeAreaCorrection(_ scroll: UIScrollView) -> UIEdgeInsets { .zero }
