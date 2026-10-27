@@ -460,6 +460,11 @@ fn text(
                 name,
                 fallback,
             } => {
+                // A content owner's value (LLP 1123 D9) is the host's, not the
+                // design's: the kernel and the browser resolve it as written
+                if exact_kernel::OwnerVar::from_name(&format!("--{name}")).is_some() {
+                    continue;
+                }
                 if !tokens.declares(&name) {
                     return Err(Why::Unknown(name, fallback.is_some()));
                 }
@@ -714,6 +719,23 @@ mod tests {
         // Quoted text, and a word ending in `var(`, are not calls.
         assert_eq!(written("'var(--x)', serif").unwrap(), None);
         assert_eq!(written("somevar(--x)").unwrap(), None);
+    }
+
+    #[test]
+    fn a_content_owners_value_is_left_as_written() {
+        let t = tokens(&["gutter"]);
+        let mut quote = None;
+        for s in [
+            "var(--exact-safe-area-inset-top)",
+            "calc(16px + var(--exact-layout-margins-inset-left))",
+            "var(--exact-viewport-segment-width-0-0, 50%)",
+        ] {
+            assert_eq!(text(s, &t, false, &mut quote), Ok(Some((s.to_string(), vec![]))), "{s}");
+        }
+        assert_eq!(
+            text("calc(var(--gutter) + var(--exact-safe-area-inset-top))", &t, false, &mut quote),
+            Ok(Some(("calc(gutter + var(--exact-safe-area-inset-top))".to_string(), vec![]))),
+        );
     }
 
     #[test]

@@ -115,7 +115,7 @@ final class ResetGateTests: XCTestCase {
         XCTAssertTrue(Set(ResetGate.knownLoss.keys).isDisjoint(with: Set(ResetGate.replayed.keys).union(ResetGate.dropped.keys)), "a known loss is in no other table")
         XCTAssertTrue(ResetGate.replayed.values.allSatisfy { !$0.1.isEmpty } && ResetGate.dropped.values.allSatisfy { !$0.isEmpty } && ResetGate.knownLoss.values.allSatisfy { !$0.isEmpty }, "each with its reason")
         XCTAssertEqual(Set(ResetGate.replayed.values.map(\.0)), Set(ResetGate.Replay.allCases), "each replay has a call that asks it")
-        let held = ["collectionFeedback(_:now:)", "focus(_:now:)", "advance(now:untilRequest:)", "setPage(_:)", "advance(now:untilRequest:)", "covers(_:)", "tellSoon(_:)"]
+        let held = ["collectionFeedback(_:now:)", "focus(_:now:)", "advance(now:untilRequest:)", "setPage(_:)", "advance(now:untilRequest:)", "covers(_:owners:)", "tellSoon(_:)"]
         XCTAssertEqual(ResetGate.replays(held), [.advance, .covers, .page, .collections], "each replay once, in order; a focus dropped")
         XCTAssertEqual(ResetGate.replays(["focus(_:now:)", "change(_:_:selection:now:)", "unlisted(_:)"]), [], "dropped, and an unlisted call with them")
     }
@@ -264,7 +264,7 @@ final class ResetGateTests: XCTestCase {
         }
         XCTAssertTrue(held.contains { $0.hasPrefix("fireNativeTimer") }, "the due task's native firing was held: \(held)")
         until("the task's firing held runs after the hold") { (try? ticks(session)) ?? 0 > before }
-        XCTAssertTrue(held.contains("collectionFeedback(_:now:)") && held.contains("covers(_:)"), "\(held)")
+        XCTAssertTrue(held.contains("collectionFeedback(_:now:)") && held.contains("covers(_:owners:)"), "\(held)")
         // (Boot's own work may come due in the hold too, a fit or the data source's activation: owed, then replayed.)
         XCTAssertEqual(replays.filter { [.covers, .collections].contains($0) }, [.covers, .collections])
         XCTAssertEqual(replays, ResetGate.replays(held), "each once, in order")

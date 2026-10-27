@@ -55,6 +55,7 @@ extension NodeView {
     /// the pump leads as it does any scroll. The tap is the reader's move of
     /// the list (`CollectionHost.readerMoves`).
     @objc package func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
+        if scrollView === self.scrollView { scrollsToTop() }
         guard scrollView === self.scrollView, let collections = presenter?.collections,
               let entry = collections.entries[id], !entry.snapshot.horizontal else { return true }
         collections.readerMoves(id)
@@ -63,6 +64,11 @@ extension NodeView {
         collections.userIntent(id)
         scrollView.setContentOffset(PixelGrid.offset(CGPoint(x: scrollView.contentOffset.x, y: top + glide), in: scrollView), animated: false)
         return true
+    }
+
+    /// The status bar's scroll to the top is over (`scrollsToTop`).
+    @objc package func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
+        if scrollView === self.scrollView { endScrollToTop() }
     }
 }
 #endif

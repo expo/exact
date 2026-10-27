@@ -746,7 +746,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     package func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { presenter?.session?.frameHealth.endScroll(scrollView); if scrollView === self.scrollView, !followEndIfOwed() { scrollMayHaveEnded(scrollView) } }
     package func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
         guard scrollView === self.scrollView, presenter?.elementScrolls.cutting !== scrollView else { return }
-        followingEndAnimated = false
+        followingEndAnimated = false; endScrollToTop()
         presenter?.elementScrolls.revealEnded(scrollView)
         // A smooth correction's driver ends its own motion (`OffsetDriver`);
         // a UIKit animation's end is not its end.
@@ -772,7 +772,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         followingEndAnimated = false
         presenter?.collections.animationEnded(id, dragging: true)
         presenter?.collections.userIntent(id, travel: true)
-        retainedScrollTop = nil
+        retainedScrollTop = nil; endScrollToTop(dragging: true)
         #if os(iOS)
         if #available(iOS 27.1, *) { presenter?.arrangements.cancelScrollHandoff(id) }
         if swipeOwner { presenter?.swipeActions.painted.began(self) }
@@ -798,6 +798,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         presenter?.scrollPump.scrolled(self)
         FrameSampler.scrolled(scrollView, in: presenter?.session, person: false)
         presenter?.session?.frameHealth.trackScrolled(scrollView)
+        if heldSize != nil { releaseSize() }
         repaintThrough()
         scrollEndMoved(scrollView)
         // User scrolling is already a coherent position. Deliver before the
@@ -1367,7 +1368,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         let s = presenter?.gridScale ?? 1, o = grid?.origin ?? .zero
         let size = CGSize(width: sv.scrollsX ? max(PixelGrid.length(content.width, from: o, vertical: false, scale: s), sv.bounds.width) : sv.bounds.width,
                           height: sv.scrollsY ? max(PixelGrid.length(content.height, from: o, vertical: true, scale: s), scrollFloor(sv)) : sv.bounds.height)
-        if sv.contentSize != size { sv.contentSize = size }
+        if !holdsSize(sv, for: size), sv.contentSize != size { sv.contentSize = size }
         // Forced bounce on a carousel's computed y traps Mac wheel input; one travels a quarter of its width or lays a
         // row (itself, or a child wider than the port), and a page a few points too wide keeps its bounce.
         let travel = size.width - sv.bounds.width

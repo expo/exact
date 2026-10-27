@@ -335,6 +335,15 @@ pub struct Env {
     /// own ([`crate::Kernel::set_root_font_size`]), which the next commit
     /// writes here; [`crate::Kernel::set_env`] keeps it.
     pub root_font_size: f32,
+    /// The values of the content owner a node lies in (LLP 1123 D9), for the
+    /// environment a node's rows resolve against; `None` for the document's
+    /// own, outside every owner. `env()` never reads them.
+    pub owner: Option<std::sync::Arc<super::owner::OwnerValues>>,
+    /// The width and height of the nearest content owner's content root,
+    /// the container units' basis (LLP 1123 D12); `None` outside every
+    /// owner. Unlike `owner` it holds through a top-layer root, as CSS keeps
+    /// a dialog's query container.
+    pub container: Option<(f32, f32)>,
 }
 
 impl Default for Env {
@@ -365,6 +374,8 @@ impl Env {
             regions: None,
             titlebar_area: None,
             root_font_size: crate::style::relative::MEDIUM,
+            owner: None,
+            container: None,
         }
     }
 
@@ -786,6 +797,7 @@ pub fn uses_env(style: &crate::StyleProps) -> bool {
                 Dimension::Env(..)
                     | Dimension::Region(..)
                     | Dimension::Segment(..)
+                    | Dimension::Owner(..)
                     | Dimension::Viewport(..)
                     | Dimension::Compare(..)
             )

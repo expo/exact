@@ -134,7 +134,7 @@ package final class Presenter {
     /// What native presentations cover of boxes (LLP 1115.002 D8.1, CoversMac.swift).
     lazy var covers = HostCovers(self)
     lazy var statusItems = StatusItemHost(self)
-    var onCovers: (([(UInt32, HostCover?)]) -> Void)?
+    var onCovers: (([(UInt32, HostCover?)], [(UInt32, OwnerValues?)]) -> Void)?
     /// The border box a person dragged a box's `resize` grip to; nil keeps an axis (ResizeGrip.swift).
     var onResizeBox: ((UInt32, CGFloat?, CGFloat?) -> Void)?
     /// The root tab bar as the window's sidebar (LLP 1115.002 D3), and the kernel's rule for a root's tabs.

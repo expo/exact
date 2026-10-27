@@ -938,7 +938,11 @@ uint32_t exact_intrinsics(ExactRuntime rt, size_t len);
  * the offset. Kind 7 forgets either placement. Kind 10 is a cells
  * list's rows' cell margin (LLP 1138: float left, right, then two unused),
  * 11 clears it. Kind 14 shows a split's `navigationSplit="placeholder"` box
- * and kind 15 hides it again (LLP 1116.006 D2; the floats unused). */
+ * and kind 15 hides it again (LLP 1116.006 D2; the floats unused). Kind 16
+ * is a content owner's values (LLP 1123 D9), 188 bytes: float safe-area top, right, bottom, left, the
+ * content root's width and height, uint32 columns and rows, four float rects
+ * x y w h (the segments, row-major), uint32 1 when twenty float region
+ * insets follow (else 0, the regions the safe area's); 17 takes them back. */
 uint32_t exact_host_covers(ExactRuntime rt, size_t len);
 /* What a block's root would measure in another block (a popover's
  * position-area option, LLP 1021 D2): each axis a length and a policy as
