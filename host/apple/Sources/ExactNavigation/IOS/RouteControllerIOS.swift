@@ -52,6 +52,12 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     var itemNodes: [ObjectIdentifier: UInt32] = [:]
     #endif
     weak var host: NavigationHost?
+    let safeArea = RouteSafeArea()
+
+    /// Whether the route turns off `edge`'s native clearance: by
+    /// `-exact-safe-area`, or at the top under a transparent bar, whose
+    /// content starts at the top edge and is inset at the bottom as any other.
+    func ignoresSafeArea(_ edge: String) -> Bool { safeArea.ignores(edge, in: self) }
     weak var ownedScroll: NodeView?
     /// The scroller a large title collapses with (LLP 1075.003 Stage 3).
     weak var collapseScroll: NodeView?

@@ -244,6 +244,7 @@ extension NavigationHost {
             // UIKit's own does, but a title's insets are not sampled.
             // A plain tab's route has no bar of its own: More's shows above it
             // under More, and none on the tab bar.
+            c.safeArea.sync(c)
             let search = searching(c)
             let barAbove = nav.map { c.parent is PlainTab ? !$0.isNavigationBarHidden : routeShowsBar(c, in: $0) } ?? false
             // Nested in a split's list column, the detail's routes are under that column's bar (LLP 1127 §1, item 2)
@@ -252,7 +253,7 @@ extension NavigationHost {
             // A route showing no bar has no title: its inset is the status bar's, none in landscape (LLP 1130 D3).
             let barless = !barAbove
             let topPeers = arrangementScrollers(in: c, top: true), bottomPeers = arrangementScrollers(in: c, top: false)
-            if settled, !search, let node = c.collapseScroll, let sv = c.collapseScrollView, sv === node.scrollView, sv.adjustedContentInset.top > 0 || barless {
+            if !c.ignoresSafeArea("top"), settled, !search, let node = c.collapseScroll, let sv = c.collapseScrollView, sv === node.scrollView, sv.adjustedContentInset.top > 0 || barless {
                 let inset = sv.adjustedContentInset.top
                 if c.insetsBarless != barless { c.insetsBarless = barless; node.scrollCollapsed = 0 }
                 // tvOS has no large titles: every title is inline.
@@ -307,11 +308,9 @@ extension NavigationHost {
             // under the bar and above the home indicator, and scrolling
             // content still passes under both. A large title's inset is its
             // widest, at rest (CSS scrollTop 0).
-            // A transparent bar insets nothing of its scroller: the content
-            // starts under it (`collapse`), so no `.inset` is reported there.
             var insetNodes = [c.collapseScroll, c.edgeScroll].compactMap { $0 }
             for peer in topPeers + bottomPeers where !insetNodes.contains(where: { $0 === peer }) { insetNodes.append(peer) }
-            for node in insetNodes where wanted[node.id] != .whole && wanted[node.id] != .bar && node.scrollView != nil && !(node === c.collapseScroll && RouteGeometry.insetsNoTop(c.node)) {
+            for node in insetNodes where wanted[node.id] != .whole && wanted[node.id] != .bar && node.scrollView != nil {
                 if settled, let safe = node.scrollView?.safeAreaInsets {
                     // The bottom edge's scroller takes the route's bottom
                     // clearance, which the route then pads nothing of
@@ -332,11 +331,10 @@ extension NavigationHost {
                     // A band's part of the safe area is a UI inset over control bars, not layout (LLP 1131 D2).
                     let title = ownsTop ? node.scrollOrigin : 0
                     let stretched = title > 0 && node.scrollView.map { Self.stretched($0, origin: title) } == true
-                    // What an opted-out bottom takes back of UIKit's inset (ClearanceIOS.swift); what
-                    // clearance adds is the title's at the top, and the route's clearance (`reach`) below.
-                    let back = min(0, node.scrollView.flatMap { clearance[ObjectIdentifier($0)]?.bottom } ?? 0)
-                    let top = max(0, max(stretched ? min(safe.top, title) : safe.top, title) - node.pageBand.top)
-                    let bottom = max(0, max(safe.bottom, reach) + back - node.pageBand.bottom)
+                    // What clearance adds is the title's at the top, and the route's clearance (`reach`) below; an edge
+                    // the route turns off is not inset (`RouteSafeArea`).
+                    let top = c.ignoresSafeArea("top") ? 0 : max(0, max(stretched ? min(safe.top, title) : safe.top, title) - node.pageBand.top)
+                    let bottom = c.ignoresSafeArea("bottom") ? 0 : max(0, max(safe.bottom, reach) - node.pageBand.bottom)
                     if top > 0 || bottom > 0 { wanted[node.id] = .inset(top: top, bottom: bottom) }
                 } else if case .inset? = covers[node.id] { wanted[node.id] = covers[node.id] }
             }
@@ -625,7 +623,7 @@ extension NavigationHost {
         for c in controllers.values where c.hatched && presenter.views[c.node.id] === c.node {
             if c.navigationController != nil, c.isViewLoaded, c.node.superview !== c.contentMount { say("route \(c.key)", "view") }
             guard let node = c.ownedScroll, let scroll = node.scrollView else { continue }
-            for property in RouteGeometry.ownedChanges(scroll, of: node, insetByUIKit: insetByUIKit(node)) { say("route \(c.key)", property) }
+            for property in RouteGeometry.ownedChanges(scroll, of: node, insetByUIKit: insetByUIKit(node), safeArea: c.safeArea.insets(for: scroll)) { say("route \(c.key)", property) }
         }
     }
 

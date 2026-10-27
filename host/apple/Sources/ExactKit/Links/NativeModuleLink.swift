@@ -327,7 +327,8 @@ extension Presenter {
     /// What of `node`'s scroll view changed outside Exact, which owns it.
     package func scrollOwnedChanges(_ node: NodeView) -> [String] {
         guard let scroll = node.scrollView else { return [] }
-        return RouteGeometry.ownedChanges(scroll, of: node, insetByUIKit: node.scrollOrigin > 0 || navigation.insetByUIKit(node))
+        return RouteGeometry.ownedChanges(scroll, of: node, insetByUIKit: node.scrollOrigin > 0 || navigation.insetByUIKit(node),
+                                          safeArea: navigation.safeAreaCorrection(scroll))
     }
     /// Whether a native list is making `id`'s row now.
     package func listCreating(_ id: UInt32) -> Bool { pool.list(creating: id) != nil }

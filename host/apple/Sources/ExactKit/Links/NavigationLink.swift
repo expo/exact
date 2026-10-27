@@ -133,16 +133,20 @@ package enum RouteGeometry {
     /// Exact-owned delegate, the node's keyboard dismissal (authored, or
     /// the platform's for what it scrolls, LLP 1115.000 D9.1). The offset
     /// and the content size are Exact's too but are not checked: they move
-    /// with the user and with layout, so no last write predicts them.
-    package static func ownedChanges(_ s: UIScrollView, of node: NodeView, insetByUIKit: Bool) -> [String] {
+    /// with the user and with layout, so no last write predicts them. A
+    /// route's opted-out edges add their correction (`safeArea`) to the inset.
+    package static func ownedChanges(_ s: UIScrollView, of node: NodeView, insetByUIKit: Bool, safeArea: UIEdgeInsets = .zero) -> [String] {
         var out: [String] = []
         // A native backend owns layout/footer insets, composed with the
         // refresh control and keyboard; zero is only the plain-scroll baseline.
         if s === node.scroll {
+            let band = node.bandInset
+            let expected = UIEdgeInsets(top: band.top + safeArea.top, left: band.left + safeArea.left,
+                                        bottom: band.bottom + safeArea.bottom, right: band.right + safeArea.right)
             #if os(tvOS)
-            if s.contentInset != node.bandInset { out.append("contentInset") }
+            if s.contentInset != expected { out.append("contentInset") }
             #else
-            if s.contentInset != node.bandInset, s.refreshControl?.isRefreshing != true { out.append("contentInset") } // a band's is the host's
+            if s.contentInset != expected, s.refreshControl?.isRefreshing != true { out.append("contentInset") } // a band's is the host's
             #endif
         }
         if s.contentInsetAdjustmentBehavior != (insetByUIKit ? .automatic : .never) { out.append("contentInsetAdjustmentBehavior") }
@@ -367,6 +371,10 @@ package protocol NavigationHosting: AnyObject {
     func reportCovers()
     func fitOwner()
     func insetByUIKit(_ node: NodeView) -> Bool
+    /// A route's primary scroller's adjusted inset changed (`RouteSafeArea`).
+    func adjustedInsetChanged(_ node: NodeView)
+    /// The correction a route's opted-out edges hold in `scroll`'s insets (`RouteSafeArea`).
+    func safeAreaCorrection(_ scroll: UIScrollView) -> UIEdgeInsets
 
     // Scrolling.
     var scrollsToTopSelection: UIScrollView? { get set }
@@ -684,6 +692,9 @@ package final class NoNavigation: NavigationHosting {
         #endif
         return false
     }
+    /// No route turns an edge's clearance off without navigation.
+    package func adjustedInsetChanged(_ node: NodeView) {}
+    package func safeAreaCorrection(_ scroll: UIScrollView) -> UIEdgeInsets { .zero }
 
     package func shownScroll(_ node: NodeView?) -> UIScrollView? { node?.scrollView }
     package func scrollBackendChanged(_ node: NodeView) {

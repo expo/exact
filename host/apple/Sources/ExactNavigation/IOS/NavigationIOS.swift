@@ -815,6 +815,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// A route's controller leaves for good: its header paints again and the
     /// route hatch hears `routeEnded` (LLP 1075.003 §3.2).
     private func end(_ c: RouteController) {
+        c.safeArea.end()
         #if os(iOS)
         projectBottomToolbar(c, in: nil)
         barHosted.show([], in: c)

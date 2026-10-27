@@ -5,9 +5,8 @@
 // itself, so the scroller's own `contentInset` makes up the rest: the
 // route's padding's points where it does not read the inset, up to the
 // inset, and nothing for boxes laid out above the scroller. An edge
-// the route opts out of (`-exact-safe-area`) is not inset at all: the top as
-// under a transparent bar (`insetsNoTop`), the bottom by taking back what
-// UIKit adds there.
+// the route opts out of (`-exact-safe-area`) is not inset at all: UIKit's
+// inset there is taken back by `RouteSafeArea` (SafeAreaIOS.swift).
 #if os(iOS) || os(tvOS)
 import UIKit
 import ExactKit
@@ -42,7 +41,8 @@ extension NavigationHost {
             let own = max(0, (c.node.kernelPadding?.first ?? nil).map { $0 - padded } ?? 0)
             return min(local.top, max(0, min(box.minY - padded, own)))
         }
-        if off & 4 != 0 { return -sv.safeAreaInsets.bottom }
+        // An edge the route turns off is `RouteSafeArea`'s, which takes UIKit's inset back there
+        if off & 4 != 0 { return 0 }
         guard credit & 4 == 0 else { return 0 }
         return min(local.bottom, max(0, c.node.bounds.maxY - box.maxY))
     }
