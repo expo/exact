@@ -27,7 +27,7 @@ component App
             for e in t.stack key=e.id
               column navigationKey=`${e.id}` navigationScroll=`content-${e.id}` position="absolute" inset=0
                 box-sizing="border-box" display="flex" flex-direction="column"
-                padding-bottom="calc(49px + env(safe-area-inset-bottom))"
+                padding-bottom="calc(49px + var(--exact-safe-area-inset-bottom))"
                 header
                   text (e.name == "today" ? "Today" : e.name == "history" ? "History" : e.params.key)
                     role="heading" aria-level=(e.name == "day" ? 2 : 1)

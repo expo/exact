@@ -21,7 +21,7 @@ extension NodeView {
     }
     package func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
         guard scrollView === self.scrollView, presenter?.elementScrolls.cutting !== scrollView else { return }
-        followingEndAnimated = false; authoredScrollAnimating = false
+        followingEndAnimated = false; authoredScrollAnimating = false; endScrollToTop()
         presenter?.elementScrolls.revealEnded(scrollView)
         // A smooth correction's driver ends its own motion (`OffsetDriver`);
         // a UIKit animation's end is not its end.
