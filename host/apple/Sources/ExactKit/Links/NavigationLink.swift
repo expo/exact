@@ -432,6 +432,8 @@ package protocol NavigationHosting: AnyObject {
     func fitOwner()
     func insetByUIKit(_ node: NodeView) -> Bool
     func clearanceInset(of scroll: UIScrollView) -> UIEdgeInsets
+    /// Whether the kernel pads `route`'s top by its cover: a route whose title's scroller goes under the bar does not.
+    func padsTop(_ route: any RouteSurface) -> Bool
 
     // Scrolling.
     var scrollsToTopSelection: UIScrollView? { get set }
@@ -751,6 +753,7 @@ package final class NoNavigation: NavigationHosting {
         #endif
         return false
     }
+    package func padsTop(_ route: any RouteSurface) -> Bool { false }
 
     package func shownScroll(_ node: NodeView?) -> UIScrollView? { node?.scrollView }
     package func scrollBackendChanged(_ node: NodeView) {

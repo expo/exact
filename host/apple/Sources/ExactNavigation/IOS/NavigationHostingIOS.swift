@@ -62,6 +62,9 @@ extension NavigationHost: NavigationHosting {
     func automaticContentScroller(of route: any RouteSurface) -> NodeView? {
         (route as? RouteController).flatMap { automaticContentScroller(of: $0) }
     }
+    func padsTop(_ route: any RouteSurface) -> Bool {
+        (route as? RouteController).map { padsTop($0) } ?? false
+    }
     func routeShowsBar(_ route: any RouteSurface, in nav: UINavigationController) -> Bool {
         (route as? RouteController).map { routeShowsBar($0, in: nav) } ?? false
     }

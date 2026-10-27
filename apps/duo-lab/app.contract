@@ -398,13 +398,14 @@ component DuoLab
                         column testId="pane-detail" flex=1 min-height=0 width="100%" box-sizing="border-box" padding-right=safeRight padding-bottom=safeBottom padding-left=safeLeft background-color="-exact-secondary-background"
                           Detail(items=items, selected=selected)
                   if entry.name == "combos"
-                    column flex=1 min-height=0 margin-left=paneLeft margin-right=paneRight class=Safe padding-left=panePadLeft padding-right=panePadRight
-                      text "Combinations" class=Title testId="combos-title"
-                      text "Push a screen, open its sheet, raise the keyboard, then fold. The note screen hides the tab bar on purpose; going back shows it again." class=Note
-                      column padding=16 gap=12
-                        button press=openNote testId="open-note" padding=14 border-radius=10 background-color="AccentColor"
-                          text "Push the note screen" font-size=16 font-weight=600 color="AccentColorText"
-                        text `Draft so far: ${title == "" and draft == "" ? "(nothing)" : title + " / " + draft}` testId="draft-echo" font-size=14 color="-exact-secondary-label"
+                    scroll flex=1 min-height=0 testId="combos-scroll"
+                      column margin-left=paneLeft margin-right=paneRight class=Safe padding-left=panePadLeft padding-right=panePadRight
+                        text "Combinations" class=Title testId="combos-title"
+                        text "Push a screen, open its sheet, raise the keyboard, then fold. The note screen hides the tab bar on purpose; going back shows it again." class=Note
+                        column padding=16 gap=12
+                          button press=openNote testId="open-note" padding=14 border-radius=10 background-color="AccentColor"
+                            text "Push the note screen" font-size=16 font-weight=600 color="AccentColorText"
+                          text `Draft so far: ${title == "" and draft == "" ? "(nothing)" : title + " / " + draft}` testId="draft-echo" font-size=14 color="-exact-secondary-label"
                   if entry.name == "note"
                     column flex=1 min-height=0 margin-left=paneLeft margin-right=paneRight class=Safe padding-left=panePadLeft padding-right=panePadRight
                       row align-items="center" gap=12 padding-left=16 padding-right=16 padding-top=12

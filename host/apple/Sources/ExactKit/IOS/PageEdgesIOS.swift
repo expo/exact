@@ -159,7 +159,7 @@ extension Presenter {
             return openFoot(of: v, sv, in: c.node, judge, apart: apart) ?? Bands()
         }
         #endif
-        if !c.ridingBars.isEmpty, case .edges(let edges)? = navigation.covers[c.node.id], edges.top > 0.5 { return Bands() }
+        if !c.ridingBars.isEmpty, navigation.padsTop(c) { return Bands() }
         return controlBands(of: v, in: c.node, judge, apart: apart)
     }
 
