@@ -4,7 +4,9 @@ On native Duo hosts, `exactViewport()` reports `devicePosture="folded"` and
 `horizontalViewportSegments=2` (book) or `verticalViewportSegments=2` (laptop).
 Web pages need browser support for these signals; a feature flag alone does not
 establish availability. `env(viewport-segment-<left|top|width|height> <x> <y>)`
-places a box in segment `x, y`.
+places a box in the window's segment `x, y`. A route has its own, measured below its bar:
+`var(--exact-viewport-segment-<field>-<x>-<y>, 50%)`, the fallback for a route holding one
+segment of two, and `var(--exact-safe-area-inset-<edge>)` (LLP 1123 D9).
 
 ```contract
 shape Viewport
@@ -27,14 +29,12 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
 [Apple's talk](https://developer.apple.com/videos/play/tech-talks/111463/)):
 
 - Scrolling content can span the hinge; keep controls off it.
-- A pane that does not scroll keeps its width: centred (full width on narrow
-  screens), or on the trailing segment of a book fold.
+- A pane of controls keeps its width, scrolling only where it does not fit: centred
+  (full width on narrow screens), or on the trailing segment of a book fold.
 - **A list and its detail** is a split view (`pattern list-detail`; iOS pushes until
   LLP 1127). **Peer panes** use [native containers](../contract-for-agents.md#arranged-panes)
-  on iOS 27.1 and responsive CSS elsewhere (Duo Lab's Panes tab).
-- A route on the trailing segment keeps its title with
-  `navigationBar=(book ? "none" : "auto")`: its first-child `header` paints in
-  that pane, with its own Back if pushed; otherwise UIKit makes the bar.
+  on iOS 27.1 and responsive CSS elsewhere (Duo Lab's Panes tab). Keep the route's
+  `header`: the bar is the platform's.
 - Put the first pane on the leading segment: segment 1 in RTL; indices count from the left.
 - Segment coordinates are relative to the viewport. Keep the pane container
   at that origin and chrome inside a pane. End a bottom pane at `bottom: 0` to fit above the page's bars.
@@ -43,8 +43,8 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
   Duo Lab uses the smaller segment width to clear unequal hinges. Inset controls
   from safe edges too.
 - In a laptop fold, put authored controls on the bottom segment. Cap a bottom
-  sheet's `max-height` at the room below its header and
-  `calc(100% - env(viewport-segment-top 0 1))`, from the viewport origin.
+  sheet's `max-height` at `calc(100% - var(--exact-viewport-segment-top-0-1))`, its
+  containing block the route's.
   An iOS keyboard can leave that segment below the viewport and zero tall;
   Duo Lab's note sheet then lifts the cap.
 - End panes under the keyboard at `100%` or `bottom: 0`; hosts report different segment heights.
