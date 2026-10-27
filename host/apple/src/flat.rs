@@ -524,7 +524,7 @@ fn quiet_node(node: &NodeRef<'_>) -> bool {
             .mask
             .union(node.style.written)
             .iter()
-            .any(|row| moving_row(row) || fragmenting_row(row))
+            .any(|row| moving_row(row) || fragmenting_row(row) || row == StyleId::SafeAreaExtend)
         && ![overflow.0, overflow.1]
             .iter()
             .any(|o| matches!(o, Overflow::Scroll | Overflow::Auto))

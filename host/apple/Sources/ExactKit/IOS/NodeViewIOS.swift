@@ -1081,6 +1081,11 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if isParagraph, set.keys.contains(where: Self.paragraphProps.contains) || clear.contains(where: Self.paragraphProps.contains) { invalidateText() }
         #if os(iOS)
         if set["declaredParent"] != nil || clear.contains("declaredParent") { syncPortalRelay() }
+        if let edges = set["boxExtension"]?.split(separator: " ").compactMap({ Double($0) }), edges.count == 4 {
+            setExtension(UIEdgeInsets(top: edges[0], left: edges[3], bottom: edges[2], right: edges[1]))
+        } else if clear.contains("boxExtension") {
+            setExtension(.zero)
+        }
         let nativeList = kind == "list" && next["listStyle"] != nil
         if groupedOwner != nativeList { groupedOwner = nativeList; syncScroll() }
         #endif

@@ -550,6 +550,13 @@ impl<D: DataSource> Host<D> {
                     }
                 }
             }
+            let extension = kernel.extension(key).filter(|edges| *edges != [0.0; 4]);
+            m.derived_prop(
+                id,
+                "boxExtension",
+                extension.map(|edges| edges.map(crate::style::num).join(" ")),
+                batch,
+            );
             let field_content = published_content_box(&node, kernel);
             let field_cell = node.is_cell_field();
             if self.layout_withheld
