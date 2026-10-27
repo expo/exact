@@ -82,7 +82,7 @@ enum ResetGate {
         "fieldEvent(_:_:_:now:)": "a field's beforeinput, input or change as the teardown ends its edit: the old field's",
         "submit(_:now:)": "a form the teardown submits (a return key's) is the old tree's",
         "clipboard(_:_:_:now:)": "a copy or a context menu line from the old tree",
-        "blocks(_:placements:shows:)": "an old sheet's block or placement as it goes; the new tree's owners publish their own",
+        "blocks(_:placements:shows:shown:)": "an old sheet's block or placement as it goes; the new tree's owners publish their own",
         "checked(_:_:commit:now:)": "a toggle's state from the old tree",
         "fieldSelect(_:_:_:now:)": "a field's selection from the old tree",
         "press(_:held:at:now:)": "a press on a view going away",

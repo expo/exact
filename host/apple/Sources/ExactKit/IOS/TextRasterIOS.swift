@@ -614,6 +614,7 @@ extension NodeView {
         if let view = ink.delegate as? CoverageImageView, let lines = textMore.rasterView?.lines {
             if view.superview !== lines { lines.addSubview(view) }
         } else if let lines = box.lines, ink.superlayer !== lines { lines.addSublayer(ink) }
+        if let cast = ink.textCast, let lines = box.lines, cast.superlayer !== lines { lines.insertSublayer(cast, below: ink) }
         textRasterLayer = ink
         if box.superlayer == nil, syncVibrancy() == nil { mountTextBox() }
         placeTextRaster()
@@ -894,3 +895,4 @@ extension Presenter {
     }
 }
 #endif
+

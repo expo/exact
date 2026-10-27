@@ -21,7 +21,15 @@ extension Presenter {
     }
 
     func beginExit(_ id: UInt32) {
-        guard let view = views[id] else { return }
+        guard let gone = retire(id) else { return }
+        gone.view.setGhost(true)
+        leaving[id] = gone
+    }
+
+    /// `id`'s view and its authored descendants out of every lookup, painted
+    /// where they are and inert, until whoever retired them forgets them.
+    func retire(_ id: UInt32) -> Leaving? {
+        guard let view = views[id] else { return nil }
         landFlights(inside: view)
         var children: [ObjectIdentifier: [NodeView]] = [:]
         var displaced = Set<ObjectIdentifier>()
@@ -46,8 +54,7 @@ extension Presenter {
             member.accessibilityElementsHidden = true
             member.accessibilityViewIsModal = false
         }
-        view.setGhost(true)
-        leaving[id] = Leaving(view: view, members: members)
+        return Leaving(view: view, members: members)
     }
 
     /// The host's `destroy` of a leaving view: its exit ended.

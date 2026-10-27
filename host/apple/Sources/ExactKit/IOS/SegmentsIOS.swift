@@ -519,7 +519,8 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
             adoptedList = adopted
         }
         let live = Set(owners.map(\.id))
-        for id in Array(controls.keys) + Array(bars.keys) where !live.contains(id) { restore(owner: id) }
+        // A tablist in the inspector's route keeps its control while the column slides it out.
+        for id in Array(controls.keys) + Array(bars.keys) where !live.contains(id) && !presenter.slidesOut(id) { restore(owner: id) }
         for id in Array(decisions.keys) where !live.contains(id) { decisions.removeValue(forKey: id) }
         for owner in owners {
             let tabs = tabs(in: owner)

@@ -1411,17 +1411,6 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         layoutContent()
     }
 
-    /// The reduced radii; the layer fast path additionally requires circles.
-    func cornerSizes(in rect: CGRect, inset: CGFloat = 0) -> [CGSize] {
-        BorderPaint.reduced(BorderPaint.radii(style, in: rect, inset: inset), in: rect)
-    }
-    func cornerRadii(in rect: CGRect, inset: CGFloat = 0) -> [CGFloat] {
-        cornerSizes(in: rect, inset: inset).map { $0.width }
-    }
-    func roundedPath(in rect: CGRect, inset: CGFloat = 0) -> UIBezierPath {
-        UIBezierPath(cgPath: BorderPaint.roundedRect(rect, cornerSizes(in: rect, inset: inset), shape: CornerShape(style["corner_shape"])))
-    }
-
     package override func draw(_ rect: CGRect) {
         repaintThrough(); syncDrawnRange()
         guard let ctx = UIGraphicsGetCurrentContext() else { return }

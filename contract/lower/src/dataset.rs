@@ -20,7 +20,7 @@ use exact_plan::BindingsRow;
 /// `host/web-js`'s row tests check the names their Rust writers emit; the
 /// markers the JS glue writes (`agent.js`, `modes.js`, `gpu-refusal.js`)
 /// and the render host's `audio-session` are kept here by hand.
-const HOST_WORDS: [&str; 125] = [
+const HOST_WORDS: [&str; 126] = [
     "accept",
     "accessibilitybusy",
     "accessibilitydisabled",
@@ -104,6 +104,7 @@ const HOST_WORDS: [&str; 125] = [
     "navigationgrabber",
     "navigationhistory",
     "navigationinitialdetent",
+    "navigationinspector",
     "navigationscroll",
     "num",
     "paragraph-dirs",

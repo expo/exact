@@ -490,6 +490,8 @@ extension NavigationHost {
             stack.barTint = c.node.ownAccent
         }
         guard !searching(c) else { return }
+        // Nested in the list's, the detail's bar is UIKit's to hide (LLP 1127 §1, item 2).
+        if let split, split.nested, nav === split.detail { return }
         let shows = c.map { routeShowsBar($0, in: nav) } ?? barShows(nav)
         guard nav.isNavigationBarHidden == shows else { return }
         nav.setNavigationBarHidden(!shows, animated: animated)

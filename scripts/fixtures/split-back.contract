@@ -1,0 +1,92 @@
+// LLP 1127 §1: a list whose rows push is UIKit's split, and collapsed (an
+// iPhone's width) UIKit nests the detail's stack in the list's. A book's
+// row pushes the book; the book pushes its notes, its info as an
+// inspector (D14), the expanded split's inspector column, a sheet and a
+// full-screen cover (SplitIOSTests). A chapter's row opens its route in
+// place of the detail, as the Landmarks port's sidebar opens a page, with
+// a large title over a scroller UIKit insets, as the port's Collections
+// page has; the route clears its sides' safe area itself, as the port's
+// pages do: its heading and a verse of a fixed width by their padding, its
+// figure by its margin. The library's note is in a system colour, which UIKit draws
+// vibrantly on the sidebar. `renew` writes the book's route anew under its key, and `swap`
+// replaces the notes with another visit.
+routes nav
+  library "/"
+    book "/book/:id"
+    notes "/notes/:id"
+    info "/info/:id"
+    share "/share/:id"
+    cover "/cover/:id"
+    chapter "/chapter/:id"
+
+component App
+  state renewals = 0
+  action follow(url: string)
+    nav = url == "/chapter/c" ? open(nav, url) : go(nav, url)
+  action back
+    nav = back(nav)
+  action openNotes(id: string)
+    nav = push(nav, path("notes", id))
+  action openInfo(id: string)
+    nav = push(nav, path("info", id))
+  action openShare(id: string)
+    nav = push(nav, path("share", id))
+  action openCover(id: string)
+    nav = push(nav, path("cover", id))
+  action renew
+    renewals = renewals + 1
+  action swap
+    nav = push(back(nav), path("notes", "z"))
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "library"
+          column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+            header
+              text "Library" role="heading" aria-level=1
+            list testId="books" flex=1 min-height=0
+              for id in ["a", "b"] key=id
+                link href=path("book", id) testId=`row-${id}`
+                  text `Book ${id}`
+              link href=path("chapter", "c") testId="row-c"
+                text "Chapter c"
+            text "Two books" color="-exact-secondary-label" testId="library-note"
+        if e.name == "book"
+          for r in [renewals] key=r
+            column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column" testId=`book-${e.params.id}`
+              header
+                text `Book ${e.params.id}` role="heading" aria-level=2
+              button press=openNotes(e.params.id) testId=`notes-${e.params.id}`
+                text "Notes"
+              button press=openInfo(e.params.id) testId=`info-${e.params.id}`
+                text "Info"
+              button press=openShare(e.params.id) testId=`share-${e.params.id}`
+                text "Share"
+              button press=openCover(e.params.id) testId=`cover-${e.params.id}`
+                text "Cover"
+              button press=renew testId=`renew-${e.params.id}`
+                text "Renew"
+        if e.name == "notes"
+          column navigationKey=`${e.id}` position="absolute" inset=0 testId="notes-page"
+            text "Notes on the book"
+            button press=swap testId=`swap-${e.params.id}`
+              text "Swap"
+        if e.name == "info"
+          column navigationKey=`${e.id}` navigationPresentation="modal" navigationInspector=true position="absolute" inset=0 testId="info-page"
+            text "About the book"
+            button press=back testId="info-close"
+              text "Close"
+        if e.name == "share"
+          column navigationKey=`${e.id}` navigationPresentation="modal" position="absolute" inset=0 testId="share-page"
+            text "Share the book"
+        if e.name == "cover"
+          column navigationKey=`${e.id}` navigationPresentation="fullscreen" position="absolute" inset=0 testId="cover-page"
+            text "The book's cover"
+        if e.name == "chapter"
+          column navigationKey=`${e.id}` navigationScroll="chapter-scroll" -exact-safe-area="left right" position="absolute" inset=0 display="flex" flex-direction="column" testId="chapter-page"
+            header
+              text "The chapter" role="heading" aria-level=1
+            scroll id="chapter-scroll" flex=1 min-height=0 testId="chapter-scroll"
+              text "Chapter one" padding-left="calc(16px + var(--exact-safe-area-inset-left))" testId="chapter-heading"
+              view margin-left="calc(16px + var(--exact-safe-area-inset-left))" width="50%" height=40 background-color="#888888" testId="chapter-figure"
+              text "A verse" width=200 padding-left="calc(16px + var(--exact-safe-area-inset-left))" testId="chapter-verse"

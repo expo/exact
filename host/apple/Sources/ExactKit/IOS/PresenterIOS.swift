@@ -796,6 +796,8 @@ package final class Presenter {
         if !applying { flats.begin(batch) }
         pool.begin(batch)
         swipeActions.prepare(batch)
+        // Before the grouped lists take their rows home: a list sliding out keeps them.
+        navigation.slideOutInspector(batch)
         groupedLists?.prepare(batch.ops)
         prepareContexts(batch)
         modals.prepare(batch)

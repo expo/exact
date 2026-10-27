@@ -31,7 +31,9 @@ impl<D: DataSource> Bridge<D> {
     /// segments, row-major, the unused ones zero), u32 1 when twenty f32
     /// region insets follow (D10's five regions, each top, right, bottom,
     /// left) and 0 when the regions are the safe area's. Kind 18 takes an
-    /// owner's values back.
+    /// owner's values back. Kind 19 says how a block is shown against its
+    /// stack's top (LLP 1127), its first float 1 beside it, 2 under a pane
+    /// over it, 0 in its stack.
     pub fn covers(&mut self, len: usize) -> u32 {
         let bytes = self.input.get(..len).unwrap_or(&[]);
         let mut records = Vec::new();
@@ -59,7 +61,7 @@ impl<D: DataSource> Bridge<D> {
                 Vec::new(),
                 Vec::new(),
             );
-            let mut owners = Vec::new();
+            let (mut owners, mut shown) = (Vec::new(), Vec::new());
             for r in records {
                 let word = |i: usize| [r[i], r[i + 1], r[i + 2], r[i + 3]];
                 let edge = |i: usize| f32::from_le_bytes(word(i));
@@ -109,6 +111,14 @@ impl<D: DataSource> Bridge<D> {
                     11 => lists.push((view, None)),
                     17 => owners.push((view, Some(owner_values(&edge, &word)))),
                     18 => owners.push((view, None)),
+                    19 => shown.push((
+                        view,
+                        match edge(8) {
+                            1.0 => exact_kernel::BlockShown::Beside,
+                            2.0 => exact_kernel::BlockShown::Under,
+                            _ => exact_kernel::BlockShown::InStack,
+                        },
+                    )),
                     1 => {
                         let edges = [edge(8), edge(12), edge(16), edge(20)];
                         covers.push((view, Some(exact_kernel::HostCover::Edges(edges))));
@@ -134,6 +144,7 @@ impl<D: DataSource> Bridge<D> {
                     list_margins: &lists,
                     restyles: &restyles,
                     owners: &owners,
+                    shown: &shown,
                 })
             })
         };

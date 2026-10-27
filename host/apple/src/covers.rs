@@ -11,7 +11,9 @@
 //! content owner's values (LLP 1123 D9).
 
 use super::Host;
-use exact_kernel::{BlockMeasure, GroupedMargins, HostBlock, HostCover, OwnerValues, ViewId};
+use exact_kernel::{
+    BlockMeasure, BlockShown, GroupedMargins, HostBlock, HostCover, OwnerValues, ViewId,
+};
 use exact_runner::DataSource;
 
 /// A host's restyle of a box under the claims' layout.
@@ -43,6 +45,8 @@ pub struct Claims<'a> {
     pub restyles: &'a [(ViewId, Restyle)],
     /// A content owner's safe area, regions, segments and size.
     pub owners: &'a [(ViewId, Option<OwnerValues>)],
+    /// How a block is shown against its stack's top (a split's columns).
+    pub shown: &'a [(ViewId, BlockShown)],
 }
 
 impl<D: DataSource> Host<D> {
@@ -116,6 +120,7 @@ impl<D: DataSource> Host<D> {
             list_margins,
             restyles,
             owners,
+            shown,
         } = *claims;
         self.presence.unauthored = true;
         let (mut error, mut read) = (None, false);
@@ -181,6 +186,10 @@ impl<D: DataSource> Host<D> {
             }
         }
         self.runner.place_blocks(placements);
+        // Liveness alone: the runner reads it, layout does not.
+        for &(view, how) in shown {
+            self.runner.kernel_mut().set_host_block_shown(view, how);
+        }
         for &(view, list) in margins {
             if let Err(e) = self.runner.kernel_mut().set_grouped_margins(view, list) {
                 error.get_or_insert(format!("grouped margins: {e:?}"));

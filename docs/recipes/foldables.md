@@ -31,8 +31,8 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
 - Scrolling content can span the hinge; keep controls off it.
 - A pane of controls keeps its width, scrolling only where it does not fit: centred
   (full width on narrow screens), or on the trailing segment of a book fold.
-- **A list and its detail** is a split view (`pattern list-detail`; iOS pushes until
-  LLP 1127). **Peer panes** use [native containers](../contract-for-agents.md#arranged-panes)
+- **A list and its detail** is a split view (`pattern list-detail`; UIKit's on iOS,
+  except in a tab, LLP 1127). **Peer panes** use [native containers](../contract-for-agents.md#arranged-panes)
   on iOS 27.1 and responsive CSS elsewhere (Duo Lab's Panes tab). Keep the route's
   `header`: the bar is the platform's.
 - Put the first pane on the leading segment: segment 1 in RTL; indices count from the left.

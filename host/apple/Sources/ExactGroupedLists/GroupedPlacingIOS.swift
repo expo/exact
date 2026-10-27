@@ -6,7 +6,7 @@ import ExactKit
 import UIKit
 
 extension GroupedListHost {
-    func prepare(_ ops: [BatchOp]) { for list in lists.values { list.prepare(ops) } }
+    func prepare(_ ops: [BatchOp]) { for (id, list) in lists where !presenter.slidesOut(id) { list.prepare(ops) } }
 
     func placing(_ container: UIView, _ want: [NodeView]) -> [NodeView] {
         lists.values.reduce(want) { $1.placing(container, $0) }

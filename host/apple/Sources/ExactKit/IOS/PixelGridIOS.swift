@@ -176,6 +176,10 @@ extension Presenter {
         v.metal?.frame = v.bounds
         v.overlay?.frame = v.bounds
         v.web?.frame = v.bounds
+        // Inside an animation (a split's column coming or going), an image's
+        // pixels take the new box in it too, as a UIImageView's do: placed at
+        // the next layout pass, outside it, they jumped to the new size.
+        if v.imageLayer != nil, UIView.inheritedAnimationDuration > 0 { v.applyImageLayer() }
         v.fitScroll()
         v.applyTransform()
         if v.surface != nil { v.applySurface() } // its size is the laid-out one plus `layoutResize`
