@@ -676,8 +676,10 @@ impl<D: DataSource> Host<D> {
         let key = motion_node(node.key);
         let shown = self.shown_paint(key);
         let color = shown.get(Property::Color);
-        let env = kernel.env_of(view);
-        let mut restyled = vec![(view, style::style_json_presented(&node, &env, &shown).0)];
+        // Each node's own owner resolves its lengths (LLP 1123 D9, D12)
+        let env = |key: exact_kernel::NodeKey| kernel.arena().env_of(key.index);
+        let own = style::style_json_presented(&node, &env(node.key), &shown).0;
+        let mut restyled = vec![(view, own)];
         let mut runs = Vec::new();
         if inherits {
             let mut inherited = style::Shown::default();
@@ -693,7 +695,8 @@ impl<D: DataSource> Host<D> {
                 if let Some((owner, _)) = self.inline_runs.get(&child) {
                     runs.push((child, *owner));
                 } else {
-                    restyled.push((child, style::style_json_inherited(&c, &env, &inherited).0));
+                    let style = style::style_json_inherited(&c, &env(c.key), &inherited).0;
+                    restyled.push((child, style));
                 }
                 stack.extend(c.children());
             }

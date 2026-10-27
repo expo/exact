@@ -576,3 +576,40 @@ fn a_batch_says_when_the_root_font_size_or_the_modes_moved() {
         "the agent's prefer"
     );
 }
+
+/// A report re-presents a box in a content owner as that owner resolves
+/// its container units (LLP 1123 D12): 10% of its 300, not of the window's 844.
+#[test]
+fn a_report_re_presents_an_owners_lengths_by_the_owner() {
+    let _turn = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut host, _) = boot(&format!(
+        "component A\n  view\n    column\n      column testId=\"owner\" width=\"100%\" height=\"100%\"\n        box testId=\"wash\" width=20 height=20 border-radius=\"10cqh\" background-image=\"linear-gradient({BRAND}, #ffffff)\"\n"
+    ));
+    // Container units read the owner's content root, in the block its host fixes (LLP 1123 D16)
+    let block = exact_kernel::HostBlock {
+        tactic: Default::default(),
+        width: exact_kernel::BlockAxis::Is(390.0),
+        height: exact_kernel::BlockAxis::Is(300.0),
+    };
+    let owner = view(&host, "owner");
+    host.set_claims(
+        &[],
+        &[(owner, Some(block))],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        crate::host::OwnerReports::default(),
+    );
+    let c = brand();
+    let batch = host.set_colors(vec![
+        (c, false, Color(0xff00_00ff)),
+        (c, true, Color(0x00ff_00ff)),
+    ]);
+    let ops = ops(&batch);
+    let wash = restyled(&ops, "background_image").expect("the gradient's box is restyled");
+    assert_eq!(wash["style"]["border_radius_top_left"], 30.0, "{batch}");
+    host.set_colors(Vec::new());
+}
