@@ -70,6 +70,16 @@ extension NavigationHost {
             guard let self, let split else { return }
             if self.split === split { splitChanged() } else { runHeldSync() }
         }
+        split.inspectorClosed = { [weak self, weak split] in
+            guard let self, let split, self.split === split,
+                  split.inspecting?.key == selectedKey else { return }
+            goBack()
+        }
+        split.columnsMove = { [weak self, weak split] in
+            guard let self, let split, self.split === split else { return }
+            coversChanged()
+            presenter.owners.publish()
+        }
         split.willPush = { [weak self] route, beneath in self?.prepareRoutePush(route, beneath: beneath) }
         split.baseChanged = { [weak self, weak split] base in
             guard let self, let split else { return }
@@ -206,7 +216,25 @@ extension NavigationHost {
         presenter.owners.publish()
         // Beside the detail the list is UIKit's sidebar list, collapsed its authored style (LLP 1127 D7)
         presenter.groupedLists?.sync(changed: nil)
+        if split.inspecting != nil || presenter.modalHost.routes.last?.node.props["navigationInspector"] == "true" {
+            projectionHeld = true
+        }
         runHeldSync()
+    }
+
+    /// The sheet an expanded split can show in its inspector column.
+    func inspectorRoute(_ parts: [Range<Int>], _ wanted: [RouteController]) -> RouteController? {
+        guard let split, split.inspects, !split.controller.isCollapsed, parts.count == 2, parts[1].count == 1 else { return nil }
+        let route = wanted[parts[1].lowerBound]
+        guard route.node.props["navigationPresentation"] == "modal", route.node.props["navigationInspector"] == "true" else { return nil }
+        return route
+    }
+
+    func placeInspector(_ route: RouteController?, animated: Bool = true) {
+        guard let split else { return }
+        let nav = route.map { split.inspector ?? makeNavigation(first: $0.node) }
+        if let route, let nav { prepareRoutes([route], in: nav) }
+        split.inspect(route, in: nav, animated: animated)
     }
 
     /// Whether UIKit's pop recognizer of `nav` pops a route of the router's:
@@ -251,7 +279,7 @@ extension NavigationHost {
         guard let split else { return ([], []) }
         let columns = split.showing, over = presenter.modalHost.routes
         if over.isEmpty { return columns }
-        return ([], over.allSatisfy { $0.kind == "modal" } ? columns.beside + columns.under : [])
+        return ([], over.allSatisfy { $0.kind == "modal" } ? columns.beside + columns.under + [split.inspecting].compactMap { $0 } : [])
     }
 
     /// Each route the split shows beside the stack's top or under a pane
@@ -373,7 +401,7 @@ extension NavigationHost {
         return ["installed": true, "collapsed": split.controller.isCollapsed, "nested": split.nested, "displayMode": modes[split.controller.displayMode] ?? "automatic",
                 "listWidth": InspectionValue.r2(split.list.view.bounds.width),
                 "list": split.list.stackRoutes.compactMap { ($0 as? RouteController)?.key }, "detail": split.detailRoutes.map(\.key),
-                "empty": split.detailRoutes.isEmpty, "beside": shown.beside.map(\.key), "under": shown.under.map(\.key),
+                "empty": split.detailRoutes.isEmpty, "inspector": split.inspecting.map { [$0.key] } ?? [], "beside": shown.beside.map(\.key), "under": shown.under.map(\.key),
                 "row": (detailRow ?? nil).map { Int($0) } ?? NSNull()]
     }
     #endif
@@ -382,7 +410,7 @@ extension NavigationHost {
     /// the containers that take them next (`reshape`).
     func retireSplit(releasing: Bool = false) {
         guard let split else { return }
-        for nav in [split.list, split.detail] {
+        for nav in [split.list, split.detail] + [split.inspector].compactMap({ $0 }) {
             if releasing { release(nav) } else { retireStack(nav) }
         }
         split.controller.willMove(toParent: nil)

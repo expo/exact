@@ -1250,4 +1250,40 @@ private final class StackSpy: NSObject, UINavigationControllerDelegate {
         return nil
     }
 }
+
+extension SplitIOSTests {
+    /// LLP 1127 D14: Exact's close of the inspector's column empties the
+    /// column once UIKit's transition is over. An inspector shown again
+    /// before then supersedes the close: it keeps its route, and the column's
+    /// hiding is no person's close.
+    func testAnInspectorShownAgainWhileItClosesKeepsItsRoute() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
+        let session = try boot(size: CGSize(width: 1100, height: 800))
+        let navigation = session.presenter.navigationHost, agent = Agent(session: session)
+        until("a split") { navigation.split != nil && !agent.nativeInFlight() }
+        let split = try XCTUnwrap(navigation.split)
+        split.controller.traitOverrides.horizontalSizeClass = .regular
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book is in the detail") { split.shown.count == 2 && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "info-a").id)])["error"])
+        until("its info is in the inspector's column") { split.inspecting != nil && split.controller.transitionCoordinator == nil && !agent.nativeInFlight() }
+        let route = try XCTUnwrap(split.inspecting), nav = try XCTUnwrap(split.inspector)
+        var reported = 0
+        let report = split.inspectorClosed
+        split.inspectorClosed = { reported += 1; report() }
+        split.inspect(nil, in: nil)
+        let closing = try XCTUnwrap(split.controller.transitionCoordinator, "the column closes in a transition")
+        // Registered after the close's own completion, so run after it.
+        var closed = false
+        closing.animate(alongsideTransition: nil) { _ in closed = true }
+        split.inspect(route, in: nav)
+        until("the close's transition is over") { closed && split.controller.transitionCoordinator == nil && !agent.nativeInFlight() }
+        RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05)) // the delegate's reports, queued
+        XCTAssertTrue(nav.viewControllers.first === route, "the inspector keeps its route: \(nav.viewControllers)")
+        XCTAssertTrue(split.inspector === nav)
+        XCTAssertTrue(split.controller.isShowing(.inspector), "the column shows again")
+        XCTAssertEqual(reported, 0, "the superseded close is no person's")
+    }
+}
 #endif

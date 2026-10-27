@@ -600,7 +600,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     }
 
     /// The view is gone: no load in flight may report for it.
-    func forget() {
+    package func forget() {
         layoutHits = nil
         ControlBars.detach(self)
         holdGone() // out of the map: a hold on it is let go (HeldState.swift)

@@ -646,6 +646,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         // @ref LLP 1115.000 D5.2 — a route's say over the platform's bar:
         // `none` for a full-bleed screen.
         "navigationBar" => AttrTarget::Prop(p("navigationBar")),
+        // @ref LLP 1127 — a sheet that an expanded split shows as its inspector.
+        "navigationInspector" => AttrTarget::Prop(p(name)),
         "navigationSource" | "sharedElement" => AttrTarget::Prop(p(name)),
         // @ref LLP 1013.002 D1 — where the element is shown, by a destination's `id`.
         "portal" => AttrTarget::Prop(p("portal")),
