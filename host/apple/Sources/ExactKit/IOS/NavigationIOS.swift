@@ -1154,7 +1154,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     func agentBack() -> String? {
         guard (backBar?.depth ?? 0) > 1 else { return nil }
         guard back != nil else { return backRefusal }
-        goBack()
+        if let to = NavigationRules.beneathPoppedTop(selected: selectedKey ?? "", inspecting: split?.inspecting?.key, shownKeys: shownKeys) { goBack(from: selectedKey ?? "", to: to) } else { goBack() }
         return ""
     }
 
@@ -1477,15 +1477,15 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // stack is as deep as it was when the swipe began.
         let sourceReplaced = swipe != nil && sourceKey == nil
             && selectedRouteCount == swipe?.depth
-        let rootKey = selectedKey ?? ""
-        let uikitTop = (viewController as? RouteController)?.key ?? ""
+        let rootKey = selectedKey ?? "", uikitTop = (viewController as? RouteController)?.key ?? ""
+        let topKey = NavigationRules.poppedTop(selected: rootKey, inspecting: split?.inspecting?.key, shownKeys: shownKeys)
         let sourceRule = (viewController as? RouteController).map {
-            NavigationRules.dispatchesBack(shownKey: $0.key, rootKey: rootKey,
+            NavigationRules.dispatchesBack(shownKey: $0.key, rootKey: topKey,
                                            sourceKey: sourceKey, sourceReplaced: sourceReplaced,
                                            modalActive: presenter.modals.inTransition)
         } ?? false
         let behindUIKit = !presenter.modals.inTransition
-            && NavigationRules.appIsBehind(poppedKeys: poppedKeys, uikitTop: uikitTop, shownKeys: shownKeys, rootKey: rootKey)
+            && NavigationRules.appIsBehind(poppedKeys: poppedKeys, uikitTop: uikitTop, shownKeys: shownKeys, rootKey: topKey)
         // A cancelled pop performed no Back, whatever the app did to its source meanwhile
         let dispatches = !cancelled && (sourceRule || behindUIKit)
         if dispatches, !sourceRule {
@@ -1493,9 +1493,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
         lastTransition = dispatches ? "completed" : (cancelled ? "cancelled" : "idle")
         guard dispatches else { return }
-        if swipe == nil, let destination = (viewController as? RouteController)?.key,
-           let from = shownKeys.firstIndex(of: rootKey),
-           let to = shownKeys.firstIndex(of: destination), from - to > 1 {
+        if let destination = NavigationRules.beneathPoppedTop(selected: rootKey, inspecting: split?.inspecting?.key, shownKeys: shownKeys)
+            ?? (swipe == nil ? (viewController as? RouteController)?.key : nil),
+           let from = shownKeys.firstIndex(of: rootKey), let to = shownKeys.firstIndex(of: destination), from - to > 1 {
             goBack(from: rootKey, to: destination)
             return
         }

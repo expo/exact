@@ -2,7 +2,8 @@
 // iPhone's width) UIKit nests the detail's stack in the list's. A book's
 // row pushes the book; the book pushes its notes, its info as an
 // inspector (D14), the expanded split's inspector column, a sheet and a
-// full-screen cover (SplitIOSTests). A chapter's row opens its route in
+// full-screen cover (SplitIOSTests). The notes open the book's info too,
+// so the inspector shows it beside a detail of two routes. A chapter's row opens its route in
 // place of the detail, as the Landmarks port's sidebar opens a page, with
 // a large title over a scroller UIKit insets, as the port's Collections
 // page has; the route clears its sides' safe area itself, as the port's
@@ -71,6 +72,8 @@ component App
             text "Notes on the book"
             button press=swap testId=`swap-${e.params.id}`
               text "Swap"
+            button press=openInfo(e.params.id) testId=`notes-info-${e.params.id}`
+              text "Info"
         if e.name == "info"
           column navigationKey=`${e.id}` navigationPresentation="modal" navigationInspector=true position="absolute" inset=0 testId="info-page"
             text "About the book"

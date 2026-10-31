@@ -593,6 +593,89 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertFalse(Self.moving(try XCTUnwrap(split.controller.view).layer, uikits: true).isEmpty, "the columns move")
     }
 
+    /// LLP 1127 D14 on the Landmarks port's iPhone Duo: the notes' info in
+    /// the inspector's column, UIKit's Back in the detail pops the notes. The
+    /// info is above them in the app's stack, so the pop takes it too: the
+    /// app goes back past both and the column closes, as Apple's Landmarks
+    /// sample closes its inspector when its path shortens, rather than the
+    /// app's stack pushing the notes again.
+    func testABackUnderTheInspectorTakesItsRouteWithIt() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit animates a pop only in a window a scene holds") }
+        let (session, agent, split) = try inspectedNotes()
+        let book = try XCTUnwrap(split.detail.viewControllers.first)
+        split.detail.popViewController(animated: true)
+        try wentBack(to: book, session, agent, split)
+    }
+
+    /// The same as a swipe: let go, it pops nothing and the info stays;
+    /// finished, it takes the notes and their info.
+    func testASwipeUnderTheInspectorTakesItsRouteWithItOnceFinished() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit animates a pop only in a window a scene holds") }
+        let (session, agent, split) = try inspectedNotes()
+        let navigation = session.presenter.navigation, info = try XCTUnwrap(split.inspecting)
+        let pop = InteractivePop()
+        navigation.setAppDelegate(split.detail, pop)
+        defer { navigation.setAppDelegate(split.detail, nil) }
+        pop.interactive = true
+        let book = try XCTUnwrap(split.detail.viewControllers.first)
+        split.detail.popViewController(animated: true)
+        until("UIKit's pop animates the book beneath") { book.viewIfLoaded?.window != nil }
+        pop.interaction.update(0.4)
+        pop.interaction.cancel()
+        until("the swipe let go is over") { split.detail.transitionCoordinator == nil && !agent.nativeInFlight() }
+        XCTAssertTrue(has(session, "notes-page") && split.inspecting === info, "the notes and their info stay")
+        XCTAssertEqual(navigation.selectedKey, info.key)
+        split.detail.popViewController(animated: true)
+        until("UIKit's pop animates the book beneath") { book.viewIfLoaded?.window != nil }
+        pop.interaction.update(0.4)
+        pop.interaction.finish()
+        pop.interactive = false
+        try wentBack(to: book, session, agent, split)
+    }
+
+    /// The agent's `back` there ends where UIKit's Back does.
+    func testTheAgentsBackUnderTheInspectorEndsWhereUIKitsBackDoes() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit animates a pop only in a window a scene holds") }
+        let (session, agent, split) = try inspectedNotes()
+        let book = try XCTUnwrap(split.detail.viewControllers.first)
+        XCTAssertNil(agent.back()["error"])
+        try wentBack(to: book, session, agent, split)
+    }
+
+    /// The expanded split at the Duo's open width: the book in the detail,
+    /// its notes over it, and the notes' info in the inspector's column.
+    @available(iOS 26.0, *)
+    private func inspectedNotes() throws -> (ExactSession, Agent, SplitIOS) {
+        let session = try boot(size: CGSize(width: 951, height: 669))
+        let navigation = session.presenter.navigation, agent = Agent(session: session)
+        until("a split") { navigation.split != nil && !agent.nativeInFlight() }
+        let split = try XCTUnwrap(navigation.split)
+        split.controller.traitOverrides.horizontalSizeClass = .regular
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book is in the detail") { split.shown.count == 2 && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "notes-a").id)])["error"])
+        until("the notes are pushed") { split.shown.count == 3 && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "notes-info-a").id)])["error"])
+        until("the notes' info is in the inspector's column") { split.inspecting != nil && split.controller.transitionCoordinator == nil && !agent.nativeInFlight() }
+        return (session, agent, split)
+    }
+
+    /// The app went back with UIKit's pop to `book`, past the notes and their info, and the inspector's column closed.
+    @available(iOS 26.0, *)
+    private func wentBack(to book: UIViewController, _ session: ExactSession, _ agent: Agent, _ split: SplitIOS) throws {
+        until("the app went back past the notes and their info") {
+            split.detail.transitionCoordinator == nil && split.controller.transitionCoordinator == nil && !agent.nativeInFlight()
+                && !has(session, "notes-page") && !has(session, "info-page")
+        }
+        XCTAssertTrue(split.detail.topViewController === book, "the book, where the person went back to: \(split.detail.viewControllers)")
+        XCTAssertEqual(session.presenter.navigation.selectedKey, (book as? RouteController)?.key)
+        XCTAssertFalse(split.controller.isShowing(.inspector), "the inspector's column closed")
+    }
+
     /// What animates in the tree of Exact's own views and layers under
     /// `layer`, and of UIKit's too with `uikits`. The views UIKit makes
     /// inside a scroller (its indicators, the large title it hosts) are

@@ -62,6 +62,28 @@ enum NavigationRules {
         !modalActive && shownKey != rootKey && (sourceKey == rootKey || sourceReplaced)
     }
 
+    /// LLP 1127 D14: the key of the route a native pop of the stack's top
+    /// takes away, which `dispatchesBack` and `appIsBehind` judge the pop
+    /// against. It is the selected route's, except while the split's
+    /// inspector column shows the selected route (`inspecting`): that route
+    /// is above the detail's top in the app's stack (`shownKeys`), so a pop
+    /// of the detail's top takes it too, and the route the pop takes away is
+    /// the detail's top, the one beneath the inspector's.
+    static func poppedTop(selected: String, inspecting: String?, shownKeys: [String]) -> String {
+        guard inspecting == selected, let at = shownKeys.firstIndex(of: selected), at > 0 else { return selected }
+        return shownKeys[at - 1]
+    }
+
+    /// Where Back from the selected route goes when a pop takes the
+    /// inspector's route with the route it is above (`poppedTop`): the route
+    /// beneath that one. nil when the selected route is not the inspector's,
+    /// or nothing is beneath.
+    static func beneathPoppedTop(selected: String, inspecting: String?, shownKeys: [String]) -> String? {
+        let top = poppedTop(selected: selected, inspecting: inspecting, shownKeys: shownKeys)
+        guard top != selected, let at = shownKeys.firstIndex(of: top), at > 0 else { return nil }
+        return shownKeys[at - 1]
+    }
+
     /// Whether the app is behind a pop UIKit finished: the app's top is among the routes the pop took
     /// from what Exact last wrote to UIKit, and UIKit's top is beneath it in the app's stack. It holds
     /// whatever became of the source's node or key during the pop. A route the app pushed meanwhile
