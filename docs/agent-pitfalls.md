@@ -251,6 +251,23 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `margin-left="auto"` on the button, as a block's auto margin places it. (The `site`
   pattern's sortable table, LLP 1153 D8; reproduced on the web, 2026-10-30.)
 
+- **Text stacked under a title sits higher than in a SwiftUI original.** In the
+  Landmarks port on iOS, the description under a 28-point bold title started 3 points
+  higher than in Apple's SwiftUI sample. Two causes, measured on the simulator. First,
+  the sample's `VStack` with no `spacing` puts SwiftUI's default distance between the
+  two texts, 2 points for this pair, where a Contract `column` has no `gap`: write it
+  (`gap=2`). Second, 1 point remains, from the text boxes. Exact lays author text out
+  in the web's line box for the system font, as Chrome's `system-ui` does
+  (`CSSLineBox`: the face's ascent and descent, 1980 and 432 per 2048 units, each
+  rounded to a point), so the title's box is 33 points with 6 below the baseline.
+  SwiftUI sizes a `Text` frame from UIKit's font metrics (ascender 26.66, descender
+  6.75, line height 33.41) and rounds it up to the device pixel: 33.67 points, about 7
+  below the baseline. The glyphs sit in the same place; only the boxes differ, so text
+  stacked under text sits that much higher. Exact keeps the web's line box, the layout
+  model every host shares. When a port must match its original to the pixel, compare
+  glyph positions on both (a screenshot's rows of ink) and add the difference under the
+  title, as the React Native entry below does with `-exact-hairline`.
+
 ## Lists and scrolling
 
 - **A frame's cell count is not its stretched layout width.** Giving the
