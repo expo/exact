@@ -286,6 +286,23 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `margin-left="auto"` on the button, as a block's auto margin places it. (The `site`
   pattern's sortable table, LLP 1153 D8; reproduced on the web, 2026-10-30.)
 
+- **Text stacked under a title sits higher than in a SwiftUI original.** In the
+  Landmarks port on iOS, the description under a 28-point bold title started 3 points
+  higher than in Apple's SwiftUI sample. Two causes, measured on the simulator. First,
+  the sample's `VStack` with no `spacing` puts SwiftUI's default distance between the
+  two texts, 2 points for this pair, where a Contract `column` has no `gap`: write it
+  (`gap=2`). Second, 1 point remains, from the text boxes. Exact lays author text out
+  in the web's line box for the system font, as Chrome's `system-ui` does
+  (`CSSLineBox`: the face's ascent and descent, 1980 and 432 per 2048 units, each
+  rounded to a point), so the title's box is 33 points with 6 below the baseline.
+  SwiftUI sizes a `Text` frame from UIKit's font metrics (ascender 26.66, descender
+  6.75, line height 33.41) and rounds it up to the device pixel: 33.67 points, about 7
+  below the baseline. The glyphs sit in the same place; only the boxes differ, so text
+  stacked under text sits that much higher. Exact keeps the web's line box, the layout
+  model every host shares. When a port must match its original to the pixel, compare
+  glyph positions on both (a screenshot's rows of ink) and add the difference under the
+  title, as the React Native entry below does with `-exact-hairline`.
+
 ## Lists and scrolling
 
 - **A long text on iOS or macOS loses its kerning, ligatures and right-to-left
@@ -1016,6 +1033,20 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   the work is done. Keep a node `aria-busy` from the send until the thread
   has finished, as the harness's live column does with `session.busy`
   (`apps/harness/terminal.contract`). (The harness's `--print`, 2026-11-12.)
+
+- **A page's own state that `back` resets is reset when a sheet over the page closes.**
+  Symptom: a page in edit mode stops editing when a sheet it opened (a picker
+  route with `navigationPresentation="modal"`) closes with its Done. Cause: the
+  editing state was the root's, reset in the root's `back` action so that leaving
+  the page ended it; `back` also closes the route above the page, so the sheet's
+  Done ran it too. What to do: make the page a component used under the stack's
+  `for e in stack(nav) key=e.id` and give it the state. A child under `for` owns
+  state keyed to its row, so the state is made when the route is pushed, stays
+  while routes and sheets sit above it, and goes when the route is popped, as
+  SwiftUI's `@State` on a pushed view does, and no navigation action resets it.
+  (The Landscapes template's collection editor, 2026-11-07.) **Candidate
+  diagnostic:** the root's `navigationBack` or `navigate` handler writing a state
+  that only one route's view reads.
 
 - **A Rust update takes the other arm of a `#[cfg(target_os)]` branch.** Where a
   replaced Rust module runs as wasm (iOS by default; `tiered` or `wasm` mode
