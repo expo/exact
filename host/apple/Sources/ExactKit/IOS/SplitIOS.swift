@@ -224,6 +224,19 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         #endif
     }
 
+    /// UIKit pops the route the inspector's route is above, which takes the
+    /// inspector's route too (`NavigationRules.poppedTop`): the column slides
+    /// away with the pop, from the moment the pop is sure to end — at once for
+    /// UIKit's Back, as the finger lifts for a swipe that goes back — rather
+    /// than once the pop is over and the app has gone back. `inspect(nil)`
+    /// keeps the route in the column until the column has gone.
+    func closeInspector(along pop: UIViewControllerTransitionCoordinator) {
+        guard pop.isInteractive else { return inspect(nil, in: nil) }
+        pop.notifyWhenInteractionChanges { [weak self] context in
+            if !context.isCancelled { self?.inspect(nil, in: nil) }
+        }
+    }
+
     /// UIKit animates the columns into place from a show or hide: what the
     /// routes beside them clear is told inside that animation
     /// (`columnsMove`), so their content moves with the columns, as a
@@ -433,6 +446,16 @@ extension NavigationHost {
               batch.ops.contains(where: { $0.op == .destroy && $0.id == route.node.id }) else { return }
         split.endSlide()
         split.sliding = presenter.retire(route.node.id)
+    }
+
+    /// The selected route's key while it is the inspector's (LLP 1127 D14):
+    /// a sheet that says `navigationInspector`, which an expanded split shows
+    /// in its column above the detail's top. The app's stack says so, not the
+    /// column, which a pop under it may already be sliding away
+    /// (`SplitIOS.closeInspector`).
+    var inspectorKey: String? {
+        guard let split, split.inspects, !split.controller.isCollapsed, selectedRoute?.props["navigationInspector"] == "true" else { return nil }
+        return selectedKey
     }
 
     /// The person closed the inspector's column: Back from its route, as a

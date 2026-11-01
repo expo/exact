@@ -605,6 +605,7 @@ final class SplitIOSTests: XCTestCase {
         let (session, agent, split) = try inspectedNotes()
         let book = try XCTUnwrap(split.detail.viewControllers.first)
         split.detail.popViewController(animated: true)
+        closesWithPop(split)
         try wentBack(to: book, session, agent, split)
     }
 
@@ -623,15 +624,17 @@ final class SplitIOSTests: XCTestCase {
         split.detail.popViewController(animated: true)
         until("UIKit's pop animates the book beneath") { book.viewIfLoaded?.window != nil }
         pop.interaction.update(0.4)
+        XCTAssertTrue(split.controller.isShowing(.inspector), "the column stays while the finger is down")
         pop.interaction.cancel()
         until("the swipe let go is over") { split.detail.transitionCoordinator == nil && !agent.nativeInFlight() }
-        XCTAssertTrue(has(session, "notes-page") && split.inspecting === info, "the notes and their info stay")
+        XCTAssertTrue(has(session, "notes-page") && split.inspecting === info && split.controller.isShowing(.inspector), "the notes and their info stay")
         XCTAssertEqual(navigation.selectedKey, info.key)
         split.detail.popViewController(animated: true)
         until("UIKit's pop animates the book beneath") { book.viewIfLoaded?.window != nil }
         pop.interaction.update(0.4)
         pop.interaction.finish()
         pop.interactive = false
+        closesWithPop(split)
         try wentBack(to: book, session, agent, split)
     }
 
@@ -662,6 +665,18 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertNil(agent.tap(["id": Int(try node(session, "notes-info-a").id)])["error"])
         until("the notes' info is in the inspector's column") { split.inspecting != nil && split.controller.transitionCoordinator == nil && !agent.nativeInFlight() }
         return (session, agent, split)
+    }
+
+    /// The inspector's column starts to slide away while the detail's pop is
+    /// still under way, not after it.
+    @available(iOS 26.0, *)
+    private func closesWithPop(_ split: SplitIOS) {
+        var closed = false
+        until("the column slides away during the pop") {
+            if !split.controller.isShowing(.inspector), split.detail.transitionCoordinator != nil { closed = true }
+            return closed || split.detail.transitionCoordinator == nil
+        }
+        XCTAssertTrue(closed, "the inspector's column slides away with the pop, not after it")
     }
 
     /// The app went back with UIKit's pop to `book`, past the notes and their info, and the inspector's column closed.

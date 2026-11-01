@@ -1154,7 +1154,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     func agentBack() -> String? {
         guard (backBar?.depth ?? 0) > 1 else { return nil }
         guard back != nil else { return backRefusal }
-        if let to = NavigationRules.beneathPoppedTop(selected: selectedKey ?? "", inspecting: split?.inspecting?.key, shownKeys: shownKeys) { goBack(from: selectedKey ?? "", to: to) } else { goBack() }
+        if let to = NavigationRules.beneathPoppedTop(selected: selectedKey ?? "", inspecting: inspectorKey, shownKeys: shownKeys) { goBack(from: selectedKey ?? "", to: to) } else { goBack() }
         return ""
     }
 
@@ -1358,9 +1358,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // As the swipe begins: an update may remove its source's node while
         // the finger is down. Beneath a split's detail is the list's route.
         let depth = navigationController.viewControllers.count + (split?.detail === navigationController ? 2 : 1)
-        let swipe: Swipe? = transition.initiallyInteractive
-            ? (transition.viewController(forKey: .from) as? RouteController).map { ($0.node, $0.key, depth) }
-            : nil
+        let source = transition.viewController(forKey: .from) as? RouteController
+        let swipe: Swipe? = transition.initiallyInteractive ? source.map { ($0.node, $0.key, depth) } : nil
+        if let split, split.detail === navigationController, let key = inspectorKey, source?.key == NavigationRules.poppedTop(selected: key, inspecting: key, shownKeys: shownKeys) { split.closeInspector(along: transition) }
         transition.animate(alongsideTransition: nil) { [weak self, weak navigationController] context in
             guard let self, let navigationController else { return }
             transitionEnded(navigationController, swipe: swipe, cancelled: context.isCancelled)
@@ -1478,7 +1478,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         let sourceReplaced = swipe != nil && sourceKey == nil
             && selectedRouteCount == swipe?.depth
         let rootKey = selectedKey ?? "", uikitTop = (viewController as? RouteController)?.key ?? ""
-        let topKey = NavigationRules.poppedTop(selected: rootKey, inspecting: split?.inspecting?.key, shownKeys: shownKeys)
+        let topKey = NavigationRules.poppedTop(selected: rootKey, inspecting: inspectorKey, shownKeys: shownKeys)
         let sourceRule = (viewController as? RouteController).map {
             NavigationRules.dispatchesBack(shownKey: $0.key, rootKey: topKey,
                                            sourceKey: sourceKey, sourceReplaced: sourceReplaced,
@@ -1493,7 +1493,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         }
         lastTransition = dispatches ? "completed" : (cancelled ? "cancelled" : "idle")
         guard dispatches else { return }
-        if let destination = NavigationRules.beneathPoppedTop(selected: rootKey, inspecting: split?.inspecting?.key, shownKeys: shownKeys)
+        if let destination = NavigationRules.beneathPoppedTop(selected: rootKey, inspecting: inspectorKey, shownKeys: shownKeys)
             ?? (swipe == nil ? (viewController as? RouteController)?.key : nil),
            let from = shownKeys.firstIndex(of: rootKey), let to = shownKeys.firstIndex(of: destination), from - to > 1 {
             goBack(from: rootKey, to: destination)
