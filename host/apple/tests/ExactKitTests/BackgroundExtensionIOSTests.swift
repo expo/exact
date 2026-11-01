@@ -4,10 +4,10 @@ import UIKit
 import XCTest
 @testable import ExactKit
 
-/// LLP 1123 D11: an image's background extension is a view beside the
-/// image, outside its subtree, in its route: it grows on the sides where the
-/// image meets the route's safe area, composites as the image does and goes
-/// when the image does.
+/// LLP 1123 D11: an image's background extension is the image's own bottom
+/// subview, which draws its picture and the mirror: it grows on the sides
+/// where the image meets the route's safe area, composites with the image as
+/// one and goes when the image does.
 final class BackgroundExtensionIOSTests: XCTestCase {
     private var window: UIWindow?
     private var loader: RasterLoader?
@@ -66,7 +66,8 @@ final class BackgroundExtensionIOSTests: XCTestCase {
 
     private func extensions(_ route: RouteController) -> [UIView] {
         guard #available(iOS 26.0, *) else { return [] }
-        return route.view.subviews.filter { $0 is UIBackgroundExtensionView }
+        func all(_ view: UIView) -> [UIView] { view.subviews.flatMap { ($0 is UIBackgroundExtensionView ? [$0] : []) + all($0) } }
+        return all(route.view)
     }
 
     /// The window as the window server draws it: each point's red, green and blue.
@@ -106,7 +107,7 @@ final class BackgroundExtensionIOSTests: XCTestCase {
             p.apply(wireBatch([["op": "frame", "id": 2, "x": frame.minX, "y": frame.minY, "w": frame.width, "h": frame.height]]))
             image.syncBackgroundExtension()
             let shown = extensions(route)
-            XCTAssertEqual(shown.first?.frame, grown, sides)
+            XCTAssertEqual(shown.first.map { $0.convert($0.bounds, to: route.view) }, grown, sides)
             XCTAssertLessThanOrEqual(shown.count, 1, sides)
             // The image keeps its place: the extension's content is laid out at it.
             if #available(iOS 26.0, *), let content = (shown.first as? UIBackgroundExtensionView)?.contentView {
@@ -123,11 +124,10 @@ final class BackgroundExtensionIOSTests: XCTestCase {
         XCTAssertTrue(extensions(route).isEmpty)
     }
 
-    /// Within the image's box only the image draws: nothing of the
-    /// extension's square picture shows behind the image's rounded corners,
-    /// and a faded image is not drawn over a copy of itself. The extension's
-    /// content takes the image's corners, so what it mirrors is the image as
-    /// it shows.
+    /// Within the image's box the picture is drawn once: nothing of a square
+    /// picture shows behind the image's rounded corners, and a faded image is
+    /// not drawn over a copy of itself. The extension's content takes the
+    /// image's corners, so what it mirrors is the image as it shows.
     func testWithinTheImagesBoxOnlyTheImageDraws() throws {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             throw missing("scene", "the extension's pixels are drawn by the window server")
@@ -206,32 +206,35 @@ final class BackgroundExtensionIOSTests: XCTestCase {
         XCTAssertEqual(at(CGPoint(x: 150, y: 25)), [0, 0, 255], "its extension's")
     }
 
-    /// The extension is outside the image's subtree, so it takes the
-    /// opacity the image composites with, its own and each ancestor's below
-    /// the view the extension is in, as they change; an ancestor that is
-    /// `display: none` hides it.
-    func testTheExtensionTakesTheOpacityTheImageCompositesWith() throws {
-        let (p, route, _) = try mount(CGRect(x: 0, y: 50, width: 300, height: 100), insets: UIEdgeInsets(top: 50, left: 0, bottom: 0, right: 0))
+    /// The extension is in the image's subtree, so it composites with the
+    /// image as one: faded with the image and its ancestors, its mirror at the
+    /// image's opacity, drawn once; an ancestor that is `display: none` hides
+    /// it with the image.
+    func testTheExtensionCompositesWithTheImageAsOne() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the extension's pixels are drawn by the window server")
+        }
+        let (p, route, image) = try mount(CGRect(x: 0, y: 50, width: 300, height: 100), insets: UIEdgeInsets(top: 50, left: 0, bottom: 0, right: 0), in: scene)
         let view = try XCTUnwrap(extensions(route).first)
+        XCTAssertTrue(view.isDescendant(of: image), "the image's own subview")
+        XCTAssertTrue(image.imageLayer.map { $0.isHidden } ?? true, "the extension draws the picture; the image's layer does not draw it again")
         func present(_ id: Int, _ opacity: Double) {
             p.apply(wireBatch([["op": "present", "id": id, "property": "opacity", "x": opacity, "y": 0.0, "w": 0.0, "h": 0.0]]))
         }
-        XCTAssertEqual(view.alpha, 1)
-        present(2, 0.5)
-        XCTAssertEqual(view.alpha, 0.5, accuracy: 1e-6, "the image's own")
-        present(3, 0.4)
-        XCTAssertEqual(view.alpha, 0.2, accuracy: 1e-6, "the image's and its box's")
-        present(2, 1)
-        present(1, 0.5)
-        XCTAssertEqual(view.alpha, 0.2, accuracy: 1e-6, "the box's and the page's")
-        present(2, 0)
-        XCTAssertEqual(view.alpha, 0, "an image faded out")
-        present(2, 1)
-        XCTAssertFalse(view.isHidden)
+        var at = try pixels()
+        let ground = at(CGPoint(x: 150, y: 300)), red = [255, 0, 0]
+        present(3, 0.5)
+        at = try pixels()
+        let half = zip(red, ground).map { ($0 + $1) / 2 }
+        for (point, what) in [(CGPoint(x: 150, y: 25), "the mirror"), (CGPoint(x: 150, y: 100), "the picture")] {
+            let shown = at(point)
+            XCTAssertTrue(zip(shown, half).allSatisfy { abs($0 - $1) <= 2 }, "\(what) at its box's opacity, once: \(shown), not \(half)")
+        }
+        present(3, 1)
         p.apply(wireBatch([["op": "style", "id": 3, "style": ["display": "none"]]]))
-        XCTAssertTrue(view.isHidden || view.superview == nil, "the box is not displayed")
+        XCTAssertTrue(sequence(first: view, next: \.superview).contains { $0.isHidden } || view.window == nil, "the box is not displayed")
         p.apply(wireBatch([["op": "style", "id": 3, "style": [:]]]))
-        XCTAssertTrue(extensions(route).first.map { !$0.isHidden } ?? false, "the box is displayed again")
+        XCTAssertTrue(extensions(route).first.map { ext in !sequence(first: ext, next: \.superview).contains { $0.isHidden } } ?? false, "the box is displayed again")
     }
 }
 #endif

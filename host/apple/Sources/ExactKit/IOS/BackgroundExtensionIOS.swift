@@ -2,8 +2,14 @@
 // the image meets a safe area (a split's sidebar or inspector, the iPhone
 // Duo's side strip), UIKit's background extension view (iOS 26) fills that
 // area with the image's mirrored, blurred edges, as SwiftUI's
-// `backgroundExtensionEffect()` does. The image stays where it is laid out;
-// the extension is drawn around it, in the nearest scroll view or route.
+// `backgroundExtensionEffect()` does. The image stays where it is laid out.
+// As in a hand-built UIKit screen, the picture is the extension view's
+// content: the view is the image's own bottom subview, grown past the
+// image's box to the route's edges on the sides that meet its safe area, and
+// it draws the picture and its mirror as one surface, so no pixel is shared
+// by the picture's edge and the mirror's. Being in the image's subtree, it
+// moves, fades and hides with the image and its ancestors, inside whatever
+// animation moves them (a column's, a press's).
 #if os(iOS) || os(tvOS)
 import UIKit
 
@@ -14,14 +20,15 @@ extension NodeView {
 
     /// The image's extension view placed, filled and sized for where the
     /// image is now; removed where it has nothing to fill. A new one shows
-    /// where it goes at once; one already shown moves and resizes in the
-    /// animation it is placed in (a split's column coming or going), as the
-    /// image does, rather than growing from nothing or jumping to its end.
+    /// where it goes at once; one already shown resizes in the animation it
+    /// is placed in (a split's column coming or going), as the image does,
+    /// rather than growing from nothing or jumping to its end.
     func syncBackgroundExtension() {
         let held = Self.extensions.object(forKey: self)
+        // A flight shows the whole image on its own layer (LLP 1013.000 D4).
         guard #available(iOS 26.0, tvOS 26.0, *), kind == "image", props["backgroundExtension"] == "auto", !cssVisibilityHidden,
-              window != nil, let image = raster?.image else { return removeBackgroundExtension() }
-        guard let place = extensionPlace() else {
+              flightLook == nil, window != nil, let image = raster?.image else { return removeBackgroundExtension() }
+        guard let frame = extensionFrame() else {
             // Inside UIKit's animation, the safe areas are already its end's
             // while the image's layout for that end has yet to land in it: the
             // extension stays, to move there, and goes at a placement outside
@@ -29,7 +36,7 @@ extension NodeView {
             if held != nil, UIView.inheritedAnimationDuration > 0 { return }
             return removeBackgroundExtension()
         }
-        if let view = held as? UIBackgroundExtensionView { return placeExtension(view, place, image) }
+        if let view = held as? UIBackgroundExtensionView { return placeExtension(view, frame, image) }
         let view = UIBackgroundExtensionView()
         view.automaticallyPlacesContentView = false
         view.isUserInteractionEnabled = false
@@ -42,36 +49,22 @@ extension NodeView {
         box.addSublayer(ExtensionLayer(owner: content))
         content.layer.addSublayer(box)
         view.contentView = content
-        // What the extension draws: four bands around the image's box.
-        let outside = ExtensionLayer(owner: view)
-        for _ in 0..<4 {
-            let band = ExtensionLayer(owner: view)
-            band.backgroundColor = UIColor.black.cgColor
-            outside.addSublayer(band)
-        }
-        view.layer.mask = outside
         Self.extensions.setObject(view, forKey: self)
-        UIView.performWithoutAnimation { placeExtension(view, place, image) }
+        UIView.performWithoutAnimation { placeExtension(view, frame, image) }
     }
 
     @available(iOS 26.0, tvOS 26.0, *)
-    private func placeExtension(_ view: UIBackgroundExtensionView, _ place: (host: UIView, below: UIView, frame: CGRect, image: CGRect), _ image: RasterImage) {
-        if view.superview !== place.host || place.host.subviews.firstIndex(of: view) != place.host.subviews.firstIndex(of: place.below).map({ $0 - 1 }) {
-            place.host.insertSubview(view, belowSubview: place.below)
-        }
-        view.frame = place.frame
-        // Outside the image's subtree, the extension takes the opacity and the
-        // hiding of the image and of each ancestor between it and the host.
-        let between = sequence(first: self as UIView, next: \.superview).prefix { $0 !== place.host }
-        view.alpha = between.reduce(1) { $0 * $1.alpha }
-        view.isHidden = between.contains { $0.isHidden }
-        guard let content = view.contentView, let box = content.layer.sublayers?.first, let picture = box.sublayers?.first,
-              let outside = view.layer.mask, let bands = outside.sublayers, bands.count == 4 else { return }
-        let shown = place.image.offsetBy(dx: -place.frame.minX, dy: -place.frame.minY)
+    private func placeExtension(_ view: UIBackgroundExtensionView, _ frame: CGRect, _ image: RasterImage) {
+        if view.superview !== self || subviews.first !== view { insertSubview(view, at: 0) }
+        view.frame = frame
+        // The extension draws the picture: the image's own layer is not drawn too.
+        if imageLayer?.isHidden == false { imageLayer?.isHidden = true }
+        guard let content = view.contentView, let box = content.layer.sublayers?.first, let picture = box.sublayers?.first else { return }
+        // The image's box, in the extension view, holds the picture as the image shows it.
+        let shown = bounds.offsetBy(dx: -frame.minX, dy: -frame.minY)
         content.frame = shown
-        // The extension mirrors the image with its corners, and draws only
-        // outside the image's box, which the image draws: nothing of the copy
-        // shows behind the image's corners or through the image as it fades.
+        // The extension mirrors the image with its corners: nothing of the
+        // picture shows past the image's rounded corners.
         if cornerRadii(in: bounds).contains(where: { $0 > 0 }) {
             let corners = content.layer.mask as? CAShapeLayer ?? CAShapeLayer()
             CATransaction.begin(); CATransaction.setDisableActions(true)
@@ -79,12 +72,6 @@ extension NodeView {
             CATransaction.commit()
             if content.layer.mask !== corners { content.layer.mask = corners }
         } else if content.layer.mask != nil { content.layer.mask = nil }
-        let size = place.frame.size
-        outside.frame = CGRect(origin: .zero, size: size)
-        bands[0].frame = CGRect(x: 0, y: 0, width: max(0, shown.minX), height: size.height)
-        bands[1].frame = CGRect(x: shown.maxX, y: 0, width: max(0, size.width - shown.maxX), height: size.height)
-        bands[2].frame = CGRect(x: shown.minX, y: 0, width: shown.width, height: max(0, shown.minY))
-        bands[3].frame = CGRect(x: shown.minX, y: shown.maxY, width: shown.width, height: max(0, size.height - shown.maxY))
         // The pixels as the image shows them (`applyImageLayer`, `draw(_:)`):
         // an animated image's frame now, fitted by its `object-fit` in its
         // content box, which clips them, and with a `-exact-tint-color` the
@@ -107,39 +94,28 @@ extension NodeView {
         }
     }
 
-    /// The extension is a view beside the image, outside its subtree: it
-    /// goes when the image leaves the window, is destroyed or is parked.
+    /// The extension goes when the image leaves the window, is destroyed or
+    /// is parked, or meets no safe area; the image draws its picture again.
     func removeBackgroundExtension() {
-        Self.extensions.object(forKey: self)?.removeFromSuperview()
+        guard let view = Self.extensions.object(forKey: self) else { return }
+        view.removeFromSuperview()
         Self.extensions.removeObject(forKey: self)
+        imageLayer?.isHidden = false
     }
 
-    /// Where the extension goes: the nearest scroll view, else the route's
-    /// view, behind the image's ancestor there; its frame the image's, grown
-    /// to the route's edges on each side where the image meets the route's
+    /// The extension's frame in the image's coordinates: the image's box,
+    /// grown to the route's edges on each side where it meets the route's
     /// safe area. Nil where it meets none.
-    private func extensionPlace() -> (host: UIView, below: UIView, frame: CGRect, image: CGRect)? {
-        let ancestors = Array(sequence(first: self as UIView, next: \.superview))
-        guard let route = ancestors.first(where: { $0.next is RouteController }),
-              let host = ancestors.first(where: { $0 is UIScrollView && $0.isDescendant(of: route) }) ?? Optional(route),
-              let below = ancestors.first(where: { $0.superview === host }) else { return nil }
-        let image = convert(bounds, to: host)
-        let edges = route.convert(route.bounds, to: host)
-        let safe = route.convert(route.bounds.inset(by: route.safeAreaInsets), to: host)
-        var frame = image
-        if abs(image.minX - safe.minX) < 1, safe.minX > edges.minX { frame.size.width += frame.minX - edges.minX; frame.origin.x = edges.minX }
-        if abs(image.maxX - safe.maxX) < 1, safe.maxX < edges.maxX { frame.size.width = edges.maxX - frame.minX }
-        if abs(image.minY - safe.minY) < 1, safe.minY > edges.minY { frame.size.height += frame.minY - edges.minY; frame.origin.y = edges.minY }
-        if abs(image.maxY - safe.maxY) < 1, safe.maxY < edges.maxY { frame.size.height = edges.maxY - frame.minY }
-        return frame == image ? nil : (host, below, frame, image)
-    }
-}
-
-extension Presenter {
-    /// `view`'s opacity or display changed: the extensions of the images in
-    /// it follow, as they are outside the images' subtrees.
-    func compositingChanged(_ view: UIView) {
-        for image in carrying("backgroundExtension") where image.isDescendant(of: view) { image.syncBackgroundExtension() }
+    private func extensionFrame() -> CGRect? {
+        guard let route = sequence(first: self as UIView, next: \.superview).first(where: { $0.next is RouteController }) else { return nil }
+        let edges = route.convert(route.bounds, to: self)
+        let safe = route.convert(route.bounds.inset(by: route.safeAreaInsets), to: self)
+        var frame = bounds
+        if abs(frame.minX - safe.minX) < 1, safe.minX > edges.minX { frame.size.width += frame.minX - edges.minX; frame.origin.x = edges.minX }
+        if abs(frame.maxX - safe.maxX) < 1, safe.maxX < edges.maxX { frame.size.width = edges.maxX - frame.minX }
+        if abs(frame.minY - safe.minY) < 1, safe.minY > edges.minY { frame.size.height += frame.minY - edges.minY; frame.origin.y = edges.minY }
+        if abs(frame.maxY - safe.maxY) < 1, safe.maxY < edges.maxY { frame.size.height = edges.maxY - frame.minY }
+        return frame == bounds ? nil : frame
     }
 }
 
