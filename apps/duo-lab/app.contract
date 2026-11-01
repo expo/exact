@@ -253,7 +253,7 @@ component DuoLab
                         header
                           text "Text and password"
                         row
-                          input id="keyboard-username" hatch="keyboard-field" value=checkUsername input=checkWriteUsername autocomplete="username" placeholder="Sample username" aria-label="Sample username" testId="keyboard-username" flex=1
+                          input id="keyboard-username" hatch="keyboard-field" value=checkUsername input=checkWriteUsername autocomplete="username" enterkeyhint="next" placeholder="Sample username" aria-label="Sample username" testId="keyboard-username" flex=1
                         row
                           input id="keyboard-password" hatch="keyboard-field" type="password" value=checkPassword input=checkWritePassword autocomplete="current-password" placeholder="Sample password" aria-label="Sample password" testId="keyboard-password" flex=1
                         row
