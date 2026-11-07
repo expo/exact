@@ -124,6 +124,30 @@ final class BackgroundExtensionIOSTests: XCTestCase {
         XCTAssertTrue(extensions(route).isEmpty)
     }
 
+    /// UIKit's view moves its mirror a frame behind any animation of its content: an opaque picture stretched under both
+    /// keeps a moving seam from showing the page. One with transparency, or that leaves part of its box empty, has nothing
+    /// under it, which would show through.
+    func testAnOpaquePictureIsStretchedUnderItsMirror() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("UIBackgroundExtensionView is iOS 26's") }
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+        let opaque = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 30, height: 10), format: format).image { context in
+            UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 30, height: 10))
+        }.jpegData(compressionQuality: 1))
+        // A fractional height, as a box half the window high has, whose content box need not equal it to the last bit
+        let insets = UIEdgeInsets(top: 50, left: 40, bottom: 20, right: 30), box = CGRect(x: 40, y: 80, width: 230, height: 317.0 / 3)
+        for (source, style, under, what) in [(opaque, [:], true, "an opaque picture"), (nil, [:], false, "a picture with transparency"),
+                                             (opaque, ["object_fit": "contain"], false, "a picture that leaves part of its box empty")] as [(Data?, [String: Any], Bool, String)] {
+            let (_, route, image) = try mount(box, insets: insets, style: style, source: source)
+            image.syncBackgroundExtension()
+            let view = try XCTUnwrap(extensions(route).first as? UIBackgroundExtensionView)
+            view.layoutIfNeeded()
+            let layer = try XCTUnwrap(view.layer.sublayers?.first)
+            XCTAssertEqual(layer.name, "exact.extension.under", "the first layer, under everything")
+            XCTAssertEqual(layer.frame, view.bounds)
+            XCTAssertEqual(layer.contents != nil, under, what)
+        }
+    }
+
     /// Within the image's box the picture is drawn once: nothing of a square
     /// picture shows behind the image's rounded corners, and a faded image is
     /// not drawn over a copy of itself. The extension's content takes the
