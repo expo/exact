@@ -22,7 +22,6 @@ extension NodeView {
     /// Each image's extension view, out of `NodeView`'s stored properties,
     /// which every view pays for.
     private static let extensions = NSMapTable<NodeView, UIView>.weakToStrongObjects()
-    private static let underName = "exact.extension.under"
 
     /// The image's extension view placed, filled and sized for where the
     /// image is now; removed where it has nothing to fill. A new one shows
@@ -56,11 +55,6 @@ extension NodeView {
         box.addSublayer(ExtensionLayer(owner: content))
         content.layer.addSublayer(box)
         view.contentView = content
-        // UIKit's view moves its mirror a frame behind any animation of the content (SwiftUI's own effect moves both
-        // together). The picture stretched under both keeps a moving seam from showing the page.
-        let under = ExtensionLayer(owner: content)
-        under.name = Self.underName
-        view.layer.insertSublayer(under, at: 0)
         Self.extensions.setObject(view, forKey: self)
         UIView.performWithoutAnimation { placeExtension(view, frame, image) }
     }
@@ -92,13 +86,6 @@ extension NodeView {
         box.frame = inner
         picture.frame = RasterGeometry.rect(natural: image.naturalSize, content: inner, fit: fit).offsetBy(dx: -inner.minX, dy: -inner.minY)
         let pixels = AnimatedRasters.shared.frame(for: self) ?? image.image
-        if let under = view.layer.sublayers?.first(where: { $0.name == Self.underName }) {
-            under.frame = view.bounds
-            // Only where nothing of it can show inside the image's box: a picture that fills the box, is opaque and has no tint or corners
-            let fills = ["cover", "fill"].contains(fit) && inner.insetBy(dx: -0.5, dy: -0.5).contains(bounds) && cornerRadii(in: bounds).allSatisfy { $0 == 0 }
-            let shown = fills && [.none, .noneSkipFirst, .noneSkipLast].contains(pixels.alphaInfo) && channels("tint_color") == nil ? pixels : nil
-            if (under.contents as AnyObject?) !== shown { under.contents = shown }
-        }
         if let tint = channels("tint_color").map({ TextEngine.color($0).cgColor }) {
             let alpha = picture.mask ?? ExtensionLayer(owner: content)
             alpha.frame = picture.bounds
