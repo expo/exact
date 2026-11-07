@@ -1235,14 +1235,14 @@ package final class Presenter {
     }
 
     /// A frame, content box or scene, in a batch or after one (a flight
-    /// landing, FlightsIOS.swift).
+    /// landing, FlightsIOS.swift; a route's edge moving, EdgeFramesIOS.swift).
     func applyGeometry(_ op: BatchOp) {
-        // Outside a batch, carried rows go back to their authored parents
-        // first, as before a batch, so the new box is theirs; the projections
-        // remount on the next turn. Inside one, a carried row's box is placed
-        // from its authored parent (`gridOrigin`) and goes home with it.
+        // Outside a batch, only the carried rows this op must read at home go back, by a batch's
+        // rule: a box moved under a carried row is placed in its cell (`cellFrame`), and the
+        // projections remount on the next turn. Every row sent home showed its cell empty and the
+        // list's hidden sections over it for a frame, each time a sheet's bar moved its edge.
         if !applying {
-            groupedLists?.prepare()
+            groupedLists?.prepare([op])
             requestProjectionSync()
         }
         let id = op.id

@@ -61,6 +61,8 @@ extension GroupedListView {
         }
         var alone: [NodeView] = []
         for op in ops {
+            // A far frame moves nothing: it is where a box goes when its route's edge moves (`farFrame`)
+            if op.op == .far { continue }
             if [.roots, .flight, .land, .exit].contains(op.op) { return restore() }
             if carried[op.id] != nil {
                 if op.op != .frame, let row = host.presenter.views[op.id] { alone.append(row) }
