@@ -90,7 +90,7 @@ extension NavigationHost {
             let search = searching(c)
             // Nested in the list's, the detail's routes are under the list's bar.
             let barNav = split.flatMap { $0.nested && nav === $0.detail ? $0.list : nil } ?? nav
-            let settled = search || (barNav?.isNavigationBarHidden ?? true) != routeShowsBar(c, in: nav)
+            let settled = !c.safeAreaNeedsLayout && (search || (barNav?.isNavigationBarHidden ?? true) != routeShowsBar(c, in: nav))
             // A route showing no bar has no title: its inset is the status bar's, none in landscape (LLP 1130 D3).
             let barless = !routeShowsBar(c, in: nav)
             if !c.ignoresSafeArea("top"), settled, !search, let node = c.collapseScroll, let sv = c.collapseScrollView, sv === node.scrollView, sv.adjustedContentInset.top > 0 || barless {

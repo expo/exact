@@ -473,6 +473,35 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertEqual(slide.duration, beside.duration, accuracy: 0.01, "with the same animation")
     }
 
+    /// UIKit announces the safe area a sidebar's opening ends at before it opens the animation it lays the detail out in,
+    /// and any batch may report covers in between. What follows the safe area moves when UIKit lays it out, in whatever
+    /// animation is open then, as a view constrained to it does. Moved when announced, the Landmarks port's hero and card
+    /// rows took their end width at once and only slid.
+    func testASafeAreaAnnouncedBeforeItsLayoutMovesInThatLayout() throws {
+        let session = try boot(size: CGSize(width: 951, height: 669))
+        let navigation = session.presenter.navigation, agent = Agent(session: session)
+        until("a split") { navigation.split != nil && !agent.nativeInFlight() }
+        let split = try XCTUnwrap(navigation.split)
+        split.controller.traitOverrides.horizontalSizeClass = .regular
+        until("expanded") { !split.controller.isCollapsed && split.showsList && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-c").id)])["error"])
+        until("the chapter is in the detail") { has(session, "chapter-figure") && split.controller.transitionCoordinator == nil && !agent.nativeInFlight() }
+        let figure = try node(session, "chapter-figure"), route = try XCTUnwrap(split.detail.topViewController as? RouteController)
+        until("a frame shows it") { figure.layer.presentation() != nil }
+        let start = figure.frame
+        route.additionalSafeAreaInsets.left += 100
+        navigation.reportCovers()
+        XCTAssertEqual(figure.frame, start, "announced and reported, not yet laid out")
+        UIView.animate(withDuration: 0.5) { route.view.layoutIfNeeded() }
+        XCTAssertNotEqual(figure.frame, start, "laid out")
+        var between = false
+        until("it ends") {
+            if let shown = figure.layer.presentation(), abs(shown.frame.minX - figure.layer.frame.minX) > 1 || abs(shown.frame.width - figure.layer.frame.width) > 1 { between = true }
+            return figure.layer.animationKeys()?.isEmpty != false
+        }
+        XCTAssertTrue(between, "a frame shows it between where it was and where it ends")
+    }
+
     /// LLP 1127 D14 on an iPhone Duo folded and unfolded with its inspector
     /// shown. Collapsing with the inspector shown, UIKit presents the
     /// inspector's column as a sheet of its own: the route goes to the sheet

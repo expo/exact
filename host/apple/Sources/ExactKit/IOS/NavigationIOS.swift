@@ -87,9 +87,11 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     // hatch): the route's content area follows (LLP 1075.003 §3.5).
     override func viewSafeAreaInsetsDidChange() {
         let started = ExactSession.protoLive ? ApplyPhases.cpu() : 0 // PROTO (UIKit-first measurement)
+        safeAreaNeedsLayout = true
         super.viewSafeAreaInsetsDidChange()
         rideBars()
-        host?.coversChanged()
+        safeArea.sync(self)
+        view.setNeedsLayout()
         host?.presenter.placeEdge(self) // PROTO (rule 4)
         if ExactSession.protoLive { NSLog("PROTO live edge %@ cpu %.0f µs top %.2f", ExactSession.protoMode.rawValue, ApplyPhases.cpu() - started, view.safeAreaInsets.top) } // PROTO (UIKit-first measurement)
     }
@@ -121,6 +123,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         fitContentViewport()
+        if safeAreaNeedsLayout {
+            safeAreaNeedsLayout = false
+            host?.coversChanged()
+        }
         host?.presenter.owners.publish()
         #if os(iOS)
         search?.labelScopes()
@@ -135,6 +141,10 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     }
 
     let safeArea = RouteSafeArea()
+    /// UIKit has announced a safe area its layout has yet to apply. It can announce a transition's end before opening
+    /// that transition's animation and laying the view out inside it, as a view constrained to the safe area moves
+    /// then: read now, the content would jump to its end, so a report keeps what it last told until the layout.
+    private(set) var safeAreaNeedsLayout = false
     var restingTop: CGFloat = 0, placedEdge: Double? // PROTO (rule 4, `EdgeFramesIOS.swift`)
 
     /// Whether the route turns off `edge`'s native clearance: by
@@ -835,7 +845,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                 if inspecting == nil, split.inspecting != nil, mounted.count <= common { placeInspector(nil) }
                 let animated = owners.count == 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && split.controller.view.window != nil
                 syncSplit(split, Array(wanted[parts[0]]), animated: animated)
-                split.controller.view.layoutIfNeeded()
+                if !split.columnsAboutToMove { split.controller.view.layoutIfNeeded() }
                 continue
             }
             guard let nav = owners[index] else { continue }
@@ -908,7 +918,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         controllers = controllers.filter { routeIDs.contains($0.key) }
         presenter.modals.updatePermissions()
         if p.tabs != nil { replayTabs() }
-        if !presenter.awaitingFrame.isEmpty { window?.layoutIfNeeded() } // Lay out new views before reporting their geometry
+        if !presenter.awaitingFrame.isEmpty, split?.columnsAboutToMove != true { window?.layoutIfNeeded() } // Lay out new views before reporting their geometry
         reportCovers()
         refitForBars()
         settled = true

@@ -43,6 +43,10 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     var inspectorClosed: () -> Void = {}
     /// UIKit is moving the columns, inside its animation (`moveAlong`).
     var columnsMove: () -> Void = {}
+    /// UIKit has said the columns will move and has yet to open its animation. It lays them out itself, inside that
+    /// animation, as it does a view constrained to the safe area: nothing here may lay them out before then, or what
+    /// the safe area moves jumps to its end.
+    private(set) var columnsAboutToMove = false
     /// The list whose rows made the stack a split, which keeps it one while
     /// it has no row to act on (a search that matches nothing).
     var listNode: UInt32?
@@ -305,6 +309,10 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         DispatchQueue.main.async { self.changed() }
     }
     func splitViewController(_ svc: UISplitViewController, willChangeTo displayMode: UISplitViewController.DisplayMode) {
+        if let coordinator = svc.transitionCoordinator {
+            columnsAboutToMove = coordinator.animate(alongsideTransition: { [weak self] _ in self?.columnsAboutToMove = false },
+                                                     completion: { [weak self] _ in self?.columnsAboutToMove = false })
+        }
         DispatchQueue.main.async { self.changed() }
     }
 }

@@ -33,6 +33,7 @@ extension NodeView {
         // A flight shows the whole image on its own layer (LLP 1013.000 D4).
         guard #available(iOS 26.0, tvOS 26.0, *), kind == "image", extendsBackground, !cssVisibilityHidden,
               flightLook == nil, window != nil, let image = raster?.image else { return removeBackgroundExtension() }
+        if let route = ViewPresentation.controller(for: self) as? RouteController, route.safeAreaNeedsLayout { return }
         guard let frame = extensionFrame() else {
             // Inside UIKit's animation, the safe areas are already its end's
             // while the image's layout for that end has yet to land in it: the
