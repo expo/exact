@@ -637,7 +637,10 @@ final class SplitIOSTests: XCTestCase {
     }
 
     /// The same as a swipe: let go, it pops nothing and the info stays;
-    /// finished, it takes the notes and their info.
+    /// finished, it takes the notes and their info. The column slides away
+    /// once the swipe's pop is over, in a transition of the split's own:
+    /// hidden while the pop finished, UIKit moved it at none of its frames
+    /// and took it away at once as its transition ended.
     func testASwipeUnderTheInspectorTakesItsRouteWithItOnceFinished() throws {
         guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit animates a pop only in a window a scene holds") }
@@ -661,7 +664,12 @@ final class SplitIOSTests: XCTestCase {
         pop.interaction.update(0.4)
         pop.interaction.finish()
         pop.interactive = false
-        closesWithPop(split)
+        var hiddenWhilePopping: Bool?
+        until("the column is hidden") {
+            if hiddenWhilePopping == nil, !split.controller.isShowing(.inspector) { hiddenWhilePopping = split.detail.transitionCoordinator != nil }
+            return hiddenWhilePopping != nil || (split.detail.transitionCoordinator == nil && split.controller.transitionCoordinator == nil && !agent.nativeInFlight())
+        }
+        XCTAssertEqual(hiddenWhilePopping, false, "the column stays until the swipe's pop is over")
         try wentBack(to: book, session, agent, split)
     }
 

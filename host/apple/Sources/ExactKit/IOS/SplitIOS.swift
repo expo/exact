@@ -230,13 +230,15 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
 
     /// UIKit pops the route the inspector's route is above, which takes the
     /// inspector's route too (`NavigationRules.poppedTop`): the column slides
-    /// away with the pop, from the moment the pop is sure to end — at once for
-    /// UIKit's Back, as the finger lifts for a swipe that goes back — rather
-    /// than once the pop is over and the app has gone back. `inspect(nil)`
-    /// keeps the route in the column until the column has gone.
+    /// away once the pop is sure to end — at once for UIKit's Back, and as a
+    /// swipe that goes back completes, as SwiftUI's inspector does. Hidden as
+    /// the finger lifts, while the swipe's pop finishes, UIKit moved the
+    /// column at none of its frames and took it away at once when its own
+    /// transition ended (iOS 27.1). `inspect(nil)` keeps the route in the
+    /// column until the column has gone.
     func closeInspector(along pop: UIViewControllerTransitionCoordinator) {
         guard pop.isInteractive else { return inspect(nil, in: nil) }
-        pop.notifyWhenInteractionChanges { [weak self] context in
+        pop.animate(alongsideTransition: nil) { [weak self] context in
             if !context.isCancelled { self?.inspect(nil, in: nil) }
         }
     }
