@@ -965,9 +965,11 @@ export function bakeTarget(platform) {
   if (platform === 'ios') return 'aarch64-apple-ios';
   // The Linux host is also a supported headless executable on macOS. This
   // is the actual target Cargo will build here, never a guessed architecture.
-  const result = spawnSync('rustc', ['-vV'], { encoding: 'utf8' });
+  // Run in this checkout, whose rust-toolchain.toml names a toolchain: an app's own folder has none
+  // and a machine need not have a default
+  const result = spawnSync('rustc', ['-vV'], { encoding: 'utf8', cwd: import.meta.dirname });
   const host = /^host: (.+)$/m.exec(result.stdout ?? '')?.[1];
-  if (result.status !== 0 || !host) throw new Error('rustc did not report its host target');
+  if (result.status !== 0 || !host) throw new Error(`rustc -vV did not report a host target, which the build needs to choose its output folder: ${(result.stderr || result.error?.message || 'no output').trim()} Install the toolchain that rust-toolchain.toml names, then build again.`);
   return host;
 }
 /** Cargo's metadata for a development bake, asked once for a lock and a set of
