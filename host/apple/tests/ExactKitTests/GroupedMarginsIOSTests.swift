@@ -5,6 +5,25 @@ import XCTest
 @testable import ExactGroupedLists
 
 final class GroupedPaddingIOSTests: GroupedListFixture {
+    /// A list's view reaches past its laid-out box to a side safe area, where UIKit keeps its cards clear of that area.
+    /// The kernel lays the rows out in the box, so the card's margins it is told are from the box: told from the view's
+    /// edge, the strip beside an open iPhone Duo's inspector came off the rows' width twice.
+    func testACardsMarginsAreFromTheListsBoxWhereItsViewReachesPastIt() throws {
+        let p = presenter { self.model("inset-grouped", custom: true) }
+        let l = try list(p), collection = l.collection
+        collection.layoutIfNeeded()
+        let before = try XCTUnwrap(l.margins())
+        SafeReach.apply(UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 84), to: l.owner)
+        collection.frame = l.owner.scrollFrame
+        (collection as? GroupedCollectionView)?.sideSafeArea = (0, 84)
+        collection.layoutIfNeeded()
+        let after = try XCTUnwrap(l.margins())
+        let card = try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))).frame
+        XCTAssertEqual(collection.bounds.width, l.owner.frame.width, "the view reached")
+        XCTAssertEqual(after[0], before[0], accuracy: 0.5, "the left margin")
+        XCTAssertEqual(after[1], max(0, l.owner.bounds.width - 84 - card.maxX), accuracy: 0.5, "the right margin is from the box, 84 points inside the view's edge")
+    }
+
     func testHorizontalPaddingInsetsSectionsAndIsNotReportedAsACardMargin() throws {
         for appearance in ["plain", "grouped", "inset-grouped"] {
             for direction in ["ltr", "rtl"] {

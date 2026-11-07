@@ -24,8 +24,9 @@ extension GroupedListHost {
 
 extension GroupedListView {
     /// UIKit's card and cell margins, left then right, inside the list's
-    /// content box. The kernel already applies CSS padding; including it
-    /// in the card margins would subtract it from a custom row's width twice.
+    /// content box. The kernel already applies CSS padding and lays the list out in the safe area, while
+    /// its native view reaches past that box; including either in the card margins would subtract it from a
+    /// custom row's width twice.
     func margins() -> [CGFloat]? {
         guard collection.window != nil, // PROTO: publish margins only for a list in its native hierarchy
               let cell = collection.visibleCells.first as? UICollectionViewListCell,
@@ -33,8 +34,8 @@ extension GroupedListView {
               let frame = collection.layoutAttributesForItem(at: path)?.frame else { return nil }
         let m = cell.directionalLayoutMargins
         let rtl = cell.effectiveUserInterfaceLayoutDirection == .rightToLeft
-        return [max(0, frame.minX - reach.left - horizontalPadding.left),
-                max(0, collection.bounds.width - frame.maxX - reach.right - horizontalPadding.right),
+        return [max(0, frame.minX - reach.left - owner.reach.left - horizontalPadding.left),
+                max(0, collection.bounds.width - frame.maxX - reach.right - owner.reach.right - horizontalPadding.right),
                 rtl ? m.trailing : m.leading, rtl ? m.leading : m.trailing]
     }
 
