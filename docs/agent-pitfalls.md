@@ -904,6 +904,20 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   viewport reader, but an app source there fails with `type-child-resource`.
   Declare the resource in the root and pass the value the child needs as a prop.
 
+- **A page's own state that `back` resets is reset when a sheet over the page closes.**
+  Symptom: a page in edit mode stops editing when a sheet it opened (a picker
+  route with `navigationPresentation="modal"`) closes with its Done. Cause: the
+  editing state was the root's, reset in the root's `back` action so that leaving
+  the page ended it; `back` also closes the route above the page, so the sheet's
+  Done ran it too. What to do: make the page a component used under the stack's
+  `for e in stack(nav) key=e.id` and give it the state. A child under `for` owns
+  state keyed to its row, so the state is made when the route is pushed, stays
+  while routes and sheets sit above it, and goes when the route is popped, as
+  SwiftUI's `@State` on a pushed view does, and no navigation action resets it.
+  (The Landscapes template's collection editor, 2026-11-07.) **Candidate
+  diagnostic:** the root's `navigationBack` or `navigate` handler writing a state
+  that only one route's view reads.
+
 - **A send reads a derive from before the action's writes.** An action's writes
   commit together; reading a derive after assigning one of its inputs still reads
   the previous commit's derive. Build the next record explicitly for the send,
