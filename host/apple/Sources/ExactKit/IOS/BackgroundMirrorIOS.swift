@@ -17,6 +17,14 @@
 // Which sides reach the route's edge is decided from the box's layout, not
 // from a safe area UIKit gives before that layout lands
 // (`NodeView.extensionFrame`).
+//
+// Where the extension reaches further past the box than the box's own size
+// (a box beside the iPhone Duo's fold, with a sidebar as wide as the
+// screen's half), the mirror is stretched to the extension's edge, as UIKit
+// stretches its own (`Mirror.stretch`). Its pieces are placed by their
+// frames, whose edges are linear in the box's position and size and in the
+// extension's, so the one animation keeps the mirror at the box's edge and at
+// the extension's at every frame.
 #if os(iOS) || os(tvOS)
 import CoreImage
 import UIKit
@@ -29,7 +37,7 @@ final class ExtensionView: UIView {
     private let box = ExtensionLayer(owner: nil), picture = ExtensionLayer(owner: nil)
     private var mirrors: [Mirror] = []
     /// Where the box, its content box and its picture were last placed.
-    private var placed: (shown: CGRect, inner: CGRect, drawn: CGRect)?
+    private var placed: Placement?
     /// A later `prune` is scheduled: one at a time, however often the box is placed meanwhile.
     private var pruneScheduled = false
     /// The sides the extension reaches past the box, and the box's layout they were judged on
@@ -62,7 +70,7 @@ final class ExtensionView: UIView {
     fileprivate static let sharp: CGFloat = 2
     /// The box at `shown` in this view, its content box `inner` and the picture at `drawn` in it, with `pixels`, a
     /// `tint` through their alpha, and `corners` the box's clip; a mirror on each side of `shown` short of this view's
-    /// edges. Called inside the animation that moves the image, each layer takes it.
+    /// edges, reaching them. Called inside the animation that moves the image, each layer takes it.
     func place(_ shown: CGRect, inner: CGRect, drawn: CGRect, pixels: CGImage, tint: CGColor?, corners: CGPath?) {
         content.frame = shown
         corner(content.layer, corners, shown.size)
@@ -72,25 +80,25 @@ final class ExtensionView: UIView {
         // A side the box comes to has a mirror placed first where the box was, to move from there; one it leaves
         // keeps its mirror while the box still moves, as what it fills narrows to nothing (`prune`).
         let sides = Mirror.Side.all.filter { side in side.extends(shown, in: bounds) || mirrors.contains { $0.side == side } }
-        let before = placed
-        placed = (shown, inner, drawn)
+        let now = Placement(shown: shown, inner: inner, drawn: drawn, bounds: bounds), before = placed
+        placed = now
         defer { prune() }
+        let masks = Self.levels.map(\.full)
         if mirrors.map(\.side) != sides {
             mirrors = sides.map { side in
                 if let kept = mirrors.first(where: { $0.side == side }) { return kept }
                 let made = Mirror(side, owner: self, levels: Self.levels.count)
                 layer.insertSublayer(made.container, below: content.layer)
-                if let before { UIView.performWithoutAnimation { made.place(before.shown, inner: before.inner, drawn: before.drawn, masks: Self.levels.map(\.full)) } }
+                if let before { UIView.performWithoutAnimation { made.place(before, from: nil, masks: masks, corners: corners) } }
                 return made
             }
         }
         guard !mirrors.isEmpty else { return }
         let images = blurs(of: pixels, drawn: drawn)
         for mirror in mirrors {
-            mirror.place(shown, inner: inner, drawn: drawn, masks: Self.levels.map(\.full))
-            corner(mirror.container, corners, shown.size)
+            mirror.place(now, from: before, masks: masks, corners: corners)
             for level in mirror.levels {
-                show(level.index == 0 ? pixels : images[level.index - 1], tint: tint, in: level.picture, owner: self)
+                for piece in level.pieces { show(level.index == 0 ? pixels : images[level.index - 1], tint: tint, in: piece.picture, owner: self) }
             }
         }
     }
@@ -157,20 +165,28 @@ final class ExtensionView: UIView {
         }
     }
 
-    /// The box's corners on a layer the box's size, or none: a path is not animated, as the box's own is not.
-    private func corner(_ layer: CALayer, _ path: CGPath?, _ size: CGSize) {
-        guard let path else { layer.mask = nil; return }
-        let mask = layer.mask as? CAShapeLayer ?? CAShapeLayer()
-        CATransaction.begin(); CATransaction.setDisableActions(true)
-        mask.path = path
-        mask.frame = CGRect(origin: .zero, size: size)
-        CATransaction.commit()
-        if layer.mask !== mask { layer.mask = mask }
-    }
+}
+
+/// Where the box, its content box and its picture are placed in the extension (`ExtensionView.place`), and the
+/// extension's bounds then, which say how far it reaches past the box.
+private struct Placement {
+    let shown: CGRect, inner: CGRect, drawn: CGRect, bounds: CGRect
+}
+
+/// The box's corners, `path`, on a layer `size` big, or none: a path is not animated, as the box's own is not.
+private func corner(_ layer: CALayer, _ path: CGPath?, _ size: CGSize) {
+    guard let path else { layer.mask = nil; return }
+    let mask = layer.mask as? CAShapeLayer ?? CAShapeLayer()
+    CATransaction.begin(); CATransaction.setDisableActions(true)
+    mask.path = path
+    mask.frame = CGRect(origin: .zero, size: size)
+    CATransaction.commit()
+    if layer.mask !== mask { layer.mask = mask }
 }
 
 /// The box reflected about one edge, or about a corner where two meet: a copy of the box's layers in a layer the
-/// box's size, flipped, its levels each masked by how far it is from the edge.
+/// box's size, flipped, its levels each masked by how far it is from the edge, and stretched to the extension's edge
+/// where that is further than the box's size.
 private final class Mirror {
     struct Side: Equatable {
         let x: Int, y: Int // -1 the box's left or top, 1 its right or bottom, 0 not across that axis
@@ -184,25 +200,33 @@ private final class Mirror {
             return across(x, box.minX, box.maxX, view.minX, view.maxX) && across(y, box.minY, box.maxY, view.minY, view.maxY)
         }
     }
-    /// A level: 0 the sharp mirror, then each blur of `ExtensionView.levels`
-    struct Level { let index: Int, holder: ExtensionLayer, box: ExtensionLayer, picture: ExtensionLayer, mask: ExtensionGradient? }
+    /// A level: 0 the sharp mirror, then each blur of `ExtensionView.levels`, drawn by its pieces
+    final class Level {
+        let index: Int, holder: ExtensionLayer, mask: ExtensionGradient?
+        var pieces: [Piece] = []
+        init(index: Int, holder: ExtensionLayer, mask: ExtensionGradient?) { (self.index, self.holder, self.mask) = (index, holder, mask) }
+    }
+    /// A part of a level's copy of the box, stretched as UIKit stretches it there: `clip`, what it shows of the box's
+    /// content box, holding the picture
+    struct Piece { let clip: ExtensionLayer, picture: ExtensionLayer }
 
     let side: Side
     let container: ExtensionLayer
     let levels: [Level]
+    private weak var owner: UIView?
+    /// How many pieces each level's copy is cut into across each axis
+    private var counts = (x: 0, y: 0)
 
     /// A corner shows the most blurred level alone; a side, every level over the sharp mirror.
     init(_ side: Side, owner: UIView, levels count: Int) {
         self.side = side
+        self.owner = owner
         let container = ExtensionLayer(owner: owner)
         container.transform = CATransform3DMakeScale(side.x == 0 ? 1 : -1, side.y == 0 ? 1 : -1, 1)
         self.container = container
         let corner = side.x != 0 && side.y != 0
         levels = (corner ? [count] : Array(0...count)).map { i in
-            let holder = ExtensionLayer(owner: owner), box = ExtensionLayer(owner: owner), picture = ExtensionLayer(owner: owner)
-            box.masksToBounds = true
-            box.addSublayer(picture)
-            holder.addSublayer(box)
+            let holder = ExtensionLayer(owner: owner)
             let mask = i > 0 && !corner ? ExtensionGradient(owner: owner) : nil
             if let mask {
                 mask.colors = [UIColor.clear.cgColor, UIColor.black.cgColor]
@@ -214,26 +238,98 @@ private final class Mirror {
                 holder.mask = mask
             }
             container.addSublayer(holder)
-            return Level(index: i, holder: holder, box: box, picture: picture, mask: mask)
+            return Level(index: i, holder: holder, mask: mask)
+        }
+    }
+
+    /// The mirror placed for `now`. Across an axis it is first stretched on, its pieces are made again, ten, and
+    /// placed first for `before` without animation, to move from there. A mirror keeps them for its life, so a
+    /// placement while an animation still moves them never takes them away.
+    func place(_ now: Placement, from before: Placement?, masks: [CGFloat], corners: CGPath?) {
+        let counts = (x: max(self.counts.x, Self.excess(side.x, now, horizontal: true) > 0 ? Self.pieces : 1),
+                      y: max(self.counts.y, Self.excess(side.y, now, horizontal: false) > 0 ? Self.pieces : 1))
+        if counts != self.counts, let owner {
+            self.counts = counts
+            for level in levels {
+                for piece in level.pieces { piece.clip.removeFromSuperlayer() }
+                level.pieces = (0..<counts.x * counts.y).map { _ in
+                    let piece = Piece(clip: ExtensionLayer(owner: owner), picture: ExtensionLayer(owner: owner))
+                    piece.clip.masksToBounds = true
+                    piece.clip.addSublayer(piece.picture)
+                    level.holder.addSublayer(piece.clip)
+                    return piece
+                }
+            }
+            if let before { UIView.performWithoutAnimation { layout(before, masks: masks, corners: corners) } }
+        }
+        layout(now, masks: masks, corners: corners)
+    }
+
+    /// UIKit's stretch of a mirror that reaches further than the box's size (the mesh on the mirror layer of
+    /// `UIBackgroundExtensionView` and SwiftUI's `backgroundExtensionEffect()`, read on iOS 27.1): the point a
+    /// fraction `u` of the box's size from the edge is drawn `u + k·u³` sizes from it, `k` the reach in box sizes less
+    /// one, so the mirror is the box's reflection at the edge and its far side meets the extension's edge. UIKit
+    /// samples it at tenths, ten straight pieces, as here. UIKit blurs the mirror after stretching it; each level here
+    /// is blurred before, so far out its blur is up to `1 + 3k` times wider along the axis.
+    private static func stretch(_ u: CGFloat, _ k: CGFloat) -> CGFloat { u + k * u * u * u }
+    private static let pieces = 10
+
+    /// How far the extension reaches past the box on side `s` across an axis, in box sizes less one: `k` in
+    /// `stretch`, or 0 where it reaches no further than the box's size.
+    private static func excess(_ s: Int, _ p: Placement, horizontal: Bool) -> CGFloat {
+        let (low, high, size) = horizontal ? (p.shown.minX - p.bounds.minX, p.bounds.maxX - p.shown.maxX, p.shown.width)
+                                           : (p.shown.minY - p.bounds.minY, p.bounds.maxY - p.shown.maxY, p.shown.height)
+        let reach = s < 0 ? low : s > 0 ? high : 0
+        return size > 0 ? max(0, reach / size - 1) : 0
+    }
+
+    /// The pieces across one axis of the copy, whose edge is at 0 when `s` is -1 and at `size` when 1: each one's span
+    /// of the box, `low` to `high` in the copy's coordinates, and the map `scale`·x + `offset` that draws it.
+    private static func spans(_ s: Int, size: CGFloat, excess k: CGFloat, count: Int) -> [(low: CGFloat, high: CGFloat, scale: CGFloat, offset: CGFloat)] {
+        guard s != 0 else { return [(0, size, 1, 0)] }
+        return (0..<count).map { j in
+            let u0 = CGFloat(j) / CGFloat(count), u1 = CGFloat(j + 1) / CGFloat(count)
+            // Distances from the edge: the piece's span of the box, and where it is drawn
+            let (s0, s1) = (size * u0, size * u1), (d0, d1) = (size * stretch(u0, k), size * stretch(u1, k))
+            let scale = s1 > s0 ? (d1 - d0) / (s1 - s0) : 1
+            let (low, high, drawnLow) = s < 0 ? (s0, s1, d0) : (size - s1, size - s0, size - d1)
+            return (low, high, scale, drawnLow - scale * low)
         }
     }
 
     /// The copy at the box's reflection: its centre reflected about the edge (twice the edge less the centre), the
-    /// box's own size and layers inside it, the flip doing the rest. Each level's mask runs from the edge, at the
-    /// copy's near side in its own coordinates, with the level clear to where the level before it is full and full
-    /// at its own `masks` distance, and reaches only as far as the next level is full, past which that level covers
-    /// it: a gradient draws its stops at a resolution along its length, and as one mask as long as any mirror the
-    /// first level's 7 points showed it a third full at the edge.
-    func place(_ shown: CGRect, inner: CGRect, drawn: CGRect, masks: [CGFloat]) {
+    /// box's own size and layers inside it, the flip doing the rest. Each piece clips its span of the box's content
+    /// box and holds the picture, both mapped by the piece's stretch. The box's corners clip the copy, or each piece
+    /// mapped the same way once it is stretched: a mask is drawn offscreen, so an unstretched mirror has one.
+    /// Each level's mask runs from the edge, at the copy's near side in its own coordinates, with the level clear to
+    /// where the level before it is full and full at its own `masks` distance, and reaches only as far as the next
+    /// level is full, past which that level covers it: a gradient draws its stops at a resolution along its length,
+    /// and as one mask as long as any mirror the first level's 7 points showed it a third full at the edge.
+    private func layout(_ p: Placement, masks: [CGFloat], corners: CGPath?) {
+        let shown = p.shown
         let x = side.x < 0 ? 2 * shown.minX - shown.midX : side.x > 0 ? 2 * shown.maxX - shown.midX : shown.midX
         let y = side.y < 0 ? 2 * shown.minY - shown.midY : side.y > 0 ? 2 * shown.maxY - shown.midY : shown.midY
         container.bounds = CGRect(origin: .zero, size: shown.size)
         container.position = CGPoint(x: x, y: y)
+        let xs = Self.spans(side.x, size: shown.width, excess: Self.excess(side.x, p, horizontal: true), count: counts.x)
+        let ys = Self.spans(side.y, size: shown.height, excess: Self.excess(side.y, p, horizontal: false), count: counts.y)
+        let inner = p.inner, drawn = p.drawn.offsetBy(dx: p.inner.minX, dy: p.inner.minY)
+        let whole = counts == (1, 1)
+        corner(container, whole ? corners : nil, shown.size)
         let r = Self.reach
         for level in levels {
             level.holder.frame = container.bounds
-            level.box.frame = inner
-            level.picture.frame = drawn
+            for (i, piece) in level.pieces.enumerated() {
+                let a = xs[i % xs.count], b = ys[i / xs.count]
+                let left = max(a.low, inner.minX), right = max(left, min(a.high, inner.maxX))
+                let top = max(b.low, inner.minY), bottom = max(top, min(b.high, inner.maxY))
+                let clip = CGRect(x: a.scale * left + a.offset, y: b.scale * top + b.offset, width: a.scale * (right - left), height: b.scale * (bottom - top))
+                piece.clip.frame = clip
+                piece.picture.frame = CGRect(x: a.scale * drawn.minX + a.offset - clip.minX, y: b.scale * drawn.minY + b.offset - clip.minY,
+                                             width: a.scale * drawn.width, height: b.scale * drawn.height)
+                var map = CGAffineTransform(a: a.scale, b: 0, c: 0, d: b.scale, tx: a.offset - clip.minX, ty: b.offset - clip.minY)
+                corner(piece.clip, whole ? nil : corners?.copy(using: &map), clip.size)
+            }
             guard let mask = level.mask else { continue }
             let i = level.index
             // The edge is the copy's side the box meets: its left (0) for a left mirror, as the flip turns it, else

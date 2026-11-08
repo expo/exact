@@ -241,6 +241,89 @@ final class BackgroundExtensionIOSTests: XCTestCase {
         XCTAssertTrue(seen.contains { $0 > 41 && $0 < 119 }, "the box was seen between its two places: \(seen)")
     }
 
+    /// The pieces of a mirror's sharp level on screen, nearest the box's edge first: `presented`, as the render
+    /// server draws them now
+    private func pieces(_ view: ExtensionView, left: Bool, presented: Bool = false) throws -> [CGRect] {
+        let shown = { (layer: CALayer) -> CGRect in let l = presented ? layer.presentation() ?? layer : layer; return l.convert(l.bounds, to: nil) }
+        let box = shown(view.content.layer)
+        let mirror = try XCTUnwrap((view.layer.sublayers ?? []).filter { $0.transform.m11 < 0 }.first { (shown($0).midX < box.midX) == left })
+        let sharp = try XCTUnwrap(mirror.sublayers?.first?.sublayers)
+        return sharp.map(shown).sorted { left ? $0.maxX > $1.maxX : $0.minX < $1.minX }
+    }
+
+    /// A mirror that reaches further past the box than the box's own width is stretched to the route's edge as
+    /// UIKit's own is (SwiftUI's mesh, read on iOS 27.1): the point a fraction `u` of the box's width from its edge is
+    /// drawn `u + k·u³` widths from it, `k` the reach in widths less one, sampled at tenths. A copy of the box alone
+    /// left the page showing between it and the route's edge (beside the iPhone Duo's fold, under a sidebar).
+    func testAMirrorWiderThanItsBoxIsStretchedToTheEdgeAsUIKitStretchesIt() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the extension's pixels are drawn by the window server")
+        }
+        let (_, route, _) = try mount(CGRect(x: 200, y: 50, width: 60, height: 100), insets: UIEdgeInsets(top: 0, left: 200, bottom: 0, right: 40), in: scene)
+        let view = try XCTUnwrap(extensions(route).first as? ExtensionView)
+        let left = try pieces(view, left: true), k: CGFloat = 200.0 / 60 - 1
+        XCTAssertEqual(left.count, 10, "ten pieces, as UIKit's mesh has")
+        for (j, piece) in left.enumerated() {
+            let u0 = CGFloat(j) / 10, u1 = CGFloat(j + 1) / 10
+            XCTAssertEqual(piece.maxX, 200 - 60 * (u0 + k * u0 * u0 * u0), accuracy: 0.01, "piece \(j)'s side nearer the box")
+            XCTAssertEqual(piece.minX, 200 - 60 * (u1 + k * u1 * u1 * u1), accuracy: 0.01, "piece \(j)'s further side")
+        }
+        XCTAssertEqual(left.last?.minX ?? 200, 0, accuracy: 0.01, "the mirror's far side at the route's edge")
+        XCTAssertEqual(try pieces(view, left: false).count, 1, "the right side reaches 40 points past a box 60 wide: a mirror of the box, unstretched")
+        let at = try pixels(), page = (0..<200).first { at(CGPoint(x: $0, y: 100)) != [255, 0, 0] }
+        XCTAssertNil(page, "the mirror from the route's edge to the box, no page between its pieces: \(page.map { "\($0): \(at(CGPoint(x: $0, y: 100)))" } ?? "")")
+    }
+
+    /// A mirror once stretched keeps its pieces: a placement while an animation still moves them, as UIKit's fold
+    /// places the image more than once inside its animation, finds them where they are rather than making new ones
+    /// at the end, which would jump the mirror from its stretch to none.
+    func testAStretchedMirrorKeepsItsPiecesThroughAnAnimationThatEndsUnstretched() throws {
+        let (p, route, image) = try mount(CGRect(x: 200, y: 50, width: 60, height: 100), insets: UIEdgeInsets(top: 0, left: 200, bottom: 0, right: 40))
+        let view = try XCTUnwrap(extensions(route).first as? ExtensionView)
+        let stretched = try XCTUnwrap(view.layer.sublayers?.first { $0.transform.m11 < 0 && $0.frame.midX < 200 }?.sublayers?.first?.sublayers)
+        UIView.animate(withDuration: 0.6) {
+            route.additionalSafeAreaInsets.left -= 160
+            route.view.layoutIfNeeded()
+            p.apply(wireBatch([["op": "frame", "id": 2, "x": 40, "y": 50, "w": 220, "h": 100]]))
+            image.syncBackgroundExtension()
+        }
+        image.syncBackgroundExtension()
+        let after = try XCTUnwrap(view.layer.sublayers?.first { $0.transform.m11 < 0 && $0.frame.midX < 40 }?.sublayers?.first?.sublayers)
+        XCTAssertEqual(after.count, 10)
+        XCTAssertTrue(zip(stretched, after).allSatisfy { $0 === $1 }, "the same pieces, still moving")
+    }
+
+    /// Folding the iPhone Duo moves the box beside the fold, where the sidebar reaches further than the box is wide:
+    /// at every frame of the one animation, the stretched mirror meets the box's edge and reaches the route's.
+    func testAMirrorStretchingInAnAnimationMeetsTheBoxAndTheEdgeAtEveryFrame() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the presentation tree is the render server's, which needs a window in a scene")
+        }
+        let (p, route, image) = try mount(CGRect(x: 40, y: 50, width: 230, height: 100), insets: UIEdgeInsets(top: 0, left: 40, bottom: 0, right: 30), in: scene)
+        let view = try XCTUnwrap(extensions(route).first as? ExtensionView)
+        XCTAssertEqual(try pieces(view, left: true).count, 1, "40 points past a box 230 wide: unstretched")
+        UIView.animate(withDuration: 0.6, delay: 0, options: [.curveEaseInOut]) {
+            route.additionalSafeAreaInsets.left += 160
+            route.view.layoutIfNeeded()
+            p.apply(wireBatch([["op": "frame", "id": 2, "x": 200, "y": 50, "w": 70, "h": 100]]))
+            image.syncBackgroundExtension()
+        }
+        var seen: [CGFloat] = []
+        let end = Date(timeIntervalSinceNow: 0.7)
+        while Date() < end {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.03))
+            let presented = view.content.layer.presentation() ?? view.content.layer
+            let box = presented.convert(presented.bounds, to: nil)
+            let left = try pieces(view, left: true, presented: true)
+            seen.append(box.minX)
+            XCTAssertEqual(left.count, 10)
+            XCTAssertEqual(try XCTUnwrap(left.first).maxX, box.minX, accuracy: 0.01, "the mirror at the box's edge, the box at \(box.minX)")
+            XCTAssertLessThanOrEqual(try XCTUnwrap(left.map(\.minX).min()), 0.01, "the mirror reaching the route's edge, the box at \(box.minX)")
+        }
+        XCTAssertTrue(seen.contains { $0 > 41 && $0 < 199 }, "the box was seen between its two places: \(seen)")
+        XCTAssertEqual(try XCTUnwrap(pieces(view, left: true).map(\.minX).min()), 0, accuracy: 0.01, "at the end, the mirror's far side at the route's edge")
+    }
+
     /// UIKit gives a route its new safe area before the kernel lays the image out for it (folding the iPhone Duo):
     /// until then the extension keeps reaching the route's edge on the sides it reached, so nothing between the old
     /// box and the edge goes blank, to slide back in when the layout lands. The box's new layout decides its sides.
