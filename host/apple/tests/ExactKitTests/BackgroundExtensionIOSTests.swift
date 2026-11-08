@@ -274,27 +274,10 @@ final class BackgroundExtensionIOSTests: XCTestCase {
         XCTAssertNil(page, "the mirror from the route's edge to the box, no page between its pieces: \(page.map { "\($0): \(at(CGPoint(x: $0, y: 100)))" } ?? "")")
     }
 
-    /// A mirror once stretched keeps its pieces: a placement while an animation still moves them, as UIKit's fold
-    /// places the image more than once inside its animation, finds them where they are rather than making new ones
-    /// at the end, which would jump the mirror from its stretch to none.
-    func testAStretchedMirrorKeepsItsPiecesThroughAnAnimationThatEndsUnstretched() throws {
-        let (p, route, image) = try mount(CGRect(x: 200, y: 50, width: 60, height: 100), insets: UIEdgeInsets(top: 0, left: 200, bottom: 0, right: 40))
-        let view = try XCTUnwrap(extensions(route).first as? ExtensionView)
-        let stretched = try XCTUnwrap(view.layer.sublayers?.first { $0.transform.m11 < 0 && $0.frame.midX < 200 }?.sublayers?.first?.sublayers)
-        UIView.animate(withDuration: 0.6) {
-            route.additionalSafeAreaInsets.left -= 160
-            route.view.layoutIfNeeded()
-            p.apply(wireBatch([["op": "frame", "id": 2, "x": 40, "y": 50, "w": 220, "h": 100]]))
-            image.syncBackgroundExtension()
-        }
-        image.syncBackgroundExtension()
-        let after = try XCTUnwrap(view.layer.sublayers?.first { $0.transform.m11 < 0 && $0.frame.midX < 40 }?.sublayers?.first?.sublayers)
-        XCTAssertEqual(after.count, 10)
-        XCTAssertTrue(zip(stretched, after).allSatisfy { $0 === $1 }, "the same pieces, still moving")
-    }
-
     /// Folding the iPhone Duo moves the box beside the fold, where the sidebar reaches further than the box is wide:
     /// at every frame of the one animation, the stretched mirror meets the box's edge and reaches the route's.
+    /// Unfolding, UIKit places the image more than once inside its animation: the mirror keeps the pieces it has,
+    /// where a set made anew for an unstretched placement would replace them mid-flight, the stretch jumping to none.
     func testAMirrorStretchingInAnAnimationMeetsTheBoxAndTheEdgeAtEveryFrame() throws {
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
             throw missing("scene", "the presentation tree is the render server's, which needs a window in a scene")
@@ -322,6 +305,18 @@ final class BackgroundExtensionIOSTests: XCTestCase {
         }
         XCTAssertTrue(seen.contains { $0 > 41 && $0 < 199 }, "the box was seen between its two places: \(seen)")
         XCTAssertEqual(try XCTUnwrap(pieces(view, left: true).map(\.minX).min()), 0, accuracy: 0.01, "at the end, the mirror's far side at the route's edge")
+        let sharp = { (left: CGFloat) in view.layer.sublayers?.first { $0.transform.m11 < 0 && $0.frame.midX < left }?.sublayers?.first?.sublayers }
+        let stretched = try XCTUnwrap(sharp(200))
+        UIView.animate(withDuration: 0.6) {
+            route.additionalSafeAreaInsets.left -= 160
+            route.view.layoutIfNeeded()
+            p.apply(wireBatch([["op": "frame", "id": 2, "x": 40, "y": 50, "w": 230, "h": 100]]))
+            image.syncBackgroundExtension()
+        }
+        image.syncBackgroundExtension()
+        let after = try XCTUnwrap(sharp(40))
+        XCTAssertEqual(after.count, 10)
+        XCTAssertTrue(zip(stretched, after).allSatisfy { $0 === $1 }, "the same pieces, still moving")
     }
 
     /// UIKit gives a route its new safe area before the kernel lays the image out for it (folding the iPhone Duo):

@@ -250,7 +250,7 @@ final class SplitIOSTests: XCTestCase {
         until("collapsed") { split.controller.isCollapsed && !agent.nativeInFlight() }
         window.traitOverrides.horizontalSizeClass = .regular
         until("expanded again") { !split.controller.isCollapsed && !agent.nativeInFlight() }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        waitForMainQueue("the expansion's ask, queued when UIKit said it expanded")
         XCTAssertEqual(split.shown.count, 1, "the book the router took away stays away")
         XCTAssertFalse(has(session, "book-a"))
     }
@@ -274,7 +274,7 @@ final class SplitIOSTests: XCTestCase {
         window.rootViewController?.view.subviews.first?.frame = window.bounds
         window.traitOverrides.horizontalSizeClass = .regular
         until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        waitForMainQueue("the expansion's ask, queued when UIKit said it expanded")
         XCTAssertFalse(has(session, "book-a"), "no page is pushed onto the sheet's stack")
         XCTAssertTrue(has(session, "share-page"), "the sheet stays")
     }

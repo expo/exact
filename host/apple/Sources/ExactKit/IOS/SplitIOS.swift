@@ -54,7 +54,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// to it, as UIKit's own split shows the detail the person left (LLP 1127 §1, item 4). The stack at its root on
     /// a split settled expanded forgets it (`NavigationHost.noteDetail`).
     var left: String?
-    /// The router asked to go to `left`'s location.
+    /// Asks the router for `left`'s location.
     var returnTo: (String) -> Void = { _ in }
 
     init(list: UINavigationController, detail: UINavigationController) {

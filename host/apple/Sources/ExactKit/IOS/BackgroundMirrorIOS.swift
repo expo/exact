@@ -242,9 +242,9 @@ private final class Mirror {
         }
     }
 
-    /// The mirror placed for `now`. Across an axis it is first stretched on, its pieces are made again, ten, and
-    /// placed first for `before` without animation, to move from there. A mirror keeps them for its life, so a
-    /// placement while an animation still moves them never takes them away.
+    /// The mirror placed for `now`. The first time it is stretched across an axis, each level is cut into ten pieces
+    /// across it, placed first for `before` without animation to move from there. The mirror keeps them for its
+    /// life, so a placement while an animation still moves them never replaces them.
     func place(_ now: Placement, from before: Placement?, masks: [CGFloat], corners: CGPath?) {
         let counts = (x: max(self.counts.x, Self.excess(side.x, now, horizontal: true) > 0 ? Self.pieces : 1),
                       y: max(self.counts.y, Self.excess(side.y, now, horizontal: false) > 0 ? Self.pieces : 1))
@@ -283,10 +283,11 @@ private final class Mirror {
         return size > 0 ? max(0, reach / size - 1) : 0
     }
 
-    /// The pieces across one axis of the copy, whose edge is at 0 when `s` is -1 and at `size` when 1: each one's span
-    /// of the box, `low` to `high` in the copy's coordinates, and the map `scale`·x + `offset` that draws it.
-    private static func spans(_ s: Int, size: CGFloat, excess k: CGFloat, count: Int) -> [(low: CGFloat, high: CGFloat, scale: CGFloat, offset: CGFloat)] {
-        guard s != 0 else { return [(0, size, 1, 0)] }
+    /// The pieces across one axis of the copy, whose edge is at 0 when `s` is -1 and at the box's size when 1: each
+    /// one's span of the box, `low` to `high` in the copy's coordinates, and the map `scale`·x + `offset` that draws
+    /// it. An axis the side does not cross has one piece, unstretched.
+    private static func spans(_ s: Int, _ p: Placement, horizontal: Bool, count: Int) -> [(low: CGFloat, high: CGFloat, scale: CGFloat, offset: CGFloat)] {
+        let size = horizontal ? p.shown.width : p.shown.height, k = excess(s, p, horizontal: horizontal)
         return (0..<count).map { j in
             let u0 = CGFloat(j) / CGFloat(count), u1 = CGFloat(j + 1) / CGFloat(count)
             // Distances from the edge: the piece's span of the box, and where it is drawn
@@ -299,8 +300,8 @@ private final class Mirror {
 
     /// The copy at the box's reflection: its centre reflected about the edge (twice the edge less the centre), the
     /// box's own size and layers inside it, the flip doing the rest. Each piece clips its span of the box's content
-    /// box and holds the picture, both mapped by the piece's stretch. The box's corners clip the copy, or each piece
-    /// mapped the same way once it is stretched: a mask is drawn offscreen, so an unstretched mirror has one.
+    /// box and holds the picture, both mapped by the piece's stretch. The box's corners clip the copy, or, once it is
+    /// stretched, each piece, mapped the same way: a mask is drawn offscreen, so an unstretched mirror keeps to one.
     /// Each level's mask runs from the edge, at the copy's near side in its own coordinates, with the level clear to
     /// where the level before it is full and full at its own `masks` distance, and reaches only as far as the next
     /// level is full, past which that level covers it: a gradient draws its stops at a resolution along its length,
@@ -311,8 +312,7 @@ private final class Mirror {
         let y = side.y < 0 ? 2 * shown.minY - shown.midY : side.y > 0 ? 2 * shown.maxY - shown.midY : shown.midY
         container.bounds = CGRect(origin: .zero, size: shown.size)
         container.position = CGPoint(x: x, y: y)
-        let xs = Self.spans(side.x, size: shown.width, excess: Self.excess(side.x, p, horizontal: true), count: counts.x)
-        let ys = Self.spans(side.y, size: shown.height, excess: Self.excess(side.y, p, horizontal: false), count: counts.y)
+        let xs = Self.spans(side.x, p, horizontal: true, count: counts.x), ys = Self.spans(side.y, p, horizontal: false, count: counts.y)
         let inner = p.inner, drawn = p.drawn.offsetBy(dx: p.inner.minX, dy: p.inner.minY)
         let whole = counts == (1, 1)
         corner(container, whole ? corners : nil, shown.size)
