@@ -404,7 +404,7 @@ fn a_subtitle_beside_a_conditional_checkmark_and_a_native_button_row() {
     let r = boot("list appearance=\"auto\" testId=\"list\" flex=1\n  section\n    button press=go testId=\"row\"\n      column testId=\"stack\"\n        text \"Dark\"\n        text \"Always\"\n      if dark\n        image \"symbol:checkmark\"\n    button press=go testId=\"plain\"\n      column testId=\"other\"\n        text \"A\"\n        text \"B\"\n      button press=go\n        text \"Go\"\n    button appearance=\"auto\" press=go testId=\"native\"\n      text \"Native\"");
     let k = r.kernel();
     assert!(
-        k.node(id(&r, "stack")).unwrap().frame.height > 60.0,
+        k.node(id(&r, "row")).unwrap().frame.height > 60.0,
         "subtitle padding: the kernel reads a subtitle cell"
     );
     assert!(
@@ -425,7 +425,7 @@ fn a_subtitle_shown_by_a_condition_and_a_hidden_text() {
     let r = boot("list appearance=\"auto\" testId=\"list\" flex=1\n  section\n    button press=go testId=\"row\"\n      if dark\n        image \"symbol:notifications\"\n      column testId=\"stack\"\n        text \"Privacy\"\n        if dark\n          text \"Screen lock\"\n    button press=go\n      text \"Gone\" display=\"none\"\n      text \"Stay\" testId=\"stay\"");
     let k = r.kernel();
     assert!(
-        k.node(id(&r, "stack")).unwrap().frame.height > 45.0,
+        k.node(id(&r, "row")).unwrap().frame.height > 45.0,
         "subtitle padding though the second line is conditional"
     );
     let list = k.grouped_list(id(&r, "list")).unwrap();
@@ -552,8 +552,8 @@ fn a_row_holding_its_own_stack_keeps_the_cells_margins() {
     assert_eq!(frame("one").height, 52.0, "one text: a cell's 52");
     assert_eq!(
         frame("field").height,
-        52.0,
-        "a row of controls keeps the cell's 52"
+        64.0,
+        "a row of controls: theirs and the cell's 15 above and below (SwiftUI's `List`, iOS 27.1: 64.3)"
     );
     assert!(
         rows[4].subtitle && frame("pair").height < 70.0,
@@ -561,13 +561,13 @@ fn a_row_holding_its_own_stack_keeps_the_cells_margins() {
     );
     assert_eq!(
         frame("cover").height,
-        66.0,
-        "an empty column is a box (a cover's placeholder), not lines"
+        96.0,
+        "an empty column is a box (a cover's placeholder), not lines, inside the cell's 15 above and below"
     );
     assert_eq!(
         frame("profile").height,
-        76.0,
-        "the stack's margins are its own: a taller avatar with its own sets the height"
+        106.0,
+        "a taller avatar with margins of its own sets the height inside the cell's, as in SwiftUI's `List`"
     );
     // The author's padding replaces the sheet's, a shorthand included.
     let own = boot("list appearance=\"auto\" flex=1\n  section\n    row padding-top=8 padding-bottom=8 testId=\"tight\"\n      column testId=\"in\"\n        text \"A\"\n        text \"B\"\n        text \"C\"\n    row padding=40 testId=\"loose\"\n      column testId=\"in2\"\n        text \"A\"\n        text \"B\"\n        text \"C\"");
@@ -635,7 +635,7 @@ fn a_stack_of_lines_takes_the_subtitle_cells_text_styles() {
 /// list's text is the platform's body size and not iOS's 17 on every host: a
 /// row and a header the body style, a second line the subheadline, a footer
 /// the footnote, each read from the ramp at the root font size the host set.
-/// The row's own metrics do not follow: a cell is 52 points at any of them.
+/// A cell is its line with 15 above and below, at least 52, as SwiftUI's `List` (iOS 27.1).
 #[test]
 fn the_sheets_text_follows_the_root_font_size() {
     let body = "list appearance=\"auto\" testId=\"list\" flex=1\n  section\n    header\n      text \"Account\" testId=\"header\"\n    row testId=\"row\"\n      text \"Title\" testId=\"title\"\n      text \"Value\" testId=\"value\"\n    button press=go testId=\"cell\"\n      column\n        text \"Privacy\" testId=\"line\"\n        text \"Screen lock\" testId=\"second\"\n    footer\n      text \"Who can see you.\" testId=\"footer\"";
@@ -671,7 +671,8 @@ fn the_sheets_text_follows_the_root_font_size() {
             assert_eq!(size(t), want, "{name}: {t}");
         }
         let row = k.node(id(&r, "row")).unwrap().frame.height;
-        assert_eq!(row, 52.0, "{name}: a row is 52");
+        let line = k.node(id(&r, "title")).unwrap().frame.height;
+        assert_eq!(row, (line + 30.0).max(52.0), "{name}: its line, 15 around");
     }
 }
 
@@ -741,9 +742,9 @@ fn a_field_goes_under_its_label_when_both_do_not_fit() {
 
 #[test]
 fn a_hidden_text_in_a_subtitle_column_and_a_hidden_first_line() {
-    let mut r = boot("list appearance=\"auto\" testId=\"list\" flex=1\n  section\n    button press=go\n      column testId=\"stack\"\n        text \"Gone\" display=\"none\"\n        text \"Privacy\"\n        text \"Screen lock\"\n    button press=go testId=\"row\"\n      column\n        if dark\n          text \"Privacy\"\n        text \"Screen lock\" testId=\"lock\"");
+    let mut r = boot("list appearance=\"auto\" testId=\"list\" flex=1\n  section\n    button press=go testId=\"first\"\n      column testId=\"stack\"\n        text \"Gone\" display=\"none\"\n        text \"Privacy\"\n        text \"Screen lock\"\n    button press=go testId=\"row\"\n      column\n        if dark\n          text \"Privacy\"\n        text \"Screen lock\" testId=\"lock\"");
     assert!(
-        r.kernel().node(id(&r, "stack")).unwrap().frame.height > 60.0,
+        r.kernel().node(id(&r, "first")).unwrap().frame.height > 60.0,
         "two shown lines: the subtitle cell's padding"
     );
     let size = |r: &Runner<NoData>| r.kernel().node(id(r, "lock")).unwrap().frame.height;
@@ -944,11 +945,11 @@ fn the_sheet_names_the_platforms_metrics_and_an_author_cannot() {
     }
     let r = boot(body);
     let row = r.kernel().node(id(&r, "row")).unwrap();
-    assert_eq!(row.style.min_height, exact_kernel::Dimension::Points(52.0));
-    assert_eq!(row.style.appearance, exact_kernel::Appearance::None);
+    let (s, points) = (&row.style, exact_kernel::Dimension::Points);
+    assert_eq!((s.min_height, s.padding_top), (points(52.0), points(15.0)));
+    assert_eq!(s.appearance, exact_kernel::Appearance::None);
     assert!(
-        !row.style.mask.has(exact_kernel::StyleId::PaddingTop)
-            && !row.style.mask.has(exact_kernel::StyleId::MarginLeft),
+        !s.mask.has(exact_kernel::StyleId::MarginLeft),
         "the Mac's rows are no row here"
     );
     assert_eq!(

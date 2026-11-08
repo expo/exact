@@ -39,7 +39,11 @@ fn a_host_that_says_its_platform_reads_that_platforms_column() {
     );
     let web = read();
     assert_eq!(web.min_height, Dimension::Points(52.0));
-    assert!(!web.mask.has(StyleId::PaddingTop), "no row on the web");
+    assert_eq!(
+        web.padding_top,
+        Dimension::Points(15.0),
+        "a list cell's content margins, where the row's author writes none"
+    );
     assert!(!web.mask.has(StyleId::MaxWidth));
     assert!(!web.mask.has(StyleId::TextAlign));
     assert_eq!(web.background_color, Some(pair(0xffff_ffff, 0x1c1c_1eff)));

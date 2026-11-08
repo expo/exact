@@ -237,15 +237,17 @@ mod tests {
     }
 
     /// iOS's and the web's columns are the grouped sheet's numbers as they
-    /// stood before they were data (LLP 1115.002 D6: neither moves), and the
-    /// Mac's are the measured form's.
+    /// stood before they were data (LLP 1115.002 D6), but a row's block
+    /// padding, which is UIKit's list cell's content margins where the row's
+    /// author writes none (15 on iOS 27.1, measured), and the Mac's are the
+    /// measured form's.
     #[test]
     fn the_columns_hold_each_platforms_grouped_form() {
         use MetricValue::{Number, Text};
         for (name, ios, mac) in [
             ("grouped-row-min-height", Number(52.0), Number(36.0)),
             ("grouped-separator-end", Number(0.0), Number(10.0)),
-            ("grouped-row-padding-block", Text("unset"), Number(10.0)),
+            ("grouped-row-padding-block", Number(15.0), Number(10.0)),
             ("grouped-card-radius", Number(26.0), Number(10.0)),
             ("grouped-card-inset", Number(16.0), Number(20.0)),
             ("grouped-section-max-width", Text("unset"), Number(744.0)),
