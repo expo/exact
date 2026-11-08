@@ -50,10 +50,10 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// The list whose rows made the stack a split, which keeps it one while
     /// it has no row to act on (a search that matches nothing).
     var listNode: UInt32?
-    /// The detail's top route, by its controller, and its location: after a Back to the list while collapsed, the
-    /// next expansion returns to it, as UIKit's own split shows the detail the person left (LLP 1127 §1, item 4).
-    /// The stack at its root on a split settled expanded forgets it (`NavigationHost.noteDetail`).
-    var left: (route: ObjectIdentifier, location: String)?
+    /// The location of the detail's top route: after a Back to the list while collapsed, the next expansion returns
+    /// to it, as UIKit's own split shows the detail the person left (LLP 1127 §1, item 4). The stack at its root on
+    /// a split settled expanded forgets it (`NavigationHost.noteDetail`).
+    var left: String?
     /// The router asked to go to `left`'s location.
     var returnTo: (String) -> Void = { _ in }
 
@@ -94,7 +94,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// put on top until it has: the detail's controller enters the list's
     /// meanwhile, while the split still reads expanded.
     private var collapsing = false
-    /// Whether the split is expanded and moving between its forms no more: UIKit reads it expanded before it has
+    /// Whether the split is expanded and no longer moving between its forms: UIKit reads it expanded before it has
     /// said so (`splitViewControllerDidExpand`), and a sync can come between.
     var settledExpanded: Bool { !controller.isCollapsed && !expansion && !collapsing }
     /// Whether the person sees the detail's routes: collapsed, only while
@@ -319,7 +319,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         show(stack, animated: false)
         // At the list after a Back while collapsed, the detail goes back to the page the person left. Asked once the
         // expansion is over, as the router's answer changes the columns.
-        if stack.count == 1, let location = left?.location {
+        if stack.count == 1, let location = left {
             DispatchQueue.main.async { [weak self] in
                 guard let self, stack.count == 1, !controller.isCollapsed else { return }
                 returnTo(location)
@@ -412,14 +412,14 @@ extension NavigationHost {
             if split.settledExpanded { split.left = nil }
             return
         }
-        guard split.left?.route != ObjectIdentifier(top),
-              let location = presenter.session?.runtime.stackSplit(root.node.id, retaining: nil)?.locations[top.node.id] else { return }
-        split.left = (ObjectIdentifier(top), location)
+        // Read each time: a `replace` keeps the route and changes its location
+        if let location = presenter.session?.runtime.stackSplit(root.node.id, retaining: nil)?.locations[top.node.id] { split.left = location }
     }
 
     /// The router goes to `location`, as a link there takes it: the root's `navigate`, else the runner's own `go`.
+    /// Nothing is asked under a presentation, as the router would push the page onto the presented stack.
     private func go(to location: String) {
-        guard let session = presenter.session else { return }
+        guard let session = presenter.session, presenter.modals.routes.isEmpty else { return }
         if let root = container, root.handlers.contains("navigate") { session.navigate(location, at: root) } else { session.hostGo(location) }
     }
 

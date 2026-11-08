@@ -255,6 +255,30 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertFalse(has(session, "book-a"))
     }
 
+    /// A sheet over the list stays up through a fold (LLP 1127 §1, item 6). Expanding under it after a Back to the
+    /// list asks for no page, which the router would push onto the sheet's stack.
+    func testExpandingUnderASheetOverTheListAsksForNoPage() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "a sheet is presented only in a scene's window") }
+        let session = try boot()
+        let navigation = session.presenter.navigation, agent = Agent(session: session)
+        until("a split") { navigation.split != nil && !agent.nativeInFlight() }
+        let split = try XCTUnwrap(navigation.split)
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book is pushed") { split.shown.count == 2 && !agent.nativeInFlight() }
+        XCTAssertNil(agent.back()["error"])
+        until("back at the list") { split.shown.count == 1 && !has(session, "book-a") && !agent.nativeInFlight() }
+        session.navigate("/share/a", at: try XCTUnwrap(session.navigationRoot))
+        until("a sheet over the list") { has(session, "share-page") && !session.presenter.modals.routes.isEmpty && !agent.nativeInFlight() }
+        let window = try XCTUnwrap(self.window)
+        window.frame = CGRect(x: 0, y: 0, width: 1100, height: 800)
+        window.rootViewController?.view.subviews.first?.frame = window.bounds
+        window.traitOverrides.horizontalSizeClass = .regular
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertFalse(has(session, "book-a"), "no page is pushed onto the sheet's stack")
+        XCTAssertTrue(has(session, "share-page"), "the sheet stays")
+    }
+
     /// An iPhone Duo unfolding: UIKit asks which display mode to expand to
     /// while the split still reads compact, then takes the detail's
     /// controller out of the list's, its `didShow` arriving before the split
