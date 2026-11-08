@@ -50,6 +50,12 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// The list whose rows made the stack a split, which keeps it one while
     /// it has no row to act on (a search that matches nothing).
     var listNode: UInt32?
+    /// The detail's top route, by its controller, and its location: after a Back to the list while collapsed, the
+    /// next expansion returns to it, as UIKit's own split shows the detail the person left (LLP 1127 §1, item 4).
+    /// The stack at its root on a split settled expanded forgets it (`NavigationHost.noteDetail`).
+    var left: (route: ObjectIdentifier, location: String)?
+    /// The router asked to go to `left`'s location.
+    var returnTo: (String) -> Void = { _ in }
 
     init(list: UINavigationController, detail: UINavigationController) {
         self.list = list
@@ -88,6 +94,9 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// put on top until it has: the detail's controller enters the list's
     /// meanwhile, while the split still reads expanded.
     private var collapsing = false
+    /// Whether the split is expanded and moving between its forms no more: UIKit reads it expanded before it has
+    /// said so (`splitViewControllerDidExpand`), and a sync can come between.
+    var settledExpanded: Bool { !controller.isCollapsed && !expansion && !collapsing }
     /// Whether the person sees the detail's routes: collapsed, only while
     /// nested, as a pop of the detail's controller leaves its routes in it.
     private var showsDetail: Bool { (controller.isCollapsed ? nested : true) && detail.viewControllers.contains { $0 is RouteController } }
@@ -308,6 +317,14 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         expansion = false
         // Collapsed, a pop of the detail's controller left its routes in it.
         show(stack, animated: false)
+        // At the list after a Back while collapsed, the detail goes back to the page the person left. Asked once the
+        // expansion is over, as the router's answer changes the columns.
+        if stack.count == 1, let location = left?.location {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, stack.count == 1, !controller.isCollapsed else { return }
+                returnTo(location)
+            }
+        }
         DispatchQueue.main.async { self.changed() }
     }
     func splitViewController(_ svc: UISplitViewController, willChangeTo displayMode: UISplitViewController.DisplayMode) {
@@ -352,6 +369,7 @@ extension NavigationHost {
         let split = SplitIOS(list: list, detail: detail)
         split.listNode = first.first.flatMap { presenter.session?.runtime.stackSplit($0.node.id, retaining: nil)?.list }
         split.changed = { [weak self] in self?.splitChanged() }
+        split.returnTo = { [weak self] location in self?.go(to: location) }
         split.inspectorClosed = { [weak self] in self?.inspectorClosed() }
         split.columnsMove = { [weak self] in self?.reportCovers(); self?.presenter.owners.publish() }
         self.split = split
@@ -360,6 +378,7 @@ extension NavigationHost {
         prepareRoutes(Array(first.dropFirst()), in: detail, firstPushed: true)
         detail.setNavigationBarHidden(false, animated: false)
         split.show(first, animated: false)
+        noteDetail(split, first)
         for nav in [list, detail] { recordOwned(nav); watchPops(nav) }
         parent.addChild(split.controller)
         split.controller.view.frame = ownerFrame(split.controller, in: p.root)
@@ -376,12 +395,32 @@ extension NavigationHost {
         prepareRoutes(Array(stack.dropFirst()), in: split.detail, firstPushed: true)
         let shown = split.shown
         split.show(stack, animated: animated)
+        noteDetail(split, stack)
         for nav in [split.list, split.detail] { recordOwned(nav) }
         // A sidebar's selected row follows the detail.
         if split.shown != shown, split.showsList, let root = stack.first,
            let list = presenter.session?.runtime.stackSplit(root.node.id, retaining: nil)?.list {
             presenter.groupedLists?.sync(changed: [list])
         }
+    }
+
+    /// The page the detail shows, which the split returns to after a Back to the list while collapsed
+    /// (`SplitIOS.left`). The stack at its root on a split settled expanded leaves none: the router took the page
+    /// away, not a Back the person made from it on the collapsed split.
+    private func noteDetail(_ split: SplitIOS, _ stack: [RouteController]) {
+        guard let root = stack.first, let top = stack.dropFirst().last else {
+            if split.settledExpanded { split.left = nil }
+            return
+        }
+        guard split.left?.route != ObjectIdentifier(top),
+              let location = presenter.session?.runtime.stackSplit(root.node.id, retaining: nil)?.locations[top.node.id] else { return }
+        split.left = (ObjectIdentifier(top), location)
+    }
+
+    /// The router goes to `location`, as a link there takes it: the root's `navigate`, else the runner's own `go`.
+    private func go(to location: String) {
+        guard let session = presenter.session else { return }
+        if let root = container, root.handlers.contains("navigate") { session.navigate(location, at: root) } else { session.hostGo(location) }
     }
 
     /// UIKit changed what the split shows: the bars' insets, which columns'

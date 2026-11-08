@@ -218,6 +218,43 @@ final class SplitIOSTests: XCTestCase {
         until("back at the list") { split.shown.count == 1 && !has("notes-a") && !agent.nativeInFlight() }
     }
 
+    /// LLP 1127 §1, item 4: on UIKit's own split, a Back to the list while
+    /// collapsed leaves the detail's controller holding the page, and the next
+    /// expansion shows it beside the list. The router went back with the
+    /// person, so as the split expands (an iPhone Duo opened after a Back on
+    /// its outer display) the router is asked to go to that page again. A page
+    /// the router itself took away while expanded is not shown again.
+    func testExpandingAfterABackToTheListShowsThePageThePersonLeft() throws {
+        let session = try boot()
+        let navigation = session.presenter.navigation, agent = Agent(session: session)
+        until("a split") { navigation.split != nil && !agent.nativeInFlight() }
+        let split = try XCTUnwrap(navigation.split)
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book is pushed") { split.shown.count == 2 && !agent.nativeInFlight() }
+        XCTAssertNil(agent.back()["error"])
+        until("back at the list") { split.shown.count == 1 && !has(session, "book-a") && !agent.nativeInFlight() }
+        // On the iPhone Duo a batch lands after UIKit reads the split expanded and before it says so, and its sync
+        // reaches the split's columns.
+        let proxy = SyncBeforeExpanding(split) { navigation.syncSplit(split, split.shown, animated: false) }
+        split.controller.delegate = proxy
+        let window = try XCTUnwrap(self.window)
+        window.frame = CGRect(x: 0, y: 0, width: 1100, height: 800)
+        window.rootViewController?.view.subviews.first?.frame = window.bounds
+        window.traitOverrides.horizontalSizeClass = .regular
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertGreaterThan(proxy.synced, 0, "a sync came between UIKit's expansion and its report of it")
+        until("the book the person left shows beside the list") { split.shown.count == 2 && has(session, "book-a") && !agent.nativeInFlight() }
+        session.navigate("/", at: try XCTUnwrap(session.navigationRoot))
+        until("the router back at the list") { split.shown.count == 1 && !has(session, "book-a") && !agent.nativeInFlight() }
+        window.traitOverrides.horizontalSizeClass = .compact
+        until("collapsed") { split.controller.isCollapsed && !agent.nativeInFlight() }
+        window.traitOverrides.horizontalSizeClass = .regular
+        until("expanded again") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(split.shown.count, 1, "the book the router took away stays away")
+        XCTAssertFalse(has(session, "book-a"))
+    }
+
     /// An iPhone Duo unfolding: UIKit asks which display mode to expand to
     /// while the split still reads compact, then takes the detail's
     /// controller out of the list's, its `didShow` arriving before the split
@@ -766,6 +803,20 @@ final class SplitIOSTests: XCTestCase {
         split.list.setViewControllers(split.list.viewControllers + [moving], animated: false)
         split.show(stack, animated: false)
         XCTAssertTrue(split.list.viewControllers.last === moving, "the list's stack is UIKit's while it collapses")
+    }
+}
+
+/// The split's delegate calls forwarded to `split`, with `sync` run as UIKit says the split expanded, before `split`
+/// hears it: the order of the iPhone Duo's unfolding, where a batch lands between.
+private final class SyncBeforeExpanding: NSObject, UISplitViewControllerDelegate {
+    let split: SplitIOS, sync: () -> Void
+    private(set) var synced = 0
+    init(_ split: SplitIOS, sync: @escaping () -> Void) { (self.split, self.sync) = (split, sync) }
+    override func responds(to aSelector: Selector!) -> Bool { super.responds(to: aSelector) || split.responds(to: aSelector) }
+    override func forwardingTarget(for aSelector: Selector!) -> Any? { split.responds(to: aSelector) ? split : nil }
+    func splitViewControllerDidExpand(_ svc: UISplitViewController) {
+        if !svc.isCollapsed { sync(); synced += 1 }
+        split.splitViewControllerDidExpand(svc)
     }
 }
 #endif
