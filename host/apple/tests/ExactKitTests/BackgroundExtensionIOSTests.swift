@@ -7,7 +7,8 @@ import XCTest
 /// LLP 1123 D11: an image's background extension is the image's own bottom
 /// subview, which draws its picture and the mirror: it grows on the sides
 /// where the image meets the route's safe area, composites with the image as
-/// one and goes when the image does.
+/// one, goes when the image does, and keeps its mirror at the picture's edge
+/// while an animation moves them.
 final class BackgroundExtensionIOSTests: XCTestCase {
     private var window: UIWindow?
     private var loader: RasterLoader?
@@ -26,7 +27,7 @@ final class BackgroundExtensionIOSTests: XCTestCase {
     /// 400 route whose safe area is `insets` in from its edges, in `scene`
     /// where one is given.
     private func mount(_ frame: CGRect, insets: UIEdgeInsets, style: [String: Any] = [:], source: Data? = nil, in scene: UIWindowScene? = nil) throws -> (Presenter, RouteController, NodeView) {
-        guard #available(iOS 26.0, *) else { throw XCTSkip("UIBackgroundExtensionView is iOS 26's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("the background extension is iOS 26's") }
         let format = UIGraphicsImageRendererFormat(); format.scale = 1
         let png = try source ?? XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 30, height: 10), format: format).image { context in
             UIColor.red.setFill(); context.fill(CGRect(x: 0, y: 0, width: 30, height: 10))
@@ -65,8 +66,7 @@ final class BackgroundExtensionIOSTests: XCTestCase {
     }
 
     private func extensions(_ route: RouteController) -> [UIView] {
-        guard #available(iOS 26.0, *) else { return [] }
-        func all(_ view: UIView) -> [UIView] { view.subviews.flatMap { ($0 is UIBackgroundExtensionView ? [$0] : []) + all($0) } }
+        func all(_ view: UIView) -> [UIView] { view.subviews.flatMap { ($0 is ExtensionView ? [$0] : []) + all($0) } }
         return all(route.view)
     }
 
@@ -110,7 +110,7 @@ final class BackgroundExtensionIOSTests: XCTestCase {
             XCTAssertEqual(shown.first.map { $0.convert($0.bounds, to: route.view) }, grown, sides)
             XCTAssertLessThanOrEqual(shown.count, 1, sides)
             // The image keeps its place: the extension's content is laid out at it.
-            if #available(iOS 26.0, *), let content = (shown.first as? UIBackgroundExtensionView)?.contentView {
+            if let content = (shown.first as? ExtensionView)?.content {
                 XCTAssertEqual(content.convert(content.bounds, to: route.view), frame, sides)
             }
         }
@@ -140,7 +140,7 @@ final class BackgroundExtensionIOSTests: XCTestCase {
         XCTAssertEqual(at(CGPoint(x: 150, y: 25)), red, "the extension fills the safe area above the image")
         XCTAssertEqual(at(CGPoint(x: 150, y: 100)), red, "the image")
         XCTAssertEqual(at(CGPoint(x: 3, y: 53)), ground, "the ground behind the image's corner, not a square picture")
-        if #available(iOS 26.0, *), let content = (extensions(route).first as? UIBackgroundExtensionView)?.contentView {
+        if let content = (extensions(route).first as? ExtensionView)?.content {
             let mask = (content.layer.mask as? CAShapeLayer)?.path
             XCTAssertEqual(mask, image.roundedPath(in: content.bounds).cgPath, "the extension mirrors the image's corners")
         }
@@ -204,6 +204,60 @@ final class BackgroundExtensionIOSTests: XCTestCase {
         let at = try pixels()
         XCTAssertEqual(at(CGPoint(x: 150, y: 100)), [0, 0, 255], "the image's second frame")
         XCTAssertEqual(at(CGPoint(x: 150, y: 25)), [0, 0, 255], "its extension's")
+    }
+
+    /// A column's animation moves the image's box, and each mirror meets the box's edge at every frame of it, as one
+    /// animation moves both: the box's left edge moves from the safe area's old edge to its new one while the mirror
+    /// fills what is left of it. UIKit's own extension moved its mirror on another clock, two frames behind the box,
+    /// and the page showed through the gap or the mirror covered the picture by up to 80 points.
+    func testTheMirrorsMeetTheBoxAtEveryFrameOfAnAnimation() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the presentation tree is the render server's, which needs a window in a scene")
+        }
+        let (p, route, image) = try mount(CGRect(x: 40, y: 50, width: 230, height: 100), insets: UIEdgeInsets(top: 0, left: 40, bottom: 0, right: 30), in: scene)
+        let view = try XCTUnwrap(extensions(route).first as? ExtensionView)
+        UIView.animate(withDuration: 0.6, delay: 0, options: [.curveEaseInOut]) {
+            route.additionalSafeAreaInsets.left += 80
+            route.view.layoutIfNeeded()
+            p.apply(wireBatch([["op": "frame", "id": 2, "x": 120, "y": 50, "w": 150, "h": 100]]))
+            image.syncBackgroundExtension()
+        }
+        // Each mirror's edge against the box's, on screen, as the render server draws them
+        func edges() -> (box: CGRect, left: CGFloat?, right: CGFloat?) {
+            let shown = { (layer: CALayer) -> CGRect in let pres = layer.presentation() ?? layer; return pres.convert(pres.bounds, to: nil) }
+            let mirrors = (view.layer.sublayers ?? []).filter { $0.transform.m11 < 0 }.map(shown)
+            let box = shown(view.content.layer)
+            return (box, mirrors.first { $0.midX < box.midX }?.maxX, mirrors.first { $0.midX > box.midX }?.minX)
+        }
+        var seen: [CGFloat] = []
+        let end = Date(timeIntervalSinceNow: 0.7)
+        while Date() < end {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.03))
+            let (box, left, right) = edges()
+            seen.append(box.minX)
+            XCTAssertEqual(try XCTUnwrap(left, "a mirror on the left"), box.minX, accuracy: 0.01, "the left mirror at the box's edge, the box at \(box.minX)")
+            XCTAssertEqual(try XCTUnwrap(right, "a mirror on the right"), box.maxX, accuracy: 0.01, "the right mirror at the box's edge")
+        }
+        XCTAssertTrue(seen.contains { $0 > 41 && $0 < 119 }, "the box was seen between its two places: \(seen)")
+    }
+
+    /// UIKit gives a route its new safe area before the kernel lays the image out for it (folding the iPhone Duo):
+    /// until then the extension keeps reaching the route's edge on the sides it reached, so nothing between the old
+    /// box and the edge goes blank, to slide back in when the layout lands. The box's new layout decides its sides.
+    func testTheExtensionKeepsItsSidesUntilTheBoxIsLaidOutAgain() throws {
+        let (p, route, image) = try mount(CGRect(x: 0, y: 50, width: 270, height: 100), insets: UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 30))
+        let reach = { self.extensions(route).first.map { $0.convert($0.bounds, to: route.view) } }
+        XCTAssertEqual(reach(), CGRect(x: 0, y: 50, width: 300, height: 100), "the image meets the safe area's right edge, its extension the route's")
+        route.additionalSafeAreaInsets.right += 20
+        route.view.layoutIfNeeded()
+        image.syncBackgroundExtension()
+        XCTAssertEqual(reach(), CGRect(x: 0, y: 50, width: 300, height: 100), "laid out for the old safe area, the image keeps its extension to the edge")
+        p.apply(wireBatch([["op": "frame", "id": 2, "x": 0, "y": 50, "w": 250, "h": 100]]))
+        image.syncBackgroundExtension()
+        XCTAssertEqual(reach(), CGRect(x: 0, y: 50, width: 300, height: 100), "laid out for the new one, it meets it")
+        p.apply(wireBatch([["op": "frame", "id": 2, "x": 0, "y": 50, "w": 200, "h": 100]]))
+        image.syncBackgroundExtension()
+        XCTAssertTrue(extensions(route).isEmpty, "laid out short of the safe area, it has none")
     }
 
     /// The extension is in the image's subtree, so it composites with the
