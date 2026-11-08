@@ -204,25 +204,28 @@ struct SafeReach {
     }
 
     /// The content's place on each edge a scroller reaches: UIKit's adjustment on the axes UIKit adjusts, and
-    /// `contentInset` for the scroll view's own safe-area inset on the rest. Which axes those are follows UIKit's
+    /// `contentInset` for the part of the reach that is the safe area on the rest: the reach less what of it crosses
+    /// an enclosing scroller's padding (`own`), which is the scroll view's safe-area inset at rest. Read from the
+    /// reach, it changes in the pass that moves the reach. Read from the scroll view's safe area, it changed when
+    /// UIKit gave a new one, against the old reach: a column opening moved a page by the whole old reach (280
+    /// points on the iPhone Duo) until the batch that moved the reach. Which axes those are follows UIKit's
     /// rule (`UIScrollView.h`: `.scrollableAxes` adjusts an axis whose content passes the view's size or that
     /// bounces, `.always` every axis). PROTO: a primary `.automatic` scroller also adjusts vertically when its
     /// content fits. The adjusted inset trails a restoring bar; a safe-area change must not fill that lag.
     static func reconcile(_ v: NodeView) {
         guard let sv = v.scroll else { return }
         if v.safeReach.insetView != ObjectIdentifier(sv) { v.safeReach.inset = .zero; v.safeReach.insetView = ObjectIdentifier(sv) }
-        let r = v.reach, safe = sv.safeAreaInsets, ci = sv.contentInset
+        let r = v.reach, own = v.safeReach.own, ci = sv.contentInset
         let adjusts = (x: sv.contentSize.width > sv.bounds.width || sv.alwaysBounceHorizontal,
                        y: sv.contentSize.height > sv.bounds.height || sv.alwaysBounceVertical
                            || (sv.contentInsetAdjustmentBehavior == .automatic && v.presenter?.navigation.insetByUIKit(v) == true))
-        func part(_ reach: CGFloat, _ safe: CGFloat, _ adjusts: Bool) -> CGFloat {
-            reach > 0 && !adjusts && sv.contentInsetAdjustmentBehavior != .always && sv.contentInsetAdjustmentBehavior != .never ? safe : 0
+        func part(_ reach: CGFloat, _ own: CGFloat, _ adjusts: Bool) -> CGFloat {
+            reach > 0 && !adjusts && sv.contentInsetAdjustmentBehavior != .always && sv.contentInsetAdjustmentBehavior != .never ? max(0, reach - own) : 0
         }
-        let own = v.safeReach.own
-        let want = UIEdgeInsets(top: part(r.top, safe.top, adjusts.y) + (r.top > 0 ? own.top : 0),
-                                left: part(r.left, safe.left, adjusts.x) + (r.left > 0 ? own.left : 0),
-                                bottom: part(r.bottom, safe.bottom, adjusts.y) + (r.bottom > 0 ? own.bottom : 0),
-                                right: part(r.right, safe.right, adjusts.x) + (r.right > 0 ? own.right : 0))
+        let want = UIEdgeInsets(top: part(r.top, own.top, adjusts.y) + (r.top > 0 ? own.top : 0),
+                                left: part(r.left, own.left, adjusts.x) + (r.left > 0 ? own.left : 0),
+                                bottom: part(r.bottom, own.bottom, adjusts.y) + (r.bottom > 0 ? own.bottom : 0),
+                                right: part(r.right, own.right, adjusts.x) + (r.right > 0 ? own.right : 0))
         let old = v.safeReach.inset
         guard want != old else { return }
         v.safeReach.inset = want
