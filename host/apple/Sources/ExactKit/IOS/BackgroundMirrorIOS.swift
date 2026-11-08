@@ -30,6 +30,8 @@ final class ExtensionView: UIView {
     private var mirrors: [Mirror] = []
     /// Where the box, its content box and its picture were last placed.
     private var placed: (shown: CGRect, inner: CGRect, drawn: CGRect)?
+    /// A later `prune` is scheduled: one at a time, however often the box is placed meanwhile.
+    private var pruneScheduled = false
     /// The sides the extension reaches past the box, and the box's layout they were judged on
     /// (`NodeView.syncBackgroundExtension`).
     var sides: UIRectEdge = []
@@ -100,7 +102,12 @@ final class ExtensionView: UIView {
         let moving = sequence(first: layer as CALayer?, next: { $0?.superlayer }).prefix(while: { $0 != nil }).compactMap { $0 }
             .contains { !($0.animationKeys() ?? []).isEmpty } || !(content.layer.animationKeys() ?? []).isEmpty
         guard !moving else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.prune() }
+            guard !pruneScheduled else { return }
+            pruneScheduled = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.pruneScheduled = false
+                self?.prune()
+            }
             return
         }
         for mirror in mirrors where !mirror.side.extends(placed.shown, in: bounds) { mirror.container.removeFromSuperlayer() }

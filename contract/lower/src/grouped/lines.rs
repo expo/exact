@@ -41,8 +41,8 @@ pub(super) fn stack_of_lines(node: &Node, sheet: Vec<Attr>) -> Node {
 }
 
 /// A title over a subtitle: the platform's subtitle cell (UIKit's has 15
-/// above and below), the second line the subheadline in the secondary
-/// colour.
+/// above and below, which the row's padding gives), the second line the
+/// subheadline in the secondary colour.
 pub(super) fn subtitle(node: &Node) -> Node {
     let Node::Element {
         tag,

@@ -987,14 +987,12 @@ fn styled(node: &Node, separated: bool, swiped: bool) -> Node {
     }
     let stack = text_stack(children);
     // A stack of lines in the row (an author's `column` that is not the
-    // subtitle cell) keeps the cell's margins, as a hand-built cell pins its
-    // content to its content view's: the subtitle cell's space above and
-    // below (15 on iOS), as a `column` row has it. On the stack, not the row,
-    // so a taller part beside it (an avatar with its own margins) sets the
-    // height as before; a row whose author wrote its vertical padding has
-    // said the space. Without them its first line touched the card and its
-    // last the separator. Where the row itself is padded (the Mac's), the
-    // stack's share is nothing.
+    // subtitle cell) is inside the cell's margins, as a hand-built cell pins
+    // its content to its content view's: the row's own padding gives them
+    // (`row-padding-block`, 15 on iOS, as SwiftUI's `List` rows measure), so
+    // the stack's share (`lines-padding-block`) is nothing on every
+    // platform; a row whose author wrote its vertical padding has said the
+    // space.
     let lines = !stack
         && !attrs.iter().any(|a| {
             matches!(
