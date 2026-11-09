@@ -258,7 +258,8 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     func closeInspector(along pop: UIViewControllerTransitionCoordinator) {
         if pop.isInteractive, let nav = inspector, let route = nav.viewControllers.first as? RouteController {
             pop.animate(alongsideTransition: nil) { [weak self, weak nav, weak route] context in
-                guard context.isCancelled, let self, let nav, let route else { return }
+                // A batch that took the route while the finger was down left it sliding out: the deferred sync decides
+                guard context.isCancelled, let self, let nav, let route, sliding == nil, nav.viewControllers.first === route else { return }
                 inspect(route, in: nav, animated: false)
             }
         }
@@ -318,7 +319,8 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     func splitViewController(_ svc: UISplitViewController, didHide column: UISplitViewController.Column) {
         #if os(iOS)
         guard #available(iOS 26.0, *), column == .inspector, closing == nil, !svc.isCollapsed else { return }
-        DispatchQueue.main.async { self.inspectorClosed() }
+        // A report for a column shown again by then (a swipe let go put it back) is no close of the person's
+        DispatchQueue.main.async { if !svc.isShowing(.inspector) { self.inspectorClosed() } }
         #endif
     }
 
