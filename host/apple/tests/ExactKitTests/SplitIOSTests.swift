@@ -723,12 +723,13 @@ final class SplitIOSTests: XCTestCase {
         try wentBack(to: book, session, agent, split)
     }
 
-    /// The same as a swipe: let go, it pops nothing and the info stays;
-    /// finished, it takes the notes and their info. The column slides away
-    /// once the swipe's pop is over, in a transition of the split's own:
-    /// hidden while the pop finished, UIKit moved it at none of its frames
-    /// and took it away at once as its transition ended.
-    func testASwipeUnderTheInspectorTakesItsRouteWithItOnceFinished() throws {
+    /// The same as a swipe: the column closes as the swipe begins, so that
+    /// UIKit's own swipe carries the column's transition with the finger (a
+    /// unit test has no touches: the interaction here drives the pop alone).
+    /// Let go, the swipe pops nothing, and the column is back in place as the
+    /// pop ends, rather than gone and sliding in again with a later sync.
+    /// Finished, the swipe takes the notes and their info.
+    func testASwipeUnderTheInspectorClosesItsColumnAsItBeginsAndALetGoKeepsIt() throws {
         guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit animates a pop only in a window a scene holds") }
         let (session, agent, split) = try inspectedNotes()
@@ -741,22 +742,20 @@ final class SplitIOSTests: XCTestCase {
         split.detail.popViewController(animated: true)
         until("UIKit's pop animates the book beneath") { book.viewIfLoaded?.window != nil }
         pop.interaction.update(0.4)
-        XCTAssertTrue(split.controller.isShowing(.inspector), "the column stays while the finger is down")
+        XCTAssertFalse(split.controller.isShowing(.inspector), "the column closes as the swipe begins")
         pop.interaction.cancel()
+        var showsAsThePopEnds: Bool?
+        split.detail.transitionCoordinator?.animate(alongsideTransition: nil) { _ in showsAsThePopEnds = split.controller.isShowing(.inspector) }
         until("the swipe let go is over") { split.detail.transitionCoordinator == nil && !agent.nativeInFlight() }
+        XCTAssertEqual(showsAsThePopEnds, true, "the column is back as the pop ends")
         XCTAssertTrue(has(session, "notes-page") && split.inspecting === info && split.controller.isShowing(.inspector), "the notes and their info stay")
         XCTAssertEqual(navigation.selectedKey, info.key)
         split.detail.popViewController(animated: true)
         until("UIKit's pop animates the book beneath") { book.viewIfLoaded?.window != nil }
         pop.interaction.update(0.4)
+        XCTAssertFalse(split.controller.isShowing(.inspector), "the column closes as the swipe begins")
         pop.interaction.finish()
         pop.interactive = false
-        var hiddenWhilePopping: Bool?
-        until("the column is hidden") {
-            if hiddenWhilePopping == nil, !split.controller.isShowing(.inspector) { hiddenWhilePopping = split.detail.transitionCoordinator != nil }
-            return hiddenWhilePopping != nil || (split.detail.transitionCoordinator == nil && split.controller.transitionCoordinator == nil && !agent.nativeInFlight())
-        }
-        XCTAssertEqual(hiddenWhilePopping, false, "the column stays until the swipe's pop is over")
         try wentBack(to: book, session, agent, split)
     }
 

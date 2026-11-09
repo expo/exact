@@ -231,29 +231,38 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         closing = close
         controller.hide(.inspector)
         moveAlong()
-        let empty = { [weak self, weak nav] in
+        let empty = { [weak self, weak nav] (cancelled: Bool) in
             guard let self, let nav, closing == close else { return }
             closing = nil
+            // A swipe let go takes the column back with its route (`closeInspector`)
+            guard !cancelled else { return }
             nav.setViewControllers([], animated: false)
             endSlide()
         }
-        if let coordinator = controller.transitionCoordinator { coordinator.animate(alongsideTransition: nil) { _ in empty() } } else { empty() }
+        if let coordinator = controller.transitionCoordinator { coordinator.animate(alongsideTransition: nil) { empty($0.isCancelled) } } else { empty(false) }
         #endif
     }
 
     /// UIKit pops the route the inspector's route is above, which takes the
-    /// inspector's route too (`NavigationRules.poppedTop`): the column slides
-    /// away once the pop is sure to end — at once for UIKit's Back, and as a
-    /// swipe that goes back completes, as SwiftUI's inspector does. Hidden as
-    /// the finger lifts, while the swipe's pop finishes, UIKit moved the
-    /// column at none of its frames and took it away at once when its own
-    /// transition ended (iOS 27.1). `inspect(nil)` keeps the route in the
-    /// column until the column has gone.
+    /// inspector's route too (`NavigationRules.poppedTop`): the column closes
+    /// as the pop begins. UIKit's Back slides it away on the split's own
+    /// clock. A swipe's pop carries the column's transition (iOS 27.1): the
+    /// column follows the finger, leaves with the page when the swipe goes
+    /// back, and comes back with the page when it is let go. Closed only as
+    /// the finger lifts or as the pop ends, it would stay until the page had
+    /// gone, as UIKit holds a split's change while a swipe's pop finishes.
+    /// Let go, UIKit still lays the split out as last asked, without the
+    /// column, so the column is shown again at once as the pop ends; asked
+    /// for later, it would vanish and slide in again. `inspect(nil)` keeps the
+    /// route in the column until the column has gone.
     func closeInspector(along pop: UIViewControllerTransitionCoordinator) {
-        guard pop.isInteractive else { return inspect(nil, in: nil) }
-        pop.animate(alongsideTransition: nil) { [weak self] context in
-            if !context.isCancelled { self?.inspect(nil, in: nil) }
+        if pop.isInteractive, let nav = inspector, let route = nav.viewControllers.first as? RouteController {
+            pop.animate(alongsideTransition: nil) { [weak self, weak nav, weak route] context in
+                guard context.isCancelled, let self, let nav, let route else { return }
+                inspect(route, in: nav, animated: false)
+            }
         }
+        inspect(nil, in: nil)
     }
 
     /// UIKit animates the columns into place from a show or hide: what the
