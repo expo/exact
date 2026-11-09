@@ -609,13 +609,14 @@ final class SplitIOSTests: XCTestCase {
         XCTAssertEqual(Set(seen), [], "unfolded, the column shows the route at once")
     }
 
-    /// An iPhone Duo unfolding with its inspector in a sheet: a sync the
-    /// expansion starts can find the split collapsing still, UIKit having
-    /// asked which column to put on top and not yet said it collapsed. The
-    /// sheet keeps the route until the column can take it: closed, the
-    /// inspector was gone until a later sync slid the column in. The order is
-    /// UIKit's on the Duo simulator, replayed here by asking before the
-    /// expansion.
+    /// An iPhone Duo unfolding with its inspector in a sheet: UIKit asks which
+    /// column to put on top and then expands, with no word of a collapse. The
+    /// sheet keeps the route until the column can take it, and the column
+    /// takes it once the split has expanded: closed early, the inspector was
+    /// gone until a later sync slid the column in; marked collapsing still,
+    /// the sheet stayed over the expanded split and held every later route
+    /// back. The order is UIKit's on the Duo simulator, replayed here by
+    /// asking before the expansion.
     func testAnInspectorsSheetKeepsItsRouteUntilTheColumnCanTakeIt() throws {
         guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "a sheet is presented only in a scene's window") }
@@ -633,9 +634,34 @@ final class SplitIOSTests: XCTestCase {
         _ = split.splitViewController(split.controller, topColumnForCollapsingToProposedTopColumn: .secondary)
         window.traitOverrides.horizontalSizeClass = .regular
         until("expanded") { !split.controller.isCollapsed }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3)) // the syncs the expansion starts
-        XCTAssertEqual(session.presenter.modals.routes.map(\.node), [info], "the sheet keeps the route")
+        until("the column takes it from the sheet") {
+            session.presenter.modals.routes.isEmpty && split.inspecting != nil && split.controller.isShowing(.inspector) && !agent.nativeInFlight()
+        }
         XCTAssertTrue(info.window != nil, "and shows it")
+        XCTAssertTrue(split.settledExpanded, "the split is expanded, not collapsing")
+    }
+
+    /// The same order with no sheet: a page in the detail, the iPhone Duo
+    /// closed and opened again. UIKit asks which column to put on top and
+    /// expands; the split is then expanded only, so Info opens its column
+    /// and a row opens its page.
+    func testAnExpansionAfterACollapseQuestionLeavesTheSplitFreeToNavigate() throws {
+        guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
+        let session = try boot(size: CGSize(width: 951, height: 669))
+        let navigation = session.presenter.navigation, agent = Agent(session: session)
+        let window = try XCTUnwrap(self.window)
+        window.traitOverrides.horizontalSizeClass = .compact
+        until("a split, collapsed") { navigation.split?.controller.isCollapsed == true && !agent.nativeInFlight() }
+        let split = try XCTUnwrap(navigation.split)
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book is pushed") { split.shown.count == 2 && !agent.nativeInFlight() }
+        _ = split.splitViewController(split.controller, topColumnForCollapsingToProposedTopColumn: .secondary)
+        window.traitOverrides.horizontalSizeClass = .regular
+        until("expanded") { split.settledExpanded && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "notes-a").id)])["error"])
+        until("the notes are pushed") { split.shown.count == 3 && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "notes-info-a").id)])["error"])
+        until("the notes' info is in the inspector's column") { split.inspecting != nil && split.controller.isShowing(.inspector) && !agent.nativeInFlight() }
     }
 
     /// LLP 1127 D14 on the Landmarks port's iPhone Duo: with the inspector

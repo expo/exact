@@ -92,7 +92,11 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     private var expansion = false
     /// Whether UIKit is collapsing the columns, from asking which column to
     /// put on top until it has: the detail's controller enters the list's
-    /// meanwhile, while the split still reads expanded.
+    /// meanwhile, while the split still reads expanded. UIKit can ask and then
+    /// expand instead, with no word of a collapse (an iPhone Duo unfolding):
+    /// the expansion's question ends the mark, as the collapse's ends
+    /// `expansion`, for a split moves one way at a time. A mark left set held
+    /// every later stack and the inspector back (`show`, `inspect`).
     private var collapsing = false
     /// Whether the split is expanded and no longer moving between its forms: UIKit reads it expanded before it has
     /// said so (`splitViewControllerDidExpand`), and a sync can come between.
@@ -297,6 +301,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     }
     func splitViewController(_ svc: UISplitViewController,
                              displayModeForExpandingToProposedDisplayMode proposedDisplayMode: UISplitViewController.DisplayMode) -> UISplitViewController.DisplayMode {
+        collapsing = false
         expansion = true
         return proposedDisplayMode
     }
@@ -309,11 +314,13 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     }
 
     func splitViewControllerDidCollapse(_ svc: UISplitViewController) {
+        expansion = false
         collapsing = false
         show(stack, animated: false)
         DispatchQueue.main.async { self.changed() }
     }
     func splitViewControllerDidExpand(_ svc: UISplitViewController) {
+        collapsing = false
         expansion = false
         // Collapsed, a pop of the detail's controller left its routes in it.
         show(stack, animated: false)
