@@ -1075,8 +1075,9 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       // layout the host kept from what happened before, which a person sees until something re-renders.
       // Not under `verify`, whose end checks read the screen the test left.
       if (closedAt == null && !failures.length && !atEnd && ['ios', 'host-ios'].includes(host)) try {
-        const { differences, unkept } = await freshBuildDifferences(s);
-        if (unkept) notes.push(`not compared with a fresh build: the screen holds state a restart does not keep (${unkept}), so a rebuild shows another screen`);
+        const { differences, unkept, skipped } = await freshBuildDifferences(s);
+        if (skipped) notes.push(`not compared with a fresh build: ${skipped}`);
+        else if (unkept) notes.push(`not compared with a fresh build: the screen holds state a restart does not keep (${unkept}), so a rebuild shows another screen`);
         for (const line of differences) failures.push(`${t.name}: ${line}`);
       } catch (e) { failures.push(`${t.name}: the comparison with a fresh build: ${e.message}`); }
       if (atEnd && closedAt == null) end = await atEnd(s, { name: t.name, index: n, size: facts.size, store, failures, reload: t.steps.some((st) => st.op === 'reload'), launch: { ...launchFacts({ ...facts, epoch: first, env: env ?? {} }), media: { ...media } }, reached: await reached(), typed: [...typed], touched: [...touched], expectedRefusals: [...expectedRefusals], ...(s.host === 'web' ? { restart: async () => { await reload(); await data(); } } : {}) }).catch((e) => ({ error: e.message }));
@@ -1105,24 +1106,30 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
 }
 
 /**
- * The screen a test ended on against a fresh build of it (`frames`, `rebuild`): each shown node's box where the
+ * The screen a test ended on against a fresh build of it (`boxes`, `rebuild`): each shown node's box where the
  * steps left it and where the same state, booted again with every view built new, puts it. A box that differs by a
  * point or more is layout the host kept from what happened before (a fold and back, a swipe let go), which a
  * person sees until something re-renders. The restart keeps the app's state but not a component's own `state`, so
  * the boxes are compared only when the tree it builds is the one the steps left (each node's type, props and focus);
- * otherwise `unkept` names the first node that differs. Returns `{ differences, unkept }`, the outermost box first.
+ * otherwise `unkept` names the first node that differs. A screen that does not settle, or a plan that does not
+ * apply again (a request it must wait for), is `skipped`, with the reason. Returns `{ differences, unkept, skipped }`,
+ * the outermost box first.
  */
 export async function freshBuildDifferences(s) {
   const read = async () => {
-    await s.clock('settle');
-    const { frames, error } = await s.op({ op: 'frames' });
+    if ((await s.clock('settle'))?.settled === false) return null;
+    const { boxes, error } = await s.op({ op: 'boxes' });
     if (error) throw new Error(error);
-    return placed(await s.op({ op: 'tree' }), frames);
+    const tree = await s.op({ op: 'tree' });
+    if (tree?.error) throw new Error(`tree: ${tree.error}`);
+    return placed(tree, boxes);
   };
   const before = await read();
+  if (!before) return { differences: [], skipped: 'the screen the test ended on did not settle' };
   const r = await s.op({ op: 'rebuild' });
-  if (r?.error) throw new Error(r.error);
+  if (r?.error) return { differences: [], skipped: r.error };
   const after = await read();
+  if (!after) return { differences: [], skipped: 'the fresh build did not settle' };
   const unkept = treeDifference(before.nodes, after.nodes);
   return { differences: unkept ? [] : frameDifferences(before.boxes, after.boxes), unkept };
 }

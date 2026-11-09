@@ -289,9 +289,9 @@ public final class Agent {
             Agent.reply(session.canvases.decorate(req, tree))
         case "layout": Agent.reply(tagged(inspectLayout(req) ?? layout(req))) // LLP 1080.001: `native`, `agree`
         #if os(iOS) || os(tvOS)
-        case "frames": Agent.reply(tagged(frames()))
+        case "boxes": Agent.reply(tagged(boxes()))
         #else
-        case "frames": Agent.reply(["error": "frames: only UIKit hosts list their boxes for a fresh-build comparison"])
+        case "boxes": Agent.reply(["error": "boxes: only UIKit hosts list their boxes for a fresh-build comparison"])
         #endif
         case "rebuild": Agent.reply(tagged(session.app.rebuild() ? ["rebuilt": true] : ["error": "rebuild: the running plan did not boot again with the app's state"]))
         // A call that moved something settles the canvases before it

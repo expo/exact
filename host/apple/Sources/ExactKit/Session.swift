@@ -224,20 +224,14 @@ public final class ExactApp {
         applyTogether(bytes, label: label, resolver: resolver, token: 0, commit: { true })
     }
 
-    /// The running plan booted again in every session with the app's state carried and every view built new: a
+    /// The running plan applied again in every session with the app's state carried and every view built new: a
     /// fresh build of what the screens show, which the test runner compares with what the steps left (`rebuild`).
-    /// A delivered generation goes through the dev loop's path; a baked app boots its baked plan as a dev restart does,
-    /// the focus kept as that restart keeps it.
+    /// A delivered generation goes through the dev loop's path; otherwise each session applies the plan it booted
+    /// (`bootedPlan`, else the one baked into the library) as a host's plan replacement does, its focus kept.
     func rebuild() -> Bool {
         if let plan = lastPlan { return applyTogether(plan, label: "rebuild", resolver: resolver, token: selectedToken, identity: devGeneration, commit: { true }) }
-        let plan = Runtime.bakedPlan()
         let booted = sessions.filter { $0.booted && $0.state != .destroyed }
-        return !booted.isEmpty && booted.map { session in
-            let kept = session.presenter.focusPlace(tree: session.agent("{\"op\":\"tree\"}"))
-            guard session.boot(plan: plan, size: session.presenter.viewportSize).error == nil else { return false }
-            session.presenter.restoreFocus(kept, tree: session.agent("{\"op\":\"tree\"}"))
-            return true
-        }.allSatisfy { $0 }
+        return !booted.isEmpty && booted.map { $0.apply($0.bootedPlan ?? Runtime.bakedPlan(), label: "rebuild") }.allSatisfy { $0 }
     }
 
     /// Every session accepts before the durable commit. Its callback runs on
@@ -424,6 +418,8 @@ public final class ExactSession {
     public internal(set) var firstLayoutMs: Double?
     /// The first batch and its numbers, once booted (the smoke prints them).
     public private(set) var booted = false
+    /// The plan `boot(plan:)` booted (a plan file's, not the library's), which `rebuild` applies again.
+    private(set) var bootedPlan: Data?
     public private(set) var bootError: String?
     public private(set) var bootMs = 0.0
     public private(set) var rustMs = 0.0
@@ -879,6 +875,7 @@ public final class ExactSession {
     /// Boot from plan bytes as the first boot (a fixture, `EXACT_PLAN`).
     @discardableResult
     public func boot(plan bytes: Data, size: CGSize) -> Batch {
+        bootedPlan = bytes
         let t = CACurrentMediaTime()
         ApplyProfile.begin(); ExactLaunch.shared.bootEntered(self)
         openStartLocation()

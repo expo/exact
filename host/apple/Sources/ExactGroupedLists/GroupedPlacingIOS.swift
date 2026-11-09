@@ -49,10 +49,10 @@ extension GroupedListView {
     /// cells do under an insert, and the rows of a list whose column UIKit
     /// resizes in an animation move with it. Any other op on a row takes it
     /// home alone; any other op on a node it was carried from (a style its
-    /// rows inherit, an `inert`) takes every row home. Carried home and
-    /// back, each shown row's subtree took UIKit's move and trait passes
-    /// twice, and was placed at once, not moved: a view that moved to
-    /// another parent showed in no frame there (`Presenter.moveOrPlace`).
+    /// rows inherit, an `inert`) takes every row home. A row carried home
+    /// and back takes UIKit's move and trait passes twice and is placed at
+    /// once, outside an animation UIKit has open: a view under another
+    /// parent has shown in no frame there (`Presenter.moveOrPlace`).
     func prepare(_ ops: [BatchOp]) {
         guard !carried.isEmpty else { return }
         var above = Set<UInt32>(), walked = Set<ObjectIdentifier>()

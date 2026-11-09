@@ -36,16 +36,20 @@ final class GroupedCarriedRowsIOSTests: GroupedListFixture {
 
     /// A route's column UIKit resizes (a fold, the split's divider) gives its route a new block and
     /// each row a new box and content box in one batch. None changes what a row reads at home, so
-    /// the rows stay in their cells and move with UIKit's animation: sent home, each was placed at
-    /// once at its new size while its column still moved.
+    /// the rows stay in their cells, where an animation UIKit has open moves them; a row sent home
+    /// is placed at once at its new size while its column still moves.
     func testANewBlockAndARowsNewContentBoxLeaveTheRowsInTheirCells() throws {
         let p = presenter { self.model(custom: true) }
         let row = try XCTUnwrap(p.views[21])
         let shown = try cell(p, 21)
-        host(p).prepare(wireBatch([["op": "block", "id": 1, "w": 475.0, "h": 669.0, "x": 0.0, "y": 0.0],
-                                   ["op": "frame", "id": 21, "x": 16.0, "y": 60.0, "w": 443.0, "h": 61.0],
-                                   ["op": "fieldContent", "id": 21, "rect": [16.0, 0.0, 411.0, 61.0]]]).ops)
+        let resize = wireBatch([["op": "block", "id": 1, "w": 402.0, "h": 874.0, "x": 0.0, "y": 0.0],
+                                ["op": "frame", "id": 21, "x": 16.0, "y": 60.0, "w": 340.0, "h": 61.0],
+                                ["op": "fieldContent", "id": 21, "rect": [16.0, 0.0, 308.0, 61.0]]])
+        host(p).prepare(resize.ops)
         XCTAssertTrue(row.superview === shown.contentView, "a block and a content box are geometry its cell takes")
+        p.apply(resize)
+        XCTAssertTrue(row.superview === (try cell(p, 21)).contentView, "applied, the row is still in a cell")
+        XCTAssertEqual(row.frame.width, 340, accuracy: 0.5, "at its new width")
         host(p).prepare(wireBatch([["op": "style", "id": 21, "style": ["opacity": 0.5]]]).ops)
         XCTAssertFalse(row.superview === shown.contentView, "another op on the row still takes it home")
     }

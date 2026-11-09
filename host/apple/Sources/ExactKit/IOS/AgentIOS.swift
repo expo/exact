@@ -301,9 +301,9 @@ extension Agent {
     }
 
 
-    /// `frames` (the test runner's comparison with a fresh build, `rebuild`): each shown node's box in the content of
+    /// `boxes` (the test runner's comparison with a fresh build, `rebuild`): each shown node's box in the content of
     /// the nearest scroller around it, so how far a page or a list is scrolled does not count, else in the window.
-    func frames() -> [String: Any] {
+    func boxes() -> [String: Any] {
         var boxes: [String: [Double]] = [:]
         for (id, v) in presenter.views where v.window != nil {
             let chain = sequence(first: v as UIView, next: { $0.superview })
@@ -311,7 +311,7 @@ extension Agent {
             let f = v.convert(v.bounds, to: chain.dropFirst().first { $0 is UIScrollView })
             boxes[String(id)] = [f.minX, f.minY, f.width, f.height].map(Agent.r2)
         }
-        return ["frames": boxes]
+        return ["boxes": boxes]
     }
 
     /// `layout <node>` (LLP 1035.002 D1): the runner's rows and their sources
