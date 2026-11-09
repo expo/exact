@@ -126,6 +126,10 @@ final class NavigationCollapseIOSTests: XCTestCase {
         sibling.frame = CGRect(x: 0, y: 500, width: 400, height: 100)
         wrapper.container.addSubview(sibling)
         XCTAssertTrue(NavigationHost.topScroller(wrapper, target: scroller) === scroller, "a sibling below leaves the scroller at the top")
+        SafeReach.apply(UIEdgeInsets(top: 82, left: 0, bottom: 34, right: 0), to: wrapper)
+        SafeReach.apply(UIEdgeInsets(top: 82, left: 0, bottom: 34, right: 0), to: scroller)
+        XCTAssertTrue(NavigationHost.topScroller(wrapper, target: scroller) === scroller, "a scroller reaching past its box is still at the top")
+        SafeReach.apply(.zero, to: wrapper); SafeReach.apply(.zero, to: scroller)
         sibling.frame.origin.y = 0
         XCTAssertNil(NavigationHost.topScroller(wrapper, target: scroller), "content beside the scroller owns the top too")
         wrapper.container.insertSubview(sibling, at: 0)

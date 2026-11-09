@@ -355,13 +355,14 @@ extension NavigationHost {
         guard let target else { return nil }
         var node = start
         while node !== target {
-            guard node.scrollView == nil, !node.bounds.isEmpty, node.transform.isIdentity,
+            guard node.scrollView == nil, !node.boxBounds.isEmpty, node.transform.isIdentity,
                   CATransform3DIsIdentity(node.layer.transform),
                   !node.overflowClips, node.clipPath == nil,
                   node.contentBox().minY <= 0.5 else { return nil }
             let children = node.container.subviews.compactMap { $0 as? NodeView }.filter(flowingTopContent)
-            guard let first = children.first, abs(first.frame.minY - node.contentBox().minY) < 1,
-                  children.allSatisfy({ $0 === first || $0.frame.minY >= first.frame.maxY - 0.5 }) else { return nil }
+            // Compare laid-out boxes: a child's frame also holds the safe area it reaches into (`SafeReach`)
+            guard let first = children.first, abs(first.boxFrame.minY - node.contentBox().minY) < 1,
+                  children.allSatisfy({ $0 === first || $0.boxFrame.minY >= first.boxFrame.maxY - 0.5 }) else { return nil }
             node = first
         }
         return target.scrollView == nil ? nil : target
