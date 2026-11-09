@@ -146,6 +146,9 @@ test('a rebuild that shows another tree is told apart from one that shows the sa
   expect(treeDifference(editing.nodes, placed(tree(true), {}).nodes)).toBeNull();
   const relabeled = placed({ nodes: [{ id: 1, parent: null, type: 'column', props: {} }, { id: 2, parent: 1, type: 'input', props: { value: 'Peaks' } }] }, {});
   expect(treeDifference(editing.nodes, relabeled.nodes)).toBe('/column0/input0');
+  // A field the rebuild left without its focus: the keyboard went down with it
+  const focused = placed({ nodes: [{ id: 1, parent: null, type: 'column', props: {} }, { id: 2, parent: 1, type: 'input', props: { value: 'Towering Peaks' }, focused: true }] }, {});
+  expect(treeDifference(focused.nodes, editing.nodes)).toBe('/column0/input0');
 });
 
 test('a presented popover belongs to its AppKit modal for outside-modal findings', () => {

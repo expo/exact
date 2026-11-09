@@ -226,12 +226,18 @@ public final class ExactApp {
 
     /// The running plan booted again in every session with the app's state carried and every view built new: a
     /// fresh build of what the screens show, which the test runner compares with what the steps left (`rebuild`).
-    /// A delivered generation goes through the dev loop's path; a baked app boots its baked plan as a dev restart does.
+    /// A delivered generation goes through the dev loop's path; a baked app boots its baked plan as a dev restart does,
+    /// the focus kept as that restart keeps it.
     func rebuild() -> Bool {
         if let plan = lastPlan { return applyTogether(plan, label: "rebuild", resolver: resolver, token: selectedToken, identity: devGeneration, commit: { true }) }
         let plan = Runtime.bakedPlan()
         let booted = sessions.filter { $0.booted && $0.state != .destroyed }
-        return !booted.isEmpty && booted.map { $0.boot(plan: plan, size: $0.presenter.viewportSize).error == nil }.allSatisfy { $0 }
+        return !booted.isEmpty && booted.map { session in
+            let kept = session.presenter.focusPlace(tree: session.agent("{\"op\":\"tree\"}"))
+            guard session.boot(plan: plan, size: session.presenter.viewportSize).error == nil else { return false }
+            session.presenter.restoreFocus(kept, tree: session.agent("{\"op\":\"tree\"}"))
+            return true
+        }.allSatisfy { $0 }
     }
 
     /// Every session accepts before the durable commit. Its callback runs on

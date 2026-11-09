@@ -199,8 +199,9 @@ Use a simulator you created when another person shares the Mac.
   carried), and reads them again. A box that differs by a point or more fails the
   test: the host kept layout from what happened before, such as a fold and back,
   which a person sees until something re-renders. Fix the host, not the test.
-  The restart does not keep a component's own `state`, so a test whose tree is
-  not the same after it (each node's type and props) is not compared, with a note.
+  The restart keeps the focus but not a component's own `state`, so a test whose
+  tree is not the same after it (each node's type, props and focus) is not
+  compared, with a note.
 
 A real drag with `during` ops fails when the touch runner finishes before a
 dispatch-log read sees the touch begin. The failure carries the aim, the injection

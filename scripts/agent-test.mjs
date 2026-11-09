@@ -1109,7 +1109,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
  * steps left it and where the same state, booted again with every view built new, puts it. A box that differs by a
  * point or more is layout the host kept from what happened before (a fold and back, a swipe let go), which a
  * person sees until something re-renders. The restart keeps the app's state but not a component's own `state`, so
- * the boxes are compared only when the tree it builds is the one the steps left (each node's type and props);
+ * the boxes are compared only when the tree it builds is the one the steps left (each node's type, props and focus);
  * otherwise `unkept` names the first node that differs. Returns `{ differences, unkept }`, the outermost box first.
  */
 export async function freshBuildDifferences(s) {
@@ -1139,12 +1139,12 @@ export function placed(tree, frames) {
     keys.set(n.id, `${keys.get(n.parent) ?? ''}/${n.type}${index}`);
   }
   return {
-    nodes: new Map(nodes.map((n) => [keys.get(n.id), JSON.stringify(n.props ?? {})])),
+    nodes: new Map(nodes.map((n) => [keys.get(n.id), JSON.stringify([n.props ?? {}, n.focused === true])])),
     boxes: new Map(nodes.filter((n) => frames[n.id]).map((n) => [keys.get(n.id), { node: n, box: frames[n.id], parent: keys.get(n.parent) }])),
   };
 }
 
-/** The first place whose node is missing, added or holds other props in the second tree, or null when the trees are the same. */
+/** The first place whose node is missing, added, or holds other props or focus in the second tree, or null when the trees are the same. */
 export function treeDifference(before, after) {
   for (const [key, props] of before) if (after.get(key) !== props) return key;
   for (const key of after.keys()) if (!before.has(key)) return key;
