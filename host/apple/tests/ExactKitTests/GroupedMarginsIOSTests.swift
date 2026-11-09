@@ -24,6 +24,62 @@ final class GroupedPaddingIOSTests: GroupedListFixture {
         XCTAssertEqual(after[1], max(0, l.owner.bounds.width - 84 - card.maxX), accuracy: 0.5, "the right margin is from the box, 84 points inside the view's edge")
     }
 
+    /// A box and the list inside it both reach a side safe edge, as the Info route and its list in the iPhone Duo's
+    /// inspector column reach the fold's band at a partial fold, and both stop reaching when the edge goes. UIKit infers
+    /// the list's margins, from which it insets its cards, from its superview's bounds when the list's frame changes:
+    /// the outer box must stop reaching first, or the list is measured against the box's old origin and its cards
+    /// keep no inset until it is built again.
+    func testAListThatStopsReachingWithTheBoxAroundItKeepsItsCardInset() throws {
+        // Each box is a fill, as the Info route's ground is: a fill reaches the edges it touches.
+        let ground: [String: Any] = ["background_color": [242, 242, 247, 255]]
+        let p = presenter(style: ground) { self.model("inset-grouped") }
+        let l = try list(p), collection = l.collection
+        let holder = UIViewController()
+        window.rootViewController = holder
+        holder.view.frame = window.bounds
+        holder.view.addSubview(p.viewport)
+        holder.view.layoutIfNeeded()
+        p.apply(wireBatch([
+            ["op": "create", "id": 50, "kind": "view", "props": [:], "handlers": [], "style": ground],
+            ["op": "children", "id": 50, "ids": [1]], ["op": "roots", "ids": [50]],
+            ["op": "frame", "id": 50, "x": 0.0, "y": 0.0, "w": 402.0, "h": 874.0],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": 874.0],
+        ]))
+        let box = try XCTUnwrap(p.views[50])
+        /// The first card's inset from the list's box, in the window.
+        func inset() throws -> CGFloat {
+            collection.layoutIfNeeded()
+            let card = try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))).frame
+            return collection.convert(card, to: window).minX - l.owner.convert(l.owner.boxBounds, to: window).minX
+        }
+        // The safe edge is UIKit's too, as the fold's band is: the controller's safe area reaches that far.
+        func reach(safeLeft: CGFloat) {
+            holder.additionalSafeAreaInsets.left = safeLeft
+            holder.view.layoutIfNeeded()
+            let a = p.viewport.bounds
+            let walk = SafeReach(view: p.viewport, allocation: a, safe: a.inset(by: UIEdgeInsets(top: 0, left: safeLeft, bottom: 0, right: 0)), pixel: 1 / 3) { _ in }
+            _ = walk.visit(box, allowed: .all)
+            walk.applyPlan()
+            p.groupedLists?.sync(changed: [])
+        }
+        let before = try inset()
+        XCTAssertGreaterThan(before, 0, "UIKit insets an inset-grouped list's cards")
+        // A safe edge 40 points in: the box and the list are laid out at it, and both reach the allocation's edge.
+        p.apply(wireBatch([["op": "frame", "id": 50, "x": 40.0, "y": 0.0, "w": 362.0, "h": 874.0],
+                           ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 362.0, "h": 874.0]]))
+        reach(safeLeft: 40)
+        XCTAssertEqual(box.reach.left, 40, "the box reaches the edge")
+        XCTAssertEqual(l.owner.reach.left, 40, "the list reaches the edge")
+        XCTAssertEqual(try inset(), before, accuracy: 0.5, "UIKit keeps the cards clear of the safe area by as much")
+        // The edge goes: the boxes take the whole width again and stop reaching.
+        p.apply(wireBatch([["op": "frame", "id": 50, "x": 0.0, "y": 0.0, "w": 402.0, "h": 874.0],
+                           ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": 874.0]]))
+        reach(safeLeft: 0)
+        XCTAssertEqual(box.reach, .zero)
+        XCTAssertEqual(l.owner.reach, .zero)
+        XCTAssertEqual(try inset(), before, accuracy: 0.5, "the cards' inset is UIKit's again")
+    }
+
     func testHorizontalPaddingInsetsSectionsAndIsNotReportedAsACardMargin() throws {
         for appearance in ["plain", "grouped", "inset-grouped"] {
             for direction in ["ltr", "rtl"] {
