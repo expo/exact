@@ -185,6 +185,15 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         guard field?.textField(textField, shouldChangeCharactersIn: range, replacementString: string) ?? true else { return false }
         return textDelegate?.textField?(textField, shouldChangeCharactersIn: range, replacementString: string) ?? true
     }
+    /// Editing ended while UIKit's search controller was still moving its bar into search: UIKit makes the field the
+    /// first responder again as that transition completes (`-[_UISearchBarVisualProviderIOS
+    /// completeTransitionToSearchLayoutState:]`, iOS 27.1), undoing the app's `blur()` or the person's end, and the
+    /// field's `focus` came again with no one there; the field does not begin again until the transition is over.
+    private var refusesBegin = false
+    func textFieldShouldBeginEditing(_ textField: UITextField) -> Bool {
+        if refusesBegin { return false }
+        return textDelegate?.textFieldShouldBeginEditing?(textField) ?? true
+    }
     func textFieldShouldClear(_ textField: UITextField) -> Bool {
         guard field?.textFieldShouldClear(textField) ?? true else { return false }
         return textDelegate?.textFieldShouldClear?(textField) ?? true
@@ -218,6 +227,10 @@ final class HeaderSearch: NSObject, UISearchBarDelegate, UISearchControllerDeleg
         bar.resignFirstResponder()
     }
     func searchBarTextDidEndEditing(_ bar: UISearchBar) {
+        if let transition = controller.transitionCoordinator {
+            refusesBegin = true
+            transition.animate(alongsideTransition: nil) { [weak self] _ in DispatchQueue.main.async { self?.refusesBegin = false } }
+        }
         host?.presenter.searchEditingChanged()
         let completion = editingCompletion
         editingCompletion = nil
