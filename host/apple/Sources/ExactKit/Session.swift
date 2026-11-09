@@ -224,6 +224,16 @@ public final class ExactApp {
         applyTogether(bytes, label: label, resolver: resolver, token: 0, commit: { true })
     }
 
+    /// The running plan booted again in every session with the app's state carried and every view built new: a
+    /// fresh build of what the screens show, which the test runner compares with what the steps left (`rebuild`).
+    /// A delivered generation goes through the dev loop's path; a baked app boots its baked plan as a dev restart does.
+    func rebuild() -> Bool {
+        if let plan = lastPlan { return applyTogether(plan, label: "rebuild", resolver: resolver, token: selectedToken, identity: devGeneration, commit: { true }) }
+        let plan = Runtime.bakedPlan()
+        let booted = sessions.filter { $0.booted && $0.state != .destroyed }
+        return !booted.isEmpty && booted.map { $0.boot(plan: plan, size: $0.presenter.viewportSize).error == nil }.allSatisfy { $0 }
+    }
+
     /// Every session accepts before the durable commit. Its callback runs on
     /// main while the runtime owner holds replies; it cannot reenter a runtime.
     @discardableResult

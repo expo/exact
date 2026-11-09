@@ -192,6 +192,16 @@ Use a simulator you created when another person shares the Mac.
   the condition the product itself uses (`Agent.nativeInFlight()` on Apple, the
   agent's `clock settle`), not a hardcoded sleep timeout.
 
+- **The end of each test is compared with a fresh build.** On iOS, `test` reads
+  every shown node's box after a test's last step (`frames`, in the content of the
+  nearest scroller, so scrolling does not count), boots the same state again with
+  every view built new (`rebuild`, the dev loop's restart with the app's state
+  carried), and reads them again. A box that differs by a point or more fails the
+  test: the host kept layout from what happened before, such as a fold and back,
+  which a person sees until something re-renders. Fix the host, not the test.
+  The restart does not keep a component's own `state`, so a test whose tree is
+  not the same after it (each node's type and props) is not compared, with a note.
+
 A real drag with `during` ops fails when the touch runner finishes before a
 dispatch-log read sees the touch begin. The failure carries the aim, the injection
 result and the log, and says whether the touch began and lifted. The log's `t` and

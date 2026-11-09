@@ -200,6 +200,14 @@ impl<D: DataSource> Bridge<D> {
         self.output.len() as u32
     }
 
+    /// Copy the plan baked into the library to the output buffer: what a carried
+    /// restart of a baked app boots again (`rebuild`).
+    pub fn baked_plan(&mut self, plan: &[u8]) -> u32 {
+        self.output.clear();
+        self.output.extend_from_slice(plan);
+        self.output.len() as u32
+    }
+
     /// This binary's `compat.json` (LLP 1030 D3a), for the delivery facts
     /// every subsequent boot hands the runner before its first frame. The
     /// `host!` macro passes the app's `COMPAT` const; nothing crosses the C ABI for it.

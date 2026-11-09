@@ -481,6 +481,8 @@ uint8_t *exact_in(ExactRuntime rt, size_t len);
 const uint8_t *exact_out(ExactRuntime rt);
 /* Copy the immutable binary bake receipt into exact_out; returns its length. */
 uint32_t exact_baked_compat(ExactRuntime rt);
+/* Copy the plan baked into the library into exact_out; returns its length. */
+uint32_t exact_baked_plan(ExactRuntime rt);
 
 /* Boot the plan baked into the library (or, exact_boot_plan, the input
  * buffer's first len bytes — the dev loop's restart, state carried) under a

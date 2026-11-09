@@ -235,6 +235,15 @@ package final class Runtime {
             return Data(bytes: exact_out(runtime.rt), count: Int(length))
         }
     }
+    /// This binary's baked plan, read on a throwaway runtime: what a baked app boots again with its state carried (`rebuild`).
+    package static func bakedPlan() -> Data {
+        let runtime = Runtime(hooks: .headless)
+        defer { runtime.destroy() }
+        return runtime.on(busy: Data()) {
+            let length = exact_baked_plan(runtime.rt)
+            return Data(bytes: exact_out(runtime.rt), count: Int(length))
+        }
+    }
 
     private var profileResolver: AssetResolver?
     package func setProfileResolver(_ resolver: AssetResolver?) { on { profileResolver = resolver } }

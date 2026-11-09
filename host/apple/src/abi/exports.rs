@@ -240,6 +240,12 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.baked_compat($compat), |n| n)
         }
 
+        /// The plan baked into this archive, into exact_out.
+        #[no_mangle]
+        pub extern "C" fn exact_baked_plan(rt: u32) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.baked_plan($plan), |n| n)
+        }
+
         /// Derive the location of the input URL; UTF-8 output, no boot required.
         #[no_mangle]
         pub extern "C" fn exact_location_of(rt: u32, len: usize) -> u32 {

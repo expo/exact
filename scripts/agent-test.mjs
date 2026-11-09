@@ -1071,6 +1071,14 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
         const pending = (state.pending ?? []).filter((p) => !p.device && !p.held && !p.stream).map((p) => p.name);
         if (pending.length) notes.push(`ended with ${pending.length} request${pending.length === 1 ? '' : 's'} in flight (${pending.join(', ')}): a reply lands at a clock step, so what the test read last may not include it`);
       } catch { /* advice only */ }
+      // The screen the test ended on against a fresh build of the same state (UIKit hosts): a box that differs is
+      // layout the host kept from what happened before, which a person sees until something re-renders.
+      // Not under `verify`, whose end checks read the screen the test left.
+      if (closedAt == null && !failures.length && !atEnd && ['ios', 'host-ios'].includes(host)) try {
+        const { differences, unkept } = await freshBuildDifferences(s);
+        if (unkept) notes.push(`not compared with a fresh build: the screen holds state a restart does not keep (${unkept}), so a rebuild shows another screen`);
+        for (const line of differences) failures.push(`${t.name}: ${line}`);
+      } catch (e) { failures.push(`${t.name}: the comparison with a fresh build: ${e.message}`); }
       if (atEnd && closedAt == null) end = await atEnd(s, { name: t.name, index: n, size: facts.size, store, failures, reload: t.steps.some((st) => st.op === 'reload'), launch: { ...launchFacts({ ...facts, epoch: first, env: env ?? {} }), media: { ...media } }, reached: await reached(), typed: [...typed], touched: [...touched], expectedRefusals: [...expectedRefusals], ...(s.host === 'web' ? { restart: async () => { await reload(); await data(); } } : {}) }).catch((e) => ({ error: e.message }));
       // A failed test shows what the data module logged, the last lines of it (sb4 farm wave 7, E1: 093 rendered
       // values into the view to see them; `logs` had them all along). Advice only.
@@ -1094,6 +1102,67 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   const failed = results.filter((r) => r.failures.length).length, skipped = results.filter((r) => r.skipped).length;
   if (properties.length) console.error(`properties on ${host}: ${propertyChecks} always line checks at boot, after authored inputs, reloads and clocks; ${propertyFalse} false${propertyChecks ? '' : '; not exercised'}`);
   return { passed: results.length - failed - skipped, failed, skipped, results };
+}
+
+/**
+ * The screen a test ended on against a fresh build of it (`frames`, `rebuild`): each shown node's box where the
+ * steps left it and where the same state, booted again with every view built new, puts it. A box that differs by a
+ * point or more is layout the host kept from what happened before (a fold and back, a swipe let go), which a
+ * person sees until something re-renders. The restart keeps the app's state but not a component's own `state`, so
+ * the boxes are compared only when the tree it builds is the one the steps left (each node's type and props);
+ * otherwise `unkept` names the first node that differs. Returns `{ differences, unkept }`, the outermost box first.
+ */
+export async function freshBuildDifferences(s) {
+  const read = async () => {
+    await s.clock('settle');
+    const { frames, error } = await s.op({ op: 'frames' });
+    if (error) throw new Error(error);
+    return placed(await s.op({ op: 'tree' }), frames);
+  };
+  const before = await read();
+  const r = await s.op({ op: 'rebuild' });
+  if (r?.error) throw new Error(r.error);
+  const after = await read();
+  const unkept = treeDifference(before.nodes, after.nodes);
+  return { differences: unkept ? [] : frameDifferences(before.boxes, after.boxes), unkept };
+}
+
+/**
+ * Each node's place in the tree (its type and index under its parent, from the root), as a rebuilt tree may number
+ * its nodes anew: `nodes`, each place's type and props, and `boxes`, each shown node's box by its place.
+ */
+export function placed(tree, frames) {
+  const nodes = tree.nodes ?? [], keys = new Map(), counts = new Map();
+  for (const n of nodes) { // preorder: a parent's key is made before its children's
+    const index = counts.get(n.parent) ?? 0;
+    counts.set(n.parent, index + 1);
+    keys.set(n.id, `${keys.get(n.parent) ?? ''}/${n.type}${index}`);
+  }
+  return {
+    nodes: new Map(nodes.map((n) => [keys.get(n.id), JSON.stringify(n.props ?? {})])),
+    boxes: new Map(nodes.filter((n) => frames[n.id]).map((n) => [keys.get(n.id), { node: n, box: frames[n.id], parent: keys.get(n.parent) }])),
+  };
+}
+
+/** The first place whose node is missing, added or holds other props in the second tree, or null when the trees are the same. */
+export function treeDifference(before, after) {
+  for (const [key, props] of before) if (after.get(key) !== props) return key;
+  for (const key of after.keys()) if (!before.has(key)) return key;
+  return null;
+}
+
+/** The boxes that differ by a point or more; one whose parent's box differs too is left to its parent's line. */
+export function frameDifferences(before, after) {
+  const differs = new Map();
+  for (const [key, was] of before) {
+    const now = after.get(key);
+    if (now && was.box.some((v, i) => Math.abs(v - now.box[i]) >= 1)) differs.set(key, { was, now });
+  }
+  const box = ([x, y, w, h]) => `(${x}, ${y}) ${w}×${h}`;
+  return [...differs.values()].filter(({ was }) => !differs.has(was.parent)).map(({ was, now }) => {
+    const id = was.node.props?.testId;
+    return `${id ? JSON.stringify(id) : `#${was.node.id} (${was.node.type})`} is at ${box(was.box)} after the steps and at ${box(now.box)} when built fresh: the host kept layout from what happened before, which a person sees until something re-renders`;
+  });
 }
 
 /** The origins a native run's fetch faults resolve against, with no web build's admission data to read: the backend its
