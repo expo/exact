@@ -1154,6 +1154,8 @@ extension Agent {
                     if name == "Enter" { f.insertText("\n") } else if name == "Backspace" { f.deleteBackward() }
                     else if Agent.caretKey(name, in: f) {} else if types { f.insertText(name) }
                     pendingTextReveal = f as? TextArea
+                } else if name == "Enter", let search = focus.headerField?.delegate as? HeaderSearch {
+                    search.searchBarSearchButtonClicked(search.controller.searchBar)
                 } else if name == "Enter", let prompt = focus.headerField, let field = prompt.delegate as? PromptField {
                     // A prompt's field is UIKit's, standing in for this one: its Return.
                     _ = field.returnHeard(prompt)

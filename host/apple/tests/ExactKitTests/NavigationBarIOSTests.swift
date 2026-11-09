@@ -920,11 +920,16 @@ final class NavigationBarIOSTests: XCTestCase {
         // away, as a hand-built search bar's delegate does, and the search
         // stays as typed.
         let field = search.searchBar.searchTextField
+        input.handlers.insert("submit")
+        var submitted: [UInt32] = []
+        session.presenter.onSubmit = { submitted.append($0) }
         XCTAssertTrue(field.becomeFirstResponder())
-        search.searchBar.delegate?.searchBarSearchButtonClicked?(search.searchBar)
+        let typed = Agent(session: session).type(["id": Int(input.id), "key": "Enter"])
+        XCTAssertNil(typed["error"])
         XCTAssertFalse(field.isFirstResponder, "Search puts the keyboard away")
         XCTAssertEqual(search.searchBar.text, "abc")
         XCTAssertEqual(state(session, "query") as? String, "abc")
+        XCTAssertEqual(submitted, [input.id])
         search.searchBar.text = ""
         XCTAssertEqual(state(session, "query") as? String, "abc", "programmatic text projection is not user input")
         search.searchBar.delegate?.searchBar?(search.searchBar, textDidChange: "")
