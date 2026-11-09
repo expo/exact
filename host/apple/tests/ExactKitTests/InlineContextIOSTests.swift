@@ -718,6 +718,12 @@ final class InlineContextIOSTests: XCTestCase {
 
     /// UIKit's outline of a run's lines where the screen shows them, in the paragraph's superview, in its own
     /// coordinates, and its area
+    private func until(_ what: String, _ seconds: Double = 5, _ done: () -> Bool) {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !done(), Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
+        XCTAssertTrue(done(), what)
+    }
+
     private func textLines(_ rects: [CGRect], in node: UIView) -> (outline: UIBezierPath, area: CGRect) {
         let outline = UIPreviewParameters(textLineRects: rects.map { NSValue(cgRect: node.convert($0, to: node.superview)) }).visiblePath ?? UIBezierPath()
         let area = outline.bounds
