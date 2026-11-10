@@ -52,6 +52,59 @@ impl<D: DataSource> Runner<D> {
         result
     }
 
+    /// The `navigationKey` of each route a person can see and use now (LLP 1127 D8): what
+    /// `exactPage().shownRoutes` answers.
+    pub fn shown_routes(&self) -> Vec<String> {
+        crate::head::shown_routes(&self.kernel, &self.roots())
+    }
+
+    /// Ask every `exactPage` reader of `shownRoutes` again, in one commit, when the routes a person can
+    /// see changed: after a host's report of how its columns show them (a fold) and after a commit
+    /// that moved the navigation. `None` when nothing reads it or the routes are the same.
+    pub fn refresh_shown_routes(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
+        if !self.reads_page_field("shownRoutes") {
+            return Ok(None);
+        }
+        let now = self.shown_routes();
+        if now == self.shown_routes {
+            return Ok(None);
+        }
+        self.shown_routes = now;
+        let which: Vec<usize> = (0..self.plan.resources.len())
+            .filter(|&i| {
+                let r = &self.plan.resources[i];
+                let ty = self.plan.type_(r.ty);
+                self.plan.str(r.source) == SOURCE
+                    && ty
+                        .fields
+                        .iter()
+                        .any(|f| self.plan.str(self.plan.field(f).name) == "shownRoutes")
+            })
+            .collect();
+        self.recommit(which, "shown routes")
+    }
+
+    /// `receipts` and, after them, the commit that answers `shownRoutes` again when they changed the
+    /// routes a person can see (a push, a pop): what a host's commit path applies, once per batch.
+    pub fn with_shown_routes<'a>(
+        &mut self,
+        receipts: &'a [crate::Timed],
+        now_ms: f64,
+    ) -> (std::borrow::Cow<'a, [crate::Timed]>, Option<RunnerError>) {
+        match self.refresh_shown_routes() {
+            Ok(Some(receipt)) => {
+                let mut all = receipts.to_vec();
+                all.push(crate::Timed {
+                    at_ms: now_ms,
+                    receipt,
+                });
+                (all.into(), None)
+            }
+            Ok(None) => (receipts.into(), None),
+            Err(e) => (receipts.into(), Some(e)),
+        }
+    }
+
     /// Whether an `exactPage` resource reads `field`: one whose shape names
     /// it, or one that is no record (refused, but asked again on every
     /// change). A host watches what no resource reads only if it wants to.
@@ -95,6 +148,15 @@ impl<D: DataSource> Runner<D> {
         let mut fields = Vec::with_capacity(ty.fields.len as usize);
         for f in ty.fields.iter() {
             let name = self.plan.str(self.plan.field(f).name);
+            if name == "shownRoutes" {
+                fields.push(Value::list(
+                    self.shown_routes()
+                        .into_iter()
+                        .map(|key| Value::str(&key))
+                        .collect(),
+                ));
+                continue;
+            }
             match self.page.field(name) {
                 Some(v) => fields.push(v),
                 None => {
@@ -107,3 +169,7 @@ impl<D: DataSource> Runner<D> {
         Ok(Value::record(fields))
     }
 }
+
+#[cfg(test)]
+#[path = "shown_routes_tests.rs"]
+mod shown_routes_tests;

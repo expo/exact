@@ -524,6 +524,8 @@ pub struct Runner<D: DataSource> {
     viewport: crate::Viewport,
     // @ref LLP 1069.000 D2 — visibility, connectivity, the share sheet.
     page: crate::page::Page,
+    // The routes `exactPage().shownRoutes` last answered (`refresh_shown_routes`).
+    shown_routes: Vec<String>,
     // @ref LLP 1027.000.000 — the date, once the host says it.
     time: crate::time::WallTime,
     live_times: live_time::LiveTimes,
@@ -871,6 +873,7 @@ impl<D: DataSource> Runner<D> {
             delivery,
             viewport,
             page: Default::default(),
+            shown_routes: Vec::new(),
             time: crate::time::launch_time(),
             live_times: Default::default(),
             text_axes: Default::default(),
@@ -1052,6 +1055,8 @@ impl<D: DataSource> Runner<D> {
         }
         drop(booting);
         runner.roles.install();
+        // Its readers were answered before the tree had routes: the first frame's are told now
+        runner.refresh_shown_routes()?;
         Ok(runner)
     }
 

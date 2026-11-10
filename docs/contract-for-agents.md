@@ -3300,7 +3300,13 @@ choose an in-window message over a system notification), `persisted` and
 away, from a `pagehide` with `persisted` until the `pageshow`; `restores`
 counts those `pageshow` events, so `task t when page.restores > 0
 key=page.restores` runs once for each return, never at launch; a Mac window a
-`keepRunning` close hid is put away, a minimized one only hidden). A reminder that should
+`keepRunning` close hid is put away, a minimized one only hidden), and `shownRoutes`
+(`string[]`: the `navigationKey` of each route a person can see and use now, in tree
+order: a navigation root's top route, and a split's list beside it while the window is
+wide, as an unfolded iPhone Duo shows it, though not a list a pushed page covers on a
+folded one; LLP 1127 D8). Show what belongs to a control on the list, such as search
+results over the page in front, only while its route is shown:
+``page.shownRoutes.includes(`${e.id}`)``. A reminder that should
 open a route uses `showNotification(title="Done", navigate="/thread/42")`
 (`@exact/notifications`); its click reaches the navigation root as a warm
 `navigate` event or a cold launch location, and without `navigate=` it is

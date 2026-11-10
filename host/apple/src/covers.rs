@@ -203,6 +203,15 @@ impl<D: DataSource> Host<D> {
                 error.get_or_insert(format!("list margins: {e:?}"));
             }
         }
+        // How its columns show the routes changes which a person can see (LLP 1127 D8, a fold)
+        match self.runner.refresh_shown_routes() {
+            Ok(Some(receipt)) => receipts.push(exact_runner::Timed {
+                at_ms: self.now_ms,
+                receipt,
+            }),
+            Ok(None) => {}
+            Err(e) => drop(error.get_or_insert(format!("shown routes: {e:?}"))),
+        }
         if !receipts.is_empty() {
             return self.commit_into(&receipts, error, batch);
         }

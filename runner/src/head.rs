@@ -133,6 +133,34 @@ pub(crate) fn activity(
     result
 }
 
+/// The `navigationKey` of each route a person can see and use (LLP 1127 D8), in tree order: every
+/// navigation root's routes that are active, its selected route and a split's list beside it, none
+/// under a sheet or an overlaid pane.
+pub(crate) fn shown_routes(kernel: &Kernel, roots: &[ViewId]) -> Vec<String> {
+    let active = activity(kernel, roots);
+    let (mut out, mut stack): (Vec<String>, Vec<ViewId>) =
+        (Vec::new(), roots.iter().rev().copied().collect());
+    while let Some(id) = stack.pop() {
+        let Some(at) = kernel_node(kernel, id) else {
+            continue;
+        };
+        if at.1.str(PropId::NavigationBack).is_some() {
+            for route in at.2.iter() {
+                let Some(r) = kernel_node(kernel, route) else {
+                    continue;
+                };
+                if let Some(key) = r.1.str(PropId::NavigationKey) {
+                    if active.get(&route).is_some_and(|flags| !flags.0) {
+                        out.push(key.to_owned());
+                    }
+                }
+            }
+        }
+        stack.extend(at.2.iter().rev());
+    }
+    out
+}
+
 impl<D: DataSource> Runner<D> {
     /// The active head of the current tree: one walk from the roots, which
     /// skips the routes a navigation root has not selected.

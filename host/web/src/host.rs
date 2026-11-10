@@ -884,8 +884,13 @@ impl<D: DataSource> Host<D> {
     fn batch_from(&mut self, mut batch: Batch, receipts: &[Timed], error: Option<&str>) -> String {
         let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
         self.sync_runtime_font_names();
-        self.emit_receipts(receipts, &mut batch);
-        self.complete(batch, error.map(str::to_string))
+        // A commit that moved the navigation changes the routes a person can see (LLP 1127 D8)
+        let (receipts, failed) = self.runner.with_shown_routes(receipts, self.now_ms);
+        let error = error
+            .map(str::to_string)
+            .or_else(|| failed.map(|e| format!("shown routes: {e:?}")));
+        self.emit_receipts(&receipts, &mut batch);
+        self.complete(batch, error)
     }
 
     fn emit_receipts(&mut self, receipts: &[Timed], batch: &mut Batch) {

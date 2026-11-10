@@ -10,7 +10,9 @@
 //! (Navigation Timing's `type`), and whether the page is put away in, and
 //! how often it came back from, the back/forward cache (`pagehide` and
 //! `pageshow` with `persisted`). The host observes them; the app reads them
-//! by field name from one reserved source. The word also carries the
+//! by field name from one reserved source. `shownRoutes` is the runner's own:
+//! the `navigationKey` of each route a person can see and use (LLP 1127 D8),
+//! from the host's report of how its columns show them. The word also carries the
 //! device's GPU tier, which an app reads as `exactViewport().gpuTier`.
 //! @ref LLP 1069.000 D2; LLP 1069.003 D5; LLP 1069.010 D2, D8; LLP 1125 D12; LLP 1139.003 D2
 
@@ -31,6 +33,7 @@ pub const FIELDS: &[&str] = &[
     "persisted",
     "restores",
     "iframePartition",
+    "shownRoutes",
 ];
 
 /// `navigationType`'s words, by their wire code (bits 5–6): the web's

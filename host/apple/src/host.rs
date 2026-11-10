@@ -1234,8 +1234,18 @@ impl<D: DataSource> Host<D> {
         self.commit_into(receipts, error, Batch::new())
     }
 
-    fn commit_into(&mut self, receipts: &[Timed], error: Option<String>, batch: Batch) -> String {
-        let (mut batch, error) = self.commit_tree(receipts, error, batch);
+    fn commit_into(
+        &mut self,
+        receipts: &[Timed],
+        mut error: Option<String>,
+        batch: Batch,
+    ) -> String {
+        // A commit that moved the navigation changes the routes a person can see (LLP 1127 D8)
+        let (receipts, failed) = self.runner.with_shown_routes(receipts, self.now_ms);
+        if let Some(e) = failed {
+            error.get_or_insert(format!("shown routes: {e:?}"));
+        }
+        let (mut batch, error) = self.commit_tree(&receipts, error, batch);
         // A receipt can end an Arrange contact; its terminal runs at receipt time.
         let arrange = self.arrange_after_commit(&mut batch);
         self.group_after_commit(&mut batch);
