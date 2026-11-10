@@ -1128,10 +1128,16 @@ export async function freshBuildDifferences(s) {
   if (!before) return { differences: [], skipped: 'the screen the test ended on did not settle' };
   const r = await s.op({ op: 'rebuild' });
   if (r?.error) return { differences: [], skipped: r.error };
-  const after = await read();
-  if (!after) return { differences: [], skipped: 'the fresh build did not settle' };
-  const unkept = treeDifference(before.nodes, after.nodes);
-  return { differences: unkept ? [] : frameDifferences(before.boxes, after.boxes), unkept };
+  // What the fresh build sets off after it settles (the keyboard coming back for the focus it kept) is read
+  // again for a while; a box the host kept from before stays where it is
+  for (let tries = 0; ; tries++) {
+    const after = await read();
+    if (!after) return { differences: [], skipped: 'the fresh build did not settle' };
+    const unkept = treeDifference(before.nodes, after.nodes);
+    const differences = unkept ? [] : frameDifferences(before.boxes, after.boxes);
+    if (unkept || !differences.length || tries === 7) return { differences, unkept };
+    await new Promise((done) => setTimeout(done, 250));
+  }
 }
 
 /**
