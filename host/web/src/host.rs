@@ -886,9 +886,7 @@ impl<D: DataSource> Host<D> {
         self.sync_runtime_font_names();
         // A commit that moved the navigation changes the routes a person can see (LLP 1127 D8)
         let (receipts, failed) = self.runner.with_shown_routes(receipts, self.now_ms);
-        let error = error
-            .map(str::to_string)
-            .or_else(|| failed.map(|e| format!("shown routes: {e:?}")));
+        let error = error.map(str::to_string).or(failed);
         self.emit_receipts(&receipts, &mut batch);
         self.complete(batch, error)
     }

@@ -1293,7 +1293,7 @@ impl<D: DataSource> Host<D> {
     pub(crate) fn commit(&mut self, receipts: &[Timed], error: Option<String>) -> Option<String> {
         // A commit that moved the navigation changes the routes a person can see (LLP 1127 D8)
         let (receipts, failed) = self.runner.with_shown_routes(receipts, self.now_ms);
-        let error = error.or_else(|| failed.map(|e| format!("shown routes: {e:?}")));
+        let error = error.or(failed);
         let error = crate::traced(c"exact commit", || self.commit_effects(&receipts, error).0);
         crate::doc_watch::sync(&mut self.doc_watch, &mut self.runner);
         error

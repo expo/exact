@@ -52,36 +52,39 @@ impl<D: DataSource> Runner<D> {
         result
     }
 
-    /// The `navigationKey` of each route a person can see and use now (LLP 1127 D8): what
-    /// `exactPage().shownRoutes` answers.
-    pub fn shown_routes(&self) -> Vec<String> {
+    /// The `navigationKey` of each route a person can see and use now (LLP 1127 D8), which
+    /// `exactPage().shownRoutes` answers once `refresh_shown_routes` has seen it.
+    pub fn current_shown_routes(&self) -> Vec<String> {
         crate::head::shown_routes(&self.kernel, &self.roots())
     }
 
     /// Ask every `exactPage` reader of `shownRoutes` again, in one commit, when the routes a person can
-    /// see changed: after a host's report of how its columns show them (a fold) and after a commit
-    /// that moved the navigation. `None` when nothing reads it or the routes are the same.
+    /// see changed: at the end of the boot, after a host's report of how its columns show them (a fold)
+    /// and after a commit that moved the navigation. `None` when nothing reads it or the routes are the same.
     pub fn refresh_shown_routes(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
-        if !self.reads_page_field("shownRoutes") {
+        if self.shown_route_readers.is_empty() {
             return Ok(None);
         }
-        let now = self.shown_routes();
+        let now = self.current_shown_routes();
         if now == self.shown_routes {
             return Ok(None);
         }
         self.shown_routes = now;
-        let which: Vec<usize> = (0..self.plan.resources.len())
-            .filter(|&i| {
-                let r = &self.plan.resources[i];
-                let ty = self.plan.type_(r.ty);
-                self.plan.str(r.source) == SOURCE
-                    && ty
-                        .fields
-                        .iter()
-                        .any(|f| self.plan.str(self.plan.field(f).name) == "shownRoutes")
-            })
-            .collect();
-        self.recommit(which, "shown routes")
+        self.recommit(self.shown_route_readers.clone(), "shown routes")
+    }
+
+    /// The commit `refresh_shown_routes` makes, at `now_ms`, and the error that refused it, as a host reports it.
+    pub fn shown_routes_commit(&mut self, now_ms: f64) -> (Option<crate::Timed>, Option<String>) {
+        match self.refresh_shown_routes() {
+            Ok(receipt) => (
+                receipt.map(|receipt| crate::Timed {
+                    at_ms: now_ms,
+                    receipt,
+                }),
+                None,
+            ),
+            Err(e) => (None, Some(format!("shown routes: {e:?}"))),
+        }
     }
 
     /// `receipts` and, after them, the commit that answers `shownRoutes` again when they changed the
@@ -90,18 +93,17 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         receipts: &'a [crate::Timed],
         now_ms: f64,
-    ) -> (std::borrow::Cow<'a, [crate::Timed]>, Option<RunnerError>) {
-        match self.refresh_shown_routes() {
-            Ok(Some(receipt)) => {
+    ) -> (std::borrow::Cow<'a, [crate::Timed]>, Option<String>) {
+        if receipts.is_empty() {
+            return (receipts.into(), None);
+        }
+        match self.shown_routes_commit(now_ms) {
+            (Some(shown), error) => {
                 let mut all = receipts.to_vec();
-                all.push(crate::Timed {
-                    at_ms: now_ms,
-                    receipt,
-                });
-                (all.into(), None)
+                all.push(shown);
+                (all.into(), error)
             }
-            Ok(None) => (receipts.into(), None),
-            Err(e) => (receipts.into(), Some(e)),
+            (None, error) => (receipts.into(), error),
         }
     }
 
@@ -150,9 +152,9 @@ impl<D: DataSource> Runner<D> {
             let name = self.plan.str(self.plan.field(f).name);
             if name == "shownRoutes" {
                 fields.push(Value::list(
-                    self.shown_routes()
-                        .into_iter()
-                        .map(|key| Value::str(&key))
+                    self.shown_routes
+                        .iter()
+                        .map(|key| Value::str(key))
                         .collect(),
                 ));
                 continue;
@@ -168,6 +170,23 @@ impl<D: DataSource> Runner<D> {
         }
         Ok(Value::record(fields))
     }
+}
+
+/// The `exactPage` resources that read `shownRoutes`: one whose shape names it, or one that is no record
+/// (refused, but asked again on every change), as `reads_page_field` counts them.
+pub(super) fn shown_route_readers(plan: &exact_plan::Plan) -> Vec<usize> {
+    (0..plan.resources.len())
+        .filter(|&i| {
+            let r = &plan.resources[i];
+            let ty = plan.type_(r.ty);
+            plan.str(r.source) == SOURCE
+                && (ty.kind != TypeKind::Record
+                    || ty
+                        .fields
+                        .iter()
+                        .any(|f| plan.str(plan.field(f).name) == "shownRoutes"))
+        })
+        .collect()
 }
 
 #[cfg(test)]

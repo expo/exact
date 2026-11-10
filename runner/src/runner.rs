@@ -524,8 +524,9 @@ pub struct Runner<D: DataSource> {
     viewport: crate::Viewport,
     // @ref LLP 1069.000 D2 — visibility, connectivity, the share sheet.
     page: crate::page::Page,
-    // The routes `exactPage().shownRoutes` last answered (`refresh_shown_routes`).
+    // What `exactPage().shownRoutes` answers, and the resources that read it (`refresh_shown_routes`).
     shown_routes: Vec<String>,
+    shown_route_readers: Vec<usize>,
     // @ref LLP 1027.000.000 — the date, once the host says it.
     time: crate::time::WallTime,
     live_times: live_time::LiveTimes,
@@ -776,6 +777,7 @@ impl<D: DataSource> Runner<D> {
         let roles = exact_kernel::style::roles::Roles::new(crate::bridge::role_overrides(&plan));
         let booting = exact_kernel::style::roles::bind(&roles);
         root_font::bold_text_facts(&mut kernel, &plan, viewport.preferences.bold_text); // LLP 1115.000 D12.3
+        let shown_route_readers = page::shown_route_readers(&plan);
         let mut runner = Runner {
             sites: crate::instance::SiteIndex::linked(&plan, links.keyframes),
             strings: vm::intern(&plan),
@@ -874,6 +876,7 @@ impl<D: DataSource> Runner<D> {
             viewport,
             page: Default::default(),
             shown_routes: Vec::new(),
+            shown_route_readers,
             time: crate::time::launch_time(),
             live_times: Default::default(),
             text_axes: Default::default(),

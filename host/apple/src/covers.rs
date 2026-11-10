@@ -189,8 +189,9 @@ impl<D: DataSource> Host<D> {
         }
         self.runner.place_blocks(placements);
         // Liveness alone: the runner reads it, layout does not.
+        let mut moved = false;
         for &(view, how) in shown {
-            self.runner.kernel_mut().set_host_block_shown(view, how);
+            moved |= self.runner.kernel_mut().set_host_block_shown(view, how);
         }
         for &(view, list) in margins {
             if let Err(e) = self.runner.kernel_mut().set_grouped_margins(view, list) {
@@ -203,14 +204,14 @@ impl<D: DataSource> Host<D> {
                 error.get_or_insert(format!("list margins: {e:?}"));
             }
         }
-        // How its columns show the routes changes which a person can see (LLP 1127 D8, a fold)
-        match self.runner.refresh_shown_routes() {
-            Ok(Some(receipt)) => receipts.push(exact_runner::Timed {
-                at_ms: self.now_ms,
-                receipt,
-            }),
-            Ok(None) => {}
-            Err(e) => drop(error.get_or_insert(format!("shown routes: {e:?}"))),
+        // Ask `shownRoutes` again when a column shows its route another way (LLP 1127 D8, a fold);
+        // `commit_into` asks after the receipts
+        if receipts.is_empty() && moved {
+            let (shown, failed) = self.runner.shown_routes_commit(self.now_ms);
+            receipts.extend(shown);
+            if let Some(e) = failed {
+                error.get_or_insert(e);
+            }
         }
         if !receipts.is_empty() {
             return self.commit_into(&receipts, error, batch);
