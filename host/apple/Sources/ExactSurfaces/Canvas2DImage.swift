@@ -99,8 +99,11 @@ final class Canvas2DHost: Canvas2DEnv {
     /// one to present: an animation drops frames instead of queueing them,
     /// and the newest replay done always shows.
     private let replay = DispatchQueue(label: "exact.canvas2d.replay", qos: .userInitiated)
-    /// Replays dispatched and not yet shown.
-    private var pending = 0
+    /// Replays dispatched and not yet shown (`loadingCount`); each one's end,
+    /// shown or dropped, tells `onReplayEnded`.
+    private var pending = 0 { didSet { if pending < oldValue { onReplayEnded?() } } }
+    /// A replay ended: what the session counts as outstanding may have cleared.
+    var onReplayEnded: (() -> Void)?
     /// Each canvas's latest arrival, and the newest one shown: an older
     /// replay's pixels are never shown over a newer one's.
     private var sequence: [UInt32: Int] = [:]

@@ -183,22 +183,42 @@ public final class ExactLaunch: NSObject {
         scheduleEvaluate()
     }
 
-    /// Re-reads outstanding work after this run-loop turn and its commit finish.
-    func applied(_ session: ExactSession, changed: Bool, what: () -> String = { "" }) {
+    /// Work ended (`ExactSession.workEnded`): re-reads outstanding work after
+    /// this run-loop turn and its commit finish.
+    func workEnded(_ session: ExactSession) {
         guard session === launchSession, ttiOutcome == nil else { return }
+        scheduleEvaluate()
+    }
+
+    /// Records a batch that changed the screen (one with ops).
+    func applied(_ session: ExactSession, _ batch: Batch) {
+        guard session === launchSession, ttiOutcome == nil, !batch.ops.isEmpty else { return }
         // Nothing outstanding, but the screen still changing: TTI waits for
         // a frame with no change, so this is what holds it then (a fresh
         // answer replacing a kept one, a fade). Its span: first to last.
-        if changed, lastOutstanding.isEmpty, marks[.present] != nil {
+        if lastOutstanding.isEmpty, marks[.present] != nil {
             let now = CACurrentMediaTime(), item = "screen:changing"
             if spans[item] == nil { spanOrder.append(item) }
             spans[item] = (spans[item]?.from ?? now, now)
             if changes.count < 12, let p = marks[.process] {
-                changes.append("\(String(format: "%.0f", (now - p) * 1000)) \(what())")
+                changes.append("\(String(format: "%.0f", (now - p) * 1000)) \(Self.summary(batch, session.presenter))")
             }
         }
-        if changed { contentDirty = true; candidate = nil }
-        scheduleEvaluate()
+        contentDirty = true; candidate = nil
+    }
+
+    /// A batch's op kinds and a few of the views it touched (test ID, else
+    /// kind), for the TTI trace.
+    private static func summary(_ batch: Batch, _ presenter: Presenter) -> String {
+        var kinds: [String: Int] = [:], names: [String] = []
+        for op in batch.ops {
+            kinds[op.op.rawValue, default: 0] += 1
+            guard op.nodeID != nil, names.count < 4 else { continue }
+            let view = presenter.views[op.id]; let name = view?.props["testId"] ?? view?.kind ?? op.kind
+            if !names.contains(name) { names.append(name) }
+        }
+        let ops = kinds.sorted { $0.value > $1.value }.prefix(3).map { "\($0.key)×\($0.value)" }.joined(separator: " ")
+        return names.isEmpty ? ops : "\(ops) (\(names.joined(separator: ", ")))"
     }
 
     // MARK: Commit and vsync
@@ -253,10 +273,13 @@ public final class ExactLaunch: NSObject {
     }
 
     /// A session's outstanding work from the runner and the host, as
-    /// `kind:name` items, plus failed resources and whether the runner is poisoned.
+    /// `kind:name` items, plus failed resources and whether the runner is
+    /// poisoned. Nil when there is none to read: a destroyed session, or a
+    /// runner that answers with an error (busy, gone), whose missing lists
+    /// would otherwise read as nothing outstanding.
     static func ledger(_ session: ExactSession) -> (items: [String], failed: [String], poisoned: Bool)? {
-        guard let data = session.agent("{\"op\":\"outstanding\"}").data(using: .utf8),
-              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        guard session.state != .destroyed, let data = session.agent("{\"op\":\"outstanding\"}").data(using: .utf8),
+              let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any], o["error"] == nil else { return nil }
         var out: [String] = []
         for key in ["requests", "streams", "awaiting", "oneShots", "busy"] {
             out += (o[key] as? [String] ?? []).map { "\(key):\($0)" }
@@ -265,7 +288,7 @@ public final class ExactLaunch: NSObject {
         return (out, o["failed"] as? [String] ?? [], o["poisoned"] as? Bool == true)
     }
 
-    /// Runs the turn after an apply or activation. With nothing outstanding,
+    /// Runs the turn after work ended or activation. With nothing outstanding,
     /// the interactive mark is the next vsync if the screen changed, else now.
     /// It is never earlier than the first render.
     private func evaluate() {

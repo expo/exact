@@ -112,6 +112,7 @@ final class SvgFilterLive {
         DispatchQueue.main.async { [weak self] in
             SvgFilterLive.inFlight -= 1
             self?.kick()
+            if SvgFilterLive.inFlight == 0 { ExactSession.workEndedEverywhere() }
         }
     }
 
@@ -209,6 +210,7 @@ final class SvgFilterLive {
                 started?.wait()
                 DispatchQueue.main.async { [weak self] in
                     SvgFilterLive.inFlight -= 1
+                    defer { if SvgFilterLive.inFlight == 0 { ExactSession.workEndedEverywhere() } }
                     guard let self else { return }
                     self.gpu -= 1
                     if let started { self.show(started.surface, started.shown) }

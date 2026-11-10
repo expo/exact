@@ -529,6 +529,7 @@ public final class ExactSession {
             guard let self, self.state != .destroyed else { return }
             self.apply(self.runtime.canvasImage(src, width: image?.width ?? 0, height: image?.height ?? 0, ok: image != nil))
         }
+        presenter.canvas2d.onReplayEnded = { [weak self] in self?.workEnded() }
         presenter.canvas2d.onHeld = { [weak self] view, held in
             guard let self, self.state != .destroyed else { return }
             self.runtime.canvasHeld(view, held)
@@ -650,7 +651,7 @@ public final class ExactSession {
         landing = true
         // A reply the slices released (`afterFill`) may have left a deadline
         // due: it advances once they have landed, unless a batch waits on them
-        defer { landing = false; if !holdingReports { advanceIfDue() } }
+        defer { landing = false; workEnded(); if !holdingReports { advanceIfDue() } }
         while true {
             published.lock()
             let next = publishedQueue.isEmpty ? nil : publishedQueue.removeFirst()
@@ -705,6 +706,9 @@ public final class ExactSession {
     /// Land every session's slice in flight.
     static func drainAll() { for weak in live.values { weak.session?.drainFill() } }
 
+    /// Work that every session counts ended: the last SVG picture in flight (`hostOutstanding`).
+    static func workEndedEverywhere() { for weak in live.values { weak.session?.workEnded() } }
+
     /// Wait for the slice in flight and land it: what shows, the agent and
     /// every read that must see it (T5, T7, T9).
     public func drainFill() {
@@ -729,7 +733,7 @@ public final class ExactSession {
             // A report inside the built window commits nothing: while a list
             // moves that is most frames. Skip the presenter's finalization
             // pass for it, unless the clock or the motion it reports is news.
-            if changesNothing(batch) && clockUnchanged(batch) { return }
+            if changesNothing(batch) && clockUnchanged(batch) { return workEnded() }
             apply(batch)
         }
         presenter.onClose = { [unowned self] id in apply(runtime.dialogClose(id, now: now())) }
@@ -1065,6 +1069,7 @@ public final class ExactSession {
         // What the pass did that a scroll moves (`scrolledWithoutPass`).
         if scrolled { presenter.scrolledWithoutPass() }
         drainReports()
+        workEnded()
         advanceIfDue()
     }
 
@@ -1167,19 +1172,8 @@ public final class ExactSession {
             transformInputHold?.cancelIfInputIneligible()
             presenter.transformGeometry.changed()
             applying = false
-            ExactLaunch.shared.applied(self, changed: !batch.ops.isEmpty) { [presenter] in
-                // Summarize op kinds and a few node IDs for the TTI trace
-                var kinds: [String: Int] = [:], names: [String] = []
-                for op in batch.ops {
-                    kinds[op.op.rawValue, default: 0] += 1
-                    guard op.nodeID != nil, names.count < 4 else { continue }
-                    let view = presenter.views[op.id]; let name = view?.props["testId"] ?? view?.kind ?? op.kind
-                    if !names.contains(name) { names.append(name) }
-                }
-                let ops = kinds.sorted { $0.value > $1.value }.prefix(3).map { "\($0.key)×\($0.value)" }.joined(separator: " ")
-                return names.isEmpty ? ops : "\(ops) (\(names.joined(separator: ", ")))"
-            }
-            NavigationMarks.shared.applied(self)
+            ExactLaunch.shared.applied(self, batch)
+            workEnded()
             #if os(macOS)
             regions.flush()
             #endif

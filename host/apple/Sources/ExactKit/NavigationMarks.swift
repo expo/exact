@@ -20,6 +20,8 @@ final class NavigationMarks: NSObject {
     private var seen: [ObjectIdentifier: Set<UInt64>] = [:]
     private var launched: Set<ObjectIdentifier> = []
     private var pending: Pending?
+    /// An evaluation is queued: one per turn, as each reads the ledger on the owner.
+    private var evaluateScheduled = false
     private(set) var link: CADisplayLink?
     private var deadline: DispatchWorkItem?
     /// Recent measurements for `state.observe`, newest last.
@@ -159,10 +161,15 @@ final class NavigationMarks: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + ExactLaunch.ttiTimeout, execute: item)
     }
 
-    /// Re-checks outstanding work after a batch, once the change is shown.
-    func applied(_ session: ExactSession) {
-        guard let p = pending, p.session === session, p.presented != nil else { return }
-        DispatchQueue.main.async { [weak self] in self?.evaluate() }
+    /// Work ended (`ExactSession.workEnded`): re-checks outstanding work once
+    /// the change is shown.
+    func workEnded(_ session: ExactSession) {
+        guard let p = pending, p.session === session, p.presented != nil, !evaluateScheduled else { return }
+        evaluateScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            self?.evaluateScheduled = false
+            self?.evaluate()
+        }
     }
 
     private func stop() {
@@ -172,7 +179,7 @@ final class NavigationMarks: NSObject {
 
     @objc private func tick(_ link: CADisplayLink) {
         guard let p = pending, let ended = p.turnEnded, p.presented == nil, let g = Vsync(link).next(after: ended) else { return }
-        // Only the first frame needs a link; later batches re-check TTI
+        // Only the first frame needs a link; work that ends later re-checks TTI
         stop()
         p.presented = g
         var f = p.fields

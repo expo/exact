@@ -50,16 +50,18 @@ final class Canvas2DReplayTests: XCTestCase {
 
     func testFramesFasterThanReplayWaitAsOneReplayAndHoldTheFrameRequest() throws {
         let host = Canvas2DHost(), parent = CALayer()
-        var held: [Bool] = []
+        var held: [Bool] = [], clearedAtEnd = false
         host.onHeld = { view, h in XCTAssertEqual(view, 7); held.append(h) }
+        host.onReplayEnded = { [unowned host] in clearedAtEnd = host.loadingCount == 0 }
         host.apply(7, op([list((255, 0, 0), rects: 20_000)], fresh: true), layer: parent)
         for i in 1...100 { host.apply(7, op([list((0, Double(i), 0))], fresh: false), layer: parent) }
         XCTAssertLessThanOrEqual(host.loadingCount, 2, "one replay running, one waiting: frames join it")
         XCTAssertEqual(held.first, true, "the runner holds the canvas's frame request")
         host.waitForReplays(timeout: 30)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.02))
+        waitForMainQueue("the release the last replay queued")
         XCTAssertEqual(host.loadingCount, 0)
         XCTAssertEqual(held.last, false, "and releases it once the replay caught up")
+        XCTAssertTrue(clearedAtEnd, "the last replay to end tells `onReplayEnded`, with nothing left loading")
         XCTAssertEqual(try pixel(try XCTUnwrap(parent.sublayers?.first)), [0, 100, 0], "every list applied, the last on top")
     }
 

@@ -17,6 +17,17 @@ extension ExactSession {
 }
 #endif
 
+extension ExactSession {
+    /// Tells the launch's and a navigation's TTI to read outstanding work
+    /// again. Work that shows nothing new can end the last of it (a skipped
+    /// batch, owner work landing, a canvas replay or an SVG picture done), so
+    /// this follows every end of work, not only an apply.
+    func workEnded() {
+        ExactLaunch.shared.workEnded(self)
+        NavigationMarks.shared.workEnded(self)
+    }
+}
+
 /// Supplied once per session launch and reused by every replacement runner.
 struct LaunchPlace: Equatable {
     let locale: String

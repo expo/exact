@@ -125,6 +125,7 @@ package protocol Canvas2DCanvases: AnyObject {
     var onImage: ((String, CGImage?) -> Void)? { get set }
     var onHeld: ((UInt32, Bool) -> Void)? { get set }
     var onScale: ((CGFloat) -> Void)? { get set }
+    var onReplayEnded: (() -> Void)? { get set }
     var loadingCount: Int { get }
     func apply(_ id: UInt32, _ payload: [String: Any], layer parent: CALayer?)
     /// Places the bitmap of `id` at `box`, its view's content box, clipped
@@ -242,6 +243,7 @@ final class NoCanvas2D: Canvas2DCanvases {
     var onImage: ((String, CGImage?) -> Void)?
     var onHeld: ((UInt32, Bool) -> Void)?
     var onScale: ((CGFloat) -> Void)?
+    var onReplayEnded: (() -> Void)?
     var loadingCount: Int { 0 }
     func apply(_ id: UInt32, _ payload: [String: Any], layer parent: CALayer?) {}
     func place(_ id: UInt32, in box: CGRect, radii: [CGSize]) {}
