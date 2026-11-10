@@ -214,8 +214,8 @@ flowchart LR
 
 ## Quick start
 
-These steps were run on macOS on Apple Silicon. Linux works for the web loop and the
-Linux host.
+These steps were run on macOS on Apple Silicon. Linux also runs the web loop, the
+Linux host, and the iOS cross compiler. On Windows, use WSL 2 with Ubuntu 24.04 for iOS builds.
 
 ### 1. Install the tools
 
@@ -225,7 +225,38 @@ Linux host.
   not needed.
 - **Google Chrome.** The agent drives the web through headless Chrome. Set `CHROME` to
   use another Chromium.
-- **Xcode 27.1 or later**, for the macOS and iOS hosts (`exact setup --check` checks it).
+- **Xcode 27.1 or later**, for Apple builds on macOS (`exact setup --check` checks it). For iOS builds on Linux/WSL, install
+  [Swift 6.4.2](https://www.swift.org/install/linux/),
+  [xtool 1.24.0](https://github.com/xtool-org/xtool/releases/tag/1.24.0),
+  [LLVM 23](https://apt.llvm.org/), and
+  [apple-codesign 0.29.0](https://github.com/indygreg/apple-platform-rs/releases/tag/apple-codesign%2F0.29.0).
+  Download Xcode 27.1 from [Apple](https://developer.apple.com/download/all/?q=Xcode%2027.1),
+  then run `APPIMAGE_EXTRACT_AND_RUN=1 xtool sdk install --slim /path/to/Xcode_27.1.xip` on Linux. This extracts the SDK;
+  it does not run Xcode. The environment variable lets xtool's AppImage run without FUSE.
+  In WSL 2, keep the checkout and SDK in Ubuntu's Linux filesystem. Put LLVM's `bin` directory on `PATH` and set
+  `EXACT_APPLE_LLVM_BIN` to that directory (on Ubuntu, `/usr/lib/llvm-23/bin`).
+  Swift and `rcodesign` must also be on `PATH`; IPA archives also need `zip`.
+  For a signed device archive, set `EXACT_IDENTITY` to an absolute PKCS#12 file path,
+  `EXACT_APPLE_SIGN_PASSWORD_FILE` to its password file, and `EXACT_PROFILE` to the
+  app’s provisioning profile. Set `EXACT_PROFILE_DIR` to a directory containing
+  companion extension profiles. Profile decoding needs `openssl`.
+  On macOS, `EXACT_IDENTITY` continues to name a Keychain identity.
+  `EXACT_APPLE_SDK` can select a Darwin
+  SDK bundle outside xtool's default `~/.swiftpm/swift-sdks/darwin.artifactbundle`.
+  Watch simulator companions require `xtool sdk install /path/to/Xcode_27.1.xip`
+  without `--slim`, so Exact can install the retained watch SDK on the first watch build.
+  Icon Composer projects retain their live SVG layers on iOS 26 and newer; Linux
+  uses the manifest’s PNG `icons` entry as artwork for older iOS versions. The
+  portable compiler supports the checked-in projects’ default SVG group and
+  opaque sRGB background; other Composer settings are refused explicitly.
+  For the SVG filter kernels and Canvas 2D GPU module on x86-64 Linux/WSL,
+  install Wine 9 or newer and download [Metal Developer Tools for Windows](https://developer.apple.com/metal/tools/).
+  Extract the installer with `7z x -o/path/to/metal-tools Metal_Developer_Tools6.2Windows.exe`,
+  then set `EXACT_APPLE_METAL_TOOLS=/path/to/metal-tools` (the directory containing `bin/metal.exe`).
+  The qualified compiler is Metal 32023.850 from the 6.2 Windows installer.
+  `EXACT_APPLE_WINE` can select Wine's executable; otherwise Exact uses Ubuntu's
+  `/usr/lib/wine/wine64` when present, then `wine` on PATH. Wine runs only at build
+  time. Its prefix defaults to `~/.cache/exact/windows-metal`; `WINEPREFIX` overrides it.
 - **Hermes**, only for TypeScript apps on native hosts. Exact consumes Ibex's
   pinned, attested `260318099.0.4` release bundle; ordinary Cargo builds are
   offline and never download or compile an engine. Install it once for each
@@ -249,13 +280,30 @@ Use `~/.bun-1.4.2/bin/bun` for the commands below if it is not on your PATH.
 `bun scripts/exact.mjs setup` installs the declared stable and web nightly Rust
 toolchains, their components/targets (the nightly's clippy lints a game's web bake),
 matching wasm-bindgen, pinned Binaryen and Bun dependencies, installs the pinned
-Hermes host bundle and the iOS/tvOS bundles this Mac builds, and fetches the crates
+Hermes host bundle and the iOS/tvOS bundles this machine builds, and fetches the crates
 of exact2's lock and the game SDK's (`game/app/shells.lock`), since every bake
 resolves offline. It keeps Binaryen in `~/.cache/exact/binaryen`; builds find it
 automatically. `setup --check` invokes Ibex's installer in its offline check mode for
 that same target set. The resolver authenticates the canonical receipts, archives,
 compiler and host/target HBC pairing without installing anything; its exit status and
 diagnostic are the check's result.
+
+With the Linux cross SDK installed, `setup` also installs the iOS Rust targets.
+Build a simulator bundle with `bun host/apple/build.mjs --ios --no-install hello-apple`.
+In an app made with `exact new`, `bun exact.mjs ios` builds without installing on Linux/WSL;
+`ios --prebuild` runs the same build in the background.
+Linux defaults to an ARM64 simulator target; `EXACT_IOS_SIM_ARCH=x86_64` selects an
+Intel simulator. Execution needs an iOS simulator on macOS or an iPhone; compilation,
+asset catalog generation, App Intents metadata and ad-hoc signing run on Linux.
+
+Production builds with custom native views also validate the compiled factory roster.
+Linux can import a simulator qualification with `EXACT_NATIVE_ROSTERS=/path/to/qualification.json`.
+It contains `{ "version": 1, "probes": [{ "probeSha256": "…", "roster": "<JSON object>" }] }`.
+The build writes `native-probes.json` beside its link products to identify the probe to
+execute on an iOS simulator. Qualifications match the probe's SHA-256; changing its
+compiled bytes requires a new simulator run. Without a matching qualification, a
+production build refuses rather than accepting an absent factory or omitting its
+first-frame declaration. Development builds retain the existing manifest fallback.
 
 ### 2. Run Caltrain in the browser
 

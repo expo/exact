@@ -1,0 +1,25 @@
+[package]
+name = "select-walk-fixture-apple"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Select walk fixture on Apple platforms: its library component fixture"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "select_walk_fixture_apple"
+crate-type = ["rlib"]
+test = false
+bench = false
+
+[dependencies]
+exact-logic = { path = "../../../logic" }
+exact-apple = { path = "../../../host/apple" }
+exact-apple-update = { path = "../../../host/apple-update" }
+select-walk-fixture-data = { path = "../data" }
+
+[build-dependencies]
+contract = { path = "../../../contract/cli" }
+exact-bake = { path = "../../../bake" }
+select-walk-fixture-data = { path = "../data" }

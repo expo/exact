@@ -1369,7 +1369,9 @@ test('a native verb refuses before writing when its platform\'s setup is missing
     const missing = await bringPlatform(dir, 'ios', { report: [{ name: 'Xcode', have: 'missing', want: 'Xcode.app', ok: false, fix: 'install Xcode' }], os: 'darwin' });
     assert.match(missing.refused, /^bun exact\.mjs ios: this machine lacks what a ios build needs; nothing was written:\n  Xcode: missing \(SDK Xcode\.app\)\n    install Xcode$/);
     assert.match((await bringPlatform(dir, 'ios', { report: { error: 'no report' }, os: 'darwin' })).refused, /the setup report could not be read, so nothing was written: no report$/);
-    assert.match((await bringPlatform(dir, 'ios', { report: [], os: 'linux' })).refused, /^bun exact\.mjs ios: an Apple build needs a Mac/);
+    assert.match((await bringPlatform(dir, 'macos', { report: [], os: 'linux' })).refused, /^bun exact\.mjs mac: an Apple build needs a Mac/);
+    assert.match((await bringPlatform(dir, 'ios', { report: [], os: 'win32' })).refused, /use WSL on Windows/);
+    assert.match((await bringPlatform(dir, 'ios', { report: [{ name: 'Apple cross SDK', have: 'missing', want: 'Xcode SDK', ok: false, fix: 'xtool sdk install' }], os: 'linux' })).refused, /Apple cross SDK: missing/);
     assert.match((await bringPlatform(dir, 'windows', { report: [], os: 'darwin' })).refused, /^bun exact\.mjs windows: a Windows build needs Windows/);
     assert.equal(manifest(), before);
     assert.ok(!existsSync(resolve(dir, '.exact/shells')), 'a refusal generates nothing');
@@ -1379,6 +1381,11 @@ test('a native verb refuses before writing when its platform\'s setup is missing
     assert.ok(existsSync(resolve(dir, '.exact/shells/apple/Cargo.toml')));
     // Named already: the report is not read, and a current workspace says nothing.
     assert.deepEqual(await bringPlatform(dir, 'macos', { report: { error: 'not read' }, os: 'darwin' }), { lines: [] });
+    const cross = await bringPlatform(dir, 'ios', { report: [{ name: 'Apple cross SDK', ok: true }], os: 'linux' });
+    assert.match(cross.lines[0], /host\.ios, deploy\.store\.ios added/);
+    assert.ok(JSON.parse(manifest()).host.ios);
+    assert.deepEqual(appVerbs('field-log', dir, { os: 'linux' }).ios, ['host/apple/build.mjs', '--ios', 'field-log-apple', '--no-install']);
+    assert.deepEqual(appVerbs('field-log', dir, { os: 'darwin' }).ios, ['host/apple/build.mjs', '--ios', 'field-log-apple']);
     // An app without app.json had the defaults readManifest supplies; naming a platform writes them down first.
     rmSync(resolve(dir, 'app.json'));
     const written = await bringPlatform(dir, 'linux', { report: [], os: 'darwin' });

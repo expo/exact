@@ -1,6 +1,5 @@
 // What an Apple app links: the capabilities its composition names, and the
 // SDK its executable records, with the device launch link of LLP 1047.001.001.
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
@@ -14,6 +13,13 @@ export function appleProduction(app, platform, args = []) {
   if (!['speed', 'size'].includes(optimize)) throw new Error(`host/apple: --optimize is speed or size, not ${optimize}`);
   if (game && optimize === 'size') throw new Error('host/apple: games cannot optimize for size because their generated Cargo workspace has no size profile; use speed');
   return { optimize, profile: optimize === 'size' ? 'size' : 'release' };
+}
+
+/** A Linux builder can target an ARM simulator on another machine, independently of its host CPU. */
+export function iosSimulatorTarget(arch = process.env.EXACT_IOS_SIM_ARCH ?? (process.platform === 'linux' ? 'arm64' : process.arch)) {
+  const cpu = arch === 'arm64' ? 'arm64' : ['x64', 'x86_64'].includes(arch) ? 'x86_64' : null;
+  if (!cpu) throw new Error(`host/apple: unsupported iOS simulator architecture ${arch}; EXACT_IOS_SIM_ARCH is arm64 or x86_64`);
+  return { target: cpu === 'arm64' ? 'aarch64-apple-ios-sim' : 'x86_64-apple-ios', triple: `${cpu}-apple-ios17.0-simulator` };
 }
 
 /** The capabilities with a Swift half, by name, and the product of
@@ -68,23 +74,59 @@ export function appleLaunchLinkArgs(destination, product) {
  * Read from the file, since `otool` takes a path ending in `name(member)`
  * for an archive's member (#234). */
 export function loadedDylibs(executable) {
-  const bytes = readFileSync(executable), names = new Set();
-  const thin = (at) => {
-    if (bytes.readUInt32LE(at) !== 0xfeedfacf) throw new Error(`host/apple: ${basename(executable)} is not a 64-bit Mach-O`);
+  return [...new Set(machoCommands(executable).flatMap(commands => commands.flatMap(({ cmd, bytes }) => {
+    if (![0xc, 0x80000018, 0x8000001f, 0x20, 0x80000023].includes(cmd)) return [];
+    return [dylibName(executable, bytes)];
+  })))];
+}
+
+function dylibName(executable, bytes) {
+  const at = bytes.length >= 24 ? bytes.readUInt32LE(8) : -1, end = bytes.indexOf(0, at);
+  if (at < 24 || at >= bytes.length || end < at) throw new Error(`host/apple: ${basename(executable)} has an invalid dylib load command`);
+  return bytes.toString('utf8', at, end);
+}
+
+/** One LC_ID_DYLIB per slice; null means that slice is not a dynamic library. */
+export function dylibInstallNames(executable) {
+  return machoCommands(executable).map(commands => {
+    const ids = commands.filter(({ cmd }) => cmd === 0xd);
+    return ids.length === 1 ? dylibName(executable, ids[0].bytes) : null;
+  });
+}
+
+/** Load commands bounded by their own slice, so build checks need no host's Mach-O tools. */
+function machoCommands(executable) {
+  const bytes = readFileSync(executable);
+  const invalid = () => { throw new Error(`host/apple: ${basename(executable)} has an invalid 64-bit Mach-O`); };
+  const slice = (at, size) => {
+    if (!Number.isSafeInteger(at) || !Number.isSafeInteger(size) || at < 0 || size < 32 || at + size > bytes.length) invalid();
+    if (bytes.readUInt32LE(at) !== 0xfeedfacf) invalid();
+    const count = bytes.readUInt32LE(at + 16), end = at + 32 + bytes.readUInt32LE(at + 20), commands = [];
+    if (end > at + size || count > (end - at - 32) / 8) invalid();
     let cursor = at + 32;
-    for (let i = 0, n = bytes.readUInt32LE(at + 16); i < n; i++) {
-      const cmd = bytes.readUInt32LE(cursor), size = bytes.readUInt32LE(cursor + 4);
-      if ([0xc, 0x80000018, 0x8000001f, 0x20, 0x80000023].includes(cmd)) {
-        const name = cursor + bytes.readUInt32LE(cursor + 8);
-        names.add(bytes.toString('utf8', name, bytes.indexOf(0, name)));
-      }
-      cursor += size;
+    for (let i = 0; i < count; i++) {
+      if (cursor + 8 > end) invalid();
+      const cmd = bytes.readUInt32LE(cursor), length = bytes.readUInt32LE(cursor + 4);
+      if (length < 8 || length % 4 || cursor + length > end) invalid();
+      commands.push({ cmd, bytes: bytes.subarray(cursor, cursor + length) });
+      cursor += length;
     }
+    if (cursor !== end) invalid();
+    return commands;
   };
-  if (bytes.readUInt32BE(0) === 0xcafebabe) {
-    for (let i = 0, n = bytes.readUInt32BE(4); i < n; i++) thin(bytes.readUInt32BE(8 + i * 20 + 8));
-  } else thin(0);
-  return [...names];
+  if (bytes.length < 4) invalid();
+  const magic = bytes.readUInt32BE(0);
+  if (magic !== 0xcafebabe && magic !== 0xcafebabf) return [slice(0, bytes.length)];
+  if (bytes.length < 8) invalid();
+  const count = bytes.readUInt32BE(4), width = magic === 0xcafebabf ? 32 : 20;
+  if (!count || count > (bytes.length - 8) / width) invalid();
+  return Array.from({ length: count }, (_, i) => {
+    const at = 8 + i * width;
+    const offset = width === 32 ? Number(bytes.readBigUInt64BE(at + 8)) : bytes.readUInt32BE(at + 8);
+    const size = width === 32 ? Number(bytes.readBigUInt64BE(at + 16)) : bytes.readUInt32BE(at + 12);
+    if (offset < 8 + count * width) invalid();
+    return slice(offset, size);
+  });
 }
 
 /** An executable links no framework that only an unlinked capability
@@ -107,16 +149,17 @@ export function linksByPlan(production, args) {
 /** The SDK the linker recorded in an executable (`LC_BUILD_VERSION`) is the
  * one asked for: AppKit draws its design by that number, so a link that
  * records another (as SwiftPM's did, LLP 1069.011 §7) changes every app's
- * look without a word. Compared to major.minor. Read by `vtool`, which
- * takes any path as a file: the executable is named for its app, and
- * `otool` takes a path ending in `name(member)`, such as "T3 Code (Exact)",
- * for an archive's member (#234). */
+ * look without a word. Compare major.minor in every slice, reading the file
+ * directly so the same check runs on Linux and accepts names ending in parentheses (#234). */
 export function assertLinkedSdk(executable, expected) {
-  const shown = spawnSync('xcrun', ['vtool', '-show-build', executable], { encoding: 'utf8' });
-  if (shown.status !== 0) throw new Error(`host/apple: xcrun vtool -show-build failed (${shown.status ?? shown.signal ?? shown.error?.message}) on ${executable}${shown.stderr?.trim() ? ': ' + shown.stderr.trim() : ''}`);
-  const recorded = /cmd LC_BUILD_VERSION[\s\S]*?\n\s*sdk (\S+)/.exec(shown.stdout)?.[1];
   const majorMinor = (v) => String(v).split('.').slice(0, 2).map(Number).join('.');
-  if (!recorded || majorMinor(recorded) !== majorMinor(expected)) {
-    throw new Error(`host/apple: ${basename(executable)} records SDK ${recorded ?? '(none)'}, not ${expected}: AppKit would draw it in another design`);
+  for (const commands of machoCommands(executable)) {
+    const versions = commands.filter(({ cmd }) => cmd === 0x32);
+    const command = versions.length === 1 ? versions[0].bytes : null;
+    const sdk = command?.length >= 24 ? command.readUInt32LE(16) : null;
+    const recorded = sdk == null ? null : `${sdk >>> 16}.${(sdk >>> 8) & 255}.${sdk & 255}`;
+    if (!recorded || majorMinor(recorded) !== majorMinor(expected)) {
+      throw new Error(`host/apple: ${basename(executable)} records SDK ${recorded ?? '(none)'}, not ${expected}: AppKit would draw it in another design`);
+    }
   }
 }

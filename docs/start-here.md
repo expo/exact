@@ -48,6 +48,10 @@ bun exact.mjs ios --prebuild  # the first iOS build: ten to fifteen minutes, in 
 `bun <exact2>/scripts/exact.mjs setup` takes a few minutes, a first macOS or iOS build ten to fifteen on a laptop, later builds a minute or two.
 Run each once and let it finish, in the background with a completion notification if your tool has one, rather than polling its log.
 
+On Linux or Windows through WSL, install the [iOS cross tools](../README.md#1-install-the-tools)
+first. `ios` builds a simulator bundle without installing it; `ios --prebuild` does so
+in the background. Running an iOS simulator, including `verify ios` and `agent ios`, needs macOS.
+
 Start from the nearest pattern. The screen `exact new` writes, and its tests in
 `app.test.contract`, are placeholders: replace both. `exact.mjs` runs from any
 directory: a file you name is found where you are, else in the app, and it says

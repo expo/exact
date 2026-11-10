@@ -100,7 +100,7 @@ export const windowsWindow = (manifest) => [manifest?.host?.windows?.window?.wid
 
 /** exact2's verbs for the app `name` in `dir`: each the script it runs, from the checkout, and its
  * first arguments. `host` is a drive's (`test ios`); a game has its own and no `verify` or `pattern`. */
-export function appVerbs(name, dir, { host = 'web', game = false } = {}) {
+export function appVerbs(name, dir, { host = 'web', game = false, os = process.platform } = {}) {
   return {
     status: ['scripts/exact.mjs', 'status', dir],
     web: ['host/web/dev.mjs', '--app', name],
@@ -110,7 +110,7 @@ export function appVerbs(name, dir, { host = 'web', game = false } = {}) {
     agent: ['scripts/agent.mjs', host, '--app', name],
     // Builds itself, so not below (LLP 1116.004 D7): one report of the build, the tests and check.
     ...game ? {} : { verify: ['scripts/verify.mjs', host, '--app', name] },
-    ios: ['host/apple/build.mjs', '--ios', `${name}-apple`],
+    ios: ['host/apple/build.mjs', '--ios', `${name}-apple`, ...(os === 'linux' ? ['--no-install'] : [])],
     mac: ['host/apple/build.mjs', `${name}-apple`],
     // An iPhone build, uploaded to AppDrop: the link a person opens to install it.
     share: ['scripts/share.mjs', '--app', name],
@@ -279,6 +279,10 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
   // generated workspace current unless the app authored one (LLP 1153 D1.2; scripts/app-shells.mjs). A drive's
   // host counts (`test ios`). Absent from a checkout that lacks the module (the scaffold's test SDK), it is skipped.
   const platform = game || rest.includes('--help') || rest.includes('-h') ? null : (await import(resolve(exact2, 'scripts/app-shells.mjs')).catch(() => null))?.platformOf(verb, host);
+  if (verb === 'ios' && process.platform === 'linux' && rest.includes('--run') && !rest.includes('--help')) {
+    const error = 'ios --run needs an iOS simulator or connected iPhone; bun exact.mjs ios builds the bundle on Linux/WSL';
+    console.error(error); reply?.({ code: 'platform_refused', error }); return log(2);
+  }
   if (platform) {
     const shells = await import(resolve(exact2, 'scripts/app-shells.mjs'));
     const named = shells.namesPlatform(existsSync(manifest) ? JSON.parse(readFileSync(manifest, 'utf8')) : {}, platform);
@@ -395,7 +399,7 @@ if (verb === 'contract') {
     && !rest.some((a, i) => (a === '--url' && !rest[i + 1]?.startsWith('/')) || a === '--web-dist');
   // Xcode's builds are a Mac's: on Windows, the verbs that need one say what Windows has instead.
   if (process.platform === 'win32' && (['ios', 'mac'].includes(verb) || ['test', 'agent', 'verify'].includes(verb) && ['ios', 'macos', 'mac'].includes(host))) {
-    const message = `${verb}${verb === 'ios' || verb === 'mac' ? '' : ` ${host}`} needs a Mac (Xcode); on Windows: bun exact.mjs windows --run opens the app, test windows and verify windows check it`;
+    const message = verb === 'ios' || host === 'ios' ? 'iOS builds run on Linux through WSL; iOS simulator drives need macOS' : `${verb}${verb === 'mac' ? '' : ` ${host}`} needs a Mac (Xcode); on Windows: bun exact.mjs windows --run opens the app, test windows and verify windows check it`;
     console.error(message);
     reply?.({ code: 'platform_refused', error: message });
     return log(2);

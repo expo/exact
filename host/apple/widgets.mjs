@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { mkdirSync, readdirSync, existsSync, writeFileSync, readFileSync, copyFileSync, cpSync, rmSync, renameSync, statSync } from 'node:fs';
 import { createHash, X509Certificate } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { plistFile, wrapFramework, frameworkLayout, frameworkInstallName } from './assets.mjs';
+import { plistFile, wrapFramework, frameworkLayout, frameworkInstallName, singleFramework } from './assets.mjs';
 import { assertCapabilityFrameworks } from './link.mjs';
 import { linkedPlanArgs } from '../../scripts/linked-plan.mjs';
 import { appleLinkArgs } from '../../scripts/package-libraries.mjs';
@@ -217,7 +217,7 @@ export function sharedWidgetCore({ app, prepared, libDir, crate, env, runApple, 
       }
     }
     writeFileSync(layout.info, plistFile({ CFBundleIdentifier: `${app.id}.runtime`, CFBundleName: 'ExactCore', CFBundleExecutable: 'ExactCore', CFBundlePackageType: 'FMWK', CFBundleVersion: '1', CFBundleShortVersionString: '0.1.0', CFBundleSupportedPlatforms: [platform === 'macos' ? 'MacOSX' : platform === 'watchos' ? 'WatchSimulator' : device ? 'iPhoneOS' : 'iPhoneSimulator'], ...(platform === 'macos' ? { LSMinimumSystemVersion: app.manifest.host?.macos?.minimumOS ?? '14.0' } : { MinimumOSVersion: platform === 'watchos' ? '10.0' : app.manifest.host?.ios?.minimumOS ?? '17.0' }) }));
-    if (!existsSync(resolve(xcframework, 'Info.plist'))) runApple('xcrun', ['xcodebuild', '-create-xcframework', '-allow-internal-distribution', '-framework', framework, '-output', xcframework]);
+    if (!existsSync(resolve(xcframework, 'Info.plist'))) singleFramework(framework, xcframework, prepared.triple);
     else {
       const slice = readdirSync(xcframework).find(name => existsSync(resolve(xcframework, name, 'ExactCore.framework')));
       cpSync(framework, resolve(xcframework, slice, 'ExactCore.framework'), { recursive: true, verbatimSymlinks: true });

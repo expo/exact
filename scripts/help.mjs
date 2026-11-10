@@ -234,12 +234,12 @@ Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simu
     example: 'bun exact.mjs verify            # bun exact.mjs verify ios once at the end, for an iPhone app',
   },
   ios: {
-    line: 'build for an iOS simulator and install it (--run launches it)',
+    line: 'build for an iOS simulator; on macOS also install it (--run launches it)',
     usage: 'bun exact.mjs ios [--run|--prebuild|--no-install] [--json] [--release] [--sim <udid|name>] [--device [--phone <udid|name>]] [--url <url>] [--optimize speed|size]',
     common: ['ios [--run] [--sim <name>]    build for a simulator; --run launches it'],
     flags: [
       ['--run', 'also launch it (in Simulator.app, or on the phone); returns once launched'],
-      ['--no-install', 'build and sign the simulator .app, and install it on no simulator'],
+      ['--no-install', 'build and sign the simulator .app, and install it on no simulator; the default on Linux/WSL'],
       jsonBuilt(', signing (an identity\'s SHA-1, or ad-hoc), installed ({name, udid}, unless --no-install, --unsigned or --archive)', '; not with --run, --prebuild or --test'),
       PREBUILD,
       RELEASE,
@@ -253,7 +253,8 @@ Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simu
       OPTIMIZE,
     ],
     get internal() { return appleRest(this.flags); },
-    body: `The first build takes minutes, later ones a minute or two. Of several booted simulators it
+    body: `Linux/WSL builds an ARM64 simulator bundle without installing it. Use macOS to run the
+simulator. The first build takes minutes, later ones a minute or two. Of several booted simulators it
 takes the one the app is installed on, else refuses to guess (--sim or EXACT_SIM). test ios
 and agent ios run it first themselves when the build is missing or older than its sources;
 an edit to only app.contract or what app.ts imports runs its new plan on the existing build
