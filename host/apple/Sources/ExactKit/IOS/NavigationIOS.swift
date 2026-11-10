@@ -420,6 +420,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     var primaryRoutes: [RouteController] { primaryStacks.flatMap(\.stackRoutes).compactMap { $0 as? RouteController } }
     /// A list beside its detail: the primary stack as UIKit's split (SplitIOS.swift).
     var split: SplitIOS?
+    /// The node that had the focus as the split's columns began to collapse or expand (`keepFocusAcrossColumns`).
+    weak var focusAcrossColumns: NodeView?
     private(set) var presentedNavigations: [UINavigationController] = []
     /// The theme's title ink each bar was last given (`titleInk`), held no
     /// longer than its bar.

@@ -43,6 +43,9 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     var inspectorClosed: () -> Void = {}
     /// UIKit is moving the columns, inside its animation (`moveAlong`).
     var columnsMove: () -> Void = {}
+    /// UIKit is about to collapse or expand the columns (a fold), and has done so.
+    var columnsWillChange: () -> Void = {}
+    var columnsDidChange: () -> Void = {}
     /// UIKit has said the columns will move and has yet to open its animation. It lays them out itself, inside that
     /// animation, as it does a view constrained to the safe area: nothing here may lay them out before then, or what
     /// the safe area moves jumps to its end.
@@ -300,6 +303,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
                              topColumnForCollapsingToProposedTopColumn proposedTopColumn: UISplitViewController.Column) -> UISplitViewController.Column {
         expansion = false
         collapsing = true
+        columnsWillChange()
         // Collapsing with its inspector shown, UIKit presents the inspector's
         // column as a sheet of its own: the route goes to the sheet it says
         // instead (LLP 1127 D14), and the column, emptied for it, would be a
@@ -313,6 +317,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
                              displayModeForExpandingToProposedDisplayMode proposedDisplayMode: UISplitViewController.DisplayMode) -> UISplitViewController.DisplayMode {
         collapsing = false
         expansion = true
+        columnsWillChange()
         return proposedDisplayMode
     }
 
@@ -328,7 +333,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         expansion = false
         collapsing = false
         show(stack, animated: false)
-        DispatchQueue.main.async { self.changed() }
+        DispatchQueue.main.async { self.changed(); self.columnsDidChange() }
     }
     func splitViewControllerDidExpand(_ svc: UISplitViewController) {
         collapsing = false
@@ -343,7 +348,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
                 returnTo(location)
             }
         }
-        DispatchQueue.main.async { self.changed() }
+        DispatchQueue.main.async { self.changed(); self.columnsDidChange() }
     }
     func splitViewController(_ svc: UISplitViewController, willChangeTo displayMode: UISplitViewController.DisplayMode) {
         if let coordinator = svc.transitionCoordinator {
@@ -366,6 +371,17 @@ extension Presenter {
 }
 
 extension NavigationHost {
+    /// The columns collapsed or expanded (a fold or an unfold): the field that had the focus before has it
+    /// again while its route still shows, as the person left it typing; UIKit takes a field moved to another
+    /// column out of its responder chain. Covered (a page over the list on a folded Duo), it keeps none.
+    func keepFocusAcrossColumns() {
+        guard let node = focusAcrossColumns else { return }
+        focusAcrossColumns = nil
+        guard presenter.views[node.id] === node, presenter.focusedNode !== node,
+              !isInactiveRoute(containing: node) else { return }
+        presenter.focusNode(node)
+    }
+
     /// Whether the stack whose first route is `root` shows as UIKit's split:
     /// its list's rows push, by the runner's rule, under the platform's chrome.
     /// An installed split keeps its list while that list has no row to act on.
@@ -390,6 +406,8 @@ extension NavigationHost {
         split.returnTo = { [weak self] location in self?.go(to: location) }
         split.inspectorClosed = { [weak self] in self?.inspectorClosed() }
         split.columnsMove = { [weak self] in self?.reportCovers(); self?.presenter.owners.publish() }
+        split.columnsWillChange = { [weak self] in self?.focusAcrossColumns = self?.presenter.focusedNode }
+        split.columnsDidChange = { [weak self] in self?.keepFocusAcrossColumns() }
         self.split = split
         primaryNavigation = list
         prepareRoutes(Array(first.prefix(1)), in: list)
