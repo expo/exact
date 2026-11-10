@@ -441,11 +441,19 @@ test('each Apple destination checks its own Rust std and Hermes bundle, device i
     { target: 'aarch64-apple-tvos-sim', destination: 'tvOS Simulator' },
   ]);
   assert.equal(appleCrossTargets('darwin', 'x64')[0].target, 'x86_64-apple-ios');
-  assert.deepEqual(appleCrossTargets('linux', 'x64'), []);
-  assert.deepEqual([false, true].map(sdk => appleSetupTargets('darwin', 'arm64', sdk)).concat([appleSetupTargets('linux', 'x64', true)]), [['aarch64-apple-ios-sim', 'aarch64-apple-tvos-sim'], ['aarch64-apple-ios-sim', 'aarch64-apple-ios', 'aarch64-apple-tvos-sim'], []]); // the device's with the iphoneos SDK
+  assert.deepEqual(appleCrossTargets('linux', 'x64'), [
+    { target: 'aarch64-apple-ios-sim', destination: 'iOS Simulator' },
+    { target: 'aarch64-apple-ios', destination: 'iOS device' },
+  ]);
+  assert.deepEqual(appleCrossTargets('win32', 'x64'), []);
+  assert.deepEqual([false, true].map(sdk => appleSetupTargets('darwin', 'arm64', sdk)).concat([appleSetupTargets('linux', 'x64', true)]), [['aarch64-apple-ios-sim', 'aarch64-apple-tvos-sim'], ['aarch64-apple-ios-sim', 'aarch64-apple-ios', 'aarch64-apple-tvos-sim'], ['aarch64-apple-ios-sim', 'aarch64-apple-ios']]); // the device's with the iphoneos SDK
   // A first iOS build refuses, naming the command, before Cargo fails on a target the pinned toolchain lacks.
   assert.deepEqual(platformRowNames('ios', { os: 'darwin', cpu: 'arm64' }).slice(-2), ['Hermes bundle (aarch64-apple-ios-sim)', 'Rust aarch64-apple-ios-sim']);
   assert.deepEqual(platformRowNames('ios', { os: 'darwin', cpu: 'x64', device: true }).slice(-2), ['Hermes bundle (aarch64-apple-ios)', 'Rust aarch64-apple-ios']);
+  const linux = platformRowNames('ios', { os: 'linux', cpu: 'x64' });
+  assert.ok(linux.includes('Apple cross SDK')); assert.ok(!linux.includes('Xcode'));
+  assert.ok(linux.includes('Hermes bundle (aarch64-apple-ios-sim)'));
+  assert.ok(platformRowNames('ios', { os: 'linux', device: true }).includes('Hermes bundle (aarch64-apple-ios)'));
   const calls = [];
   const execute = (command, args) => { calls.push(args); return {status: 0, stdout: 'Verified', stderr: ''}; };
   checkHermesBundles({}, execute, 'darwin', 'arm64', ['aarch64-apple-ios']);
@@ -1433,6 +1441,12 @@ for (const [moduleDirectory, staleDirectory] of [['', null], ['Modules', null], 
       const executable = resolve(dir, `Fixture${version}`), frameworks = resolve(slice, '..');
       run('xcrun', ['clang', resolve(dir, 'app.c'), '-F', frameworks, '-framework', 'ExactCore', '-Wl,-rpath,' + frameworks, '-o', executable]);
       run(executable, []);
+    }
+    if (!moduleDirectory && staleDirectory === null) {
+      const reference = resolve(base, 'XcodeReference.xcframework');
+      run('xcrun', ['xcodebuild', '-create-xcframework', '-allow-internal-distribution', '-framework', prepared.framework, '-output', reference]);
+      const metadata = path => JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', resolve(path, 'Info.plist')]).stdout);
+      assert.deepEqual(metadata(prepared.xcframework), metadata(reference));
     }
     // A plan edit relinks the shared image even when its Rust archive stays.
     const planDir=resolve(dir,'plan'); mkdirSync(planDir);

@@ -10,9 +10,10 @@
 // the SwiftPM build, not inside it, and needs no ExactKit module to compile
 // against.
 import { resolve } from 'node:path';
-import { existsSync, mkdirSync, rmSync, writeFileSync, cpSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, cpSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { intentsMetadata as emittedIntentsMetadata } from './intents-metadata.mjs';
 
 const toolchain = '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain';
 /** The protocols whose conformers' constant values the metadata pass reads (Xcode's list for App Intents). */
@@ -229,7 +230,8 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
   if (!faces.length) return null;
   if (parseFloat(deployment) < floor[platform]) throw new Error(`host/apple: intents: a faced tool needs ${platform === 'ios' ? 'iOS' : 'macOS'} ${floor[platform]} or later, and app.json's host.${platform}.minimumOS is ${deployment}`);
   const source = intentsSource(faces, app.manifest.intents?.entities ?? {});
-  const digest = createHash('sha256').update(JSON.stringify([source, swiftc, triple, sdk])).digest('hex').slice(0, 16);
+  const emitter = process.platform === 'linux' ? readFileSync(new URL('./intents-metadata.mjs', import.meta.url)) : '';
+  const digest = createHash('sha256').update(JSON.stringify([source, swiftc, triple, sdk])).update(emitter).digest('hex').slice(0, 16);
   const dir = resolve(directory, digest), object = resolve(dir, 'ExactIntents.o'), metadata = resolve(dir, 'Metadata.appintents');
   if (!existsSync(resolve(metadata, 'extract.actionsdata'))) {
     rmSync(dir, { recursive: true, force: true });
@@ -241,7 +243,15 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
       '-module-cache-path', resolve(directory, 'module-cache'), '-target', triple, '-sdk', sdk,
       ...constValueArgs(values, dir),
       '-c', file, '-o', object]);
-    intentsMetadata({ moduleName: 'ExactIntents', dir, sdk, triple, platform, deployment, binary: object, sources: [file], values, runApple });
+    if (process.platform === 'linux') {
+      const major = parseInt(JSON.parse(readFileSync(resolve(sdk, 'SDKSettings.json'), 'utf8')).Version);
+      const actions = emittedIntentsMetadata(JSON.parse(readFileSync(values, 'utf8')), major);
+      mkdirSync(metadata, { recursive: true });
+      writeFileSync(resolve(metadata, 'extract.actionsdata'), JSON.stringify(actions));
+      writeFileSync(resolve(metadata, 'version.json'), JSON.stringify({ toolsVersion: 'exact-1', version: '3.0' }));
+    } else {
+      intentsMetadata({ moduleName: 'ExactIntents', dir, sdk, triple, platform, deployment, binary: object, sources: [file], values, runApple });
+    }
     console.log(`host/apple: intents: ${faces.length} faced tool${faces.length === 1 ? '' : 's'} compiled with their metadata (${Date.now() - started} ms)`);
   }
   return {

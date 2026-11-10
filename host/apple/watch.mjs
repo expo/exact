@@ -7,6 +7,7 @@ import { appleAssets, plistFile } from './assets.mjs';
 import { appleProduction, stripProductionExecutable } from './link.mjs';
 import { reportBuilt } from '../../scripts/help.mjs';
 import { copyStaticTreeIfPresent } from '../web/serve.mjs';
+import { ensureWatchSimulatorSDK } from './sdk.mjs';
 import { platformWidgetEntries, prepareWidgetCore, sharedWidgetCore, packageWidgets } from './widgets.mjs';
 import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url))), pkg = resolve(root, 'host/apple');
@@ -58,6 +59,7 @@ export async function buildWatch(app, args, { runApple, appleArtifacts, appleBui
       console.log(`host/apple: no watch entry and no Rust accessory entries; watch bundle omitted${args.includes('--run') ? '; --run skipped' : ''}`);
       return;
     }
+    if (process.platform === 'linux') ensureWatchSimulatorSDK();
     const profile = production ? 'release' : HOST_DEV;
     const directory = resolve(parent.namespace, 'watchos'), target = 'aarch64-apple-watchos-sim', triple = 'arm64-apple-watchos10.0-simulator';
     mkdirSync(directory, { recursive: true });

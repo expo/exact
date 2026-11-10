@@ -346,7 +346,8 @@ export async function bringPlatform(dir, platform, { report = null, os = process
   const lines = [], verb = `bun exact.mjs ${platform === 'macos' ? 'mac' : platform}`;
   const manifest = existsSync(resolve(dir, 'app.json')) ? readManifest(dir) : null;
   if (!namesPlatform(manifest ?? {}, platform)) {
-    if (['ios', 'macos', 'tvos'].includes(platform) && os !== 'darwin') return { refused: `${verb}: an Apple build needs a Mac with Xcode; nothing was written` };
+    if (platform === 'ios' && !['darwin', 'linux'].includes(os)) return { refused: `${verb}: iOS builds need macOS or Linux (use WSL on Windows); nothing was written` };
+    if (['macos', 'tvos'].includes(platform) && os !== 'darwin') return { refused: `${verb}: an Apple build needs a Mac with Xcode; nothing was written` };
     if (platform === 'windows' && os !== 'win32') return { refused: `${verb}: a Windows build needs Windows with the MSVC Rust target; nothing was written` };
     if (report?.error) return { refused: `${verb}: the setup report could not be read, so nothing was written: ${report.error}` };
     const missing = (report ?? []).filter(row => !row.ok);

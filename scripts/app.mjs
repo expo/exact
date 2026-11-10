@@ -23,7 +23,7 @@ import { nativeResourceMappings, nativeResourceInventory, appleAssetCatalogInven
 // never identity). Validated here against `scripts/app.schema.json` with a
 // validator small enough to live beside the reader; an app without one gets
 // the derived defaults it had before the manifest existed.
-import { spawnSync } from 'node:child_process';
+import { spawnSync } from '../host/apple/toolchain.mjs';
 import { closeSync, existsSync, mkdirSync, openSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep, toNamespacedPath } from 'node:path';
 import { constants, homedir, tmpdir } from 'node:os';
@@ -503,7 +503,7 @@ export function resolveApp(nameOrCrate) {
       if (declared.length) workspace = declared[0];
       // From the files, never `cargo locate-project`: a web verb runs no Cargo in the app (LLP 1153 D2.1). An app that
       // authored no workspace builds in the generated one (scripts/app-shells.mjs), written when a build asks (`rust`).
-      else if (outside) workspace = authoredWorkspace(dir) ?? shellsDir(dir);
+      else if (outside || !manifests.some(existsSync)) workspace = authoredWorkspace(dir) ?? shellsDir(dir);
       // EXACT_APP_DIR may name an app of this repo; only another workspace is checked, its lock when a build asks.
       if (workspace !== ROOT && workspace !== shellsDir(dir) && existsSync(resolve(workspace, 'Cargo.toml'))) {
         const problems = outsideWorkspaceProblems(workspace);
@@ -516,7 +516,7 @@ export function resolveApp(nameOrCrate) {
     name = manifest.game.crate.slice(0, -'-logic'.length);
     workspace = resolve(dir, '.shells');
   }
-  const generated = !!outside && workspace === shellsDir(dir), own = manifest.game || generated ? dir : workspace;
+  const generated = workspace === shellsDir(dir), own = manifest.game || generated ? dir : workspace;
   const target = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(own, 'target');
   assertOwnTarget(target, own);
   // What a build asks for before it runs Cargo in the workspace, once: a generated workspace written current with the
