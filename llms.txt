@@ -1,0 +1,82 @@
+# Exact
+
+> Exact is a way to write an app once and ship it natively to the web, iOS, macOS, Linux, Windows and Android. The view is Contract (`app.contract`): HTML's structure and CSS's names in an indented syntax, with TypeScript's expressions. Data lives in a TypeScript module (`app.ts`). Each host draws its own controls, so an app says what a thing is and leaves colour, type, bars and motion to the platform. A coding agent can build, run, see and test the app on every host from the command line.
+
+Exact has no releases, tags or npm package. An app uses a checkout of https://github.com/expo/exact by path, and the paths below are relative to that checkout. Make an app with `bun scripts/exact.mjs new <path>` (run `bun scripts/exact.mjs setup` once first), then work in the app's directory with `bun exact.mjs <verb>`.
+
+Rules that differ from React and React Native:
+
+- Read one start guide whole, then look things up by name. `bun exact.mjs contract vocab <name>…` answers any tag, function, property, idiom or recipe; `bun exact.mjs docs <heading words>` prints one section of a guide.
+- Start from the nearest tested pattern: `bun exact.mjs pattern` lists them.
+- Write structure and layout; leave controls unpainted. A colour names a role (`-exact-secondary-label`), not a hex.
+- Every screen, tab and sheet is a route. Only the root component declares `resource`, `mutation` and `task`.
+- Contract has no `null`, truthiness, indexing, spread or JSX callbacks: absence is an option to `match`, lists copy with `concat`, records with `Shape(old, field=value)`, repetition is a keyed `for`.
+- A data source answers exactly its declared shape. A failed read throws; a refused write returns a shaped reply. `app.ts` has no clock or randomness.
+- Verify by running: `bun exact.mjs contract build app.contract --json` prints `[]` on success, `bun exact.mjs verify` tests, checks layouts and relaunches. A web pass does not establish native behaviour.
+
+## Start here
+
+- [Building an app](docs/start-here.md): the only required reading for an app: the idea, the workflow, one complete screen with its data module and test, the costliest pitfalls
+- [Building a website](docs/start-here-site.md): the only required reading for a site: pages at URLs, rendered ahead or per request
+- [The card](docs/card.md): every function, tag, part, test step and idiom on one page; `contract vocab` prints the same text
+
+## Skills
+
+- [exact-app](skills/exact-app/SKILL.md): building or changing an Exact app: where work belongs, Contract against JSX habits, the build, test and verify loop
+- [exact-performance](skills/exact-performance/SKILL.md): measuring with `perf`, long lists, work at rest, data-source budgets, launch
+- [exact-desktop](skills/exact-desktop/SKILL.md): a Mac app that embeds a web guest, a companion service, native pickers, a full-window title bar, shortcuts, packaging
+
+To use a skill in Claude Code, link its directory into `~/.claude/skills/` or the app's `.claude/skills/`.
+
+## Recipes
+
+One short file per common question, each with code that compiles. `contract vocab <name>` prints one.
+
+- [list-rows](docs/recipes/list-rows.md): a list with search, swipe to delete and a long-press menu
+- [grouped-form](docs/recipes/grouped-form.md): an entry or settings form
+- [navigation-stack](docs/recipes/navigation-stack.md): routes, push, back, sheets
+- [tabs](docs/recipes/tabs.md): tabs with a stack in each
+- [fetch-loading-error](docs/recipes/fetch-loading-error.md): loading, failure, retry, pull to refresh
+- [rest-backend](docs/recipes/rest-backend.md): a server of your own, its origin as a setting, HTTP caching
+- [after-a-write](docs/recipes/after-a-write.md): a write that may be refused
+- [files-and-grants](docs/recipes/files-and-grants.md): records kept across launches: a JSON file, SQLite, picked documents
+- [persisted-setting](docs/recipes/persisted-setting.md): a setting kept with `persist`
+- [timers](docs/recipes/timers.md): tasks, `every` and `after`, a timer that measures time
+- [dates-and-days](docs/recipes/dates-and-days.md): the date, days, pinned clocks in tests
+- [motion](docs/recipes/motion.md): transitions, keyframes, exit and layout animation
+- [theme](docs/recipes/theme.md) and [tamber](docs/recipes/tamber.md): brand colours, light and dark, design tokens
+- [symbols](docs/recipes/symbols.md): icons by role
+- [responsive-columns](docs/recipes/responsive-columns.md): one column on a phone, two when wide
+- [chat-thread](docs/recipes/chat-thread.md): a transcript that opens at its newest message
+- [native-module](docs/recipes/native-module.md): a Swift module the data module asks
+- [native-views](docs/recipes/native-views.md): a map, the camera, a platform view
+- [permissions](docs/recipes/permissions.md): location and anything the person must allow
+- [app-json](docs/recipes/app-json.md): manifest keys, assets, the modules folder
+- [tests](docs/recipes/tests.md): authored tests and their steps
+- [ios-driving](docs/recipes/ios-driving.md): driving the app on a simulator
+- [website](docs/recipes/website.md): serving a site, per-request pages, settings, deep links
+- [porting-and-release](docs/recipes/porting-and-release.md): porting an app, a release build
+
+## Lookup
+
+Read these by section, never front to back.
+
+- [Contract for agents](docs/contract-for-agents.md): the working guide: values and expressions, state and actions, data requests, views and layout, routes, tabs, time and motion, inspection and testing, repairing common mistakes
+- [Pitfalls](docs/agent-pitfalls.md): verified footguns, by area: layout, lists and scrolling, native navigation, porting from React Native, actions, input, driving and testing, websites
+- [Grammar](docs/contract-grammar.md): exact syntax, lengths, authored-test forms
+- [Reference](docs/reference.md): the data module's runtime (fetch, storage, budgets, sockets), access hatches, painters, delivery
+- [Testing](docs/testing.md): waits, isolation, coverage, measuring
+- [Game pitfalls](docs/game-pitfalls.md): for a game made with `exact new <path> --game`
+
+## Examples
+
+- [apps/shelf](apps/shelf/app.contract): a whole app to grep
+- [apps/metronome](apps/metronome/app.contract): sound, MIDI and a transport with no native audio code
+- [Exact Draw](https://github.com/rami-maalouf/exact-draw): a Mac app outside this repository: a native shell around an embedded Excalidraw editor and a local file service, with a journal of what building on Exact was like
+
+## Optional
+
+- [README](README.md): what Exact is, prerequisites, platforms
+- [Contract for humans](docs/contract-for-humans.md): the language taught at length
+- [Diary](docs/diary.md): the feedback diary an app keeps and `bun exact.mjs feedback note`
+- [AGENTS.md](AGENTS.md): instructions for working on Exact itself, not for building an app with it
