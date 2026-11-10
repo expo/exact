@@ -836,7 +836,7 @@ export async function nativeSmoke({ host, open, check: record, webDist, shots, d
     writeFileSync(source, 'static const struct { unsigned major, size; const char *roster; void *f[7]; } t = { 1, 72, "{}", { 0 } };\nconst void *exact_native_abi(void) { return &t; }\n');
     const cc = spawnSync('xcrun', host === 'ios' ? ['--sdk', 'iphonesimulator', 'clang', '-target', 'arm64-apple-ios17.0-simulator', '-dynamiclib', '-o', dylib, source] : ['clang', '-dynamiclib', '-o', dylib, source], { encoding: 'utf8' });
     check(cc.status === 0, `${host} native: the skewed artifact compiles: ${cc.stderr}`);
-    await failing('a wrong ABI', { env: { EXACT_MODULES: dylib } }, /module ABI 1, host ABI 3/);
+    await failing('a wrong ABI', { env: { EXACT_MODULES: dylib } }, /module ABI 1, host ABI 4/);
   }
   rmSync(tmp, { recursive: true, force: true });
   console.log(`${host} native: ${checks - failed} of ${checks} checks passed in ${((Date.now() - t0) / 1000).toFixed(1)} s (the LLP 1024 D8 fixture)`);

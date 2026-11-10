@@ -3,7 +3,7 @@ import UIKit
 
 final class GallerySplit: UISplitViewController, UISplitViewControllerDelegate {
     private let contents: ExactTabContents
-    private let stacks: [UINavigationController]
+    private let stacks: [UIViewController]
     private let sidebar: GallerySidebar
     private var selectedFromSidebar = false
 

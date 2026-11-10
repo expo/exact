@@ -966,7 +966,9 @@ impl<D: DataSource> Host<D> {
         self.own_navigation(now_ms, |runner| runner.host_go(location))
     }
 
-    fn own_navigation(
+    /// Advance the clock to `now_ms` and run `navigate` on the runner, as one
+    /// batch.
+    pub(crate) fn own_navigation(
         &mut self,
         now_ms: f64,
         navigate: impl FnOnce(&mut Runner<D>) -> Result<Option<CommitReceipt>, RunnerError>,

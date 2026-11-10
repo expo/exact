@@ -1,0 +1,79 @@
+// LLP 1075.003 §3.7: more root tabs than an iPhone's tab bar shows, so UIKit
+// lists the last ones under its More item (NavigationMoreIOSTests). Home,
+// Barless, Three and Five draw their tab's stack, so each tab is a navigation
+// controller: Home and Three show a bar; Barless and Five's root have no
+// header, and under More, Five's root shows More's Back to its list. Four's
+// panel shows one fixed route with a header, so its tab is a navigation
+// controller too, whose bar shows that header. Six's panel shows one fixed
+// route with no header, so its tab is a plain view controller. Home and Five
+// push a route. With Redirect on, Four's press selects Three: a press that
+// moves the router to a tab other than the one tapped.
+routes nav
+  tab home "/"
+    detail "/detail"
+  tab barless "/barless"
+  tab three "/three"
+  tab four "/four"
+  tab five "/five"
+    deeper "/five/deeper"
+  tab six "/six"
+
+component MoreTabs
+  state redirecting = false
+  action pick(name: string)
+    nav = select(nav, (redirecting and name == "four") ? "three" : name)
+  action open(url: string)
+    nav = push(nav, url)
+  action back
+    nav = back(nav)
+  action follow(url: string)
+    nav = go(nav, url)
+  action redirect
+    redirecting = not redirecting
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%" display="flex" flex-direction="column"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          if t.name == "six"
+            column role="tabpanel" id="panel-six" position="absolute" inset=0
+              column navigationKey=(match first(t.stack) { case some(e) => `${e.id}`, case none => "" }) testId="route-six" position="absolute" inset=0
+                text "six" testId="text-six"
+          else if t.name == "four"
+            column role="tabpanel" id="panel-four" position="absolute" inset=0
+              column navigationKey=(match first(t.stack) { case some(e) => `${e.id}`, case none => "" }) testId="route-four" position="absolute" inset=0 display="flex" flex-direction="column"
+                header display="flex" align-items="center" padding="8px 16px"
+                  text "four" role="heading" aria-level=1
+                text "Four's page" testId="text-four"
+          else
+            column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+              for e in t.stack key=e.id
+                column navigationKey=`${e.id}` testId=`route-${e.name}` position="absolute" inset=0 display="flex" flex-direction="column"
+                  if e.name != "barless" and e.name != "five"
+                    header display="flex" align-items="center" padding="8px 16px"
+                      if e.name == "detail" or e.name == "deeper"
+                        button id="back" press=back testId=`back-${e.name}` aria-label="Back"
+                          text "Back"
+                      text e.name role="heading" aria-level=(e.name == "detail" or e.name == "deeper" ? 2 : 1)
+                  if e.name == "home"
+                    button press=open("/detail") testId="open-detail"
+                      text "Detail"
+                    button press=redirect testId="redirect"
+                      text (redirecting ? "Redirecting Four" : "Redirect Four")
+                  if e.name == "five"
+                    button press=open("/five/deeper") testId="open-deeper"
+                      text "Deeper"
+                  if e.name == "barless"
+                    text e.name testId=`text-${e.name}`
+      row role="tablist"
+        button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=pick("home") testId="tab-home" flex=1
+          text "Home"
+        button role="tab" aria-controls="panel-barless" aria-selected=(nav.tab == "barless") press=pick("barless") testId="tab-barless" flex=1
+          text "Barless"
+        button role="tab" aria-controls="panel-three" aria-selected=(nav.tab == "three") press=pick("three") testId="tab-three" flex=1
+          text "Three"
+        button role="tab" aria-controls="panel-four" aria-selected=(nav.tab == "four") press=pick("four") testId="tab-four" flex=1
+          text "Four"
+        button role="tab" aria-controls="panel-five" aria-selected=(nav.tab == "five") press=pick("five") testId="tab-five" flex=1
+          text "Five"
+        button role="tab" aria-controls="panel-six" aria-selected=(nav.tab == "six") press=pick("six") testId="tab-six" flex=1
+          text "Six"

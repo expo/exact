@@ -72,10 +72,8 @@ final class NativeListNavigationIOSTests: XCTestCase {
 
     private func second(_ session: ExactSession) throws -> (UINavigationController, RouteController, NodeView) {
         let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
-        _ = tabs.delegate?.tabBarController?(tabs, shouldSelect: tabs.viewControllers![1])
-        until("Second selected") { tabs.selectedIndex == 1 }
-        tabs.view.setNeedsLayout()
-        tabs.view.layoutIfNeeded()
+        tapTab(tabs, 1)
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
         let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
         let route = try XCTUnwrap(nav.topViewController as? RouteController)
         let node = try XCTUnwrap(session.presenter.views.values.first {

@@ -224,7 +224,7 @@ final class OwnerBlocks {
         presenter.navigation.primaryStacks.flatMap { routes(of: $0, presented: false) } + presenter.modals.navigations.flatMap { routes(of: $0, presented: true) }
     }
 
-    /// A stack's routes: a navigation controller's, or a tab's held one.
+    /// A stack's routes: a navigation controller's, or a plain tab's one route.
     private func routes(of stack: UIViewController, presented: Bool) -> [(route: RouteController, view: UIView, block: CGRect, shown: Bool, presented: Bool)] {
         var controllers = stack.stackRoutes
         if let leaving = (stack as? UINavigationController)?.transitionCoordinator?.viewController(forKey: .from),

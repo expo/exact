@@ -446,10 +446,9 @@ extension NavigationHost {
     }
 
     /// Whether a route shows the bar: its stack's routes may, and the route
-    /// has something to show in it. A held stack's (no `nav`) may, as no
-    /// hatch has said otherwise.
-    func routeShowsBar(_ c: RouteController, in nav: UINavigationController?) -> Bool {
-        (nav.map(barShows) ?? !ExactEnv.authoredChrome) && bar(of: c.node, pushed: c.pushed) != .hidden
+    /// has something to show in it.
+    func routeShowsBar(_ c: RouteController, in nav: UINavigationController) -> Bool {
+        barShows(nav) && bar(of: c.node, pushed: c.pushed) != .hidden
     }
 
     /// Whether the bar is UIKit's for now on a route's account: its header
@@ -485,9 +484,10 @@ extension NavigationHost {
         // The bar's tint is the route's accent, as a hand-built app tints its bar for the screen it shows:
         // its title, items and field in the tint draw it and grey behind a sheet or an alert. A tint a
         // hatch gave the bar stays (`NavigationStack.hatchTintsBar`).
-        if let c, !stack.hatchTintsBar, c.node.ownAccent != stack.barTint {
-            nav.navigationBar.tintColor = c.node.ownAccent
-            stack.barTint = c.node.ownAccent
+        // More's list is no route: its bar takes back UIKit's tint.
+        if c != nil || nav === more, !stack.hatchTintsBar, c?.node.ownAccent != stack.barTint {
+            nav.navigationBar.tintColor = c?.node.ownAccent
+            stack.barTint = c?.node.ownAccent
         }
         guard !searching(c) else { return }
         let shows = c.map { routeShowsBar($0, in: nav) } ?? barShows(nav)
@@ -683,8 +683,9 @@ extension NavigationHost {
     /// Whether a route between the root and `c` (not `c`) hides the bar by
     /// UIKit's flag, which keeps it hidden over `c` on a phone too.
     static func underHides(_ nav: UINavigationController, _ c: UIViewController) -> Bool {
-        guard let at = nav.viewControllers.firstIndex(where: { $0 === c }), at > 1 else { return false }
-        return nav.viewControllers[1..<at].contains(where: hidesBar)
+        let routes = nav.stackRoutes
+        guard let at = routes.firstIndex(where: { $0 === c }), at > 1 else { return false }
+        return routes[1..<at].contains(where: hidesBar)
     }
 
     /// UIKit's flag, which tvOS has none of: its tab bar is the top's, and a push never hides it.
@@ -715,7 +716,7 @@ extension NavigationHost {
     /// reconciles the bar with its tablist.
     func settleTablist(_ nav: UINavigationController) {
         guard !ExactEnv.authoredChrome, let key = selectedKey,
-              let root = nav.viewControllers.first as? RouteController, root.key == key, nav.topViewController === root,
+              let root = nav.stackRoutes.first as? RouteController, root.key == key, nav.topViewController === root,
               let list = adoptedTablist.flatMap({ presenter.views[$0] }) ?? container.flatMap({ NavigationTabs.of($0, presenter)?.tablist })
         else { return }
         followTablistAtRoot(root, hidden: list.style["display"]?.string == "none", in: nav)

@@ -30,10 +30,11 @@ enum FocusSearch {
     /// `view` joins one of exact2's containers.
     static func joined(_ view: UIView) {
         // exact2's own views, an image and a material's backdrop are never
-        // focus items; a route's navigation container holds exact2's nodes,
-        // whose own foreign views join the nodes themselves.
+        // focus items; a route's container (a navigation controller or a
+        // plain tab) holds exact2's nodes, whose own foreign views join the
+        // nodes themselves.
         if view is NodeView || view is PlainView || view is ScrollView || view is MetalView
-            || view is UIImageView || view is UIVisualEffectView || view.next is UINavigationController || view.next is HeldStack
+            || view is UIImageView || view is UIVisualEffectView || view.next is UINavigationController || view.next is PlainTab
             || view is NativeButtonIOS { return } // a native button's node keeps the focus (LLP 1069.011 D4)
         candidates.add(view)
     }

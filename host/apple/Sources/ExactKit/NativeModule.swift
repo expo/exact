@@ -10,7 +10,7 @@
 // The table (`exact_native_abi()`, 64-bit layout; the module side is
 // `host/apple/modules/ExactNativeModule.swift`):
 //
-//   0  u32 major            3
+//   0  u32 major            4
 //   4  u32 size             104 or more
 //   8  const char *roster   JSON: {"tag": {"snapshot": bool, "reuse": bool,
 //                          "firstFrame": bool}, …}
@@ -109,12 +109,9 @@ private struct NativeFailure: Error { let state: String; let message: String }
 
 /// The loaded table: the roster and the entries, read once.
 private final class NativeTable {
-    static let major: UInt32 = 3
+    static let major: UInt32 = 4
     /// The hatch words the module handles, or nil for one that does not say.
     var hatchWords: Set<String>?
-    /// Whether its `tabContainer` takes a tab Exact holds without a
-    /// navigation controller (HeldStackIOS.swift); an older module's does not.
-    var heldStacks = false
     /// The modules' extensions the artifact composes (LLP 1133.001 D4).
     var extensions: [String] = []
     /// The module reads `app.onLine` through the host table's `on_line`
@@ -231,7 +228,6 @@ private final class NativeTable {
             moduleLater: unsafeBitCast(moduleLater, to: ModuleLaterFn.self),
             moduleCall: unsafeBitCast(moduleCall, to: ModuleLaterFn.self))
         loaded.hatchWords = hatchWords
-        loaded.heldStacks = hatches?["heldStacks"] as? Bool == true
         loaded.extensions = extensions
         loaded.asksOnLine = asksOnLine
         loaded.agentInput = pointer(64).map { unsafeBitCast($0, to: SetFn.self) }
@@ -574,8 +570,6 @@ final class NativeViews {
     /// The hatch words the loaded module was built to handle (LLP
     /// 1075.003.000.001 §4.3), or nil when it does not say: then every word is called.
     var handledHatches: Set<String>? { if case .success(let t) = NativeProcess.table { t.hatchWords } else { nil } }
-    /// Whether the loaded module's `tabContainer` takes held tabs (HeldStackIOS.swift).
-    var takesHeldStacks: Bool { if case .success(let t) = NativeProcess.table { t.heldStacks } else { false } }
     /// Whether the loaded module asks the host for `app.onLine` (`NativeTable.asksOnLine`).
     var moduleAsksOnLine: Bool { if case .success(let t) = NativeProcess.table { t.asksOnLine } else { false } }
     var onHatchesConnected: (() -> Void)?

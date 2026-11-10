@@ -56,8 +56,8 @@ final class NavigationCollapseIOSTests: XCTestCase {
         spin(0.3)
         let navigation = session.presenter.navigation
         let tabs = try XCTUnwrap(navigation.tabController)
-        _ = tabs.delegate?.tabBarController?(tabs, shouldSelect: tabs.viewControllers![1])
-        until("Second selected") { tabs.selectedIndex == 1 }
+        tapTab(tabs, 1)
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
         return (session, try XCTUnwrap(tabs.selectedViewController as? UINavigationController))
     }
 

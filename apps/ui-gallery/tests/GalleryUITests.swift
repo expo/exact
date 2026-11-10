@@ -299,7 +299,7 @@ final class GalleryUITests: XCTestCase {
 // Test the UIKit container independently of Exact's router
 struct GalleryTestTab {
     let name: String
-    let controller: UINavigationController
+    let controller: UIViewController
     let item: UITabBarItem
 }
 

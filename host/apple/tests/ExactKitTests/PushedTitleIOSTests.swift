@@ -324,8 +324,7 @@ final class PushedTitleIOSTests: XCTestCase {
         let (session, tabs, nav) = try fixture()
         let (expanded, inline) = try heights(nav)
         func select(_ index: Int) {
-            let controller = tabs.viewControllers![index]
-            if tabs.delegate?.tabBarController?(tabs, shouldSelect: controller) ?? true { tabs.selectedIndex = index }
+            tapTab(tabs, index)
             until("tab \(index) selected") { tabs.selectedIndex == index && session.presenter.navigation.transitioning == false }
             settle()
         }

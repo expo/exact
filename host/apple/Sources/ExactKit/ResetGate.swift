@@ -123,6 +123,7 @@ enum ResetGate {
         "pickerCancel(_:now:)": "an old picker dismissed as its view goes",
         "hostBack(_:now:)": "a back gesture the teardown set off is the old navigation's",
         "hostBack(from:to:now:)": "a back the teardown set off is the old navigation's",
+        "buildTabs(_:now:)": "the old tree's tab panels; the new tree's are built when More shows them",
         "beforeunload(_:now:)": "the old page's unload as it goes",
         "surfaceRecord(_:_:)": "an old canvas publisher released as the teardown ends it: the new runner starts with no surface records (none is carried), and the new tree's publishers record their own",
         "regionComplete(_:)": "an old generation's region artifact: `RegionController` drops one from another generation before it is told, and the new tree asks its own",

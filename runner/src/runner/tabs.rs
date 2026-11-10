@@ -20,6 +20,32 @@ impl<D: DataSource> Runner<D> {
         self.update_tree(true, |tree, u| tree.open_every_tab(u))
     }
 
+    /// Build the waiting tab panels among `panels` now, selecting none (LLP
+    /// 1075.003 §9.14): a host whose container lets a person pick a tab it
+    /// cannot show unbuilt asks for that tab first (UIKit's More list does
+    /// nothing for a row whose navigation controller is empty).
+    pub fn build_tabs(&mut self, panels: &[ViewId]) -> Result<CommitReceipt, RunnerError> {
+        self.update_tree(true, |tree, u| tree.open_panels(u, panels))
+    }
+
+    /// Whether each tab panel in `panels` needs a navigation controller
+    /// ([`crate::instance::tabs::sites_need_navigation`]); `true` where the
+    /// plan cannot tell, for a view that is no panel site the plan names (a
+    /// panel whose `role` is computed): a navigation controller can show any
+    /// of its routes.
+    pub fn panels_need_navigation(&self, panels: &[ViewId]) -> Vec<bool> {
+        let sites = crate::instance::tabs::panel_sites(&self.plan);
+        let navigation = crate::instance::tabs::sites_need_navigation(&self.plan, &sites);
+        panels
+            .iter()
+            .map(|p| {
+                self.plan_site_of(*p)
+                    .and_then(|s| sites.binary_search(&s).ok())
+                    .is_none_or(|i| navigation[i])
+            })
+            .collect()
+    }
+
     /// The tab panels' state a reload carries: each built panel's, and what
     /// the last reload carried for one not built since.
     pub(super) fn carry_panels(&self) -> CarriedPanels {

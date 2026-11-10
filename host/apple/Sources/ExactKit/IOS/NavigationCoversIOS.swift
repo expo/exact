@@ -64,10 +64,8 @@ extension NavigationHost {
             for node in (c.lifted.map({ [$0] }) ?? c.barNodes) + [c.scoped].compactMap({ $0 }) { wanted[node.id] = .whole }
             // Include the departing route until UIKit finishes its transition
             let nav = c.navigationController
-            let held = nav.map {
-                $0.viewControllers.contains(c) || $0.transitionCoordinator?.viewController(forKey: .from) === c
-            } ?? (c.parent is HeldStack)
-            guard held else { continue }
+            let stacked = c.stack?.stackRoutes.contains(c) == true || nav?.transitionCoordinator?.viewController(forKey: .from) === c
+            guard stacked else { continue }
             // A presented route's controller takes its sheet's whole view, and
             // the document's insets (`env()`) are not the sheet's: its route is
             // covered for its own safe area whatever the document's fit (LLP
@@ -81,13 +79,17 @@ extension NavigationHost {
             // A collapsing title's scroller goes under the bar, which insets it;
             // its expanded inset is where CSS scrollTop 0 rests.
             // While the bar is not as the route wants it (mid-transition to or
-            // from a route without one, §9.10), its last cover stands.
+            // from a route without one, §9.10), or the route is not in a window
+            // (a tab UIKit has yet to show), its last cover stands.
             // An active search's bar is UIKit's: the content follows it, as
             // UIKit's own does, but a title's insets are not sampled.
+            // A plain tab's route has no bar of its own: More's shows above it
+            // under More, and none on the tab bar.
             let search = searching(c)
-            let settled = search || (nav?.isNavigationBarHidden ?? true) != routeShowsBar(c, in: nav)
+            let barAbove = nav.map { c.parent is PlainTab ? !$0.isNavigationBarHidden : routeShowsBar(c, in: $0) } ?? false
+            let settled = c.viewIfLoaded?.window != nil && (search || (nav?.isNavigationBarHidden ?? true) != barAbove)
             // A route showing no bar has no title: its inset is the status bar's, none in landscape (LLP 1130 D3).
-            let barless = !routeShowsBar(c, in: nav)
+            let barless = !barAbove
             let topPeers = arrangementScrollers(in: c, top: true), bottomPeers = arrangementScrollers(in: c, top: false)
             if settled, !search, let node = c.collapseScroll, let sv = c.collapseScrollView, sv === node.scrollView, sv.adjustedContentInset.top > 0 || barless {
                 let inset = sv.adjustedContentInset.top
@@ -109,7 +111,7 @@ extension NavigationHost {
                     if node.scrollCollapsed == 0 || inset < node.scrollCollapsed { node.scrollCollapsed = inset }
                 }
             }
-            if settled, c.viewIfLoaded?.window != nil {
+            if settled {
                 let safe = c.view.safeAreaInsets
                 // The route's end with its page unscrolled: scrolling moves the route, not the bars.
                 // A route the keyboard shortens can end above the bars, with no bottom cover.
@@ -133,7 +135,7 @@ extension NavigationHost {
             var insetNodes = [c.collapseScroll, c.edgeScroll].compactMap { $0 }
             for peer in topPeers + bottomPeers where !insetNodes.contains(where: { $0 === peer }) { insetNodes.append(peer) }
             for node in insetNodes where wanted[node.id] != .whole && node.scrollView != nil && !(node === c.collapseScroll && Self.transparentBar(c.node)) {
-                if settled, c.viewIfLoaded?.window != nil, let safe = node.scrollView?.safeAreaInsets {
+                if settled, let safe = node.scrollView?.safeAreaInsets {
                     // The bottom edge's scroller takes the route's bottom
                     // clearance, which the route then pads nothing of
                     // (`scroller_insets_bottom`) and still moves an
@@ -248,6 +250,7 @@ extension NavigationHost {
             let line = "\(what): \(property) changed outside Exact, which owns it"
             if ownedReported.insert(line).inserted { presenter.session?.log(line) }
         }
+        // Skip a tab's own navigation controller while UIKit holds its routes in More (`allNavigations`), which no hatch has
         for nav in allNavigations {
             guard let stack = stacks[ObjectIdentifier(nav)], stack.hatched else { continue }
             if nav.delegate !== stack.proxy { say("navigation \(stack.label)", "delegate") }

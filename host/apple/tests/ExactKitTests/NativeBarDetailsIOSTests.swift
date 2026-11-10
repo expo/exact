@@ -13,7 +13,7 @@ final class NativeBarDetailsIOSTests: XCTestCase {
         list.addSubview(first); list.addSubview(second)
         let nav = p.navigation, controller = UITabBarController()
         nav.tabController = controller
-        nav.tabItemsSource = (NavigationTabs(tablist: list, tabs: [first, second], panels: []), [])
+        nav.tabItemsSource = NavigationTabs(tablist: list, tabs: [first, second], panels: [])
         nav.routerTab = 0
         nav.tint(list)
         XCTAssertEqual(controller.tabBar.tintColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)), .red)
@@ -37,7 +37,7 @@ final class NativeBarDetailsIOSTests: XCTestCase {
         list.addSubview(tab)
         let nav = p.navigation, controller = UITabBarController()
         nav.tabController = controller
-        nav.tabItemsSource = (NavigationTabs(tablist: list, tabs: [tab], panels: []), [])
+        nav.tabItemsSource = NavigationTabs(tablist: list, tabs: [tab], panels: [])
         nav.routerTab = 0
         list.tintAdjustmentMode = .dimmed
         nav.tint(list)
@@ -58,7 +58,7 @@ final class NativeBarDetailsIOSTests: XCTestCase {
         list.addSubview(tab)
         let nav = p.navigation, controller = UITabBarController()
         nav.tabController = controller
-        nav.tabItemsSource = (NavigationTabs(tablist: list, tabs: [tab], panels: []), [])
+        nav.tabItemsSource = NavigationTabs(tablist: list, tabs: [tab], panels: [])
         nav.routerTab = 0
         nav.tint(list)
         tab.applyStyle(["tint_color": [0, 0, 255, 255], "written": ["tint_color"]])

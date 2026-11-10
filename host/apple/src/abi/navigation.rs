@@ -70,6 +70,19 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
 
+    /// Build the tab panels the input buffer names, comma-separated view
+    /// ids, selecting none (`Runner::build_tabs`, LLP 1075.003 §9.14), a batch.
+    pub fn build_tabs(&mut self, len: usize, now_ms: f64) -> u32 {
+        let panels: Vec<u32> = String::from_utf8_lossy(&self.input[..len.min(self.input.len())])
+            .split(',')
+            .filter_map(|id| id.trim().parse().ok())
+            .collect();
+        let out = self.host.as_mut().map_or_else(not_booted, |h| {
+            h.own_navigation(now_ms, |runner| runner.build_tabs(&panels).map(Some))
+        });
+        self.emit(out)
+    }
+
     /// Follow the UTF-8 location in the owned input buffer.
     pub fn host_go(&mut self, len: usize, now_ms: f64) -> u32 {
         let location = String::from_utf8_lossy(&self.input[..len.min(self.input.len())]);

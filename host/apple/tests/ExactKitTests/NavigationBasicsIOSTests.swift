@@ -736,12 +736,6 @@ final class NavigationBasicsIOSTests: XCTestCase {
     /// root still hidden (UIKit brings the bar back for its root; Exact
     /// hides it again once the pop settles), another tab's root with its
     /// tablist shown, and a hatch's own value standing between those moments.
-    /// A tap on the bar's item for a tab, as UIKit asks before selecting.
-    private func tapTab(_ tabs: UITabBarController, _ index: Int) {
-        let target = tabs.viewControllers![index]
-        if tabs.delegate?.tabBarController?(tabs, shouldSelect: target) ?? true { tabs.selectedIndex = index }
-    }
-
     func testTheRootsTablistHiddenHidesTheTabBarAndShownBringsItBack() throws {
         guard #available(iOS 18.0, *) else { throw XCTSkip("setTabBarHidden is iOS 18") }
         let session = try fixture("basics-roottabbar")
@@ -1389,7 +1383,7 @@ final class NavigationBasicsIOSTests: XCTestCase {
         until("Chat's push started") { nav.viewControllers.count == 3 }
         XCTAssertNotNil(nav.transitionCoordinator, "the tab is switched while Chat's push runs")
         tapTab(tabs, 1)
-        until("Second selected") { tabs.selectedIndex == 1 }
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
         // (Home's push ends here, or, its stack off screen, when it shows again.)
         spin(0.6)
         XCTAssertTrue(barShows(tabs), "Second's root shows the bar, Home's late push notwithstanding")

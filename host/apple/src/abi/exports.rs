@@ -317,6 +317,13 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.host_back(id, now_ms), |n| n)
         }
 
+        /// Build the tab panels the input names, comma-separated view ids,
+        /// selecting none, a batch. @ref LLP 1075.003 §9.14
+        #[no_mangle]
+        pub extern "C" fn exact_build_tabs(rt: u32, len: usize, now_ms: f64) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.build_tabs(len, now_ms), |n| n)
+        }
+
         /// Follow a UTF-8 location with the runner's own go.
         #[no_mangle]
         pub extern "C" fn exact_host_go(rt: u32, len: usize, now_ms: f64) -> u32 {

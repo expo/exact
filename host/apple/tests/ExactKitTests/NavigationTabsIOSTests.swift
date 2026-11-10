@@ -4,11 +4,12 @@ import XCTest
 @testable import ExactKit
 
 /// LLP 1075.003 Stage 2 over the native fixture's tabs: Exact's
-/// `UITabBarController`, one navigation controller a tab, items from the
-/// authored tablist, a tab the bar selects pressing its authored tab, every
-/// tab's stack kept — its pushed screen, its scroll offset, its draft — and
-/// reselecting a tab popping it to its root. The bar is driven as a tap on
-/// it drives it, through the delegate Exact keeps.
+/// `UITabBarController`, one controller per tab, items from the authored
+/// tablist, UIKit's selection with the router following through the tab's
+/// authored tab, every tab's stack kept — its pushed screen, its scroll
+/// offset, its draft — and a reselected tab popped to its root by UIKit.
+/// The bar is driven as a tap on it drives it (`tapTab`), through the
+/// delegate Exact keeps.
 final class NavigationTabsIOSTests: XCTestCase {
     private var window: UIWindow?
     private var sessions: [ExactSession] = []
@@ -106,12 +107,6 @@ final class NavigationTabsIOSTests: XCTestCase {
         }
     }
 
-    /// A tap on the bar's item for a tab, as UIKit asks before selecting.
-    private func tapTab(_ tabs: UITabBarController, _ index: Int) {
-        let target = tabs.viewControllers![index]
-        if tabs.delegate?.tabBarController?(tabs, shouldSelect: target) ?? true { tabs.selectedIndex = index }
-    }
-
     /// The root's tablist shown while its stack is in a transition (a sheet
     /// presenting over the tabs), when the bar cannot move, brings the bar
     /// back at the next batch after it: the change is not lost, even when a
@@ -161,6 +156,9 @@ final class NavigationTabsIOSTests: XCTestCase {
         let p = session.presenter, navigation = p.navigation
         let list = try node(session, "tabs")
         let tabs = try XCTUnwrap(navigation.tabController)
+        // Select Second once so the runner builds its routes, then Home again
+        tapTab(tabs, 1)
+        tapTab(tabs, 0)
         let stacks = try XCTUnwrap(tabs.viewControllers)
         try authoredTabs(session, true)
         XCTAssertFalse(navigation.adopts(tablist: list))
@@ -241,7 +239,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         let navigation = session.presenter.navigation
         until("the app's container holds the tabs") { navigation.tabController == nil && navigation.tabOwner != nil }
         let owner = try XCTUnwrap(navigation.tabOwner)
-        let stacks = navigation.tabPanels.compactMap { navigation.tabNavigations[$0] }
+        let stacks = navigation.tabPanels.compactMap { navigation.tabStacks[$0] as? UINavigationController }
         XCTAssertEqual(stacks.count, 2)
         let second = try XCTUnwrap(stacks.dropFirst().first)
         let old = try node(session, "tabs").id
@@ -561,7 +559,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         XCTAssertTrue(item.isEnabled)
         XCTAssertTrue(item.accessibilityTraits.contains(.notEnabled))
         tapTab(tabs, 1)
-        until("ARIA-unavailable tab still selects") { tabs.selectedIndex == 1 }
+        XCTAssertEqual(tabs.selectedIndex, 1, "ARIA-unavailable tab still selects")
         session.presenter.apply(wireBatch([["op": "props", "id": Int(tab.id), "set": ["accessibilityDisabled": "false"]]]))
         XCTAssertFalse(item.accessibilityTraits.contains(.notEnabled))
     }
@@ -665,15 +663,15 @@ final class NavigationTabsIOSTests: XCTestCase {
         tint.getRed(&rgb.0, green: &rgb.1, blue: &rgb.2, alpha: &rgb.3)
         XCTAssertEqual([rgb.0, rgb.1, rgb.2].map { Int(($0 * 255).rounded()) }, [0x38, 0x38, 0xf5])
         let home = try XCTUnwrap(tabs.viewControllers?[0] as? UINavigationController)
-        let second = try XCTUnwrap(tabs.viewControllers?[1] as? UINavigationController)
-        XCTAssertEqual(second.viewControllers.count, 0, "another tab is built when first selected (LLP 1075.003 §9.14)")
+        XCTAssertEqual(tabs.viewControllers?[1].stackRoutes.count, 0, "another tab is built when first selected (LLP 1075.003 §9.14)")
 
         // A pushed screen in Home.
         try tapNode(session, "detail")
         until("detail pushed in Home") { home.viewControllers.count == 2 && home.transitionCoordinator == nil }
         // The bar selects Second through the authored tab.
         tapTab(tabs, 1)
-        until("Second selected by the router") { tabs.selectedIndex == 1 }
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
+        let second = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
         XCTAssertEqual(home.viewControllers.count, 2, "Home's stack is kept")
         // A change made while Home is hidden shows when it is selected.
         XCTAssertNil(second.tabBarItem.badgeValue, "no badge box, no badge")
@@ -702,20 +700,77 @@ final class NavigationTabsIOSTests: XCTestCase {
         let scrolled = css()
         // Away and back.
         tapTab(tabs, 0)
-        until("Home selected") { tabs.selectedIndex == 0 }
+        XCTAssertEqual(tabs.selectedIndex, 0, "Home selected")
         XCTAssertEqual(home.tabBarItem.badgeValue, "hatch", "the hatch's badge stays")
         XCTAssertEqual(home.topViewController?.navigationItem.title, "Detail", "the pushed screen survived")
         XCTAssertTrue(try node(session, "counts").accessibleText.contains("count 1"), "the hidden tab's update shows")
         tapTab(tabs, 1)
-        until("Second selected again") { tabs.selectedIndex == 1 }
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected again")
         XCTAssertEqual(css(), scrolled, accuracy: 0.5, "the scroll offset survived")
         XCTAssertTrue(try node(session, "list-second") === list, "the same views, retained")
         XCTAssertEqual(try node(session, "draft").field?.text, "kept", "the draft survived")
-        // Reselecting a tab pops it to its root.
+        // Reselecting a tab pops it to its root: UIKit's pop, which the router follows as a Back.
         tapTab(tabs, 0)
-        until("Home selected") { tabs.selectedIndex == 0 }
+        XCTAssertEqual(tabs.selectedIndex, 0, "Home selected")
+        let homeRoot = try XCTUnwrap((home.viewControllers.first as? RouteController)?.key)
         tapTab(tabs, 0)
         until("Home popped to its root") { home.viewControllers.count == 1 && home.transitionCoordinator == nil }
+        until("the router is back on Home's root") { session.presenter.navigation.observation()["route"] as? String == homeRoot && !session.presenter.navigation.changing }
+    }
+
+    /// A tap on another tab is UIKit's selection (LLP 1075.003 §3.7), and the
+    /// router follows inside UIKit's call: the tab is built and projected
+    /// before UIKit shows it. A tab not built yet is its navigation
+    /// controller with no routes, which the tab's press fills.
+    func testATapSelectsInUIKitAndTheRouterFollowsWithinTheCall() throws {
+        let session = try fixture("tabs")
+        let navigation = session.presenter.navigation
+        let tabs = try XCTUnwrap(navigation.tabController)
+        let unbuilt = try XCTUnwrap(tabs.viewControllers?[1] as? UINavigationController)
+        XCTAssertTrue(unbuilt.viewControllers.isEmpty, "not built yet")
+        tapTab(tabs, 1)
+        let second = try XCTUnwrap(tabs.selectedViewController as? UINavigationController, "UIKit shows its navigation controller")
+        XCTAssertTrue(second === unbuilt, "the tab keeps its controller")
+        XCTAssertEqual(navigation.routerTab, 1, "the router followed within the call")
+        XCTAssertTrue(navigation.primaryNavigation === second)
+        XCTAssertEqual(second.viewControllers.count, 1, "built before UIKit showed it")
+        XCTAssertFalse(second.isNavigationBarHidden, "its root's bar")
+    }
+
+    /// A batch writes UIKit's selection only when the router's own tab
+    /// changes: a batch that leaves the router's tab unchanged leaves UIKit's
+    /// selection alone.
+    func testABatchLeavesTheTabUIKitShows() throws {
+        let session = try fixture("tabs")
+        let navigation = session.presenter.navigation
+        let tabs = try XCTUnwrap(navigation.tabController)
+        let home = try XCTUnwrap(tabs.viewControllers?[0])
+        tapTab(tabs, 1)
+        XCTAssertEqual(navigation.routerTab, 1)
+        // UIKit's own selection, which sends no delegate call
+        tabs.selectedViewController = home
+        navigation.sync(wireBatch([]))
+        XCTAssertTrue(tabs.selectedViewController === home, "the batch left UIKit's tab")
+    }
+
+    /// A tap on the tab UIKit shows, above its root, is UIKit's pop to the
+    /// root: refused where Back does not go (LLP 1035.001 D1), so nothing pops.
+    func testAReselectWhereBackIsRefusedPopsNothing() throws {
+        let session = try fixture("tabs")
+        let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
+        let home = try XCTUnwrap(tabs.viewControllers?[0] as? UINavigationController)
+        try tapNode(session, "detail")
+        until("Detail pushed in Home") { home.viewControllers.count == 2 && home.transitionCoordinator == nil }
+        try node(session, "back").handlers.remove("press")
+        let detail = home.topViewController
+        tapTab(tabs, 0)
+        waitForMainQueue()
+        XCTAssertEqual(home.viewControllers.count, 2, "UIKit popped nothing")
+        XCTAssertNil(home.transitionCoordinator, "and began no pop")
+        // A sync writes the router's stack: Detail left in it is the router's too.
+        session.presenter.navigation.sync(wireBatch([]))
+        XCTAssertEqual(home.viewControllers.count, 2, "Detail stays")
+        XCTAssertTrue(home.topViewController === detail)
     }
 
     /// A warm deep link into a tab built earlier (Brooks): from Second, one
@@ -745,12 +800,12 @@ final class NavigationTabsIOSTests: XCTestCase {
     /// tab shows reads no tab's face; one that changes a tab's text still
     /// retitles its item.
     func testATabsFaceIsReadAgainOnlyAfterABatchThatCanChangeIt() throws {
-        let session = try fixture("tab-faces", plan: "EXACT_HELD_TAB_PLAN")
+        let session = try fixture("tab-faces", plan: "EXACT_BARLESS_TAB_PLAN")
         let navigation = session.presenter.navigation
         let tabs = try XCTUnwrap(navigation.tabController)
-        let tabNodes = try ["tab-plain", "tab-titled"].map { try node(session, $0) }
-        XCTAssertTrue(tabNodes.allSatisfy(\.isNativeButton), "the held-tab fixture's tabs are native buttons")
-        XCTAssertEqual(tabs.viewControllers?.map { $0.tabBarItem.title }, ["Plain", "Titled"])
+        let tabNodes = try ["tab-barless", "tab-titled"].map { try node(session, $0) }
+        XCTAssertTrue(tabNodes.allSatisfy(\.isNativeButton), "the barless-tab fixture's tabs are native buttons")
+        XCTAssertEqual(tabs.viewControllers?.map { $0.tabBarItem.title }, ["Barless", "Titled"])
         var reads: [UInt32: Int] = [:]
         let read = try XCTUnwrap(session.presenter.buttonFace)
         session.presenter.buttonFace = { reads[$0, default: 0] += 1; return read($0) }
@@ -761,7 +816,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         XCTAssertEqual(tabNodes.map { reads[$0.id] ?? 0 }, [0, 0], "no tab's face is read for a text no tab shows")
         session.presenter.press(try node(session, "rename").id)
         until("the item's title follows its tab's text") { tabs.viewControllers?[1].tabBarItem.title == "Renamed" }
-        XCTAssertEqual(tabs.viewControllers?[0].tabBarItem.title, "Plain")
+        XCTAssertEqual(tabs.viewControllers?[0].tabBarItem.title, "Barless")
     }
 
     /// A tab selected while a push animates: the pushing stack stops being
@@ -775,13 +830,13 @@ final class NavigationTabsIOSTests: XCTestCase {
         // Second shown once already: a stack's first appearance calls its
         // `didShow`, which would end the push's transition by itself.
         tapTab(tabs, 1)
-        until("Second selected") { tabs.selectedIndex == 1 }
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
         tapTab(tabs, 0)
-        until("Home selected") { tabs.selectedIndex == 0 }
+        XCTAssertEqual(tabs.selectedIndex, 0, "Home selected")
         try selectDuringPush(session, home) { self.tapTab(tabs, 1) } selected: { tabs.selectedIndex == 1 }
         // Reselecting Home pops it to its root: a sync, which waits for no transition.
         tapTab(tabs, 0)
-        until("Home selected") { tabs.selectedIndex == 0 }
+        XCTAssertEqual(tabs.selectedIndex, 0, "Home selected")
         tapTab(tabs, 0)
         until("Home popped to its root") { home.viewControllers.count == 1 && home.transitionCoordinator == nil }
 
@@ -792,9 +847,9 @@ final class NavigationTabsIOSTests: XCTestCase {
         try tapNode(session, "detail")
         XCTAssertNotNil(home.transitionCoordinator, "the push is animating")
         tapTab(tabs, 1)
-        until("Second selected") { tabs.selectedIndex == 1 }
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
         tapTab(tabs, 0)
-        until("Home selected") { tabs.selectedIndex == 0 }
+        XCTAssertEqual(tabs.selectedIndex, 0, "Home selected")
         XCTAssertNotNil(home.transitionCoordinator, "Home was selected again while its push ran")
         XCTAssertTrue(navigation.changing, "navigation waits for Home's push again")
         until("the push over and navigation free") { home.transitionCoordinator == nil && !navigation.changing }
@@ -811,7 +866,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         try tapNode(session, "detail")
         until("Home holds its pushed route") { home.viewControllers.count == 2 }
         tapTab(tabs, 1)
-        until("Exact follows the other tab") { tabs.selectedIndex == 1 && navigation.primaryNavigation !== home }
+        until("Exact follows the other tab") { tabs.selectedIndex == 1 && navigation.primaryNavigation.map { $0 !== home } == true }
         let second = try XCTUnwrap(navigation.primaryNavigation)
         let root = try XCTUnwrap(home.viewControllers.first)
         let detail = try XCTUnwrap(home.topViewController)
@@ -848,7 +903,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         let navigation = session.presenter.navigation
         until("the app's container holds the tabs") { navigation.tabController == nil && navigation.tabOwner != nil }
         let owner = try XCTUnwrap(navigation.tabOwner)
-        let stacks = navigation.tabPanels.compactMap { navigation.tabNavigations[$0] }
+        let stacks = navigation.tabPanels.compactMap { navigation.tabStacks[$0] as? UINavigationController }
         let control = try XCTUnwrap(owner.view.subviews.compactMap { $0 as? UISegmentedControl }.first)
         try selectDuringPush(session, stacks[0]) {
             control.selectedSegmentIndex = 1
@@ -886,7 +941,6 @@ final class NavigationTabsIOSTests: XCTestCase {
         let session = try fixture("tabs-pop")
         let navigation = session.presenter.navigation
         let tabs = try XCTUnwrap(navigation.tabController)
-        let navs = try XCTUnwrap(tabs.viewControllers as? [UINavigationController])
         func pops(_ nav: UINavigationController) -> [UIGestureRecognizer] {
             var out = [nav.interactivePopGestureRecognizer].compactMap { $0 }
             if #available(iOS 26.0, *), let content = nav.interactiveContentPopGestureRecognizer { out.append(content) }
@@ -894,9 +948,10 @@ final class NavigationTabsIOSTests: XCTestCase {
         }
         // Every stack loads, as selecting its tab does.
         tapTab(tabs, 1)
-        until("Second selected") { tabs.selectedIndex == 1 }
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
         tapTab(tabs, 0)
-        until("Home selected") { tabs.selectedIndex == 0 }
+        XCTAssertEqual(tabs.selectedIndex, 0, "Home selected")
+        let navs = try XCTUnwrap(tabs.viewControllers as? [UINavigationController])
         for nav in navs {
             XCTAssertTrue(nav.isViewLoaded)
             for pop in pops(nav) { XCTAssertTrue(pop.delegate === navigation, "\(pop) asks Exact") }
@@ -929,7 +984,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         XCTAssertFalse(mayPop(second).contains(true), "a hidden tab's stack does not pop")
         // Its own depth decides once it shows: Second is a root.
         tapTab(tabs, 1)
-        until("Second selected") { tabs.selectedIndex == 1 }
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
         XCTAssertFalse(mayPop(second).contains(true), "Second is a root")
         XCTAssertFalse(mayPop(home).contains(true), "Home's pushed screen is hidden now")
     }
@@ -991,7 +1046,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         let session = try fixture("tabs-edge")
         let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
         tapTab(tabs, 1)
-        until("Second selected") { tabs.selectedIndex == 1 }
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
         spin(0.3)
         let second = try XCTUnwrap((tabs.viewControllers?[1] as? UINavigationController)?.topViewController as? RouteController)
         let list = try node(session, "list-second"), sv = try XCTUnwrap(list.scroll)
@@ -1008,8 +1063,8 @@ final class NavigationTabsIOSTests: XCTestCase {
     /// expanding, as every tab bar app does. The scroller is the route's
     /// content scroller, the status bar's (D11.1), and it scrolls with
     /// UIKit's animation, which opens the title as it arrives. Another tab's
-    /// tap only selects it, and above the root the router pops (the test
-    /// above). The agent's frozen clock lands there unanimated
+    /// tap only selects it, and above the root UIKit pops (the test above).
+    /// The agent's frozen clock lands there unanimated
     /// (PushedTitleIOSTests).
     func testTheSelectedTabTappedAgainAtItsRootScrollsToTheTop() throws {
         guard UIApplication.shared.connectedScenes.contains(where: { $0 is UIWindowScene }) else {
@@ -1018,7 +1073,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         let session = try fixture("tabs-retap")
         let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
         tapTab(tabs, 1)
-        until("Second selected") { tabs.selectedIndex == 1 }
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected")
         spin(0.3)
         let nav = try XCTUnwrap(tabs.viewControllers?[1] as? UINavigationController)
         // UIKit shows no large title where it places a vertical bar: the iPhone Duo upright or closed
@@ -1038,9 +1093,9 @@ final class NavigationTabsIOSTests: XCTestCase {
         }
         // The other tab, then back: selecting a tab keeps its scroll.
         tapTab(tabs, 0)
-        until("Home selected") { tabs.selectedIndex == 0 }
+        XCTAssertEqual(tabs.selectedIndex, 0, "Home selected")
         tapTab(tabs, 1)
-        until("Second selected again") { tabs.selectedIndex == 1 }
+        XCTAssertEqual(tabs.selectedIndex, 1, "Second selected again")
         spin(0.3)
         XCTAssertEqual(css(), 600, accuracy: 0.5, "a tab selected from another keeps its place")
         // The selected tab, tapped again at its root.
@@ -1055,7 +1110,7 @@ final class NavigationTabsIOSTests: XCTestCase {
     /// LLP 1070.000 §2.6: the selected tab tapped again scrolls its screen's
     /// list to the top unless the tab's press asked for a row there, landed
     /// or already shown, whether or not that list was the screen's before
-    /// the press. By the bar's tap (`selectTab`) and by the agent's
+    /// the press. By the bar's tap (`mayShow`, `followUIKit`) and by the agent's
     /// (`activateChrome`), over the real runner.
     func testTheSelectedTabsScrollToTheTopGivesWayToARequestItsPressMade() throws {
         try reselectGivesWay("tabs-request-bar") { session, tabs in self.tapTab(tabs, 0) }
@@ -1130,7 +1185,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         let composed = { (try? self.node(session, "composed"))?.accessibleText ?? "" }
         until("hatches replayed") { log().contains("hatch route 0: built") }
         let navigation = session.presenter.navigation
-        let home = try XCTUnwrap(navigation.tabNavigations[navigation.tabPanels[0]]?.viewControllers.first)
+        let home = try XCTUnwrap(navigation.tabStack(0)?.stackRoutes.first)
         let more = try XCTUnwrap(home.navigationItem.leftBarButtonItems?.first { $0.accessibilityIdentifier == "hatch-more" })
         let target = try XCTUnwrap(more.target as? NSObject), action = try XCTUnwrap(more.action)
         _ = target.perform(action, with: more)
@@ -1164,10 +1219,10 @@ final class NavigationTabsIOSTests: XCTestCase {
         XCTAssertNil(session.boot(plan: plan, size: CGSize(width: 402, height: 874)).error)
         spin(0.3)
         let navigation = session.presenter.navigation
-        let other = try XCTUnwrap(navigation.tabPanels.last.flatMap { navigation.tabNavigations[$0] })
-        XCTAssertTrue(other.viewControllers.isEmpty, "the other tab waits for its first selection")
         let tabs = try XCTUnwrap(navigation.tabController)
+        XCTAssertEqual(tabs.viewControllers?.last?.stackRoutes.count, 0, "the other tab waits for its first selection")
         tapTab(tabs, tabs.viewControllers!.count - 1)
+        let other = try XCTUnwrap(navigation.tabPanels.last.flatMap { navigation.tabStacks[$0] as? UINavigationController })
         until("the screen is contained") { other.viewControllers.first?.children.count == 1 }
         let route = try XCTUnwrap(other.viewControllers.first)
         XCTAssertTrue(route.children.first?.view.isDescendant(of: route.view) == true)
@@ -1183,7 +1238,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         until("the module connected") { log().contains("hatch tabs: built") }
         until("the hook was asked") { navigation.tabContainerAsked }
         let container = try XCTUnwrap(navigation.tabController)
-        let stacks = navigation.tabPanels.compactMap { navigation.tabNavigations[$0] }
+        let stacks = navigation.tabPanels.compactMap { navigation.tabStacks[$0] }
         XCTAssertEqual(container.viewControllers?.count, stacks.count)
         XCTAssertTrue(zip(container.viewControllers ?? [], stacks).allSatisfy { $0 === $1 }, "Exact's container keeps its stacks")
         XCTAssertNotNil(container.tabBar.selectedItem, "the bar shows a tab selected")
@@ -1220,7 +1275,7 @@ final class NavigationTabsIOSTests: XCTestCase {
         XCTAssertTrue(log().contains("hatch tabs: built"))
         XCTAssertTrue(log().contains("hatch tabContainer: the app's"))
         let owner = try XCTUnwrap(navigation.tabOwner)
-        let stacks = navigation.tabPanels.compactMap { navigation.tabNavigations[$0] }
+        let stacks = navigation.tabPanels.compactMap { navigation.tabStacks[$0] as? UINavigationController }
         XCTAssertEqual(stacks.count, 2)
         XCTAssertTrue(stacks.allSatisfy { $0.parent === owner }, "the app's container holds Exact's stacks")
         XCTAssertTrue(try node(session, "tabs").isHidden, "and takes the authored tablist's place")
@@ -1240,6 +1295,21 @@ final class NavigationTabsIOSTests: XCTestCase {
         let route = try XCTUnwrap(stacks[1].topViewController)
         until("the screen is contained") { route.children.count == 1 }
         XCTAssertTrue(route.children.first?.view.isDescendant(of: route.view) == true)
+    }
+}
+extension XCTestCase {
+    /// A tap on the bar's item for tab `index` (`tapTab(_:of:)`).
+    func tapTab(_ tabs: UITabBarController, _ index: Int) { tapTab(tabs, of: tabs.viewControllers![index]) }
+
+    /// A tap on the bar's item for `controller`, a tab's or More's, as UIKit performs one (iOS 27,
+    /// measured with real touches; a `tabBar(_:didSelect:)` sent by a test does nothing): the
+    /// delegate's `shouldSelect`; then the selection, or, for the tab UIKit already shows, a pop
+    /// of its stack to its root; then `didSelect`.
+    func tapTab(_ tabs: UITabBarController, of controller: UIViewController) {
+        guard tabs.delegate?.tabBarController?(tabs, shouldSelect: controller) ?? true else { return }
+        if controller === tabs.selectedViewController { (controller as? UINavigationController)?.popToRootViewController(animated: true) }
+        else { tabs.selectedViewController = controller }
+        tabs.delegate?.tabBarController?(tabs, didSelect: controller)
     }
 }
 #endif

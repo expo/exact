@@ -311,15 +311,16 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         snapshot.setPaintForeground()
     }
 
-    /// Where the remote's focus goes back to after the route moved into a
-    /// navigation controller (HeldStackIOS `KeptFocus`).
-    weak var focusReturn: UIView?
-    override var preferredFocusEnvironments: [any UIFocusEnvironment] {
-        focusReturn.map { [$0] } ?? super.preferredFocusEnvironments
+    // Follow UIKit moving this route into another controller (`NavigationHost.moved(into:)`)
+    override func willMove(toParent parent: UIViewController?) {
+        super.willMove(toParent: parent)
+        if let parent { host?.moved(into: parent) }
     }
 
-    /// The stack it is in: its navigation controller, or a tab's held stack.
-    var stack: UIViewController? { navigationController ?? (parent as? HeldStack) }
+    /// The stack it is in: its plain tab, checked first because under More
+    /// the plain tab's `navigationController` is More's; else its navigation
+    /// controller.
+    var stack: UIViewController? { (parent as? PlainTab) ?? navigationController }
 
     private var projectingContentScrollView = false
     private(set) var nativeContentScrollEdges: NSDirectionalRectEdge = []
@@ -343,11 +344,11 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         setContentScrollView(scrollView, for: edge)
     }
 
-    // A held stack's tab bar follows the route's scroll views as a navigation controller's follows its top's.
+    // A plain tab's tab bar follows the route's scroll views as a navigation controller's follows its top's.
     override func setContentScrollView(_ scrollView: UIScrollView?, for edge: NSDirectionalRectEdge) {
         if !projectingContentScrollView { nativeContentScrollEdges.formUnion(edge) }
         super.setContentScrollView(scrollView, for: edge)
-        (parent as? HeldStack)?.setContentScrollView(scrollView, for: edge)
+        (parent as? PlainTab)?.setContentScrollView(scrollView, for: edge)
         if edge.contains(.top) {
             followTopEdge(scrollView)
             #if os(iOS)
@@ -400,13 +401,13 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// longer than its bar.
     let titleInks = NSMapTable<UINavigationBar, UIColor>.weakToStrongObjects()
     var modalNavigation: UINavigationController? { presentedNavigations.last }
-    private var navigation: UINavigationController? { modalNavigation ?? primaryNavigation }
+    var navigation: UINavigationController? { modalNavigation ?? primaryNavigation }
     /// The route on top of the stack in front: the one the person sees.
-    var activeRoute: RouteController? { (navigation?.topViewController ?? primaryHeld?.route) as? RouteController }
+    var activeRoute: RouteController? { (navigation?.topViewController ?? primaryPlain?.route) as? RouteController }
     private(set) var syncing = false
     private var mounting = false
     private(set) weak var container: NodeView?
-    private var routeIDs: [UInt32] = []
+    private(set) var routeIDs: [UInt32] = []
     private(set) var controllers: [UInt32: RouteController] = [:]
     /// Each route owner's logical children (the root's, each tabpanel's),
     /// while UIKit containment holds the route views (LLP 1075.003 §3.7).
@@ -418,11 +419,24 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// `tabContainer` hatch returned (LLP 1075.003 §3.6).
     var tabOwner: UIViewController?
     var tabsHatched = false, tabContainerAsked = false, routerTab = -1
-    var tabNavigations: [UInt32: UINavigationController] = [:]
-    /// The tabs whose stacks have no navigation controller yet (HeldStackIOS).
-    var heldTabs: [UInt32: HeldStack] = [:]
-    /// A sync is armed for when the transition a held tab waits on ends.
-    var syncAfterTransitionArmed = false
+    /// The router's tab's root route when a tap reselects it at that root,
+    /// kept from `shouldSelect` to `didSelect` to scroll it to its top; the
+    /// tab's stack when a tap reselects it above its root, kept until UIKit's
+    /// pop ends, to press the tab then (`pressReselected`).
+    weak var reselected: RouteController?, reselectedPop: UINavigationController?
+    /// The tab UIKit is selecting for a person: a tap on the bar, from UIKit's `shouldSelect` to its
+    /// `didSelect`, which UIKit sends in one call with its selection between them and no transition
+    /// coordinator, or a row of More's list, during More's `willShow`. UIKit selects it, so `syncTabs`
+    /// does not, and the safe areas UIKit lays it out through are not reported until `followUIKit`.
+    weak var tapping: UIViewController?
+    /// Each tab's controller by its panel id (PlainTabIOS): a navigation
+    /// controller, or a plain tab.
+    var tabStacks: [UInt32: UIViewController] = [:]
+    /// UIKit's More as Exact last adopted it (iOS) and its record's key, to retire that record
+    /// after UIKit lets it go; whether a sync is owed in the next turn (`syncNextTurn`); whether
+    /// the app's `tabContainer` is taking the tabs' controllers, whose containers are not More.
+    weak var adoptedMore: UINavigationController?
+    var adoptedMoreID: ObjectIdentifier?, resyncOwed = false, offeringTabs = false
     var tabPanels: [UInt32] = []
     /// How many routes the selected stack declared at the last projection.
     private var selectedRouteCount = 0
@@ -435,9 +449,9 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     weak var tablistRoot: RouteController?
     var tablistHidBar = false
     var tabItems: [String] = []
-    /// The tabs and stacks the items were last made from, made again when
-    /// the size class (a path glyph's size) changes.
-    var tabItemsSource: (NavigationTabs, [UIViewController])?
+    /// The tabs the items were last made from, made again when the size
+    /// class (a path glyph's size) changes.
+    var tabItemsSource: NavigationTabs?
     /// The bar's tint as last written as a value: the selected tab's own tint, light and dark; nil
     /// where the bar takes an accent as its tint.
     var tabTint: [[Double]]?
@@ -469,7 +483,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     private var coversPending = false
     /// Whether the session's view last took the whole of its own for a bar.
     var tookWholeView = false
-    private var pendingSync = false
+    private(set) var pendingSync = false
     /// The press whose commit a deferred sync still owes (PressHandoffIOS).
     private weak var pendingPress: PressHandoff?
     /// A sync was deferred (a transition ran, or there was no window yet)
@@ -763,11 +777,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         if p.tabs != nil { syncTabs(p) }
         // Initial content draws before a presentation covers it.
         if parts.count > 1, let session = presenter.session, session.firstDrawMs == nil { return }
-        // The selected tab held while its navigation controller waits for
-        // a transition in the way (`syncTabs`, HeldStackIOS) shows nothing
-        // new until it is built.
-        let heldWaits = primaryHeld != nil && needsNavigation(Array(wanted[parts[0]]))
-        guard !changing, !presenter.modals.inTransition, !heldWaits else {
+        guard !changing, !presenter.modals.inTransition else {
             pendingSync = true
             owePress()
             reportCovers()
@@ -790,38 +800,40 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         let common = zip(boundaries, mounted).prefix {
             $0.0 === $0.1.node && $0.0.props["navigationPresentation"] == $0.1.kind
         }.count
-        // The selected tab while it is held (HeldStackIOS): `syncTabs` built its
-        // navigation controller if this batch pushes onto it or shows its bar.
-        if let held = primaryHeld {
-            show(Array(wanted[parts[0]]), in: held)
-            held.view.layoutIfNeeded()
-        }
         // Mount the destination under a departing presentation before starting
         // dismissal, so its editor can accept the batch's focus handoff.
-        let owners: [UINavigationController?] = (primaryHeld != nil ? [nil] : [primaryNavigation].compactMap { $0 }) + presentedNavigations
+        let primary: UIViewController? = primaryPlain ?? primaryNavigation
+        let owners = [primary].compactMap { $0 } + presentedNavigations
         for index in 0...common where index < owners.count {
-            guard let nav = owners[index] else { continue }
             let stack = Array(wanted[parts[index]])
+            // Show the router's tab's route when it is a plain tab (PlainTabIOS)
+            guard let nav = owners[index] as? UINavigationController else {
+                setRoutes(stack, in: owners[index])
+                owners[index].view.layoutIfNeeded()
+                continue
+            }
             prepareRoutes(stack, in: nav)
-            let same = nav.viewControllers.count == stack.count && zip(nav.viewControllers, stack).allSatisfy { $0 === $1 }
-            if !same {
+            // Compare and write only the routes: under More, UIKit's list stays before them (`stackFront`)
+            let routes = nav.stackRoutes
+            if !routes.elementsEqual(stack, by: ===) {
                 // @ref LLP 1038 D6 — a tab change swaps immediately. A replacement within one stack
                 // whose new top was not on it (a finished screen giving way to its result) arrives
                 // as UIKit's own push, rather than cutting.
-                let pushOrPop = NavigationRules.isPushOrPop(from: nav.viewControllers.map(ObjectIdentifier.init), to: stack.map(ObjectIdentifier.init))
-                let arrives = stack.count > 1 && nav.viewControllers.first === stack.first
-                    && !nav.viewControllers.contains { $0 === stack.last }
+                let pushOrPop = NavigationRules.isPushOrPop(from: routes.map(ObjectIdentifier.init), to: stack.map(ObjectIdentifier.init))
+                let arrives = stack.count > 1 && routes.first === stack.first
+                    && !routes.contains { $0 === stack.last }
                 #if os(iOS)
                 // A route pushed from a source zooms from it (ZoomPushIOS).
                 if (pushOrPop || arrives), stack.count > 1, let top = stack.last as? RouteController, !nav.viewControllers.contains(where: { $0 === top }) {
                     prepareZoomPush(top, beneath: stack[stack.count - 2] as? RouteController)
                 }
                 #endif
-                nav.setViewControllers(stack, animated: (pushOrPop || arrives) && index == owners.count - 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && nav.view.window != nil)
-                recordOwned(nav)
+                nav.setViewControllers(nav.stackFront + stack, animated: (pushOrPop || arrives) && index == owners.count - 1 && mounted.count == boundaries.count && !ExactEnv.agentFreezes && !unanimated && nav.view.window != nil)
                 // A press that pushed may hand its control's focus to the arriving route's first autofocus (PressHandoffIOS).
                 if pushOrPop || arrives { presenter.pressShows((stack.last as? RouteController)?.node) }
             }
+            // Record what it holds even when unchanged: UIKit moves routes between More and a tab's own (`recordOwned`)
+            recordOwned(nav)
             ApplyProfile.time("nav.layout") { nav.view.layoutIfNeeded() }
         }
         unanimated = false
@@ -909,8 +921,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         defer { replayingHatches = false }
         for nav in allNavigations { hatchNavigation(nav) }
         replayTabs()
-        // (Held stacks too, whose routes' hatches have not run either; a tab
-        // container the app took built every tab's navigation controller.)
+        // Prepare plain tabs' routes too: their route hatches have not run either
         for stack in primaryStacks + presentedNavigations {
             prepareRoutes(stack.stackRoutes.compactMap { $0 as? RouteController }, in: stack)
             stack.view.layoutIfNeeded()
@@ -923,7 +934,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     func coversChanged() {
         // sync reports the final containment below; intermediate safe areas
         // belong to the controller the route is leaving.
-        guard !syncing, !coversPending else { return }
+        guard !syncing, tapping == nil, !coversPending else { return }
         coversPending = true
         presenter.afterBatch { [weak self] in
             guard let self else { return }
@@ -1032,7 +1043,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
 
     /// UIKit removes a controller before resigning its search field and calling willShow.
     /// A shorter prefix of our last write belongs to that unfinished native pop.
-    private func nativePopPending(on nav: UINavigationController) -> Bool {
+    func nativePopPending(on nav: UINavigationController) -> Bool {
         guard let written = stacks[ObjectIdentifier(nav)]?.written else { return false }
         let current = nav.viewControllers.map(ObjectIdentifier.init)
         return current.count < written.count && current.elementsEqual(written.prefix(current.count))
@@ -1049,12 +1060,13 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     func observation() -> [String: Any] {
         // Scope Back to its container: Duo places the control outside the navigation bar
         let nativeBack: String? = {
+            if let more = moreListBack { return more.isNavigationBarHidden ? nil : primaryOwner?.view.accessibilityIdentifier }
             guard let nav = navigation, nav.viewIfLoaded?.window != nil, !nav.isNavigationBarHidden,
                   nav.viewControllers.count > 1, canInvokeBack else { return nil }
             let owner: UIViewController? = nav === primaryNavigation ? primaryOwner : nav
             return owner?.view.accessibilityIdentifier
         }()
-        let stack = (navigation?.viewControllers ?? primaryHeld?.stackRoutes ?? []).compactMap { ($0 as? RouteController)?.key }
+        let stack = (navigation?.viewControllers ?? primaryPlain?.stackRoutes ?? []).compactMap { ($0 as? RouteController)?.key }
         let transition: [String: Any] = ["interactive": navigation?.transitionCoordinator?.isInteractive ?? false,
                                          "phase": changing || pendingSync || presenter.modals.inTransition ? "in-progress" : lastTransition]
         let root = container ?? presenter.root.subviews.first as? NodeView
@@ -1071,42 +1083,6 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     func logicallyHidden(_ route: NodeView) -> Bool {
         presenter.logicalAncestry(of: route).prefix { $0 !== presenter.root }
             .contains { ($0 as? NodeView)?.style["display"]?.string == "none" }
-    }
-
-    func invokeBack(from source: NodeView) {
-        guard presenter.session?.view?.window != nil,
-              presenter.views[source.id] === source, routeIDs.contains(source.id),
-              source.props["navigationKey"] == selectedKey else { return }
-        goBack()
-    }
-
-    /// Whether the platform's Back goes from the selected route (LLP 1115 D5).
-    var canInvokeBack: Bool { back != nil }
-
-    /// The agent's `back` from a pushed route (LLP 1116.006 D4): UIKit's
-    /// Back button, ending where its pop ends (`goBack`), as tvOS's Menu
-    /// does. nil when the stack in front has nothing beneath its top (a
-    /// sheet's own root is the sheet's); "" when it went, else why not.
-    func agentBack() -> String? {
-        guard (navigation?.viewControllers.count ?? 0) > 1 else { return nil }
-        guard back != nil else { return backRefusal }
-        goBack()
-        return ""
-    }
-
-    /// The platform's Back, completed: the authored control pressed, else
-    /// the root's `navigate` with the location beneath (LLP 1115 D5).
-    private func goBack() {
-        switch back {
-        case .press(let id)?: presenter.press(id)
-        case .navigate(let location)?:
-            guard let root = container, let session = presenter.session else { return }
-            session.navigate(location, at: root)
-        case .pop?:
-            guard let key = selectedRoute?.props["navigationKey"], let session = presenter.session else { return }
-            session.hostBack(key)
-        case nil: break
-        }
     }
 
     /// A history jump uses navigation; the authored Back control handles the adjacent intent.
@@ -1136,42 +1112,6 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         guard let selected = selectedKey,
               let key = routeKey(containing: view) else { return false }
         return key != selected
-    }
-
-    /// D1: resolved at use, by HTML id, among live enabled press controls —
-    /// never captured at a gesture's start (`NavigationBack.control`).
-    private var backControl: NodeView? {
-        guard let route = selectedRoute else { return nil }
-        let routes = routeIDs.compactMap { presenter.views[$0] }
-        return NavigationBack.control(named: container?.props["navigationBack"], among: presenter.carrying("id"),
-                                           id: \.id, htmlID: { $0.props["id"] }, pressable: { $0.handlers.contains("press") }, disabled: \.disabled,
-                                           inActiveRoute: { $0 === route || $0.isDescendant(of: route) },
-                                           inAnyRoute: { control in routes.contains { control === $0 || control.isDescendant(of: $0) } })
-    }
-
-    private var selectedRoute: NodeView? {
-        guard let key = selectedKey else { return nil }
-        return routeIDs.compactMap({ presenter.views[$0] }).first(where: { $0.props["navigationKey"] == key })
-    }
-
-    /// How Back goes from the selected route, resolved at use as its
-    /// control is (`NavigationBack.way`, LLP 1115 D5).
-    var back: NavigationBack.Way? {
-        guard let root = container, let route = selectedRoute else { return nil }
-        return NavigationBack.way(control: backControl?.id, declared: declaresBack(route), hearsNavigate: root.handlers.contains("navigate"),
-                                    beneath: { [presenter] in route.props["navigationKey"].flatMap { presenter.session?.runtime.locationBeneath($0) } })
-    }
-
-    /// Whether a route holds an element named by the root's `navigationBack`.
-    private func declaresBack(_ route: NodeView) -> Bool {
-        guard let name = container?.props["navigationBack"] else { return false }
-        return presenter.carrying("id").contains { $0.props["id"] == name && ($0 === route || $0.isDescendant(of: route)) }
-    }
-
-    /// Why Back does not go from the selected route, for the journal.
-    var backRefusal: String {
-        if let route = selectedRoute, declaresBack(route) { return "its navigationBack control is disabled or has no press handler" }
-        return "no visit beneath the active route"
     }
 
     /// Where each pop recognizer's first touch went down, in its view. A
@@ -1218,17 +1158,21 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     func popMayBegin(_ gestureRecognizer: UIGestureRecognizer, from start: CGPoint?, in view: UIView?, velocity: CGPoint) -> Bool {
         // tvOS has no interactive pop gesture.
         #if os(tvOS)
-        let owner: UINavigationController? = nil
+        let owner: UINavigationController? = nil, toList = false
         #else
-        let owner = allNavigations.first { nav in
+        let pops = { (nav: UINavigationController) -> Bool in
             if nav.interactivePopGestureRecognizer === gestureRecognizer { return true }
             if #available(iOS 26.0, *) { return nav.interactiveContentPopGestureRecognizer === gestureRecognizer }
             return false
         }
+        let owner = (allNavigations + [more].compactMap { $0 }).first(where: pops)
+        // Let More's swipe back to its list from a tab's root or a plain tab begin: it is UIKit's own, and no route pops.
+        // On More's list alone there is nothing to pop.
+        let toList = owner != nil && owner === more && (more?.topViewController is PlainTab || (navigation === more && more?.stackRoutes.count == 1))
         #endif
-        if let owner, owner !== navigation { return false }
-        let depth = navigation?.viewControllers.count ?? 0
-        let goes = back != nil
+        if let owner, owner !== navigation, !toList { return false }
+        let depth = (toList ? owner : navigation)?.viewControllers.count ?? 0
+        let goes = toList || back != nil
         guard NavigationRules.popMayBegin(depth: depth, changing: changing, modalActive: presenter.modals.inTransition,
                                           hasBackControl: goes,
                                           contextPreviewActive: !presenter.chrome.ids("contextTarget").isEmpty) else {
@@ -1264,6 +1208,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
 
     func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
+        if navigationController === more { followMore(viewController, animated: animated) }
         guard navigationController === navigation else { return }
         HostLog.note(presenter.session, {
             let by = navigationController.transitionCoordinator?.isInteractive == true ? "the edge swipe" : nativePopPending(on: navigationController) ? "UIKit's Back" : "the app"
@@ -1315,6 +1260,12 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
 
     func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {
+        // Select the router's tab again when a row's press left the router on another tab: the app declined the row,
+        // so More shows its list again rather than the declined tab the next time it shows
+        if navigationController === more, let index = tabIndex(ofShown: viewController), index != routerTab, tabStack(routerTab) != nil {
+            navigationController.popToRootViewController(animated: false)
+            return showRouterTab(declining: index)
+        }
         guard navigationController === navigation, navigationController.topViewController === viewController else {
             recordPop(navigationController)
             return
@@ -1358,6 +1309,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         let poppedKeys = controllers.values.filter { written.contains(ObjectIdentifier($0)) && !navigationController.viewControllers.contains($0) }.map(\.key)
         let source = swipe.map { (node: $0.node, key: $0.key) } ?? departed.map { (node: $0.node, key: $0.key) }
         recordPop(navigationController)
+        // A tab tapped again above its root: its press follows the Back this pop is
+        let reselect = reselectedPop === navigationController ? reselectedPop : nil
+        if reselect != nil { reselectedPop = nil }
+        defer { if let reselect, !cancelled { pressReselected(reselect) } }
         guard navigationController === navigation, let viewController = navigationController.topViewController else { return }
         nativeMoved = true
         stopRevealing()
@@ -1393,6 +1348,15 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             #if os(iOS)
             presenter.resolveStatusBar(settled: true)
             #endif
+        }
+        // Count More's return to its list (its Back on a root, More tapped again) as a Back to the tab's root, unless UIKit
+        // moved the routes to their tab's own controller (a size class change, measured): the router keeps its tab. One
+        // step is the platform's Back, which presses the authored control; more is a history jump, as below.
+        if navigationController === more, viewController === navigationController.viewControllers.first {
+            let moved = controllers.values.contains { $0.key == selectedKey && $0.navigationController.map { $0 !== navigationController } == true }
+            guard !moved, let top = selectedKey, let root = shownKeys.first, top != root else { return }
+            if shownKeys.firstIndex(of: top) == 1, back != nil { goBack() } else { goBack(from: top, to: root) }
+            return
         }
         let sourceKey = source.flatMap { presenter.views[$0.node.id] === $0.node ? $0.key : nil }
         // Replaced in place while the finger was down: the source's node is gone and the app's
@@ -1431,7 +1395,6 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
 
     func reset(clearFocus: Bool = true) {
-        syncAfterTransitionArmed = false
         unanimated = false
         presenter.modals.reset()
         for nav in presentedNavigations { retireNavigation(nav, preserving: false) }
@@ -1468,14 +1431,4 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         presenter.owners.publish()
     }
 }
-#if os(tvOS)
-extension NavigationHost {
-    /// Whether the Siri Remote's Menu goes back: a route to pop and a Back control.
-    var menuGoesBack: Bool { (navigation?.viewControllers.count ?? 0) > 1 && canInvokeBack }
-    func menuBack() {
-        guard menuGoesBack, !changing else { return }
-        goBack()
-    }
-}
-#endif
 #endif
