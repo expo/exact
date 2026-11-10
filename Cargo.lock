@@ -1513,6 +1513,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-time",
  "wgpu 30.0.1",
+ "whichever",
  "windows",
  "windows-core",
 ]
@@ -6877,6 +6878,26 @@ dependencies = [
  "raw-window-handle",
  "static_assertions",
  "web-sys",
+]
+
+[[package]]
+name = "whichever"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a3286089d1877300f333abaaa96f7958a7537e27c9c49cee0b776d195f5a076"
+dependencies = [
+ "whichever-macros",
+]
+
+[[package]]
+name = "whichever-macros"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc9d1d4bb0ef1b24b338caaa737e59c6ccfc5b205075b1df4b7c794f7b9d1d13"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

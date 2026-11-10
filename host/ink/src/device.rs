@@ -123,6 +123,7 @@ pub struct TextureUpload {
 /// keeps storage alive until its last use completes. Readback is synchronous on
 /// native devices; browser callers must use the device's asynchronous readback
 /// instead of blocking its event loop.
+#[whichever::dispatchable]
 pub trait Device {
     type Buffer;
     fn info(&self) -> &Info;

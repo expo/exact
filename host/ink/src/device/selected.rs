@@ -1,14 +1,19 @@
 use super::*;
 
 /// The boot choice; both layers consume the same core's frames and resources.
+#[whichever::dispatch(from = false)]
 pub enum Selected {
+    #[dispatch(deref)]
     Wgpu(Box<wgpu::Wgpu>),
     #[cfg(windows)]
+    #[dispatch(deref)]
     D3d11(Box<d3d11::D3d11>),
     #[cfg(exact_ink_metal)]
+    #[dispatch(deref)]
     Metal(Box<metal::Metal>),
 }
 
+#[whichever::dispatch]
 pub enum Buffer {
     Wgpu(wgpu::Buffer),
     #[cfg(windows)]
@@ -17,33 +22,20 @@ pub enum Buffer {
     Metal(metal::Buffer),
 }
 
+#[whichever::dispatch]
 impl Selected {
     #[cfg(target_os = "macos")]
-    pub fn attach_layer(&mut self, layer: apple::Layer) -> Result<()> {
-        match self {
-            Self::Wgpu(device) => device.attach_layer(layer),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(device) => device.attach_layer(layer),
-        }
-    }
+    #[dispatch(*)]
+    pub fn attach_layer(&mut self, layer: apple::Layer) -> Result<()>;
 
     #[cfg(target_os = "macos")]
-    pub fn has_layer(&self) -> bool {
-        match self {
-            Self::Wgpu(device) => device.has_layer(),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(device) => device.has_layer(),
-        }
-    }
+    #[dispatch(*)]
+    pub fn has_layer(&self) -> bool;
 
     #[cfg(target_os = "macos")]
-    pub fn present(&mut self, texture: TextureId) -> Result<f64> {
-        match self {
-            Self::Wgpu(device) => device.present(texture),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(device) => device.present(texture),
-        }
-    }
+    #[dispatch(*)]
+    pub fn present(&mut self, texture: TextureId) -> Result<f64>;
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn from_env() -> Result<Self> {
         let value = std::env::var("EXACT_INK_DEVICE").ok();
@@ -85,17 +77,11 @@ impl From<wgpu::Wgpu> for Selected {
     }
 }
 
+/// A buffer belongs to the layer that made it, so `upload_buffer` is written
+/// here; every other method is forwarded to the selected layer.
+#[whichever::dispatch]
 impl Device for Selected {
     type Buffer = Buffer;
-    fn create_buffer(&self, bytes: u64) -> Result<Buffer> {
-        match self {
-            Self::Wgpu(d) => d.create_buffer(bytes).map(Buffer::Wgpu),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.create_buffer(bytes).map(Buffer::Metal),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.create_buffer(bytes).map(Buffer::D3d11),
-        }
-    }
     fn upload_buffer(&mut self, buffer: &Buffer, offset: u64, data: &[u8]) -> Result<Submission> {
         match (self, buffer) {
             (Self::Wgpu(d), Buffer::Wgpu(b)) => d.upload_buffer(b, offset, data),
@@ -107,159 +93,6 @@ impl Device for Selected {
             _ => Err(Error::Invalid(
                 "buffer belongs to another device layer".into(),
             )),
-        }
-    }
-    fn info(&self) -> &Info {
-        match self {
-            Self::Wgpu(d) => d.info(),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.info(),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.info(),
-        }
-    }
-    fn max_texture_dimension(&self) -> u32 {
-        match self {
-            Self::Wgpu(d) => d.max_texture_dimension(),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.max_texture_dimension(),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.max_texture_dimension(),
-        }
-    }
-    fn create_texture(&mut self, desc: TextureDesc) -> Result<TextureId> {
-        match self {
-            Self::Wgpu(d) => d.create_texture(desc),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.create_texture(desc),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.create_texture(desc),
-        }
-    }
-    fn upload_texture(
-        &mut self,
-        texture: TextureId,
-        origin: [u32; 2],
-        size: [u32; 2],
-        data: &[u8],
-    ) -> Result<Submission> {
-        match self {
-            Self::Wgpu(d) => d.upload_texture(texture, origin, size, data),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.upload_texture(texture, origin, size, data),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.upload_texture(texture, origin, size, data),
-        }
-    }
-    fn upload_textures(&mut self, uploads: &[TextureUpload]) -> Result<Submission> {
-        match self {
-            Self::Wgpu(d) => d.upload_textures(uploads),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.upload_textures(uploads),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.upload_textures(uploads),
-        }
-    }
-    fn last_use(&self, texture: TextureId) -> Result<Submission> {
-        match self {
-            Self::Wgpu(d) => d.last_use(texture),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.last_use(texture),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.last_use(texture),
-        }
-    }
-    fn generate_mips(&mut self, texture: TextureId) -> Result<Submission> {
-        match self {
-            Self::Wgpu(d) => d.generate_mips(texture),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.generate_mips(texture),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.generate_mips(texture),
-        }
-    }
-    fn resize_target(&mut self, target: TextureId, width: u32, height: u32) -> Result<TextureId> {
-        match self {
-            Self::Wgpu(d) => d.resize_target(target, width, height),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.resize_target(target, width, height),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.resize_target(target, width, height),
-        }
-    }
-    fn copy_region(
-        &mut self,
-        source: TextureId,
-        origin: [u32; 2],
-        target: TextureId,
-        dst: [u32; 2],
-        size: [u32; 2],
-    ) -> Result<Submission> {
-        match self {
-            Self::Wgpu(d) => d.copy_region(source, origin, target, dst, size),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.copy_region(source, origin, target, dst, size),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.copy_region(source, origin, target, dst, size),
-        }
-    }
-    fn render(
-        &mut self,
-        frame: &Frame,
-        target: TextureId,
-        clear: Option<[f64; 4]>,
-    ) -> Result<Submission> {
-        match self {
-            Self::Wgpu(d) => d.render(frame, target, clear),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.render(frame, target, clear),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.render(frame, target, clear),
-        }
-    }
-    fn readback(&mut self, texture: TextureId) -> Result<Vec<u8>> {
-        match self {
-            Self::Wgpu(d) => d.readback(texture),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.readback(texture),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.readback(texture),
-        }
-    }
-    fn wait(&mut self, submission: Submission) -> Result<()> {
-        match self {
-            Self::Wgpu(d) => d.wait(submission),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.wait(submission),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.wait(submission),
-        }
-    }
-    fn completed(&mut self) -> Result<Submission> {
-        match self {
-            Self::Wgpu(d) => d.completed(),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.completed(),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.completed(),
-        }
-    }
-    fn retire_texture(&mut self, texture: TextureId) -> Result<()> {
-        match self {
-            Self::Wgpu(d) => d.retire_texture(texture),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.retire_texture(texture),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.retire_texture(texture),
-        }
-    }
-    fn trim(&mut self) -> Result<()> {
-        match self {
-            Self::Wgpu(d) => d.trim(),
-            #[cfg(exact_ink_metal)]
-            Self::Metal(d) => d.trim(),
-            #[cfg(windows)]
-            Self::D3d11(d) => d.trim(),
         }
     }
 }

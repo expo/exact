@@ -9,6 +9,7 @@ publish = false
 bytemuck = { version = "1", features = ["derive"] }
 tiny-skia = "0.12"
 swash = "0.2"
+whichever = { version = "0.7.1", default-features = false }
 
 [target.'cfg(target_vendor = "apple")'.dependencies]
 libc = "0.2"
