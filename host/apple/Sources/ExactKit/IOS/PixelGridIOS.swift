@@ -177,7 +177,10 @@ extension Presenter {
         }
         let outset = UIEdgeInsets(top: -v.take.top - v.reach.top, left: -v.take.left - v.reach.left, bottom: -v.take.bottom - v.reach.bottom, right: -v.take.right - v.reach.right)
         let framed = drawn.inset(by: outset)
-        if v.frame != framed { v.frame = framed }
+        if v.frame != framed {
+            if v.kind == "native", framed.size != v.frame.size, UIView.inheritedAnimationDuration > 0 { session?.natives.resizeWillBegin(v) }
+            v.frame = framed
+        }
         v.textRasterGeometryChanged()
         if let sv = v.scroll, sv.frame != v.scrollFrame { sv.frame = v.scrollFrame }
         if v.fieldWaits, rect.width > 0 || rect.height > 0 { v.makeWaitingField() } // its box laid out (MenuHost.waitingFields)

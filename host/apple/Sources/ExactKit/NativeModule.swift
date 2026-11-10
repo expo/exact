@@ -295,6 +295,10 @@ private final class NativeEntry {
     #if os(iOS) || os(tvOS)
     /// A native screen's controller, a child of its route's while it lives.
     var screen: UIViewController?
+    /// The view's picture, stretched with its box while UIKit animates the box's size, and what ends it
+    /// (`resizeWillBegin`).
+    var stretch: UIView?
+    var stretchEnd: StretchEnd?
     #endif
     var intrinsicSize: CGSize?
     var hasIntrinsicReport = false
@@ -1161,12 +1165,46 @@ final class NativeViews {
     func laidOut(_ owner: NodeView) {
         guard let entry = entries[owner.id], let view = entry.view else { return }
         if entry.sizing && owner.bounds.isEmpty { return }
+        #if os(iOS) || os(tvOS)
+        if entry.stretch != nil { return } // its picture stands for it until the box's animation ends
+        #endif
         entry.sizing = false
         view.frame = owner.contentBox()
         #if os(iOS) || os(tvOS)
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         #endif
     }
+
+    #if os(iOS) || os(tvOS)
+    /// `owner`'s box is about to change size inside an animation UIKit has open (a split's column as the device
+    /// folds): a picture of its platform view as it shows now stretches with the box in that animation, as an
+    /// image's pixels do, and the view keeps its size under it until the box's animation ends; then it takes its
+    /// new size and the picture fades as it draws there. A platform view lays its content out for its bounds (a
+    /// map fits its region to them), not at each size between: given its new bounds in the animation, it showed
+    /// that layout at once inside a box still moving, and resized on every frame a map's tiles lagged its bounds.
+    func resizeWillBegin(_ owner: NodeView) {
+        guard let entry = entries[owner.id], let view = entry.view, !entry.sizing, view.window != nil,
+              entry.stretch == nil, let picture = view.snapshotView(afterScreenUpdates: false) else { return }
+        UIView.performWithoutAnimation {
+            picture.frame = view.frame
+            picture.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            owner.insertSubview(picture, aboveSubview: view)
+            view.autoresizingMask = []
+        }
+        entry.stretch = picture
+        entry.stretchEnd = StretchEnd(owner: owner) { [weak self, weak entry] in self?.endStretch(entry) }
+    }
+
+    private func endStretch(_ entry: NativeEntry?) {
+        guard let entry else { return }
+        entry.stretchEnd = nil
+        let picture = entry.stretch
+        entry.stretch = nil
+        if let owner = entry.owner, let view = entry.view { laidOut(owner); view.layoutIfNeeded() }
+        UIView.animate(withDuration: 0.15, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction],
+                       animations: { picture?.alpha = 0 }, completion: { _ in picture?.removeFromSuperview() })
+    }
+    #endif
 
     #if os(iOS) || os(tvOS)
     /// Whether `owner`'s module view declined a touch at `point` that it
@@ -1491,6 +1529,30 @@ extension NativeViews {
     var observation: [String: Any] {
         ["made": made, "reused": reused, "returned": returned, "parks": parks, "dropped": dropped, "hidden": hidden, "released": released,
          "parked": parked.mapValues(\.count), "cap": Self.reuseCap, "limit": Self.reuseLimit]
+    }
+}
+#endif
+
+#if os(iOS) || os(tvOS)
+/// The end of a box's animated resize (`NativeViews.resizeWillBegin`): the first frame on which the box has no
+/// animation of its place or size left.
+final class StretchEnd: NSObject {
+    private weak var owner: UIView?
+    private let ended: () -> Void
+    private var link: CADisplayLink?
+
+    init(owner: UIView, ended: @escaping () -> Void) {
+        self.owner = owner; self.ended = ended
+        super.init()
+        let link = CADisplayLink(target: self, selector: #selector(tick))
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    @objc private func tick() {
+        if let owner, owner.window != nil, owner.layer.animationKeys()?.contains(where: { $0.hasPrefix("bounds") || $0.hasPrefix("position") }) == true { return }
+        link?.invalidate(); link = nil
+        ended()
     }
 }
 #endif
