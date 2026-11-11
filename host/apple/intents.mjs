@@ -17,6 +17,9 @@ import { intentsMetadata } from './intents-metadata.mjs';
 // A development archive (--development, a build service's) compiles extensions unoptimized: an optimized compile of
 // an app's widget, Live Activity or intents code runs mostly on one core (minutes). What is distributed keeps -O.
 const swiftOpt = process.argv.includes('--development') ? '-Onone' : '-O';
+// Extension compiles share one Clang module cache (content-keyed, safe across concurrent builds): a cache per build
+// rebuilt every framework's modules for an extension, about two minutes, on every build.
+const extensionModuleCache = resolve(new URL('../..', import.meta.url).pathname, 'target', 'apple-extension-module-cache');
 
 const toolchain = '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain';
 /** The protocols whose conformers' constant values the metadata pass reads (Xcode's list for App Intents). */
@@ -221,7 +224,7 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
     writeFileSync(resolve(dir, 'protocols.json'), JSON.stringify(gathered));
     const started = Date.now();
     runApple('xcrun', ['--sdk', sdkName, 'swiftc', '-parse-as-library', '-wmo', swiftOpt, '-swift-version', '5', '-module-name', 'ExactIntents',
-      '-module-cache-path', resolve(directory, 'module-cache'), '-target', triple, '-sdk', sdk,
+      '-module-cache-path', extensionModuleCache, '-target', triple, '-sdk', sdk,
       '-emit-const-values-path', values, '-Xfrontend', '-const-gather-protocols-file', '-Xfrontend', resolve(dir, 'protocols.json'),
       '-c', file, '-o', object]);
     writeFileSync(resolve(dir, 'sources.txt'), file + '\n');

@@ -13,6 +13,9 @@ import { fileURLToPath } from 'node:url';
 // A development archive (--development, a build service's) compiles extensions unoptimized: an optimized compile of
 // an app's widget, Live Activity or intents code runs mostly on one core (minutes). What is distributed keeps -O.
 const swiftOpt = process.argv.includes('--development') ? '-Onone' : '-O';
+// Extension compiles share one Clang module cache (content-keyed, safe across concurrent builds): a cache per build
+// rebuilt every framework's modules for an extension, about two minutes, on every build.
+const extensionModuleCache = resolve(new URL('../..', import.meta.url).pathname, 'target', 'apple-extension-module-cache');
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url))), pkg = resolve(root, 'host/apple');
 export const accessoryFamilies = ['accessoryCircular', 'accessoryRectangular', 'accessoryInline', 'accessoryCorner'];
 export function platformWidgetEntries(app, platform = 'ios') {
@@ -238,7 +241,7 @@ export function widgetReload({ directory, triple, sdk, device, platform = 'ios',
   mkdirSync(directory, { recursive: true });
   runApple('xcrun', ['--sdk', platform === 'macos' ? 'macosx' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', swiftOpt,
     '-D', 'EXACT_WIDGET_RELOAD', ...(!production ? ['-D', 'EXACT_INSPECT'] : []), '-module-name', 'ExactWidgetReload', '-target', triple, '-sdk', sdk,
-    '-module-cache-path', resolve(directory, 'cache'), source, '-o', binary + '.tmp']);
+    '-module-cache-path', extensionModuleCache, source, '-o', binary + '.tmp']);
   renameSync(binary + '.tmp', binary);
   writeFileSync(stamp, digest);
   return binary;
@@ -299,7 +302,7 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
     CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac ? { ExactWidgetSecretsAvailable: !!appInfo.ExactKeychainAccessGroup, ExactWidgetRequiresSecrets: appInfo.ExactWidgetRequiresSecrets ?? [] } : {}), ExactWidgetGeneration: appInfo.ExactWidgetGeneration, ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
     NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } }));
   runApple('xcrun', ['--sdk', mac ? 'macosx' : platform === 'watchos' ? 'watchsimulator' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', swiftOpt, ...appexArgs, ...keepMain, ...(!production ? ['-D', 'EXACT_INSPECT'] : []), '-target', triple, '-sdk', sdk,
-    '-module-cache-path', resolve(directory, 'cache'), '-I', resolve(root, 'host/apple/Sources/CExact'), '-I', resolve(shared.framework, 'Modules'), '-F', resolve(shared.framework, '..'), '-framework', 'ExactCore',
+    '-module-cache-path', extensionModuleCache, '-I', resolve(root, 'host/apple/Sources/CExact'), '-I', resolve(shared.framework, 'Modules'), '-F', resolve(shared.framework, '..'), '-framework', 'ExactCore',
     '-Xlinker', '-rpath', '-Xlinker', mac ? '@executable_path/../../../../Frameworks' : '@executable_path/../../Frameworks',
     ...(!device && !mac ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
     ...(alarmMember ? alarmArgs(alarm) : []),
@@ -340,7 +343,7 @@ export function packageAlarmExtension({ app, bundle, directory, sdk, triple, dev
     ...(appInfo.UIRequiredDeviceCapabilities ? { UIRequiredDeviceCapabilities: appInfo.UIRequiredDeviceCapabilities } : {}),
     NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } }));
   runApple('xcrun', ['--sdk', device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', swiftOpt, ...appexArgs, ...keepMain, '-target', triple, '-sdk', sdk,
-    '-module-cache-path', resolve(directory, 'cache'), ...(!device ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
+    '-module-cache-path', extensionModuleCache, ...(!device ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
     ...alarmArgs(alarm), source, '-o', resolve(extension, 'ExactWidgets')]);
   sign(extension, entitlementPath);
 }

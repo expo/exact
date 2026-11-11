@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url';
 // A development archive (--development, a build service's) compiles extensions unoptimized: an optimized compile of
 // an app's widget, Live Activity or intents code runs mostly on one core (minutes). What is distributed keeps -O.
 const swiftOpt = process.argv.includes('--development') ? '-Onone' : '-O';
+// Extension compiles share one Clang module cache (content-keyed, safe across concurrent builds): a cache per build
+// rebuilt every framework's modules for an extension, about two minutes, on every build.
+const extensionModuleCache = resolve(new URL('../..', import.meta.url).pathname, 'target', 'apple-extension-module-cache');
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
 /** An extension executable's link: application-extension API only, entered at `NSExtensionMain`. A bundle with an
@@ -52,7 +55,7 @@ export function packageShareExtension({ app, bundle, directory, sdk, triple, dev
   const entitlementPath = resolve(directory, 'share-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
   runApple('xcrun', ['--sdk', mac ? 'macosx' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', swiftOpt, ...appexArgs,
-    '-module-name', 'ExactShare', '-target', triple, '-sdk', sdk, '-module-cache-path', resolve(directory, 'cache'),
+    '-module-name', 'ExactShare', '-target', triple, '-sdk', sdk, '-module-cache-path', extensionModuleCache,
     ...(!device && !mac ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
     resolve(root, 'host/apple/share/ShareInbox.swift'), resolve(root, 'host/apple/share/ShareViewController.swift'), '-o', binary]);
   sign(extension, entitlementPath);
