@@ -11,8 +11,8 @@
 // Whatever it cannot vouch for it refuses, before writing the archive, with a line starting `repack refused:`; the
 // caller then builds in full. It refuses an app with widgets or Live Activities (their plans link into ExactCore), an
 // App Clip, a share or alarm extension, a GPU crate, a package framework, Rust of its own, a base executable without
-// reserved sections, and a bake whose compat.json inputs or reach differ from the base's (the Contract changed what
-// the binary must provide: grants, executors, App Intents faces).
+// reserved sections, a bake whose compat.json inputs or reach differ from the base's (the Contract changed what
+// the binary must provide: grants, executors, App Intents faces), and changed Swift module inputs (native-extras.mjs).
 import { spawnSync } from './toolchain.mjs';
 import { appleCargo } from '../../scripts/cargo-check.mjs';
 import { createHash } from 'node:crypto';
@@ -29,6 +29,7 @@ import { hasEntries } from './widgets.mjs';
 import { iosAssets } from './assets.mjs';
 import { buildInfo } from './buildinfo.mjs';
 import { fitLinkedSections, readLinkedSections } from './sections.mjs';
+import { nativeExtras } from './native-extras.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const TARGET = 'aarch64-apple-ios', SDK_NAME = 'iphoneos';
@@ -99,6 +100,10 @@ export async function repack(args) {
       const fields = differs.includes('inputs') ? Object.keys({ ...baseCompat.inputs, ...compat.inputs }).filter(key => canonical(baseCompat.inputs?.[key] ?? null) !== canonical(compat.inputs?.[key] ?? null)).map(key => `inputs.${key}`) : [];
       refuse(`the Contract changed what the binary provides (compat.json ${[...fields, ...differs.filter(key => key !== 'inputs')].join(', ')})`);
     }
+    // The Swift module's generated inputs, which compat.json does not carry (a package `use`, data words, the theme).
+    const baseReceipt = JSON.parse(readFileSync(resolve(base, 'receipt.json'), 'utf8'));
+    if (!baseReceipt.build?.nativeExtras) refuse('the base build recorded no Swift module digest (built before repacks)');
+    if (baseReceipt.build.nativeExtras !== nativeExtras(app, 'ios')) refuse('the app\'s Swift module inputs changed (a package use or import, data words, or the theme of an app with Swift)');
     for (const entry of readdirSync(base)) if (entry !== executable && !NATIVE_ENTRIES.has(entry) && !REBUILT(entry)) refuse(`the base bundle holds ${entry}, which repack does not rebuild`);
 
     // A new bundle: the base's native entries, then what assembleIOS writes for an unsigned development archive.
@@ -126,7 +131,6 @@ export async function repack(args) {
     const ent = resolve(work, 'entitlements.plist');
     writeFileSync(ent, entitlements({ ...app, id: app.id, widgetTV: false, widgetHost: false }, undefined, false, appleReach, { simulator: false, prefix: undefined, allows: [], distributed: false }));
     // The base receipt's native build (its Cargo products and binary inputs), with this bake's compat and graph.
-    const baseReceipt = JSON.parse(readFileSync(resolve(base, 'receipt.json'), 'utf8'));
     const build = { ...baseReceipt.build, compat, graph };
     writeFileSync(resolve(bundle, 'receipt.json'), shippedReceipt(receipt(app, { compatibilityId: compat.id, build, composition: baseReceipt.composition, platform: 'ios', target: TARGET, sdk, identity: '-', profile: null, entitlements: readFileSync(ent, 'utf8'), gpu: null, development: null, repackedFrom: baseCompat.id })));
     tool('codesign', ['--force', '--sign', '-', '--timestamp=none', '--entitlements', ent, bundle], { stdio: 'ignore' });

@@ -70,6 +70,7 @@ import { keptCrates } from './crates.mjs';
 import { appleCargo } from '../../scripts/cargo-check.mjs';
 import { linkedPlanArgs, placeLinkedPlan } from '../../scripts/linked-plan.mjs';
 import { fitLinkedSections, reserveLinkedPlan } from './sections.mjs';
+import { nativeExtras } from './native-extras.mjs';
 import { appleComposition, appleProduction, appleLaunchFrameworks, appleLaunchLinkArgs, assertCapabilityFrameworks, assertLinkedSdk, iosSimulatorTarget, linksByPlan } from './link.mjs';
 export { appIcon, iosAssets, documentTypes, exportedTypes, importedTypes, stripForDistribution, stripProductionExecutable };
 import { IPAD_ORIENTATIONS, orientationKeys, allows, chooseSimulator, deviceLaunchArgs, developmentLaunchEnvironment, identity, installedBuild, macIdentity, phone, replacedNote, profile, showSimulator, simulator, simulators, useXcode } from './devices.mjs';
@@ -1391,6 +1392,8 @@ async function main(args, lockHeld = false) {
     return;
   }
 
+  // What a repack must find unchanged in this archive's Swift module (host/apple/native-extras.mjs), in its receipt.
+  if (reservesPlan()) buildReceipt.nativeExtras = nativeExtras(app, tv ? 'tvos' : 'ios', buildReceipt.graph.extensions);
   const { bundles, frameworkSymbols } = assembleIOS({intents, shared, library, serviceDylibs, triple: iosTripleFor(app, device, tv), app, paths, binDir, bin, clipBin, device, development, appleReach, tv, bakedCompat, bakedPlan, ipa, linkRoot, swiftc, buildReceipt, rosterKeys, sdkName, production, distribution, stampSdk, libDir, gpuArtifacts, looseArms, modulesBuilt, modulesLoadName, hasSvg, svgBuilt, svgLoadName, svgFilterBuilt, svgFilterLibraryName, canvasGpuBuilt, canvasGpuLoadName, args, unsigned, prof, ph, sha1, composition, destination, target, sdk, hasGpu, dylib, alarm: ios && !tv && packaged.has('alarms') ? alarmActivity(packages) : null}, bundleTools);
   publishProducts();
   release();
