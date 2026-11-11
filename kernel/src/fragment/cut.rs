@@ -424,7 +424,7 @@ pub(crate) fn container(
     // patch 30): only layout knows whether a percentage had a definite basis
     let (min_outer, max_outer) = tree.multicol_bounds(node);
     let definite = s.height != Dimension::Auto;
-    let max = max_outer.map(|v| (v - inset_v).max(0.0));
+    let max = max_outer.map(|v| (v - inset_v - l.scrollbar_size.height).max(0.0));
     let content = (l.size.height - inset_v - l.scrollbar_size.height).max(0.0);
     let (h, walk, used) = match (definite, max, s.column_fill) {
         (true, _, ColumnFill::Auto) => {
@@ -481,7 +481,7 @@ pub(crate) fn container(
     };
     let height = match used {
         Some(columns) => {
-            let mut outer = columns + inset_v;
+            let mut outer = columns + inset_v + l.scrollbar_size.height;
             if let Some(v) = max_outer {
                 outer = outer.min(v);
             }
@@ -519,6 +519,11 @@ pub(crate) fn container(
             height,
             border: b,
             padding: p,
+            // Taffy reserves a vertical scrollbar's gutter on the left in RTL
+            gutter: (
+                if rtl { 0.0 } else { l.scrollbar_size.width },
+                l.scrollbar_size.height,
+            ),
             scrolls: s.overflow_x != crate::Overflow::Visible
                 || s.overflow_y != crate::Overflow::Visible,
         },
@@ -579,6 +584,8 @@ struct Outer {
     scrolls: bool,
     border: taffy::Rect<f32>,
     padding: taffy::Rect<f32>,
+    /// The scrollbar gutters at the right and bottom edges, outside the client box
+    gutter: (f32, f32),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -756,17 +763,18 @@ fn publish(
     }
     // The scrollable overflow (D7): the columns and every translated box,
     // a scroll container's end padding (as Taffy and Chrome count it), and
-    // at least the client box, measured from the
+    // at least the client box (inside the borders and any scrollbar
+    // gutter, CSS 2.1 §11.1.1), measured from the
     // padding box's corner as Taffy measures it. Its left edge is kept but
     // only the right and bottom are published (D10.8).
-    let (b, p) = (outer.border, outer.padding);
+    let (b, p, (gr, gb)) = (outer.border, outer.padding, outer.gutter);
     let (pr, pb) = if outer.scrolls {
         (p.right, p.bottom)
     } else {
         (0.0, 0.0)
     };
-    let right = (right + pr).max(outer.width - b.right) - b.left;
-    let bottom = (bottom + pb).max(outer.height - b.bottom) - b.top;
+    let right = (right + pr).max(outer.width - b.right - gr) - b.left;
+    let bottom = (bottom + pb).max(outer.height - b.bottom - gb) - b.top;
     cut.overflow = Some(taffy::Rect {
         left: (leftmost - b.left).min(0.0),
         right,

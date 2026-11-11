@@ -218,9 +218,10 @@ impl Kernel {
 /// A cover's part of a box's engine style (@ref LLP 1075.003 §3.5): a
 /// container's bars add to the padding of the route they cover, a box a bar
 /// replaces takes no space, and a scroller the platform insets ends its
-/// content box that much sooner (LLP 1116.000 D1.2): its end padding takes
-/// both insets, so its children keep their start and their scroll extent's
-/// end is where the platform's own inset begins.
+/// content box that much sooner (LLP 1116.000 D1.2): both insets are the
+/// gutter at its padding box's bottom (`lay_inset`), so its children keep
+/// their start and its scroll extent ends where the platform's own inset
+/// begins.
 pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     // A popover is the host's to lift, out of flow, open or closed (`style::top_layer`).
     crate::style::top_layer::apply(arena, slot, s);
@@ -239,11 +240,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
                 left: style.padding_left.spaced(env, across).floor_lp(env, left),
             };
         }
-        Some(HostCover::Inset(_)) => {
-            let [_, _, bottom, _] = added_padding(arena, slot);
-            let spaced = style.padding_bottom.spaced(env, crate::style::cells::ROW);
-            s.padding.bottom = spaced.floor_lp(env, bottom);
-        }
+        Some(HostCover::Inset([top, bottom])) => lay_inset(s, top + bottom),
         Some(HostCover::Gutter([right, bottom])) => {
             s.scrollbar_width = right.max(bottom);
             // Taffy reserves its scalar width on Scroll axes. Hidden keeps
@@ -434,17 +431,7 @@ pub(crate) fn added_padding(arena: &NodeArena, slot: u32) -> [f32; 4] {
         Some(HostCover::Edges([top, right, bottom, left])) => {
             [top + header_inset(arena, slot, top), right, bottom, left]
         }
-        Some(HostCover::Inset([top, bottom])) => [0.0, 0.0, top + bottom, 0.0],
         _ => [0.0; 4],
-    }
-}
-
-/// The scroll extent a scroller publishes: what the engine measured, less
-/// the insets the platform adds back (`Inset`).
-pub(crate) fn published_extent(arena: &NodeArena, slot: u32, extent: (f32, f32)) -> (f32, f32) {
-    match arena.cover(slot) {
-        Some(HostCover::Inset([top, bottom])) => (extent.0, (extent.1 - top - bottom).max(0.0)),
-        _ => extent,
     }
 }
 
@@ -453,12 +440,31 @@ pub(crate) fn inset(arena: &NodeArena, slot: u32) -> bool {
     matches!(arena.cover(slot), Some(HostCover::Inset(_)))
 }
 
-/// `s` as authored at the end the platform's inset took (`apply`).
+/// `s` as authored, without the platform's inset (`apply`).
 pub(crate) fn without_inset(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     if inset(arena, slot) {
-        let (style, env) = (arena.effective_style(slot), arena.env());
-        let spaced = style.padding_bottom.spaced(env, crate::style::cells::ROW);
-        s.padding.bottom = spaced.floor_lp(env, 0.0);
+        s.scrollbar_width = 0.0;
+    }
+}
+
+/// Lay a scroller's `inset` points of platform scroll insets out as the
+/// gutter a horizontal scrollbar takes at the bottom of its padding box
+/// (LLP 1116.000 D1.2): the content box loses them and the scroll extent
+/// leaves them out. A definite size keeps the box, since no box sizing,
+/// definite flex basis or aspect ratio counts a gutter; a size taken from
+/// content counts the insets as it counts a scrollbar's gutter. Taffy
+/// reserves `scrollbar_width` on each `Scroll` axis, and `Hidden` keeps the
+/// same scroll container without reserving the vertical scrollbar's gutter.
+/// A vertical scroller's `overflow-x` lays out as `Scroll` or `Hidden`, the
+/// same box but for the gutter; a box that does not scroll keeps its
+/// overflow and no gutter.
+fn lay_inset(s: &mut taffy::style::Style, inset: f32) {
+    s.scrollbar_width = inset;
+    if s.overflow.x == taffy::style::Overflow::Hidden {
+        s.overflow.x = taffy::style::Overflow::Scroll;
+    }
+    if s.overflow.y == taffy::style::Overflow::Scroll {
+        s.overflow.y = taffy::style::Overflow::Hidden;
     }
 }
 

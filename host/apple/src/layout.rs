@@ -696,12 +696,6 @@ pub(super) fn content_size(node: &NodeRef<'_>, kernel: &Kernel) -> (f32, f32) {
     // Floor with the direct children's extent plus the end padding, as the
     // last layout resolved it (a percentage is of the containing block).
     let (_, _, pad_right, pad_bottom) = kernel.layout_padding(node.key).unwrap_or_default();
-    // A scroller UIKit insets: its end padding holds those insets, which
-    // UIKit adds back (LLP 1116.000 D1.2), as `node.content` leaves them out.
-    let pad_bottom = match kernel.arena().cover(node.key.index) {
-        Some(exact_kernel::HostCover::Inset([top, bottom])) => pad_bottom - top - bottom,
-        _ => pad_bottom,
-    };
     let (mut w, mut h) = node.content;
     for child in node.children() {
         // A child in a containing block of its own is in another space.
