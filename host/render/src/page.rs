@@ -933,6 +933,28 @@ mod tests {
         assert!(!body_js(shell, &js, &rendered, false, false).contains(&mark));
     }
 
+    /// LLP 1048.000 D3: the app's `host.web.head`, which the build writes
+    /// after the shell's sheet, is in every page's head once, whether the
+    /// page carries the whole sheet or only its own rules, and whatever
+    /// its entries' text says.
+    #[test]
+    fn a_page_keeps_the_apps_head_entries_after_the_sheet() {
+        let entries = "<script async src=\"https://a.example/t.js\"></script>\n<script>x('<style>p{}</style>')</script>\n";
+        let shell = format!("<!doctype html>\n<html lang=\"en\">\n<meta charset=\"utf-8\">\n<base href=\"/\">\n<title>Blog</title>\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<link rel=\"modulepreload\" href=\"./app.js\">\n<style>p{{margin:0}}</style>\n{entries}<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n");
+        for rules in [None, Some("[]")] {
+            let js = Js::of(&shell).unwrap();
+            let js = match rules {
+                Some(rules) => js.with_rules(rules),
+                None => js,
+            };
+            for preload in [true, false] {
+                let head = head_js(&shell, &js, "en", "ltr", preload, false);
+                assert_eq!(head.matches(entries).count(), 1, "{head}");
+                assert_eq!(head.contains("p{margin:0}"), rules.is_none(), "{head}");
+            }
+        }
+    }
+
     /// LLP 1115.000 D4.6: a rendered page keeps the manifest's `lang`, which
     /// the build wrote on the shell, when its plan has no strings table to
     /// name a language (`lang` empty); a resolved table's language still wins.

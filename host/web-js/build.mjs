@@ -1,5 +1,6 @@
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, packageConfig, webImplementations } from '../../js/bake/src/typescript.mjs';
 import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, resolveApp, webAppManifest } from '../../scripts/app.mjs';
+import { webHead } from '../../scripts/web-head.mjs';
 import { launchModules } from '../../scripts/launch-modules.mjs';
 // The web build's JS target: `bun host/web-js/build.mjs <app> [--plan <baked app.plan>] [--out <dir>]`.
 //
@@ -840,6 +841,8 @@ const preloads = fonts + (args.includes('--inline') ? '' : statics.map(f => `<li
 // the whole sheet before its first render (main.js), from style.css.
 writeFileSync(resolve(out, 'style.css'), base + css);
 writeFileSync(resolve(gen, 'page-style.json'), JSON.stringify(analyze(base + css)));
+// app.json's `host.web.head` goes after the sheet, where no search for the shell's places (its sheet, preloads and
+// title) can find a tag in an entry's text; every page composed over the shell keeps it (LLP 1048.000 D3).
 writeFileSync(resolve(out, 'index.html'), `<!doctype html>
 <html lang="${attr(webManifest.lang)}">
 <meta charset="utf-8">
@@ -848,7 +851,7 @@ writeFileSync(resolve(out, 'index.html'), `<!doctype html>
 <meta name="viewport" content="${viewport}">
 ${icon}
 ${preloads}<style>${base}${css}</style>
-<div id="exact-root"${manifest.audio_session ? ` data-audio-session="${manifest.audio_session}"` : ''}></div>
+${webHead(manifest)}<div id="exact-root"${manifest.audio_session ? ` data-audio-session="${manifest.audio_session}"` : ''}></div>
 ${args.includes('--inline') ? `<script type="module">${readFileSync(resolve(out, 'app.js'), 'utf8').replaceAll('</script', '<\\/script')}</script>` : '<script type="module" src="./app.js"></script>'}
 `);
 if (production && !opt('--plan')) {

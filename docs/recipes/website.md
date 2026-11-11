@@ -37,6 +37,8 @@ aria-labelledby` (a region), `h1`–`h6`, `table` with `caption`, `th scope` and
 `img`). Use `list` for links or cards: it supplies the item roles and keeps each link's
 role. A field's label is a `text id=` the field names with `aria-labelledby`.
 `curl` a page `serve` renders to read it.
+An analytics script or site-wide JSON-LD goes in `app.json`'s `host.web.head`, which every
+page's `<head>` carries (`bun exact.mjs docs head tags`).
 
 ## A setting
 

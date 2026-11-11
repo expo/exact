@@ -2824,6 +2824,37 @@ policy belongs to the site's renderer/build pipeline; follow
 [LLP 1048.003](../llp/1048.003-documents-in-contract.spec.md). Do not claim SEO,
 streaming, or deployment correctness from a client-only screenshot.
 
+### Head tags on the web
+
+`app.json`'s `host.web.head` lists tags the web build writes into the `<head>` of every
+document: the shell, each page rendered at build or per request, and the 404 page. It is
+for what a site says once to the browser: an analytics script, a preconnect, site-wide
+JSON-LD. A page's own title and metas stay its `head` element's.
+
+```json
+"host": { "web": { "head": [
+  { "link": { "rel": "preconnect", "href": "https://www.google-analytics.com" } },
+  { "script": { "async": true, "src": "https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX" } },
+  { "script": { "text": "window.dataLayer = window.dataLayer || []; function gtag() { dataLayer.push(arguments); } gtag('js', new Date()); gtag('config', 'G-XXXXXXXXXX');" } },
+  { "script": { "type": "application/ld+json", "text": { "@context": "https://schema.org", "@type": "WebSite", "name": "Euxy", "url": "https://euxy.example/" } } }
+] } }
+```
+
+- An entry is one `script`, `link` or `meta`, whose value is its attributes: a string, or
+  `true` for a bare one such as `async`. A script's `text` is its content; an object or a
+  list is written as JSON. In it, `<!--`, `<script` and `</script` are written `<…`,
+  which a JavaScript or JSON literal reads alike.
+- The build refuses another tag, a malformed entry, and what Exact writes itself (the
+  charset, the viewport, the `head` element's fields, the icon, manifest and theme colour),
+  naming the entry.
+- A script runs once per document. When the runtime changes the route in place, the tags
+  stay and do not run again, so an analytics tag counts that change only if it watches the
+  browser history. A page that loads no runtime (an `interaction` page with no handlers)
+  follows a link as a new document, which runs them again.
+- The dev loop and `serve` send them too, so a tag there reports local visits. `serve` and a
+  static host send no Content-Security-Policy. The Rust render server (`<app>-render
+  --serve`) admits only Exact's own scripts, so these do not run there.
+
 ## Time, motion, graphics, and platform facts
 
 A root task has one `every(ms, action)`, `after(ms, action)`, or

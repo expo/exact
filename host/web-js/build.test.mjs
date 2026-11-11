@@ -416,6 +416,36 @@ test('serve preserves the retry delay for unfinished pages, request and cached, 
 }, 60000);
 
 /** The test app `site` in `app` with `source` as its app.contract and a data source `note`. */
+test('host.web.head is in the head of the shell, a page built ahead, one rendered per request and the 404 page, once', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-site-head-')), app = resolve(dir, 'site'), out = resolve(app, 'dist');
+  let serve;
+  try {
+    site(app, 'shape Note\n  text: string\n\nroutes nav\n  home "/" render=build\n  live "/live" render=request\n  notfound render=build\n\n'
+      + 'component App\n  resource note = note("rendered") as shape Note\n  view\n    column\n      text top(nav).url\n      text note.text\n');
+    writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'Site', app: { id: 'test.site', name: 'Site' }, host: { web: { head: [
+      { link: { rel: 'preconnect', href: 'https://analytics.example' } },
+      { script: { async: true, src: 'https://analytics.example/tag.js?id=1&x=2' } },
+      { script: { text: "window.seen = '</SCRIPT><!--';" } },
+      { script: { type: 'application/ld+json', text: { '@type': 'Person', name: '</script>' } } },
+    ] } } }));
+    const head = '<link rel="preconnect" href="https://analytics.example">\n<script async src="https://analytics.example/tag.js?id=1&amp;x=2"></script>\n'
+      + "<script>window.seen = '\\u003C/SCRIPT>\\u003C!--';</script>\n<script type=\"application/ld+json\">{\"@type\":\"Person\",\"name\":\"\\u003C/script>\"}</script>\n";
+    const built = spawnSync(process.execPath, ['host/web/build.mjs', app, '--out', out], { cwd: root, env: { ...process.env, EXACT_APP_DIR: app }, encoding: 'utf8' });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    // Once, and before the root: only head elements come before it.
+    const placed = (html) => [html.split(head).length - 1, html.indexOf(head) < html.indexOf('<div id="exact-root"')];
+    for (const name of ['shell.html', 'index.html', '404.html']) expect([name, ...placed(readFileSync(resolve(out, name), 'utf8'))]).toEqual([name, 1, true]);
+    serve = await serving(root, out);
+    const live = await serve.get('/live');
+    expect([live.status, live.body.includes('The note, rendered.'), ...placed(live.body)]).toEqual([200, true, 1, true]);
+  } finally {
+    await serve?.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 300_000);
+
 function site(app, source) {
   mkdirSync(app, { recursive: true });
   writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'Site', app: { id: 'test.site', name: 'Site' } }));

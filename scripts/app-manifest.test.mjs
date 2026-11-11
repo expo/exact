@@ -201,6 +201,26 @@ test('manifest colours follow the web and retired launch and alias keys are refu
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+test('host.web.head takes script, link and meta entries and refuses the rest by entry', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-manifest-'));
+  const read = head => { writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Head', app: { id: 'test.head', name: 'Head' }, host: { web: { head } } })); return readManifest(dir, 'fixture'); };
+  try {
+    read([{ script: { async: true, src: 'https://a.example/t.js' } }, { script: { type: 'application/ld+json', text: { '@type': 'WebSite' } } }, { meta: { name: 'author', content: 'J' } }]);
+    assert.throws(() => read([{ meta: { name: 'author', content: 'J' } }, { style: { text: 'p{}' } }, { script: {}, link: {} }, { script: { async: false } },
+      { link: { rel: 'preconnect', text: 'x' } }, { meta: { property: 'og:title', content: 'x' } }, { link: { rel: 'Canonical', href: '/' } }]), (error) => {
+      assert.match(error.message, /host\.web\.head\[1\]: style is not a tag the head takes \(script, link, meta\)/);
+      assert.match(error.message, /host\.web\.head\[2\]: \{"script":\{\},"link":\{\}\} is not one tag/);
+      assert.match(error.message, /host\.web\.head\[3\]\.script\.async: false; an attribute is a string, or true/);
+      assert.match(error.message, /host\.web\.head\[4\]\.link\.text: a link has no content/);
+      assert.match(error.message, /host\.web\.head\[5\]: Exact writes this meta itself, from the Contract `head` element/);
+      assert.match(error.message, /host\.web\.head\[6\]: Exact writes this link itself/);
+      assert.doesNotMatch(error.message, /head\[0\]|matches 0 of the allowed forms/);
+      return true;
+    });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('readManifest names the game.presentation rename instead of an unknown key', async () => {
   const { readManifest } = await import('./app.mjs');
   const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('node:fs');

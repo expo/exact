@@ -967,9 +967,16 @@
           "additionalProperties": false
         },
         "web": {
-          "description": "The web host has no settings yet; an empty object.",
+          "description": "The web host's settings.",
           "type": "object",
-          "additionalProperties": false
+          "additionalProperties": false,
+          "properties": {
+            "head": {
+              "description": "Tags the web build writes into the <head> of every document: the shell, each pre-rendered page and the 404 page. Each entry is one tag, {\"script\": {...}}, {\"link\": {...}} or {\"meta\": {...}}, whose value is its attributes (a string, or true for a bare one such as async); a script's `text` is its content. For what a site says once to the browser (an analytics script, a preconnect, site-wide JSON-LD); a page's own title and metas are the Contract `head` element's. The same on every page and web only.",
+              "type": "array",
+              "items": { "$ref": "#/$defs/webHeadEntry" }
+            }
+          }
         }
       },
       "additionalProperties": false
@@ -1337,6 +1344,17 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "webHeadEntry": {
+      "oneOf": [
+        { "type": "object", "required": ["script"], "additionalProperties": false, "properties": { "script": { "type": "object", "properties": { "text": { "type": ["string", "object", "array"], "description": "The script's content; an object or list is written as JSON (application/ld+json, importmap, speculationrules). `<!--`, `<script` and `</script` are written as `\\u003C…`, which JavaScript and JSON read alike." } }, "additionalProperties": { "$ref": "#/$defs/webHeadAttribute" } } } },
+        { "type": "object", "required": ["link"], "additionalProperties": false, "properties": { "link": { "type": "object", "additionalProperties": { "$ref": "#/$defs/webHeadAttribute" } } } },
+        { "type": "object", "required": ["meta"], "additionalProperties": false, "properties": { "meta": { "type": "object", "additionalProperties": { "$ref": "#/$defs/webHeadAttribute" } } } }
+      ]
+    },
+    "webHeadAttribute": {
+      "description": "An attribute's value, or true for a bare attribute such as async.",
+      "oneOf": [{ "type": "string" }, { "enum": [true] }]
+    },
     "cadence": {
       "oneOf": [
         {

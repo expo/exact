@@ -306,6 +306,14 @@ the runtime loads. Take: Messages as the Snapback4 consumer (above). Still
 refused: progressive forms (server actions without the runtime) and
 server-driven UI; no Node on the render path.
 
+**Expanded (James Ide, 2026-11-10: the app's own tags in a web page's head):**
+`app.json`'s `host.web.head` lists `script`, `link` and `meta` tags the web
+build writes into every document's `<head>` (LLP 1048.000 D3). jameside.com's
+port is the consumer: Google Analytics and its site-wide JSON-LD. Take: none
+offered; it needs Charlie's waiver or a take James names. Still out: other tags,
+per-page tags (the Contract `head` element's), a field for structured data, and
+admitting these scripts under the render server's CSP.
+
 **Expanded (Charlie, 2026-09-23: "let's build it in exact2 and see how we
 stack up"):** RealWorld/Conduit (`apps/realworld`), the spec'd Medium clone,
 against its hosted API, measured for browser load against a React 19 build of
