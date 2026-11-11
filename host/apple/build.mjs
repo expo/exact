@@ -69,6 +69,7 @@ import { quiet, quietFor } from './quiet.mjs';
 import { keptCrates } from './crates.mjs';
 import { appleCargo } from '../../scripts/cargo-check.mjs';
 import { linkedPlanArgs, placeLinkedPlan } from '../../scripts/linked-plan.mjs';
+import { fitLinkedSections, reserveLinkedPlan } from './sections.mjs';
 import { appleComposition, appleProduction, appleLaunchFrameworks, appleLaunchLinkArgs, assertCapabilityFrameworks, assertLinkedSdk, iosSimulatorTarget, linksByPlan } from './link.mjs';
 export { appIcon, iosAssets, documentTypes, exportedTypes, importedTypes, stripForDistribution, stripProductionExecutable };
 import { IPAD_ORIENTATIONS, orientationKeys, allows, chooseSimulator, deviceLaunchArgs, developmentLaunchEnvironment, identity, installedBuild, macIdentity, phone, replacedNote, profile, showSimulator, simulator, simulators, useXcode } from './devices.mjs';
@@ -628,6 +629,11 @@ async function main(args, lockHeld = false) {
   // `--development` packages the development build `--run` installs (host-dev, development trust): an
   // agent's own iteration build that a service re-signs, not an artifact to distribute.
   const developmentArchive = args.includes('--development');
+  // A development device archive links its plan's sections with room to spare and fits the plan into them after the
+  // link (host/apple/sections.mjs), so a later build of the same native inputs can take its own plan into a copy of
+  // this executable (a service's repack) instead of linking. An app with widgets links its plan into ExactCore instead.
+  const reservesPlan = () => !!(ios && device && ipa && developmentArchive && !widgets);
+  const planArgs = (dir) => linkedPlanArgs(dir && reservesPlan() ? reserveLinkedPlan(dir) : dir);
   const distribution = (!!ipa && !developmentArchive) || args.includes('--distribution');
   // What is stamped `release` or `archive` (buildinfo.mjs) bakes production trust, as --release does, so the stamp and
   // the trust every production policy reads (compat.json's `embedded.trust`) cannot disagree.
@@ -844,7 +850,7 @@ async function main(args, lockHeld = false) {
     if (was.plan && !existsSync(resolve(expected.scratch, 'plan/app.hbc'))) return null;
     let claim;
     try { claim = claimBuildOutput(app, expected.swiftLock); } catch { return null; }
-    const step = startApple('swift', [...swiftArgs, ...appleLaunchLinkArgs(destination, sole), ...entitledArgs(expected.scratch, sole), ...appleLinkArgs(library, ios), ...linkedPlanArgs(was.plan && resolve(expected.scratch, 'plan')), '--product', sole], resolve(webBuildDir, 'swift-compile.log'),
+    const step = startApple('swift', [...swiftArgs, ...appleLaunchLinkArgs(destination, sole), ...entitledArgs(expected.scratch, sole), ...appleLinkArgs(library, ios), ...planArgs(was.plan && resolve(expected.scratch, 'plan')), '--product', sole], resolve(webBuildDir, 'swift-compile.log'),
       { cwd: pkg, env: swiftEnv(expected.capture, expected.composition, was.link) });
     beside.push(step);
     return { claim, step };
@@ -1259,7 +1265,7 @@ async function main(args, lockHeld = false) {
       // executable. `exact_advance` stays, because the scroll recorder finds an Exact app by it (`feel/feel.m`);
       // it is named as a pattern, which a product without the symbol still links with.
       const unexported = production && !shared ? ['-Xlinker', '-exported_symbol', '-Xlinker', '_exact_advance*'] : [];
-      const productArgs = [...swiftArgs, ...appleLaunchLinkArgs(destination, p), ...unexported, ...entitledArgs(linkRoot, p), ...(intents ? ['-Xlinker', intents.object] : []), ...(shared ? ['-Xlinker', '-rpath', '-Xlinker', ios ? '@executable_path/Frameworks' : '@executable_path/../Frameworks'] : []), ...appleLinkArgs(library, ios, shared ? null : undefined), ...linkedPlanArgs(shared ? null : linkedPlan?.dir)];
+      const productArgs = [...swiftArgs, ...appleLaunchLinkArgs(destination, p), ...unexported, ...entitledArgs(linkRoot, p), ...(intents ? ['-Xlinker', intents.object] : []), ...(shared ? ['-Xlinker', '-rpath', '-Xlinker', ios ? '@executable_path/Frameworks' : '@executable_path/../Frameworks'] : []), ...appleLinkArgs(library, ios, shared ? null : undefined), ...planArgs(shared ? null : linkedPlan?.dir)];
       let entitled = null;
       if (ios && !device) {
         // Simulator Security reads entitlements from the Mach-O text section.
@@ -1273,7 +1279,7 @@ async function main(args, lockHeld = false) {
       // swift build does not see the Rust archive (or that plist, or a linked plan) change, so the executable is
       // dropped to be linked again: 0.4 s, and it was every build's. A development build drops only one linked from
       // other bytes, which `<product>.linked` beside it says: the archive's hash, whose it is, the plist, the plan's.
-      const linked = resolve(swiftBinDir, `${p}.linked`), from = JSON.stringify({ launchFrameworks: appleLaunchFrameworks(destination, p), archive: archive ?? null, libDir, lib: env.EXACT_LIB ?? null, link: appleLink, entitled, shared: shared?.xcframework ?? null, plan: linkedPlan?.digest ?? null, intents: intents?.digest ?? null, library: library?.sha256 ?? null });
+      const linked = resolve(swiftBinDir, `${p}.linked`), from = JSON.stringify({ launchFrameworks: appleLaunchFrameworks(destination, p), archive: archive ?? null, libDir, lib: env.EXACT_LIB ?? null, link: appleLink, entitled, shared: shared?.xcframework ?? null, plan: linkedPlan?.digest ?? null, reserved: reservesPlan(), intents: intents?.digest ?? null, library: library?.sha256 ?? null });
       const same = cargoProfile === HOST_DEV && archive && existsSync(resolve(swiftBinDir, p)) && existsSync(linked) && readFileSync(linked, 'utf8') === from;
       if (!same) for (const stale of [p, `${p}.linked`]) rmSync(resolve(swiftBinDir, stale), { force: true });
       // The early build was this one's when nothing it linked from has changed.
@@ -1281,6 +1287,7 @@ async function main(args, lockHeld = false) {
       writeFileSync(linked, from);
       const executable = p === 'ExactClip' ? clipBin : resolve(binDir, p === product ? paths.executable : p);
       copyFileSync(resolve(swiftBinDir, p), executable);
+      if (linkedPlan && !shared && reservesPlan()) fitLinkedSections(executable, { plan: readFileSync(resolve(linkedPlan.dir, 'app.plan')), compat: readFileSync(resolve(linkedPlan.dir, 'compat.json')), bytecode: readFileSync(resolve(linkedPlan.dir, 'app.hbc')) });
       assertAppleIdentity(app, executable, bakedCompat.id, shared && resolve(shared.framework, 'ExactCore'));
       assertLinkedSdk(executable, designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : read('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout.trim());
       // ExactNumerals uses SwiftUI only on iOS/tvOS; the Mac has no linked numerals presenter.
