@@ -106,6 +106,9 @@ const refuseMixedTargets = (cmd, args, output) => {
  * `done` waits for it, says what it said, and refuses what runApple refuses.
  * `repeated` is a step the build runs again in the foreground, which then
  * says its own failure. A build that ends early stops it. `authored` restores paths in the log (`snapshotSources`). */
+/** A build service's progress (EXACT_BUILD_STEPS=1): one `exact-step <phase>` line as each phase of an iOS/Mac build
+ * starts, which its worker turns into steps; nothing otherwise. */
+const buildStep = (name) => { if (process.env.EXACT_BUILD_STEPS === '1') console.log(`exact-step ${name}`); };
 function startApple(cmd, args, log, { authored, ...opts } = {}) {
   const out = openSync(log, 'w');
   const child = spawn(...appleCargo(cmd, args, { cwd: root, ...opts, stdio: ['ignore', out, out] }));
@@ -637,6 +640,7 @@ async function main(args, lockHeld = false) {
     return (await import('../apple-painted/build.mjs')).buildPainted(app, args, { macInfoPlist });
   }
   // --extensions: which app extensions this build packages (a build service's quick development build leaves some out).
+  buildStep('prepare');
   const packaged = extensionKinds(args);
   if (packaged.size < 4) { app.manifest = withoutExtensions(app.manifest, packaged); console.log(`host/apple: extensions ${[...packaged].join(',') || 'none'} (--extensions)`); }
   if (args.includes('--watchos')) return (await import('./watch.mjs')).buildWatch(app, args, { runApple, appleArtifacts, appleBuildLock, receipt, buildParent: args => main(args, true) });
@@ -696,7 +700,7 @@ async function main(args, lockHeld = false) {
   const webBuildDir = mkdtempSync(resolve(tmpdir(), 'exact-webarm-'));
   cleanup.push(webBuildDir);
   const webBuilt = resolve(webBuildDir, webLoadName);
-  const t0 = Date.now();
+  const t0 = Date.now(); buildStep('cargo');
   const target = ios ? (tv ? tvTarget : device ? 'aarch64-apple-ios' : iosTarget) : bakeTarget('macos');
   const library = prepareLibrary(app.dir, target); // a package's prebuilt framework (LLP 1154 D3), fetched and checked before Cargo
   const sdkName = ios ? (tv ? (device ? 'appletvos' : 'appletvsimulator') : device ? 'iphoneos' : 'iphonesimulator') : 'macosx', stampSdk = { sdk: sdkName, sdkVersion: designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : null }; // stampSdk: the SDK the link records
@@ -980,7 +984,7 @@ async function main(args, lockHeld = false) {
     console.log(`host/apple: ${paths.embed.replace(root + '/', '')} — ${archive} ${(bytes / 1048576).toFixed(2)} MB, include/exact.h${gpu ? `, ${gpu}` : ''}${svgFilterBuilt ? `, ${svgFilterLibraryName} (the bundle's top level)` : ios ? ', no SVG filter kernels (no Metal toolchain)' : ''}, shaders, assets, compat.json; link it with ExactKit${composition === 'updating' ? ' + ExactUpdates' : ''} from the package at ${pkg.replace(root + '/', '')}`);
     if (embedOnly) { if (args.includes('--json')) reportBuilt({ path: paths.embed, ...built() }); return; }
   }
-  const t1 = Date.now();
+  const t1 = Date.now(); buildStep('swift');
   // The host's loaded modules only where the plan can reach them (LLP 1047
   // D1's loaded tier; the bake's `loads`, by the runner's own rule for each):
   // a production binary at store level 0 runs the plan it was baked with and
@@ -1287,7 +1291,7 @@ async function main(args, lockHeld = false) {
     }
     if (launchPartsDir) { auditLaunchParts(resolve(swiftBinDir, 'ExactLaunchParts.o'), launchModules(app.dir, app.manifest), read); }
   } finally { releaseSwift(); }
-  const tSwift = Date.now();
+  const tSwift = Date.now(); buildStep('arms');
   for (const placed of arms) await placed();
   if (modules.tags.length) {
     // The manifest's roster stands when no route reads the artifact's; with no artifact, it serves nothing.
@@ -1331,7 +1335,7 @@ async function main(args, lockHeld = false) {
     // A roster read that lacks a tag's factory fails here: another route is not tried.
     checkModuleRoster(app, provided, `host/apple ${ios ? 'iOS' : 'macOS'}`, production);
   }
-  const tArms = Date.now();
+  const tArms = Date.now(); buildStep('modules');
   // The SVG island module (@ref LLP 1055.000 §8 ruling 4: exact-svg-raster,
   // which SvgIsland.swift dlopens the first time a mask or filter needs pixel
   // work) and the Canvas 2D GPU module (@ref LLP 1056 §8.5: exact-canvas-vello,
@@ -1345,7 +1349,7 @@ async function main(args, lockHeld = false) {
   const canvasGpuLoadName = 'libexact_canvas_gpu.dylib';
   const canvasGpuBuilt = canvasGpu ? resolve(webBuildDir, canvasGpuLoadName) : null;
   if (canvasGpu) copyFileSync(moduleLib['exact-canvas-vello'], canvasGpuBuilt);
-  const t2 = Date.now();
+  const t2 = Date.now(); buildStep('package');
   // Where the build's time went, said at its end: the app's Rust and bake; the Swift host's link, and what of its compile
   // the bake did not cover; the arms and the app's module artifact; what of the host's two Rust modules those did not
   // cover; and assembling, signing and installing.
