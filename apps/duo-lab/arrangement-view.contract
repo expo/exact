@@ -28,10 +28,13 @@ component ArrangementView
     seed: ArrangementSettings
     openNext: action
   resource viewport = exactViewport() as shape PaneViewport
-  // Each screen keeps its own settings, starting from the screen that pushed it
+  // Each screen keeps its own settings, starting from those the last Next carried
   state settings = seed
   // A screen's depth is the number in its location (`/arrangement/3` is 3; the tab's root is 1),
-  // so its title, ids and Next agree with the URL however the screen was opened
+  // so its title, Next and testIds agree with the URL however the screen was opened. The ids the
+  // hosts resolve (menus, panes) carry the visit's key, which stays unique in the stack when two
+  // screens share a depth
+  derive key = `arrangement-${routeKey}`
   derive prefix = `arrangement-${depth}`
   derive title = depth == 1 ? "Arrangement" : `Arrangement ${depth}`
   action layout(value: string)
@@ -45,48 +48,48 @@ component ArrangementView
   action contentScroll(value: string)
     settings = ArrangementSettings(settings, contentScroll=value)
   view
-    column navigationKey=routeKey testId=`${prefix}-screen` data-title-display=settings.titleDisplay data-bar-minimization=settings.barMinimization data-safe-area-adjustment=settings.safeAreaAdjustment data-content-scroll=(settings.contentScroll == "automatic" ? "" : `${prefix}-${settings.contentScroll}`) position="absolute" inset=0 display="flex" flex-direction="column"
+    column navigationKey=routeKey testId=`${prefix}-screen` data-title-display=settings.titleDisplay data-bar-minimization=settings.barMinimization data-safe-area-adjustment=settings.safeAreaAdjustment data-content-scroll=(settings.contentScroll == "automatic" ? "" : `${key}-${settings.contentScroll}`) position="absolute" inset=0 display="flex" flex-direction="column"
       header display="flex" align-items="center" gap=8 padding="8px 16px"
         text title role="heading" aria-level=2 flex=1 testId=`${prefix}-title`
         if native
-          button popovertarget=`${prefix}-layout` aria-label="Layout" testId=`${prefix}-layout-button`
+          button popovertarget=`${key}-layout` aria-label="Layout" testId=`${prefix}-layout-button`
             image "symbol:icon.split"
-          button popovertarget=`${prefix}-options` aria-label="Options" testId=`${prefix}-options-button`
+          button popovertarget=`${key}-options` aria-label="Options" testId=`${prefix}-options-button`
             image "symbol:more"
         button press=openNext(settings, depth + 1) aria-label="Next" testId=`${prefix}-next`
           image "symbol:icon.next"
       if native
-        column id=`${prefix}-layout` popover="auto" role="menu" position="absolute"
-          Choice(menu=`${prefix}-layout`, group=`${prefix}-layout`, label="Split Automatic", value="split", chosen=settings.layout, choose=layout)
-          Choice(menu=`${prefix}-layout`, group=`${prefix}-layout`, label="Split Horizontal", value="horizontal", chosen=settings.layout, choose=layout)
-          Choice(menu=`${prefix}-layout`, group=`${prefix}-layout`, label="Split Vertical", value="vertical", chosen=settings.layout, choose=layout)
-          Choice(menu=`${prefix}-layout`, group=`${prefix}-layout`, label="Overlay", value="overlay", chosen=settings.layout, choose=layout)
-        column id=`${prefix}-options` popover="auto" role="menu" position="absolute"
-          Submenu(label="Content Scroll View", menu=`${prefix}-content-scroll`)
-          Submenu(label="Title Display", menu=`${prefix}-title-display`)
-          Submenu(label="Bar Minimization", menu=`${prefix}-bar-minimization`)
-          Submenu(label="Safe Area Adjustment", menu=`${prefix}-safe-area`)
-        column id=`${prefix}-content-scroll` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Content Scroll View"
-          Choice(menu=`${prefix}-options`, group=`${prefix}-scroll`, label="Automatic", value="automatic", chosen=settings.contentScroll, choose=contentScroll)
-          Choice(menu=`${prefix}-options`, group=`${prefix}-scroll`, label="Primary", value="primary", chosen=settings.contentScroll, choose=contentScroll)
-          Choice(menu=`${prefix}-options`, group=`${prefix}-scroll`, label="Secondary", value="secondary", chosen=settings.contentScroll, choose=contentScroll)
-        column id=`${prefix}-title-display` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Title Display"
-          Choice(menu=`${prefix}-options`, group=`${prefix}-title`, label="Automatic", value="automatic", chosen=settings.titleDisplay, choose=titleDisplay)
-          Choice(menu=`${prefix}-options`, group=`${prefix}-title`, label="Inline", value="inline", chosen=settings.titleDisplay, choose=titleDisplay)
-          Choice(menu=`${prefix}-options`, group=`${prefix}-title`, label="Large", value="large", chosen=settings.titleDisplay, choose=titleDisplay)
-        column id=`${prefix}-bar-minimization` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Bar Minimization"
-          Choice(menu=`${prefix}-options`, group=`${prefix}-minimize`, label="Automatic", value="automatic", chosen=settings.barMinimization, choose=barMinimization)
-          Choice(menu=`${prefix}-options`, group=`${prefix}-minimize`, label="Never", value="never", chosen=settings.barMinimization, choose=barMinimization)
-          Choice(menu=`${prefix}-options`, group=`${prefix}-minimize`, label="On Scroll Down", value="on-scroll-down", chosen=settings.barMinimization, choose=barMinimization)
-          Choice(menu=`${prefix}-options`, group=`${prefix}-minimize`, label="On Scroll Up", value="on-scroll-up", chosen=settings.barMinimization, choose=barMinimization)
-        column id=`${prefix}-safe-area` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Safe Area Adjustment"
-          Choice(menu=`${prefix}-options`, group=`${prefix}-safe-area`, label="Automatic", value="automatic", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
-          Choice(menu=`${prefix}-options`, group=`${prefix}-safe-area`, label="Enabled", value="enabled", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
-          Choice(menu=`${prefix}-options`, group=`${prefix}-safe-area`, label="Disabled", value="disabled", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
+        column id=`${key}-layout` popover="auto" role="menu" position="absolute"
+          Choice(menu=`${key}-layout`, group=`${prefix}-layout`, label="Split Automatic", value="split", chosen=settings.layout, choose=layout)
+          Choice(menu=`${key}-layout`, group=`${prefix}-layout`, label="Split Horizontal", value="horizontal", chosen=settings.layout, choose=layout)
+          Choice(menu=`${key}-layout`, group=`${prefix}-layout`, label="Split Vertical", value="vertical", chosen=settings.layout, choose=layout)
+          Choice(menu=`${key}-layout`, group=`${prefix}-layout`, label="Overlay", value="overlay", chosen=settings.layout, choose=layout)
+        column id=`${key}-options` popover="auto" role="menu" position="absolute"
+          Submenu(label="Content Scroll View", menu=`${key}-content-scroll`, name=`${prefix}-content-scroll`)
+          Submenu(label="Title Display", menu=`${key}-title-display`, name=`${prefix}-title-display`)
+          Submenu(label="Bar Minimization", menu=`${key}-bar-minimization`, name=`${prefix}-bar-minimization`)
+          Submenu(label="Safe Area Adjustment", menu=`${key}-safe-area`, name=`${prefix}-safe-area`)
+        column id=`${key}-content-scroll` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Content Scroll View"
+          Choice(menu=`${key}-options`, group=`${prefix}-scroll`, label="Automatic", value="automatic", chosen=settings.contentScroll, choose=contentScroll)
+          Choice(menu=`${key}-options`, group=`${prefix}-scroll`, label="Primary", value="primary", chosen=settings.contentScroll, choose=contentScroll)
+          Choice(menu=`${key}-options`, group=`${prefix}-scroll`, label="Secondary", value="secondary", chosen=settings.contentScroll, choose=contentScroll)
+        column id=`${key}-title-display` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Title Display"
+          Choice(menu=`${key}-options`, group=`${prefix}-title`, label="Automatic", value="automatic", chosen=settings.titleDisplay, choose=titleDisplay)
+          Choice(menu=`${key}-options`, group=`${prefix}-title`, label="Inline", value="inline", chosen=settings.titleDisplay, choose=titleDisplay)
+          Choice(menu=`${key}-options`, group=`${prefix}-title`, label="Large", value="large", chosen=settings.titleDisplay, choose=titleDisplay)
+        column id=`${key}-bar-minimization` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Bar Minimization"
+          Choice(menu=`${key}-options`, group=`${prefix}-minimize`, label="Automatic", value="automatic", chosen=settings.barMinimization, choose=barMinimization)
+          Choice(menu=`${key}-options`, group=`${prefix}-minimize`, label="Never", value="never", chosen=settings.barMinimization, choose=barMinimization)
+          Choice(menu=`${key}-options`, group=`${prefix}-minimize`, label="On Scroll Down", value="on-scroll-down", chosen=settings.barMinimization, choose=barMinimization)
+          Choice(menu=`${key}-options`, group=`${prefix}-minimize`, label="On Scroll Up", value="on-scroll-up", chosen=settings.barMinimization, choose=barMinimization)
+        column id=`${key}-safe-area` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Safe Area Adjustment"
+          Choice(menu=`${key}-options`, group=`${prefix}-safe-area`, label="Automatic", value="automatic", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
+          Choice(menu=`${key}-options`, group=`${prefix}-safe-area`, label="Enabled", value="enabled", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
+          Choice(menu=`${key}-options`, group=`${prefix}-safe-area`, label="Disabled", value="disabled", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
       // UIKit lays out the two panes where it supports arrangements; elsewhere CSS puts them side by side or stacked
       column hatch="arranged-panes" data-pane-layout=(native ? settings.layout : "css") testId=`${prefix}-container` flex=1 min-height=0 display="flex" flex-direction=paneDirection(viewport)
-        ArrangementPane(id=`${prefix}-primary`, name="Primary", ground="pane.primary", stripe="pane.primary.stripe", band="pane.primary.band")
-        ArrangementPane(id=`${prefix}-secondary`, name="Secondary", ground="pane.secondary", stripe="pane.secondary.stripe", band="pane.secondary.band")
+        ArrangementPane(id=`${key}-primary`, name=`${prefix}-primary`, label="Primary", ground="pane.primary", stripe="pane.primary.stripe", band="pane.primary.band")
+        ArrangementPane(id=`${key}-secondary`, name=`${prefix}-secondary`, label="Secondary", ground="pane.secondary", stripe="pane.secondary.stripe", band="pane.secondary.band")
 
 // One single-choice row of a menu: the current choice is checked
 component Choice
@@ -106,8 +109,9 @@ component Submenu
   props
     label: string
     menu: string
+    name: string
   view
-    button popovertarget=menu role="menuitem" aria-haspopup="menu" testId=`${menu}-opener`
+    button popovertarget=menu role="menuitem" aria-haspopup="menu" testId=`${name}-opener`
       text label
       text "›" aria-hidden=true
 
@@ -115,13 +119,14 @@ component ArrangementPane
   props
     id: string
     name: string
+    label: string
     ground: string
     stripe: string
     band: string
   view
     // Fill UIKit's allocation, which is the pane's containing block, to scroll within it
-    scroll id=id hatch="arrangement-pane" testId=id flex="1 1 0%" width="100%" height="100%" min-width=0 min-height=0 background-color=ground
+    scroll id=id hatch="arrangement-pane" testId=name flex="1 1 0%" width="100%" height="100%" min-width=0 min-height=0 background-color=ground
       for i in range(150) key=i
-        column gap=4 padding="16px 20px" background-color=((i + 1) % 2 == 0 ? stripe : band) testId=`${id}-row-${i + 1}`
-          text `${name} ${rowNumber(i + 1)}` font="-exact-body"
+        column gap=4 padding="16px 20px" background-color=((i + 1) % 2 == 0 ? stripe : band) testId=`${name}-row-${i + 1}`
+          text `${label} ${rowNumber(i + 1)}` font="-exact-body"
           text "Scroll this pane independently." font="-exact-subheadline" color="-exact-secondary-label"

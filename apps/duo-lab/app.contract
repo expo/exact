@@ -127,7 +127,7 @@ component DuoLab
   resource doc = document() as shape Document
   resource feed = feed() as shape FeedRow[]
   resource keyboardRows = keyboardRows() as shape KeyboardRow[]
-  // The settings the next Arrangement screen starts with: those of the screen that pushes it
+  // The settings an Arrangement screen starts with: those the last Next carried, else the defaults
   state arrangementSeed = ArrangementSettings(layout="split", titleDisplay="automatic", barMinimization="automatic", safeAreaAdjustment="automatic", contentScroll="automatic")
   // Shared across the Fold screen's two layouts: a fold mid-reading keeps the item.
   state selected = 1
