@@ -1,6 +1,6 @@
 #[cfg(all(doc, feature = "alloc"))]
 use super::RigidBodyActivation;
-use crate::math::Real;
+use crate::math::{Real, Vector};
 use simba::simd::SimdRealField;
 
 // NOTE: the 2x2 block solver (`block-solver` feature) runs in BOTH passes and solves the COMPLIANT
@@ -304,18 +304,21 @@ pub struct IntegrationParameters {
     /// Exact2: weight-bounded friction under [`FrictionModel::Coulomb`] (cannon-es's
     /// model). A rigid-body contact point that touches (separation ≤ 0) when the step
     /// starts may take a friction impulse of `friction × friction_gravity × reduced
-    /// mass × substep dt` in each substep of that step, whatever its normal impulse,
+    /// mass × substep dt` on support contacts or contacts carrying normal load,
     /// so a point lifting off keeps its friction until the step ends. Zero (the
     /// default) keeps the Coulomb bound everywhere. Not serialized: the caller sets
     /// it before each step.
     #[cfg_attr(feature = "serde-serialize", serde(skip))]
     pub friction_gravity: Real,
-    /// Exact2: below this contact-point speed, both along the normal and across it, a
+    /// Exact2: below this full contact-point speed, checked during each solve, a
     /// point keeps the Coulomb bound under [`Self::friction_gravity`], so resting and
     /// rolling contacts settle as Rapier's do. Zero applies the weight bound to every
     /// touching point. Not serialized, like [`Self::friction_gravity`].
     #[cfg_attr(feature = "serde-serialize", serde(skip))]
     pub friction_slip_speed: Real,
+    /// Exact2: support direction for weight friction; zero accepts any direction.
+    #[cfg_attr(feature = "serde-serialize", serde(skip))]
+    pub friction_up: Vector,
 }
 
 impl IntegrationParameters {
@@ -324,7 +327,11 @@ impl IntegrationParameters {
     /// This is zero if `self.dt` is zero.
     #[inline]
     pub fn inv_dt(&self) -> Real {
-        if self.dt == 0.0 { 0.0 } else { 1.0 / self.dt }
+        if self.dt == 0.0 {
+            0.0
+        } else {
+            1.0 / self.dt
+        }
     }
 
     /// Sets the time-stepping length.
@@ -420,6 +427,7 @@ impl Default for IntegrationParameters {
             friction_model: FrictionModel::default(),
             friction_gravity: 0.0,
             friction_slip_speed: 0.0,
+            friction_up: Vector::ZERO,
         }
     }
 }

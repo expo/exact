@@ -381,15 +381,16 @@ pub struct Physics {
     /// Weight-bounded friction, as cannon-es has it; needs `coulomb_friction`. A
     /// contact point touching when a step starts may take a friction impulse of
     /// friction × `friction_gravity` × the pair's reduced mass × the substep's
-    /// duration in each substep of that step, whatever its normal load: a point
+    /// duration in each substep. It applies to support contacts, contacts that carried
+    /// load last step, and contacts pressed during the solve. A point
     /// lifting off keeps its friction until the step ends, and a flicked box trips
     /// over its edge instead of sliding. Contacts with multibodies keep Coulomb
     /// friction. In m/s²; zero (the default) keeps Coulomb friction everywhere.
     pub friction_gravity: f32,
-    /// Below this contact-point speed in m/s, along the normal and across it, a
+    /// Below this full contact-point speed in m/s, checked during each solve, a
     /// point keeps Coulomb friction under `friction_gravity`, so resting and
     /// rolling contacts settle flat. Zero applies the weight bound to every
-    /// touching point.
+    /// touching, loaded point.
     pub friction_slip_speed: f32,
 }
 crate::types::record!(Physics {

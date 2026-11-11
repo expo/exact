@@ -545,3 +545,60 @@ fn zero_contact_damping_is_refused() {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| physics::step(&mut w)));
     assert!(result.is_err());
 }
+
+// A wall touching a lifted body carries no load. Weight friction must not turn
+// its upward motion into a spin, including when gravity points along another axis.
+#[test]
+fn weight_friction_ignores_unloaded_walls_in_either_gravity_direction() {
+    for sideways in [false, true] {
+        let rotate = |v: Vec3| {
+            if sideways {
+                Vec3::new(v.y, -v.x, v.z)
+            } else {
+                v
+            }
+        };
+        let mut w = World::new(120, 0);
+        physics::register(&mut w);
+        {
+            let mut p = w.resource_mut::<physics::Physics>();
+            p.gravity = rotate(Vec3::new(0.0, -9.81, 0.0));
+            p.coulomb_friction = true;
+            p.friction_gravity = 5040.0;
+        }
+        w.spawn((
+            Transform {
+                position: rotate(Vec3::new(-0.5, 0.0, 0.0)),
+                ..Transform::default()
+            },
+            Collider {
+                shape: Shape::Box {
+                    half: if sideways {
+                        Vec3::new(10.0, 0.5, 10.0)
+                    } else {
+                        Vec3::new(0.5, 10.0, 10.0)
+                    },
+                },
+                ..Collider::default()
+            },
+        ));
+        let e = w.spawn((
+            Transform {
+                position: rotate(Vec3::new(0.5, 0.0, 0.0)),
+                ..Transform::default()
+            },
+            Body {
+                velocity: rotate(Vec3::new(0.0, 3.0, 0.0)),
+                gravity: 0.0,
+                ..Body::default()
+            },
+            Collider::default(),
+        ));
+        for _ in 0..8 {
+            physics::step(&mut w);
+        }
+        let b = w.get::<Body>(e).unwrap();
+        assert!(b.spin.length() < 1e-3, "sideways {sideways}: {}", b.spin);
+        assert!((b.velocity.length() - 3.0).abs() < 1e-3, "{}", b.velocity);
+    }
+}

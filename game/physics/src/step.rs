@@ -515,6 +515,7 @@ fn configure(p: &Physics, ip: &mut IntegrationParameters, dt: f32) {
     // Not saved by Rapier: the resource holds them.
     ip.friction_gravity = p.friction_gravity;
     ip.friction_slip_speed = p.friction_slip_speed;
+    ip.friction_up = math::vector(-p.gravity.normalize_or_zero());
     ip.dt = dt;
     ip.num_solver_iterations = p.solver_iterations as usize;
     ip.contact_softness = SpringCoefficients::new(p.contact_frequency, p.contact_damping_ratio);

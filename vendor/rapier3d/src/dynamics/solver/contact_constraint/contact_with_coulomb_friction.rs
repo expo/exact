@@ -6,7 +6,7 @@ use crate::dynamics::solver::solver_body::SolverBodies;
 use crate::dynamics::solver::solver_contact_graph::ContactRef;
 use crate::dynamics::{IntegrationParameters, MultibodyJointSet, RigidBodySet};
 use crate::geometry::{ContactManifold, SimdSolverContact};
-use crate::math::{DIM, MAX_MANIFOLD_POINTS, Real, SIMD_WIDTH, SimdReal, TangentImpulse};
+use crate::math::{Real, SimdReal, TangentImpulse, DIM, MAX_MANIFOLD_POINTS, SIMD_WIDTH};
 #[cfg(feature = "dim2")]
 use crate::utils::OrthonormalBasis;
 use crate::utils::{self, AngularInertiaOps, CrossProduct, DotProduct, ScalarType};
@@ -46,10 +46,6 @@ pub(crate) struct ContactWithCoulombFrictionBuilder {
     /// The pair's restitution coefficient (needed by `refresh` to recompute the
     /// restitution rhs seed).
     restitution: SimdReal,
-    /// Exact2: each point's weight-bounded friction per second of substep, decided
-    /// once per step by `generate` (see `IntegrationParameters::friction_gravity`);
-    /// zero keeps the Coulomb bound.
-    weights: [SimdReal; MAX_MANIFOLD_POINTS],
 }
 
 impl ContactWithCoulombFrictionBuilder {
@@ -218,6 +214,24 @@ impl ContactWithCoulombFrictionBuilder {
             let vel2 = vels2.linear + vels2.angular.gcross(dp2);
 
             out_constraint.limit = friction;
+            // Weight friction holds for the whole step on a point that touches when the step
+            // starts, like a contact generated for the step. Deciding it again after each
+            // substep's integration dropped it from a point lifting off within the step.
+            out_constraint.weight_contact[k] = SimdReal::splat(1.0)
+                .select(active & dist.simd_le(SimdReal::zero()), SimdReal::zero());
+            // A touching point gets weight friction when it holds a body up (its normal within
+            // 60° of `friction_up`), carried load last step, or is pressed in this step's solve.
+            // A body resting flush against a wall only touches it: braking its slide along the
+            // wall with the weight budget spun it without any load.
+            let up = <SimdReal as ScalarType>::Vector::splat(params.friction_up.into());
+            let facing = force_dir1.gdot(up);
+            let support = facing.simd_gt(SimdReal::splat(0.5))
+                | facing.simd_lt(SimdReal::splat(-0.5))
+                | SimdReal::splat(params.friction_up.length_squared()).simd_eq(SimdReal::zero());
+            out_constraint.weight_loaded[k] = SimdReal::splat(1.0).select(
+                support | warmstart_impulse.simd_gt(SimdReal::zero()),
+                SimdReal::zero(),
+            );
             // `u8::MAX` marks an inactive slot: the impulse writeback skips it.
             out_constraint.manifold_contact_id[k] = array![|ii| if k < counts[ii] {
                 cids[ii] as u8
@@ -317,25 +331,6 @@ impl ContactWithCoulombFrictionBuilder {
             out_builder.infos[k].dist =
                 dist - ((world_com1 + dp1) - (world_com2 + dp2)).gdot(force_dir1);
             out_builder.infos[k].restitution_seed = restitution_seed;
-            // Exact2: weight-bounded friction. A point touching now, and moving at
-            // least the slip speed along or across the normal, keeps
-            // `friction × friction_gravity × reduced mass` for the whole step.
-            out_builder.weights[k] = if params.friction_gravity > 0.0 {
-                let rel = vel1 - vel2;
-                let vn = rel.gdot(force_dir1);
-                let vt = rel - force_dir1 * vn;
-                let slip = SimdReal::splat(params.friction_slip_speed * params.friction_slip_speed);
-                let moving = (vn * vn).simd_ge(slip) | vt.gdot(vt).simd_ge(slip);
-                let imsum = poses1.im + poses2.im;
-                let reduced_mass =
-                    utils::simd_inv(force_dir1.gdot(imsum.component_mul(&force_dir1)));
-                (friction * SimdReal::splat(params.friction_gravity) * reduced_mass).select(
-                    active & moving & dist.simd_le(SimdReal::zero()),
-                    SimdReal::zero(),
-                )
-            } else {
-                SimdReal::zero()
-            };
         }
 
         #[cfg(feature = "block-solver")]
@@ -402,6 +397,12 @@ impl ContactWithCoulombFrictionBuilder {
         let static_erp = params.static_contact_softness.erp_inv_dt(params.dt);
         let cfm_factor =
             SimdReal::splat(dyn_cfm) + is_static * SimdReal::splat(static_cfm - dyn_cfm);
+        constraint.weight_friction_slip_squared =
+            SimdReal::splat(params.friction_slip_speed * params.friction_slip_speed);
+        let imsum = constraint.im1 + constraint.im2;
+        let inv_mass = constraint.dir1.gdot(imsum.component_mul(&constraint.dir1));
+        constraint.weight_friction_impulse =
+            SimdReal::splat(params.friction_gravity * params.dt) * utils::simd_inv(inv_mass);
         let inv_dt = SimdReal::splat(params.inv_dt());
         let erp_inv_dt =
             SimdReal::splat(dyn_erp) + is_static * SimdReal::splat(static_erp - dyn_erp);
@@ -413,6 +414,8 @@ impl ContactWithCoulombFrictionBuilder {
         let poses1 = bodies.gather_transforms(constraint.solver_vel1);
         let poses2 = bodies.gather_transforms(constraint.solver_vel2);
         let all_infos = &self.infos[..constraint.num_contacts as usize];
+        let normal_parts = &mut constraint.normal_part[..constraint.num_contacts as usize];
+        let tangent_parts = &mut constraint.tangent_part[..constraint.num_contacts as usize];
 
         #[cfg(feature = "dim2")]
         let tangents1 = constraint.dir1.orthonormal_basis();
@@ -423,14 +426,6 @@ impl ContactWithCoulombFrictionBuilder {
         ];
 
         let solved_dt = SimdReal::splat(solved_dt);
-        // Exact2: the weight bound of this substep; `refresh_rhs_wo_bias` keeps it.
-        let substep_dt = SimdReal::splat(params.dt);
-        let n = constraint.num_contacts as usize;
-        for (limit, weight) in constraint.weight_limit[..n].iter_mut().zip(&self.weights) {
-            *limit = *weight * substep_dt;
-        }
-        let normal_parts = &mut constraint.normal_part[..constraint.num_contacts as usize];
-        let tangent_parts = &mut constraint.tangent_part[..constraint.num_contacts as usize];
 
         for ((info, normal_part), tangent_part) in all_infos
             .iter()
@@ -476,7 +471,12 @@ impl ContactWithCoulombFrictionBuilder {
 
                 for j in 0..DIM - 1 {
                     let bias = (p1 - p2).gdot(tangents1[j]) * inv_dt;
-                    tangent_part.rhs[j] = tangent_part.rhs_wo_bias[j] + bias;
+                    tangent_part.rhs[j] = tangent_part.rhs_wo_bias[j]
+                        + if params.friction_gravity > 0.0 {
+                            SimdReal::zero()
+                        } else {
+                            bias
+                        };
                 }
             }
         }
@@ -494,6 +494,12 @@ impl ContactWithCoulombFrictionBuilder {
         bodies: &SolverBodies,
         constraint: &mut ContactWithCoulombFriction<SimdReal>,
     ) {
+        constraint.weight_friction_slip_squared =
+            SimdReal::splat(params.friction_slip_speed * params.friction_slip_speed);
+        let imsum = constraint.im1 + constraint.im2;
+        let inv_mass = constraint.dir1.gdot(imsum.component_mul(&constraint.dir1));
+        constraint.weight_friction_impulse =
+            SimdReal::splat(params.friction_gravity * params.dt) * utils::simd_inv(inv_mass);
         let inv_dt = SimdReal::splat(params.inv_dt());
         let poses1 = bodies.gather_transforms(constraint.solver_vel1);
         let poses2 = bodies.gather_transforms(constraint.solver_vel2);
@@ -571,6 +577,10 @@ pub(crate) struct ContactWithCoulombFriction<N: ScalarType> {
     pub im2: N::Vector,
     pub cfm_factor: N,
     pub limit: N,
+    pub weight_friction_impulse: N,
+    pub weight_friction_slip_squared: N,
+    pub weight_contact: [N; MAX_MANIFOLD_POINTS],
+    pub weight_loaded: [N; MAX_MANIFOLD_POINTS],
 
     #[cfg(feature = "dim3")]
     pub tangent1: N::Vector, // One of the friction force directions.
@@ -581,9 +591,6 @@ pub(crate) struct ContactWithCoulombFriction<N: ScalarType> {
     pub manifold_id: [ContactRef; SIMD_WIDTH],
     pub num_contacts: u8,
     pub manifold_contact_id: [[u8; SIMD_WIDTH]; MAX_MANIFOLD_POINTS],
-    /// Exact2: each point's weight-bounded friction impulse for this substep, or
-    /// zero for the Coulomb bound (see `CoulombContactPointInfos::weight`).
-    pub weight_limit: [N; MAX_MANIFOLD_POINTS],
 }
 
 impl ContactWithCoulombFriction<SimdReal> {
@@ -696,14 +703,40 @@ impl ContactWithCoulombFriction<SimdReal> {
             #[cfg(feature = "dim2")]
             let tangents1 = [&self.dir1.orthonormal_vector()];
 
-            for ((tangent_part, normal_part), weight_limit) in tangent_parts
+            for (contact_index, (tangent_part, normal_part)) in tangent_parts
                 .iter_mut()
                 .zip(normal_parts.iter())
-                .zip(&self.weight_limit)
+                .enumerate()
             {
-                // Exact2: a weight-bounded point takes its weight bound instead.
-                let limit = (self.limit * normal_part.impulse)
-                    .select(weight_limit.simd_le(SimdReal::zero()), *weight_limit);
+                let normal = if self.weight_friction_impulse.simd_gt(SimdReal::zero()).any() {
+                    let loaded = self.weight_loaded[contact_index].simd_gt(SimdReal::zero())
+                        | normal_part.impulse.simd_gt(SimdReal::zero());
+                    let weight = (self.weight_friction_impulse
+                        * self.weight_contact[contact_index])
+                        .select(loaded, SimdReal::zero());
+                    let mut slip_squared = SimdReal::zero();
+                    for j in 0..DIM - 1 {
+                        let slip = tangents1[j].gdot(solver_vel1.linear - solver_vel2.linear)
+                            + tangent_part.torque_dir1[j].gdot(solver_vel1.angular)
+                            + tangent_part.torque_dir2[j].gdot(solver_vel2.angular);
+                        slip_squared += slip * slip;
+                    }
+                    // The point's full speed: a point lifting off or striking is not quasi-static.
+                    let normal_speed = self.dir1.gdot(solver_vel1.linear - solver_vel2.linear)
+                        + normal_part.torque_dir1.gdot(solver_vel1.angular)
+                        + normal_part.torque_dir2.gdot(solver_vel2.angular);
+                    slip_squared += normal_speed * normal_speed;
+                    let sliding = slip_squared.simd_ge(self.weight_friction_slip_squared);
+                    weight.select(
+                        self.weight_friction_impulse.simd_gt(SimdReal::zero()) & sliding,
+                        normal_part.impulse,
+                    )
+                } else {
+                    normal_part.impulse
+                };
+                // Padding lanes must stay inert even when friction uses body weight.
+                let limit = (self.limit * normal)
+                    .select(normal_part.r.simd_gt(SimdReal::zero()), SimdReal::zero());
                 tangent_part.solve(
                     tangents1,
                     &self.im1,
@@ -949,6 +982,64 @@ mod test {
                     }
                 }
             }
+        }
+    }
+    #[test]
+    fn weight_friction_keeps_zero_mass_slots_inert() {
+        let manifold = test_manifold(MAX_MANIFOLD_POINTS, 1.0);
+        let mut c = generate_chunk([&manifold; SIMD_WIDTH]);
+        c.weight_friction_impulse = SimdReal::splat(1.0);
+        c.weight_contact.fill(SimdReal::splat(1.0));
+        c.weight_loaded.fill(SimdReal::splat(1.0));
+        for part in &mut c.tangent_part {
+            part.impulse.fill(SimdReal::zero());
+            part.rhs.fill(SimdReal::splat(1.0));
+            part.r.fill(SimdReal::splat(1.0));
+            #[cfg(feature = "dim3")]
+            {
+                part.r[2] = SimdReal::zero();
+            }
+        }
+        c.solve(&mut SolverBodies::default(), false, true);
+        for part in &c.tangent_part {
+            for impulse in &part.impulse {
+                for lane in 0..SIMD_WIDTH {
+                    assert_eq!(impulse.extract(lane), 0.0);
+                }
+            }
+        }
+    }
+    #[test]
+    fn weight_budget_uses_the_contact_normal_with_locked_axes() {
+        let mut c = generate_chunk([&test_manifold(1, 1.0); SIMD_WIDTH]);
+        c.num_contacts = 0;
+        c.im1 = <SimdReal as ScalarType>::Vector::splat((up() * 2.0).into());
+        c.im2 = <SimdReal as ScalarType>::Vector::splat(up().into());
+        let builder: ContactWithCoulombFrictionBuilder = unsafe { core::mem::zeroed() };
+        let params = IntegrationParameters {
+            friction_gravity: 120.0,
+            dt: 1.0 / 120.0,
+            ..IntegrationParameters::default()
+        };
+        builder.update(
+            &params,
+            0.0,
+            &SolverBodies::default(),
+            &MultibodyJointSet::new(),
+            &mut c,
+        );
+        for lane in 0..SIMD_WIDTH {
+            assert!((c.weight_friction_impulse.extract(lane) - 1.0 / 3.0).abs() < 1e-6);
+        }
+        c.weight_friction_impulse = SimdReal::zero();
+        builder.refresh_rhs_wo_bias(&params, 0.0, &SolverBodies::default(), &mut c);
+        for lane in 0..SIMD_WIDTH {
+            assert!((c.weight_friction_impulse.extract(lane) - 1.0 / 3.0).abs() < 1e-6);
+        }
+        c.dir1 = <SimdReal as ScalarType>::Vector::splat(Vector::X.into());
+        builder.refresh_rhs_wo_bias(&params, 0.0, &SolverBodies::default(), &mut c);
+        for lane in 0..SIMD_WIDTH {
+            assert_eq!(c.weight_friction_impulse.extract(lane), 0.0);
         }
     }
 }
