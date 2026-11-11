@@ -431,7 +431,8 @@ public final class ExactSession {
     var hostOutstanding: [String] {
         var out: [String] = []
         if fillInFlight || !afterFill.isEmpty { out.append("fill") }
-        if tickInFlight || hasPublished { out.append("published") }
+        // Count a published batch only if it shows something new: one that shows nothing is not loading, nor is a hold it moves or an error it logs (LLP 1132 D5)
+        if hasPublished({ !showsNothing($0) }) { out.append("published") }
         if canvasInFlight || canvasOwed || presenter.canvas2d.loadingCount > 0 { out.append("canvas") }
         #if os(iOS)
         if SvgFilterLive.inFlight > 0 { out.append("svgPicture") }
@@ -640,10 +641,9 @@ public final class ExactSession {
         DispatchQueue.main.async { [weak self] in self?.landFill() }
     }
 
-    private var hasPublished: Bool {
-        published.lock()
-        defer { published.unlock() }
-        return !publishedQueue.isEmpty
+    /// A published batch waits to land: any, or one that `which` picks.
+    private func hasPublished(_ which: (Batch) -> Bool = { _ in true }) -> Bool {
+        published.withLock { publishedQueue.contains { which($0.batch) } }
     }
 
     /// Apply the slice the owner published, then what it owes and what
@@ -715,7 +715,7 @@ public final class ExactSession {
     /// Wait for the slice in flight and land it: what shows, the agent and
     /// every read that must see it (T5, T7, T9).
     public func drainFill() {
-        guard ownerInFlight || hasPublished else { return }
+        guard ownerInFlight || hasPublished() else { return }
         Owner.shared.sync {}
         landFill()
     }
@@ -1032,16 +1032,15 @@ public final class ExactSession {
         apply(runtime.surfaceRecord(name, json))
     }
 
-    /// A batch that changes nothing the presenter shows: no ops, no error,
-    /// no control's viewless contents (`controls`, LLP 1069.011 §9), no
-    /// page facts the app moved (`setMode`, `setRootFontSize`), wake or orientation lock,
-    /// or word on work the app must finish, and the motion, spatial, frame-task, canvas and
-    /// owed-draw state as they stand. Its timer deadline is the caller's to compare.
-    func changesNothing(_ batch: Batch) -> Bool {
-        batch.ops.isEmpty && !batch.controls && batch.error == nil && batch.canvasImages.isEmpty
-            && !batch.facts && batch.wakelock == nil && batch.orientation == nil && batch.mustFinish == nil
-            && batch.motion == frames.motion && batch.spatial == frames.spatial && batch.canvasOwed == canvasOwed
-            && batch.canvas == frames.canvas2d && batch.frames == frames.tasks
+    /// A batch that changes nothing: it shows nothing new (`showsNothing`), has no error to log and moves no hold, the
+    /// wake lock (LLP 1125 D11) or word on work the app must finish (`Holds.swift`). Its timer deadline is the caller's to compare.
+    func changesNothing(_ batch: Batch) -> Bool { showsNothing(batch) && batch.error == nil && batch.wakelock == nil && batch.mustFinish == nil }
+    /// A batch that changes nothing the presenter shows: it leaves the screen as it is (no ops, control's
+    /// viewless contents, LLP 1069.011 §9, page facts or orientation lock), asks for no canvas image, and
+    /// leaves the motion, spatial, frame-task, canvas and owed-draw state as they stand.
+    func showsNothing(_ batch: Batch) -> Bool {
+        !batch.changesScreen && batch.canvasImages.isEmpty && batch.motion == frames.motion && batch.spatial == frames.spatial
+            && batch.canvasOwed == canvasOwed && batch.canvas == frames.canvas2d && batch.frames == frames.tasks
     }
 
     /// A batch from a timer, a scroll event or a host's measurement: one that
@@ -1057,7 +1056,7 @@ public final class ExactSession {
     func applyUnlessEmpty(_ batch: Batch, scrolled: Bool = false) {
         guard !batch.busy, !batch.held else { return }
         guard !applying else { apply(batch); return }
-        if !landing, ownerInFlight, hasPublished {
+        if !landing, ownerInFlight, hasPublished() {
             // What the slices leave owed is asked after this batch, as in `apply`.
             holdingReports = true; landFill(); holdingReports = false
             guard state != .destroyed else { return }
@@ -1106,7 +1105,7 @@ public final class ExactSession {
         guard state != .destroyed, !batch.busy, !batch.held else { return }
         appliedBatches += 1
         // A slice the owner committed before this batch applies first (T4).
-        if !applying, !landing, ownerInFlight, hasPublished {
+        if !applying, !landing, ownerInFlight, hasPublished() {
             // What the landed slices leave owed is asked after this batch,
             // which the owner made after them (T4; LLP 1034 §8).
             holdingReports = true; landFill(); holdingReports = false

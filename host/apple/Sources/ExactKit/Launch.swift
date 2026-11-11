@@ -280,7 +280,9 @@ public final class ExactLaunch: NSObject {
     /// `kind:name` items, plus failed resources and whether the runner is
     /// poisoned. Nil when there is none to read: a destroyed session, or a
     /// runner that answers with an error (busy, gone), whose missing lists
-    /// would otherwise read as nothing outstanding.
+    /// would otherwise read as nothing outstanding. The runner's call comes
+    /// first and waits for the owner, so work sent there before it has
+    /// published its batch when `hostOutstanding` reads the published queue.
     static func ledger(_ session: ExactSession) -> (items: [String], failed: [String], poisoned: Bool)? {
         guard session.state != .destroyed, let data = session.agent("{\"op\":\"outstanding\"}").data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any], o["error"] == nil else { return nil }

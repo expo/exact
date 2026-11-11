@@ -10,13 +10,13 @@ final class NavigationMarksTests: XCTestCase {
         XCTAssertNil(session.boot(plan: try fixturePlan("HEADLESS"), size: CGSize(width: 400, height: 800)).error)
         let marks = NavigationMarks()
         marks.routerChanged(session, payload: ["top": 1, "pattern": "/"])
-        session.tickInFlight = true
-        defer { session.tickInFlight = false }
+        session.holdFillForTests()
         marks.routerChanged(session, payload: ["top": 2, "pattern": "/details"])
         waitFor("the navigation's first frame") { marks.recent.contains { $0.hasPrefix("cold_ttr ") } }
         XCTAssertNil(marks.link, "only the first frame needs a display link")
         XCTAssertFalse(marks.recent.contains { $0.hasPrefix("tti ") }, "native work still holds TTI")
-        session.tickInFlight = false
+        session.publishFillForTests(1, wireBatch([]), generation: session.generation)
+        waitFor("the slice's landing") { !session.fillInFlight }
         marks.workEnded(session)
         waitFor("TTI after the work clears") { marks.recent.contains { $0.hasPrefix("tti ") } }
         XCTAssertNil(marks.link)
@@ -29,20 +29,20 @@ final class NavigationMarksTests: XCTestCase {
     // Work that shows nothing new can still end what held TTI, so the
     // session tells the marks at every end of work, not only an apply.
 
-    func testTTIFollowsATickThatLandsWithNothingToShow() throws {
-        let session = try heldNavigation("/landed") { $0.tickInFlight = true }
+    func testTTIFollowsASliceThatLandsWithNothingToShow() throws {
+        let session = try heldNavigation("/landed") { $0.holdFillForTests() }
         defer { session.destroy() }
         let applied = session.appliedBatches
-        session.publishTickForTests(wireBatch([]))
+        session.publishFillForTests(1, wireBatch([]), generation: session.generation)
         waitForTTI("/landed")
-        XCTAssertEqual(session.appliedBatches, applied, "the tick shows nothing and skips the pass")
+        XCTAssertEqual(session.appliedBatches, applied, "the slice shows nothing and skips the pass")
     }
 
     func testTTIFollowsABatchThatSkipsThePass() throws {
-        let session = try heldNavigation("/skipped") { $0.tickInFlight = true }
+        let session = try heldNavigation("/skipped") { _ in SvgFilterLive.inFlight += 1 }
         defer { session.destroy() }
         // The hold clears without notice; the empty batch that follows must re-check TTI
-        session.tickInFlight = false
+        SvgFilterLive.inFlight -= 1
         let applied = session.appliedBatches
         session.applyUnlessEmpty(wireBatch([]))
         XCTAssertEqual(session.appliedBatches, applied, "the batch shows nothing and skips the pass")
@@ -69,11 +69,11 @@ final class NavigationMarksTests: XCTestCase {
     }
 
     func testADestroyedSessionHasNoTTI() throws {
-        let session = try heldNavigation("/destroyed") { $0.tickInFlight = true }
+        let session = try heldNavigation("/destroyed") { $0.holdFillForTests() }
         session.destroy()
-        // A tick that lands after the session is gone, and the evaluation it asks for
-        session.publishTickForTests(wireBatch([]))
-        waitFor("the tick's landing") { !session.tickInFlight }
+        // A slice that lands after the session is gone, and the evaluation it asks for
+        session.publishFillForTests(1, wireBatch([]), generation: session.generation)
+        waitFor("the slice's landing") { !session.fillInFlight }
         waitForMainQueue("the evaluation it asked for")
         XCTAssertFalse(NavigationMarks.shared.recent.contains { $0.hasPrefix("tti /destroyed ") }, "a destroyed session's runtime has no outstanding work to read")
     }
