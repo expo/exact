@@ -1119,21 +1119,24 @@ async function main(args, lockHeld = false) {
   const frameworkStamp = (forIos, simulator, arch) => JSON.stringify([linkArgs(forIos), ...(modules.frameworks ?? []).flatMap(fw => frameworkSlice(fw, forIos, simulator, arch).stamped).map(f => { const st = statSync(f); return [f, st.size, st.mtimeMs]; })]);
   const macArch = process.arch === 'arm64' ? 'arm64' : 'x86_64';
   const iosArch = device ? 'arm64' : (iosTriple.startsWith('arm64') ? 'arm64' : 'x86_64');
-  const moduleArgs = (sdkFor, targetArgs, out, forIos = false, simulator = false, arch = macArch, packagesIn = packageDir) => ['--sdk', sdkFor, 'swiftc', '-module-cache-path', resolve(swiftBuildRoot, 'modules-module-cache'), '-parse-as-library', '-emit-library', '-O', '-swift-version', '5', '-module-name', 'ExactAppModules', ...moduleSources, ...(packages.length ? ['-I', packagesIn, ...packageObjects(packagesIn)] : []), ...frameworkArgs(forIos, simulator, arch), ...linkArgs(forIos), '-o', out, ...targetArgs];
+  const moduleArgs = (sdkFor, targetArgs, out, forIos = false, simulator = false, arch = macArch, packagesIn = packageDir) => ['--sdk', sdkFor, 'swiftc', '-module-cache-path', resolve(swiftBuildRoot, 'modules-module-cache'), '-parse-as-library', '-emit-library', ...(production || distribution ? ['-O'] : ['-Onone']), '-swift-version', '5', '-module-name', 'ExactAppModules', ...moduleSources, ...(packages.length ? ['-I', packagesIn, ...packageObjects(packagesIn)] : []), ...frameworkArgs(forIos, simulator, arch), ...linkArgs(forIos), '-o', out, ...targetArgs];
   const macTarget = ['-target', moduleTripleFor(app, false)];
   // Each package's Swift module for this target, before the app's module links it: once, and only when an arm
   // linking it is compiled anew (its copied sources and `packageStamp` are that arm's key; its objects' paths this
   // build's own). A failed package stays unplaced, so the next arm that needs it compiles it again and says why.
-  const swiftModuleArgs = (name, sources, dir = packageDir) => ['--sdk', packageTargets.get(dir)[0], 'swiftc', '-module-cache-path', resolve(swiftBuildRoot, 'modules-module-cache'), '-parse-as-library', '-wmo', '-O', '-swift-version', '5', '-module-name', name, '-emit-module', '-emit-module-path', resolve(dir, `${name}.swiftmodule`), '-I', dir, '-c', ...sources, '-o', resolve(dir, `${name}.o`), ...packageTargets.get(dir)[1]];
+  // A development build's packages compile unoptimized on every core: optimized whole-module compiles run on one core
+  // (a package could take two minutes); what is distributed keeps -O.
+  const swiftModuleArgs = (name, sources, dir = packageDir) => ['--sdk', packageTargets.get(dir)[0], 'swiftc', '-module-cache-path', resolve(swiftBuildRoot, 'modules-module-cache'), '-parse-as-library', '-wmo', ...(production || distribution ? ['-O'] : ['-Onone', '-num-threads', '16']), '-swift-version', '5', '-module-name', name, '-emit-module', '-emit-module-path', resolve(dir, `${name}.swiftmodule`), '-I', dir, '-c', ...sources, '-o', resolve(dir, `${name}.o`), ...packageTargets.get(dir)[1]];
   const packageArgs = (p, i, dir) => [...swiftModuleArgs(p.module, packageCopies[i], dir), ...(!production && !distribution ? ['-D', 'EXACT_DEVELOPMENT'] : [])]; // a package's development-only paths (an injected device, LLP 1133.037 D19 item 3), as the web arm's
   // What an arm linking the packages adds to its key: each package, its sources by name, and how it compiles.
   const packageStamp = JSON.stringify(packages.map((p, i) => [p.module, p.sources, packageArgs(p, i).map(a => a.replaceAll(packageDir, '<packages>'))]));
-  // Each package's compiled module kept in the app's own build by what it is made of: its sources, the modules it imports
+  // Each package's compiled module kept in the destination's shared Swift scratch (every app's build reads it, as the
+  // arms') by what it is made of, which names no app: its sources, the modules it imports
   // (`ExactPackage`'s key), how it compiles and the compiler. A module edit links the packages it did not change, as
   // compiled before, instead of compiling every one again (LLP 1156.003 D2). Written under this process's name and renamed.
   const placed = new Set(), keptPackage = (name, args, sources, imports, dir, compile) => {
     const key = createHash('sha256').update(JSON.stringify([name, args.map(a => a.replaceAll(dir, '<dir>')), sources.map(f => readFileSync(f, 'utf8')), imports, swiftc])).digest('hex').slice(0, 20);
-    const entry = resolve(linkRoot, 'packages-kept', `${name}-${key}`), outputs = (d) => readdirSync(d).filter(f => f.startsWith(`${name}.`));
+    const entry = resolve(swiftBuildRoot, 'packages-kept', `${name}-${key}`), outputs = (d) => readdirSync(d).filter(f => f.startsWith(`${name}.`));
     if (existsSync(entry)) { for (const f of outputs(entry)) copyFileSync(resolve(entry, f), resolve(dir, f)); return key; }
     compile();
     const making = `${entry}.${process.pid}.tmp`; rmSync(making, { recursive: true, force: true }); mkdirSync(making, { recursive: true });
@@ -1449,7 +1452,7 @@ async function test(args) {
     env.TEST_RUNNER_EXACT_FIXTURE_MODULE = resolve(fixtureDir, 'libexact_modules.dylib');
     // The module composes no packages' extensions (LLP 1133.001 D5): their table, empty.
     writeFileSync(resolve(fixtureDir, 'ExactComposed.swift'), composedModule([], fixture.modules.apple.length > 0));
-    runApple('xcrun', ['--sdk', 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', '-O', '-swift-version', '5', '-module-name', 'ExactAppModules',
+    runApple('xcrun', ['--sdk', 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', ...(production || distribution ? ['-O'] : ['-Onone']), '-swift-version', '5', '-module-name', 'ExactAppModules',
       '-module-cache-path', resolve(fixtureDir, 'cache'), ...moduleSeam(resolve, root), resolve(fixtureDir, 'ExactComposed.swift'), resolve(fixtureDir, 'ExactDataKeys.swift'),
       ...fixture.modules.apple, '-target', iosTriple, '-o', env.TEST_RUNNER_EXACT_FIXTURE_MODULE]);
     compileFixtures(root, run, env, fixtureDir, 'TEST_RUNNER_EXACT', app.id);
