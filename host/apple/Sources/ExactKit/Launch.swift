@@ -58,7 +58,7 @@ public final class ExactLaunch: NSObject {
     /// The screen changed since its last presented frame.
     private var contentDirty = false
     /// The vsync at which a settled screen becomes interactive, unless work reappears.
-    private var candidate: Double?
+    private(set) var candidate: Double?
     private var evaluateScheduled = false
     /// The app's `aria-busy` elements were the last outstanding work.
     private var declaredLast = false
@@ -234,8 +234,11 @@ public final class ExactLaunch: NSObject {
         resolvePresent()
     }
 
-    @objc private func tick(_ link: CADisplayLink) {
-        vsync = Vsync(link)
+    @objc private func tick(_ link: CADisplayLink) { frame(Vsync(link)) }
+
+    /// A display-link callback's sample (a test's own, as its timestamps are read-only).
+    func frame(_ sample: Vsync) {
+        vsync = sample
         resolvePresent()
         if marks[.present] != nil, ttiOutcome != nil || suppressed != nil || ExactEnv.agentMode { stopWatching(); return }
         confirmCandidate()
@@ -307,7 +310,11 @@ public final class ExactLaunch: NSObject {
         guard outstanding.isEmpty, marks[.present] != nil else { candidate = nil; return }
         let now = CACurrentMediaTime()
         if contentDirty {
-            candidate = vsync?.next(after: now)
+            // A candidate stands until work reappears or a batch changes the
+            // screen (`applied`): work that ends showing nothing new, after
+            // its vsync and before the callback that confirms it, would
+            // otherwise move it a frame later each time.
+            if candidate == nil { candidate = vsync?.next(after: now) }
         } else {
             interactive(at: now)
         }
@@ -505,17 +512,19 @@ struct Vsync {
     let at: Double
     let interval: Double
 
-    init(_ link: CADisplayLink) {
-        // On ProMotion, `duration` can stay nominal while the real cadence changes.
-        let interval = link.targetTimestamp - link.timestamp
-        at = link.timestamp
-        self.interval = interval > 0 ? interval : link.duration
-    }
-
     /// The first vsync strictly after `t`, on this sample's grid.
     func next(after t: Double) -> Double? {
         guard interval > 0 else { return nil }
         let g = at + ((t - at) / interval).rounded(.up) * interval
         return g <= t ? g + interval : g
+    }
+}
+
+// An extension, so the struct keeps its memberwise initializer.
+extension Vsync {
+    init(_ link: CADisplayLink) {
+        // On ProMotion, `duration` can stay nominal while the real cadence changes.
+        let interval = link.targetTimestamp - link.timestamp
+        self.init(at: link.timestamp, interval: interval > 0 ? interval : link.duration)
     }
 }
