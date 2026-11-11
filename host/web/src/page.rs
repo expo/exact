@@ -205,9 +205,10 @@ fn fonts(out: &mut String, plan: &Plan) -> Result<(), DocumentError> {
 /// The runner's checkpoint (LLP 1048.000 D6) as JSON a script element can
 /// carry: the location, the render's time, the logic that answered, the
 /// answers — each `[name, source, [args…], value]`, the values in
-/// [`push_value`]'s JSON — what is still pending, and the open streams when
-/// there are any. `<`, `>` and `&` are escapes, so user text can never close
-/// the element or open a comment. [`read_checkpoint`] reads it back.
+/// [`push_value`]'s JSON — what is still pending, and when there are any,
+/// the indices of the answers whose stream is open and of those that read
+/// the store. `<`, `>` and `&` are escapes, so user text can never close the
+/// element or open a comment. [`read_checkpoint`] reads it back.
 ///
 /// The values are text, not their canonical bytes in base64, so a page's
 /// compression finds the strings its document already shows (titles, names,
@@ -243,9 +244,11 @@ pub fn checkpoint<D: DataSource>(runner: &Runner<D>, location: &str) -> String {
     }
     json.push_str("],\"pending\":");
     push_names(&checkpoint.pending, &mut json);
-    if !checkpoint.open.is_empty() {
-        json.push_str(",\"open\":");
-        push_names(&checkpoint.open, &mut json);
+    for (field, indices) in [("open", &checkpoint.open), ("readers", &checkpoint.readers)] {
+        if !indices.is_empty() {
+            let indices: Vec<String> = indices.iter().map(usize::to_string).collect();
+            json.push_str(&format!(",\"{field}\":[{}]", indices.join(",")));
+        }
     }
     json.push('}');
     json.replace('<', "\\u003c")
@@ -410,29 +413,41 @@ pub fn read_checkpoint(text: &str) -> Result<Checkpoint, String> {
                 }
                 json.expect(b']')?;
             }
-            "pending" => checkpoint.pending = read_names(&mut json)?,
-            "open" => checkpoint.open = read_names(&mut json)?,
+            "pending" => checkpoint.pending = read_list(&mut json, |json| json.string())?,
+            "open" => checkpoint.open = read_list(&mut json, read_index)?,
+            "readers" => checkpoint.readers = read_list(&mut json, read_index)?,
             other => return Err(format!("unknown field `{other}`")),
         }
         match json.next() {
             Some(b',') => continue,
-            Some(b'}') if json.peek().is_none() => return Ok(checkpoint),
+            Some(b'}') if json.peek().is_none() => break,
             _ => return Err("expected `,` or the end".into()),
         }
     }
+    if (checkpoint.open.iter().chain(&checkpoint.readers)).any(|&k| k >= checkpoint.answers.len()) {
+        return Err("an index past the answers".into());
+    }
+    Ok(checkpoint)
 }
 
-fn read_names(json: &mut Json) -> Result<Vec<String>, String> {
-    let mut names = Vec::new();
+fn read_index(json: &mut Json) -> Result<usize, String> {
+    (json.number()?.parse()).map_err(|_| "not an answer's index".to_string())
+}
+
+fn read_list<T>(
+    json: &mut Json,
+    mut item: impl FnMut(&mut Json) -> Result<T, String>,
+) -> Result<Vec<T>, String> {
+    let mut items = Vec::new();
     json.expect(b'[')?;
     while json.peek() != Some(b']') {
-        if !names.is_empty() {
+        if !items.is_empty() {
             json.expect(b',')?;
         }
-        names.push(json.string()?);
+        items.push(item(json)?);
     }
     json.expect(b']')?;
-    Ok(names)
+    Ok(items)
 }
 
 impl<D: DataSource> crate::Host<D> {

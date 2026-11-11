@@ -19,7 +19,7 @@ pub(crate) struct ResourceRow {
     /// argument derived from such a reader), not only randomness.
     pub(super) contents_reader: bool,
     /// `contents_reader` is known: it was asked in this run, or a reload
-    /// carried what its last ask read.
+    /// carried, or a rendered page says, what its last ask read.
     pub(super) reads_known: bool,
     /// Topics watched by this answer; an announcement asks this row again.
     pub(super) watching: Vec<String>,
@@ -28,6 +28,10 @@ pub(crate) struct ResourceRow {
     /// No answer yet because the source is not ready: the resource reads pending.
     pub(super) awaiting: bool,
     pub(super) member: Option<each::Member>,
+    /// While a boot from a rendered page settles, a list's answers for the
+    /// elements it makes (LLP 1048.000 D6). Boxed: every commit copies each
+    /// row, and only a list's row during a boot holds them.
+    pub(super) page_answers: Option<Box<each::PageAnswers>>,
     pub(super) inspection: crate::perf::ResourceWork,
 }
 
@@ -95,6 +99,16 @@ impl<D: DataSource> Runner<D> {
         row.store_reader |= reads > 0;
         row.entropy_reader |= draws > 0;
         row.contents_reader |= reads > draws;
+        row.reads_known = true;
+    }
+
+    /// What resource `i`'s answer from a rendered page read, which the render
+    /// knew: what the store holds when the page lists it in `readers` (LLP
+    /// 1048.000 D6), else nothing a store change asks it again for.
+    pub(super) fn seed_reads(&mut self, i: usize, contents: bool) {
+        let row = &mut self.resources[i];
+        row.store_reader |= contents;
+        row.contents_reader = contents;
         row.reads_known = true;
     }
 }

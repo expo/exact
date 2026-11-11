@@ -99,7 +99,7 @@ fn a_stream_completes_the_render_at_its_first_message_and_is_listed_open() {
         "{}",
         rendered.document.root
     );
-    assert_eq!(rendered.state.open, ["feed"], "the stream is still open");
+    assert_eq!(rendered.state.open, [0], "`feed`'s answer is still open");
     assert!(
         rendered.state.pending.is_empty(),
         "{:?}",

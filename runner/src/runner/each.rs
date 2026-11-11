@@ -28,6 +28,67 @@ pub(super) struct Member {
     pub(super) gone: bool,
 }
 
+/// A rendered page's answer for one element of a list.
+#[derive(Clone)]
+pub(super) struct PageAnswer {
+    pub(super) args: Vec<Value>,
+    pub(super) value: Value,
+    /// It is asked again: its stream was open, or it read the store and the
+    /// device's store holds the app's own entries.
+    pub(super) again: bool,
+    /// It read the store, and the render never had the device's store.
+    pub(super) reads: bool,
+}
+
+/// A rendered page's answers for one list's elements.
+#[derive(Clone)]
+pub(super) struct PageAnswers {
+    answers: Vec<PageAnswer>,
+    /// The answer after the last one taken.
+    next: usize,
+    /// Which answers an element took.
+    taken: Vec<bool>,
+    /// The store's revision when the boot took the page's answers, which an
+    /// element's answer stands for, as a declared seed's does: a store write
+    /// in the boot's own settlement asks a store reader again.
+    store_revision: u64,
+}
+
+impl PageAnswers {
+    pub(super) fn new(answers: Vec<PageAnswer>, store_revision: u64) -> PageAnswers {
+        let taken = vec![false; answers.len()];
+        PageAnswers {
+            answers,
+            next: 0,
+            taken,
+            store_revision,
+        }
+    }
+
+    /// An answer at `args`. Elements with equal arguments make the same
+    /// request, so each takes an answer at those arguments, in the page's
+    /// order. Look first at the answer after the last one taken: the boot
+    /// makes the elements in the list's order, and the page wrote their
+    /// answers in the order of their rows, which is the list's unless the
+    /// list changed during the render. An element the list moved is found by
+    /// a scan; one the render did not answer costs a scan that finds
+    /// nothing.
+    fn take(&mut self, args: &[Value]) -> Option<&PageAnswer> {
+        let count = self.answers.len();
+        let at = (0..count)
+            .map(|step| (self.next + step) % count)
+            .find(|&at| self.answers[at].args == args)?;
+        self.next = at + 1;
+        self.taken[at] = true;
+        Some(&self.answers[at])
+    }
+
+    /// How many of the answers an element took.
+    pub(super) fn taken(&self) -> usize {
+        self.taken.iter().filter(|taken| **taken).count()
+    }
+}
+
 impl<D: DataSource> Runner<D> {
     /// The resource rows the plan declares; the members follow them.
     pub fn declared_resources(&self) -> &[exact_plan::ResourcesRow] {
@@ -42,6 +103,44 @@ impl<D: DataSource> Runner<D> {
     /// Row `i`'s element, when it is a member.
     pub(super) fn member(&self, i: usize) -> Option<&Member> {
         self.resources.get(i).and_then(|row| row.member.as_ref())
+    }
+
+    /// Member `i`'s state at `args` from the page the runner boots from,
+    /// while its list's answers are held. Make it a store reader when its
+    /// answer read the store, and ask it again as a seeded resource is, when
+    /// the page says so: now when its source can answer (`force`), as the
+    /// launch's own ask, not a refresh (`ask_at_launch`, LLP 1162.000 D1),
+    /// else at `data_ready`.
+    pub(super) fn seed_member(
+        &mut self,
+        i: usize,
+        args: &[Value],
+        force: &mut Vec<usize>,
+    ) -> Option<super::ResourceState> {
+        let family = self.member(i)?.family;
+        let page = self.resources[family].page_answers.as_mut()?;
+        let store_revision = page.store_revision;
+        let answer = page.take(args)?;
+        let (value, again, reads) = (answer.value.clone(), answer.again, answer.reads);
+        self.seed_reads(i, reads);
+        if again && self.data.ready() {
+            self.launch.push(i);
+            force.push(i);
+        } else if again {
+            self.resources[i].stale = true;
+        }
+        Some(super::ResourceState {
+            inspection_generation: 0,
+            args: args.to_vec(),
+            value: Held::new(value),
+            store_revision,
+            placeholder: false,
+            kept_seed: false,
+            answered_for: None,
+            asleep: false,
+            slept: false,
+            origin: 0,
+        })
     }
 
     /// What row `i`'s arguments read as parameters: a member's element.

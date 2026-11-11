@@ -1,7 +1,7 @@
 //! The page around a document (LLP 1048.000 D3, D6, D7): its head, its
 //! checkpoint, and the locations a build renders.
 
-use exact_runner::{DataError, DataSource, Value};
+use exact_runner::{Answer, DataError, DataSource, Store, Value};
 use exact_web::document::{build_locations, checkpoint, digest, read_checkpoint, route_at, Site};
 use exact_web::Host;
 
@@ -125,8 +125,11 @@ fn a_checkpoint_reads_back_as_the_runner_wrote_it() {
         !json.contains('<') && !json.contains('>') && !json.contains('&'),
         "{json}"
     );
-    // No stream is open, so no `open` is written
-    assert!(!json.contains("\"open\""), "{json}");
+    // No stream is open and no answer read the store, so neither field is written
+    assert!(
+        !json.contains("\"open\"") && !json.contains("\"readers\""),
+        "{json}"
+    );
     let read = read_checkpoint(&json).unwrap();
     assert_eq!(read, host.runner().document_checkpoint("/said?q=1"));
     assert_eq!(read.answers[0].3, Value::str("</script><!-- & \u{1F4AC}"));
@@ -141,11 +144,47 @@ fn a_checkpoint_reads_back_as_the_runner_wrote_it() {
     }
 }
 
+/// `viewer()` answers the store's `token`.
+struct Viewer;
+
+impl DataSource for Viewer {
+    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(source.into()))
+    }
+
+    fn answer(&mut self, store: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        Ok(Answer::Now(Value::str(
+            store.get("token").unwrap_or("anonymous"),
+        )))
+    }
+
+    fn grants(&self) -> &str {
+        "secret.keep token\n"
+    }
+}
+
+#[test]
+fn a_checkpoint_lists_the_answers_that_read_the_store() {
+    let plan = contract::compile(
+        "component A\n  resource viewer = viewer() as shape string\n  view\n    text viewer\n",
+    )
+    .unwrap();
+    let host = Host::boot(&plan.encode(), Viewer, Default::default(), "/")
+        .unwrap()
+        .0;
+    let json = checkpoint(host.runner(), "/");
+    assert!(json.ends_with(",\"readers\":[0]}"), "{json}");
+    assert_eq!(
+        read_checkpoint(&json).unwrap(),
+        host.runner().document_checkpoint("/")
+    );
+}
+
 #[test]
 fn checkpoint_values_are_json_that_reads_back_exactly() {
     // Every kind of plan value, as `push_value` spells it: text a page's
     // compression matches against the document's own strings.
-    let text = r#"{"location":"/","time":1.5,"logic":null,"answers":[["a","src",["x",{"n":"NaN"}],{"r":[1,-0,2.25,true,null,{},{"s":"y"},["p","q"],{"n":"-Infinity"}]}]],"pending":["b"],"open":["a"]}"#;
+    let text = r#"{"location":"/","time":1.5,"logic":null,"answers":[["a","src",["x",{"n":"NaN"}],{"r":[1,-0,2.25,true,null,{},{"s":"y"},["p","q"],{"n":"-Infinity"}]}]],"pending":["b"],"open":[0],"readers":[0]}"#;
     let read = read_checkpoint(text).unwrap();
     let (name, source, args, value) = &read.answers[0];
     assert_eq!((name.as_str(), source.as_str()), ("a", "src"));
@@ -167,8 +206,13 @@ fn checkpoint_values_are_json_that_reads_back_exactly() {
     );
     assert_eq!(fields[8], Value::Number(f64::NEG_INFINITY));
     assert_eq!(read.pending, ["b"]);
-    assert_eq!(read.open, ["a"]);
+    assert_eq!((read.open, read.readers), (vec![0], vec![0]));
     assert!(read_checkpoint(&text.replace("{\"s\"", "{\"z\"")).is_err());
+    // Refuse an `open` or `readers` index past the answers
+    for field in ["open", "readers"] {
+        let past = text.replace(&format!("\"{field}\":[0]"), &format!("\"{field}\":[1]"));
+        assert!(read_checkpoint(&past).is_err(), "{past}");
+    }
 }
 
 #[test]
