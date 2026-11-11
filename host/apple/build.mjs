@@ -12,6 +12,7 @@
 //   bun host/apple/build.mjs --device [crate] --unsigned                    iOS, an ad-hoc .app, no installation
 //   bun host/apple/build.mjs --device [crate] --archive <out.ipa>            iOS, an .ipa to distribute
 //   bun host/apple/build.mjs --device [crate] --archive <out.ipa> --unsigned an .ipa a service re-signs
+//   bun host/apple/build.mjs --device [crate] --archive <out.ipa> --unsigned --development  the same, of the development build
 //   bun host/apple/build.mjs [crate] --bundle --distribution                 macOS, the bundle `exact release` signs
 // Add --url <http(s) app URL> to connect any of these clients to the same
 // address as the browser (LLP 1030.000 §7): with --run it is the launch
@@ -597,7 +598,10 @@ async function main(args, lockHeld = false) {
   const ipa = args.includes('--archive') ? resolve(process.cwd(), args[args.indexOf('--archive') + 1] ?? '') : null;
   const unsigned = args.includes('--unsigned');
   // What leaves this machine: an .ipa, or the Mac bundle `exact release` signs and notarises.
-  const distribution = !!ipa || args.includes('--distribution');
+  // `--development` packages the development build `--run` installs (host-dev, development trust): an
+  // agent's own iteration build that a service re-signs, not an artifact to distribute.
+  const developmentArchive = args.includes('--development');
+  const distribution = (!!ipa && !developmentArchive) || args.includes('--distribution');
   // What is stamped `release` or `archive` (buildinfo.mjs) bakes production trust, as --release does, so the stamp and
   // the trust every production policy reads (compat.json's `embedded.trust`) cannot disagree.
   if (distribution && process.env.EXACT_UPDATE_TRUST !== 'production') {
@@ -1340,7 +1344,7 @@ async function main(args, lockHeld = false) {
     mkdirSync(dirname(ipa), { recursive: true });
     rmSync(ipa, { force: true });
     run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', resolve(payload, 'Payload'), ipa]);
-    console.log(`host/apple: ${ipa} (${prof ? `signed by ${prof.name}` : 'ad-hoc signed, for re-signing'}, ${timing()}${svgFilterBuilt ? '' : '; no SVG filter kernels (no Metal toolchain)'}); symbols: ${stripped.dsym} (${(stripped.saved / 1048576).toFixed(1)} MB off the executable)${frameworkSymbols.count ? `, ${frameworkSymbols.dir} (${frameworkSymbols.count} frameworks, ${(frameworkSymbols.saved / 1048576).toFixed(1)} MB off them)` : ''}`);
+    console.log(`host/apple: ${ipa} (${prof ? `signed by ${prof.name}` : 'ad-hoc signed, for re-signing'}, ${timing()}${svgFilterBuilt ? '' : '; no SVG filter kernels (no Metal toolchain)'}); symbols: ${stripped ? `${stripped.dsym} (${(stripped.saved / 1048576).toFixed(1)} MB off the executable)` : 'kept (development)'}${frameworkSymbols.count ? `, ${frameworkSymbols.dir} (${frameworkSymbols.count} frameworks, ${(frameworkSymbols.saved / 1048576).toFixed(1)} MB off them)` : ''}`);
     if (args.includes('--json')) reportBuilt({ path: ipa, ...built() }); return;
   }
   if (unsigned || args.includes('--no-install')) { if (args.includes('--run')) throw new Error('--no-install takes no --run'); console.log(`host/apple: ${paths.bundle} (${timing()}); built and signed, installed on nothing (${unsigned ? '--unsigned' : '--no-install'})`); if (args.includes('--json')) reportBuilt({ path: paths.bundle, ...built() }); return; }
