@@ -682,6 +682,17 @@ fn kind_words(kind: tamber::Kind) -> &'static str {
     }
 }
 
+/// Whether `v` names an `--exact-*` property anywhere but as a content
+/// owner's value read alone by `var()` (LLP 1123 D9).
+pub(crate) fn host_private(v: &str) -> bool {
+    let lower = v.to_ascii_lowercase();
+    lower.match_indices("--exact-").any(|(at, _)| {
+        let read = lower[..at].trim_end().ends_with("var(");
+        let name = lower[at..].split([')', ',', ' ']).next().unwrap_or("");
+        !(read && exact_kernel::OwnerVar::from_name(name).is_some())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
