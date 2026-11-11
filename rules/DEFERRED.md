@@ -310,7 +310,7 @@ server-driven UI; no Node on the render path.
 `app.json`'s `host.web.head` lists `script`, `link` and `meta` tags the web
 build writes into every document's `<head>` (LLP 1048.000 D3). jameside.com's
 port is the consumer: Google Analytics and its site-wide JSON-LD. Take: none
-offered; it needs Charlie's waiver or a take James names. Still out: other tags,
+offered; waived by Charlie. Still out: other tags,
 per-page tags (the Contract `head` element's), a field for structured data, and
 admitting these scripts under the render server's CSP.
 
