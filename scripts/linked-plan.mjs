@@ -149,7 +149,7 @@ function fresh(record, dir, env, tool) {
  * refreshes the compiled baker through Cargo before it reads new inputs.
  * The caller holds the app's build claim (host/apple/build.mjs `appleBuildLock`), the one
  * writer of the directory. */
-export function bakeOutside(app, platform, target, env, prepareRust) {
+export function bakeOutside(app, platform, target, env, prepareRust, { toolBuilt = false } = {}) {
   const dir = linkedBakeDir(env, platform, target), at = resolve(dir, 'inputs.json');
   let executable = bakeTool.built, args = [app.dir, '--cargo', platform, target, dir], cwd = app.dir, runEnv = cargoEnvironment(env);
   const rust = existsSync(resolve(app.dir, 'data/Cargo.toml'));
@@ -163,7 +163,8 @@ export function bakeOutside(app, platform, target, env, prepareRust) {
     if (!existsSync(baker.executable)) return dir;
     executable = baker.executable; args = []; cwd = baker.cwd;
     runEnv = { ...runEnv, ...baker.env, OUT_DIR: dir, EXACT_BAKED: dir, EXACT_RUST_BAKE: '1' };
-  } else {
+  } else if (!(toolBuilt && existsSync(bakeTool.built))) {
+    // `toolBuilt`: the caller knows this checkout's tool is built (a read-only compiled SDK), so Cargo's check is skipped.
     const built = spawnSync(bakeTool.command, bakeTool.args, { ...bakeTool.options(env), stdio: ['ignore', 'inherit', 'inherit'] });
     if (built.status !== 0) throw new Error(`the bake tool did not build (${bakeTool.command} ${bakeTool.args.join(' ')})`);
   }

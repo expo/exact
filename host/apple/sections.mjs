@@ -66,13 +66,20 @@ export function textSections(bytes) {
 
 /** Each linked section's current bytes. */
 export function readLinkedSections(executable) {
-  const bytes = readFileSync(executable), sections = textSections(bytes), out = {};
-  for (const [kind, name] of Object.entries(LINKED_SECTIONS)) {
-    const s = sections.find(item => item.name === name);
-    if (!s) throw new Error(`${executable} has no __TEXT,${name}`);
-    out[kind] = Buffer.from(bytes.subarray(s.offset, s.offset + s.size));
-  }
-  return out;
+  // The load commands, then each section's bytes: never the whole (tens of megabytes) executable.
+  const fd = openSync(executable, 'r');
+  try {
+    const head = Buffer.alloc(32); readSync(fd, head, 0, 32, 0);
+    if (head.readUInt32LE(0) !== MH_MAGIC_64) throw new Error(`${executable} is not a thin 64-bit Mach-O`);
+    const commands = Buffer.alloc(32 + head.readUInt32LE(20)); readSync(fd, commands, 0, commands.length, 0);
+    const sections = textSections(commands), out = {};
+    for (const [kind, name] of Object.entries(LINKED_SECTIONS)) {
+      const s = sections.find(item => item.name === name);
+      if (!s) throw new Error(`${executable} has no __TEXT,${name}`);
+      out[kind] = Buffer.alloc(s.size); readSync(fd, out[kind], 0, s.size, s.offset);
+    }
+    return out;
+  } finally { closeSync(fd); }
 }
 
 /** Write `contents` ({plan, compat, bytecode}: Buffers) into the executable's linked sections, in place: each section's

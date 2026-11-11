@@ -10,7 +10,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
 import { verifyBakeFiles } from '../../scripts/app.mjs';
 import { webRefusal, browserEntitlements } from './documents.mjs';
 import { listAssets } from '../web/serve.mjs';
-import { appIcon, buildInfo, iosAssets, appleAssets, copyNativeResources, IOS_RESOURCE_ROOT, iosBundleGrants, iosExecutableRefusal, shareIosResources, signingOrder, helperEntitlements, wrapFramework, assertArchiveFrameworks } from './assets.mjs';
+import { appIcon, buildInfo, iosAssets, appleAssets, appleAssetsKey, copyNativeResources, IOS_RESOURCE_ROOT, iosBundleGrants, iosExecutableRefusal, shareIosResources, signingOrder, helperEntitlements, wrapFramework, assertArchiveFrameworks } from './assets.mjs';
 import { allows, profile, identity, embeddedProfile } from './devices.mjs';
 import { grantEntitlements } from './presence.mjs';
 import { placeLibrary } from '../../scripts/package-libraries.mjs';
@@ -185,6 +185,9 @@ export function assembleIOS({intents, shared, library, serviceDylibs, triple, ap
   copyNativeResources(app, resolve(bundle, IOS_RESOURCE_ROOT), buildReceipt.binary.metadata.nativeResources ?? [], 'ios');
   verifyBakeFiles(bakedCompat, bakedPlan, listAssets(bundle, true, ['typescript']));
   const assetKeys = iosAssets(app, bundle, device, { tv, catalog: production, requireIcon: !!ipa && distribution, kept: { dir: resolve(linkRoot, 'assets'), stamp: swiftc }, expected: buildReceipt.binary.metadata.appleAssetCatalogs ?? [], ...(tv ? {} : { expectedLaunchImage: buildReceipt.binary.metadata.launchImage ?? null }), launch: buildReceipt.graph.launchBackground });
+  // A development archive records what its icons were made from and the keys they gave Info.plist: a later repack
+  // whose icon inputs are the same takes the base's icons instead of drawing them again (host/apple/repack.mjs).
+  if (ipa && args.includes('--development') && !tv) buildReceipt.assets = { key: appleAssetsKey(app, { platform: 'ios', device, catalog: production, launch: buildReceipt.graph.launchBackground, stamp: swiftc }), keys: assetKeys, stamp: swiftc };
   const stamp = { ...rosterKeys, ...(production ? distributionKeys(sdkName) : {}), ...buildInfo(app, { root, archive: !!ipa, production: production || distribution, ...stampSdk }) };
   writeFileSync(resolve(bundle, 'Info.plist'), infoPlist(app, device, { development, distributed: distribution, reach: appleReach, icon: assetKeys, distribution: stamp, tv }));
   if (shared) run('plutil', ['-insert', 'ExactWidgetGeneration', '-string', createHash('sha256').update(JSON.stringify([bakedCompat.id, buildReceipt.graph.artifacts])).digest('hex'), resolve(bundle, 'Info.plist')]);

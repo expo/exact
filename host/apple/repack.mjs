@@ -16,17 +16,17 @@
 import { spawnSync } from './toolchain.mjs';
 import { appleCargo } from '../../scripts/cargo-check.mjs';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appleArtifacts, appClip, COMPATIBLE_SDK, deploymentTargets, designCompatible, distributionKeys, entitlements, infoPlist, modulePlist, receipt, shippedReceipt, writeUsageStrings, copyAppleStaticTrees, assertAppleIdentity } from './build.mjs';
+import { appleArtifacts, appClip, COMPATIBLE_SDK, deploymentTargets, designCompatible, distributionKeys, entitlements, infoPlist, modulePlist, receipt, shippedReceipt, writeUsageStrings, copyAppleStaticTrees } from './build.mjs';
 import { bakeOutput, bakeWatchEnv, developmentBuildEnv, executableName, gpuModules, HOST_DEV, resolveApp } from '../../scripts/app.mjs';
 import { HOST_MACOS, withHostDeployment } from '../../scripts/filesystem.mjs';
 import { prepareRustBundle, nativeSource } from '../../scripts/rust.mjs';
 import { bakeOutside } from '../../scripts/linked-plan.mjs';
 import { hasEntries } from './widgets.mjs';
-import { iosAssets } from './assets.mjs';
+import { appleAssetsKey, iosAssets } from './assets.mjs';
 import { buildInfo } from './buildinfo.mjs';
 import { fitLinkedSections, readLinkedSections } from './sections.mjs';
 import { nativeExtras } from './native-extras.mjs';
@@ -58,6 +58,7 @@ export async function repack(args) {
   if (!baseIpa || !ipa || !appArg) throw new Error('usage: repack.mjs --base <base.ipa> --archive <out.ipa> [--extensions kinds] <app>');
   const started = Date.now(), times = {}, mark = (name) => { times[name] = (Date.now() - started) / 1000; };
   const app = resolveApp(appArg);
+  mark('app');
   // What only a full build makes.
   if (app.manifest.game) refuse('a game builds in full');
   if (hasEntries(app)) refuse('an app with widgets or Live Activities links its plan into ExactCore');
@@ -76,7 +77,12 @@ export async function repack(args) {
   if (prepareRustBundle(app, 'ios', TARGET, env)) refuse('an app with interpreted Rust bundles builds in full');
   const native = nativeSource(app, env); if (native) env.EXACT_NATIVE_SOURCE = native; else delete env.EXACT_NATIVE_SOURCE;
   Object.assign(env, bakeWatchEnv(app));
-  const baked = bakeOutside(app, 'ios', TARGET, env);
+  mark('setup');
+  // The base IPA unzips while the bake runs (a process of its own); both are needed only after it.
+  const work = mkdtempSync(resolve(tmpdir(), 'exact-repack-'));
+  const unzipping = Bun.spawn(['unzip', '-q', resolve(baseIpa), '-d', work], { stdout: 'ignore', stderr: 'pipe' });
+  // The SDK here is a compiled, read-only one the native fingerprint pinned: its bake tool is built.
+  const baked = bakeOutside(app, 'ios', TARGET, env, undefined, { toolBuilt: true });
   const plan = readFileSync(resolve(baked, 'app.plan')), compatText = readFileSync(resolve(baked, 'compat.json')), compat = JSON.parse(compatText);
   const bytecode = existsSync(resolve(baked, 'app.hbc')) ? readFileSync(resolve(baked, 'app.hbc')) : refuse('the bake made no module bytecode');
   if (compat.target !== TARGET || compat.inputs?.platform !== 'ios' || compat.inputs?.app !== app.id) throw new Error('the bake names another target, platform or app');
@@ -84,9 +90,9 @@ export async function repack(args) {
   mark('bake');
 
   // The base bundle.
-  const work = mkdtempSync(resolve(tmpdir(), 'exact-repack-'));
   try {
-    tool('unzip', ['-q', resolve(baseIpa), '-d', work]);
+    if (await unzipping.exited !== 0) throw new Error(`unzip of the base IPA failed: ${(await new Response(unzipping.stderr).text()).trim().slice(-500)}`);
+    mark('unzip');
     const apps = readdirSync(resolve(work, 'Payload')).filter(name => name.endsWith('.app'));
     if (apps.length !== 1) refuse('the base IPA does not hold exactly one app');
     const paths = appleArtifacts(app, { destination: 'ios', composition: compat.inputs.store?.L === '0' ? 'embedded' : 'updating', trust: 'development' });
@@ -103,44 +109,76 @@ export async function repack(args) {
     // The Swift module's generated inputs, which compat.json does not carry (a package `use`, data words, the theme).
     const baseReceipt = JSON.parse(readFileSync(resolve(base, 'receipt.json'), 'utf8'));
     if (!baseReceipt.build?.nativeExtras) refuse('the base build recorded no Swift module digest (built before repacks)');
-    if (baseReceipt.build.nativeExtras !== nativeExtras(app, 'ios')) refuse('the app\'s Swift module inputs changed (a package use or import, data words, or the theme of an app with Swift)');
+    const extras = nativeExtras(app, 'ios'); mark('extras');
+    if (baseReceipt.build.nativeExtras !== extras) refuse('the app\'s Swift module inputs changed (a package use or import, data words, or the theme of an app with Swift)');
     for (const entry of readdirSync(base)) if (entry !== executable && !NATIVE_ENTRIES.has(entry) && !REBUILT(entry)) refuse(`the base bundle holds ${entry}, which repack does not rebuild`);
 
     // A new bundle: the base's native entries, then what assembleIOS writes for an unsigned development archive.
     const bundle = resolve(work, 'new', name);
     mkdirSync(bundle, { recursive: true });
     for (const entry of [executable, ...NATIVE_ENTRIES]) if (existsSync(resolve(base, entry))) cpSync(resolve(base, entry), resolve(bundle, entry), { recursive: true, verbatimSymlinks: true });
+    mark('copy');
     try { fitLinkedSections(resolve(bundle, executable), { plan, compat: compatText, bytecode }, { renewUuid: true }); }
     catch (error) { if (error.code === 'EXACT_SECTION_ROOM') refuse(`${error.message} (a base built before sections were reserved, or a plan that outgrew them)`); throw error; }
-    assertAppleIdentity(app, resolve(bundle, executable), compat.id);
+    // The executable's identity is the compat.json just fitted (assertAppleIdentity scans the whole file for it).
+    const fitted = JSON.parse(readLinkedSections(resolve(bundle, executable)).compat.toString('utf8'));
+    if (fitted.id !== compat.id || fitted.inputs?.app !== app.id) throw new Error('the fitted executable does not name this bake');
     mark('sections');
     const appleReach = modulePlist(app, compat.reach, 'ios');
+    mark('reach');
     // Keys the native build computed and repack cannot: the module roster's first-frame modules (none on Linux).
-    const baseInfo = JSON.parse(tool('plutil', ['-convert', 'json', '-o', '-', resolve(base, 'Info.plist')]).stdout);
+    // (Converting the plist is a process of its own: only when the key is there at all.)
+    const baseInfo = readFileSync(resolve(base, 'Info.plist')).includes('ExactFirstFrameModules') ? JSON.parse(tool('plutil', ['-convert', 'json', '-o', '-', resolve(base, 'Info.plist')]).stdout) : {};
     const rosterKeys = baseInfo.ExactFirstFrameModules ? { ExactFirstFrameModules: baseInfo.ExactFirstFrameModules } : {};
     writeFileSync(resolve(bundle, 'Info.plist'), infoPlist(app, true, { development: null, distributed: false, reach: appleReach, tv: false }));
+    mark('plist1');
     copyAppleStaticTrees(app.dir, bundle, [['assets', 'assets'], ['deck', 'deck']]);
+    mark('trees');
     const linkRoot = paths.scratch; mkdirSync(linkRoot, { recursive: true });
-    const swiftc = tool('xcrun', ['--sdk', SDK_NAME, 'swiftc', '--version']).stdout ?? '';
-    const assetKeys = iosAssets(app, bundle, true, { tv: false, catalog: false, kept: { dir: resolve(linkRoot, 'assets'), stamp: swiftc } });
+    // The compiler the base's icons were keyed by: the same one, since the native fingerprint pins the toolchain.
+    const swiftc = baseReceipt.build.assets?.stamp ?? tool('xcrun', ['--sdk', SDK_NAME, 'swiftc', '--version']).stdout ?? '';
+    // Icons drawn from the same inputs as the base's are the base's (development archives record what theirs were made
+    // from, bundle.mjs): taken from the base bundle with the Info.plist keys they gave, else drawn again.
+    mark('swiftc');
+    const assetsKey = appleAssetsKey(app, { platform: 'ios', device: true, catalog: false, launch: graph.launchBackground, stamp: swiftc });
+    let assetKeys;
+    if (baseReceipt.build.assets?.key === assetsKey && baseReceipt.build.assets.keys) {
+      for (const entry of readdirSync(base)) if (entry === 'Assets.car' || /^AppIcon.*\.png$/.test(entry)) cpSync(resolve(base, entry), resolve(bundle, entry));
+      assetKeys = baseReceipt.build.assets.keys;
+    } else assetKeys = iosAssets(app, bundle, true, { tv: false, catalog: false, kept: { dir: resolve(linkRoot, 'assets'), stamp: swiftc }, launch: graph.launchBackground });
     mark('assets');
     const stampSdk = { sdk: SDK_NAME, sdkVersion: designCompatible(app, 'ios') ? COMPATIBLE_SDK.ios : null };
     const stamp = { ...rosterKeys, ...distributionKeys(SDK_NAME), ...buildInfo(app, { root, archive: true, production: false, ...stampSdk }) };
     writeFileSync(resolve(bundle, 'Info.plist'), infoPlist(app, true, { development: null, distributed: false, reach: appleReach, icon: assetKeys, distribution: stamp, tv: false }));
     writeUsageStrings(appleReach, bundle);
+    mark('plist');
     const ent = resolve(work, 'entitlements.plist');
     writeFileSync(ent, entitlements({ ...app, id: app.id, widgetTV: false, widgetHost: false }, undefined, false, appleReach, { simulator: false, prefix: undefined, allows: [], distributed: false }));
     // The base receipt's native build (its Cargo products and binary inputs), with this bake's compat and graph.
-    const build = { ...baseReceipt.build, compat, graph };
+    const build = { ...baseReceipt.build, compat, graph, assets: { key: assetsKey, keys: assetKeys, stamp: swiftc } };
+    mark('entitlements');
     writeFileSync(resolve(bundle, 'receipt.json'), shippedReceipt(receipt(app, { compatibilityId: compat.id, build, composition: baseReceipt.composition, platform: 'ios', target: TARGET, sdk, identity: '-', profile: null, entitlements: readFileSync(ent, 'utf8'), gpu: null, development: null, repackedFrom: baseCompat.id })));
+    mark('receipt');
     tool('codesign', ['--force', '--sign', '-', '--timestamp=none', '--entitlements', ent, bundle], { stdio: 'ignore' });
     mark('sign');
     const payload = resolve(work, 'out', 'Payload');
     mkdirSync(payload, { recursive: true }); renameSync(bundle, resolve(payload, name));
     mkdirSync(dirname(ipa), { recursive: true }); rmSync(ipa, { force: true });
-    tool('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', payload, ipa]);
+    // The base IPA, patched: only the entries whose bytes changed are removed and compressed again (the frameworks,
+    // most of the archive, keep the base's compressed bytes).
+    const before = files(base), now = files(resolve(payload, name)), prefix = `Payload/${name}/`;
+    mark('compare');
+    const changed = [...now.keys()].filter(rel => !before.has(rel) || !before.get(rel).equals(now.get(rel)));
+    const removed = [...before.keys()].filter(rel => !now.has(rel));
+    cpSync(resolve(baseIpa), ipa);
+    mark('copy-ipa');
+    const drop = [...changed.filter(rel => before.has(rel)), ...removed].map(rel => prefix + rel);
+    if (drop.length) tool('zip', ['-q', '-d', ipa, '-@'], { input: drop.join('\n') + '\n' });
+    mark('zip-delete');
+    if (process.env.EXACT_REPACK_DEBUG) console.log(`changed: ${changed.join(' ')}`);
+    if (changed.length) tool('zip', ['-q', '-1', '-X', '-y', ipa, '-@'], { cwd: resolve(work, 'out'), input: changed.map(rel => prefix + rel).join('\n') + '\n' });
     mark('archive');
-    console.log(`host/apple: ${ipa} (repacked from the base's native build: ${Object.entries(times).map(([step, s]) => `${step} ${s.toFixed(1)} s`).join(', ')})`);
+    console.log(`host/apple: ${ipa} (repacked from the base's native build: ${Object.entries(times).map(([step, s], i, all) => `${step} ${(s - (all[i - 1]?.[1] ?? 0)).toFixed(2)}`).join(', ')})`);
     return { times, compat: compat.id };
   } finally { rmSync(work, { recursive: true, force: true }); }
 }
@@ -150,4 +188,15 @@ const canonical = (value) => Array.isArray(value) ? `[${value.map(canonical).joi
 if (import.meta.main) {
   try { await repack(process.argv.slice(2)); }
   catch (error) { console.error(error instanceof RepackRefused ? error.message : (error.stack ?? String(error))); process.exit(error instanceof RepackRefused ? 3 : 1); }
+}
+
+/** Every file under `dir` (relative path -> bytes; a link as its target's text), for the archive patch. */
+function files(dir, at = dir, out = new Map()) {
+  for (const entry of readdirSync(at, { withFileTypes: true })) {
+    const path = resolve(at, entry.name), rel = path.slice(dir.length + 1);
+    if (entry.isSymbolicLink()) out.set(rel, Buffer.from(`link:${readlinkSync(path)}`));
+    else if (entry.isDirectory()) files(dir, path, out);
+    else out.set(rel, readFileSync(path));
+  }
+  return out;
 }
