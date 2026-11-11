@@ -667,6 +667,16 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   "import { markRoutes, markDocument } from './document.js';",
   ...(ts ? ["import { install as ts } from './ts-data.js';", "import { answering, unfinishedIO } from './ts-fetch.js'; import { heldReply, looseFetch } from './held.js'; Object.assign(answering, { loose: looseFetch, heldReply });"] : []),
   ...(rust ? ["import { install } from './rust-data.js';"] : []),
+  // `exactTime` is a fact of the reader's device, which a render has not got: it answers as the runner does before a
+  // host says the date (runner/src/time.rs, as the Rust renderer does), the unknown date in UTC, never the app's
+  // source (LLP 1039 D1). The runtime answers the reader's when it adopts the page.
+  ...(time ? [
+    "import { resolvedLocale } from './rt.js';",
+    "data.reserved = { exactTime: () => {",
+    "  const f = { epochAtZero: 0, utcOffset: 0, locale: 'en-US', timeZone: 'UTC', seed: 0, formatLocale: 'en-US', resolvedLocale: resolvedLocale() };",
+    "  return Object.keys(sourceTypes.exactTime[1]).map(k => f[k]);",
+    "} };",
+  ] : []),
   // Two steps, so a server can send the page's head between them
   // (render.mjs): the app starts and names its route, then settles.
   'let t0, route, planResources;',

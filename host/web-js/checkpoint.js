@@ -21,7 +21,9 @@ export function answers(resources, types, sourceTypes) {
   resources.forEach((g, i) => {
     // A declared list keeps its settled aggregate with no arguments; its members have no checkpoint rows.
     const r = g.r, args = r.each ? (g.p() ? undefined : []) : r.settled;
-    if (args === undefined) return;
+    // A runner's own source (the date, the viewport) is the reader's device: the runtime asks it again, as
+    // `Runner::document_checkpoint` leaves it out.
+    if (args === undefined || r.owned) return;
     const params = sourceTypes[r.source]?.[0] ?? [];
     out.push(`[${JSON.stringify(r.name)},${JSON.stringify(r.source)},[${args.map((a, k) => encode(a, params[k] ?? 's')).join(',')}],${encode(r.each ? g() : r.value, types[i])}]`);
   });
