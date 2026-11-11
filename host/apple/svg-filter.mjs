@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from './toolchain.mjs';
-import { metalToolchainInstructions } from './metal.mjs';
+import { metalRequired, metalToolchainInstructions } from './metal.mjs';
 import { appleCargo } from '../../scripts/cargo-check.mjs';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const read = (cmd, args) => spawnSync(...appleCargo(cmd, args, { cwd: root, encoding: 'utf8' }));
@@ -36,7 +36,7 @@ export function metalVersion(sdkName) {
  *  without it gets `null`, and its filter pictures draw with Core Image. */
 export function svgFilterLibrary(sdkName, minimum, out, required = false) {
   const version = metalVersion(sdkName), install = metalToolchainInstructions(), missing = version.status !== 0;
-  if (missing && required) throw new Error(`host/apple: this build requires the Metal toolchain for its SVG filter kernels. ${install}`);
+  if (missing && (required || metalRequired())) throw new Error(`host/apple: this build requires the Metal toolchain for its SVG filter kernels${required ? '' : ' (EXACT_APPLE_METAL_REQUIRED=1)'}. ${install}`);
   if (missing) return console.warn(`host/apple: no Metal toolchain, so no ${svgFilterLibraryName}: SVG filter pictures draw with Core Image. ${install}`), null;
   const flag = { iphoneos: `-mios-version-min=${minimum}`, iphonesimulator: `-mios-simulator-version-min=${minimum}`, appletvos: `-mtvos-version-min=${minimum}`, appletvsimulator: `-mtvos-simulator-version-min=${minimum}`, macosx: `-mmacosx-version-min=${minimum}` }[sdkName];
   // Kept by what it is made of (the kernel source, the selected SDK and its version, the deployment flag and the

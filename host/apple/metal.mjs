@@ -39,3 +39,7 @@ export function windowsMetalCommand(sdk, tool, args, options = {}, find = false)
   return [wine, [executable, ...paths], { ...options, env: { ...env, WINEDEBUG: env.WINEDEBUG ?? '-all',
     WINEPREFIX: env.WINEPREFIX ?? resolve(env.XDG_CACHE_HOME ?? resolve(env.HOME ?? homedir(), '.cache'), 'exact/windows-metal') } }];
 }
+
+/** `EXACT_APPLE_METAL_REQUIRED=1`: a build that cannot run the Metal compiler fails rather than ship SVG filters on
+ *  Core Image and canvases on Core Graphics (a build service, whose compiler may be missing or flaky, sets it). */
+export const metalRequired = () => process.env.EXACT_APPLE_METAL_REQUIRED === '1';

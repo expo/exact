@@ -42,7 +42,7 @@ import { platformWidgetEntries, activityEntries, hasEntries, widgetGroup, prepar
 import { assembleMac, assembleIOS, buildIntents, shortcutKeys } from './bundle.mjs';
 import { extensionKinds, withoutExtensions } from './extensions.mjs';
 import { spawn, spawnSync } from './toolchain.mjs';
-import { metalToolchainInstructions } from './metal.mjs';
+import { metalRequired, metalToolchainInstructions } from './metal.mjs';
 import { metalVersion, svgFilterLibrary, svgFilterLibraryName } from './svg-filter.mjs';
 export { metalVersion, svgFilterLibrary, svgFilterLibraryName };
 import { distributionToolchain } from './sdk.mjs';
@@ -818,6 +818,7 @@ async function main(args, lockHeld = false) {
   mkdirSync(moduleTarget, { recursive: true });
   startSweep(moduleTarget);
   const metalTools = metalVersion('macosx'), metal = metalTools.status === 0;
+  if (!metal && metalRequired()) throw new Error(`host/apple: no Metal toolchain, and EXACT_APPLE_METAL_REQUIRED=1: the Canvas 2D GPU module needs it. ${metalToolchainInstructions()}`);
   if (!metal) console.warn(`host/apple: no Metal toolchain, so no Canvas 2D GPU module: canvases draw with Core Graphics. ${metalToolchainInstructions()}`);
   // A development build takes a module some checkout of this machine has
   // already compiled from these bytes, and keeps each one it compiles itself
