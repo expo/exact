@@ -223,6 +223,51 @@ fn a_read_sees_the_box_through_every_transform_above_it() {
 /// due after a layout, each node once per size, from a depth on (Resize
 /// Observer 1 §3.4.1's rounds), and hands the action the content box.
 #[test]
+fn a_resize_handler_that_removes_a_later_node_of_its_round_delivers_that_node_nothing() {
+    let plan = contract::compile(
+        r#"component App
+  state gone = false
+  state heard = 0
+  action fold(w: number, h: number)
+    gone = true
+  action note(w: number, h: number)
+    heard = heard + 1
+  view
+    column
+      column id="first" height=10 resize=fold
+      if !gone
+        column id="second" height=20 resize=note
+"#,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    lay_out(&mut r);
+    let due = r.resize_due(0);
+    assert_eq!(due.len(), 2, "both, in one round: {due:?}");
+    let mut delivered = Vec::new();
+    for (v, rect, _) in due {
+        if r.resize_delivered(v, rect) {
+            r.dispatch(v, exact_runner::Event::Resize(rect)).unwrap();
+            delivered.push(v);
+        }
+    }
+    assert_eq!(delivered.len(), 1, "the first's handler removed the second");
+    assert_eq!(r.slot("gone"), Some(&Value::Bool(true)));
+    assert_eq!(
+        r.slot("heard"),
+        Some(&Value::Number(0.0)),
+        "the removed node heard nothing"
+    );
+}
+
+#[test]
 fn resize_given_an_action_is_the_element_resize_event_and_a_string_is_css() {
     use exact_plan::EventKind;
     let plan = contract::compile(

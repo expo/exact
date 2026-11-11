@@ -56,7 +56,9 @@ impl<D: DataSource> Host<D> {
             depth = shallowest + 1;
             let mut receipts = Vec::new();
             for (view, rect, _) in due {
-                self.runner.resize_delivered(view, rect);
+                if !self.runner.resize_delivered(view, rect) {
+                    continue;
+                }
                 match self.runner.dispatch(view, Event::Resize(rect)) {
                     Ok(receipt) => receipts.push(Timed {
                         at_ms: self.now_ms,
