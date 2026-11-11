@@ -33,7 +33,7 @@ import { BINARYEN } from '../host/web/stages.mjs';
 import { SHELL_SOURCES } from '../host/web/look.mjs';
 import { createHash } from 'node:crypto';
 import { nativeSource, prepareRustBundle } from './rust.mjs';
-import { bakeOutside, linkable, recordRustBake } from './linked-plan.mjs';
+import { bakeOutside, compiledBakeDir, linkable, recordRustBake } from './linked-plan.mjs';
 import { throwContractErrors } from './contract-diagnosis.mjs';
 import { filesystem, installedModules, removePrivateTree, withHostDeployment } from './filesystem.mjs';
 import { startSweep } from './sweep.mjs';
@@ -1268,7 +1268,12 @@ export function buildBake(app, platform, target, options = {}) {
       });
     } else delete env.EXACT_BAKED;
     const recordInputs = pkg.id === graph.root.id ? cargoBakeInputs(pkg,target,profile,env) : () => {};
-    const result=buildCommand('cargo',args,app,env,'inherit');
+    // Cargo reads a TypeScript app's linked bake from a content-addressed copy of the files it compiles, so apps whose
+    // generated Rust is the same share one compiled archive (linked-plan.mjs compiledBakeDir). A Rust data crate's
+    // bake registers its build script in the bake directory itself, so it keeps that one.
+    const shared = archive && env.EXACT_BAKED && !existsSync(resolve(app.dir,'data/Cargo.toml')) && env.CARGO_TARGET_DIR
+      ? compiledBakeDir(env.EXACT_BAKED, resolve(env.CARGO_TARGET_DIR,'bake-compiled')) : null;
+    const result=buildCommand('cargo',args,app,shared?{...env,EXACT_BAKED:shared}:env,'inherit');
     const output=result.stdout.split('\n').filter(Boolean).map((line)=>JSON.parse(line));messages.push(...output);roots.push({package:pkg.id,name:unit.name});
     recordInputs(output);
     if (archive && env.EXACT_BAKED) recordRustBake(env);

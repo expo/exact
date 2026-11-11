@@ -66,7 +66,7 @@ impl std::error::Error for BakeError {}
 /// mixed entries below do.
 pub fn build(app: &Path, platform: &str) -> Result<(), BakeError> {
     println!("cargo:rerun-if-env-changed=EXACT_BAKED");
-    library::link(app, platform).map_err(BakeError)?;
+    library::link(app, platform, std::env::var_os("EXACT_BAKED").is_some()).map_err(BakeError)?;
     match std::env::var_os("EXACT_BAKED") {
         Some(baked) => std::env::var_os("OUT_DIR")
             .ok_or_else(|| "build requires OUT_DIR".to_string())
@@ -99,7 +99,7 @@ pub const APP_BYTECODE: &[u8] = {
 /// never invoke or activate the Rust implementation; first-frame values bake
 /// through TypeScript alone.
 pub fn build_mixed(app: &Path, platform: &str, rust: &dyn DataSource) -> Result<(), BakeError> {
-    library::link(app, platform).map_err(BakeError)?;
+    library::link(app, platform, false).map_err(BakeError)?;
     build_sources(app, platform, Some(rust), None, false).map_err(BakeError)
 }
 
@@ -115,7 +115,7 @@ pub fn build_mixed_with(
     rust_sources: &[&str],
     compose: impl Fn(Module) -> Box<dyn DataSource>,
 ) -> Result<(), BakeError> {
-    library::link(app, platform).map_err(BakeError)?;
+    library::link(app, platform, false).map_err(BakeError)?;
     let composer = Composer {
         rust_sources: rust_sources.iter().map(|s| s.to_string()).collect(),
         compose: Box::new(compose),
@@ -147,6 +147,30 @@ fn mixed_grants<'a>(
     .transpose()
 }
 
+/// compat.json with the module's identity beside its id (`"module"`: the
+/// app, its grants and its Canvas 2D roster), outside the inputs the id
+/// digests: what a linked archive reads where it reads the plan
+/// (`exact_apple::baked::identity`), so its Rust need not name them. The
+/// link carries compat.json in the signed executable, as it does the plan.
+fn with_module_identity(compat: &str, meta: &serde_json::Value) -> Result<String, String> {
+    let surfaces: Vec<serde_json::Value> = meta["surfaces"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(name, arity)| serde_json::json!([name, arity.as_u64().unwrap_or(0)]))
+        .collect();
+    let identity = serde_json::json!({
+        "app": meta["appId"].as_str().ok_or("missing appId")?,
+        "grants": meta["grants"].as_str().ok_or("missing grants")?,
+        "canvasSurfaces": surfaces,
+    });
+    let text = compat.trim_end();
+    let body = text
+        .strip_suffix('}')
+        .ok_or("compat.json is not an object")?;
+    Ok(format!("{body},\"module\":{identity}}}{}", &compat[text.len()..]))
+}
+
 /// `module.rs`'s first constants: the app, its grants and, but in a linked
 /// bake, the module's hash (`REVISION`, which the web's entry passes on); on
 /// a native platform the bytecode, embedded, or in a linked bake the
@@ -160,11 +184,16 @@ fn module_constants(
     linked: bool,
     native: Option<&contract::native::NativeSlot>,
 ) -> Result<String, String> {
-    let mut metadata = format!(
-        "pub const APP: &str = {:?};\npub const GRANTS: &str = {:?};\n",
-        meta["appId"].as_str().ok_or("missing appId")?,
-        meta["grants"].as_str().ok_or("missing grants")?
-    );
+    let app = meta["appId"].as_str().ok_or("missing appId")?;
+    let grants = meta["grants"].as_str().ok_or("missing grants")?;
+    // A linked bake's identity and grants are in the compat.json the link
+    // carries (`module_identity`), read where the plan is, so the Rust this
+    // writes is the same for apps that differ only there.
+    let mut metadata = if linked {
+        linked::LINKED_IDENTITY.to_string()
+    } else {
+        format!("pub const APP: &str = {app:?};\npub const GRANTS: &str = {grants:?};\n")
+    };
     if !linked {
         let hash = meta["module"]["sha256"]
             .as_str()
@@ -180,7 +209,7 @@ fn module_constants(
         });
         if let Some(slot) = native {
             metadata.push_str(&format!(
-                "// {package}'s native module, from its exact.json `native` (LLP 1154 D3).\n#[path = {root:?}]\n#[allow(dead_code, missing_docs, unused_imports, clippy::all)]\nmod exact_native_shim;\n/// The app's native module, for `embedded_data`'s `.with_native(exact_native)`.\npub fn exact_native(_grants: &str) -> Box<dyn exact_js::NativeModule> {{\n    Box::new(exact_native_shim::{class}::new(APP))\n}}\n",
+                "// {package}'s native module, from its exact.json `native` (LLP 1154 D3).\n#[path = {root:?}]\n#[allow(dead_code, missing_docs, unused_imports, clippy::all)]\nmod exact_native_shim;\n/// The app's native module, for `embedded_data`'s `.with_native(exact_native)`.\npub fn exact_native(_grants: &str) -> Box<dyn exact_js::NativeModule> {{\n    Box::new(exact_native_shim::{class}::new(&APP))\n}}\n",
                 package = slot.package,
                 root = slot.root.display().to_string(),
                 class = slot.class,
@@ -271,7 +300,12 @@ fn build_sources(
     };
     // What an Apple archive links, as its compatibility inputs name it (LLP 1047.001 D2).
     let linked = (platform != "web").then(|| exact_bake::apple_link(&compat, host));
-    replace_changed(&out.join("compat.json"), compat.to_json().as_bytes())?;
+    let compat_json = if outside && platform != "web" {
+        with_module_identity(&compat.to_json(), &meta)?
+    } else {
+        compat.to_json()
+    };
+    replace_changed(&out.join("compat.json"), compat_json.as_bytes())?;
     let rust_updates = compat.inputs["rustMode"] != "off"
         && compat.inputs["rustModule"]
             .as_str()
@@ -288,12 +322,17 @@ fn build_sources(
             manifest.windows_window()?
         ));
     }
-    // The module's Canvas 2D roster (LLP 1056 D1), known before it loads.
-    metadata.push_str("#[allow(dead_code)]\npub const CANVAS_SURFACES: &[(&str, usize)] = &[");
-    for (name, arity) in meta["surfaces"].as_object().into_iter().flatten() {
-        metadata.push_str(&format!("({name:?}, {}), ", arity.as_u64().unwrap_or(0)));
+    // The module's Canvas 2D roster (LLP 1056 D1), known before it loads; a
+    // linked bake's is in its compat.json, as its identity is.
+    if outside && platform != "web" {
+        metadata.push_str(linked::LINKED_SURFACES);
+    } else {
+        metadata.push_str("#[allow(dead_code)]\npub const CANVAS_SURFACES: &[(&str, usize)] = &[");
+        for (name, arity) in meta["surfaces"].as_object().into_iter().flatten() {
+            metadata.push_str(&format!("({name:?}, {}), ", arity.as_u64().unwrap_or(0)));
+        }
+        metadata.push_str("];\n");
     }
-    metadata.push_str("];\n");
     // Where each module runs (LLP 1027.002 §6), typed for the executor crate
     // this platform links; the compatibility id already carries the same.
     let placement_type = if platform == "web" {

@@ -80,6 +80,36 @@ export function linkable(app, pkg) {
   return false;
 }
 
+/** The files of a linked bake the archive compiles (js/bake/src/linked.rs `COMPILED`). */
+export const COMPILED_BAKE = ['module.rs', 'logic.rs', 'linked.rs', 'host.rs'];
+
+/** A content-addressed copy of the files Cargo compiles from the linked bake in `dir`, under `root`; what Cargo's
+ * EXACT_BAKED names. The app's identity, grants and Canvas roster are in compat.json, which the link carries
+ * (`exact_apple::baked::identity`), so apps whose generated Rust is the same get the same path and bytes: their
+ * archive's build script and crate stay fresh, and one compiled archive serves them all. The copy never changes once
+ * written; a concurrent build of another app writes its own. Null when the bake lacks one of the files. */
+export function compiledBakeDir(dir, root) {
+  const files = [];
+  for (const name of COMPILED_BAKE) {
+    try { files.push([name, readFileSync(resolve(dir, name))]); } catch { return null; }
+  }
+  const hash = createHash('sha256');
+  for (const [name, bytes] of files) hash.update(`${name}\0${bytes.length}\0`).update(bytes);
+  const out = resolve(root, hash.digest('hex').slice(0, 32));
+  if (existsSync(resolve(out, '.complete'))) return out;
+  const making = `${out}.${process.pid}.tmp`;
+  rmSync(making, { recursive: true, force: true });
+  mkdirSync(making, { recursive: true });
+  for (const [name, bytes] of files) writeFileSync(resolve(making, name), bytes);
+  writeFileSync(resolve(making, '.complete'), '');
+  try { renameSync(making, out); } catch (error) {
+    // Another build wrote the same bytes first.
+    rmSync(making, { recursive: true, force: true });
+    if (!existsSync(resolve(out, '.complete'))) throw error;
+  }
+  return out;
+}
+
 /** Where an Apple build for `target` keeps the bake it links. */
 export const linkedBakeDir = (env, platform, target) => resolve(env.EXACT_BAKE_OUTPUT, `${platform}-${target}.baked`);
 

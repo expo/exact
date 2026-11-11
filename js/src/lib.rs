@@ -471,8 +471,10 @@ impl Module {
 
     /// This module's Canvas 2D roster, as the bake recorded it beside the
     /// bytecode (`module.rs`'s `CANVAS_SURFACES`).
-    pub fn with_canvas_surfaces(mut self, surfaces: &[(&str, usize)]) -> Self {
-        self.canvas_surfaces = surfaces.iter().map(|(n, a)| (n.to_string(), *a)).collect();
+    /// It takes the roster's slice or what reads as one (a linked bake's
+    /// `CANVAS_SURFACES`, `exact_apple::baked::LinkedSurfaces`).
+    pub fn with_canvas_surfaces<'a>(mut self, surfaces: impl AsRef<[(&'a str, usize)]>) -> Self {
+        self.canvas_surfaces = surfaces.as_ref().iter().map(|(n, a)| (n.to_string(), *a)).collect();
         self
     }
 
