@@ -406,12 +406,12 @@ const conformEvidence = c => {
     ...(c.failing ?? []).map(f => `  NEW ${f}`), ...c.before.failures.map(f => `  baseline: ${f}`), ...c.after.failures.map(f => `  after: ${f}`)];
 };
 
-/** The SDK a copy builds with: its exact.mjs's EXACT, else EXACT2 (the environment's, else its default, which every
- * launcher `exact new` has written puts after `process.env.EXACT2 ??` or `process.env.EXACT ?? process.env.EXACT2 ??`). */
-function sdkOf(copy, override = process.env.EXACT ?? process.env.EXACT2) {
-  const named = /process\.env\.EXACT2? \?\? (?:process\.env\.EXACT2 \?\? )?"([^"]+)"/.exec(readFileSync(join(copy, 'exact.mjs'), 'utf8'))?.[1];
-  // As the copy's launcher reads it: an override, like its default, against the copy's directory.
-  return override ? resolve(copy, override) : named ? resolve(copy, named) : null;
+/** The SDK a copy builds with: its launcher's environment names and default, resolved against the copy. */
+export function sdkOf(copy, env = process.env) {
+  const launcher = readFileSync(join(copy, 'exact.mjs'), 'utf8');
+  const override = /process\.env\.EXACT\s*\?\?/.test(launcher) ? env.EXACT ?? env.EXACT2 : env.EXACT2;
+  const named = /process\.env\.EXACT2? \?\? (?:process\.env\.EXACT2 \?\? )?"([^"]+)"/.exec(launcher)?.[1];
+  return override != null ? resolve(copy, override) : named ? resolve(copy, named) : null;
 }
 
 /** host/web-js/conform.mjs on a copy, run from the SDK it builds with (its
