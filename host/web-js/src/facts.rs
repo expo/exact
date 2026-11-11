@@ -7,12 +7,14 @@ use std::fmt::Write as _;
 
 /// The reserved sources facts.js answers (LLP 1071 §7): each declared
 /// record's fields checked against the runner's names and passed by name;
-/// `exactSurface` readers with their surface and shape. Returns the import.
+/// `exactSurface` readers with their surface and shape. `exactTime`'s
+/// readers too, though the entry answers it (build.mjs). Returns the import.
 pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
-    use exact_runner::{delivery, page, surface_record, viewport};
+    use exact_runner::{delivery, page, surface_record, time, viewport};
     let mut imports = Vec::new();
     for (source, fields, name) in [
         ("exactViewport", viewport::FIELDS, "viewport"),
+        ("exactTime", time::FIELDS, "time"),
         ("exactPage", page::FIELDS, "page"),
         ("exactDelivery", &delivery::FIELDS[..], "delivery"),
         ("exactSurface", &[][..], "surfaces"),

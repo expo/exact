@@ -486,12 +486,11 @@ writeFileSync(resolve(gen, 'main.js'), [
   // A data module's answers, watched from before the app asks (seam.js).
   ...(production || !asks ? [] : ["import { seam } from './perf.js';", 'seam();']),
   ...(time ? [
-    "import { sourceTypes } from './names.js';",
+    "import { timeFields } from './facts.js';",
     "import { reportTime, reportPlace } from './navigation.js';",
-    "data.reserved = { exactTime: () => {",
+    "data.reserved = { exactTime: (_, a, name) => {",
     "  const [epochAtZero, utcOffset] = reportTime(clock.now), [locale, timeZone, seed, formatLocale] = reportPlace().split('\\0');",
-    "  const f = { epochAtZero, utcOffset, locale, timeZone, seed: Number(seed), formatLocale: formatLocale || locale, resolvedLocale: resolvedLocale() };",
-    "  return Object.keys(sourceTypes.exactTime[1]).map(k => f[k]);",
+    "  return timeFields(name, { epochAtZero, utcOffset, locale, timeZone, seed: Number(seed), formatLocale: formatLocale || locale, resolvedLocale: resolvedLocale() });",
     "} };",
     // The zone's offset follows the clock (habits F6): a timer, a `then` or the agent's `clock` that finds the offset
     // at its instant changed (a DST change, a new zone) answers `exactTime` again first (LLP 1027.000.000 D2).
@@ -671,11 +670,8 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   // host says the date (runner/src/time.rs, as the Rust renderer does), the unknown date in UTC, never the app's
   // source (LLP 1039 D1). The runtime answers the reader's when it adopts the page.
   ...(time ? [
-    "import { resolvedLocale } from './rt.js';",
-    "data.reserved = { exactTime: () => {",
-    "  const f = { epochAtZero: 0, utcOffset: 0, locale: 'en-US', timeZone: 'UTC', seed: 0, formatLocale: 'en-US', resolvedLocale: resolvedLocale() };",
-    "  return Object.keys(sourceTypes.exactTime[1]).map(k => f[k]);",
-    "} };",
+    "import { resolvedLocale } from './rt.js'; import { timeFields } from './facts.js';",
+    "data.reserved = { exactTime: (_, a, name) => timeFields(name, { epochAtZero: 0, utcOffset: 0, locale: 'en-US', timeZone: 'UTC', seed: 0, formatLocale: 'en-US', resolvedLocale: resolvedLocale() }) };",
   ] : []),
   // Two steps, so a server can send the page's head between them
   // (render.mjs): the app starts and names its route, then settles.

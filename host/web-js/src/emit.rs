@@ -212,8 +212,9 @@ struct Em<'a> {
 }
 
 /// The runner's reserved sources the JS runtime answers itself: the page's
-/// facts, never the build's (`exactTime` in the entry, the rest in
-/// facts.js). `exactDelivery` answers what the build baked (facts.js).
+/// facts, never the build's (`exactTime` in the entry, by its readers'
+/// fields from facts.js; the rest in facts.js). `exactDelivery` answers
+/// what the build baked (facts.js).
 const HOST_FACTS: &[&str] = &[
     "exactViewport",
     "exactTime",

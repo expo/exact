@@ -72,6 +72,13 @@ export function page(readers) {
   shareReporter();
 }
 
+// `exactTime` (runner/src/time.rs) is answered by the entry (build.mjs), the reader's device on a page and the
+// unknown date in a render, each reader by its own fields: readers of one source may declare different shapes.
+let timeReaders = {};
+export function time(readers) { timeReaders = readers; }
+/** `facts`: every `exactTime` field, by the runner's names; the fields resource `name` declares, in its order. */
+export const timeFields = (name, facts) => byName(timeReaders, name, facts);
+
 /** Each reader's second entry: the value the build baked, if it baked one
  * (a plan built from source did not): the embedded answer. */
 export function activities(readers) {
