@@ -67,17 +67,15 @@ test('the web build reports the JS target Contract refusal with its component lo
   try {
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Refusal', app: { id: 'test.exact.refusal', name: 'Refusal' }, rust: false }));
     writeFileSync(resolve(dir, 'app.contract'), [
-      'component App', '  state leaving = "none"', '  view', '    Greeting(leaving=leaving)',
-      'component Greeting', '  props', '    leaving: string', '  view', '    text "Hello" -exact-exit-animation=leaving', '',
+      'component App', '  view', '    column', '      Notes()', '',
+      'component Notes', '  state kind = "markdown"', '  view', '    textarea markup=kind aria-label="Notes"', '',
     ].join('\n'));
-    writeFileSync(resolve(dir, 'app.ts'), 'export const appId = "test.exact.refusal";\nexport const grants = "";\n');
     const built = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), 'refusal', '--render', 'none'], {
       cwd: ROOT, encoding: 'utf8', env: { ...process.env, EXACT_APP_DIR: dir, EXACT_WEB_DIST: resolve(dir, 'dist') },
     });
     expect(built.status, built.stderr).toBe(1);
-    expect(built.stderr).toMatch(/app\.contract:9:5 \[web-target\] a dynamic `exit_animation`/);
-    expect(built.stderr).toContain('is not one declaration; not in the JS target');
-    expect(built.stderr).toMatch(/app\.contract:4:5: `Greeting` is instantiated here/);
+    expect(built.stderr).toMatch(/app\.contract:9:5 \[web-target\] a dynamic `markup` on a text field is not in the JS target/);
+    expect(built.stderr).toMatch(/app\.contract:4:7: `Notes` is instantiated here/);
     expect(built.stderr).toContain('9 |');
     expect(built.stderr).toContain('the web build (the JS target) failed');
   } finally { rmSync(dir, { recursive: true, force: true }); }

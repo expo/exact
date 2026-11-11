@@ -977,7 +977,10 @@ fn acts_are_queued_run_between_turns_and_journaled_an_input_by_its_length() {
         s["slots"]["text"], "Palo Alto",
         "cut to the field's maxlength, as typing is"
     );
-    assert_eq!(s["slots"]["secret"], "hunter2");
+    // A password field's text is masked in `state`, as in the tree.
+    assert_eq!(s["slots"]["secret"], "•••");
+    let revealed = agent(&mut p, json!({"op": "state", "reveal": true}));
+    assert_eq!(revealed["slots"]["secret"], "hunter2");
     assert_eq!(
         p.focus(),
         Some(id(&p, "arm")),
