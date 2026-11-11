@@ -13,9 +13,12 @@ final class DevMenuController: UITableViewController {
         var checked = false
     }
     private(set) var groups: [[Command]] = []
+    /// The card above the menu can close itself, which unchecks its row
+    private var cardObserver: NSObjectProtocol?
 
     init() { super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { cardObserver.map(NotificationCenter.default.removeObserver) }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -27,6 +30,9 @@ final class DevMenuController: UITableViewController {
         tableView.estimatedRowHeight = 56
         tableView.cellLayoutMarginsFollowReadableWidth = true
         tableView.accessibilityIdentifier = "exact.host.dev-menu"
+        cardObserver = NotificationCenter.default.addObserver(forName: FrameHealthOverlay.visibilityChanged, object: nil, queue: .main) {
+            [weak self] _ in self?.rebuild()
+        }
         rebuild()
     }
 

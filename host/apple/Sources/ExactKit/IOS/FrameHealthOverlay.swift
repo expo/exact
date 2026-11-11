@@ -3,10 +3,18 @@ import UIKit
 import CExact
 import ObjectiveC
 
-/// Host UI outside the app's node tree, below sheets and alerts. The card takes the touches within
-/// its bounds, and touches outside it reach the app (LLP 1079.000 §7.2).
+/// Host UI outside the app's node tree, in a window of its own above the app's window, so above every sheet,
+/// alert and cover the app presents, whichever opened first. The card takes the touches within its bounds,
+/// and touches outside it reach the app (LLP 1079.000 §7.2).
 final class FrameHealthOverlay: UIView {
     fileprivate weak var health: FrameHealth?
+    /// The window the card shows in, until it is detached; the window holds the overlay in turn
+    fileprivate var host: UIWindow?
+    /// The app's view whose appearance the card's window takes, and the registration that follows it
+    fileprivate weak var appearanceSource: UIView?
+    fileprivate var appearanceRegistration: UITraitChangeRegistration?
+    /// Posted when the card is shown or hidden, for the developer menu's checkmark
+    static let visibilityChanged = Notification.Name("ExactFrameHealthVisibilityChanged")
     let card = FrameHealthCardView()
     /// Exact's own frames, which the face shows where the screen's cannot be observed, and Details always
     private let reader = FrameHealthCardReader()
@@ -99,6 +107,10 @@ final class FrameHealthOverlay: UIView {
         notifications.forEach(NotificationCenter.default.removeObserver)
         notifications.removeAll()
         removeFromSuperview()
+        if let appearanceSource, let appearanceRegistration { appearanceSource.unregisterForTraitChanges(appearanceRegistration) }
+        appearanceRegistration = nil
+        host?.isHidden = true
+        host = nil
     }
 
     func setVisible(_ visible: Bool) {
@@ -116,6 +128,12 @@ final class FrameHealthOverlay: UIView {
             card.drawNow()
         }
         CATransaction.commit()
+        NotificationCenter.default.post(name: Self.visibilityChanged, object: self)
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        setNeedsLayout()
     }
 
     override func didMoveToWindow() {
@@ -350,7 +368,7 @@ final class FrameHealthOverlay: UIView {
             UIAccessibility.post(notification: .announcement, argument: paused ? "Paused" : "Resumed")
             if paused { render() } else { refresh() }
         case .close: hideReadout()
-        case .title: DevMenu.showFrameHealthDefinitions(source)
+        case .title: DevMenu.showFrameHealthDefinitions(source, from: ViewPresentation.presenter(for: card))
         case .details:
             card.showDetails(!card.state.showsDetails)
             render()
@@ -405,8 +423,9 @@ final class FrameHealthOverlay: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // Keep the card 8 points inside the window and above the keyboard, ignoring safe-area insets
-        var available = bounds.insetBy(dx: 8, dy: 8)
+        // Keep the card 8 points inside the safe area, clear of the status bar, the sensor housing and the home
+        // indicator, and above the keyboard
+        var available = bounds.inset(by: safeAreaInsets).insetBy(dx: 8, dy: 8)
         if let keyboard, keyboard.intersects(available), keyboard.maxY >= available.maxY {
             available.size.height = max(0, keyboard.minY - 8 - available.minY)
         }
@@ -1000,25 +1019,83 @@ extension DevMenu {
 
     static func frameHealthOverlay() -> FrameHealthOverlay? {
         guard let controller, let session, let container = frameHealthContainer, !(container is ExactView) else { return nil }
+        let scene = container.window?.windowScene
         if let existing = objc_getAssociatedObject(controller, &overlayKey) as? FrameHealthOverlay {
-            if existing.health === session.frameHealth, existing.superview === container { return existing }
+            let placed = existing.host.map { $0.windowScene === scene && scene != nil } ?? (existing.superview === container)
+            if existing.health === session.frameHealth, placed { return existing }
             existing.detach()
         }
         let overlay = FrameHealthOverlay(health: session.frameHealth, session: session)
-        overlay.frame = container.bounds
         overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        container.addSubview(overlay)
+        if let scene {
+            // A presented controller (a sheet, an alert, a full-screen cover) lives in the app window's transition
+            // view, above every subview of the root controller's view; only a window above that window stays on top
+            let window = FrameHealthWindow(windowScene: scene)
+            let root = FrameHealthWindowController()
+            window.rootViewController = root
+            window.windowLevel = .alert + 1
+            window.backgroundColor = .clear
+            // The card's window descends from no app view, so it takes the app's appearance, which a dark or light
+            // `color-scheme` overrides on the app's window, and follows it
+            window.overrideUserInterfaceStyle = container.traitCollection.userInterfaceStyle
+            overlay.appearanceSource = container
+            overlay.appearanceRegistration = MainActor.assumeIsolated {
+                container.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak window] (view: UIView, _: UITraitCollection) in
+                    window?.overrideUserInterfaceStyle = view.traitCollection.userInterfaceStyle
+                }
+            }
+            overlay.frame = root.view.bounds
+            root.view.addSubview(overlay)
+            // Shown without becoming key: the app's window keeps the keyboard, the first responder and key commands
+            window.isHidden = false
+            overlay.host = window
+        } else {
+            overlay.frame = container.bounds
+            container.addSubview(overlay)
+        }
         objc_setAssociatedObject(controller, &overlayKey, overlay, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         return overlay
     }
 
-    /// The definitions of the figures the card gives from `source`.
-    static func showFrameHealthDefinitions(_ source: FrameHealthCardText.Source) {
+    /// The definitions of the figures the card gives from `source`, over the card when the card presents them.
+    static func showFrameHealthDefinitions(_ source: FrameHealthCardText.Source, from presenter: UIViewController? = nil) {
         let navigation = UINavigationController(rootViewController: FrameHealthDefinitionsController(source))
         navigation.modalPresentationStyle = .pageSheet
         navigation.sheetPresentationController?.detents = [.medium(), .large()]
         navigation.sheetPresentationController?.prefersGrabberVisible = true
-        present(navigation)
+        if let presenter, presenter.view.window is FrameHealthWindow { presenter.present(navigation, animated: !ExactEnv.agentFreezes) }
+        else { present(navigation) }
     }
+}
+
+/// The frame-health card's window. A touch reaches it only on the card or on what the card presents; everywhere
+/// else it passes to the app's window below.
+final class FrameHealthWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === self || hit === rootViewController?.view ? nil : hit
+    }
+
+    override var canBecomeKey: Bool { false }
+}
+
+/// The card window's root: the status bar, its style and the orientations stay the app's topmost controller's.
+final class FrameHealthWindowController: UIViewController {
+    private var app: UIViewController? {
+        var top = DevMenu.presenter
+        while let child = top?.childForStatusBarStyle { top = child }
+        return top
+    }
+
+    override func loadView() {
+        view = UIView()
+        view.backgroundColor = .clear
+    }
+
+    override var prefersStatusBarHidden: Bool { app?.prefersStatusBarHidden ?? false }
+    override var preferredStatusBarStyle: UIStatusBarStyle { app?.preferredStatusBarStyle ?? .default }
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { app?.preferredStatusBarUpdateAnimation ?? .fade }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { DevMenu.presenter?.supportedInterfaceOrientations ?? .all }
+    override var prefersHomeIndicatorAutoHidden: Bool { DevMenu.presenter?.prefersHomeIndicatorAutoHidden ?? false }
 }
 #endif

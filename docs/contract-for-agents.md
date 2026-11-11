@@ -3473,11 +3473,13 @@ written, up to 16 KB; no file, no section. A deploy script that publishes the
 build under a revision sets `EXACT_DISTRIBUTION_REVISION` for the build to show
 it. Copy (iOS and macOS) takes all of it as text.
 
-On iOS, the developer menu's **Frame Health** row opens a native card below sheets and
-alerts; the Mac's Develop menu has the same item. Row and item are checked while the
-card shows. The card starts hidden and takes the touches within its bounds: drag it
-from anywhere, even past the window's edges, and on release it springs to the window
-corner nearest where its momentum would carry it, past the safe area; accessibility
+On iOS, the developer menu's **Frame Health** row opens a native card in a window of its
+own above the app's, so above every sheet, alert and cover, whichever opened first, and
+in the app's appearance; the Mac's Develop menu has the same item. Row and item are
+checked while the card shows, and follow it when it closes itself. The card starts hidden
+and takes the touches within its bounds: drag it from anywhere, even past the window's
+edges, and on release it springs to the corner of the safe area nearest where its
+momentum would carry it; accessibility
 actions move it to a corner. Close, at its top left, or the checked **Frame Health**
 dismisses it. Touches outside it reach the app. LLP 1079.000 §7.2 describes
 its rows: Live, Paused or Idle; the requested rate and any system limit; frame rate
