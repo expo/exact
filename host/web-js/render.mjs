@@ -6,7 +6,7 @@
 // over the built shell as the Rust render host composes them
 // (`host/render/src/page.rs` `page_js`), so the page adopts the same way.
 //
-//   bun host/web-js/render.mjs <dist> --build                      pages for render=build routes
+//   bun host/web-js/render.mjs <dist> --build                      pages for render=build routes, robots.txt, sitemap.xml
 //   bun host/web-js/render.mjs <dist> <location>…                  print pages
 //   bun host/web-js/render.mjs <dist> --serve [--port 8830]        a page per request
 import { createHash } from 'node:crypto';
@@ -18,6 +18,7 @@ import { createDocument } from './dom.js';
 import { cachingFetch, FRESH } from './http-cache.mjs';
 import { canonical, matchPattern } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
+import { writeCrawlerFiles } from '../web/crawl.mjs';
 
 const DEADLINE = 3000;
 // `html` with each script element's text blanked, the same length, so the shell's places (its root, entry and
@@ -302,7 +303,7 @@ export function renderer(dist, { closed = false } = {}) {
         // another render would make until the first of those answers goes stale: it may be given again until then, for
         // at most 60 s (LLP 1048.007 D8).
         const keep = status === 200 && settled && !out.failed?.length && out.activation?.kept === false && !out.rust && !read.random && read.fresh > 0 && read.fresh < Infinity ? Math.min(read.fresh, 60000) : 0;
-        return { html: markedHead + body(''), rest: marked + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep };
+        return { html: markedHead + body(''), rest: marked + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep, robots: out.robots, origin: out.origin };
       } finally { made.dispose(); }
     } };
   }
@@ -344,7 +345,7 @@ const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input'
 
 const refusedLine = ([name, api]) => `resource ${name} is pending: a page rendered on the server has no storage (${api}); the reader's page asks it`;
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.css': 'text/css', '.mp4': 'video/mp4', '.plan': 'application/octet-stream' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.css': 'text/css', '.mp4': 'video/mp4', '.plan': 'application/octet-stream', '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml' };
 
 /** A page per request for one built dist, as the Rust render server sends it (host/render/src/serve.rs, stream.rs):
  * `page(location, header)`, where `header(name)` reads a request header, answers `{ status, headers, body }`, the body
@@ -458,9 +459,12 @@ if (import.meta.main) {
     } });
     console.log(`serving ${dist} with pages rendered by the JavaScript runtime on ${port}`);
   } else if (args.includes('--build')) {
-    const pages = JSON.parse(readFileSync(resolve(dist, '.gen/pages.json'), 'utf8'));
+    const pages = JSON.parse(readFileSync(resolve(dist, '.gen/pages.json'), 'utf8')), docs = [];
+    let origin = null;
     for (const p of pages) {
       const page = await render(p.location);
+      docs.push({ location: canonical(p.location), notfound: p.notfound, status: page.status, robots: page.robots, page: page.html });
+      origin ??= page.origin;
       const file = p.notfound ? '404.html' : `${p.location.replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
       mkdirSync(dirname(resolve(dist, file)), { recursive: true });
       writeFileSync(resolve(dist, file), page.html);
@@ -468,6 +472,7 @@ if (import.meta.main) {
       for (const failure of page.failed) console.log(`  ${p.location}: resource ${failure}`);
       for (const refused of page.refused) console.log(`  ${p.location}: ${refusedLine(refused)}`);
     }
+    writeCrawlerFiles(dist, docs, origin);
   } else for (const location of args.slice(1)) {
     const page = await render(location);
     for (const failure of page.failed) console.error(`${location}: resource ${failure}`);

@@ -1,4 +1,5 @@
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, packageConfig, webImplementations } from '../../js/bake/src/typescript.mjs';
+import { writeCrawlerFiles } from '../web/crawl.mjs';
 import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, resolveApp, webAppManifest } from '../../scripts/app.mjs';
 import { webHead } from '../../scripts/web-head.mjs';
 import { fileIdentity, resourceIdentities } from '../apple/assets.mjs';
@@ -1023,11 +1024,9 @@ const pages = JSON.parse(readFileSync(resolve(gen, 'pages.json'), 'utf8'));
 // over (a render server's, too). And the route table a host serves by
 // (LLP 1153 D3: host/web/serve.mjs `buildTreeFile` applies it).
 cpSync(resolve(out, 'index.html'), resolve(out, 'shell.html'));
-{
-  const { planRouteTable } = await import('../web/serve.mjs');
-  const routes = planRouteTable(readFileSync(resolve(out, 'app.plan'))).map(({ name, pattern, render, notfound }) => ({ name, pattern, render, notfound }));
-  writeFileSync(resolve(out, 'routes.json'), JSON.stringify({ routes }, null, 2) + '\n');
-}
+const { planRouteTable } = await import('../web/serve.mjs');
+const routes = planRouteTable(readFileSync(resolve(out, 'app.plan'))).map(({ name, pattern, render, notfound }) => ({ name, pattern, render, notfound }));
+writeFileSync(resolve(out, 'routes.json'), JSON.stringify({ routes }, null, 2) + '\n');
 // Compile known reader text even when the development build emits only a shell.
 if (markdownReaders) {
   const { markdownAt, renderer } = await import('./render.mjs');
@@ -1054,15 +1053,19 @@ if (pages.length && how === 'rust') {
   const r = spawnSync('cargo', ['run', ...injectedProfiles(renderApp), '--profile', 'host-dev', '-q', '-p', at[1], '--bin', bin, '--', '--plan', plan, '--name', manifest.name, ...(manifest.app?.origin ? ['--origin', manifest.app.origin] : []), '--shell', resolve(out, 'index.html'), '--build'],
     { cwd: renderApp.workspace, encoding: 'utf8', maxBuffer: 256 << 20, env: { ...process.env, CARGO_TARGET_DIR: renderApp.target, EXACT_UPDATE_TRUST: 'development' } });
   if (r.status !== 0) { console.error(r.stderr); process.exit(1); }
-  for (const doc of r.stdout.split('\n').filter(Boolean).map(l => JSON.parse(l))) {
+  const docs = r.stdout.split('\n').filter(Boolean).map(l => JSON.parse(l));
+  for (const doc of docs) {
     if (doc.error) { console.error(`${bin} ${doc.location}: ${doc.error}`); process.exit(1); }
     const file = doc.notfound ? '404.html' : `${decodeURIComponent(doc.location).replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
     mkdirSync(dirname(resolve(out, file)), { recursive: true });
     writeFileSync(resolve(out, file), doc.page);
   }
+  writeCrawlerFiles(out, docs, manifest.app?.origin);
   console.log(`${out}: ${pages.length} pages rendered by ${bin}`);
 } else if (pages.length && how === 'js') {
   const r = spawnSync('bun', [resolve(here, 'render.mjs'), out, '--build'], { cwd: root, stdio: 'inherit' });
   if (r.status !== 0) process.exit(1);
+} else if (how !== 'none' && routes.length) {
+  writeCrawlerFiles(out, [], null); // robots.txt alone: no page made at build to list
 }
 console.log(`${out}: built`);

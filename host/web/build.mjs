@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { writeCrawlerFiles } from './crawl.mjs';
 import { warmGameInputs, warmGameEnvironment, publishWarmGame } from '../web-js/module.mjs';
 import { generatedInputFiles } from '../../game/inputs.mjs';
 // Build the web app (LLP 1071): the JS target, `host/web-js/build.mjs`, the
@@ -477,7 +478,6 @@ if (buildLocations.length && renderAt) {
   const shell = readFileSync(resolve(stage, 'index.html'), 'utf8');
   const pages = rendered.stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   if (pages.length) writeFileSync(resolve(stage, 'shell.html'), shell);
-  const listed = [];
   for (const doc of pages) {
     if (doc.error) throw new Error(`${renderBin} ${doc.location}: ${doc.error}`);
     const html = doc.page;
@@ -485,14 +485,8 @@ if (buildLocations.length && renderAt) {
     if (!resolve(stage, file).startsWith(stage + '/')) throw new Error(`${renderBin}: location ${doc.location} leaves dist`);
     mkdirSync(resolve(stage, file, '..'), { recursive: true });
     writeFileSync(resolve(stage, file), html);
-    if (!doc.notfound && !/noindex/i.test(doc.robots ?? '')) listed.push(doc.location);
   }
-  if (pages.length) {
-    const xml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const origin = app.origin?.replace(/\/+$/, '');
-    if (origin) writeFileSync(resolve(stage, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${listed.map((location) => `  <url><loc>${xml(origin + location)}</loc></url>\n`).join('')}</urlset>\n`);
-    writeFileSync(resolve(stage, 'robots.txt'), `User-agent: *\nAllow: /\n${origin ? `Sitemap: ${origin}/sitemap.xml\n` : ''}`);
-  }
+  if (pages.length) writeCrawlerFiles(stage, pages, app.origin);
   // A render that reached its deadline still ships: its placeholders show
   // until the runtime asks what was pending (LLP 1048.000 D9).
   const late = pages.filter((doc) => doc.settled === false).map((doc) => doc.location);

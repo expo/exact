@@ -2653,8 +2653,13 @@ file paths stay 404, even with `notfound`.
 release build as deploy makes one (no agent mode): a page for each `render=build` route
 (rendered under Bun unless the app has a render entry of its own), `404.html` for a `notfound`
 route rendered so, `shell.html`, and `routes.json`, the route table in the plan's order with each
-route's pattern, render policy and `notfound`. Inside the app, `--out` is `dist` (or a path under
-`dist/` or `target/`), which no build reads as source; the build it replaces is kept beside it in
+route's pattern, render policy and `notfound`. An app with routes also gets `robots.txt`, which
+allows every path, and with `app.json`'s `app.origin` a `sitemap.xml` of the pages made at build,
+by the render server's rule: not the `notfound` page, a page whose status is neither 200 nor 503
+(a render at its deadline), one whose `head` says `robots="noindex"` or `"none"`, or one whose
+`canonical` is another page. A page rendered per request is not made at build, so the built
+sitemap does not list it. Inside the app, `--out` is `dist` (or a path under `dist/` or
+`target/`), which no build reads as source; the build it replaces is kept beside it in
 `dist.gen` while a page sent from it may still ask for its files, and `--out` refuses a directory
 beside which something else holds one of those names (`dist.gen`, `dist.previous`, `dist.lock`).
 `bun exact.mjs serve dist` serves it on 127.0.0.1 (`--lan`: every interface), and any static
