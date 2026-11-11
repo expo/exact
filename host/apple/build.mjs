@@ -940,7 +940,10 @@ async function main(args, lockHeld = false) {
   // the resolver's app-owned `embed` directory, with `ExactKit` at
   // `host/apple`. With --archive it also builds the IPA; --embed alone
   // builds no Swift. The sample hosts prove that the same pieces link.
-  const { link: appleLink, products: swiftCapabilities } = appleComposition(buildReceipt.graph, linksByPlan(production, args), app.manifest.link, bakedCompat.reach?.auth?.sessions === true);
+  // A development archive (--development, what a build service hands an agent) links every Swift capability: one
+  // composition for every app, so the host compiled once serves them all, where linking by use recompiles all of
+  // ExactKit for each combination of the three by-use capabilities (minutes). It costs launch time, not correctness.
+  const { link: appleLink, products: swiftCapabilities } = appleComposition(args.includes('--development') ? null : buildReceipt.graph, linksByPlan(production, args), app.manifest.link, bakedCompat.reach?.auth?.sessions === true);
   if (args.includes('--embed')) {
     const platform = ios ? (device ? 'ios' : 'ios-simulator') : 'macos';
     const gpu = hasGpu ? (frameworkBundles ? 'ExactGpu.framework/ExactGpu' : loadName) : null;
