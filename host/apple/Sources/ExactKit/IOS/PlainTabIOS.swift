@@ -133,7 +133,7 @@ extension NavigationHost {
 
     /// Build the tabs More's list shows a row for that the runner has not
     /// built (LLP 1075.003 §9.14), selecting none: a row for an empty
-    /// navigation controller does nothing (iOS 27, measured), so each is
+    /// navigation controller does nothing (LLP 1075.003 §9.16), so each is
     /// built before a person can pick it. A plain tab needs nothing: More
     /// pushes a plain controller, empty or not.
     func buildTabsUnderMore() {
@@ -149,75 +149,68 @@ extension NavigationHost {
         #endif
     }
 
-    /// UIKit moved tabs between the bar and More, and their routes with
-    /// them (More's Edit, a size class change): one sync in the next turn
+    /// UIKit moved tabs between the bar and More, their routes or plain tabs
+    /// with them (a size class change, a row of More's list, More's Edit), or
+    /// an app's container took tabs More held: one sync in the next turn
     /// writes each tab's routes where UIKit now holds them and follows the
-    /// router's tab, and More's list gets the tabs it now shows built.
+    /// router's tab, and a More list on screen gets the tabs it now shows
+    /// built.
     func syncNextTurn() {
         guard !resyncOwed else { return }
         resyncOwed = true
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            resyncOwed = false
-            guard let owner = tabOwner else { return }
-            // Let UIKit first apply what it deferred to layout (a row's push onto More comes in a later turn, measured),
-            // so More's delegate calls and the press they make run before this sync, not inside it
+            guard let owner = tabOwner else { resyncOwed = false; return }
+            // Let UIKit first apply what it deferred to layout (More shows a tab selected in code in a later turn,
+            // LLP 1075.003 §9.16), so More's delegate calls and the press they make run before this sync, not inside
+            // it; a move that layout makes is this sync's to follow
             owner.view.layoutIfNeeded()
+            resyncOwed = false
             sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
-            buildTabsUnderMore()
+            if let more, more.viewIfLoaded?.window != nil, more.topViewController === more.viewControllers.first { buildTabsUnderMore() }
         }
     }
 
-    /// UIKit is moving a route or a plain tab into `parent`: `willMove(toParent:)`
-    /// comes as UIKit applies the move, before the navigation controller's
-    /// `willShow` for it (iOS 27.1, measured). UIKit makes a new More when it
-    /// needs one again (measured), and Exact adopts it here, so its delegate
-    /// hears this move: a navigation controller Exact has no record of, while
-    /// Exact's tab container holds the tabs, is More, since every tab's and
-    /// sheet's has one; while the app's `tabContainer` takes the tabs'
-    /// controllers (`offeringTabs`), one it puts a plain tab in is the app's.
-    /// It is not found by `moreNavigationController`, which can already name
-    /// another More while UIKit moves routes (measured). A move Exact did not
-    /// write (a size class change, a row of More's list, More's Edit) is
-    /// followed by a sync in the next turn.
+    /// UIKit is moving a route or a plain tab into `parent`.
+    /// `willMove(toParent:)` comes as UIKit applies the move, before the
+    /// navigation controller's `willShow` for it, and More's parent is then
+    /// Exact's tab container (LLP 1075.003 §9.16). UIKit makes a new More
+    /// when it needs one again, and Exact adopts it here, so its delegate
+    /// hears this move: a navigation controller that Exact's tab container
+    /// holds and Exact has no record of is More, since each tab's own has
+    /// one. It is not read from `moreNavigationController`, which makes a
+    /// More where UIKit has none and names a new one once the routes have
+    /// left the last. A move Exact did not write (a size class change, a row
+    /// of More's list, More's Edit) is followed by a sync in the next turn.
     func moved(into parent: UIViewController) {
         #if os(iOS)
-        if let nav = parent as? UINavigationController, tabController != nil, !offeringTabs, !isAdopted(nav) { adoptMore(nav) }
+        if let nav = parent as? UINavigationController, let tabController, nav.parent === tabController,
+           stacks[ObjectIdentifier(nav)] == nil { adoptMore(nav) }
         #endif
         if tabOwner != nil, !syncing { syncNextTurn() }
     }
 
     /// Adopt UIKit's More as one of Exact's stacks, its list left to UIKit,
     /// in place of the More adopted before it, whose record and delegate go:
-    /// UIKit owns what that one holds.
+    /// UIKit owns what that one holds. Exact holds the adopted More until it
+    /// adopts the next, so no record outlives its More.
     func adoptMore(_ nav: UINavigationController) {
         #if os(iOS)
-        if nav === adoptedMore, isAdopted(nav) { return }
-        if let old = adoptedMore, old !== nav {
+        guard nav !== adoptedMore else { return }
+        if let old = adoptedMore {
             retireStack(old)
             if old.delegate is NavigationDelegateProxy { old.delegate = nil }
         }
-        if let id = adoptedMoreID { stacks.removeValue(forKey: id) }
         registerStack(nav)
-        watchPops(nav)
         adoptedMore = nav
-        adoptedMoreID = ObjectIdentifier(nav)
         #endif
     }
 
-    /// Whether `nav` has Exact's record and holds its delegate: a controller
-    /// that reuses a released one's address has the record but not the delegate.
-    func isAdopted(_ nav: UINavigationController) -> Bool {
-        stacks[ObjectIdentifier(nav)].map { nav.delegate === $0.proxy } ?? false
-    }
-
-    /// The adopted More leaves Exact: its record goes, also when UIKit has
-    /// let it go already, and its routes leave it.
+    /// The adopted More leaves Exact: its record and its delegate go, and
+    /// the routes and the plain tab it holds leave it.
     func releaseMore() {
-        if let more = adoptedMore { release(more) }
-        if let id = adoptedMoreID { stacks.removeValue(forKey: id) }
+        if let adoptedMore { release(adoptedMore) }
         adoptedMore = nil
-        adoptedMoreID = nil
     }
 }
 

@@ -432,11 +432,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// Each tab's controller by its panel id (PlainTabIOS): a navigation
     /// controller, or a plain tab.
     var tabStacks: [UInt32: UIViewController] = [:]
-    /// UIKit's More as Exact last adopted it (iOS) and its record's key, to retire that record
-    /// after UIKit lets it go; whether a sync is owed in the next turn (`syncNextTurn`); whether
-    /// the app's `tabContainer` is taking the tabs' controllers, whose containers are not More.
-    weak var adoptedMore: UINavigationController?
-    var adoptedMoreID: ObjectIdentifier?, resyncOwed = false, offeringTabs = false
+    /// UIKit's More as Exact last adopted it (iOS), held until the next (`adoptMore`).
+    var adoptedMore: UINavigationController?
+    /// Whether a sync is owed in the next turn (`syncNextTurn`).
+    var resyncOwed = false
     var tabPanels: [UInt32] = []
     /// How many routes the selected stack declared at the last projection.
     private var selectedRouteCount = 0
@@ -504,7 +503,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     private var refusedKey: String?
     /// The keys of the stack last shown, through its selected route, and the
     /// route selected in the root's place while its key matches none (D1).
-    private var shownKeys: [String] = [], fallbackKey: String?
+    private(set) var shownKeys: [String] = [], fallbackKey: String?
     /// The key of the selected route: the root's, or while the root's
     /// matches no route, the route left selected of the stack last shown.
     var selectedKey: String? {
@@ -1036,10 +1035,10 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// pressed), `cancelled` (an interactive pop returned), `idle` (a
     /// programmatic change, or nothing yet) — for `state.navigation`.
     private var lastTransition = "idle"
-    /// Whether UIKit is pushing or popping the stack navigation follows: from
-    /// the transition's first frame through `didShow`, until the completion
-    /// `willShow` registers
-    var changing: Bool { navigation.map { nativePopPending(on: $0) || pushOrPop(on: $0) != nil } ?? false }
+    /// Whether UIKit is pushing or popping the stack navigation follows, or
+    /// popping More (`morePopPending`): from the transition's first frame
+    /// through `didShow`, until the completion `willShow` registers
+    var changing: Bool { navigation.map { nativePopPending(on: $0) || pushOrPop(on: $0) != nil } ?? false || morePopPending }
 
     /// UIKit removes a controller before resigning its search field and calling willShow.
     /// A shorter prefix of our last write belongs to that unfinished native pop.
@@ -1086,7 +1085,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
 
     /// A history jump uses navigation; the authored Back control handles the adjacent intent.
-    private func goBack(from source: String, to destination: String) {
+    func goBack(from source: String, to destination: String) {
         pendingSync = true
         guard let session = presenter.session, let root = container,
               let location = session.runtime.visitLocation(destination) else {
@@ -1209,7 +1208,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
 
     func navigationController(_ navigationController: UINavigationController, willShow viewController: UIViewController, animated: Bool) {
         if navigationController === more { followMore(viewController, animated: animated) }
-        guard navigationController === navigation else { return }
+        guard navigationController === navigation || showsMoresList(navigationController) else { return }
         HostLog.note(presenter.session, {
             let by = navigationController.transitionCoordinator?.isInteractive == true ? "the edge swipe" : nativePopPending(on: navigationController) ? "UIKit's Back" : "the app"
             return "navigation: willShow \((viewController as? RouteController)?.key ?? "?") (\(animated ? "animated" : "unanimated"), by \(by))"
@@ -1260,13 +1259,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
 
     func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {
-        // Select the router's tab again when a row's press left the router on another tab: the app declined the row,
-        // so More shows its list again rather than the declined tab the next time it shows
-        if navigationController === more, let index = tabIndex(ofShown: viewController), index != routerTab, tabStack(routerTab) != nil {
-            navigationController.popToRootViewController(animated: false)
-            return showRouterTab(declining: index)
-        }
-        guard navigationController === navigation, navigationController.topViewController === viewController else {
+        if navigationController === more, declineMoreRow(viewController) { return }
+        guard navigationController === navigation || showsMoresList(navigationController), navigationController.topViewController === viewController else {
             recordPop(navigationController)
             return
         }
@@ -1313,7 +1307,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         let reselect = reselectedPop === navigationController ? reselectedPop : nil
         if reselect != nil { reselectedPop = nil }
         defer { if let reselect, !cancelled { pressReselected(reselect) } }
-        guard navigationController === navigation, let viewController = navigationController.topViewController else { return }
+        guard navigationController === navigation || showsMoresList(navigationController), let viewController = navigationController.topViewController else { return }
         nativeMoved = true
         stopRevealing()
         // The route a pop took away keeps its block until it leaves the stack (LLP 1123 D2)
@@ -1349,15 +1343,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             presenter.resolveStatusBar(settled: true)
             #endif
         }
-        // Count More's return to its list (its Back on a root, More tapped again) as a Back to the tab's root, unless UIKit
-        // moved the routes to their tab's own controller (a size class change, measured): the router keeps its tab. One
-        // step is the platform's Back, which presses the authored control; more is a history jump, as below.
-        if navigationController === more, viewController === navigationController.viewControllers.first {
-            let moved = controllers.values.contains { $0.key == selectedKey && $0.navigationController.map { $0 !== navigationController } == true }
-            guard !moved, let top = selectedKey, let root = shownKeys.first, top != root else { return }
-            if shownKeys.firstIndex(of: top) == 1, back != nil { goBack() } else { goBack(from: top, to: root) }
-            return
-        }
+        if showsMoresList(navigationController) { return followMoresList(navigationController, popped: poppedKeys) }
         let sourceKey = source.flatMap { presenter.views[$0.node.id] === $0.node ? $0.key : nil }
         // Replaced in place while the finger was down: the source's node is gone and the app's
         // stack is as deep as it was when the swipe began.

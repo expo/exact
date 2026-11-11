@@ -250,7 +250,8 @@ extension NavigationHost {
             let line = "\(what): \(property) changed outside Exact, which owns it"
             if ownedReported.insert(line).inserted { presenter.session?.log(line) }
         }
-        // Skip a tab's own navigation controller while UIKit holds its routes in More (`allNavigations`), which no hatch has
+        // `allNavigations` leaves out a tab's own navigation controller while UIKit holds its routes in More; More has
+        // no hatch, so the `hatched` guard skips it
         for nav in allNavigations {
             guard let stack = stacks[ObjectIdentifier(nav)], stack.hatched else { continue }
             if nav.delegate !== stack.proxy { say("navigation \(stack.label)", "delegate") }

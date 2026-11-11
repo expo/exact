@@ -367,11 +367,16 @@ extension NavigationHost {
             // (`TabDelegateProxy`; the order measured with real touches, as `tapTab` replays it)
             if let tabsController = tabController, let controller = tabStack(index), barItem(ofTab: index) != nil {
                 let reselect = controller === tabsController.selectedViewController
-                guard tabProxy.tabBarController(tabsController, shouldSelect: controller) else {
-                    // Above the selected tab's root, UIKit pops only where Back goes (`mayShow`)
+                // Ask the app's delegate, then `mayShow`, as `TabDelegateProxy` does, so the reply can say which declined
+                if tabProxy.app?.tabBarController?(tabsController, shouldSelect: controller) == false {
+                    return ["error": "tab #\(id): the app's tab bar delegate declined the tap (its shouldSelect returned false), so UIKit selects nothing"]
+                }
+                guard mayShow(tabsController, controller) else {
+                    // Above the selected tab's root, UIKit pops only where Back goes; another tab's press left the
+                    // router off that tab, and UIKit shows the router's (`mayShow`)
                     return reselect ? ["error": "tab #\(id): \(backRefusal)"] : reply
                 }
-                if reselect { (controller as? UINavigationController)?.popToRootViewController(animated: true) }
+                if reselect { (controller as? UINavigationController)?.popToRootViewController(animated: !ExactEnv.agentFreezes) }
                 else { tabsController.selectedViewController = controller }
                 tabProxy.tabBarController(tabsController, didSelect: controller)
                 return reply
@@ -490,13 +495,13 @@ extension NavigationHost {
         return stack
     }
 
-    /// `nav` leaves Exact: its record and its delegate go, and its routes
-    /// leave it, as they may go into the next containers (a remount, new
-    /// tabs); More keeps its list.
+    /// `nav` leaves Exact: its record and its delegate go, and its routes and
+    /// a plain tab leave it, as they may go into the next containers (a
+    /// remount, new tabs); More keeps its list.
     func release(_ nav: UINavigationController) {
         retireStack(nav)
         nav.delegate = nil
-        nav.setViewControllers(nav.stackFront, animated: false)
+        nav.setViewControllers(nav.stackFront.filter { !($0 is PlainTab) }, animated: false)
     }
 
     /// The `navigation` hatch for a stack built before the module connected
