@@ -11,6 +11,7 @@ import { faultRequest as rawFaultRequest, PREFERENCES, preferGroups } from './ag
 import { open } from './agent.mjs';
 import { duringOp } from './agent-drag.mjs';
 import { perfDelta } from './agent-inspect.mjs';
+import { named } from './agent-check.mjs';
 import { driveStore, faultSpecOf, launchFacts } from './agent-launch.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
 import { onThisMachine, serverUrl } from './verify.mjs';
@@ -1118,9 +1119,8 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
 export async function freshBuildDifferences(s) {
   const read = async () => {
     if ((await s.clock('settle'))?.settled === false) return null;
-    const { boxes, error } = await s.op({ op: 'boxes' });
+    const [{ boxes, error }, tree] = await Promise.all([s.op({ op: 'boxes' }), s.op({ op: 'tree' })]);
     if (error) throw new Error(error);
-    const tree = await s.op({ op: 'tree' });
     if (tree?.error) throw new Error(`tree: ${tree.error}`);
     return placed(tree, boxes);
   };
@@ -1129,20 +1129,24 @@ export async function freshBuildDifferences(s) {
   const r = await s.op({ op: 'rebuild' });
   if (r?.error) return { differences: [], skipped: r.error };
   // What the fresh build sets off after it settles (the keyboard coming back for the focus it kept) is read
-  // again for a while; a box the host kept from before stays where it is
-  for (let tries = 0; ; tries++) {
-    const after = await read();
-    if (!after) return { differences: [], skipped: 'the fresh build did not settle' };
-    const unkept = treeDifference(before.nodes, after.nodes);
-    const differences = unkept ? [] : frameDifferences(before.boxes, after.boxes);
-    if (unkept || !differences.length || tries === 7) return { differences, unkept };
-    await new Promise((done) => setTimeout(done, 250));
+  // again until two reads agree; a box the host kept from before stays where it is
+  let after = await read();
+  for (let tries = 0; after && tries < 8; tries++) {
+    if (treeDifference(before.nodes, after.nodes) || !frameDifferences(before, after).length) break;
+    await new Promise((done) => setTimeout(done, 100));
+    const next = await read();
+    if (next && !treeDifference(after.nodes, next.nodes) && !frameDifferences(after, next).length) break;
+    after = next;
   }
+  if (!after) return { differences: [], skipped: 'the fresh build did not settle' };
+  const unkept = treeDifference(before.nodes, after.nodes);
+  return { differences: unkept ? [] : frameDifferences(before, after), unkept };
 }
 
 /**
  * Each node's place in the tree (its type and index under its parent, from the root), as a rebuilt tree may number
- * its nodes anew: `nodes`, each place's type and props, and `boxes`, each shown node's box by its place.
+ * its nodes anew: `nodes`, each place's type, props and focus; `boxes`, each shown node's box by its place; and
+ * `byId`, the tree's nodes, which name a node in a line.
  */
 export function placed(tree, frames) {
   const nodes = tree.nodes ?? [], keys = new Map(), counts = new Map();
@@ -1154,6 +1158,7 @@ export function placed(tree, frames) {
   return {
     nodes: new Map(nodes.map((n) => [keys.get(n.id), JSON.stringify([n.props ?? {}, n.focused === true])])),
     boxes: new Map(nodes.filter((n) => frames[n.id]).map((n) => [keys.get(n.id), { node: n, box: frames[n.id], parent: keys.get(n.parent) }])),
+    byId: new Map(nodes.map((n) => [n.id, n])),
   };
 }
 
@@ -1167,15 +1172,13 @@ export function treeDifference(before, after) {
 /** The boxes that differ by a point or more; one whose parent's box differs too is left to its parent's line. */
 export function frameDifferences(before, after) {
   const differs = new Map();
-  for (const [key, was] of before) {
-    const now = after.get(key);
+  for (const [key, was] of before.boxes) {
+    const now = after.boxes.get(key);
     if (now && was.box.some((v, i) => Math.abs(v - now.box[i]) >= 1)) differs.set(key, { was, now });
   }
   const box = ([x, y, w, h]) => `(${x}, ${y}) ${w}×${h}`;
-  return [...differs.values()].filter(({ was }) => !differs.has(was.parent)).map(({ was, now }) => {
-    const id = was.node.props?.testId;
-    return `${id ? JSON.stringify(id) : `#${was.node.id} (${was.node.type})`} is at ${box(was.box)} after the steps and at ${box(now.box)} when built fresh: the host kept layout from what happened before, which a person sees until something re-renders`;
-  });
+  return [...differs.values()].filter(({ was }) => !differs.has(was.parent)).map(({ was, now }) =>
+    `${named(was.node.id, before.byId)} is at ${box(was.box)} after the steps and at ${box(now.box)} when built fresh: the host kept layout from what happened before, which a person sees until something re-renders`);
 }
 
 /** The origins a native run's fetch faults resolve against, with no web build's admission data to read: the backend its

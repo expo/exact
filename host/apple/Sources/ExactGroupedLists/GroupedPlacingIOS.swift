@@ -39,15 +39,14 @@ extension GroupedListView {
                 rtl ? m.trailing : m.leading, rtl ? m.leading : m.trailing]
     }
 
-    /// Before a batch: the carried rows it must read at home go back. A
-    /// carried row's own box and content box (`frame`, `fieldContent`) and
-    /// the order of the nodes it was carried from (a `children` op, which
-    /// `placing` follows) are kept in its cell, as are those nodes' boxes,
-    /// their blocks' used sizes and their props other than `inert`: the
-    /// shown rows of a list two rows are inserted into, or whose
-    /// `refreshing` changes, stay in their cells, as a collection view's
-    /// cells do under an insert, and the rows of a list whose column UIKit
-    /// resizes in an animation move with it. Any other op on a row takes it
+    /// Before a batch: the carried rows it must read at home go back. An op
+    /// that changes only geometry (`BatchOp.isGeometry`) on a carried row or
+    /// a node it was carried from, the order of those nodes (a `children`
+    /// op, which `placing` follows) and their props other than `inert` keep
+    /// the rows in their cells: the shown rows of a list two rows are
+    /// inserted into, or whose `refreshing` changes, stay in their cells, as
+    /// a collection view's cells do under an insert, and the rows of a list
+    /// whose column UIKit resizes in an animation move with it. Any other op on a row takes it
     /// home alone; any other op on a node it was carried from (a style its
     /// rows inherit, an `inert`) takes every row home. A row carried home
     /// and back takes UIKit's move and trait passes twice and is placed at
@@ -69,14 +68,12 @@ extension GroupedListView {
             if op.op == .far { continue }
             if [.roots, .flight, .land, .exit].contains(op.op) { return restore() }
             if carried[op.id] != nil {
-                if op.op != .frame, op.op != .fieldContent, let row = host.presenter.views[op.id] { alone.append(row) }
+                if !op.isGeometry, let row = host.presenter.views[op.id] { alone.append(row) }
                 continue
             }
-            guard above.contains(op.id) else { continue }
+            guard above.contains(op.id), !op.isGeometry else { continue }
             switch op.op {
-            case .frame, .content, .children: continue
-            // A block's used size (a route's, as its column moves) changes nothing its rows read
-            case .unknown where op.payload["op"] as? String == "block": continue
+            case .children: continue
             case .props where op.props["inert"] == nil && !op.clear.contains("inert"): continue
             default: return restore()
             }

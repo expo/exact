@@ -23,13 +23,7 @@ extension Presenter {
     /// Finish the full projection before newly mounted views have their first frame.
     func geometryOnly(_ batch: Batch) -> Bool {
         ExactSession.protoMode == .geometry && awaitingFrame.isEmpty && !batch.controls && !batch.ops.isEmpty
-            && batch.ops.allSatisfy { op in
-                switch op.op {
-                case .frame, .content, .fieldContent: true
-                case .unknown: op.payload["op"] as? String == "block"
-                default: false
-                }
-            }
+            && batch.ops.allSatisfy(\.isGeometry)
     }
 
     /// PROTO (UIKit-first measurement): the full reach walk after a moving edge's own, under

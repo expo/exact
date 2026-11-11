@@ -111,11 +111,7 @@ extension Presenter {
         }
         return batch.ops.allSatisfy { op in
             // PROTO (UIKit-first measurement): pass geometry on any node, the named scroller's included
-            switch op.op {
-            case .frame, .content, .fieldContent: return true
-            case .unknown where op.payload["op"] as? String == "block": return true
-            default: break
-            }
+            if op.isGeometry { return true }
             // It changes or removes what a header button invokes, a view or a paragraph's run.
             if targets.contains(op.id) { return false }
             if !invoked.isEmpty, op.op == .paragraph || op.op == .destroy {

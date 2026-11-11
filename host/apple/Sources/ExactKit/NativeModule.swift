@@ -295,10 +295,8 @@ private final class NativeEntry {
     #if os(iOS) || os(tvOS)
     /// A native screen's controller, a child of its route's while it lives.
     var screen: UIViewController?
-    /// The view's picture, stretched with its box while UIKit animates the box's size, and what ends it
-    /// (`resizeWillBegin`).
+    /// The view's picture, stretched with its box while UIKit animates the box's size (`resizeWillBegin`).
     var stretch: UIView?
-    var stretchEnd: StretchEnd?
     #endif
     var intrinsicSize: CGSize?
     var hasIntrinsicReport = false
@@ -1192,17 +1190,30 @@ final class NativeViews {
             view.autoresizingMask = []
         }
         entry.stretch = picture
-        entry.stretchEnd = StretchEnd(owner: owner) { [weak self, weak entry] in self?.endStretch(entry) }
+        // The box's animation ends on the first frame with nothing of its place or size in flight
+        FrameClock.shared.want(picture, .nativeStretch) { [weak self, weak entry, weak owner] _ in
+            if let owner, owner.window != nil, Self.moving(owner.layer) { return }
+            self?.endStretch(entry)
+        }
+    }
+
+    /// Whether an animation of `layer`'s place or size is under way (`Agent.inFlight`: not one held at speed 0
+    /// or kept past its end).
+    private static func moving(_ layer: CALayer) -> Bool {
+        let now = CACurrentMediaTime()
+        return (layer.animationKeys() ?? []).contains { key in
+            (key.hasPrefix("bounds") || key.hasPrefix("position"))
+                && layer.animation(forKey: key).map { Agent.inFlight($0, on: layer, key: key, now: now) } == true
+        }
     }
 
     private func endStretch(_ entry: NativeEntry?) {
-        guard let entry else { return }
-        entry.stretchEnd = nil
-        let picture = entry.stretch
+        guard let entry, let picture = entry.stretch else { return }
+        FrameClock.shared.drop(picture)
         entry.stretch = nil
         if let owner = entry.owner, let view = entry.view { laidOut(owner); view.layoutIfNeeded() }
         UIView.animate(withDuration: 0.15, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction],
-                       animations: { picture?.alpha = 0 }, completion: { _ in picture?.removeFromSuperview() })
+                       animations: { picture.alpha = 0 }, completion: { _ in picture.removeFromSuperview() })
     }
     #endif
 
@@ -1529,30 +1540,6 @@ extension NativeViews {
     var observation: [String: Any] {
         ["made": made, "reused": reused, "returned": returned, "parks": parks, "dropped": dropped, "hidden": hidden, "released": released,
          "parked": parked.mapValues(\.count), "cap": Self.reuseCap, "limit": Self.reuseLimit]
-    }
-}
-#endif
-
-#if os(iOS) || os(tvOS)
-/// The end of a box's animated resize (`NativeViews.resizeWillBegin`): the first frame on which the box has no
-/// animation of its place or size left.
-final class StretchEnd: NSObject {
-    private weak var owner: UIView?
-    private let ended: () -> Void
-    private var link: CADisplayLink?
-
-    init(owner: UIView, ended: @escaping () -> Void) {
-        self.owner = owner; self.ended = ended
-        super.init()
-        let link = CADisplayLink(target: self, selector: #selector(tick))
-        link.add(to: .main, forMode: .common)
-        self.link = link
-    }
-
-    @objc private func tick() {
-        if let owner, owner.window != nil, owner.layer.animationKeys()?.contains(where: { $0.hasPrefix("bounds") || $0.hasPrefix("position") }) == true { return }
-        link?.invalidate(); link = nil
-        ended()
     }
 }
 #endif

@@ -231,7 +231,8 @@ public final class ExactApp {
     func rebuild() -> Bool {
         if let plan = lastPlan { return applyTogether(plan, label: "rebuild", resolver: resolver, token: selectedToken, identity: devGeneration, commit: { true }) }
         let booted = sessions.filter { $0.booted && $0.state != .destroyed }
-        return !booted.isEmpty && booted.map { $0.apply($0.bootedPlan ?? Runtime.bakedPlan(), label: "rebuild") }.allSatisfy { $0 }
+        let baked = booted.contains { $0.bootedPlan == nil } ? Runtime.bakedPlan() : Data()
+        return !booted.isEmpty && booted.map { $0.apply($0.bootedPlan ?? baked, label: "rebuild") }.allSatisfy { $0 }
     }
 
     /// Every session accepts before the durable commit. Its callback runs on

@@ -195,16 +195,18 @@ impl<D: DataSource> Bridge<D> {
 
     /// Copy the immutable binary bake receipt to the output buffer.
     pub fn baked_compat(&mut self, compat: &str) -> u32 {
-        self.output.clear();
-        self.output.extend_from_slice(compat.as_bytes());
-        self.output.len() as u32
+        self.copy_out(compat.as_bytes())
     }
 
     /// Copy the plan baked into the library to the output buffer: what a carried
     /// restart of a baked app boots again (`rebuild`).
     pub fn baked_plan(&mut self, plan: &[u8]) -> u32 {
+        self.copy_out(plan)
+    }
+
+    fn copy_out(&mut self, bytes: &[u8]) -> u32 {
         self.output.clear();
-        self.output.extend_from_slice(plan);
+        self.output.extend_from_slice(bytes);
         self.output.len() as u32
     }
 

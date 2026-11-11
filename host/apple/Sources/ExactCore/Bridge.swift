@@ -227,20 +227,15 @@ package final class Runtime {
         on { exact_set_wake(rt, wake, UnsafeMutableRawPointer(bitPattern: ctx)) }
     }
     /// This binary's baked `compat.json`, read on a throwaway runtime.
-    package static func bakedCompat() -> Data {
-        let runtime = Runtime(hooks: .headless)
-        defer { runtime.destroy() }
-        return runtime.on(busy: Data()) {
-            let length = exact_baked_compat(runtime.rt)
-            return Data(bytes: exact_out(runtime.rt), count: Int(length))
-        }
-    }
+    package static func bakedCompat() -> Data { baked(exact_baked_compat) }
     /// This binary's baked plan, read on a throwaway runtime: what a baked app boots again with its state carried (`rebuild`).
-    package static func bakedPlan() -> Data {
+    package static func bakedPlan() -> Data { baked(exact_baked_plan) }
+    private static func baked(_ copy: (ExactRuntime) -> UInt32) -> Data {
         let runtime = Runtime(hooks: .headless)
         defer { runtime.destroy() }
         return runtime.on(busy: Data()) {
-            let length = exact_baked_plan(runtime.rt)
+            // The copy can move the output buffer, so its address is read after it
+            let length = copy(runtime.rt)
             return Data(bytes: exact_out(runtime.rt), count: Int(length))
         }
     }

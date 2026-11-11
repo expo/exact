@@ -187,7 +187,7 @@ export function judge(obs, png, { host = 'web' } = {}) {
 function parseHex(h) { const n = parseInt(String(h).slice(1, 7), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
 
 /** A node as a builder names it: its testId, else its type and an excerpt of its text, else its id (`tree`'s nodes by id). */
-function named(id, nodes, fallback) {
+export function named(id, nodes, fallback) {
   const n = id == null ? null : nodes.get(id);
   if (!n) return fallback ?? (id == null ? 'a view' : `#${id}`);
   if (n.props?.testId != null) return /\s/.test(n.props.testId) ? JSON.stringify(n.props.testId) : n.props.testId;

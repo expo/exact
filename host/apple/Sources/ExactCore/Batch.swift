@@ -109,6 +109,7 @@ public struct BatchOp {
         case create, props, style, children, paragraph, frame, content, present, roots, destroy
         case far // PROTO (rule 4): a box's frame with its route's top edge at the block's top
         case fieldContent, flow, surface, surfaceWork, command, hold, collections, region, router, title, language, unknown
+        case block // LLP 1115.002 D8.2: the used size of the containing block a host gave a subtree, kept in `payload`
         case activity
         case auth // LLP 1069.006 D3: open or cancel an authentication session
         case presence // LLP 1133.010 D13: the platform's check for a presence call
@@ -161,5 +162,16 @@ extension BatchValue {
            let c = color.converted(to: srgb, intent: ProfileSpaces.intent(half["i"]?.string), options: nil)?.components,
            c.count == 4 { return c.map { (Double($0) * 255).rounded() } }
         return nil
+    }
+}
+
+extension BatchOp {
+    /// An op that changes only where something is drawn and how large: a box (`frame`), a scroller's content
+    /// size (`content`), a field's or box's content box (`fieldContent`), a block's used size (`block`).
+    package var isGeometry: Bool {
+        switch op {
+        case .frame, .content, .fieldContent, .block: true
+        default: false
+        }
     }
 }

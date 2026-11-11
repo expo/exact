@@ -125,15 +125,15 @@ test('a box a fresh build places elsewhere is named once, by its outermost node,
   // The same screen built again, its nodes numbered anew and the text half a point off
   const same = placed(tree([9, 10, 11, 12]), { ...frames([9, 10, 11, 12], [0, 10, 364, 44]), 12: [16, 560.5, 100, 20.4] });
   expect(treeDifference(before.nodes, same.nodes)).toBeNull();
-  expect(frameDifferences(before.boxes, same.boxes)).toEqual([]);
+  expect(frameDifferences(before, same)).toEqual([]);
   // The row inset as UIKit insets it when built fresh
   const inset = placed(tree([9, 10, 11, 12]), frames([9, 10, 11, 12], [20, 10, 324, 44]));
-  const lines = frameDifferences(before.boxes, inset.boxes);
+  const lines = frameDifferences(before, inset);
   expect(lines).toHaveLength(1);
-  expect(lines[0]).toStartWith('#3 (row) is at (0, 10) 364×44 after the steps and at (20, 10) 324×44 when built fresh');
+  expect(lines[0]).toStartWith('row#3 is at (0, 10) 364×44 after the steps and at (20, 10) 324×44 when built fresh');
   // A list that moved names the list, not each row inside it
   const moved = placed(tree([9, 10, 11, 12]), { ...frames([9, 10, 11, 12], [20, 10, 324, 44]), 10: [20, 0, 344, 600] });
-  expect(frameDifferences(before.boxes, moved.boxes).map((l) => l.split(' is at')[0])).toEqual(['"info-list"']);
+  expect(frameDifferences(before, moved).map((l) => l.split(' is at')[0])).toEqual(['info-list']);
 });
 
 test('a rebuild that shows another tree is told apart from one that shows the same', () => {

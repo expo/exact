@@ -303,6 +303,8 @@ extension Agent {
 
     /// `boxes` (the test runner's comparison with a fresh build, `rebuild`): each shown node's box in the content of
     /// the nearest scroller around it, so how far a page or a list is scrolled does not count, else in the window.
+    /// The box is the view's whole bounds, a reach past its laid-out box included: a reach kept from before is
+    /// what the comparison is for.
     func boxes() -> [String: Any] {
         var boxes: [String: [Double]] = [:]
         for (id, v) in presenter.views where v.window != nil {
