@@ -101,6 +101,11 @@ final class PresentationMount: UIView {
     /// Relay a modal presentation's events to its logical ancestors (`MountRelay`).
     var relay: MountRelay?
     #endif
+    /// A view UIKit adds, a context menu's highlight among them, draws over the route's ranked document
+    override func didAddSubview(_ subview: UIView) {
+        super.didAddSubview(subview)
+        keepPlatformViewsOver()
+    }
     #if !os(tvOS)
     override func focusItems(in rect: CGRect) -> [any UIFocusItem] { FocusSearch.items(self, in: rect) }
     #endif

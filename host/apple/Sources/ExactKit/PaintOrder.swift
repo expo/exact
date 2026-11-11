@@ -161,7 +161,7 @@ extension NodeView {
         }
         dense?.top = top
         #if os(iOS) || os(tvOS)
-        (parent as? ScrollView)?.keepPlatformViewsOver()
+        if parent is ScrollView || parent is PresentationMount { parent.keepPlatformViewsOver() }
         #endif
     }
 
@@ -278,15 +278,17 @@ extension NSView {
 #endif
 
 #if os(iOS) || os(tvOS)
-extension ScrollView {
+extension UIView {
     /// UIKit hangs a scroller's edge effect (iOS 26) in a view after its
-    /// content, at depth 0, to draw over it. A child ranked above 0 (one
-    /// holding a native button, a `position: relative` card, a `z-index`)
-    /// would paint over the effect and run sharp under the bar, so each
-    /// view of UIKit's after the last ranked child goes to the top child's
-    /// depth, where its later place puts it over them. One with a depth of
-    /// its own (the indicators' 1000, a view sent behind) keeps it. After a
-    /// ranking, and after UIKit's layout, which adds and moves its views.
+    /// content, at depth 0, to draw over it, and a context menu's highlight
+    /// in its preview's container, a route's mount (`PresentationMount`),
+    /// while it hides the node it shows. A child ranked above 0 (one holding
+    /// a native button, a `position: relative` card, a `z-index`, a route's
+    /// document) would paint over them, so each view of UIKit's after the
+    /// last ranked child goes to the top child's depth, where its later place
+    /// puts it over them. One with a depth of its own (the indicators' 1000,
+    /// a view sent behind) keeps it. After a ranking, and as UIKit adds its
+    /// views and lays them out.
     /// Skip the session viewport, whose children include native presentations.
     /// A route viewport holds only its document and keeps UIKit's effects above it.
     func keepPlatformViewsOver() {
