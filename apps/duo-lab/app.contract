@@ -342,7 +342,7 @@ component DuoLab
                 else
                   ArrangementScreen(routeKey=`${entry.id}`, routeName=entry.name, prefix="pushed", title="Pushed panes", nextTitle="Back", openNext=back, nativeArrangement=paneSupport.available)
               if t.name == "arrangement"
-                ArrangementView(routeKey=`${entry.id}`, depth=i + 1, native=paneSupport.available, seed=arrangementSeed, openNext=openArrangement)
+                ArrangementView(routeKey=`${entry.id}`, depth=(match parseNumber(entry.params.depth) { case some(n) => n, case none => i + 1 }), native=paneSupport.available, seed=arrangementSeed, openNext=openArrangement)
               if entry.name != "images" and entry.name != "reflow" and t.name != "keyboard" and t.name != "panes" and t.name != "arrangement"
                 column navigationKey=`${entry.id}` navigationBar="none" class=Screen testId=`screen-${entry.name}`
                   if entry.name == "fold"

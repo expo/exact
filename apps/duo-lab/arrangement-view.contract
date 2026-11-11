@@ -30,7 +30,8 @@ component ArrangementView
   resource viewport = exactViewport() as shape PaneViewport
   // Each screen keeps its own settings, starting from the screen that pushed it
   state settings = seed
-  // A screen's depth is its place in its tab's stack, so its ids are unique and the same in every drive
+  // A screen's depth is the number in its location (`/arrangement/3` is 3; the tab's root is 1),
+  // so its title, ids and Next agree with the URL however the screen was opened
   derive prefix = `arrangement-${depth}`
   derive title = depth == 1 ? "Arrangement" : `Arrangement ${depth}`
   action layout(value: string)
