@@ -1,6 +1,7 @@
 // The app's icon and asset catalog, from its manifest, for an Apple bundle
 // (host/apple/build.mjs assembles it).
 import { spawnSync } from './toolchain.mjs';
+import { resizeSquares } from './image.mjs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, relative, resolve, isAbsolute } from 'node:path';
@@ -29,7 +30,10 @@ export function appIcon(app, dir, platform, { catalog = false } = {}) {
   if (!existsSync(source)) throw new Error(`host/apple: ${app.name}'s icon ${icon.src} does not exist`);
   const sized = (px, out) => run('sips', ['-z', String(px), String(px), source, '--out', out], { stdio: 'ignore' });
   if (platform === 'ios') {
-    for (const [name, px] of [['AppIcon60x60@2x.png', 120], ['AppIcon60x60@3x.png', 180], ['AppIcon76x76@2x~ipad.png', 152], ['AppIcon83.5x83.5@2x~ipad.png', 167]]) sized(px, resolve(dir, name));
+    const sizes = [['AppIcon60x60@2x.png', 120], ['AppIcon60x60@3x.png', 180], ['AppIcon76x76@2x~ipad.png', 152], ['AppIcon83.5x83.5@2x~ipad.png', 167]];
+    // Off a Mac there is no sips: the portable resizer decodes the source once for every size, in this process.
+    if (process.platform === 'darwin') for (const [name, px] of sizes) sized(px, resolve(dir, name));
+    else resizeSquares(source, sizes.map(([name, px]) => [px, resolve(dir, name)]));
     // A distributed build also compiles the icon into Assets.car: App Store
     // Connect requires the asset catalog, not loose PNGs.
     if (catalog) {
