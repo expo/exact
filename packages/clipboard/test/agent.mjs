@@ -11,7 +11,7 @@ import { KINDS, checker, discard, makeFixture, root, run } from './fixture.mjs';
 const argv = process.argv.slice(2), sim = argv.includes('--sim') ? argv[argv.indexOf('--sim') + 1] : process.env.EXACT_SIM;
 const hosts = argv.filter((a, i) => ['web', 'macos', 'ios'].includes(a) && argv[i - 1] !== '--sim');
 const { app } = makeFixture(), env = { ...process.env, EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' };
-Object.assign(process.env, { EXACT_APP_DIR: app, EXACT2: root, HERMES_LEAN_SYS_OFFLINE: '1', ...(sim ? { EXACT_SIM: sim } : {}) });
+Object.assign(process.env, { EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1', ...(sim ? { EXACT_SIM: sim } : {}) });
 const { open } = await import(resolve(root, 'scripts/agent.mjs'));
 const { check, failed } = checker();
 

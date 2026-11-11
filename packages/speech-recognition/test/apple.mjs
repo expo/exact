@@ -17,7 +17,7 @@ const hosts = argv.filter((a, i) => ['macos', 'ios'].includes(a) && argv[i - 1] 
 const { app, id } = makeFixture(), name = basename(app);
 // The fixture's build is gigabytes: it goes however the suite ends.
 process.on('exit', () => rmSync(dirname(app), { recursive: true, force: true }));
-Object.assign(process.env, { EXACT_APP_DIR: app, EXACT2: root, HERMES_LEAN_SYS_OFFLINE: '1' });
+Object.assign(process.env, { EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1' });
 const { open } = await import(resolve(root, 'scripts/agent.mjs'));
 const { check, failed } = checker();
 

@@ -28,7 +28,7 @@ const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 const reused = given && existsSync(given);
 const { app } = reused ? { app: given } : makeFixture(...(given ? [given] : [])), name = basename(app);
 const { check, failed } = checker();
-const env = { ...process.env, EXACT_APP_DIR: app, EXACT2: root, HERMES_LEAN_SYS_OFFLINE: '1' };
+const env = { ...process.env, EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1' };
 try {
   const built = spawnSync('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk'], { cwd: root, env, encoding: 'utf8', maxBuffer: 1 << 28 });
   check('android', 'the APK builds, compiling Gamepad.kt', built.status === 0, (built.stdout + built.stderr).slice(-3000));

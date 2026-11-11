@@ -467,7 +467,7 @@ Ports    none. Runs to completion.`,
     ],
     internal: ['--update'],
     body: `Also rewrites AGENTS.md's generated block and adds the use lines the app's files lack;
-app.json commands and your files are kept. EXACT2=<path> names another exact2 checkout.
+app.json commands and your files are kept. EXACT=<path> names another Exact checkout.
 An app that authored no Cargo workspace has none to rewrite: its native workspace is
 generated under .exact/ by the verb that builds it.
 Ports    none. Runs to completion.`,
@@ -592,7 +592,7 @@ export function indexText({ verbs = Object.keys(HELP).filter((v) => !['new', 'ad
   const line = (verb) => HELP[verb]?.line ?? (own[verb] ? `app.json commands: ${own[verb].join(' ')}` : '');
   const forms = verbs.flatMap((verb) => HELP[verb]?.common ?? []);
   return [
-    'bun exact.mjs <verb> [arguments]    in the app directory (EXACT2=<path> selects the SDK)',
+    'bun exact.mjs <verb> [arguments]    in the app directory (EXACT=<path> selects the SDK)',
     ...names.map((verb) => `  ${verb.padEnd(width)}  ${line(verb)}`),
     ...forms.map((form) => `  ${form}`),
     'bun exact.mjs <verb> --help: flags and example; bun exact.mjs <verb> --help all: every flag and port.',

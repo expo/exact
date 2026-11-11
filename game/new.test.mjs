@@ -117,7 +117,7 @@ test('generated commands run from an external author directory with quoted paths
     mkdirSync(resolve(sdk, 'js/bake/src'), { recursive: true });
     cpSync(resolve(import.meta.dir, '../js/bake/src/__exact_env.mjs'), resolve(sdk, 'js/bake/src/__exact_env.mjs'));
     writeFileSync(resolve(sdk,'host/windows/build.mjs'),`console.log(JSON.stringify({args:process.argv.slice(2),app:process.env.EXACT_APP_DIR}));`);
-    const windows=spawnSync(process.execPath,['exact.mjs','windows','--release','--run'],{cwd:app,env:{...process.env,EXACT2:sdk},encoding:'utf8'});
+    const windows=spawnSync(process.execPath,['exact.mjs','windows','--release','--run'],{cwd:app,env:{...process.env,EXACT:sdk},encoding:'utf8'});
     assert.equal(windows.status,0,windows.stderr);
     const forwarded=JSON.parse(windows.stdout);
     assert.deepEqual(forwarded.args,['outside-game','--release','--run']);

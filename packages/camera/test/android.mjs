@@ -20,7 +20,7 @@ const contract = readFileSync(resolve(app, 'app.contract'), 'utf8')
   .replace('      if placed\n', '      input type="date" value=day change=setDay aria-label="Day" testId="day"\n      if placed\n');
 writeFileSync(resolve(app, 'app.contract'), contract);
 const { check, failed } = checker();
-const env = { ...process.env, EXACT_APP_DIR: app, EXACT2: root, HERMES_LEAN_SYS_OFFLINE: '1' };
+const env = { ...process.env, EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1' };
 const build = (...flags) => spawnSync('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk', ...flags], { cwd: root, env, encoding: 'utf8', maxBuffer: 1 << 28 });
 const lock = resolve(app, 'gradle.lockfile'), checksums = resolve(app, 'gradle-verification.xml');
 try {

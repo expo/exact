@@ -174,7 +174,7 @@ const img = (evaluate, testId) => evaluate(`(() => {
 
 const granted = makeApp('device.photos purpose.swatches');
 process.env.EXACT_APP_DIR = granted;
-process.env.EXACT2 = root;
+process.env.EXACT = root;
 const { open } = await import(resolve(root, 'scripts/agent.mjs'));
 const browserOf = { chromium: 'chrome', firefox: 'firefox', webkit: 'webkit' };
 

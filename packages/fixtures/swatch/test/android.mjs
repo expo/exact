@@ -21,7 +21,7 @@ const workspace = resolve(app, 'Cargo.toml');
 writeFileSync(workspace, readFileSync(workspace, 'utf8').replace('members = ["apple", "linux", "web"]', 'members = ["android", "apple", "linux", "web"]'));
 run('bun', ['exact.mjs', 'lock'], app);
 const { check, failed } = checker();
-const env = { ...process.env, EXACT_APP_DIR: app, EXACT2: root, HERMES_LEAN_SYS_OFFLINE: '1' };
+const env = { ...process.env, EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1' };
 try {
   run('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk'], root, env);
   const generated = resolve(root, 'host/android/app/build', name, 'extensions/exact/app/ExactExtensions.kt');

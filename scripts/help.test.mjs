@@ -34,7 +34,7 @@ test('each verb of a new app\'s exact.mjs, and no verb, answers help from exact2
       mkdirSync(resolve(sdk, file, '..'), { recursive: true });
       writeFileSync(resolve(sdk, file), `require('node:fs').appendFileSync(${JSON.stringify(started)}, ${JSON.stringify(file)} + '\\n');`);
     }
-    const exact = (...args) => timed([resolve(dir, 'exact.mjs'), ...args], { cwd: dir, env: { ...process.env, EXACT2: sdk } });
+    const exact = (...args) => timed([resolve(dir, 'exact.mjs'), ...args], { cwd: dir, env: { ...process.env, EXACT: sdk } });
     for (const verb of APP_VERBS) {
       const lead = verb === 'test' || verb === 'verify' ? ['ios'] : verb === 'agent' ? ['web', 'tree'] : [];
       for (const args of [[verb, '--help'], [verb, ...lead, '-h'], ['help', verb], [verb, '--help', 'all']]) {

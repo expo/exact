@@ -1,5 +1,5 @@
 // An app's commands (LLP 1086; LLP 1116.006 D7): what `bun exact.mjs <verb>` runs in an app that
-// `exact new` made. Its exact.mjs is a few lines that find this checkout (EXACT2) and call `run`, so
+// `exact new` made. Its exact.mjs is a few lines that find this checkout (EXACT) and call `run`, so
 // a builder reading it learns where the verbs are (`bun exact.mjs --help`), not this code. An
 // exact.mjs written before this file held all of it, and still runs; `bun exact.mjs update` thins it.
 import { spawn, spawnSync } from 'node:child_process';
@@ -227,7 +227,7 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
   const asked = !verb || ['help', '--help', '-h'].includes(verb) ? rest.find(known) ?? rest.find((a) => !a.startsWith('-') && a !== 'all') ?? '' : verbs[verb] && (rest.includes('--help') || rest.includes('-h')) ? verb : null;
   if (asked !== null) {
     const help = await import(resolve(exact2, 'scripts/help.mjs')).catch(() => null);
-    if (!help) { console.error(`no exact2 at ${exact2}: EXACT2 names the checkout`); return 1; }
+    if (!help) { console.error(`no Exact checkout at ${exact2}: EXACT names the checkout`); return 1; }
     return help.printHelp(asked, { verbs: Object.keys(verbs), own, all: rest.includes('all') });
   }
   if (verb === 'status' || verb === 'web' && rest.includes('--ready')) {
@@ -295,7 +295,8 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     const child = spawn(command, args, {
       stdio,
       cwd,
-      env: { ...process.env, HERMES_LEAN_SYS_OFFLINE: '1', EXACT_APP_DIR: dir, EXACT2: exact2, EXACT_LAUNCHER_PID: String(process.pid), ...env },
+      // EXACT2 as well, for an app's scripts that read that name (LLP 1036.001 D3)
+      env: { ...process.env, HERMES_LEAN_SYS_OFFLINE: '1', EXACT_APP_DIR: dir, EXACT: exact2, EXACT2: exact2, EXACT_LAUNCHER_PID: String(process.pid), ...env },
     });
     piped(child);
     const pass = (signal) => { interrupted = true; stopped ??= signal; child.kill(signal); }, signals = ['SIGINT', 'SIGTERM', 'SIGHUP'];

@@ -78,7 +78,7 @@ for (const host of hosts.length ? hosts : ['macos']) {
   const where = host === 'ios' ? 'ios-simulator' : 'macos';
   if (host === 'ios' && !sim) throw new Error('ios: name a simulator you booted (--sim <udid>)');
   const fixture = makeFixture();
-  Object.assign(process.env, { EXACT_APP_DIR: fixture.app, EXACT2: root, EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
+  Object.assign(process.env, { EXACT_APP_DIR: fixture.app, EXACT: root, EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
   if (sim) process.env.EXACT_SIM = sim;
   try {
     run('bun', [resolve(root, 'host/apple/build.mjs'), ...(host === 'ios' ? ['--ios', '--sim', sim] : []), 'bgtfixture-apple'], root);

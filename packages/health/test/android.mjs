@@ -19,7 +19,7 @@ const { app } = makeFixture(), name = basename(app);
 
 const { check, failed } = checker();
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const env = { ...process.env, EXACT_APP_DIR: app, EXACT2: root, HERMES_LEAN_SYS_OFFLINE: '1' };
+const env = { ...process.env, EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1' };
 const out = resolve(root, 'host/android/app/build', name);
 try {
   const built = spawnSync('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk', '--write-locks'], { cwd: root, env, encoding: 'utf8', maxBuffer: 1 << 28 });

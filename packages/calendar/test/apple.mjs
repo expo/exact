@@ -31,7 +31,7 @@ const walked = (t) => /\s\d+$/.test(t ?? '');
 /** The fixture built for `host`, its plist read, and `open` bound to it. */
 async function fixtureFor(host, reads) {
   const fixture = makeFixture('calendar', { reads });
-  Object.assign(process.env, { EXACT_APP_DIR: fixture.app, EXACT2: root, EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
+  Object.assign(process.env, { EXACT_APP_DIR: fixture.app, EXACT: root, EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
   if (sim) process.env.EXACT_SIM = sim;
   run('bun', [resolve(root, 'host/apple/build.mjs'), ...(host === 'ios' ? ['--ios', '--sim', sim] : ['--bundle']), `${fixture.name}-apple`], root);
   const target = join(fixture.app, 'target'), files = readdirSync(target, { recursive: true });

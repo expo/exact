@@ -134,7 +134,7 @@ for (const host of hosts.length ? hosts : ['macos']) {
   const where = host === 'ios' ? 'ios-simulator' : 'macos';
   if (host === 'ios' && !sim) throw new Error('ios: name a simulator you booted (--sim <udid>)');
   const fixture = makeFixture();
-  Object.assign(process.env, { EXACT_APP_DIR: fixture.app, EXACT2: root, EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
+  Object.assign(process.env, { EXACT_APP_DIR: fixture.app, EXACT: root, EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
   if (sim) process.env.EXACT_SIM = sim;
   // Registrations and wake requests live in the app's defaults, which no agent store holds: deleted before and after.
   // On the simulator, the app's defaults are a file in its data container.

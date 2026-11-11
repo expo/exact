@@ -13,7 +13,7 @@
 // the clone's own targets among the required hosts, light and dark, every
 // screen in SCREENS, plus the copy's plan bytes. The copy is a git clone of
 // the clone, never the clone itself; its exact.mjs names this checkout or
-// another by EXACT2. EXACT_SIM names the simulator.
+// another by EXACT. EXACT_SIM names the simulator.
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -241,7 +241,7 @@ function provenance(copy) {
   try {
     for (const [runtime, list] of Object.entries(JSON.parse(sim).devices)) for (const d of list) if (d.udid === process.env.EXACT_SIM) device = { name: d.name, runtime };
   } catch { /* no simulator named */ }
-  // The SDK the copy builds with: its exact.mjs's EXACT2 (the environment's,
+  // The SDK the copy builds with: its exact.mjs's EXACT (the environment's,
   // else its default), not this script's checkout.
   const sdk = sdkOf(copy);
   return {
@@ -406,12 +406,12 @@ const conformEvidence = c => {
     ...(c.failing ?? []).map(f => `  NEW ${f}`), ...c.before.failures.map(f => `  baseline: ${f}`), ...c.after.failures.map(f => `  after: ${f}`)];
 };
 
-/** The SDK a copy builds with: its exact.mjs's EXACT2 (the environment's,
- * else its default). */
-function sdkOf(copy) {
-  const named = /const EXACT2 = resolve\(import\.meta\.dir, process\.env\.EXACT2 \?\? "([^"]+)"\)/.exec(readFileSync(join(copy, 'exact.mjs'), 'utf8'))?.[1];
-  // As the copy's launcher reads it: an EXACT2 override, like its default, against the copy's directory.
-  return process.env.EXACT2 ? resolve(copy, process.env.EXACT2) : named ? resolve(copy, named) : null;
+/** The SDK a copy builds with: its exact.mjs's EXACT, else EXACT2 (the environment's, else its default, which every
+ * launcher `exact new` has written puts after `process.env.EXACT2 ??` or `process.env.EXACT ?? process.env.EXACT2 ??`). */
+function sdkOf(copy, override = process.env.EXACT ?? process.env.EXACT2) {
+  const named = /process\.env\.EXACT2? \?\? (?:process\.env\.EXACT2 \?\? )?"([^"]+)"/.exec(readFileSync(join(copy, 'exact.mjs'), 'utf8'))?.[1];
+  // As the copy's launcher reads it: an override, like its default, against the copy's directory.
+  return override ? resolve(copy, override) : named ? resolve(copy, named) : null;
 }
 
 /** host/web-js/conform.mjs on a copy, run from the SDK it builds with (its

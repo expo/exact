@@ -1406,12 +1406,12 @@ test('add writes a relative package specifier within a shared tree, including th
   });
 });
 
-test('add installs a standard package by pathFrom from an outside app with an absolute EXACT2', () => inDir(dir => {
+test('add installs a standard package by pathFrom from an outside app with an absolute EXACT', () => inDir(dir => {
   const root = resolve(import.meta.dir, '..'), app = resolve(dir, 'nested/shop');
   const made = spawnSync(process.execPath, [resolve(root, 'scripts/exact.mjs'), 'new', app], { encoding: 'utf8' });
   assert.equal(made.status, 0, made.stdout + made.stderr);
   const added = spawnSync(process.execPath, ['exact.mjs', 'add', '@exact/in-app-browser'], {
-    cwd: app, encoding: 'utf8', env: { ...process.env, EXACT2: root },
+    cwd: app, encoding: 'utf8', env: { ...process.env, EXACT: root },
   });
   assert.equal(added.status, 0, added.stdout + added.stderr);
   assert.equal(added.stdout.trim().split('\n').at(-1), `For Android, after importing the package, run: in '${realpathSync(app)}': bun exact.mjs android --write-locks`);

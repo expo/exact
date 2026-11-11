@@ -67,7 +67,7 @@ export function androidFixture(name, { contract, uses, grants = '', strings = {}
   const out = resolve(root, 'host/android/app/build', name);
   /** `agent-android.mjs build … --apk` with `flags`, under `env` added to this process's. */
   const build = (flags = [], env = {}) => spawnSync('bun', [resolve(root, 'scripts/agent-android.mjs'), 'build', name, '--apk', ...flags],
-    { cwd: root, env: { ...process.env, EXACT_APP_DIR: app, EXACT2: root, HERMES_LEAN_SYS_OFFLINE: '1', ...env }, encoding: 'utf8', maxBuffer: 1 << 28 });
+    { cwd: root, env: { ...process.env, EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1', ...env }, encoding: 'utf8', maxBuffer: 1 << 28 });
   return { app, out, build, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 

@@ -31,7 +31,7 @@ const { check, failed } = checker();
 }
 
 const { app } = makeFixture(), name = basename(app);
-Object.assign(process.env, { EXACT_APP_DIR: app, EXACT2: root, HERMES_LEAN_SYS_OFFLINE: '1' });
+Object.assign(process.env, { EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1' });
 const { open } = await import(resolve(root, 'scripts/agent.mjs'));
 
 /** The text at `testId` once `want` holds, or the last seen; the platform answers on its own time. */

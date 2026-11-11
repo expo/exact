@@ -31,7 +31,7 @@ const SAMPLE = ['Kate Bell', 'Daniel Higgins Jr.', 'John Appleseed', 'Anna Haro'
 /** The fixture built for `host`, its plist read, and `open` bound to it. */
 async function fixtureFor(host, reads) {
   const fixture = makeFixture('contacts', { reads });
-  Object.assign(process.env, { EXACT_APP_DIR: fixture.app, EXACT2: root, EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
+  Object.assign(process.env, { EXACT_APP_DIR: fixture.app, EXACT: root, EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
   if (sim) process.env.EXACT_SIM = sim;
   run('bun', [resolve(root, 'host/apple/build.mjs'), ...(host === 'ios' ? ['--ios', '--sim', sim] : ['--bundle']), `${fixture.name}-apple`], root);
   const target = join(fixture.app, 'target'), files = readdirSync(target, { recursive: true });

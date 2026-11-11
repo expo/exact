@@ -17,7 +17,7 @@ import { checker, makeFixture, root, run, texts, until } from './fixture.mjs';
 
 const hosts = process.argv.slice(2).length ? process.argv.slice(2) : ['web', ...(process.platform === 'darwin' ? ['macos'] : [])];
 const { app, dir } = makeFixture({ packed: true }), name = app.split('/').pop();
-Object.assign(process.env, { EXACT_APP_DIR: app, EXACT2: root, HERMES_LEAN_SYS_OFFLINE: '1', EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
+Object.assign(process.env, { EXACT_APP_DIR: app, EXACT: root, HERMES_LEAN_SYS_OFFLINE: '1', EXACT_IDENTITY: process.env.EXACT_IDENTITY ?? '-' });
 const { open } = await import(resolve(root, 'scripts/agent.mjs'));
 const { check, failed } = checker();
 
