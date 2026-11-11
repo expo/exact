@@ -607,7 +607,7 @@ async function main(args, lockHeld = false) {
   // What the manifest and the app's files refuse is said before Cargo: an app with an update store ships into a stream,
   // so the bake refuses a production build without its receipt; packaging refuses a missing icon (assets.mjs).
   const store = `deploy.store.${ios ? 'ios' : 'macos'}`, streamed = app.manifest.deploy?.store?.[ios ? 'ios' : 'macos'] !== '0';
-  const refused = [...(distribution && streamed && !process.env.EXACT_UPDATE_RECEIPT && process.env.EXACT_UPDATE_GENESIS !== '1' ? [`${app.name}: what is distributed bakes production trust, and with an update store (${store} is not "0") it belongs to a stream: set EXACT_UPDATE_RECEIPT to its authenticated publisher receipt (scripts/deploy.mjs), or EXACT_UPDATE_GENESIS=1 to start a new stream`] : []), ...appleRefusals(app, tv ? 'tvos' : ios ? 'ios' : 'macos', { archive: !!ipa })];
+  const refused = [...(distribution && streamed && !process.env.EXACT_UPDATE_RECEIPT && process.env.EXACT_UPDATE_GENESIS !== '1' ? [`${app.name}: what is distributed bakes production trust, and with an update store (${store} is not "0") it belongs to a stream: set EXACT_UPDATE_RECEIPT to its authenticated publisher receipt (scripts/deploy.mjs), or EXACT_UPDATE_GENESIS=1 to start a new stream`] : []), ...appleRefusals(app, tv ? 'tvos' : ios ? 'ios' : 'macos', { archive: distribution })];
   const sdkName = appleSdkName(tv ? 'tvos' : ios ? 'ios' : 'macos', device); // the SDK this build compiles with
   if (process.platform === 'darwin' && compilesSwiftHost(args)) refused.push(...[xcodeRefusal(sdkName)].filter(Boolean));
   if (refused.length) { console.error(refused.join('\n')); process.exitCode = 1; return; }
