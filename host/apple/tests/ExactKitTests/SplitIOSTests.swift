@@ -552,10 +552,10 @@ final class SplitIOSTests: XCTestCase {
     /// An iPhone Duo unfolding with its inspector in a sheet: a sync the
     /// expansion starts can find the split collapsing still, UIKit having
     /// asked which column to put on top and not yet said it collapsed. The
-    /// sheet keeps the route until the column can take it: closed, the
-    /// inspector was gone until a later sync slid the column in. The order is
-    /// UIKit's on the Duo simulator, replayed here by asking before the
-    /// expansion.
+    /// sheet keeps the route until the column can take it, once UIKit says it
+    /// expanded: closed, the inspector was gone until a later sync slid the
+    /// column in. The order is UIKit's on the Duo simulator, replayed here by
+    /// asking before the expansion.
     func testAnInspectorsSheetKeepsItsRouteUntilTheColumnCanTakeIt() throws {
         guard #available(iOS 26.0, *) else { throw XCTSkip("the inspector's column is iOS 26's") }
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "a sheet is presented only in a scene's window") }
@@ -572,10 +572,32 @@ final class SplitIOSTests: XCTestCase {
         let info = try node(session, "info-page")
         _ = split.splitViewController(split.controller, topColumnForCollapsingToProposedTopColumn: .secondary)
         window.traitOverrides.horizontalSizeClass = .regular
-        until("expanded") { !split.controller.isCollapsed }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3)) // the syncs the expansion starts
-        XCTAssertEqual(session.presenter.modals.routes.map(\.node), [info], "the sheet keeps the route")
-        XCTAssertTrue(info.window != nil, "and shows it")
+        var unshown = false
+        until("the column takes the route") {
+            if info.window == nil { unshown = true }
+            return split.inspecting?.node === info && session.presenter.modals.routes.isEmpty && !agent.nativeInFlight()
+        }
+        XCTAssertFalse(unshown, "the route shows throughout, in its sheet until the column takes it")
+    }
+
+    /// An iPhone Duo unfolding asks which column to put on top between
+    /// asking how to expand and expanding, and never collapses: a route
+    /// chosen once it has expanded shows in the detail. Replayed here by
+    /// asking before the expansion, as UIKit does on the Duo simulator.
+    func testARouteChosenAfterAnUnfoldThatAskedToCollapseShowsInTheDetail() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the size class is the scene window's") }
+        let session = try boot(size: CGSize(width: 951, height: 669))
+        let navigation = session.presenter.navigation, agent = Agent(session: session)
+        let window = try XCTUnwrap(self.window)
+        window.traitOverrides.horizontalSizeClass = .compact
+        until("a split, collapsed") { navigation.split?.controller.isCollapsed == true && !agent.nativeInFlight() }
+        let split = try XCTUnwrap(navigation.split)
+        _ = split.splitViewController(split.controller, topColumnForCollapsingToProposedTopColumn: .primary)
+        window.traitOverrides.horizontalSizeClass = .regular
+        until("expanded") { !split.controller.isCollapsed && !agent.nativeInFlight() }
+        XCTAssertNil(agent.tap(["id": Int(try node(session, "row-a").id)])["error"])
+        until("the book is in the detail") { split.shown.count == 2 && !agent.nativeInFlight() }
+        XCTAssertTrue(split.detail.topViewController?.view.window != nil, "and shows there")
     }
 
     /// LLP 1127 D14 on the Landmarks port's iPhone Duo: with the inspector

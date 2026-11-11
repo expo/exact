@@ -300,6 +300,10 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     }
     func splitViewControllerDidExpand(_ svc: UISplitViewController) {
         expansion = false
+        // Unfolding an iPhone Duo, UIKit asks which column to collapse to
+        // between asking how to expand and expanding, and never collapses:
+        // the columns it expanded are what shows.
+        collapsing = false
         // Collapsed, a pop of the detail's controller left its routes in it.
         show(stack, animated: false)
         DispatchQueue.main.async { self.changed() }
