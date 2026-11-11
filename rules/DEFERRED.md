@@ -628,10 +628,12 @@ a paint-only row, no doing-list item in this area.
 `:focus-visible` take `color`, which reaches the node's text as its own
 `color` does: CSS's `a:hover { color }`. Consumer: jameside.com's port,
 whose nav, title and icon links change their text colour on hover. This
-amends D8's rule that a host look takes no inherited row. The web shows it;
-the Apple and Linux hosts' looks paint the box alone and leave it unshown.
-Take: not yet named; it needs James's or Charlie's ruling. Still out: a
-look's `color` on the native hosts.
+amends D8's rule that a host look takes no inherited row. The web and the
+Apple host (a Mac's pointer, an iPad's) show it; Linux's looks paint the
+box alone. Take: waived (Charlie, 2026-11-10) on the condition that the Mac
+host applies the hover colour too: a look the author writes that a host
+with a pointer drops would be a tell. Still out: a look's `color` on
+Linux.
 
 **Runtime**
 

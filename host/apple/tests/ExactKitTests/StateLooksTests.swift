@@ -26,6 +26,7 @@ final class StateLooksTests: XCTestCase {
 
     private let blue: [Double] = [37, 99, 235, 255], navy: [Double] = [29, 78, 216, 255]
     private let white: [Double] = [255, 255, 255, 255], red: [Double] = [255, 0, 0, 255], green: [Double] = [0, 255, 0, 255]
+    private let yellow: [Double] = [253, 224, 71, 255]
     private func ink(_ c: [Double]) -> BatchValue { .array(c.map(BatchValue.number)) }
     private var looks: [String: Any] {
         ["hover": ["background_color": green, "opacity": 0.8], "focus_visible": ["border_color_top": green]]
@@ -119,6 +120,82 @@ final class StateLooksTests: XCTestCase {
         XCTAssertEqual(v.style["border_color_top"], ink([0, 0, 0, 255]))
         p.apply(wireBatch([["op": "props", "id": 1, "set": [:], "clear": ["disabled"]]]))
         XCTAssertEqual(v.style["border_color_top"], ink(green))
+    }
+
+    /// A box with a `:hover` colour (1, `ink` its base), holding a text that
+    /// takes its colour (2), one with its own (3), and a pressable box (4)
+    /// with a press colour holding a text that takes the colour around (5).
+    private func colourFixture(_ extra: [String: Any] = [:]) throws -> (Presenter, NodeView, [NodeView]) {
+        let (p, v) = try fixture()
+        let style: [String: Any] = ["text_color": white, "looks": ["hover": ["text_color": red]]].merging(extra) { $1 }
+        p.apply(wireBatch([
+            ["op": "style", "id": 1, "style": style],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "Takes"], "style": ["text_color": white]],
+            ["op": "create", "id": 3, "kind": "text", "props": ["text": "Keeps"], "style": ["text_color": blue, "written": ["text_color"]]],
+            ["op": "create", "id": 4, "kind": "view", "handlers": ["press"], "style": ["text_color": white, "press_color": navy]],
+            ["op": "create", "id": 5, "kind": "text", "props": ["text": "Pressed"], "style": ["text_color": white]],
+            ["op": "children", "id": 4, "ids": [5]],
+            ["op": "children", "id": 1, "ids": [2, 3, 4]],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 200.0, "h": 20.0],
+            ["op": "frame", "id": 3, "x": 0.0, "y": 20.0, "w": 200.0, "h": 20.0],
+            ["op": "frame", "id": 4, "x": 0.0, "y": 40.0, "w": 200.0, "h": 40.0],
+            ["op": "frame", "id": 5, "x": 0.0, "y": 0.0, "w": 200.0, "h": 20.0],
+        ]))
+        return (p, v, try [2, 3, 4, 5].map { try XCTUnwrap(p.views[$0]) })
+    }
+    private func colours(_ views: [NodeView]) -> [BatchValue?] { views.map { $0.style["text_color"] } }
+
+    /// A `:hover` `color` is its text colour and its subtree's, as CSS's
+    /// `a:hover { color }` is inherited: a text with its own keeps it, the
+    /// engine's writes beneath keep it, and the pointer leaving gives the
+    /// base back.
+    func testAHoverColourReachesTheTextBelow() throws {
+        let (p, v, below) = try colourFixture()
+        p.setHoverPath([v])
+        XCTAssertEqual(v.style["text_color"], ink(red))
+        XCTAssertEqual(colours(below), [ink(red), ink(blue), ink(red), ink(red)], "all but the text with its own")
+        // The engine writes a text beneath again: the hover's colour stays over it.
+        p.apply(wireBatch([["op": "style", "id": 2, "style": ["text_color": white]]]))
+        XCTAssertEqual(below[0].style["text_color"], ink(red))
+        p.setHoverPath([])
+        XCTAssertEqual(v.style["text_color"], ink(white))
+        XCTAssertEqual(colours(below), [ink(white), ink(blue), ink(white), ink(white)])
+    }
+
+    /// The press's colour stands over the hover's, its own and a pressed
+    /// child's, and the hover's comes back with the release; the focus's
+    /// stands over the hover's.
+    func testAPressColourStandsOverTheHoversAndTheFocusOver() throws {
+        let (p, v, below) = try colourFixture(["press_color": yellow, "looks": ["hover": ["text_color": red], "focus_visible": ["text_color": green]]])
+        p.setHoverPath([v])
+        v.pressed = true
+        XCTAssertEqual(v.style["text_color"], ink(yellow))
+        XCTAssertEqual(colours(below), [ink(yellow), ink(blue), ink(yellow), ink(yellow)])
+        v.press.start -= 1; v.pressPaint.at -= 1
+        v.pressed = false
+        XCTAssertEqual(colours(below), [ink(red), ink(blue), ink(red), ink(red)], "the hover's again")
+        // A child's own press colour over the hover's, and the hover's again after.
+        let child = below[2]
+        child.pressed = true
+        XCTAssertEqual(colours(below), [ink(red), ink(blue), ink(navy), ink(navy)])
+        child.press.start -= 1; child.pressPaint.at -= 1
+        child.pressed = false
+        XCTAssertEqual(colours(below), [ink(red), ink(blue), ink(red), ink(red)])
+        v.focusVisible = true
+        XCTAssertEqual(colours(below), [ink(green), ink(blue), ink(green), ink(green)], "the focus's over the hover's")
+        p.setHoverPath([])
+        v.focusVisible = false
+        XCTAssertEqual(colours(below), [ink(white), ink(blue), ink(white), ink(white)])
+    }
+
+    /// A disabled node lends no look's colour; enabled under the pointer, it does.
+    func testADisabledNodeLendsNoColour() throws {
+        let (p, v, below) = try colourFixture()
+        p.apply(wireBatch([["op": "props", "id": 1, "set": ["disabled": "true"], "clear": []]]))
+        p.setHoverPath([v])
+        XCTAssertEqual(colours(below), [ink(white), ink(blue), ink(white), ink(white)])
+        p.apply(wireBatch([["op": "props", "id": 1, "set": [:], "clear": ["disabled"]]]))
+        XCTAssertEqual(colours(below), [ink(red), ink(blue), ink(red), ink(red)])
     }
 
     /// A re-entrant hover (an ancestor's enter replacing the path) publishes

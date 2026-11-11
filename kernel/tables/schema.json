@@ -4687,7 +4687,7 @@
     {
       "id": 9,
       "name": "SetLooks",
-      "_comment": "@ref LLP 1121 D8 (stage 8 B): a node's `:hover` and `:focus-visible` looks, resolved by the producer as a static row is: payload a u8 count (at most 2), then per look its state (1 :hover, 2 :focus-visible; ascending, each once; 0, once `:active`, is retired: `:active` lowers to the press paint) and a style patch of the look rows only (background-color, color, a side's border colour, opacity, box-shadow), set or cleared. A look's color reaches the subtree as the node's own does; the web shows it, and the other hosts' looks paint the box alone. Replaces the node's looks whole; a count of 0 clears them. A host composes them over the base on its own tracking, under the press paint."
+      "_comment": "@ref LLP 1121 D8 (stage 8 B): a node's `:hover` and `:focus-visible` looks, resolved by the producer as a static row is: payload a u8 count (at most 2), then per look its state (1 :hover, 2 :focus-visible; ascending, each once; 0, once `:active`, is retired: `:active` lowers to the press paint) and a style patch of the look rows only (background-color, color, a side's border colour, opacity, box-shadow), set or cleared. A look's color reaches the subtree as the node's own does; the web and Apple show it, and Linux's looks paint the box alone. Replaces the node's looks whole; a count of 0 clears them. A host composes them over the base on its own tracking, under the press paint."
     }
   ],
   "symbols": [
