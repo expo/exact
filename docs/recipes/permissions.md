@@ -22,7 +22,7 @@ answers the platform's prompt (LLP 1133 D7).
 
 4. **Recover:** while `denied`, say so and offer Settings; the rest keeps
    working. A refused request fails and runs no `then`: read
-   `failed(located)` ([error-alert](error-alert.md)).
+   `failed(located)` ([error alert](error-alert.md)).
 
 ```text
 use getCurrentPosition, geolocationStatus, GeolocationPosition, GeolocationStatus from "@exact/geolocation"

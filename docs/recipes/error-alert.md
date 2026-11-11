@@ -71,4 +71,4 @@ test "a refused save says why, and OK keeps the draft"
   waiting alert, and a removed dialog never presents later. Waiting alerts appear before
   dialogs opened by the preceding alert’s chosen action.
 - `then` does not run for a request that brought no answer: show `failed(saved)` in place
-  ([fetch-loading-error](fetch-loading-error.md)).
+  ([fetch with loading, error and retry](fetch-loading-error.md)).

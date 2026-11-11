@@ -38,7 +38,7 @@ component Shop
 ```
 
 In `app.ts`, append the page before `refreshes` re-reads the resource's answer
-([after-a-write](after-a-write.md)). This fake API has three pages of twenty;
+([after a write](after-a-write.md)). This fake API has three pages of twenty;
 replace `fetchPage` with your API and its next cursor, and name its origin in `grants`:
 
 ```ts

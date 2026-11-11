@@ -4,12 +4,12 @@ Where an app keeps things, and the `grants` line for each:
 
 | What | Where | Grant |
 | --- | --- | --- |
-| A setting | `state … persist` ([persisted-setting](persisted-setting.md)) | none |
+| A setting | `state … persist` ([a remembered setting](persisted-setting.md)) | none |
 | A small collection | a JSON file, `storage.fs` (start-here's list) | `fs.read app:/data/items.json`, `fs.write …` |
 | A collection that grows or is queried | SQLite, `storage.sqlite` | `sqlite.open app:/data/journal.db` |
 | A secret: a token | `store.get`, `store.set` | `secret.keep token` |
 | A file the app ships | app.json `host.ios.resources` (and `.macos`) | `fs.read bundle:/Resources/x` (its `to`) |
-| A server | `fetch` ([rest-backend](rest-backend.md)) | `net.fetch https://api.example.com` |
+| A server | `fetch` ([a REST server](rest-backend.md)) | `net.fetch https://api.example.com` |
 | A server the person names at run time | `fetch`, a socket | `net.fetch https:`, `net.websocket wss:` (any host and port); plain `http:` to a host name on Apple also needs app.json's `appTransportSecurity.allowsArbitraryLoads` |
 
 A journal in SQLite (its field and Add are start-here's):
@@ -62,7 +62,7 @@ export const answer: Answer = (source, args, store, storage, native) => sources[
 - A grant covers its path and its tree (`fs.write app:/data`); anything else is refused,
   code `denied`. A native line names a directory (`fs.read /etc`). `app:/data` is kept,
   `app:/cache` refetchable, `app:/tmp` scratch: a native module's `context.data`,
-  `.cache`, `.temporary` ([native-module](native-module.md)).
+  `.cache`, `.temporary` ([native module](native-module.md)).
 - A file is bytes (`readFile`, `atomicWriteFile`); a missing one is code `ENOENT`: answer
   the empty collection, and branch on `e.code`, never the message.
 - SQLite: `query` reads, `execute` writes, `transaction([...])` writes several or none.
