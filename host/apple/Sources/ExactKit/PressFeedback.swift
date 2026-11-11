@@ -123,11 +123,20 @@ extension NodeView {
         }
         #endif
         if isNativeButton { heldHighlight(); return }
+        #if os(iOS)
+        // A custom row of a grouped list shows the platform's press as its
+        // cell's highlight (LLP 1084 §4)
+        let grouped = presenter?.groupedLists?.highlight(carried: self, down && platformPressFeedback) == true
+        let cellPress = grouped && platformPressFeedback
+        let down = down && (defaultLink == nil || grouped) && !cellPress
+        #else
         let down = down && defaultLink == nil
+        #endif
         // What a press shows goes at its release whatever the style says now:
         // an authored look the style dropped while held included.
         if !down || !authorsPress { paintPress(false, instantly: down); aimPress(false, release: true) }
         #if os(iOS)
+        if cellPress { dimPress(false, instantly: true); return }
         // A list's row is its cell: the cell's ground, not the dim (LLP 1115.000 D16).
         if presenter?.rowCells.press(self, down) == true { return }
         if platformPressDims { dimPress(down); return }
