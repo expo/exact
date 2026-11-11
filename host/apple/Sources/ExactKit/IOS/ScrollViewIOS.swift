@@ -40,6 +40,7 @@ package class ScrollView: UIScrollView {
     package override var bounds: CGRect {
         get { super.bounds }
         set {
+            guard super.bounds != newValue else { return }
             guard UIView.inheritedAnimationDuration > 0, let node = scrollingNode, let presenter = node.presenter else { return super.bounds = newValue }
             presenter.moveOrPlace(node) { super.bounds = newValue }
         }
@@ -52,6 +53,11 @@ package class ScrollView: UIScrollView {
     /// tab bar's inset reaches a grid after it opened at its newest row
     /// (r25's photos, at launch and as a viewer closes), and kept, the
     /// offset left that row under the bar.
+    package override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        // PROTO (safe-area design r4 §5.3): the composer's cross-axis term reads this safe area.
+        if let node = superview as? NodeView, node.reach != .zero { SafeReach.reconcile(node) }
+    }
     package override func adjustedContentInsetDidChange() {
         let was = keptInset
         keptInset = adjustedContentInset
@@ -158,7 +164,7 @@ package class ScrollView: UIScrollView {
         // `none` gets its band back: off for this drag's `none`, or for an
         // axis this view scrolls under `none`.
         let still = { (axis: String) in owner.style["overscroll_behavior_\(axis)"]?.string == "none" }
-        bounces = !(behavior == "none" || (scrollsX && still("x")) || (scrollsY && still("y")))
+        assign(self, \.bounces, !(behavior == "none" || (scrollsX && still("x")) || (scrollsY && still("y"))))
         return chains(velocity)
     }
     /// `handsOff`'s answer without its side effect: whether a drag in
@@ -268,7 +274,7 @@ extension NodeView {
         if scrollView == nil { presenter?.scrollers.remove(id) }
         else { presenter?.scrollers.insert(id) }
         scrollWritten = nil
-        view?.contentInsetAdjustmentBehavior = .never
+        // PROTO: a native backend keeps its own adjustment, as a scroll view Exact makes keeps UIKit's (`syncScroll`)
         view?.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         syncScroll()
         updateRefresh()
@@ -289,14 +295,14 @@ extension NodeView {
     /// UIKit owns a native list's row geometry, including rows offscreen.
     private func scrollRect(_ node: NodeView, in sv: UIScrollView) -> CGRect? {
         if groupedOwner { return presenter?.groupedLists?.projectedRect(for: node, in: sv) }
-        return node.isDescendant(of: sv) && !node.isHidden ? node.convert(node.bounds, to: sv) : nil
+        return node.isDescendant(of: sv) && !node.isHidden ? node.convert(node.boxBounds, to: sv) : nil
     }
 
     func captureScrollPosition(focused: NodeView?) {
         // UIKit may have pending row geometry and its own offset adjustment.
         // Snapshot both from the same layout before preserving the reader.
         if groupedOwner { scrollView?.layoutIfNeeded() }
-        beforeLayoutScroll = scrollView.map { ($0.contentOffset, scrollTopInset($0)) }
+        beforeLayoutScroll = scrollView.map { ($0.contentOffset, scrollTopInset($0), $0.adjustedContentInset.top - $0.contentInset.top) }
         followedScroll = nil
         readingAnchors.removeAll(keepingCapacity: true)
         scrollAnchor = nil
@@ -335,7 +341,7 @@ extension NodeView {
         // Coordinates are in the scroll view's content space, not the window.
         func anchors(in view: UIView) {
             for case let node as NodeView in view.subviews where !node.isHidden {
-                let rect = node.convert(node.bounds, to: sv)
+                let rect = node.convert(node.boxBounds, to: sv)
                 guard rect.width > 0, rect.height > 0, rect.intersects(sv.bounds) else { continue }
                 if !sv.bounds.contains(rect) { anchors(in: node.container) }
                 readingAnchors.append((node, rect.minY))
@@ -355,8 +361,11 @@ extension NodeView {
                     let shift = rect.minY - anchor.y
                     let i = sv.adjustedContentInset
                     // Native layout may already have moved the offset. Restore
-                    // the captured reading position, counting the row shift once.
-                    let top = (beforeLayoutScroll?.offset.y ?? sv.contentOffset.y) + shift
+                    // the captured reading position, counting the row shift once and
+                    // carrying over a change in UIKit's own adjustment (its part of
+                    // `adjustedContentInset`), which UIKit has applied to the offset
+                    // to keep the rows where they were: replaying the raw offset would undo it.
+                    let top = (beforeLayoutScroll.map { $0.offset.y + $0.uikitTop - (sv.adjustedContentInset.top - sv.contentInset.top) } ?? sv.contentOffset.y) + shift
                     let y = sv.isTracking || sv.isDecelerating ? top : min(max(top, -i.top), max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height))
                     // An element reveal heads for where its target now is instead (`IntoView.swift`).
                     if presenter?.elementScrolls.revealing(sv) != nil { presenter?.elementScrolls.retarget(sv) }
@@ -477,31 +486,29 @@ extension NodeView {
         }
         if let saved = hiddenScroll {
             hiddenScroll = nil
-            writeScrollPosition(in: sv, left: Double(saved.x), top: Double(saved.y), animated: false, titleSlack: false)
+            writeScrollPosition(in: sv, left: Double(saved.x), top: Double(saved.y), animated: false)
         }
         guard pendingScrollTop != nil || pendingScrollLeft != nil else { return }
         // `scroll-behavior: smooth` (CSS) animates a prop write, never a
         // reader's own scroll. Under the agent's frozen clock it lands at once
         // (as a modal presents, LLP 1035.003 D5), so `layout` reads the target.
         let smooth = extras?.pendingScrollTransfer != true && style["scroll_behavior"]?.string == "smooth" && !ExactEnv.agentFreezes
-        writeScrollPosition(in: sv, left: pendingScrollLeft, top: pendingScrollTop, animated: smooth, titleSlack: true)
+        writeScrollPosition(in: sv, left: pendingScrollLeft, top: pendingScrollTop, animated: smooth)
     }
 
     /// Convert a logical write only after native layout. UIKit can
     /// invalidate its offset when that write collapses the navigation title;
     /// settle that one inset transition and apply the same intent once more.
-    private func writeScrollPosition(in sv: UIScrollView, left: Double?, top: Double?, animated: Bool, titleSlack: Bool) {
+    private func writeScrollPosition(in sv: UIScrollView, left: Double?, top: Double?, animated: Bool) {
         func target() -> CGPoint {
             let i = sv.adjustedContentInset, inset = scrollTopInset(sv)
-            // CSS ends where a large title rests collapsed.
-            let slack = titleSlack && scrollOrigin > 0 ? max(0, i.top - scrollCollapsed) : 0
-            let y = top.map { CGFloat($0) - inset == sv.contentOffset.y ? sv.contentOffset.y : min(max(CGFloat($0) - inset, -i.top), max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height - slack)) } ?? sv.contentOffset.y
+            let y = top.map { CGFloat($0) - inset == sv.contentOffset.y ? sv.contentOffset.y : min(max(CGFloat($0) - inset, -i.top), max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height)) } ?? sv.contentOffset.y
             let x = left.map { CGFloat($0) == sv.contentOffset.x ? sv.contentOffset.x : min(max(CGFloat($0), -i.left), max(-i.left, sv.contentSize.width + i.right - sv.bounds.width)) } ?? sv.contentOffset.x
             // On the pixel grid inside the range, so the content it scrolls
             // stays on it and UIKit does not clamp it off (`PixelGridIOS.swift`).
             let s = presenter?.gridScale ?? 1
             return CGPoint(x: PixelGrid.clamp(x, -i.left, max(-i.left, sv.contentSize.width + i.right - sv.bounds.width), scale: s),
-                           y: PixelGrid.clamp(y, -i.top, max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height - slack), scale: s))
+                           y: PixelGrid.clamp(y, -i.top, max(-i.top, sv.contentSize.height + i.bottom - sv.bounds.height), scale: s))
         }
         let initial = target()
         guard sv.contentOffset != initial else { return }

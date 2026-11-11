@@ -8,7 +8,9 @@ use ArrangementScreen from "./arrangement.contract"
 // (`var(--exact-viewport-segment-*)`, LLP 1123 D9), the fold band empty between them. Images is a virtualized list of a few
 // hundred image rows over four bundled PNGs (the raster budget's stress).
 // Reflow is one long Markdown document and a dense feed (the text caches'
-// stress from 951 to 466 points and back). Combinations pushes a route with
+// stress from 951 to 466 points and back). Edges holds boxes that depend on the route's
+// top edge while its large title collapses and its bar minimizes, over 60 plain rows or
+// 1,000 virtualized ones, with the safe-area modes and a Run. Combinations pushes a route with
 // an absolutely positioned sheet holding a textarea, so keyboard + sheet +
 // pushed screen + fold is one sequence of taps. Keyboard adds physical-device
 // checks with an app-local geometry recorder and a native share sheet.
@@ -19,6 +21,7 @@ routes nav
     panes-next "/panes/next"
   tab images "/images"
   tab reflow "/reflow"
+  tab edges "/edges"
   tab combos "/combos"
     note "/combos/note"
   tab keyboard "/keyboard"
@@ -115,6 +118,10 @@ component DuoLab
   resource keyboardRows = keyboardRows() as shape KeyboardRow[]
   // Shared across the Fold screen's two layouts: a fold mid-reading keeps the item.
   state selected = 1
+  // PROTO (UIKit-first measurement): how the host follows an edge UIKit moves: resting, live or geometry
+  state safeAreaMode = "geometry"
+  state safeAreaRun = 0
+  state heavyEdges = false
   state title = ""
   state draft = ""
   state noteFocused = false
@@ -155,6 +162,13 @@ component DuoLab
     selected = id
   action selectTab(name: string)
     nav = select(nav, name)
+  action pickMode(mode: string)
+    safeAreaMode = mode
+  action runEdges
+    safeAreaRun = safeAreaRun + 1
+  // PROTO (UIKit-first measurement): switch between 60 plain rows and 1,000 virtualized rows
+  action toggleEdgeRows
+    heavyEdges = not heavyEdges
   action openNote
     nav = push(nav, path("note"))
   action openPanesNext
@@ -208,13 +222,14 @@ component DuoLab
   action checkSearchBlur
     checkBlurs = checkBlurs + 1
   view
-    main testId="root" navigationKey=`${current.id}` navigationBack="back" navigate=navigate viewport-fit="cover" interactive-widget="resizes-content" width="100%" height="100%" display="flex" flex-direction="column" overflow="hidden" font-family="system-ui"
+    main testId="root" navigationKey=`${current.id}` navigationBack="back" navigate=navigate data-safe-area-mode=safeAreaMode data-safe-area-run=`${safeAreaRun}` viewport-fit="cover" interactive-widget="resizes-content" width="100%" height="100%" display="flex" flex-direction="column" overflow="hidden" font-family="system-ui"
       column flex=1 min-height=0 position="relative"
         for t in nav.tabs key=t.name
           column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
             for entry in t.stack key=entry.id
               if t.name == "keyboard"
-                column navigationKey=`${entry.id}` navigationScroll=`keyboard-scroll-${entry.id}` id=`keyboard-route-${entry.id}` hatch="keyboard-route" data-keyboard-screen=entry.name data-focus-on-show=(entry.name == "keyboard-editor" ? "keyboard-editor" : entry.name == "keyboard" and returnFocus ? "keyboard-return" : "") class=Screen background-color=((entry.name == "keyboard" or entry.name == "keyboard-form") ? "-exact-grouped-background" : "Canvas") testId=`screen-${entry.name}`
+                // PROTO: native form rows supply the child screens' margins and spacing.
+                column navigationKey=`${entry.id}` navigationScroll=`keyboard-scroll-${entry.id}` id=`keyboard-route-${entry.id}` hatch="keyboard-route" data-keyboard-screen=entry.name data-focus-on-show=(entry.name == "keyboard-editor" ? "keyboard-editor" : entry.name == "keyboard" and returnFocus ? "keyboard-return" : "") class=Screen background-color="-exact-grouped-background" testId=`screen-${entry.name}`
                   header class=Head display="flex" align-items="center" gap=8
                     text (entry.name == "keyboard" ? "Keyboard Check" : entry.name == "keyboard-form" ? "Far Focus" : entry.name == "keyboard-search" ? "Search" : "Editor") role="heading" aria-level=2
                     if entry.name == "keyboard-form"
@@ -266,13 +281,16 @@ component DuoLab
                         row
                           text "Tap the first field, then Focus last. The last field and Done should appear above the keyboard. Use First to jump back, and repeat."
                   if entry.name == "keyboard-editor"
-                    scroll id=`keyboard-scroll-${entry.id}` flex=1 min-height=0 width="100%" box-sizing="border-box" testId="keyboard-editor-scroll"
-                      column class=ReadingBody gap=16
-                        text "Type sample text. Try a cancelled swipe, a completed swipe, and the native Back button."
-                        input id="keyboard-editor" hatch="keyboard-field" value=checkEditor input=checkWriteEditor placeholder="Type here" aria-label="Editor" testId="keyboard-editor" width="100%" box-sizing="border-box"
+                    list id=`keyboard-scroll-${entry.id}` flex=1 min-height=0 appearance="auto" listStyle="inset-grouped" class=ReadableList testId="keyboard-editor-scroll"
+                      section
+                        row
+                          text "Type sample text. Try a cancelled swipe, a completed swipe, and the native Back button."
+                        row
+                          input id="keyboard-editor" hatch="keyboard-field" value=checkEditor input=checkWriteEditor placeholder="Type here" aria-label="Editor" testId="keyboard-editor" flex=1
                         button press=checkDismissBack testId="keyboard-dismiss-back"
                           text "Dismiss keyboard and go Back"
-                        text "If a blank band appears, tap Share immediately. The file keeps the recent geometry from before the share sheet."
+                        footer
+                          text "If a blank band appears, tap Share immediately. The file keeps the recent geometry from before the share sheet."
                   if entry.name == "keyboard-form"
                     list id=`keyboard-scroll-${entry.id}` flex=1 min-height=0 appearance="auto" listStyle="inset-grouped" class=ReadableList testId="keyboard-long-form"
                       section
@@ -290,9 +308,10 @@ component DuoLab
                         button press=dismiss testId="keyboard-form-done"
                           text "Done"
                   if entry.name == "keyboard-search"
-                    scroll id=`keyboard-scroll-${entry.id}` flex=1 min-height=0 width="100%" box-sizing="border-box" testId="keyboard-search-scroll"
-                      column class=ReadingBody
-                        text "Type sample text in the header, then use Back. The previous screen should show the final committed text and one blur. Repeat with a swipe. Check the committed text after Back, then Share from that screen; recording continues through Back." testId="keyboard-search-description"
+                    list id=`keyboard-scroll-${entry.id}` flex=1 min-height=0 appearance="auto" listStyle="inset-grouped" class=ReadableList testId="keyboard-search-scroll"
+                      section
+                        row
+                          text "Type sample text in the header, then use Back. The previous screen should show the final committed text and one blur. Repeat with a swipe. Check the committed text after Back, then Share from that screen; recording continues through Back."
               // Every screen's header is the platform's: on iOS, UIKit's navigation bar.
               // Reflow and Images scroll the whole width under it, and UIKit takes the
               // large title away as the scroller immediately following the header moves.
@@ -318,6 +337,27 @@ component DuoLab
                         row gap=10 class=Card testId=`feed-${post.id}`
                           text post.who font-size=14 font-weight=600 flex-shrink=0 width=72
                           text post.body font-size=14 flex=1 min-width=0
+              // PROTO (UIKit-first measurement): Edges has boxes that depend on the route's top edge while its
+              // large title collapses and its bar minimizes (`data-minimize`, the route hook), and the mode the host follows it by.
+              if entry.name == "edges"
+                column navigationKey=`${entry.id}` navigationScroll="edges-scroll" hatch="keyboard-route" data-minimize="scroll-down" class=Screen testId="screen-edges"
+                  header
+                    text "Edges" role="heading" aria-level=1 testId="edges-title"
+                  // PROTO (UIKit-first measurement): keep the active scroller first in flow so UIKit collapses the title with it
+                  if heavyEdges
+                    list id="edges-scroll" appearance="none" virtualized=true estimated-item-height=44 flex=1 min-height=0 width="100%" overflow-x="hidden" testId="edges-scroll"
+                      for index in range(1000) key=index
+                        EdgeRow(index=index, mode=safeAreaMode, heavy=heavyEdges, pickMode=pickMode, run=runEdges, toggleRows=toggleEdgeRows)
+                  else
+                    scroll id="edges-scroll" flex=1 min-height=0 testId="edges-scroll"
+                      for index in range(60) key=index
+                        EdgeRow(index=index, mode=safeAreaMode, heavy=heavyEdges, pickMode=pickMode, run=runEdges, toggleRows=toggleEdgeRows)
+                  box testId="edges-chip" position="absolute" top=12 left=16 padding="4px 8px" background-color="#ffcc00" border-radius=12 pointer-events="none"
+                    text "Chip at top 12"
+                  box testId="edges-panel" position="absolute" top=0 bottom=0 right=16 width=40 background-color="rgba(0, 122, 255, 0.3)" pointer-events="none"
+                  box testId="edges-capped" position="absolute" top=0 bottom=0 right=64 width=24 max-height=640 background-color="rgba(52, 199, 89, 0.4)" pointer-events="none"
+                  column testId="edges-centre" position="absolute" inset=0 display="flex" align-items="center" justify-content="center" pointer-events="none"
+                    text "Centred" background-color="#ff2d55" color="white" padding="4px 8px"
               if t.name == "panes"
                 if entry.name == "panes"
                   ArrangementScreen(routeKey=`${entry.id}`, routeName=entry.name, prefix="panes", title="Panes", nextTitle="Next", openNext=openPanesNext, nativeArrangement=paneSupport.available)
@@ -325,8 +365,8 @@ component DuoLab
                   ArrangementScreen(routeKey=`${entry.id}`, routeName=entry.name, prefix="pushed", title="Pushed panes", nextTitle="Back", openNext=back, nativeArrangement=paneSupport.available)
               // The note screen takes its bottom edge (LLP 1123 D4): its sheet's surface reaches
               // the display's bottom, as a sheet's does, and pads its controls by the route's inset there.
-              if entry.name != "images" and entry.name != "reflow" and t.name != "keyboard" and t.name != "panes"
-                column navigationKey=`${entry.id}` -exact-safe-area=(entry.name == "note" ? "bottom" : "auto") class=Screen testId=`screen-${entry.name}`
+              if entry.name != "images" and entry.name != "reflow" and entry.name != "edges" and t.name != "keyboard" and t.name != "panes"
+                column navigationKey=`${entry.id}` -exact-safe-area=(entry.name == "note" ? "ignore bottom" : "auto") class=Screen testId=`screen-${entry.name}`
                   header class=Head
                     text (entry.name == "fold" ? "Fold" : entry.name == "combos" ? "Combinations" : "Note") role="heading" aria-level=(entry.name == "note" ? 2 : 1) testId=`${entry.name}-title`
                   if entry.name == "fold"
@@ -411,6 +451,9 @@ component DuoLab
         button role="tab" aria-controls="panel-reflow" aria-selected=(nav.tab == "reflow") press=selectTab("reflow") testId="tab-reflow" flex=1
           image "symbol:document"
           text "Reflow"
+        button role="tab" aria-controls="panel-edges" aria-selected=(nav.tab == "edges") press=selectTab("edges") testId="tab-edges" flex=1
+          image "symbol:sf/rectangle.inset.filled"
+          text "Edges"
         button role="tab" aria-controls="panel-combos" aria-selected=(nav.tab == "combos") press=selectTab("combos") testId="tab-combos" flex=1
           image "symbol:layers"
           text "Combos"
@@ -436,6 +479,34 @@ component Facts
       row gap=8 align-items="baseline"
         text "viewport" class=Note padding=0
         text `${viewport.width}×${viewport.height}` class=Fact testId="fact-size"
+
+// PROTO (UIKit-first measurement): the shared controls in the first row and row text for both edge lists
+component EdgeRow
+  props
+    index: number
+    mode: string
+    heavy: bool
+    pickMode: action
+    run: action
+    toggleRows: action
+  view
+    column
+      if index == 0
+        // PROTO (UIKit-first measurement): clear the chip above and the panels on the trailing side
+        column padding-top=52 padding-left=16 padding-right=100 padding-bottom=12 gap=8
+          row role="radiogroup" aria-label="How the boxes follow" testId="edges-mode"
+            button role="radio" aria-checked=(mode == "resting") press=pickMode("resting") testId="mode-resting"
+              text "Resting"
+            button role="radio" aria-checked=(mode == "live") press=pickMode("live") testId="mode-live"
+              text "Live"
+            button role="radio" aria-checked=(mode == "geometry") press=pickMode("geometry") testId="mode-geometry"
+              text "Geometry"
+          button press=toggleRows testId="edges-list-toggle"
+            text (heavy ? "Use 60 plain rows" : "Use 1,000 virtualized rows")
+          button press=run testId="edges-run" padding=10 border-radius=10 background-color="-exact-secondary-background"
+            text "Run: move the top edge 106 points and back, twice" font-size=15 font-weight=600 color="AccentColor"
+          text (mode == "resting" ? "Laid out with the bar at its full height; the boxes are placed between layouts computed ahead." : mode == "live" ? "Laid out in UIKit's live safe area on every frame, through the whole batch pipeline." : "Laid out in UIKit's live safe area on every frame; a frame's batch applies frames and reach only.") class=Note padding-left=0 padding-right=0
+      text `Row ${index + 1}` padding="12px 16px"
 
 component ItemList
   props

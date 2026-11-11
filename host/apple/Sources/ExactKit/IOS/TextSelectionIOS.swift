@@ -162,7 +162,7 @@ final class SelectableText: UIResponder, UITextInput, UITextInteractionDelegate 
     init(node: NodeView, host: TextSelectionHost, document: SelectionDocument? = nil, attach: Bool = true) {
         self.node = node; self.host = host
         self.document = document
-        text = document?.text ?? Self.shaped(node); laid = node.bounds.size
+        text = document?.text ?? Self.shaped(node); laid = node.boxBounds.size
         super.init()
         guard attach else { return }
         document?.surface.input = self
@@ -205,10 +205,10 @@ final class SelectableText: UIResponder, UITextInput, UITextInteractionDelegate 
         if now != text {
             clear()
             text = now
-        } else if selected.length > 0, node.bounds.size != laid {
+        } else if selected.length > 0, node.boxBounds.size != laid {
             display?.setNeedsSelectionUpdate()
         }
-        laid = node.bounds.size
+        laid = node.boxBounds.size
         return true
     }
 

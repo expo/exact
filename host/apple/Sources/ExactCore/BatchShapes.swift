@@ -179,11 +179,11 @@ extension BatchReader {
             case (.props, "clear"): op.clear = try array { try $0.string() }
             case (.paragraph, "runs"): op.runs = try array { try $0.inline() }
             case (.children, "ids"), (.roots, "ids"): op.ids = try array { try $0.id() }
-            case (.frame, "x"), (.content, "x"), (.present, "x"): op.x = try number()
-            case (.frame, "y"), (.content, "y"), (.present, "y"): op.y = try number()
-            case (.frame, "w"), (.content, "w"), (.present, "w"): op.w = try number()
-            case (.frame, "h"), (.content, "h"), (.present, "h"): op.h = try number()
-            case (.frame, "property"), (.content, "property"), (.present, "property"): op.property = try string()
+            case (.frame, "x"), (.content, "x"), (.present, "x"), (.far, "x"): op.x = try number()
+            case (.frame, "y"), (.content, "y"), (.present, "y"), (.far, "y"): op.y = try number()
+            case (.frame, "w"), (.content, "w"), (.present, "w"), (.far, "w"): op.w = try number()
+            case (.frame, "h"), (.content, "h"), (.present, "h"), (.far, "h"): op.h = try number()
+            case (.frame, "property"), (.content, "property"), (.present, "property"), (.far, "property"): op.property = try string()
             default: try skip()
             }
         }
@@ -232,7 +232,7 @@ extension BatchReader {
 extension BatchOp {
     package var isAdapter: Bool {
         switch op {
-        case .create, .props, .style, .children, .paragraph, .frame, .content, .present, .roots, .destroy, .roles: return false
+        case .create, .props, .style, .children, .paragraph, .frame, .content, .present, .roots, .destroy, .roles, .far: return false
         default: return true
         }
     }
@@ -295,7 +295,7 @@ package struct BatchFields {
         case .style: op.style = try CalculatedLength.decode(object("style"))
         case .paragraph: op.runs = try array("runs") { try Self(Self.object($0)).inline(colorChannels: colorChannels) }
         case .children, .roots: op.ids = try array("ids", Self.id)
-        case .frame, .content, .present:
+        case .frame, .content, .present, .far:
             op.x = try number("x") ?? 0; op.y = try number("y") ?? 0
             op.w = try number("w") ?? 0; op.h = try number("h") ?? 0
             op.property = try string("property") ?? ""

@@ -833,6 +833,73 @@ component App
     }
 }
 
+// PROTO: restore a plain scroller's content-relative offset while the replacement measures
+#[test]
+fn a_plain_scroll_top_can_be_restored_to_a_new_list_in_the_switch_or_after_mount() {
+    let source = r#"component App
+  state heavy = false
+  state saved = 0
+  action moved(x: number, y: number, e: ScrollEvent)
+    saved = e.scrollTop
+  action replace(preserve: bool)
+    heavy = true
+    if preserve
+      scrollIntoView("feed", 0, offset=saved)
+  action restore
+    scrollIntoView("feed", 0, offset=saved)
+  view
+    column
+      if heavy
+        list id="feed" virtualized=true estimated-item-height=44 width=400 height=600 overflow-x="hidden"
+          for i in range(1000) key=i
+            box height=(i == 0 ? 290 : 44)
+      else
+        scroll id="feed" testId="plain" width=400 height=600 scroll=moved
+          for i in range(60) key=i
+            box height=(i == 0 ? 290 : 44)
+"#;
+    for (top, timing) in [
+        (80.0, "default"),
+        (0.0, "switch"),
+        (80.0, "switch"),
+        (640.0, "switch"),
+        (80.0, "mounted"),
+        (640.0, "mounted"),
+    ] {
+        let mut r = Runner::boot(
+            contract::compile(source).unwrap(),
+            Data,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let plain = r.kernel().find_by_test_id("plain")[0];
+        let plain = r.kernel().node_by_key(plain).unwrap().id;
+        let payload = format!("0,{top},400,2886,400,600");
+        r.dispatch(
+            plain,
+            exact_runner::Event::scroll_payload(&payload).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(r.slot("saved"), Some(&Value::Number(top)));
+        r.act("replace", vec![Value::Bool(timing == "switch")])
+            .unwrap();
+        let feed = list(&r, false).unwrap().view;
+        let size = |i| if i == 0 { 290.0 } else { 44.0 };
+        if timing == "mounted" {
+            assert_eq!(host(&mut r, feed, 0.0, 600.0, size), 0.0);
+            r.act("restore", vec![]).unwrap();
+        }
+        let offset = host(&mut r, feed, 0.0, 600.0, size);
+        let expected = if timing == "default" { 0.0 } else { top };
+        assert_eq!(offset, expected, "{timing}, saved {top}");
+        if timing != "default" {
+            assert!(state(&r).contains("\"status\":\"done\""), "{}", state(&r));
+        }
+    }
+}
+
 /// Rows of 100.25: row 18 starts at 1804.5. Edges are drawn on device
 /// pixels, each rounded to the nearest with a half up, so a port starting
 /// less than half a device pixel above a row's start, or up to half one

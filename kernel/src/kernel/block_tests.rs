@@ -384,33 +384,29 @@ fn a_hidden_root_lays_nothing_out_and_its_used_size_is_zero() {
 
 #[test]
 fn a_cover_applies_inside_a_block() {
-    // What a bar covers of a route is padding inside the route's block, as
-    // an iPad column's bar will be: the same boxes as that padding written.
+    // PROTO (safe-area design §2.2): what a bar covers of a route is its
+    // clearance, the safe area its root is laid out inside: the root is the
+    // block less the clearance, at the clearance's left and top, and its used
+    // size is still the block's.
     let mut covered = laid_out(small());
     covered.set_host_block(3, is(300.0, 200.0)).unwrap();
     covered
         .set_host_cover(3, Some(HostCover::Edges([44.0, 0.0, 0.0, 10.0])))
         .unwrap();
     covered.compute_layout(1, OFFER).unwrap();
-    let mut written = small();
-    written.push(style(
-        3,
-        &[
-            (StyleId::PaddingTop, n(44.0)),
-            (StyleId::PaddingLeft, n(10.0)),
-        ],
-    ));
-    let mut written = laid_out(written);
-    written.set_host_block(3, is(300.0, 200.0)).unwrap();
-    written.compute_layout(1, OFFER).unwrap();
-    for id in [3, 4] {
-        let (a, b) = (
-            covered.node(id).unwrap().frame,
-            written.node(id).unwrap().frame,
-        );
-        assert!(a.bits_eq(b), "{id}: {a:?} {b:?}");
-    }
+    let root = covered.node(3).unwrap().frame;
+    assert_eq!(
+        (root.x, root.y, root.width, root.height),
+        (10.0, 44.0, 290.0, 40.0)
+    );
     assert_eq!(covered.node(4).unwrap().frame.y, 44.0);
+    assert_eq!(covered.host_block_size(3), Some((300.0, 200.0)));
+    // The clearance moving with the same inner size republishes the root.
+    covered
+        .set_host_cover(3, Some(HostCover::Edges([44.0, 5.0, 0.0, 5.0])))
+        .unwrap();
+    covered.compute_layout(1, OFFER).unwrap();
+    assert_eq!(covered.node(3).unwrap().frame.x, 5.0);
 }
 
 #[test]
@@ -660,4 +656,122 @@ fn a_blocks_root_fits_its_content_at_the_blocks_width() {
     k.set_host_block(3, is(300.0, 50.0)).unwrap();
     k.compute_layout(1, OFFER).unwrap();
     assert_eq!(fit(&mut k), wide, "nor its own measure");
+}
+
+/// PROTO (rule 4): the edge-follow route of `rows` text rows in a scroller, a chip at `top: 12px` and a panel
+/// pinned to both edges, in a 402 × 874 block cleared by 168 at the top and 34 at the bottom, laid out.
+fn edge_route(rows: u32) -> Kernel {
+    let mut ops = Vec::new();
+    ops.extend(view(1, NodeType::View, &[(StyleId::Height, n(874.0))]));
+    ops.extend(view(2, NodeType::View, &[(StyleId::Height, n(874.0))]));
+    ops.extend(view(
+        3,
+        NodeType::View,
+        &[
+            (StyleId::Display, t("flex")),
+            (StyleId::FlexDirection, t("column")),
+            (StyleId::Height, StyleValue::Percent(100.0)),
+        ],
+    ));
+    ops.extend(view(
+        5,
+        NodeType::View,
+        &[
+            (StyleId::FlexGrow, n(1.0)),
+            (StyleId::FlexBasis, StyleValue::Percent(0.0)),
+            (StyleId::MinHeight, n(0.0)),
+            (StyleId::OverflowX, t("hidden")),
+            (StyleId::OverflowY, t("scroll")),
+        ],
+    ));
+    ops.extend(view(
+        6,
+        NodeType::View,
+        &[
+            (StyleId::PositionType, t("absolute")),
+            (StyleId::Top, n(12.0)),
+            (StyleId::Left, n(16.0)),
+            (StyleId::Width, n(100.0)),
+            (StyleId::Height, n(28.0)),
+        ],
+    ));
+    ops.extend(view(
+        7,
+        NodeType::View,
+        &[
+            (StyleId::PositionType, t("absolute")),
+            (StyleId::Top, n(0.0)),
+            (StyleId::Bottom, n(0.0)),
+            (StyleId::Right, n(16.0)),
+            (StyleId::Width, n(40.0)),
+        ],
+    ));
+    let row_ids: Vec<ViewId> = (0..rows).map(|i| 1000 + i).collect();
+    for &id in &row_ids {
+        ops.extend(text(id, &format!("Row {id}")));
+        ops.push(style(
+            id,
+            &[
+                (StyleId::PaddingTop, n(12.0)),
+                (StyleId::PaddingBottom, n(12.0)),
+                (StyleId::PaddingLeft, n(16.0)),
+            ],
+        ));
+    }
+    ops.extend([
+        children(5, row_ids),
+        children(3, [5, 6, 7]),
+        children(2, [3]),
+        children(1, [2]),
+        Op::AttachRoot { id: 1 },
+    ]);
+    let mut k = laid_out(ops);
+    k.set_host_block(3, is(402.0, 874.0)).unwrap();
+    k.set_host_cover(3, Some(HostCover::Edges([168.0, 0.0, 34.0, 0.0])))
+        .unwrap();
+    k.compute_layout(1, Offer::definite(402.0, 874.0)).unwrap();
+    k
+}
+
+#[test]
+fn far_pass_frames_equal_a_layout_at_the_far_edge() {
+    // PROTO (rule 4): the trial at the far end gives each box the frame a layout with the edge there gives it
+    let mut k = edge_route(40);
+    let far = k.trial_clearance_frames(3, 1.0, 0.0).unwrap();
+    k.set_host_cover(3, Some(HostCover::Edges([0.0, 0.0, 34.0, 0.0])))
+        .unwrap();
+    k.compute_layout(1, Offer::definite(402.0, 874.0)).unwrap();
+    for id in [5, 6, 7] {
+        let (_, _, trial) = far.iter().find(|(v, _, _)| *v == id).copied().unwrap();
+        let real = k.node(id).unwrap().frame;
+        assert!(
+            (trial.y - real.y).abs() < 0.01 && (trial.height - real.height).abs() < 0.01,
+            "box {id}: trial {trial:?} against {real:?}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "a timing, run by hand: cargo test -p exact-kernel --release --lib far_pass_time -- --ignored --nocapture"]
+fn far_pass_time() {
+    // A far pass as the host runs it: one trial session, then 2 places (every box linear) or 16 (a bend)
+    for rows in [40, 1000] {
+        let mut k = edge_route(rows);
+        for places in [2usize, 16] {
+            let _ = take_trial_phases();
+            let mut times = Vec::new();
+            for _ in 0..30 {
+                let started = std::time::Instant::now();
+                let mut trial = k.clearance_trial(3, 0.0).unwrap();
+                for i in 0..places {
+                    trial.frames(1.0 - i as f32 / places as f32).unwrap();
+                }
+                drop(trial);
+                times.push(started.elapsed().as_micros() as u64);
+            }
+            times.sort_unstable();
+            let (copy, lay, collect, count) = take_trial_phases();
+            eprintln!("{rows} rows, {places} places: median {} µs (min {}, max {}) · per pass copy {} µs, per place layout {} collect {} µs", times[15], times[0], times[29], copy / 30, lay / count, collect / count);
+        }
+    }
 }

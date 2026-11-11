@@ -182,7 +182,7 @@ extension Agent {
 // independently. A missing presentation never borrows the target's value.
 extension Agent {
     func geometry(_ view: NodeView, region: CGRect? = nil) -> [String: Any] {
-        let local = region ?? view.bounds
+        let local = region ?? view.boxBounds
         var result: [String: Any] = ["target": AgreementReport.rect(box(view, region: local)), "space": "viewport", "source": "model-view"]
         #if os(macOS)
         let layer = view.layer
@@ -196,11 +196,17 @@ extension Agent {
             result["presented"] = ["unavailable": "no comparable presentation layer"]
             return result
         }
-        guard local == view.bounds || shown.bounds == view.bounds else {
+        let whole = local == view.boxBounds
+        guard whole || shown.bounds == view.bounds else {
             result["presented"] = ["unavailable": "fragment geometry during an animated bounds change"]
             return result
         }
-        let rect = shown.convert(local == view.bounds ? shown.bounds : local, to: port)
+        #if os(macOS)
+        let shownBox = shown.bounds
+        #else
+        let shownBox = shown.bounds.inset(by: view.reach)
+        #endif
+        let rect = shown.convert(whole ? shownBox : local, to: port)
         #if os(macOS)
         let origin = port.bounds.origin
         #else

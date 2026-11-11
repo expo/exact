@@ -44,7 +44,7 @@ extension NodeView {
     private static func readingOrder(_ views: [UIView]) -> [UIView] {
         guard views.count > 1 else { return views }
         let rtl = views[0].superview?.effectiveUserInterfaceLayoutDirection == .rightToLeft
-        let frames = views.map { $0.convert($0.bounds, to: nil) }
+        let frames = views.map { $0.convert(($0 as? NodeView)?.boxBounds ?? $0.bounds, to: nil) }
         func before(_ a: Int, _ b: Int) -> Bool {
             let (fa, fb) = (frames[a], frames[b])
             if abs(fa.minY - fb.minY) >= 8 { return fa.minY < fb.minY }

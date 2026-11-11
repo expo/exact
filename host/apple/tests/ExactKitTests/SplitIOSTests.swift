@@ -468,12 +468,10 @@ final class SplitIOSTests: XCTestCase {
         let slide = try XCTUnwrap(sequence(first: moved, next: \.superlayer).prefix { $0 !== heading.layer }.lazy.compactMap(longest).first,
                                   "the words move inside the animation")
         session.presenter.textRasters.settleVisible([verse]) // a worker's pixels, if it painted them again
-        XCTAssertTrue(verse.textRaster?.object === lines.object, "a paragraph whose box only moves keeps its pixels")
+        XCTAssertTrue(verse.textRaster === lines, "a paragraph whose box only moves keeps its pixels")
         let beside = try XCTUnwrap(longest(figure.layer), "the figure beside them moves inside it")
         XCTAssertEqual(slide.duration, beside.duration, accuracy: 0.01, "with the same animation")
     }
-
-
 
     /// LLP 1127 D14 on an iPhone Duo folded and unfolded with its inspector
     /// shown. Collapsing with the inspector shown, UIKit presents the

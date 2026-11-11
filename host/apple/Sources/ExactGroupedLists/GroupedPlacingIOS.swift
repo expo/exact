@@ -27,7 +27,8 @@ extension GroupedListView {
     /// content box. The kernel already applies CSS padding; including it
     /// in the card margins would subtract it from a custom row's width twice.
     func margins() -> [CGFloat]? {
-        guard let cell = collection.visibleCells.first as? UICollectionViewListCell,
+        guard collection.window != nil, // PROTO: publish margins only for a list in its native hierarchy
+              let cell = collection.visibleCells.first as? UICollectionViewListCell,
               let path = collection.indexPath(for: cell),
               let frame = collection.layoutAttributesForItem(at: path)?.frame else { return nil }
         let m = cell.directionalLayoutMargins

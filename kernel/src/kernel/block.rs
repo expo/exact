@@ -24,10 +24,11 @@
 //! content as the UA sheet's `fit-content` does. A host's block for the
 //! same box wins, and taking it back leaves the viewport.
 
+use super::cover::HostCover;
 use super::{engine, Kernel};
 use crate::arena::NodeArena;
 use crate::error::{KernelError, LayoutError};
-use crate::id::{NodeFlags, Offer, ViewId};
+use crate::id::{Frame, NodeFlags, Offer, ViewId};
 use crate::layout::{self, LayoutMirror, LayoutReceipt};
 use crate::style::resolve_calc;
 use taffy::style::{BoxSizing, LengthPercentageAuto as Lpa, Position};
@@ -58,6 +59,24 @@ impl BlockAxis {
         match self {
             BlockAxis::Is(v) | BlockAxis::AtMost(v) | BlockAxis::Fit(v) | BlockAxis::Region(v) => v,
         }
+    }
+}
+
+/// PROTO (safe-area design §2.2): `block` less the root's clearance on each
+/// axis, the box the root is laid out in (the owner's safe area).
+pub(crate) fn inner(arena: &NodeArena, slot: u32, block: HostBlock) -> HostBlock {
+    let Some([top, right, bottom, left]) = super::clearance(arena, slot) else {
+        return block;
+    };
+    let less = |axis: BlockAxis, by: f32| match axis {
+        BlockAxis::Is(v) => BlockAxis::Is((v - by).max(0.0)),
+        BlockAxis::AtMost(v) => BlockAxis::AtMost((v - by).max(0.0)),
+        BlockAxis::Fit(v) => BlockAxis::Fit((v - by).max(0.0)),
+        BlockAxis::Region(v) => BlockAxis::Region((v - by).max(0.0)),
+    };
+    HostBlock {
+        width: less(block.width, left + right),
+        height: less(block.height, top + bottom),
     }
 }
 
@@ -272,6 +291,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     let Some(block) = arena.blocks.get(slot) else {
         return;
     };
+    let block = inner(arena, slot, block);
     if replaced_above(arena, slot) {
         s.display = taffy::style::Display::None;
         return;
@@ -450,6 +470,22 @@ impl Kernel {
         if before.is_some() == block.is_some() {
             return;
         }
+        // A block's cover becomes clearance instead of padding. Its children's
+        // derived insets and side reach change even when the cover does not.
+        if matches!(self.arena.cover(slot), Some(HostCover::Edges(_))) {
+            let affected = super::cover::positioned_children(&self.arena, slot)
+                .into_iter()
+                .chain(super::cover::reaching(&self.arena, slot));
+            for child in affected {
+                if let (Some(node), Some(layout)) =
+                    (self.arena.taffy(child), self.layout.as_deref_mut())
+                {
+                    layout.restyle(&self.arena, child, node);
+                    layout.mark_dirty(node);
+                }
+            }
+            super::cover::settle_chain(&mut self.arena, self.layout.as_deref_mut());
+        }
         // It leaves its parent's layout, or returns to it: published whole
         // in the space it is now in, and its parent's children again.
         self.arena.flags_mut(slot).insert(NodeFlags::ATTACHED);
@@ -621,7 +657,8 @@ impl Kernel {
         let under = |slot: u32| slot != root && arena.is_ancestor(root, slot);
         let offer = |b: HostBlock| Offer::definite(b.width.length(), b.height.length());
         let held = arena.blocks.0.iter().filter(|b| under(b.slot));
-        held.map(|b| (b.slot, offer(b.block))).collect()
+        held.map(|b| (b.slot, offer(inner(arena, b.slot, b.block))))
+            .collect()
     }
 
     /// Lay `root` out under `offer`, then each subtree with a block under
@@ -708,7 +745,11 @@ impl Kernel {
         ) else {
             return (0.0, 0.0);
         };
-        used_in(block, &tree.layout(node))
+        used_in(
+            block,
+            super::clearance(&self.arena, slot),
+            &tree.layout(node),
+        )
     }
 
     /// The used size `view`'s subtree would have in `block`, had its host
@@ -763,18 +804,186 @@ impl Kernel {
         arena.blocks.set(slot, Some(block));
         trial.restyle(&arena, slot, node);
         trial.mark_dirty(node);
-        let offer = Offer::definite(lengths[0], lengths[1]);
+        let room = inner(&arena, slot, block);
+        let offer = Offer::definite(room.width.length(), room.height.length());
         layout::compute(&mut arena, &mut trial, self.measurer.as_mut(), slot, offer)?;
         if arena.flags(slot).has(NodeFlags::HIDDEN) {
             return Ok(BlockMeasure::default());
         }
         let l = trial.layout(node);
         Ok(BlockMeasure {
-            used: used_in(block, &l),
+            used: used_in(block, super::clearance(&arena, slot), &l),
             border: (l.size.width, l.size.height),
             margin: [l.margin.top, l.margin.right, l.margin.bottom, l.margin.left],
         })
     }
+
+    /// PROTO (rule 4, "Exact describes, UIKit drives"): a trial of `view`'s
+    /// subtree with its clearance's top edge moved toward `far`. `view` holds
+    /// a block and an `Edges` clearance (an owner's root). The arena and engine
+    /// tree are copied once, with the scrolled content the edge cannot change
+    /// frozen in its settled layout (`LayoutTree::freeze_scroll_content`), and
+    /// each place along the range is laid out in the copy
+    /// (`ClearanceTrial::frames`): nothing the kernel holds changes.
+    pub fn clearance_trial(
+        &mut self,
+        view: ViewId,
+        far: f32,
+    ) -> Result<ClearanceTrial<'_>, KernelError> {
+        let slot = self
+            .arena
+            .slot_of(view)
+            .ok_or(LayoutError::UnknownView(view))?;
+        let Some(block) = self.arena.blocks.get(slot) else {
+            return Err(LayoutError::HostBlock("only a block's root takes a clearance").into());
+        };
+        let Some(HostCover::Edges(edges)) = self.arena.cover(slot) else {
+            return Err(LayoutError::HostBlock("the root has no clearance").into());
+        };
+        if !far.is_finite() || far < 0.0 {
+            return Err(LayoutError::InvalidOffer.into());
+        }
+        let tree = self.layout.as_deref().and_then(LayoutMirror::tree_ref);
+        let (Some(node), Some(tree)) = (self.arena.taffy(slot), tree) else {
+            return Err(LayoutError::HostBlock("not laid out yet").into());
+        };
+        let (wants, moved) = self.implied_changes();
+        if !wants.is_empty() || !moved.is_empty() || self.symbols_pending() || tree.is_dirty(node) {
+            return Err(LayoutError::HostBlock("a layout is due first").into());
+        }
+        let started = std::time::Instant::now(); // PROTO: the trial's phases timed
+        let (mut arena, mut trial) = (self.arena.trial_copy(), tree.clone());
+        // Scrolled content the edge cannot change keeps its settled layout and is neither laid out nor collected
+        let frozen = trial.freeze_scroll_content(node);
+        for &s in &frozen {
+            arena.set_children(s, Vec::new());
+        }
+        let frozen = frozen.into_iter().map(|s| self.arena.local_id(s)).collect();
+        TRIAL_PHASES.with(|p| {
+            let (a, b, c, n) = p.get();
+            p.set((a + started.elapsed().as_micros() as u64, b, c, n));
+        });
+        Ok(ClearanceTrial {
+            settled: &self.arena,
+            measurer: self.measurer.as_mut(),
+            arena,
+            tree: trial,
+            slot,
+            node,
+            block,
+            edges,
+            far,
+            frozen,
+        })
+    }
+
+    /// PROTO (rule 4): the frames of one trial at `t`, `clearance_trial(view, far)?.frames(t)`.
+    pub fn trial_clearance_frames(
+        &mut self,
+        view: ViewId,
+        t: f32,
+        far: f32,
+    ) -> Result<Vec<(ViewId, Frame, Frame)>, KernelError> {
+        self.clearance_trial(view, far)?.frames(t)
+    }
+}
+
+/// PROTO (rule 4): an owner's subtree laid out again, in a copy, at places along its top edge's range
+/// (`Kernel::clearance_trial`).
+pub struct ClearanceTrial<'a> {
+    settled: &'a NodeArena,
+    measurer: &'a mut dyn crate::text::TextMeasurer,
+    arena: NodeArena,
+    tree: layout::LayoutTree,
+    slot: u32,
+    node: taffy::NodeId,
+    block: HostBlock,
+    edges: [f32; 4],
+    far: f32,
+    frozen: Vec<ViewId>,
+}
+
+impl ClearanceTrial<'_> {
+    /// The scrollers whose content keeps its settled layout in this trial: a layout confined to their content
+    /// changes nothing a trial lays out.
+    pub fn frozen(&self) -> &[ViewId] {
+        &self.frozen
+    }
+
+    /// The frames the subtree takes with its top edge `t` of the way from where it is to the far end, in each
+    /// box's parent's space: each box, its frame now, its frame then. A frozen scroller's content is not listed:
+    /// it keeps its frame in its scroller.
+    pub fn frames(&mut self, t: f32) -> Result<Vec<(ViewId, Frame, Frame)>, KernelError> {
+        let top = self.edges[0] + (self.far - self.edges[0]) * t;
+        if !top.is_finite() || top < 0.0 {
+            return Err(LayoutError::InvalidOffer.into());
+        }
+        let started = std::time::Instant::now();
+        let mut edges = self.edges;
+        edges[0] = top;
+        self.arena
+            .set_cover(self.slot, Some(HostCover::Edges(edges)));
+        self.tree.restyle(&self.arena, self.slot, self.node);
+        self.tree.mark_dirty(self.node);
+        let room = inner(&self.arena, self.slot, self.block);
+        let offer = Offer::definite(room.width.length(), room.height.length());
+        layout::compute(
+            &mut self.arena,
+            &mut self.tree,
+            &mut *self.measurer,
+            self.slot,
+            offer,
+        )?;
+        let computed = started.elapsed();
+        let slot = self.slot;
+        // Each box in its parent's space, as the host places it; the root in the block's
+        let relative = |a: &NodeArena, s: u32| {
+            let f = a.frame(s);
+            match a.parent(s).filter(|_| s != slot) {
+                Some(p) => {
+                    let pf = a.frame(p);
+                    Frame {
+                        x: f.x - pf.x,
+                        y: f.y - pf.y,
+                        width: f.width,
+                        height: f.height,
+                    }
+                }
+                None => f,
+            }
+        };
+        let mut out = Vec::new();
+        let mut stack = vec![slot];
+        while let Some(s) = stack.pop() {
+            out.push((
+                self.settled.local_id(s),
+                relative(self.settled, s),
+                relative(&self.arena, s),
+            ));
+            stack.extend_from_slice(self.arena.children(s));
+        }
+        let collected = started.elapsed();
+        TRIAL_PHASES.with(|p| {
+            let (a, b, c, n) = p.get();
+            p.set((
+                a,
+                b + computed.as_micros() as u64,
+                c + (collected - computed).as_micros() as u64,
+                n + 1,
+            ));
+        });
+        Ok(out)
+    }
+}
+
+thread_local! {
+    /// PROTO: the trial layouts' time in copying, laying out and collecting frames, in microseconds, and their count
+    static TRIAL_PHASES: std::cell::Cell<(u64, u64, u64, u64)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
+}
+
+/// PROTO: the trial layouts' phases since the last call: copy, layout and collection, in microseconds, and the count
+pub fn take_trial_phases() -> (u64, u64, u64, u64) {
+    TRIAL_PHASES.with(|p| p.replace((0, 0, 0, 0)))
 }
 
 /// What `Kernel::measure_block` answers: the used size, the border box, and
@@ -792,14 +1001,22 @@ pub struct BlockMeasure {
 /// A block root's used size from its engine layout: the given length where
 /// the block is the size, and where it is a maximum or a fit its border box
 /// and margins, clamped only for `AtMost`.
-fn used_in(block: HostBlock, l: &taffy::tree::Layout) -> (f32, f32) {
+fn used_in(block: HostBlock, clearance: Option<[f32; 4]>, l: &taffy::tree::Layout) -> (f32, f32) {
+    // PROTO: a cleared root's end is in its inner box; the clearance is added back once.
+    let [top, right, bottom, left] = clearance.unwrap_or([0.0; 4]);
     let axis = |axis: BlockAxis, end: f32| match axis {
         BlockAxis::Is(length) => length,
         BlockAxis::AtMost(most) => end.clamp(0.0, most),
         BlockAxis::Fit(_) | BlockAxis::Region(_) => end.max(0.0),
     };
     (
-        axis(block.width, l.location.x + l.size.width + l.margin.right),
-        axis(block.height, l.location.y + l.size.height + l.margin.bottom),
+        axis(
+            block.width,
+            l.location.x + l.size.width + l.margin.right + left + right,
+        ),
+        axis(
+            block.height,
+            l.location.y + l.size.height + l.margin.bottom + top + bottom,
+        ),
     )
 }

@@ -98,7 +98,7 @@ extension NodeView {
     /// content).
     fileprivate var firstText: NodeView? {
         if kind == "text" { return self }
-        for case let child as NodeView in container.subviews where !child.isHidden && child.frame.maxX > 0 && child.frame.minX < bounds.width {
+        for case let child as NodeView in container.subviews where !child.isHidden && child.boxFrame.maxX > boxBounds.minX && child.boxFrame.minX < boxBounds.maxX {
             if let found = child.firstText { return found }
         }
         return nil

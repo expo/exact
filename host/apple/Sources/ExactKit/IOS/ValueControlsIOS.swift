@@ -127,11 +127,11 @@ extension ControlHost {
         if let ids = presenter.flats.children(of: parent.id) {
             before = ids.prefix { $0 != owner.id }.compactMap { id in
                 if let leaf = presenter.flats.leaves[id] { return leaf.layout.width > 0 && leaf.layout.height > 0 ? leaf.layout : nil }
-                return presenter.views[id].flatMap { seen($0) ? $0.frame : nil }
+                return presenter.views[id].flatMap { seen($0) ? $0.boxFrame : nil }
             }
-        } else { before = parent.container.subviews.compactMap { $0 as? NodeView }.prefix { $0 !== owner }.filter(seen).map(\.frame) }
+        } else { before = parent.container.subviews.compactMap { $0 as? NodeView }.prefix { $0 !== owner }.filter(seen).map(\.boxFrame) }
         guard !before.isEmpty else { return nil }
-        let box = owner.frame
+        let box = owner.boxFrame
         return before.contains { $0.maxX <= box.minX + 0.5 || $0.minX >= box.maxX - 0.5 ? $0.minY < box.maxY && $0.maxY > box.minY : false }
     }
     #endif

@@ -234,8 +234,8 @@ extension Agent {
                   n.style["box_sizing"]?.string != "border-box",
                   !["absolute", "fixed"].contains(n.layoutPosition),
                   !(["scroll", "auto"].contains(p.style["overflow_x"]?.string ?? "") && (p.style["written"]?.array?.contains(.string("overflow_x")) ?? false)) else { return nil }
-            let pad = n.padding("left") + n.padding("right"), room = p.contentBox().width, past = n.bounds.width - room
-            guard pad > 0.5, past > 1.5, n.bounds.width - pad <= room + 1.5 else { return nil }
+            let pad = n.padding("left") + n.padding("right"), room = p.contentBox().width, past = n.boxBounds.width - room
+            guard pad > 0.5, past > 1.5, n.boxBounds.width - pad <= room + 1.5 else { return nil }
             return ["by": Int(p.id), "dx": Double(r2(past)), "pad": Double(r2(pad))]
         }
 
@@ -247,7 +247,7 @@ extension Agent {
                   !p.clipsToBounds, p.clipBox == nil, !(p.scroll?.scrollsX == true && p.style["written"]?.array?.contains(.string("overflow_x")) == true),
                   !["absolute", "fixed"].contains(n.layoutPosition),
                   n.transform.isIdentity, CATransform3DIsIdentity(n.layer.transform), !pinned(n, upTo: scope) else { return nil }
-            let pb = p.convert(p.bounds, to: nil), uniform = p.number("border_width")
+            let pb = p.convert(p.boxBounds, to: nil), uniform = p.number("border_width")
             let left = pb.minX + p.number("border_width_left", uniform), right = pb.maxX - p.number("border_width_right", uniform)
             let dx = max(b.maxX - right, left - b.minX)
             guard dx > 1.5 else { return nil }
@@ -266,7 +266,7 @@ extension Agent {
             var heldBelow = held, outBelow = out
             if let n = v as? NodeView {
                 guard !n.inert, !n.cssVisibilityHidden, !presenter.navigation.isInactiveRoute(containing: n) else { return }
-                let b = n.convert(n.bounds, to: nil)
+                let b = n.convert(n.boxBounds, to: nil)
                 if b.width > 0, b.height > 0, b.intersects(port) || b.intersects(win.bounds) {
                     var item: [String: Any] = rect(b).merging(["id": Int(n.id)]) { x, _ in x }
                     let past = max(b.maxX - port.maxX, port.minX - b.minX)

@@ -392,13 +392,15 @@ extension NavigationHost {
             if let requests, presenter.collections.lastRequest(node.id) != requests[node.id] ?? 0 { return }
             presenter.collections.readerMoves(node.id)
         }
-        // At its top under a collapsed title it goes on to the open title's
-        // inset, as UIKit's status-bar tap does, and opens it.
-        let inset = max(sv.adjustedContentInset.top, node != nil && node === c.collapseScroll ? node?.scrollOrigin ?? 0 : 0)
+        let inset = sv.adjustedContentInset.top
         guard sv.contentOffset.y > 0.5 - inset else { return restAtTop(sv, in: c) }
         guard scrollsToTopAnimated else { return restAtTop(sv, in: c) }
         if node?.scrollView === sv { node?.scrollsToTop() }
-        sv.setContentOffset(PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -inset), in: sv, clamped: false), animated: true)
+        // To the open title's top, as the status bar's tap goes: UIKit opens a large title only past the collapsed
+        // top, which is outside the range while it is collapsed. A view animation, because `setContentOffset(_:animated:)`
+        // is retargeted by the inset as the title opens and stops at the collapsed top (iOS 27).
+        let expanded = max(inset, node != nil && node === c.collapseScroll ? node?.scrollOrigin ?? 0 : 0)
+        UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) { sv.contentOffset = CGPoint(x: sv.contentOffset.x, y: -expanded) }
     }
 
     /// Where `scrollToTop` ends, in one turn, under the agent's frozen clock,
@@ -467,11 +469,13 @@ extension NavigationHost {
         measuredTablist = nil
     }
 
-    /// After a batch: the projection, unless the batch only moved a list's
-    /// rows and nothing is owed; then what presentations inherit and the
-    /// authored tablist's covers.
-    func batchApplied(_ batch: Batch, rowsOnly: Bool) {
-        if !rowsOnly || syncOwed { sync(batch) }
+    /// After a batch: the projection, unless the batch changed only geometry
+    /// (PROTO) or a list's rows and nothing is owed; then what presentations
+    /// inherit and the authored tablist's covers.
+    func batchApplied(_ batch: Batch, skipSync: Bool) {
+        if !skipSync || syncOwed || presenter.awaitingFrame.contains(where: { entry in
+            entry.view.map { $0.groupedOwner || insetByUIKit($0) } ?? false
+        }) { sync(batch) }
         presenter.modals.inheritFromAncestors()
         followAuthoredTablist()
     }
@@ -485,7 +489,7 @@ extension NavigationHost {
         if ExactEnv.authoredChrome, !syncing { fitOwner() }
         guard tablistAppearanceNone, !syncing, let view = presenter.session?.view,
               let list = adoptedTablist.flatMap({ presenter.views[$0] }) else { return }
-        if list.convert(list.bounds, to: view) != measuredTablist { reportCovers() }
+        if list.convert(list.boxBounds, to: view) != measuredTablist { reportCovers() }
     }
 
     /// A bar visible in its window, including every ancestor's visibility.

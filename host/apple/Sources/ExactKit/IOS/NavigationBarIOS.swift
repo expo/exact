@@ -843,14 +843,15 @@ extension NavigationHost {
         let flowing = Self.flowingTopContent
         let node = shape.map { shape in kids.firstIndex { $0 === shape.header }.flatMap { kids[($0 + 1)...].first(where: flowing) } }
             ?? (shows || wantsWholeView ? kids.first(where: flowing) : nil)
-        var riders: [NodeView] = []
+        var bands = Presenter.Bands()
         #if os(iOS)
         if #available(iOS 26.0, *), shape?.level == 1, let scroller,
            scroller.style["scroll_edge_effect"]?.string != "none", !Self.transparentBar(c.node),
-           case let bands = presenter.controlBands(of: scroller, in: c.node, ControlBars(presenter)), !bands.top.isEmpty {
-            riders = bands.top
+           case let found = presenter.controlBands(of: scroller, in: c.node, ControlBars(presenter)), !found.top.isEmpty {
+            bands = found
         }
         #endif
+        let riders = bands.top
         for old in c.ridingBars where !riders.contains(where: { $0 === old }) { old.controlRide = 0; old.applyTransform() }
         c.ridingBars = riders
         c.rideBars()
@@ -859,8 +860,7 @@ extension NavigationHost {
         let arranged = scroller.flatMap { node in arrangementScrollers(in: c, top: true).contains(where: { $0 === node }) ? node : nil }
         let target = !riders.isEmpty ? (covered ? nil : scroller) : (ordinary ?? arranged)
         if let target, !riders.isEmpty {
-            let frame = target.convert(target.bounds, to: c.node)
-            let band = UIEdgeInsets(top: max(0, frame.minY), left: 0, bottom: target.pageBand.bottom, right: 0)
+            let band = UIEdgeInsets(top: bands.band.top, left: 0, bottom: target.pageBand.bottom, right: 0)
             var own = band
             own.top += min(band.top, c.view.safeAreaInsets.top)
             if target.pageBand != band || target.bandInset != own { target.setPageBand(band, inset: own) }
@@ -869,33 +869,20 @@ extension NavigationHost {
         guard c.collapseScroll !== target || c.collapseScrollView !== physical else { return }
         c.safeArea.release(c.collapseScrollView)
         let old = c.collapseScroll, oldView = c.collapseScrollView
-        if let old, let sv = oldView { old.retainScrollPosition(from: sv) }
         c.collapseScroll = target
         c.collapseScrollView = physical
-        // A scroller at its start (CSS scrollTop 0) stays there as UIKit
-        // begins to inset it: UIKit keeps the offset it had, a new
-        // scroller's 0, which left its content's top under the bar.
+        // PROTO: let UIKit place the content as its first safe area arrives (`syncScroll`)
         let shown = shownScroll(target)
-        let atStart = shown.map { $0.contentOffset.y <= 0.5 - $0.adjustedContentInset.top } ?? false
         // Under a transparent bar the content starts at the top edge, under
         // the bar, as on the web under a fixed transparent header: a hero
         // photo bleeds to the top, and the bar's material comes as it scrolls.
         // That is the top's clearance turned off (`ignoresSafeArea`).
-        shown?.contentInsetAdjustmentBehavior = .automatic
-        // …and is there before UIKit is handed it: a bar handed a
-        // scroller that far from its top closes an open large title.
-        if atStart, let sv = shown, sv.contentOffset.y != -sv.adjustedContentInset.top { sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -sv.adjustedContentInset.top), in: sv) }
+        if shown?.contentInsetAdjustmentBehavior == .scrollableAxes { shown?.contentInsetAdjustmentBehavior = .automatic } // PROTO: release the reach's axis policy for the primary scroller
         c.projectContentScrollView(shown ?? c.bandedTop, for: .top) // or the scroller its control bars are over (LLP 1131)
-        // The scroller left behind gets the page's offsets back only once the
-        // bar follows the new one: UIKit reads its inset taken away while the
-        // bar still follows it as a scroll, and closes an open large title.
-        if let old, let sv = oldView, sv !== shown, !arrangementInsets(sv, in: c) {
-            let top = sv.contentOffset.y + old.scrollTopInset(sv)
-            // The bottom edge's scroller stays UIKit's to inset (`reachBottom`).
-            if old !== c.edgeScroll || sv !== old.scrollView { sv.contentInsetAdjustmentBehavior = .never }
+        // PROTO: keep UIKit's inset and offset when only the bar's scroll association changes
+        if let old, oldView !== shown {
             old.scrollOrigin = 0
             old.scrollCollapsed = 0
-            sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: top - old.scrollTopInset(sv)), in: sv, clamped: !sv.isTracking && !sv.isDragging && !sv.isDecelerating)
         }
         // UIKit keeps a pushed route's large title inside the scroller the bar
         // follows and moves it only on the bar's next layout, which handing
@@ -924,6 +911,7 @@ extension NavigationHost {
     /// Register a replacement before its first native layout. Resolve only
     /// the containing route, preserving that stack's Back relationships.
     func scrollBackendChanged(_ node: NodeView) {
+        presenter.unshown(node) // A replacement backend has no committed frame, even when its node survives.
         for current in ViewPresentation.controllers(for: node) {
             if let route = current as? RouteController, route.host === self, let stack = route.stack {
                 guard route.collapseScroll === node || route.edgeScroll === node || (node.scrollView != nil && contentScroller(of: route) === node) else { return }
@@ -955,19 +943,9 @@ extension NavigationHost {
         let projects = !c.nativeContentScrollEdges.contains(.bottom)
         guard c.edgeScroll !== target || (projects && c.contentScrollView(for: .bottom) !== (target?.scrollView ?? c.bandedBottom)) else { return }
         c.safeArea.release(c.edgeScroll?.scrollView)
-        if let old = c.edgeScroll, let sv = old.scrollView, old !== c.collapseScroll, !arrangementInsets(sv, in: c) { sv.contentInsetAdjustmentBehavior = .never }
-        if projects, let previous = c.contentScrollView(for: .bottom), previous !== target?.scrollView,
-           previous !== c.collapseScrollView, !arrangementInsets(previous, in: c) { previous.contentInsetAdjustmentBehavior = .never }
         c.edgeScroll = target
         let shown = shownScroll(target)
-        // A scroller at its start stays there as UIKit begins to inset it.
-        // One made in this batch can hold a safe area from before its first
-        // frame (at the route's top, under the bar): UIKit insets it by that
-        // first, then, given it below, takes the inset away and moves the
-        // offset by as much, scrolling its content out of its port.
-        let atStart = shown.map { $0.contentOffset.y <= 0.5 - $0.adjustedContentInset.top } ?? false
-        shown?.contentInsetAdjustmentBehavior = .automatic
-        if atStart, let sv = shown, sv.contentOffset.y != -sv.adjustedContentInset.top { sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -sv.adjustedContentInset.top), in: sv) }
+        if shown?.contentInsetAdjustmentBehavior == .scrollableAxes { shown?.contentInsetAdjustmentBehavior = .automatic } // PROTO: release only the reach's axis policy
         // tvOS has no bottom bar whose edge follows a scroller.
         #if !os(tvOS)
         c.projectContentScrollView(shown ?? c.bandedBottom, for: .bottom)
@@ -993,7 +971,7 @@ extension NavigationHost {
         // (a column with a Save button at its foot) and keeps the cover. The
         // laid-out frames say so; the host is not sent the flex direction.
         func alone(_ last: NodeView, among children: [NodeView]) -> Bool {
-            children.allSatisfy { $0 === last || $0.frame.maxY <= last.frame.minY + 0.5 }
+            children.allSatisfy { $0 === last || $0.boxFrame.maxY <= last.boxFrame.minY + 0.5 }
         }
         var parent = route
         while true {
@@ -1003,9 +981,9 @@ extension NavigationHost {
             // child that box less the cover the kernel may pad it by, a
             // deeper one its parent's bottom, with nothing (a padding, a
             // border) under it.
-            let foot = parent === route ? parent.contentBox().maxY - cover : parent.bounds.maxY
+            let foot = parent === route ? parent.contentBox().maxY - cover : parent.boxBounds.maxY
             if parent !== route, parent.contentBox().maxY < foot - 0.5 { return nil }
-            if parent.convert(last.bounds, from: last).maxY < foot - 0.5 { return nil }
+            if parent.convert(last.boxBounds, from: last).maxY < foot - 0.5 { return nil }
             if last.scrollView != nil { return ["scroll", "auto"].contains(last.style["overflow_y"]?.string ?? "") ? last : nil }
             parent = last
         }

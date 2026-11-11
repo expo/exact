@@ -101,12 +101,12 @@ extension Presenter {
             return v.window != nil
         }
         if let id = source, let v = views[id] {
-            if shown(v) { return (v, v.bounds) }
+            if shown(v) { return (v, v.boxBounds) }
             var at: ShareAnchorView? = v.superview
             while let a = at, (a as? NodeView)?.props["popover"] == nil { at = a.superview }
             if let popover = at as? NodeView,
                let invoker = (carrying("popovertarget") + carrying("commandfor")).first(where: { invocation(of: $0)?.target === popover && shown($0) }) {
-                return (invoker, invoker.bounds)
+                return (invoker, invoker.boxBounds)
             }
         }
         #if canImport(UIKit)

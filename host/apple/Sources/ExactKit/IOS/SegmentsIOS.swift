@@ -451,7 +451,7 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
         // as the web lays them out.
         let box = owner.contentBox(), origin = owner.grid?.origin ?? .zero, scale = presenter.gridScale(under: origin)
         let left = PixelGrid.length(box.minX, from: origin, vertical: false, scale: scale), right = PixelGrid.length(box.maxX, from: origin, vertical: false, scale: scale)
-        let frame = CGRect(x: left, y: owner.bounds.minY, width: right - left, height: owner.bounds.height)
+        let frame = CGRect(x: left, y: owner.boxBounds.minY, width: right - left, height: owner.boxBounds.height)
         if bar.frame != frame { bar.frame = frame }
         assign(bar, \.isUserInteractionEnabled, available(owner, forActivation: false))
         assign(bar, \.accessibilityLabel, owner.props["accessibilityLabel"])
@@ -565,11 +565,9 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
             value.autoresizingMask = [.flexibleWidth, .flexibleTopMargin, .flexibleBottomMargin]
             // A path segment is drawn at the body size: again as the text size changes.
             value.registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (control: ExactSegmentedControl, _: UITraitCollection) in control.redrawPaths() }
-            owner.addSubview(value)
             controls[owner.id] = value
             return value
         }()
-        if control.superview !== owner { owner.addSubview(control) }
         assign(control, \.isEnabled, available(owner, forActivation: false))
         // The authored colour belongs to UIKit's control, within its native height and corners.
         assign(control, \.backgroundColor, owner.uiColor("background_color"))
@@ -599,6 +597,9 @@ final class SegmentHost: NSObject, UIGestureRecognizerDelegate, UITabBarDelegate
             control.selectedSegmentIndex = selected
         }
         if control.selectedSegmentIndex == selected { control.settled = selected }
+        // Joins its owner holding its segments and choice: UIKit animates a choice made in a window, so a control
+        // given its first choice there would slide to it as it first shows
+        if control.superview !== owner { owner.addSubview(control) }
         // As wide as the content box and its own height, centred in it
         // (LLP 1116.019 D1): a taller box (an authored height, a stretch)
         // does not stretch UIKit's control, as a hand-built screen's

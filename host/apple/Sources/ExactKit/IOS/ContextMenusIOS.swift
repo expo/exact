@@ -188,7 +188,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         owner.home = Self.box(node)
         place(owner)
     }
-    /// A view's layout box in its parent, untransformed.
+    /// The untransformed native frame saved for the lifted view's return.
     private static func box(_ view: UIView) -> CGRect {
         CGRect(x: view.center.x - view.bounds.width / 2, y: view.center.y - view.bounds.height / 2,
                width: view.bounds.width, height: view.bounds.height)

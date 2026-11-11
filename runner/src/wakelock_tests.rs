@@ -341,28 +341,55 @@ fn a_detail_under_the_list_over_it_is_shown_but_not_live() {
     r.kernel_mut()
         .set_host_block_shown(list, BlockShown::Beside);
     assert!(!r.inactive(back) && !r.inactive(open), "side by side");
+    assert_tree_activity(
+        &r,
+        &[
+            (list, false, false),
+            (open, false, false),
+            (detail, false, false),
+            (back, false, false),
+        ],
+    );
     r.kernel_mut()
         .set_host_block_shown(detail, BlockShown::Under);
     assert!(r.inactive(back), "the detail under the list");
     assert!(!r.inactive(open), "the list over it");
-    let tree = crate::head::activity(r.kernel(), &r.roots());
-    assert_eq!(
-        tree.get(&back),
-        Some(&(true, false)),
-        "the agent's tree: the detail not live, shown"
-    );
-    assert_eq!(
-        tree.get(&open),
-        Some(&(false, false)),
-        "the agent's tree: the list live"
-    );
     assert!(
         !crate::head::hidden_route(r.kernel(), back),
         "shown all the same"
     );
+    assert_tree_activity(
+        &r,
+        &[
+            (list, false, false),
+            (open, false, false),
+            (detail, true, false),
+            (back, true, false),
+        ],
+    );
     r.kernel_mut()
         .set_host_block_shown(detail, BlockShown::InStack);
     assert!(!r.inactive(back), "beside it again");
+    assert_tree_activity(
+        &r,
+        &[
+            (list, false, false),
+            (open, false, false),
+            (detail, false, false),
+            (back, false, false),
+        ],
+    );
+    r.kernel_mut()
+        .set_host_block_shown(list, BlockShown::InStack);
+    assert_tree_activity(
+        &r,
+        &[
+            (list, true, true),
+            (open, true, true),
+            (detail, false, false),
+            (back, false, false),
+        ],
+    );
 }
 
 /// A sheet over a split covers its columns first (LLP 1127 D8): the list
@@ -391,5 +418,46 @@ fn a_splits_list_under_a_sheet_is_shown_but_not_live() {
         !crate::head::hidden_route(r.kernel(), open),
         "the list is shown all the same"
     );
+    assert_tree_activity(
+        &r,
+        &[
+            (list, true, false),
+            (open, true, false),
+            (detail, true, false),
+            (back, true, false),
+            (view(&r, "close"), false, false),
+        ],
+    );
     assert_eq!(super::holders(&r), vec![id]);
+}
+
+fn assert_tree_activity(r: &Runner<NoData>, expected: &[(u32, bool, bool)]) {
+    let tree: serde_json::Value = serde_json::from_str(&crate::agent::tree(r)).unwrap();
+    let rows = tree["nodes"].as_array().unwrap();
+    for &(id, inactive, hidden) in expected {
+        let row = rows
+            .iter()
+            .find(|row| row["id"].as_u64() == Some(u64::from(id)))
+            .unwrap();
+        assert_eq!(
+            row["inactive"].as_bool().unwrap_or(false),
+            inactive,
+            "node {id}: inactive"
+        );
+        assert_eq!(
+            row["hidden"].as_bool().unwrap_or(false),
+            hidden,
+            "node {id}: hidden"
+        );
+        assert_eq!(
+            r.inactive(id),
+            inactive,
+            "node {id}: individual inactive read"
+        );
+        assert_eq!(
+            crate::head::hidden_route(r.kernel(), id),
+            hidden,
+            "node {id}: individual hidden read"
+        );
+    }
 }

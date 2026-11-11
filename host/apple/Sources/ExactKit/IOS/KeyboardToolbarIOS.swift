@@ -54,7 +54,7 @@ final class KeyboardToolbars {
         var still = Set<UInt32>(), owned = Set<UInt32>()
         for bar in toolbars {
             guard let window = bar.window else { continue }
-            var box = bar.convert(bar.bounds, to: window)
+            var box = bar.convert(bar.boxBounds, to: window)
             // Work from the authored position, not the lift already applied
             // on a previous keyboard frame. Convert the outer translation
             // through the same parent/context transforms as applyTransform.
@@ -74,7 +74,7 @@ final class KeyboardToolbars {
             // The scrollers whose bottom is the bar's top, across its width.
             for node in presenter.views.values {
                 guard let sv = node.scrollView, node.window === window, !node.isHidden else { continue }
-                let frame = node.convert(node.bounds, to: window)
+                let frame = node.convert(node.boxBounds, to: window)
                 guard abs(frame.maxY - box.minY) <= 1, frame.maxX > box.minX, frame.minX < box.maxX else { continue }
                 owned.insert(node.id)
                 apply(lift, to: sv, node: node)

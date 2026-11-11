@@ -266,7 +266,7 @@ extension Agent {
     /// presentation transform applied (UIKit's conversion carries `transform`),
     /// as the web's `getBoundingClientRect` includes CSS transforms.
     package func box(_ v: UIView, region: CGRect? = nil) -> CGRect {
-        Self.box(region ?? v.bounds, of: v, viewport: presenter.viewport)
+        Self.box(region ?? (v as? NodeView)?.boxBounds ?? v.bounds, of: v, viewport: presenter.viewport)
     }
 
     static func box(_ bounds: CGRect, of v: UIView, viewport: UIScrollView) -> CGRect {
@@ -369,7 +369,7 @@ extension Agent {
             return reply
         }
         if presenter.inlineText(UInt32(id)) == nil {
-            node["radii"] = v.effectiveCornerSizes(in: v.bounds).map { [Double($0.width), Double($0.height)] }
+            node["radii"] = v.effectiveCornerSizes(in: v.boxBounds).map { [Double($0.width), Double($0.height)] }
         }
         let host = v.paragraphOwner
         // @ref LLP 1043.000 §3 D7 — diagnose actual painted fragments, not a replay.
@@ -378,7 +378,7 @@ extension Agent {
         }
         let vp = presenter.viewport
         let rect = { (r: CGRect) -> [String: Any] in ["x": Agent.r2(r.origin.x), "y": Agent.r2(r.origin.y), "w": Agent.r2(r.width), "h": Agent.r2(r.height)] }
-        let local = presenter.inlineText(UInt32(id)).map { host.inlineBounds($0) ?? .zero } ?? host.bounds
+        let local = presenter.inlineText(UInt32(id)).map { host.inlineBounds($0) ?? .zero } ?? host.boxBounds
         let b = presenter.inlineFrame(UInt32(id)) ?? box(host, region: local)
         var space: [String: Any] = ["viewport": rect(b), "local": ["w": Agent.r2(local.width), "h": Agent.r2(local.height)],
                                     "capture": ["scale": Agent.r2(vp.window?.screen.scale ?? vp.traitCollection.displayScale)]]
@@ -434,7 +434,7 @@ extension Agent {
         var clip: [[String: Any]] = []
         for (n, id, kind) in clippers.reversed() {
             clip.append(["id": Int(id), "kind": kind])
-            if let w = host.window, !host.convert(host.bounds, to: w).intersects(n.convert(n.bounds, to: w)) { clipped = true }
+            if let w = host.window, !host.convert(host.boxBounds, to: w).intersects(n.convert(n.bounds, to: w)) { clipped = true }
         }
         node["scroll"] = scroll
         node["clip"] = clip
@@ -752,9 +752,9 @@ extension Agent {
             guard let handle = next as? NodeView, let clipID = presenter.transformBindings[handle.id]?.clip, let clip = presenter.views[clipID] else {
                 return ["error": "no photo binding (transformDragFor) at view \(v.id)"]
             }
-            let offset = (req["at"] as? [Double]).map { CGPoint(x: $0[0], y: $0[1]) } ?? CGPoint(x: handle.bounds.midX, y: handle.bounds.midY)
+            let offset = (req["at"] as? [Double]).map { CGPoint(x: $0[0], y: $0[1]) } ?? CGPoint(x: handle.boxBounds.midX, y: handle.boxBounds.midY)
             let point = handle.convert(offset, to: clip)
-            if let error = DragLink.installed?.recognizedPinch(handle, scale: scale, focal: CGPoint(x: point.x - clip.bounds.midX, y: point.y - clip.bounds.midY)) { return ["error": error] }
+            if let error = DragLink.installed?.recognizedPinch(handle, scale: scale, focal: CGPoint(x: point.x - clip.boxBounds.midX, y: point.y - clip.boxBounds.midY)) { return ["error": error] }
             return delivered(["tapped": Int(handle.id), "pinch": scale, "at": at, "delivery": "recognized"], hit)
         }
         if req["hover"] as? Bool == true {

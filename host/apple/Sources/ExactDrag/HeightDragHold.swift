@@ -81,7 +81,7 @@ final class HeightDragHold {
         let batch = session.runtime.heightDragUpdate(primary.token, height: height, now: session.now())
         session.apply(batch)
         guard batch.error == nil, live, eligible, let target else { return false }
-        shown = Double(target.bounds.height); self.time = time
+        shown = Double(target.boxBounds.height); self.time = time
         lastDisplacement = downward
         return true
     }

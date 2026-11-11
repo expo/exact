@@ -29,6 +29,12 @@ private final class KeyboardCheck: NSObject, UINavigationControllerDelegate {
 
     func update(_ route: ExactRoute) {
         routes[ObjectIdentifier(route.controller)] = route
+        // PROTO (rule 4): a route that says `data-minimize="scroll-down"` minimizes its bar as its scroller scrolls down
+        if #available(iOS 27.0, *), route.data[.minimize] == "scroll-down" {
+            if route.controller.navigationItem.navigationBarMinimization.minimizationBehavior != .onScrollDown {
+                route.controller.navigationItem.navigationBarMinimization.minimizationBehavior = .onScrollDown
+            }
+        }
         guard route.data[.keyboardScreen] != nil else { return }
         let items = route.controller.navigationItem.rightBarButtonItems ?? []
         if items.contains(where: { $0.accessibilityIdentifier == "keyboard-record" }),
@@ -43,7 +49,9 @@ private final class KeyboardCheck: NSObject, UINavigationControllerDelegate {
         route.controller.navigationItem.rightBarButtonItems = [share, record] + authored
     }
 
-    func remove(_ route: ExactRoute) { routes.removeValue(forKey: ObjectIdentifier(route.controller)) }
+    func remove(_ route: ExactRoute) {
+        routes.removeValue(forKey: ObjectIdentifier(route.controller))
+    }
 
     func update(_ element: ExactElement) {
         element.reusable = true

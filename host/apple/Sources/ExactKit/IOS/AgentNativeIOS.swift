@@ -29,7 +29,7 @@ extension Agent {
             let r = nativeAction ? actionView.map { box($0) } ?? .zero : scope ?? box(v)
             var n: [String: Any] = ["id": Int(id), "x": Agent.r2(r.origin.x), "y": Agent.r2(r.origin.y), "w": Agent.r2(r.width), "h": Agent.r2(r.height)]
             if !nativeAction, scope == nil {
-                n["radii"] = v.effectiveCornerSizes(in: v.bounds).map { [Double($0.width), Double($0.height)] }
+                n["radii"] = v.effectiveCornerSizes(in: v.boxBounds).map { [Double($0.width), Double($0.height)] }
             }
             if nativeAction { n["presentation"] = "native-swipe-action"; n["visible"] = actionView != nil }
             // A waiting scroll (a closed swipe row's) is at its start, with no range until it scrolls.
@@ -447,7 +447,7 @@ extension Presenter {
                 // A collection row's origin is the list's (LLP 1080.001 §5).
                 if collections.owns(parent) { sizeOnly = true }
             } else if sv !== root { report.skip("reparented"); continue }
-            report.compare(id, kernel: f.rect, native: v.frame, sizeOnly: sizeOnly)
+            report.compare(id, kernel: f.rect, native: v.boxFrame, sizeOnly: sizeOnly)
         }
     }
 }

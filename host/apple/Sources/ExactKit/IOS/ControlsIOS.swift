@@ -335,7 +335,7 @@ final class ControlHost: NSObject {
             // A native button's box is its frame (below): its natural size is
             // the kernel's, from the measurement, and asked here of none.
             var natural = control is NativeButtonIOS ? .zero : naturalSize(control, owner)
-            let box = control is NativeButtonIOS ? owner.bounds : owner.contentBox()
+            let box = control is NativeButtonIOS ? owner.boxBounds : owner.contentBox()
             #if os(iOS)
             // A select its box holds narrower than its widest option wraps its
             // title and grows taller, as a pop-up button does under Auto Layout,

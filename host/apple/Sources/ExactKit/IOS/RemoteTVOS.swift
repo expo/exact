@@ -14,6 +14,15 @@
 #if os(tvOS)
 import UIKit
 
+extension NavigationHost {
+    /// Whether the Siri Remote's Menu goes back: a route to pop and a Back control.
+    var menuGoesBack: Bool { (navigation?.viewControllers.count ?? 0) > 1 && canInvokeBack }
+    func menuBack() {
+        guard menuGoesBack, !changing else { return }
+        goBack()
+    }
+}
+
 extension NodeView {
     /// An explicit negative `tabindex` is no remote stop, as it is no Tab
     /// stop (LLP 1088 D7.3); the remote's order stays UIKit's geometry.

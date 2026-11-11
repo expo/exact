@@ -730,11 +730,23 @@ mod tests {
             "calc(16px + var(--exact-layout-margins-inset-left))",
             "var(--exact-viewport-segment-width-0-0, 50%)",
         ] {
-            assert_eq!(text(s, &t, false, &mut quote), Ok(Some((s.to_string(), vec![]))), "{s}");
+            assert_eq!(
+                text(s, &t, false, &mut quote),
+                Ok(Some((s.to_string(), vec![]))),
+                "{s}"
+            );
         }
         assert_eq!(
-            text("calc(var(--gutter) + var(--exact-safe-area-inset-top))", &t, false, &mut quote),
-            Ok(Some(("calc(gutter + var(--exact-safe-area-inset-top))".to_string(), vec![]))),
+            text(
+                "calc(var(--gutter) + var(--exact-safe-area-inset-top))",
+                &t,
+                false,
+                &mut quote
+            ),
+            Ok(Some((
+                "calc(gutter + var(--exact-safe-area-inset-top))".to_string(),
+                vec![]
+            ))),
         );
     }
 

@@ -132,7 +132,7 @@ final class StickyHost {
         // the scroller's port has moved past the block's top.
         if let sv = v.superview as? UIScrollView {
             let i = sv.adjustedContentInset
-            return CGPoint(x: max(0, sv.contentOffset.x + i.left - v.frame.minX), y: max(0, sv.contentOffset.y + i.top - v.frame.minY))
+            return CGPoint(x: max(0, sv.contentOffset.x + i.left - v.boxFrame.minX), y: max(0, sv.contentOffset.y + i.top - v.boxFrame.minY))
         }
         guard v.superview === presenter.root else { return .zero }
         let page = presenter.viewport.contentOffset

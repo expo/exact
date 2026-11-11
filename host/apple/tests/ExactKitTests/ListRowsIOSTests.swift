@@ -5,7 +5,8 @@ import XCTest
 
 /// A batch that only builds, moves or drops a virtualized list's rows (a
 /// fling's fills, many a second) skips the route projection; anything the
-/// projection reads, or anything outside such rows, runs it.
+/// projection reads, or anything outside such rows, runs it. PROTO: so does
+/// a batch of geometry alone.
 final class ListRowsIOSTests: XCTestCase {
     private func snapshot(_ view: Int, revision: Int) -> [String: Any] {
         ["view": view, "revision": revision, "scrollSequence": 0, "count": 50, "totalExtent": 2000,
@@ -14,8 +15,7 @@ final class ListRowsIOSTests: XCTestCase {
     /// 30 holds a header 50, which holds a virtualized list 4 (row 40 > 42),
     /// a virtualized list 1 (row 10 > 11), a tab 70 whose face is 71, and a
     /// virtualized list 5 whose row 80 holds a tablist 81.
-    private func presenter() -> Presenter {
-        let p = Presenter()
+    private func presenter(_ p: Presenter = Presenter()) -> Presenter {
         p.apply(wireBatch([
             ["op": "collections", "items": [snapshot(1, revision: 1), snapshot(4, revision: 1), snapshot(5, revision: 1)]],
             ["op": "create", "id": 30, "kind": "view"],
@@ -41,7 +41,7 @@ final class ListRowsIOSTests: XCTestCase {
     func testRowsBuiltMovedAndDroppedInAVirtualizedListAreOnlyListRows() {
         let p = presenter()
         XCTAssertTrue(p.collections.owns(1))
-        XCTAssertTrue(p.onlyListRows(wireBatch([
+        XCTAssertTrue(p.canSkipNavigationSync(wireBatch([
             ["op": "create", "id": 20, "kind": "view"], ["op": "create", "id": 21, "kind": "view"],
             ["op": "children", "id": 20, "ids": [21]], ["op": "children", "id": 1, "ids": [10, 20]],
             ["op": "frame", "id": 20, "x": 0.0, "y": 40.0, "w": 300.0, "h": 40.0],
@@ -53,7 +53,7 @@ final class ListRowsIOSTests: XCTestCase {
         ])))
         // A fade outside any list that no tab, header or Back reads, and an
         // op on a node the presenter never made, change nothing it projects.
-        XCTAssertTrue(p.onlyListRows(wireBatch([
+        XCTAssertTrue(p.canSkipNavigationSync(wireBatch([
             ["op": "present", "id": 30, "property": "opacity", "x": 0.0],
             ["op": "frame", "id": 999, "x": 0.0, "y": 0.0, "w": 10.0, "h": 10.0],
             ["op": "collections", "items": [snapshot(1, revision: 2)]],
@@ -66,7 +66,6 @@ final class ListRowsIOSTests: XCTestCase {
             [["op": "props", "id": 1, "set": ["testId": "t"]]],                    // the list's own props
             [["op": "style", "id": 30, "style": ["opacity": 0.5]]],                // outside any list
             [["op": "children", "id": 30, "ids": [1, 50]]],                        // reorders a header
-            [["op": "frame", "id": 30, "x": 0.0, "y": 0.0, "w": 300.0, "h": 300.0]],
             [["op": "present", "id": 71, "property": "opacity", "x": 0.0]],        // a tab's badge fading
             [["op": "style", "id": 42, "style": ["opacity": 0.5]]],                // a row under a header
             [["op": "children", "id": 4, "ids": [40]]],                             // a header's list
@@ -78,7 +77,7 @@ final class ListRowsIOSTests: XCTestCase {
             [["op": "roots", "ids": [30]]],
             [],
         ] {
-            XCTAssertFalse(p.onlyListRows(wireBatch(ops)), "\(ops)")
+            XCTAssertFalse(p.canSkipNavigationSync(wireBatch(ops)), "\(ops)")
         }
     }
 
@@ -101,7 +100,7 @@ final class ListRowsIOSTests: XCTestCase {
             ["op": "children", "id": 5, "ids": [2, 4]], ["op": "children", "id": 1, "ids": [5]], ["op": "roots", "ids": [1]],
             ["op": "frame", "id": 4, "x": 0.0, "y": 0.0, "w": 300.0, "h": 300.0],
         ]))
-        XCTAssertTrue(p.onlyListRows(wireBatch([
+        XCTAssertTrue(p.canSkipNavigationSync(wireBatch([
             ["op": "create", "id": 41, "kind": "view"], ["op": "children", "id": 4, "ids": [40, 41, 43, 44]],
             ["op": "paragraph", "id": 44, "runs": [["id": 46, "parent": 44, "paint": true, "props": ["text": "plain"], "style": [:]]]],
         ])), "a plain row and a plain run")
@@ -112,12 +111,12 @@ final class ListRowsIOSTests: XCTestCase {
             [["op": "destroy", "id": 43], ["op": "children", "id": 4, "ids": [40, 44]]],
             [["op": "paragraph", "id": 44, "runs": [["id": 45, "parent": 44, "paint": true, "props": ["id": "m", "text": "m"], "style": [:]]]]],
         ] {
-            XCTAssertFalse(p.onlyListRows(wireBatch(ops)), "\(ops)")
+            XCTAssertFalse(p.canSkipNavigationSync(wireBatch(ops)), "\(ops)")
         }
         // A paragraph holding a run the header names, destroyed with that run.
         p.apply(wireBatch([["op": "paragraph", "id": 44, "runs": [["id": 45, "parent": 44, "paint": true, "props": ["id": "m", "text": "m"], "style": [:]]]]]))
-        XCTAssertFalse(p.onlyListRows(wireBatch([["op": "destroy", "id": 45], ["op": "destroy", "id": 44], ["op": "children", "id": 4, "ids": [40, 43]]])))
-        XCTAssertFalse(p.onlyListRows(wireBatch([["op": "destroy", "id": 44], ["op": "children", "id": 4, "ids": [40, 43]]])))
+        XCTAssertFalse(p.canSkipNavigationSync(wireBatch([["op": "destroy", "id": 45], ["op": "destroy", "id": 44], ["op": "children", "id": 4, "ids": [40, 43]]])))
+        XCTAssertFalse(p.canSkipNavigationSync(wireBatch([["op": "destroy", "id": 44], ["op": "children", "id": 4, "ids": [40, 43]]])))
     }
 
     /// A scroll view's content is rows too (a sequencer's step strips redraw
@@ -135,7 +134,7 @@ final class ListRowsIOSTests: XCTestCase {
             ["op": "children", "id": 5, "ids": [50]],
             ["op": "children", "id": 1, "ids": [3, 2, 5]], ["op": "roots", "ids": [1]],
         ]))
-        XCTAssertTrue(p.onlyListRows(wireBatch([
+        XCTAssertTrue(p.canSkipNavigationSync(wireBatch([
             ["op": "create", "id": 22, "kind": "view"], ["op": "children", "id": 20, "ids": [21, 22]],
             ["op": "frame", "id": 22, "x": 0.0, "y": 0.0, "w": 6.0, "h": 6.0],
             ["op": "style", "id": 21, "style": ["opacity": 0.4]],
@@ -147,7 +146,7 @@ final class ListRowsIOSTests: XCTestCase {
             [["op": "style", "id": 50, "style": ["opacity": 0.5]]],   // a scroll holding a tablist
             [["op": "animations", "id": 1, "specs": []]],            // outside every scroll
         ] {
-            XCTAssertFalse(p.onlyListRows(wireBatch(ops)), "\(ops)")
+            XCTAssertFalse(p.canSkipNavigationSync(wireBatch(ops)), "\(ops)")
         }
     }
 
@@ -159,6 +158,110 @@ final class ListRowsIOSTests: XCTestCase {
         XCTAssertEqual(p.navigation.syncCalls, before, "rows only")
         p.apply(wireBatch([["op": "style", "id": 30, "style": ["opacity": 0.5]]]))
         XCTAssertEqual(p.navigation.syncCalls, before + 1, "outside the rows")
+    }
+
+    func testARowsRadioGroupSyncsWithoutNavigation() throws {
+        let p = presenter()
+        p.buttonFace = { id in var face = ButtonFace(); face.title = id == 62 ? "Day" : "Week"; return face }
+        let batch = wireBatch([
+            ["op": "create", "id": 61, "kind": "view", "props": ["accessibilityRole": "radiogroup"]],
+            ["op": "create", "id": 62, "kind": "control", "handlers": ["press"],
+             "props": ["type": "button", "accessibilityRole": "radio", "accessibilityChecked": "true"]],
+            ["op": "create", "id": 63, "kind": "control", "handlers": ["press"],
+             "props": ["type": "button", "accessibilityRole": "radio", "accessibilityChecked": "false"]],
+            ["op": "children", "id": 61, "ids": [62, 63]], ["op": "children", "id": 10, "ids": [11, 61]],
+            ["op": "frame", "id": 61, "x": 0, "y": 0, "w": 200, "h": 40],
+        ])
+        XCTAssertTrue(p.canSkipNavigationSync(batch))
+        let before = p.navigation.syncCalls
+        p.apply(batch)
+        let control = try XCTUnwrap(p.segments.control(of: 61))
+        XCTAssertEqual(p.navigation.syncCalls, before)
+        XCTAssertEqual((0..<2).map { control.titleForSegment(at: $0) }, ["Day", "Week"])
+        XCTAssertEqual(control.selectedSegmentIndex, 0)
+
+        p.apply(wireBatch([
+            ["op": "props", "id": 61, "set": ["accessibilityLabel": "Period"]],
+            ["op": "props", "id": 62, "set": ["accessibilityChecked": "false"]],
+            ["op": "props", "id": 63, "set": ["accessibilityChecked": "true"]],
+        ]))
+        XCTAssertEqual(p.navigation.syncCalls, before)
+        XCTAssertTrue(p.segments.control(of: 61) === control)
+        XCTAssertEqual(control.selectedSegmentIndex, 1)
+        XCTAssertEqual(control.accessibilityLabel, "Period")
+    }
+
+    /// PROTO (UIKit-first measurement): a batch of geometry alone asks no sync, in every safe-area mode
+    func testGeometrySkipsNavigationInEveryMode() {
+        let saved = ExactSession.protoMode
+        defer { ExactSession.protoMode = saved }
+        for mode: ExactSession.ProtoMode in [.resting, .live, .geometry] {
+            ExactSession.protoMode = mode
+            let p = presenter()
+            let batch = wireBatch([
+                ["op": "frame", "id": 30, "x": 0.0, "y": 0.0, "w": 300.0, "h": 300.0],
+                ["op": "content", "id": 1, "w": 300.0, "h": 2000.0],
+                ["op": "fieldContent", "id": 30, "x": 0.0, "y": 0.0, "w": 100.0, "h": 20.0],
+                ["op": "block", "id": 30, "x": 0.0, "y": 0.0, "w": 300.0, "h": 300.0],
+            ])
+            XCTAssertTrue(p.canSkipNavigationSync(batch), mode.rawValue)
+            let before = p.navigation.syncCalls
+            p.apply(batch)
+            XCTAssertEqual(p.navigation.syncCalls, before, mode.rawValue)
+            p.apply(wireBatch([["op": "style", "id": 30, "style": ["opacity": 0.5]]]))
+            XCTAssertEqual(p.navigation.syncCalls, before + 1, "an outside style change still syncs")
+        }
+    }
+
+    /// PROTO (UIKit-first measurement): a fill of the named scroller's rows asks no sync; a change to the scroller does
+    func testNamedScrollerRowsSkipNavigationButScrollerChangesDoNot() throws {
+        let session = ExactApp.shared.makeSession(label: "named-scroller-rows")
+        let scene = hostedWindowScene()
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: .zero)
+        window.frame = window.screen.bounds
+        let frame = window.bounds
+        defer { session.destroy(); window.isHidden = true }
+        // A refused boot keeps view layout from loading the baked plan.
+        XCTAssertNotNil(session.boot(plan: Data(), size: frame.size).error)
+        let view = ExactView(session: session), host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.addSubview(view)
+        view.frame = host.view.bounds
+        session.presenter.viewport.frame = host.view.bounds
+        let p = presenter(session.presenter)
+        p.apply(wireBatch([
+            ["op": "create", "id": 100, "kind": "view", "props": ["navigationBack": "back", "navigationKey": "edges"]],
+            ["op": "props", "id": 1, "set": ["id": "edges-scroll"]],
+            ["op": "props", "id": 30, "set": ["navigationKey": "edges", "navigationScroll": "edges-scroll"]],
+            ["op": "children", "id": 100, "ids": [30]], ["op": "roots", "ids": [100]],
+            ["op": "frame", "id": 100, "x": 0, "y": 0, "w": frame.width, "h": frame.height],
+            ["op": "frame", "id": 30, "x": 0, "y": 0, "w": frame.width, "h": frame.height],
+        ]))
+        let route = try XCTUnwrap(p.navigation.controllers[30])
+        XCTAssertEqual(route.node.props["navigationScroll"], "edges-scroll")
+        waitFor("the route's first frame settles") { p.awaitingFrame.isEmpty && !p.navigation.syncOwed }
+        let batch = wireBatch([
+            ["op": "create", "id": 20, "kind": "view"],
+            ["op": "children", "id": 1, "ids": [20]],
+            ["op": "destroy", "id": 11], ["op": "destroy", "id": 10],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 300.0],
+            ["op": "content", "id": 1, "w": 300.0, "h": 2000.0],
+        ])
+        XCTAssertTrue(p.canSkipNavigationSync(batch))
+        let before = p.navigation.syncCalls
+        p.apply(batch)
+        XCTAssertEqual(p.navigation.syncCalls, before)
+        waitFor("the new rows' first frame settles") { p.awaitingFrame.isEmpty }
+        for op: [String: Any] in [
+            ["op": "create", "id": 60, "kind": "view"],
+            ["op": "destroy", "id": 1],
+            ["op": "style", "id": 1, "style": ["opacity": 0.5]],
+            ["op": "props", "id": 1, "set": ["id": "another-scroll"]],
+            ["op": "children", "id": 30, "ids": [1]],
+        ] {
+            XCTAssertFalse(p.canSkipNavigationSync(wireBatch([op])), "\(op)")
+        }
     }
 
     /// A batch that changes a list's rows configures the controls of the

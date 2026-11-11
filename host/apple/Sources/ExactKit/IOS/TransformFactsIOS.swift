@@ -45,9 +45,9 @@ extension Presenter {
         // UIView.frame is undefined under a nonidentity transform. Bounds and
         // center retain the untransformed layout box in its parent's coordinates.
         let frame = CGRect(x: target.center.x - target.bounds.width / 2, y: target.center.y - target.bounds.height / 2,
-            width: target.bounds.width, height: target.bounds.height)
-        return TransformGeometryFacts(targetBounds: target.bounds, targetFrame: frame,
-            clipBounds: clip.bounds, windowOrigin: clip.convert(.zero, to: window), supportedAncestors: true)
+            width: target.bounds.width, height: target.bounds.height).inset(by: target.reach)
+        return TransformGeometryFacts(targetBounds: target.boxBounds, targetFrame: frame,
+            clipBounds: clip.boxBounds, windowOrigin: clip.convert(.zero, to: window), supportedAncestors: true)
     }
 }
 #endif

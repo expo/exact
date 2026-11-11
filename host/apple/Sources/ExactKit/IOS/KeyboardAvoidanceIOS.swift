@@ -156,7 +156,7 @@ extension Presenter {
     /// little air, and with `keep` the rest of its section when all of it
     /// fits; whether it moved.
     private func show(_ node: NodeView, rect: CGRect? = nil, in sv: UIScrollView, keep: Bool, covered: CGFloat = 0) -> Bool {
-        let field = node.convert(rect ?? node.bounds, to: sv)
+        let field = node.convert(rect ?? node.boxBounds, to: sv)
         let owner = (sv.superview as? NodeView).flatMap { $0.scrollView === sv ? $0 : nil }
         var visible = sv.pageBounds.inset(by: owner?.scrollPortInsets(sv) ?? sv.adjustedContentInset)
         visible.size.height = max(0, visible.height - covered)
@@ -222,7 +222,7 @@ extension Presenter {
             at = view.superview
         }
         guard let group else { return nil }
-        let box = group.convert(group.bounds, to: sv)
+        let box = group.convert(group.boxBounds, to: sv)
         return CGRect(x: box.minX, y: field.minY, width: box.width, height: max(field.height, box.maxY - field.minY))
     }
 }
@@ -378,7 +378,7 @@ extension NavigationHost {
         // root, as on the web; the routes end at its edge, not under it.
         if owner === tabOwner, ExactEnv.authoredChrome, let list = adoptedTablist.flatMap({ presenter.views[$0] }),
            list.style["display"]?.string != "none", list.isDescendant(of: root) {
-            let rect = list.convert(list.bounds, to: root)
+            let rect = list.convert(list.boxBounds, to: root)
             if rect.height > 0, rect.minY >= frame.midY {
                 frame.size.height = max(0, min(frame.maxY, rect.minY) - frame.minY)
             } else if rect.height > 0, rect.maxY <= frame.midY {

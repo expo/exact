@@ -1,21 +1,24 @@
 // Which batches touch only the rows of a virtualized list or the content of a
 // scroll view (iOS, tvOS): a fling's fills build, move and drop rows many
 // times a second, a playhead redraws its strip eight, and the route and bar
-// projection reads nothing in them.
+// projection reads nothing in them. PROTO (UIKit-first measurement): nor in a
+// batch of geometry alone, which a moving edge sends every frame, or in the
+// rows of the route's named scroller, which stays the scroll view the bar follows.
 #if os(iOS) || os(tvOS)
 import UIKit
 
 extension Presenter {
-    /// Whether every op in `batch` is a list snapshot or lands in a
-    /// virtualized list's rows or a scroll view's content: on a node under
-    /// one, on a node the batch places under one, or on its own children,
-    /// content size, frame or rank. A node on the way up to the list that the projection reads
+    /// Whether every op in `batch` is geometry (PROTO: a frame, a content size,
+    /// a field's box or an owner's block rect), a list snapshot, or lands in a
+    /// virtualized list's rows or a scroll view's content: on a node under one,
+    /// on a node the batch places under one, or on its own children or rank.
+    /// A node on the way up to the list that the projection reads
     /// (a header, a tab, tablist or tabpanel, a route, the stack's Back
     /// control), a list that is a route or a routes' owner, or one inside a
     /// header, a tab or the Back control makes the op count. Read before the batch applies,
     /// while its destroys still have views.
-    func onlyListRows(_ batch: Batch) -> Bool {
-        guard !batch.controls, !batch.ops.isEmpty else { return false }
+    func canSkipNavigationSync(_ batch: Batch) -> Bool {
+        guard awaitingFrame.isEmpty, !batch.controls, !batch.ops.isEmpty else { return false } // PROTO: settle first-frame geometry with its containers
         let back = navigation.container?.props["navigationBack"]
         let scrolls = Set(navigation.controllers.values.compactMap { $0.node.props["navigationScroll"] })
         // The names a route's header buttons invoke (a route's header is a
@@ -30,18 +33,16 @@ extension Presenter {
             let route = sequence(first: header.superview, next: { $0?.superview }).lazy.compactMap { $0 as? NodeView }.first
             if route?.props["navigationKey"] != nil { gather(header) }
         }
-        func projected(_ props: [String: String], kind: String) -> Bool {
-            props["semanticTag"] == "header" || ["tab", "tablist", "tabpanel", "radiogroup"].contains(props["accessibilityRole"] ?? "")
-                || (props["accessibilityRole"] == "radio" && props["type"] != "radio")
+        func projected(_ props: [String: String], kind: String, includingScrolls: Bool = true) -> Bool {
+            props["semanticTag"] == "header" || ["tab", "tablist", "tabpanel"].contains(props["accessibilityRole"] ?? "")
                 || props["navigationKey"] != nil || props["navigationBack"] != nil || (back != nil && props["id"] == back)
-                || props["id"].map(scrolls.contains) == true || props["id"].map(invoked.contains) == true
+                || (includingScrolls && props["id"].map(scrolls.contains) == true) || props["id"].map(invoked.contains) == true
         }
         func projected(_ node: NodeView) -> Bool { projected(node.props, kind: node.kind) }
         /// Read with everything under it: a header's items and title, a
         /// tab's face, a tablist's segments, the Back control's title.
         func readsInside(_ node: NodeView) -> Bool {
-            node.props["semanticTag"] == "header" || ["tab", "tablist", "radiogroup"].contains(node.props["accessibilityRole"] ?? "")
-                || (node.props["accessibilityRole"] == "radio" && node.props["type"] != "radio")
+            node.props["semanticTag"] == "header" || ["tab", "tablist"].contains(node.props["accessibilityRole"] ?? "")
                 || (back != nil && node.props["id"] == back)
         }
         // The nodes the batch creates, and those of them the projection
@@ -59,7 +60,8 @@ extension Presenter {
         // What the projection reads by name or role, wherever it is: tab
         // lists (their tint comes from their ancestors), the Back control,
         // each route's named content scroller, the routes themselves.
-        var read = chrome.ids("role:tablist").union(chrome.ids("role:radiogroup")).union(chrome.ids("navigationBack"))
+        // Radio groups are SegmentHost's; it syncs independently after each batch.
+        var read = chrome.ids("role:tablist").union(chrome.ids("navigationBack"))
         for name in [back].compactMap({ $0 }) + Array(scrolls) { read.formUnion(chrome.named[name] ?? []) }
         let targets = invoked.reduce(into: Set<UInt32>()) { $0.formUnion(chrome.named[$1] ?? []) }
         read.formUnion(navigation.controllers.keys)
@@ -69,10 +71,11 @@ extension Presenter {
         func holdsRows(_ view: NodeView) -> Bool { view.kind == "list" || view.kind == "scroll" }
         /// A virtualized list or scroll view that is not a route or a routes'
         /// owner, that no header, tab or Back control holds, and that holds
-        /// nothing the projection reads.
+        /// nothing the projection reads. A route's named scroller may change its rows
+        /// without changing the scroll view the bar follows.
         func rowsList(_ list: NodeView) -> Bool {
             if let known = lists[ObjectIdentifier(list)] { return known }
-            var result = (list.kind == "scroll" || (list.kind == "list" && collections.owns(list.id))) && !projected(list) && navigation.container !== list
+            var result = (list.kind == "scroll" || (list.kind == "list" && collections.owns(list.id))) && !projected(list.props, kind: list.kind, includingScrolls: false) && navigation.container !== list
             var up = list.superview
             while result, let u = up { if let n = u as? NodeView, readsInside(n) { result = false }; up = u.superview }
             for id in read where result {
@@ -91,8 +94,8 @@ extension Presenter {
                 var up: UIView? = view
                 while let u = up {
                     if let n = u as? NodeView {
-                        if projected(n) { break }
                         if n !== view, holdsRows(n) { result = rowsList(n); break }
+                        if projected(n) { break }
                     }
                     up = u.superview
                 }
@@ -107,6 +110,12 @@ extension Presenter {
             return result
         }
         return batch.ops.allSatisfy { op in
+            // PROTO (UIKit-first measurement): pass geometry on any node, the named scroller's included
+            switch op.op {
+            case .frame, .content, .fieldContent: return true
+            case .unknown where op.payload["op"] as? String == "block": return true
+            default: break
+            }
             // It changes or removes what a header button invokes, a view or a paragraph's run.
             if targets.contains(op.id) { return false }
             if !invoked.isEmpty, op.op == .paragraph || op.op == .destroy {
@@ -121,7 +130,7 @@ extension Presenter {
             case .children where op.ids.contains { read.contains($0) || createdProjected.contains($0) }:
                 // It places something the projection reads (a named scroller, a tablist).
                 return false
-            case .children, .content, .frame, .rank:
+            case .children, .rank:
                 if let list = views[op.id], holdsRows(list) { return rowsList(list) }
                 return inRows(op.id)
             case .create, .props:

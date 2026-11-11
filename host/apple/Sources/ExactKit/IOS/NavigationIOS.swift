@@ -1,8 +1,6 @@
 // @ref LLP 1008 §9 — Contract routes projected into UIKit's navigation
-// controller. UIKit owns recognition, arbitration, progress and cancellation.
-// Only a completed pop invokes the Contract back control. The bar a stack
-// shows, what a route projects into it and when the app module's hatches run
-// are LLP 1075.003's (NavigationBarIOS.swift, NativeHatches.swift).
+// controller. UIKit owns recognition, arbitration, progress and cancellation; only a completed pop invokes the Contract back control.
+// The bar a stack shows, what a route projects into it and when the app module's hatches run: LLP 1075.003 (NavigationBarIOS.swift, NativeHatches.swift).
 #if os(iOS) || os(tvOS)
 import UIKit
 
@@ -47,13 +45,6 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// Its insets were last taken with no bar shown (LLP 1130 D3), so a title's are measured afresh.
     var insetsBarless = false
     var ridingBars: [NodeView] = []
-    func rideBars() {
-        let offset = node.convert(CGPoint(x: 0, y: view.safeAreaInsets.top), from: view).y
-        for bar in ridingBars where abs(bar.controlRide - offset) > 0.001 {
-            bar.controlRide = offset
-            bar.applyTransform()
-        }
-    }
     /// The scroller that is the route's last in-flow child, which reaches
     /// the screen's bottom edge (LLP 1116 D2).
     weak var edgeScroll: NodeView?
@@ -95,9 +86,12 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     // The bar's height changed (a push to an inline title, a rotation, a
     // hatch): the route's content area follows (LLP 1075.003 §3.5).
     override func viewSafeAreaInsetsDidChange() {
+        let started = ExactSession.protoLive ? ApplyPhases.cpu() : 0 // PROTO (UIKit-first measurement)
         super.viewSafeAreaInsetsDidChange()
         rideBars()
         host?.coversChanged()
+        host?.presenter.placeEdge(self) // PROTO (rule 4)
+        if ExactSession.protoLive { NSLog("PROTO live edge %@ cpu %.0f µs top %.2f", ExactSession.protoMode.rawValue, ApplyPhases.cpu() - started, view.safeAreaInsets.top) } // PROTO (UIKit-first measurement)
     }
     // Back on a screen whose list pushed the one leaving: the row that was
     // tapped fades with the transition (LLP 1115.000 D11.3).
@@ -141,6 +135,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     }
 
     let safeArea = RouteSafeArea()
+    var restingTop: CGFloat = 0, placedEdge: Double? // PROTO (rule 4, `EdgeFramesIOS.swift`)
 
     /// Whether the route turns off `edge`'s native clearance: by
     /// `-exact-safe-area`, or at the top under a transparent bar, whose
@@ -272,9 +267,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         let frame = ExactEnv.authoredChrome ? allocation : view.bounds
         if scroll.frame != frame { scroll.frame = frame }
         scroll.keyboardDismissMode = viewportKeyboardDismissal
-        let extent = CGSize(width: max(node.bounds.width, node.style["overflow_x"]?.string == "visible" || node.style["overflow_x"] == nil ? node.content.width : 0),
-                            height: max(node.bounds.height, node.style["overflow_y"]?.string == "visible" || node.style["overflow_y"] == nil ? node.content.height : 0))
-        let size = CGSize(width: max(allocation.width, node.frame.minX + extent.width), height: max(allocation.height, node.frame.minY + extent.height))
+        let extent = CGSize(width: max(node.boxBounds.width, node.style["overflow_x"]?.string == "visible" || node.style["overflow_x"] == nil ? node.content.width : 0),
+                            height: max(node.boxBounds.height, node.style["overflow_y"]?.string == "visible" || node.style["overflow_y"] == nil ? node.content.height : 0))
+        let size = CGSize(width: max(allocation.width, node.boxFrame.minX + extent.width), height: max(allocation.height, node.boxFrame.minY + extent.height))
         if scroll.contentSize != size { scroll.contentSize = size }
         // Keep drawing under the keyboard while the content clears its occupied area
         var overlap = max(0, frame.maxY - allocation.maxY)
@@ -315,13 +310,11 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         host?.presenter.elementScrolls.revealEnded(scrollView)
     }
 
-    // A button can remove a route before UIKit starts its pop. Preserve its
-    // outgoing pixels for that transition; an interactive pop uses live views.
+    // A button can remove a route before UIKit starts its pop. Preserve its outgoing pixels for that transition; an interactive pop uses live views.
     func freeze() {
         guard isViewLoaded, let snapshot = view.snapshotView(afterScreenUpdates: false) else { return }
         snapshot.frame = view.bounds
-        // Pinned to the top, never stretched: the viewport can grow under it
-        // as the pop starts (a keyboard going away, see NavigationHost.sync).
+        // Pinned to the top, never stretched: the viewport can grow under it as the pop starts (a keyboard going away, see NavigationHost.sync).
         snapshot.autoresizingMask = [.flexibleWidth, .flexibleBottomMargin]
         view.addSubview(snapshot)
         snapshot.setPaintForeground()
@@ -362,6 +355,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     // A held stack's tab bar follows the route's scroll views as a navigation controller's follows its top's.
     override func setContentScrollView(_ scrollView: UIScrollView?, for edge: NSDirectionalRectEdge) {
         if !projectingContentScrollView { nativeContentScrollEdges.formUnion(edge) }
+        // Read the view a single edge leaves: `contentScrollView(for:)` takes one edge, and a write that moves
+        // both edges off a view leaves no edge still using it
+        let leaving = edge == .top || edge == .bottom ? contentScrollView(for: edge) : nil
         super.setContentScrollView(scrollView, for: edge)
         (parent as? HeldStack)?.setContentScrollView(scrollView, for: edge)
         if edge.contains(.top) {
@@ -370,6 +366,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             if !projectingContentScrollView { host?.presenter.syncScrollsToTop() }
             #endif
         }
+        observeAgain(leaving, leftFrom: edge, for: scrollView)
     }
 
     private var topEdgeWatch: NSKeyValueObservation?
@@ -418,7 +415,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// longer than its bar.
     let titleInks = NSMapTable<UINavigationBar, UIColor>.weakToStrongObjects()
     var modalNavigation: UINavigationController? { presentedNavigations.last }
-    private var navigation: UINavigationController? { modalNavigation ?? split?.front ?? primaryNavigation }
+    var navigation: UINavigationController? { modalNavigation ?? split?.front ?? primaryNavigation }
     /// Whether a stack's pushes and pops are the router's: the one in front,
     /// and with a split, either column's.
     private func follows(_ nav: UINavigationController) -> Bool { nav === navigation || (modalNavigation == nil && split?.holds(nav) == true) }
@@ -667,6 +664,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         guard primaryOwner == nil else { return }
         // Find the containing controller before installing our child.
         guard let parent = ViewPresentation.controller(for: p.root) else { return }
+        defer { primaryOwner?.view.layoutIfNeeded() } // UIKit must mount retained routes in a replacement container too.
         if let tabs = p.tabs {
             installTabs(p, tabs, first: first, in: parent)
             return
@@ -719,7 +717,6 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         _ = adoptBootCover()
         let parts = NavigationRules.segments(presentations: p.routes[...p.selected].map { $0.props["navigationPresentation"] })
         ApplyProfile.time("nav.primary") { installPrimary(p, first: Array(p.chosen[parts[0]])) }
-        ApplyProfile.time("nav.layout") { primaryOwner?.view.layoutIfNeeded() }
         // The content area the bar leaves reaches layout in this turn, before
         // the first frame (LLP 1075.003 Q3 (c)).
         ApplyProfile.time("nav.covers") { reportCovers() }
@@ -776,6 +773,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         nativeMoved = false; settled = false
         syncing = true
         defer { syncing = false; presenter.flushPendingFocus(); presenter.elementScrolls.flush() }
+        presenter.owners.publish() // PROTO: covers must find a block before deriving child styles.
         guard let p = projection(batch) else { settled = true; return }
         let root = p.root, wanted = p.chosen
         // A presentation whose route a logical ancestor's `display: none`
@@ -862,7 +860,6 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                 // A press that pushed may hand its control's focus to the arriving route's first autofocus (PressHandoffIOS).
                 if pushOrPop || arrives { presenter.pressShows((stack.last as? RouteController)?.node) }
             }
-            ApplyProfile.time("nav.layout") { nav.view.layoutIfNeeded() }
         }
         unanimated = false
         // As the split expands, the inspector's sheet gives its route to the
@@ -902,21 +899,18 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             presenter.modals.present(route, navigation: nav, from: background,
                                      preceding: preceding, owner: owner)
         }
-        // A presented navigation fills its sheet; the primary owner the root,
-        // which no presentation resizes (LLP 1123 D1)
-        if let top = primaryOwner {
+        // A presented navigation fills its sheet; the primary owner fills the root, which no presentation resizes (LLP 1123 D1).
+        if primaryOwner != nil {
             fitOwner()
             placeOwner()
-            top.view.layoutIfNeeded()
         }
         for (id, c) in controllers where !routeIDs.contains(id) { end(c) }
         controllers = controllers.filter { routeIDs.contains($0.key) }
         presenter.modals.updatePermissions()
         if p.tabs != nil { replayTabs() }
+        if !presenter.awaitingFrame.isEmpty { window?.layoutIfNeeded() } // Lay out new views before reporting their geometry
         reportCovers()
         refitForBars()
-        // A route that left every stack gives its block back (LLP 1123 D2)
-        presenter.owners.publish()
         settled = true
     }
 
@@ -1550,14 +1544,4 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         presenter.owners.publish()
     }
 }
-#if os(tvOS)
-extension NavigationHost {
-    /// Whether the Siri Remote's Menu goes back: a route to pop and a Back control.
-    var menuGoesBack: Bool { (navigation?.viewControllers.count ?? 0) > 1 && canInvokeBack }
-    func menuBack() {
-        guard menuGoesBack, !changing else { return }
-        goBack()
-    }
-}
-#endif
 #endif

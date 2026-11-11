@@ -242,7 +242,7 @@ final class NativeListNavigationIOSTests: XCTestCase {
         XCTAssertTrue(route.contentScrollView(for: .top) === collection, "UIKit follows the actual collection")
         XCTAssertTrue(route.collapseScroll === node)
         XCTAssertTrue(route.collapseScrollView === collection)
-        XCTAssertEqual(plain.contentInsetAdjustmentBehavior, .never)
+        XCTAssertEqual(plain.contentInsetAdjustmentBehavior, .automatic) // PROTO: retiring a backend keeps UIKit's adjustment
         XCTAssertEqual(collection.contentInsetAdjustmentBehavior, .automatic)
         collection.contentInset.bottom = 40
         XCTAssertTrue(NavigationHost.ownedChanges(collection, of: node, insetByUIKit: true).isEmpty, "the collection retains its Exact-owned delegate and native footer insets")
@@ -256,7 +256,7 @@ final class NativeListNavigationIOSTests: XCTestCase {
         let replacement = mount()
         XCTAssertTrue(route.collapseScroll === node, "the logical owner did not change")
         XCTAssertTrue(route.contentScrollView(for: .top) === replacement, "a new backend on the same node is rebound")
-        XCTAssertEqual(collection.contentInsetAdjustmentBehavior, .never)
+        XCTAssertEqual(collection.contentInsetAdjustmentBehavior, .automatic) // PROTO: replacing a backend keeps UIKit's adjustment
         XCTAssertTrue(route.contentScrollView(for: .bottom) === replacement, "the bottom edge follows the replacement too")
         XCTAssertEqual(replacement.contentInsetAdjustmentBehavior, .automatic)
         XCTAssertEqual(node.scrollOrigin, 0, "the previous backend's title inset is not carried over")

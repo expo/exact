@@ -118,7 +118,7 @@ enum InspectHost {
     /// which is not looked for).
     typealias Place = () -> CGRect?
     static func place(of node: NodeView, in session: ExactSession) -> Place? {
-        if shown(node) { return { [weak node] in node.flatMap { $0.window != nil && shown($0) ? $0.convert($0.bounds, to: nil) : nil } } }
+        if shown(node) { return { [weak node] in node.flatMap { $0.window != nil && shown($0) ? $0.convert($0.boxBounds, to: nil) : nil } } }
         let id = node.id, presenter = session.presenter
         for c in presenter.navigation.controllers.values {
             guard let nav = c.navigationController, nav.topViewController === c else { continue }
@@ -196,7 +196,7 @@ enum InspectHost {
     private static func reveal(_ view: UIView) {
         var at = view.superview
         while let v = at {
-            if let scroll = v as? UIScrollView { scroll.scrollRectToVisible(view.convert(view.bounds, to: scroll), animated: false) }
+            if let scroll = v as? UIScrollView { scroll.scrollRectToVisible(view.convert((view as? NodeView)?.boxBounds ?? view.bounds, to: scroll), animated: false) }
             at = v.superview
         }
     }

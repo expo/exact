@@ -80,7 +80,7 @@ final class SelectionDocument {
         return part.start + part.input.index(at: part.node.convert(point, from: surface))
     }
     private func distance(_ point: CGPoint, to node: NodeView) -> CGFloat {
-        let box = node.convert(node.bounds, to: surface)
+        let box = node.convert(node.boxBounds, to: surface)
         let x = max(box.minX - point.x, 0, point.x - box.maxX), y = max(box.minY - point.y, 0, point.y - box.maxY)
         return x * x + y * y
     }

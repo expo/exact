@@ -111,7 +111,7 @@ enum ScrollAnchoring {
         // longer the presenter's: the DOM has removed it, so it is no candidate.
         let live = { (n: NodeView) in scroller.presenter?.views[n.id] === n }
         let roots = space.subviews.compactMap { $0 as? NodeView }
-        let rect = { (n: NodeView) in n.convert(n.bounds, to: space) }
+        let rect = { (n: NodeView) in n.convert(n.boxBounds, to: space) }
         let children = { (node: NodeView) -> [NodeView] in
             #if os(iOS) || os(tvOS)
             let scrolls = node.scrollView != nil
@@ -167,6 +167,6 @@ enum ScrollAnchoring {
         // A box that became or stopped being absolutely positioned anywhere in
         // the scroller suppresses too.
         for id in changes.positioned where scroller.presenter?.views[id]?.isDescendant(of: space) == true { return nil }
-        return node.convert(node.bounds, to: space).minY - anchor.y
+        return node.convert(node.boxBounds, to: space).minY - anchor.y
     }
 }

@@ -167,9 +167,19 @@ extension Presenter {
         // A frame is set untransformed (UIKit's `frame` is undefined
         // under a transform); the presentation goes back on after.
         v.transform = .identity
-        v.frame = groupedLists?.carriesRows == true ? groupedLists?.cellFrame(of: v, at: place) ?? place.drawn : place.drawn
+        // PROTO (rule 4): keep the outset frame for a box reaching past its laid-out box, set once
+        let drawn = groupedLists?.carriesRows == true ? groupedLists?.cellFrame(of: v, at: place) ?? place.drawn : place.drawn
+        // PROTO (UIKit-first measurement): update reach before framing, including resting-mode placement,
+        // so a scroller pinned to the allocation's top keeps its native frame.
+        if v.reach.top > 0, let route = v.safeReach.route, let up = v.superview {
+            let depth = max(0, up.convert(drawn.origin, to: route).y - route.bounds.minY)
+            if abs(depth - v.reach.top) > 0.01 { v.reach.top = depth; v.bounds.origin.y = -depth }
+        }
+        let outset = UIEdgeInsets(top: -v.take.top - v.reach.top, left: -v.take.left - v.reach.left, bottom: -v.take.bottom - v.reach.bottom, right: -v.take.right - v.reach.right)
+        let framed = drawn.inset(by: outset)
+        if v.frame != framed { v.frame = framed }
         v.textRasterGeometryChanged()
-        v.scroll?.frame = v.scrollFrame
+        if let sv = v.scroll, sv.frame != v.scrollFrame { sv.frame = v.scrollFrame }
         if v.fieldWaits, rect.width > 0 || rect.height > 0 { v.makeWaitingField() } // its box laid out (MenuHost.waitingFields)
         v.layoutField()
         v.layoutTextArea()

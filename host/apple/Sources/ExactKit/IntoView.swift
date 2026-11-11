@@ -362,7 +362,7 @@ extension Presenter {
         for inner in inners {
             let frame = elementDestination(target, in: inner, grouped: grouped, block: block, inline: inline, projected: projected).frame
             let at = elementScrolls.revealing(inner) ?? inner.contentOffset
-            projected = Projected(view: inner, now: target.convert(target.bounds, to: inner),
+            projected = Projected(view: inner, now: target.convert(target.boxBounds, to: inner),
                                   then: frame.offsetBy(dx: inner.contentOffset.x - at.x, dy: inner.contentOffset.y - at.y))
         }
         return projected
@@ -388,7 +388,7 @@ extension Presenter {
         } else if let grouped, grouped.isDescendant(of: sv), let row = groupedLists?.projectedRect(for: target, in: grouped) {
             frame = grouped.convert(row, to: sv)
         } else {
-            frame = target.convert(target.bounds, to: sv)
+            frame = target.convert(target.boxBounds, to: sv)
         }
         let area = IntoView.inset(frame, style: target.style, family: "scroll_margin", outward: true)
         let inset = owner?.scrollPortInsets(sv) ?? sv.adjustedContentInset

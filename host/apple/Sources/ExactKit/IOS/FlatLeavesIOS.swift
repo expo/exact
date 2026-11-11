@@ -292,7 +292,7 @@ final class FlatLeaves {
               parent.canvasAbove == nil, parent.surface == nil else { return }
         if order[parent.id] == nil { order[parent.id] = parent.container.subviews.compactMap { ($0 as? NodeView)?.id } }
         let leaf = FlatLeaf(id: id, style: view.style, paint: flat)
-        leaf.layout = view.grid?.layout ?? view.frame
+        leaf.layout = view.laidOutFrame
         leaf.content = view.kernelContentBox.map { ($0, view.kernelPadding) }
         leaf.opacity = Float(view.alpha)
         leaf.parent = parent.id

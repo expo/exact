@@ -69,6 +69,8 @@ package final class Presenter {
     private(set) var chrome = ChromeIndex()
     func propsChanged(_ view: NodeView) { chrome.note(view.id, props: view.props); DragLink.installed?.updateReorderGesture(view); view.updateRefresh(); view.relook() }
     package func carrying(_ key: String) -> [NodeView] { chrome.ids(key).sorted().compactMap { views[$0] } }
+    /// PROTO (safe-area design r6 §3): the images that extend their artwork, by either spelling.
+    package func extendingImages() -> [NodeView] { (carrying("backgroundExtension") + carrying("safeArea")).filter { $0.kind == "image" && $0.extendsBackground } }
     func takeChangedNames() -> Set<String> { chrome.takeChangedNames() }
     var scrollers: Set<UInt32> = []
     var pendingScrolls: Set<UInt32> = []
@@ -298,7 +300,7 @@ package final class Presenter {
     /// page's area (`pageMargins`, PageEdgesIOS.swift).
     var viewportSize: CGSize { viewport.pageSize }
     /// The first root's frame size, zero before the first batch.
-    var rootSize: CGSize { root.subviews.first?.frame.size ?? .zero }
+    var rootSize: CGSize { root.subviews.first.map { ($0 as? NodeView)?.boxFrame.size ?? $0.frame.size } ?? .zero }
 
     /// An asset's bytes changed (LLP 1030 D10): every image showing it loads
     /// it again — the old picture stays until the new one is decoded, as a
@@ -367,8 +369,8 @@ package final class Presenter {
         let m = pageMargins; var size = viewportSize
         for r in root.subviews {
             let v = r as? NodeView, extent = v.flatMap { $0.scrollView == nil && !$0.overflowClips && !$0.isHidden ? $0.content : nil }
-            let reach = extent.flatMap { _ in v?.documentOverflow(in: root) } ?? .zero
-            size = CGSize(width: max(size.width, r.frame.maxX, reach.maxX), height: max(size.height, r.frame.maxY, reach.maxY))
+            let reach = extent.flatMap { _ in v?.documentOverflow(in: root) } ?? .zero, frame = v?.boxFrame ?? r.frame
+            size = CGSize(width: max(size.width, frame.maxX, reach.maxX), height: max(size.height, frame.maxY, reach.maxY))
         }
         let frame = CGRect(origin: CGPoint(x: m.left, y: m.top), size: size)
         if root.frame != frame { root.frame = frame }
@@ -740,14 +742,21 @@ package final class Presenter {
     var onCovers: (([(UInt32, HostCover?)], [(UInt32, OwnerValues?)]) -> Void)?
     /// The border box a person dragged a box's `resize` grip to; nil keeps an axis (ResizeGrip.swift).
     var onResizeBox: ((UInt32, CGFloat?, CGFloat?) -> Void)?
+    // PROTO (rule 4, `EdgeFramesIOS.swift`): routes whose top edge moves, as told; each one's boxes' two frames
+    var onMovingTops: (([(UInt32, Bool)]) -> Void)?
+    var movingTops = Set<UInt32>(), deliveredMovingTops = Set<UInt32>()
+    let geometry = GeometryOnlyState() // PROTO (UIKit-first measurement, `GeometryOnlyIOS.swift`)
+    /// PROTO (rule 4): routes whose top edge UIKit moved though nothing configured said it would (`noteUnforeseenMove`)
+    var movedTops = Set<UInt32>()
+    var edgeFrames: [UInt32: [UInt32: [(t: Double, frame: CGRect)]]] = [:]
     /// In `reset`: host state its views would move with no runtime to tell stays as it was (FocusEvents' focus,
     /// OwnersIOS' blocks, ExactView `fit`'s geometry; ResetGate).
     private(set) var resetting = false
     /// Work for after the batch being applied, or now: a hatch's act on an
     /// authored element never lands inside a batch (LLP 1075.003 §3.4).
     package func afterBatch(_ work: @escaping () -> Void) { if applying { waiting.append((nil, work)) } else { work() } }
-    /// Symbols and projected controls report after the batch that creates
-    /// them: all sizes from a turn reach the runner under one layout.
+    /// PROTO: drain a batch's projected sizes before its first frame; the
+    /// queued callback also covers changes made outside a batch.
     private struct QueuedIntrinsic { weak var view: NodeView?; let generation: Int; let size: CGSize? }
     private var intrinsicSizes: [QueuedIntrinsic] = []
     func queueIntrinsicSize(_ view: NodeView, generation: Int, _ size: CGSize?) {
@@ -756,7 +765,8 @@ package final class Presenter {
         }
         intrinsicSizes.append(QueuedIntrinsic(view: view, generation: generation, size: size))
     }
-    private func flushIntrinsicSizes() {
+    func flushIntrinsicSizes() {
+        guard !intrinsicSizes.isEmpty else { return } // PROTO: the report drain may have consumed the queued callback's sizes
         let queued = intrinsicSizes
         intrinsicSizes = []
         var latest: [UInt32: CGSize?] = [:], order: [UInt32] = []
@@ -789,6 +799,7 @@ package final class Presenter {
         defer { inputStarted = outerInput }
         defer { applyLanguage(batch); applyWakeLock(batch); applyOrientationLock(batch) }
         if applySnapshots(batch) { return }
+        let geometryOnly = geometryOnly(batch) // PROTO (UIKit-first measurement)
         PaintOrder.begin(); let schemes = ColorSchemes.begin(); defer { schemes.end() }
         let post = Self.signposts.beginInterval("apply"), phase = HostPhases.shared.begin(.apply)
         defer { Self.signposts.endInterval("apply", post); HostPhases.shared.end(phase) }
@@ -804,7 +815,10 @@ package final class Presenter {
         navigation.prepare(batch)
         anchorChanges.reset()
         let anchorFocus = scrollers.isEmpty ? nil : focusedNode
-        for id in scrollers where !collections.owns(id) { views[id]?.captureScrollPosition(focused: anchorFocus) }
+        // PROTO (UIKit-first measurement): leave scroll offsets to UIKit while the edge moves
+        if !geometryOnly {
+            for id in scrollers where !collections.owns(id) { views[id]?.captureScrollPosition(focused: anchorFocus) }
+        }
         if let e = batch.error { FileHandle.standardError.write(Data("exact: \(e)\n".utf8)) }
         if let text = session?.text {
             // SVG text shapes with the session's fonts (LLP 1055.000 D11).
@@ -813,6 +827,7 @@ package final class Presenter {
             }
         }
         svg.seek(clock: session?.clock)
+        let skipNavigationSync = canSkipNavigationSync(batch)
         let outermost = !applying
         applying = true
         // Hatched nodes this batch destroys end first, so a reusable hatch has
@@ -821,18 +836,24 @@ package final class Presenter {
         elements.begin(batch)
         var moved = false // create, frame or content ops: rows may have come or moved (`HeavyLeaves.batchApplied`)
         defer {
-            collections.endBatch()
             pool.end()
             PaintOrder.end()
             if outermost {
                 applying = false
+                let q = waiting
+                waiting = []
+                // Finish containment before queued geometry reports, with UIKit's animation still in scope.
+                if !geometryOnly {
+                    let protoNav = ApplyPhases.cpu()
+                    navigation.batchApplied(batch, skipSync: skipNavigationSync)
+                    ApplyPhases.navigation += ApplyPhases.cpu() - protoNav
+                }
+                collections.endBatch() // Sample the new backend only after its containers have laid it out.
                 reaimFixedGradients()
                 ApplyProfile.time("pass.text") { paintPresentedText() }
                 paintChangedText()
                 if !boxFilters.isEmpty { boxFilters.render() }
                 videoVisibility?.changed()
-                let q = waiting
-                waiting = []
                 for (id, f) in q where id.map({ textHost($0) != nil }) ?? true { f() }
                 scrollPump.batchApplied()
                 ApplyProfile.time("pass.leaves") { leaves.batchApplied(moved: moved) }
@@ -845,14 +866,13 @@ package final class Presenter {
                 #if os(iOS)
                 session?.view?.syncKeyboardFocus()
                 #endif
-            }
+            } else { collections.endBatch() }
         }
         var beganGeometry = false, touchedIDs: [UInt32] = [], reshapedIDs: [UInt32] = [], restyledIDs: [UInt32] = []
         // Read once: an animation UIKit has open around the batch is open around each of its ops
         let animating = UIView.inheritedAnimationDuration > 0
         if outermost { placedAnew.removeAll(keepingCapacity: true) } // a flat leaf promoted between batches
         let anewFrom = placedAnew.count
-        let rowsOnly = onlyListRows(batch)
         if batch.controls { controls.facesChanged() }
         // An op inside an animation UIKit has open only if its view showed in the last frame (`moveOrPlace`).
         func applyOp(_ op: BatchOp, _ kind: BatchOp.Kind, _ id: UInt32) {
@@ -980,6 +1000,7 @@ package final class Presenter {
             case .roots:
                 root.subviews.forEach { $0.removeFromSuperview() }
                 ApplyProfile.time("roots.attach") { accent.attach(op.ids.compactMap { views[UInt32($0)] }) { for r in $0 { root.addSubview(r); regrid(r) } } }
+            case .far: farFrame(op)
             case .frame, .content, .fieldContent:
                 if flats.isFlat(id) {
                     if kind == .frame { flats.frame(id, CGRect(x: op.x, y: op.y, width: op.w, height: op.h)) }
@@ -1009,6 +1030,7 @@ package final class Presenter {
             default: menus.sheets.applied(op); owners.applied(op)
             }
         }
+        let protoOps = ApplyPhases.cpu() // PROTO (UIKit-first measurement)
         for op in batch.ops {
             let kind = op.op
             let opBegan = ApplyProfile.on ? CACurrentMediaTime() : 0
@@ -1038,12 +1060,19 @@ package final class Presenter {
             }
             if animating { moveOrPlace(kind == .create ? nil : views[id] ?? leaving[id]?.view) { applyOp(op, kind, id) } } else { applyOp(op, kind, id) }
         }
+        ApplyPhases.ops += ApplyPhases.cpu() - protoOps; let protoRegrid = ApplyPhases.cpu() // PROTO
         schemes.end(); regridMoved() // every override and move made: the traits before anything reads them
         flats.flush()
         // A view the flush promoted and mounted may have moved its children.
         while !gridMoved.isEmpty { regridMoved(); flats.flush() }
-        fitDocument(); reachPageEdges()
+        ApplyPhases.regrid += ApplyPhases.cpu() - protoRegrid; let protoReach = ApplyPhases.cpu() // PROTO
+        if geometryOnly { reachMovingTops(); verifyMovingTops() } else {
+            fitDocument(); placeEdgesAfterBatch() // PROTO (rule 4): test reach at the placed edge, not the resting frame.
+            reachSafeEdges(); reachPageEdges()
+        }
+        ApplyPhases.reach += ApplyPhases.cpu() - protoReach // PROTO
         paintCanvas()
+        if geometryOnly { deferGeometry(touchedIDs + geometryApplied); geometryApplied = []; return } // PROTO (UIKit-first measurement)
         let first = root.subviews.first as? NodeView
         let widget = first?.props["interactiveWidget"]
         if widget != interactiveWidget {
@@ -1052,13 +1081,14 @@ package final class Presenter {
         }
         let fit = first?.props["viewportFit"]
         if fit != viewportFit { viewportFit = fit; onViewportFit?() }
+        applyProtoMode(first) // PROTO (UIKit-first measurement)
         session?.canvases.cancelMovedControls()
         PaintOrder.flush()
         session?.canvases.captureIfNeeded()
-        let changed = touchedAndAbove(touchedIDs + geometryApplied)
+        let deferredIDs = takeDeferredGeometry(), changed = touchedAndAbove(touchedIDs + geometryApplied + deferredIDs) // PROTO (UIKit-first measurement): merge views deferred by geometry batches
         geometryApplied = []
         swipeActions.sync(changed: changed, reshaped: touchedAndAbove(reshapedIDs)); rowCells.sync(changed: changed)
-        groupedLists?.sync(changed: changed); reachPageEdges() // a list mounted now reaches its bands too
+        groupedLists?.sync(changed: changed); reachSafeEdges(); reachPageEdges() // a list mounted now reaches its bands too
         if !flights.isEmpty { flightsBatchApplied() }
         #if os(tvOS)
         menuKey.sync()
@@ -1090,20 +1120,15 @@ package final class Presenter {
         let disabledRoots = Set(ariaProps).union(ariaMoved)
         placedAnew.removeSubrange(anewFrom...)
         // What a node's name, state and focus read: not its box (an autofocus waiting for one is indexed).
-        let named = touchedAndAbove(batch.ops.compactMap { [.create, .props, .style, .children, .paragraph, .flow].contains($0.op) ? $0.id : nil })
-        // Finish controls and frames before UIKit synchronously lays out the destination.
+        let named = touchedAndAbove(batch.ops.compactMap { [.create, .props, .style, .children, .paragraph, .flow].contains($0.op) ? $0.id : nil } + deferredIDs) // PROTO (UIKit-first measurement): include deferred names and states
         afterBatch { [weak self] in
             guard let self else { return }
-            navigation.batchApplied(batch, rowsOnly: rowsOnly)
             #if os(iOS)
             if #available(iOS 27.1, *) { arrangements.sync() }
             #endif
             keyboardToolbars.finishBackendChange()
             for id in scrollers.union(pendingScrolls).union(materialNodes) {
                 guard let node = views[id] else { continue }
-                // Navigation can resize a native port after its row projection.
-                // Settle that layout before restoring or authoring an offset.
-                if node.groupedOwner { node.scrollView?.layoutIfNeeded() }
                 if !collections.owns(node.id) { node.restoreScrollPosition() }
                 if node.pendingScrollTop != nil || node.pendingScrollLeft != nil { collections.userIntent(node.id) }
                 node.applyPendingScroll()
@@ -1197,7 +1222,7 @@ package final class Presenter {
 
     /// The views a batch touched and every view above them, as the batch
     /// left the hierarchy: what a pass reading a subtree must revisit.
-    private func touchedAndAbove(_ ids: [UInt32]) -> Set<UInt32> {
+    func touchedAndAbove(_ ids: [UInt32]) -> Set<UInt32> {
         var seen = Set<UInt32>()
         for id in ids {
             var view: UIView? = views[id]
@@ -1305,7 +1330,7 @@ package final class Presenter {
     private func contextAnchor(_ target: String, _ source: NodeView) -> ContextAnchor {
         let scroll = contextContent(source)?.scroll, port = port(of: source)
         return ContextAnchor(target: target, source: source, port: port,
-            box: source.convert(source.bounds, to: port), viewportWidth: port.bounds.width,
+            box: source.convert(source.boxBounds, to: port), viewportWidth: port.bounds.width,
             scroll: scroll, scrollBox: scroll.map { $0.convert($0.bounds, to: port) })
     }
 
@@ -1321,7 +1346,7 @@ package final class Presenter {
         reaimFixedGradients()
     }
 
-    private func positionContexts() {
+    func positionContexts() {
         for id in contextNodes {
             guard let node = views[id] else { continue }
             node.contextTransform = .identity
@@ -1339,8 +1364,8 @@ package final class Presenter {
             guard let target = preview.props["contextTarget"],
                   let source = carrying("id").first(where: { $0.props["id"] == target }),
                   let panel = contextPanel(preview), let parent = panel.superview,
-                  source.window != nil, preview.bounds.width > 0, preview.bounds.height > 0 else { continue }
-            let liveSourceBox = source.convert(source.bounds, to: parent)
+                  source.window != nil, preview.boxBounds.width > 0, preview.boxBounds.height > 0 else { continue }
+            let liveSourceBox = source.convert(source.boxBounds, to: parent)
             // The source is read where it was captured; the preview is kept
             // inside its own port, the viewport or its presentation's mount
             let vp = port(of: preview), insets = vp === viewport ? insets : vp.safeAreaInsets
@@ -1350,7 +1375,7 @@ package final class Presenter {
             }
             let anchor = contextAnchors[preview.id]!
             let sourceBox = (anchor.port ?? viewport).convert(anchor.box, to: parent)
-            let content = preview.convert(preview.bounds, to: parent)
+            let content = preview.convert(preview.boxBounds, to: parent)
             let port = vp.convert(vp === viewport ? vp.bounds.inset(by: pageMargins) : vp.bounds, to: parent)
             // Public UIKit target-preview fixture, iPhone 17 / iOS 26.5.
             let scale = preview.props["contextMagnify"] == "false" ? 1 : min(1.15, 1 + 26 / max(content.width, content.height))
@@ -1362,19 +1387,19 @@ package final class Presenter {
             // Their zero-height layout boxes do not enlarge the balloon row.
             if let row = preview.superview {
                 for sibling in row.subviews.compactMap({ $0 as? NodeView })
-                    where sibling !== preview && abs(sibling.frame.minY - preview.frame.minY) < 0.01 {
-                    if sibling.frame.maxX <= preview.frame.minX + 0.01 {
+                    where sibling !== preview && abs(sibling.boxFrame.minY - preview.boxFrame.minY) < 0.01 {
+                    if sibling.boxFrame.maxX <= preview.boxFrame.minX + 0.01 {
                         project(sibling, CGAffineTransform(translationX: dx - content.width * (scale - 1) / 2, y: 0))
-                    } else if sibling.frame.minX >= preview.frame.maxX - 0.01 {
+                    } else if sibling.boxFrame.minX >= preview.boxFrame.maxX - 0.01 {
                         project(sibling, CGAffineTransform(translationX: dx + content.width * (scale - 1) / 2, y: 0))
                     }
                 }
             }
             var child: NodeView? = preview
             while let current = child, current !== panel, let container = current.superview {
-                let bottom = current.frame.maxY
+                let bottom = current.boxFrame.maxY
                 for sibling in container.subviews.compactMap({ $0 as? NodeView })
-                    where sibling !== current && sibling.frame.minY >= bottom - 0.01 {
+                    where sibling !== current && sibling.boxFrame.minY >= bottom - 0.01 {
                     project(sibling, CGAffineTransform(translationX: 0, y: extra / 2))
                 }
                 child = container as? NodeView
@@ -1391,23 +1416,23 @@ package final class Presenter {
                 guard let ancestor = containing.superview, ancestor is NodeView || ancestor === root else { break }
                 containing = ancestor
             }
-            let region = containing.convert(containing.bounds, to: parent)
+            let region = containing.convert((containing as? NodeView)?.boxBounds ?? containing.bounds, to: parent)
             let minimum = max(region.minY, port.minY + insets.top + 8)
-            let overflow = max(extra / 2, content.maxY + extra - panel.frame.maxY)
-            let maximum = min(region.maxY, port.maxY - insets.bottom - 8) - panel.bounds.height - overflow
-            let wanted = sourceBox.midY - (content.minY - panel.frame.minY) - content.height * scale / 2
+            let overflow = max(extra / 2, content.maxY + extra - panel.boxFrame.maxY)
+            let maximum = min(region.maxY, port.maxY - insets.bottom - 8) - panel.boxBounds.height - overflow
+            let wanted = sourceBox.midY - (content.minY - panel.boxFrame.minY) - content.height * scale / 2
             let top = max(minimum, min(wanted, maximum))
-            if panel.frame.origin.y != top { moveOrPlace(panel) { panel.frame.origin.y = top } }
+            if panel.boxFrame.origin.y != top { moveOrPlace(panel) { panel.frame.origin.y = top - panel.reach.top } }
             // A tall preview can fill the available region. Keep the trailing
             // control group inside it, even when that overlaps the preview (the native 24-line Messages reference does this).
             var branch: UIView = preview
             while let owner = branch.superview, owner !== panel { branch = owner }
             let trailing = panel.subviews.compactMap { $0 as? NodeView }.filter {
-                $0 !== branch && $0.frame.minY >= branch.frame.maxY - 0.01
+                $0 !== branch && $0.boxFrame.minY >= ((branch as? NodeView)?.boxFrame ?? branch.frame).maxY - 0.01
             }
             let bottom = min(region.maxY, port.maxY - insets.bottom - 8)
-            if let last = trailing.map({ $0.convert($0.bounds, to: parent).maxY }).max(),
-               let first = trailing.map({ $0.convert($0.bounds, to: parent).minY }).min() {
+            if let last = trailing.map({ $0.convert($0.boxBounds, to: parent).maxY }).max(),
+               let first = trailing.map({ $0.convert($0.boxBounds, to: parent).minY }).min() {
                 let overflow = min(max(0, last - bottom), max(0, first - minimum))
                 if overflow > 0 {
                     for node in trailing {

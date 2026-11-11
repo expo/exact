@@ -70,6 +70,17 @@ final class AgreementIOSTests: XCTestCase {
         XCTAssertEqual(r.hiddenCompared, 4)
     }
 
+    func testNativeReachDoesNotDisagreeWithKernelFrames() throws {
+        let p = fixture()
+        let row = try XCTUnwrap(p.views[10])
+        SafeReach.apply(UIEdgeInsets(top: 0, left: 20, bottom: 0, right: 34), to: row)
+        let report = agree(p, kernel())
+        XCTAssertEqual(report.counts, [:], "\(report.found)")
+        XCTAssertEqual(report.sizeOnly, 1)
+        row.frame.size.width += 2
+        XCTAssertEqual(agree(p, kernel()).counts["frame"], 1, "a real size error still disagrees")
+    }
+
     func testAParkedRowIsCountedAndMustStayHidden() throws {
         let p = fixture()
         let row = try XCTUnwrap(p.views[10])

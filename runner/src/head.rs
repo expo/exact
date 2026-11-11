@@ -95,9 +95,7 @@ fn kernel_node(kernel: &Kernel, id: ViewId) -> Option<HeadNode<'_>> {
 }
 
 /// Navigation selection is computed once for a whole tree read, then inherited
-/// down each route. A sheet covers an inactive page without hiding it, as its
-/// host does a route it shows under a pane over it (`BlockShown::Under`, LLP
-/// 1127 D8): the flags [`inactive`] and [`hidden_route`] read for one node.
+/// down each route. A sheet or an overlaid pane makes a page inactive without hiding it.
 pub(crate) fn activity(
     kernel: &Kernel,
     roots: &[ViewId],
@@ -109,9 +107,10 @@ pub(crate) fn activity(
     let mut stack: Vec<_> = roots.iter().map(|&id| (id, false, false)).collect();
     while let Some((id, was_inactive, was_hidden)) = stack.pop() {
         let Some(at) = node(id) else { continue };
-        let under = kernel.host_block_shown(id) == BlockShown::Under;
         let flags = (
-            was_inactive || under || inactive.contains(&id),
+            was_inactive
+                || inactive.contains(&id)
+                || kernel.host_block_shown(id) == BlockShown::Under,
             was_hidden || hidden.contains(&id),
         );
         result.insert(id, flags);

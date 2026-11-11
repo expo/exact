@@ -100,7 +100,7 @@ extension NodeView {
     /// The clip's centre in window points: the origin of the focal arithmetic.
     private var transformCenter: CGPoint? {
         guard let clipID = presenter?.transformBindings[id]?.clip, let clip = presenter?.views[clipID], let window else { return nil }
-        return clip.convert(CGPoint(x: clip.bounds.midX, y: clip.bounds.midY), to: window)
+        return clip.convert(CGPoint(x: clip.boxBounds.midX, y: clip.boxBounds.midY), to: window)
     }
     #if !os(tvOS)
     @objc func transformDragging(_ gesture: UIGestureRecognizer) {

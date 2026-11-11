@@ -26,7 +26,7 @@ extension NodeView {
             for case let node as NodeView in view.subviews where !node.isHidden {
                 let align = node.style["scroll_snap_align"]?.string
                 if align == "start" || align == "end" {
-                    let rect = node.convert(node.bounds, to: scrollView)
+                    let rect = node.convert(node.boxBounds, to: scrollView)
                     let width = scrollView.bounds.width
                     // A snap area wider than the viewport can be explored
                     // freely while it covers the viewport (CSS Snap §5.2.2);

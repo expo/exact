@@ -778,7 +778,7 @@ final class MenuHost {
             return
         }
         let anchorView: UIView = source.isNativeButton ? presenter.controls.controls[source.id] ?? source : source
-        var anchor = anchorView.convert(anchorView.bounds, to: entry.layer), scroll = presenter.anchorScroll(anchorView, outside: entry.layer)
+        var anchor = anchorView.convert((anchorView as? NodeView)?.boxBounds ?? anchorView.bounds, to: entry.layer), scroll = presenter.anchorScroll(anchorView, outside: entry.layer)
         // A bar item's popover opens from the item, not its hidden button (`agentOpen(barItem:)`).
         if case .success(let (bar, item))? = presenter.navigation.barItem(source) { (anchor, scroll) = (bar.convert(item, to: entry.layer), .zero) }
         // Sized in its option's region, as the web's (PopoverRegion.swift). The overflow's page: the
@@ -1361,7 +1361,7 @@ final class MenuHost {
         // UIKit's defaults for a sheet presented from a control: the whole
         // invoker, an arrow on the side UIKit picks, never over the invoker.
         // An authored area overrides.
-        presentation.sourceRect = anchor.bounds
+        presentation.sourceRect = (anchor as? NodeView)?.boxBounds ?? anchor.bounds
         Self.place(presentation, area)
     }
     #endif

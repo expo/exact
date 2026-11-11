@@ -157,7 +157,7 @@ final class NodeExtras {
     var lastScrollEvent: [Double] = []
     var dispatchingScrollEvent: Bool = false
     var scrollEnd: ScrollEnd?
-    var beforeLayoutScroll: (offset: CGPoint, topInset: CGFloat)?
+    var beforeLayoutScroll: (offset: CGPoint, topInset: CGFloat, uikitTop: CGFloat)?
     /// Logical coordinates survive hiding and physical backend replacement.
     var hiddenScroll: CGPoint?
     var followedScroll: (top: CGFloat, end: Bool, start: Bool)?
@@ -382,7 +382,7 @@ extension NodeView {
     var lastScrollEvent: [Double] { get { extras?.lastScrollEvent ?? [] } set { if !newValue.isEmpty || extras != nil { more.lastScrollEvent = newValue } } }
     var dispatchingScrollEvent: Bool { get { extras?.dispatchingScrollEvent ?? false } set { if newValue || extras != nil { more.dispatchingScrollEvent = newValue } } }
     var scrollEnd: ScrollEnd? { get { extras?.scrollEnd } set { if newValue != nil || extras != nil { more.scrollEnd = newValue } } }
-    var beforeLayoutScroll: (offset: CGPoint, topInset: CGFloat)? { get { extras?.beforeLayoutScroll } set { if newValue != nil || extras != nil { more.beforeLayoutScroll = newValue } } }
+    var beforeLayoutScroll: (offset: CGPoint, topInset: CGFloat, uikitTop: CGFloat)? { get { extras?.beforeLayoutScroll } set { if newValue != nil || extras != nil { more.beforeLayoutScroll = newValue } } }
     var hiddenScroll: CGPoint? { get { extras?.hiddenScroll } set { if newValue != nil || extras != nil { more.hiddenScroll = newValue } } }
     var followedScroll: (top: CGFloat, end: Bool, start: Bool)? { get { extras?.followedScroll } set { if newValue != nil || extras != nil { more.followedScroll = newValue } } }
     var followingEndAnimated: Bool { get { extras?.followingEndAnimated ?? false } set { if newValue || extras != nil { more.followingEndAnimated = newValue } } }
@@ -456,7 +456,7 @@ extension NodeView {
     /// collection view's does, not by the whole keyboard.
     func scrollFloor(_ sv: UIScrollView) -> CGFloat {
         let keyboard = extras?.keyboardInset ?? 0
-        guard case .inset(let top, let bottom)? = presenter?.navigation.covers[id] else { return max(0, sv.bounds.height - pageBand.top - pageBand.bottom - keyboard) }
+        guard case .inset(let top, let bottom)? = presenter?.navigation.covers[id] else { return max(0, sv.bounds.height - reach.top - reach.bottom - pageBand.top - pageBand.bottom - keyboard) }
         return max(0, sv.bounds.height - top - bottom - pageBand.top - pageBand.bottom - keyboard)
     }
 }

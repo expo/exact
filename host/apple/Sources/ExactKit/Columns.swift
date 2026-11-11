@@ -143,8 +143,8 @@ extension NodeView {
     /// fragmented box's first fragment, never its union's middle, which may
     /// be a gap (LLP 1093 D12).
     func tapBox(_ box: CGRect) -> CGRect {
-        guard let f = columnRecord?.fragments.first, bounds.width > 0 else { return box }
-        let scale = box.width / bounds.width
+        guard let f = columnRecord?.fragments.first, boxBounds.width > 0 else { return box }
+        let scale = box.width / boxBounds.width
         return CGRect(x: box.minX + f.rect.minX * scale, y: box.minY + f.rect.minY * scale,
                       width: f.rect.width * scale, height: f.rect.height * scale)
     }

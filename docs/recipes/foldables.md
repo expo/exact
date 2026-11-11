@@ -4,9 +4,9 @@ On native Duo hosts, `exactViewport()` reports `devicePosture="folded"` and
 `horizontalViewportSegments=2` (book) or `verticalViewportSegments=2` (laptop).
 Web pages need browser support for these signals; a feature flag alone does not
 establish availability. `env(viewport-segment-<left|top|width|height> <x> <y>)`
-places a box in the window's segment `x, y`. A route has its own, measured below its bar:
-`var(--exact-viewport-segment-<field>-<x>-<y>, 50%)`, the fallback for a route holding one
-segment of two, and `var(--exact-safe-area-inset-<edge>)` (LLP 1123 D9).
+places a box in the window's segment `x, y` (LLP 1078). A route has its own, measured
+below its bar: `var(--exact-viewport-segment-<field>-<x>-<y>, 50%)`, the fallback for a
+route holding one segment of two, and `var(--exact-safe-area-inset-<edge>)` (LLP 1123 D9).
 
 ```contract
 shape Viewport
@@ -29,8 +29,8 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
 [Apple's talk](https://developer.apple.com/videos/play/tech-talks/111463/)):
 
 - Scrolling content can span the hinge; keep controls off it.
-- A pane of controls keeps its width, scrolling only where it does not fit: centred
-  (full width on narrow screens), or on the trailing segment of a book fold.
+- A pane of controls moves (scrolling only where it does not fit) and keeps its width:
+  centred (full width on narrow screens), or on the trailing segment of a book fold.
 - **A list and its detail** is a split view (`pattern list-detail`; UIKit's on iOS,
   except in a tab, LLP 1127). **Peer panes** use [native containers](../contract-for-agents.md#arranged-panes)
   on iOS 27.1 and responsive CSS elsewhere (Duo Lab's Panes tab). Keep the route's
@@ -44,9 +44,8 @@ On a fold ([HIG](https://developer.apple.com/design/human-interface-guidelines/d
   from safe edges too.
 - In a laptop fold, put authored controls on the bottom segment. Cap a bottom
   sheet's `max-height` at `calc(100% - var(--exact-viewport-segment-top-0-1))`, its
-  containing block the route's.
-  An iOS keyboard can leave that segment below the viewport and zero tall;
-  Duo Lab's note sheet then lifts the cap.
+  containing block the route's. An iOS keyboard can leave that segment below the
+  viewport and zero tall; Duo Lab's note sheet then lifts the cap.
 - End panes under the keyboard at `100%` or `bottom: 0`; hosts report different segment heights.
 - Keep the same pane instances to retain field text; UIKit may end editing on a panel switch.
 - UIKit's alerts and sheets on a fold: [Folds on iOS](../contract-for-agents.md#folds-on-ios).

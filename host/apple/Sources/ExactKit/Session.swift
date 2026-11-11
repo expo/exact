@@ -422,6 +422,7 @@ public final class ExactSession {
     // frame's tick, a timer, a reply, an intrinsic size, a report) waits on
     // main instead, and runs after the slice lands, in order.
     private(set) var fillInFlight = false
+    private var fillStarted = 0.0
     private typealias IdleWork = (views: Int?, work: () -> Void, cancelled: (() -> Void)?)
     private var afterFill: [IdleWork] = []
     private var viewsEpoch = 0
@@ -605,6 +606,7 @@ public final class ExactSession {
     /// Send a build-only slice to the owner; its batch comes back published.
     private func sendFill(_ view: UInt32, _ bytes: Data) {
         fillInFlight = true
+        fillStarted = CACurrentMediaTime() // PROTO (UIKit-first measurement)
         let captured = generation
         runtime.collectionFeedbackAsync(bytes, now: now()) { [weak self] batch in
             self?.publish(.fill(view), batch, captured)
@@ -659,7 +661,9 @@ public final class ExactSession {
             let began = CACurrentMediaTime()
             var submitted = 0.0
             switch next.kind {
-            case .fill: fillInFlight = false
+            case .fill:
+                fillInFlight = false
+                if Self.protoLive { NSLog("PROTO live fill %.0f µs", (CACurrentMediaTime() - fillStarted) * 1e6) }
             case .tick: tickInFlight = false
             case .advance: advanceInFlight = false
             case .canvas: canvasInFlight = false
@@ -769,11 +773,12 @@ public final class ExactSession {
         // @ref LLP 1075.003 §3.5, Q3 (c) — what a bar covers reaches layout as an intrinsic
         // size does, on AppKit too (LLP 1115.002 D8.1); the hatches replay once the module connects.
         // An owner's values change with each frame of a keyboard; where no row reads them the batch changes nothing (LLP 1123 D9).
-        presenter.onCovers = { [unowned self] covers, owners in whenIdle(bound: true) { [unowned self] in applyUnlessEmpty(runtime.covers(covers, owners: owners)) } }
+        presenter.onCovers = { [unowned self] covers, owners in applyMeasuredCovers(covers, owners: owners) } // PROTO (UIKit-first measurement)
         presenter.onResizeBox = { [unowned self] id, width, height in
             whenIdle(bound: true) { [unowned self] in applyUnlessEmpty(runtime.resizeBox(id, width: width, height: height)) }
         }
         #if os(iOS) || os(tvOS)
+        presenter.onMovingTops = { [unowned self] moving in whenIdle(bound: true) { [unowned self] in applyUnlessEmpty(runtime.covers([], movingTops: moving)) } } // PROTO (rule 4)
         natives.onHatchesConnected = { [weak self] in
             self?.presenter.navigation.replayHatches()
             self?.presenter.elements.replay()
@@ -1068,8 +1073,7 @@ public final class ExactSession {
         advanceIfDue()
     }
 
-    /// The appearance reports a landing held back (`holdingReports`), asked
-    /// once the batch the owner made before them has applied or skipped.
+    /// Pending appearance and intrinsic reports, after preceding owner batches apply or skip.
     private func drainReports() {
         if colorsOwed, !holdingReports, !awaitingTree { colorsOwed = false; apply(runtime.reportColors(tint: SystemColor.appTint.flatMap { SystemColor.tintPair($0) })) }
         while !holdingReports, !pendingViewDark.isEmpty {
@@ -1081,8 +1085,10 @@ public final class ExactSession {
                 if let q = batch.seq { natives.hatchClock.seq = q.1 }
             } else { apply(batch) }
         }
+    #if os(iOS) || os(tvOS)
+        if !holdingReports, !awaitingTree { presenter.flushIntrinsicSizes() } // PROTO: settle projected heights before collection feedback and the first frame
+    #endif
     }
-
     #if DEBUG
     /// Tests: a tick's slice the owner published, not yet landed.
     func publishTickForTests(_ batch: Batch) { tickInFlight = true; publish(.tick, batch, generation) }

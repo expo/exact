@@ -12,20 +12,50 @@ import AppKit
 #endif
 
 extension NodeView {
+    /// The drawn border box, excluding the native safe-area reach.
+    package var boxBounds: CGRect {
+        #if os(iOS) || os(tvOS)
+        bounds.inset(by: reach)
+        #else
+        bounds
+        #endif
+    }
+
     /// Native fields keep their published editor box for field layout (LLP
     /// 1104 D5) and read their padding rows. Other content uses the published
     /// box, or the bounds of a box sent none.
     /// The bounds at the size layout gave: a box drawn on the pixel grid
     /// can be up to a device pixel smaller or larger (`PixelGridIOS.swift`,
     /// `PixelGridMac.swift`), and its text wraps at layout's width, not the
-    /// drawn one.
-    package var layoutBounds: CGRect { CGRect(origin: bounds.origin, size: grid?.layout.size ?? bounds.size) }
+    /// drawn one. On iOS and tvOS it is the box less what reaches past it.
+    package var layoutBounds: CGRect {
+        #if os(iOS) || os(tvOS)
+        // PROTO (safe-area design r2 §2.4): a leaf that takes its edges is laid out in its whole bounds.
+        take != .zero ? bounds : CGRect(origin: boxBounds.origin, size: grid?.layout.size ?? boxBounds.size)
+        #else
+        CGRect(origin: bounds.origin, size: grid?.layout.size ?? bounds.size)
+        #endif
+    }
     /// The frame layout sent, where the drawn one is on the pixel grid.
-    package var laidOutFrame: CGRect { grid?.layout ?? frame }
+    package var laidOutFrame: CGRect {
+        #if os(iOS) || os(tvOS)
+        grid?.layout ?? boxFrame
+        #else
+        grid?.layout ?? frame
+        #endif
+    }
 
     package func contentBox() -> CGRect {
         if !isNativeTextControl {
+            #if os(iOS) || os(tvOS)
+            // PROTO (§2.4): what a leaf takes is its content's too.
+            if take != .zero, let k = kernelContentBox {
+                return CGRect(x: k.minX, y: k.minY, width: k.width + take.left + take.right, height: k.height + take.top + take.bottom)
+            }
+            return kernelContentBox?.offsetBy(dx: boxBounds.minX, dy: boxBounds.minY) ?? layoutBounds
+            #else
             return kernelContentBox?.offsetBy(dx: bounds.minX, dy: bounds.minY) ?? layoutBounds
+            #endif
         }
         let uniform = number("border_width")
         return layoutBounds.insetBy(

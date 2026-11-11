@@ -86,7 +86,7 @@ component App
           column navigationKey=`${e.id}` navigationPresentation="fullscreen" position="absolute" inset=0 testId="cover-page"
             text "The book's cover"
         if e.name == "chapter"
-          column navigationKey=`${e.id}` navigationScroll="chapter-scroll" -exact-safe-area="left right" position="absolute" inset=0 display="flex" flex-direction="column" testId="chapter-page"
+          column navigationKey=`${e.id}` navigationScroll="chapter-scroll" -exact-safe-area="ignore start end" position="absolute" inset=0 display="flex" flex-direction="column" testId="chapter-page"
             header
               text "The chapter" role="heading" aria-level=1
             scroll id="chapter-scroll" flex=1 min-height=0 testId="chapter-scroll"

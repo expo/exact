@@ -48,7 +48,7 @@ extension Agent {
         guard v.window != nil else { return scrolled }
         // A hidden scroller (the authored one under a grouped list) shows nothing where it scrolls.
         for case let sv as UIScrollView in sequence(first: v.superview, next: { $0?.superview }).compactMap({ $0 }) where sv.isScrollEnabled && !sv.isHidden {
-            let frame = v.convert(v.bounds, to: sv), mid = CGPoint(x: frame.midX, y: frame.midY), i = sv.adjustedContentInset
+            let frame = v.convert(v.boxBounds, to: sv), mid = CGPoint(x: frame.midX, y: frame.midY), i = sv.adjustedContentInset
             let port = visiblePort(sv, for: v)
             // (No band left between the covers: nothing to scroll the middle into, so nothing moves.)
             if port.height <= 0 { continue }
@@ -125,8 +125,9 @@ extension Agent {
         // The target's covers: the sticky box at its middle, then each one at the middle of the band that leaves (a
         // header across from a dock), by the window's hit test, as the tap's.
         if let v {
-            let x = v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: sv).x, mid = port.midY
-            var at = v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: nil)
+            let box = (v as? NodeView)?.boxBounds ?? v.bounds
+            let x = v.convert(CGPoint(x: box.midX, y: box.midY), to: sv).x, mid = port.midY
+            var at = v.convert(CGPoint(x: box.midX, y: box.midY), to: nil)
             for _ in 0..<4 {
                 guard port.height > 0, let cover = stickyCover(at: at, over: v, in: sv) else { break }
                 let r = cover.convert(cover.bounds, to: sv).intersection(port)
