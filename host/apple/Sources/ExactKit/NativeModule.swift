@@ -892,6 +892,8 @@ final class NativeViews {
     /// Tests: the process's table from memory, and this session's module
     /// instance, without an artifact or a runtime.
     static func install(table: UnsafeRawPointer) { NativeProcess.table = NativeTable.read(table, path: "test") }
+    /// Tests: the ABI major a table must name, so a test's table follows the host's.
+    static let tableMajor = NativeTable.major
     static func uninstallTable() { NativeProcess.table = nil }
     func install(module: UnsafeMutableRawPointer, gateOpen open: Bool = true) { instance = module; gateOpen = open }
     /// Tests: the process's artifact from a file and this session's module

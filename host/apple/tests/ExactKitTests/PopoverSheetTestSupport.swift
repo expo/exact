@@ -164,7 +164,7 @@ enum PopoverScreenModule {
         let set: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UnsafeMutablePointer<UInt8>?, UInt32) -> Int32 = { _, _, _, _, _ in 0 }
         let destroy: @convention(c) (UnsafeMutableRawPointer?) -> Void = { Unmanaged<UIViewController>.fromOpaque($0!).release() }
         let none: @convention(c) (UnsafeMutableRawPointer?) -> Void = { _ in }
-        put(UInt32(3), at: 0); put(UInt32(168), at: 4); put(UnsafeRawPointer(roster), at: 8)
+        put(NativeViews.tableMajor, at: 0); put(UInt32(168), at: 4); put(UnsafeRawPointer(roster), at: 8)
         put(unsafeBitCast(create, to: UnsafeRawPointer.self), at: 16)
         put(unsafeBitCast(view, to: UnsafeRawPointer.self), at: 24)
         put(unsafeBitCast(set, to: UnsafeRawPointer.self), at: 32)

@@ -1131,7 +1131,7 @@ private enum FakeModule {
         }
         let none: @convention(c) (UnsafeMutableRawPointer?) -> Void = { _ in }
         let reuse: @convention(c) (UnsafeMutableRawPointer?) -> Int32 = { FakeModule.instance($0).resets += 1; return 0 }
-        put(UInt32(3), 0); put(UInt32(112), 4); put(UnsafeRawPointer(roster), 8)
+        put(NativeViews.tableMajor, 0); put(UInt32(112), 4); put(UnsafeRawPointer(roster), 8)
         put(unsafeBitCast(create, to: UnsafeRawPointer.self), 16); put(unsafeBitCast(view, to: UnsafeRawPointer.self), 24)
         put(unsafeBitCast(set, to: UnsafeRawPointer.self), 32); put(unsafeBitCast(destroy, to: UnsafeRawPointer.self), 48)
         // The module entries are never called here (the test installs an instance).

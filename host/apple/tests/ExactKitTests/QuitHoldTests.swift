@@ -69,7 +69,7 @@ final class ModuleQuitHoldTests: XCTestCase {
             ModuleQuitHoldTests.asked += 1
             ModuleQuitHoldTests.done = { fn?(ctx) }
         }
-        put(UInt32(3), 0); put(size, 4); put(UnsafeRawPointer(strdup("{}")), 8)
+        put(NativeViews.tableMajor, 0); put(size, 4); put(UnsafeRawPointer(strdup("{}")), 8)
         for offset in [16, 24, 32, 48, 72, 80, 88, 96] { put(unsafeBitCast(none, to: UnsafeRawPointer.self), offset) }
         put(unsafeBitCast(willQuit, to: UnsafeRawPointer.self), 208)
         return t

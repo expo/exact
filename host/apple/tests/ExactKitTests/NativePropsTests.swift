@@ -67,7 +67,7 @@ private enum PropsModule {
         }
         let destroy: @convention(c) (UnsafeMutableRawPointer?) -> Void = { Unmanaged<Instance>.fromOpaque($0!).release() }
         let none: @convention(c) (UnsafeMutableRawPointer?) -> Void = { _ in }
-        put(UInt32(3), 0); put(UInt32(112), 4); put(UnsafeRawPointer(roster), 8)
+        put(NativeViews.tableMajor, 0); put(UInt32(112), 4); put(UnsafeRawPointer(roster), 8)
         put(unsafeBitCast(create, to: UnsafeRawPointer.self), 16)
         put(unsafeBitCast(view, to: UnsafeRawPointer.self), 24)
         put(unsafeBitCast(set, to: UnsafeRawPointer.self), 32)
