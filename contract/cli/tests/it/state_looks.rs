@@ -297,3 +297,29 @@ fn a_look_follows_a_base_its_shadows_new_value_reads() {
     r.set_token("space.md", "30px", &[]).unwrap();
     assert!(shadow(&r).contains("y: 30.0"), "{}", shadow(&r));
 }
+
+/// A `:hover` and a `:focus-visible` `color` (James Ide's site's nav links,
+/// CSS's `a:hover { color }`) reach the kernel as a look's text colour, a
+/// `light-dark()` token resolved as a static row is: each scheme its own.
+#[test]
+fn a_looks_color_is_a_token_in_both_schemes() {
+    let design = "tamber t\n\ntheme\n  ink = light-dark(#222222, #e2e2e2)\n  ink.nav = light-dark(#666666, #ffffff)\n";
+    let view = "component App\n  view\n    link href=\"/a\" testId=\"card\" color=\"ink.nav\"\n      :hover\n        color = \"ink\"\n      :focus-visible\n        color = \"#123456\"\n      text \"a\"\n";
+    let path = app("color", &[("app.tamber", design), ("app.contract", view)]);
+    let r = booted(contract::compile_path(&path).unwrap_or_else(|e| panic!("{e:?}")));
+    let k = r.kernel();
+    let node = k.node_by_key(k.find_by_test_id("card")[0]).unwrap();
+    let colour = |state: u8, dark: bool| {
+        let (_, look) = node.looks().iter().find(|(s, _)| *s == state).unwrap();
+        assert!(look.mask.has(exact_kernel::StyleId::TextColor), "{look:?}");
+        format!("{:08x}", look.text_color.resolve(dark).0)
+    };
+    assert_eq!(colour(LOOK_HOVER, false), "222222ff");
+    assert_eq!(colour(LOOK_HOVER, true), "e2e2e2ff");
+    assert_eq!(colour(exact_kernel::LOOK_FOCUS_VISIBLE, false), "123456ff");
+    // The base keeps its own colour; the look stands over it.
+    assert_eq!(
+        format!("{:08x}", node.style.text_color.resolve(true).0),
+        "ffffffff"
+    );
+}

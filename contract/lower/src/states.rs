@@ -34,8 +34,16 @@ const RUNNER_ROWS: [&str; 6] = [
     "-exact-tint-color",
 ];
 
-/// The rows `:hover` and `:focus-visible` take: none that inherits.
-const HOST_ROWS: [&str; 4] = ["background-color", "border-color", "opacity", "box-shadow"];
+/// The rows `:hover` and `:focus-visible` take. Their `color` reaches the
+/// subtree as the node's own does (a descendant that writes its own keeps
+/// it); the web shows it, and the native hosts' looks paint the box only.
+const HOST_ROWS: [&str; 5] = [
+    "background-color",
+    "color",
+    "border-color",
+    "opacity",
+    "box-shadow",
+];
 
 /// The rows `:active` takes, and the press paint's row each lowers to: the
 /// press's colour reaches the subtree, so `color` is one (LLP 1061 D7).
@@ -142,7 +150,6 @@ pub(crate) fn refusal(state: &str, row: &Attr, values: bool) -> Option<LowerErro
             }
             (_, "-exact-press-scale") => " and a press scale is `:active`'s".to_string(),
             ("active", _) => " and is the host's press (LLP 1061 D7)".to_string(),
-            _ if host => " and never changes what a child inherits".to_string(),
             _ => String::new(),
         };
         return Some(LowerError {

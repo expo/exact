@@ -560,6 +560,26 @@ fn state_looks_are_sheet_rules_for_the_nodes_set() {
     );
 }
 
+/// A look's `color` is its rule's (CSS's `a:hover { color }`), a varying
+/// token as its property, so the link's text inherits it as the browser
+/// does and follows the scheme; the base keeps its own.
+#[test]
+fn a_looks_color_is_its_rules_with_the_token() {
+    let view = "component App\n  view\n    link href=\"/a\" color=\"surface.card\"\n      :hover\n        color = \"text.primary\"\n      text \"a\"\n";
+    let out = emitted("look-color", DESIGN, view);
+    let hover = out
+        .css
+        .find("[data-exact-looks=\"1\"]:hover")
+        .expect("a hover rule");
+    let rule = &out.css[hover..];
+    let rule = &rule[..rule.find('}').unwrap()];
+    assert!(
+        rule.contains("color:var(--x-text-primary") && rule.contains("!important"),
+        "{rule}"
+    );
+    assert!(out.js.contains("color:var(--x-surface-card"), "{}", out.js);
+}
+
 /// LLP 1121 stage 9 B: under a written token colour, a mode boundary below
 /// writes the token again as its implied row, no author's, so the kernel's
 /// symbol under the boundary takes no written colour; one beside it does.

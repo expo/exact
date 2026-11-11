@@ -62,6 +62,7 @@ pub fn look_rows() -> StyleMask {
     let mut mask = StyleMask::EMPTY;
     for id in [
         crate::StyleId::BackgroundColor,
+        crate::StyleId::TextColor,
         crate::StyleId::BorderColorTop,
         crate::StyleId::BorderColorRight,
         crate::StyleId::BorderColorBottom,

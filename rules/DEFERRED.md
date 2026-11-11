@@ -624,6 +624,15 @@ without it, its labels read a weight heavier than the original's. `none` and
 `subpixel-antialiased` stay refused. Take: waived (Daehyeon Mun, 2026-10-28):
 a paint-only row, no doing-list item in this area.
 
+**Expanded (James Ide, 2026-11-10; LLP 1121 D8):** `:hover` and
+`:focus-visible` take `color`, which reaches the node's text as its own
+`color` does: CSS's `a:hover { color }`. Consumer: jameside.com's port,
+whose nav, title and icon links change their text colour on hover. This
+amends D8's rule that a host look takes no inherited row. The web shows it;
+the Apple and Linux hosts' looks paint the box alone and leave it unshown.
+Take: not yet named; it needs James's or Charlie's ruling. Still out: a
+look's `color` on the native hosts.
+
 **Runtime**
 
 **Expanded (Charlie, 2026-10-13, issue-program ruling 10):** runner-owned

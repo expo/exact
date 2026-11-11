@@ -104,6 +104,8 @@ fn an_elements_state_part_is_linted_as_lowering_folds_it() {
         ("hover", "opacity = 1"),
         ("active", "opacity=0.5"),
         ("active", "color=\"#000000\""),
+        ("hover", "color=\"#000000\""),
+        ("focus-visible", "color=\"#000000\""),
     ] {
         assert!(
             lint(state, row).is_empty(),
@@ -120,7 +122,7 @@ fn an_elements_state_part_is_linted_as_lowering_folds_it() {
     for (state, row, id) in [
         ("hover", "opacty=1", "lower-state-row"),
         ("hover", "width=10", "lower-state-row"),
-        ("hover", "color=\"#000000\"", "lower-state-row"),
+        ("hover", "-exact-tint-color=\"#000000\"", "lower-state-row"),
         ("active", "-exact-press-opacity-to=0.5", "lower-state-row"),
         ("active", "color=\"inherit\"", "lower-attr-value"),
     ] {

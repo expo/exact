@@ -4612,7 +4612,7 @@ and `none` to clear a target. Pressing needs no runner round trip.
 Absolute active opacity and `-exact-press-opacity` are mutually exclusive
 (`lower-state-press-paint`), as are two declarations of the press scale. Border
 and shadow targets remain unsupported until their host paint is implemented.
-`:hover` and `:focus-visible` take `background-color`,
+`:hover` and `:focus-visible` take `background-color`, `color`,
 `border-color`, `opacity` and `box-shadow`, shown at once while they hold (a
 `:hover` replaces the platform's hover wash, as `:active` its press; on
 the web a `transition` of the node's own on one of those rows still times it), the
@@ -4620,7 +4620,10 @@ focus's over the hover's, under the press. Each host applies them on its own
 tracking, over the node's rows (rows a part doesn't name show the base, also a
 base that changes while pressed); hover and focus rows are literals, tokens included. A
 disabled node takes none. The web (both targets) does this today; Apple, Linux
-and Android follow (LLP 1121 stage 8 B). Native buttons and list rows accept
+and Android follow (LLP 1121 stage 8 B). A look's `color` reaches the node's text
+as its own `color` does (a descendant that writes its own keeps it), so
+`:hover color="ink"` on a link recolours its words; only the web shows it, and
+the other hosts' looks paint the box alone. Native buttons and list rows accept
 `:active`; their other states remain the platform's. Active properties keep a
 button native, including with `appearance="auto"`. Each written property overrides
 that field; unwritten fields keep the native highlighted state. Clearing a target

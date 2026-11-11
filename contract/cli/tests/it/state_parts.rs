@@ -190,7 +190,7 @@ fn a_state_part_is_refused_where_it_cannot_be() {
         "lower-state-row"
     );
     assert_eq!(
-        refused(&node(":hover\n          color = \"#000000\"")),
+        refused(&node(":hover\n          -exact-tint-color = \"#000000\"")),
         "lower-state-row"
     );
     assert_eq!(
