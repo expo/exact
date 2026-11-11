@@ -287,7 +287,14 @@ final class NativeListNavigationIOSTests: XCTestCase {
         route.view.addSubview(firstNative); route.view.addSubview(secondNative)
         defer { firstNative.removeFromSuperview(); secondNative.removeFromSuperview() }
 
+        route.setContentScrollView(firstNative, for: .leading)
+        XCTAssertTrue(route.nativeContentScrollEdges.contains(.leading))
+        route.setContentScrollView(nil, for: .leading)
+        XCTAssertFalse(route.nativeContentScrollEdges.contains(.leading), "nil releases a side edge")
+
         route.setContentScrollView(firstNative, for: .all)
+        XCTAssertTrue(route.nativeContentScrollEdges.contains(.leading))
+        XCTAssertTrue(route.nativeContentScrollEdges.contains(.trailing))
         XCTAssertTrue(firstNative.scrollsToTop, "a selected native view is enabled even when its flag was false")
         XCTAssertFalse(automatic.scrollsToTop)
         p.navigation.prepareRoutes([route], in: nav)
@@ -323,6 +330,8 @@ final class NativeListNavigationIOSTests: XCTestCase {
         XCTAssertTrue(automatic.scrollsToTop)
         XCTAssertTrue(route.contentScrollView(for: .top) === automatic, "the bar follows the automatic scroller again")
         XCTAssertTrue(route.contentScrollView(for: .bottom) === automaticBottom)
+        XCTAssertFalse(route.nativeContentScrollEdges.contains(.leading), "nil releases the leading edge selected by .all")
+        XCTAssertFalse(route.nativeContentScrollEdges.contains(.trailing), "nil releases the trailing edge selected by .all")
         XCTAssertEqual(topCover(), automaticCover, "the covers follow the edge given back at once")
         p.navigation.prepareRoutes([route], in: nav)
         XCTAssertEqual(route.projected?.scroll, ObjectIdentifier(automatic))

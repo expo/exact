@@ -2595,9 +2595,9 @@ route the app never touched: for the top edge, the scroller `navigationScroll` n
 else the first visible vertical one, when it sits under the bar (none when content other
 than control bars sits above it), and for the bottom edge the scroller at the route's
 bottom.
-`contentScrollView(for:)` reports Exact's selection too, so it does not tell an
-automatic edge from a selected one. Each edge is independent, and `.all` selects
-all edges.
+`contentScrollView(for:)` reports Exact's top and bottom selections too, so it does
+not tell an automatic edge from a selected one. UIKit's getter accepts only those
+two edges. Each edge is independent, and `.all` selects all edges.
 For example, a menu action can select the secondary pane after the arrangement
 has mounted:
 

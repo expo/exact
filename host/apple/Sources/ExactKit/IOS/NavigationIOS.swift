@@ -354,8 +354,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// An app's selection; Exact's own goes through `projectContentScrollView`.
     override func setContentScrollView(_ scrollView: UIScrollView?, for edge: NSDirectionalRectEdge) {
         if let scrollView {
-            // Exact selects only the top and bottom edges, the ones UIKit's bars follow
-            nativeContentScrollEdges.formUnion(edge.intersection([.top, .bottom]))
+            nativeContentScrollEdges.formUnion(edge)
             select(scrollView, for: edge)
         } else {
             // An app's nil makes the edges it selected automatic again, and the navigation host
@@ -365,7 +364,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             guard !released.isEmpty else { return }
             nativeContentScrollEdges.subtract(released)
             select(nil, for: released)
-            host?.selectScrollEdges(of: self)
+            if !released.intersection([.top, .bottom]).isEmpty { host?.selectScrollEdges(of: self) }
         }
         #if os(iOS)
         if edge.contains(.top) { host?.presenter.syncScrollsToTop() }
