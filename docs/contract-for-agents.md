@@ -2842,8 +2842,8 @@ JSON-LD. A page's own title and metas stay its `head` element's.
 
 - An entry is one `script`, `link` or `meta`, whose value is its attributes: a string, or
   `true` for a bare one such as `async`. A script's `text` is its content; an object or a
-  list is written as JSON. In it, `<!--`, `<script` and `</script` are written `<…`,
-  which a JavaScript or JSON literal reads alike.
+  list is written as JSON. In it, `<!--`, and `<script` and `</script` before whitespace,
+  `/` or `>`, are written `\u003C…`, which a JavaScript or JSON literal reads alike.
 - The build refuses another tag, a malformed entry, and what Exact writes itself (the
   charset, the viewport, the `head` element's fields, the icon, manifest and theme colour),
   naming the entry.

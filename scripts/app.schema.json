@@ -1346,7 +1346,7 @@
   "$defs": {
     "webHeadEntry": {
       "oneOf": [
-        { "type": "object", "required": ["script"], "additionalProperties": false, "properties": { "script": { "type": "object", "properties": { "text": { "type": ["string", "object", "array"], "description": "The script's content; an object or list is written as JSON (application/ld+json, importmap, speculationrules). `<!--`, `<script` and `</script` are written as `\\u003C…`, which JavaScript and JSON read alike." } }, "additionalProperties": { "$ref": "#/$defs/webHeadAttribute" } } } },
+        { "type": "object", "required": ["script"], "additionalProperties": false, "properties": { "script": { "type": "object", "properties": { "text": { "type": ["string", "object", "array"], "description": "The script's content; an object or list is written as JSON (application/ld+json, importmap, speculationrules). `<!--`, and `<script` and `</script` before whitespace, `/` or `>`, are written as `\\u003C…`, which JavaScript and JSON read alike." } }, "additionalProperties": { "$ref": "#/$defs/webHeadAttribute" } } } },
         { "type": "object", "required": ["link"], "additionalProperties": false, "properties": { "link": { "type": "object", "additionalProperties": { "$ref": "#/$defs/webHeadAttribute" } } } },
         { "type": "object", "required": ["meta"], "additionalProperties": false, "properties": { "meta": { "type": "object", "additionalProperties": { "$ref": "#/$defs/webHeadAttribute" } } } }
       ]

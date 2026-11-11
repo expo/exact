@@ -427,11 +427,11 @@ test('host.web.head is in the head of the shell, a page built ahead, one rendere
     writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'Site', app: { id: 'test.site', name: 'Site' }, host: { web: { head: [
       { link: { rel: 'preconnect', href: 'https://analytics.example' } },
       { script: { async: true, src: 'https://analytics.example/tag.js?id=1&x=2' } },
-      { script: { text: "window.seen = '</SCRIPT><!--';" } },
+      { script: { text: "for (let i = 0; i<scripts.length; i++); window.seen = '</SCRIPT><!--';" } },
       { script: { type: 'application/ld+json', text: { '@type': 'Person', name: '</script>' } } },
     ] } } }));
     const head = '<link rel="preconnect" href="https://analytics.example">\n<script async src="https://analytics.example/tag.js?id=1&amp;x=2"></script>\n'
-      + "<script>window.seen = '\\u003C/SCRIPT>\\u003C!--';</script>\n<script type=\"application/ld+json\">{\"@type\":\"Person\",\"name\":\"\\u003C/script>\"}</script>\n";
+      + "<script>for (let i = 0; i<scripts.length; i++); window.seen = '\\u003C/SCRIPT>\\u003C!--';</script>\n<script type=\"application/ld+json\">{\"@type\":\"Person\",\"name\":\"\\u003C/script>\"}</script>\n";
     const built = spawnSync(process.execPath, ['host/web/build.mjs', app, '--out', out], { cwd: root, env: { ...process.env, EXACT_APP_DIR: app }, encoding: 'utf8' });
     expect(built.status, built.stdout + built.stderr).toBe(0);
     // Once, and before the root: only head elements come before it.

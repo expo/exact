@@ -34,9 +34,11 @@ export function webHeadProblems(manifest) {
 }
 /** `host.web.head`'s entries as HTML, one line each: what the web builds write into the shell after its sheet, so
  * every document composed over the shell carries them (LLP 1048.000 D3). A script's `text` that is an object or list
- * is written as JSON (`application/ld+json`, `importmap`, `speculationrules`). Its `<!--`, `<script` and `</script`
- * are written as `\u003C…`, which a JavaScript or JSON literal reads alike, so it cannot end its element early (HTML,
- * "Restrictions for contents of script elements"). Throws on an entry `webHeadProblems` refuses. */
+ * is written as JSON (`application/ld+json`, `importmap`, `speculationrules`). Its `<!--`, and its `<script` and
+ * `</script` where whitespace, `/` or `>` follows, are written as `\u003C…`, which a JavaScript or JSON literal reads
+ * alike, so it cannot end its element early (HTML, "Restrictions for contents of script elements"). Only those: the
+ * tokenizer reads nothing else there, and `\u003C` outside a literal, as in `i<scripts.length`, is a syntax error.
+ * Throws on an entry `webHeadProblems` refuses. */
 export function webHead(manifest) {
   const problems = webHeadProblems(manifest);
   if (problems.length) throw new Error(`app.json:\n  ${problems.join('\n  ')}`);
@@ -44,6 +46,6 @@ export function webHead(manifest) {
   return (manifest.host?.web?.head ?? []).map((entry) => {
     const [[tag, { text, ...attrs }]] = Object.entries(entry);
     const open = `<${tag}${Object.entries(attrs).map(([name, value]) => value === true ? ` ${name}` : ` ${name}="${escape(value)}"`).join('')}>`;
-    return tag === 'script' ? `${open}${(typeof text === 'object' ? JSON.stringify(text) : text ?? '').replace(/<(?=!--|\/?script)/gi, '\\u003C')}</script>\n` : `${open}\n`;
+    return tag === 'script' ? `${open}${(typeof text === 'object' ? JSON.stringify(text) : text ?? '').replace(/<(?=!--|\/?script[\t\n\f\r />])/gi, '\\u003C')}</script>\n` : `${open}\n`;
   }).join('');
 }
