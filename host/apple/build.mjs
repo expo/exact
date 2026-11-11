@@ -1167,7 +1167,11 @@ async function main(args, lockHeld = false) {
   // here. A route with no slice, or whose probe does not compile, load or run, falls through; a roster read is final. tvOS has
   // the macOS route alone, and no first-frame tag. The first route compiles beside the build, a later one only when needed.
   let rosterKeys = {}; if (process.platform === 'linux') rmSync(resolve(linkRoot, 'native-probes.json'), { force: true });
-  const routes = !(modulesBuilt && modules.tags.length && typeof Bun !== 'undefined') ? [] : !ios ? [{ via: 'macOS', built: modulesBuilt, placed: async () => true }]
+  // On Linux no route's probe can run (no simulator, Catalyst or macOS loader): a development build without a simulator
+  // qualification (EXACT_NATIVE_ROSTERS) takes the manifest's roster, as it would after every route failed, without
+  // compiling three probes for it (85 s of a build with native modules).
+  const probeless = process.platform === 'linux' && !production && !distribution && !process.env.EXACT_NATIVE_ROSTERS;
+  const routes = probeless || !(modulesBuilt && modules.tags.length && typeof Bun !== 'undefined') ? [] : !ios ? [{ via: 'macOS', built: modulesBuilt, placed: async () => true }]
     : rosterRoutes({ tv, device, packageDir, missingSlice: (variant) => (modules.frameworks ?? []).find(fw => { try { frameworkSlice(fw, variant !== false, variant, variant === true ? iosArch : macArch); return false; } catch { return true; } }) }).map(route => ({ ...route, built: resolve(webBuildDir, route.variant === false ? 'probe-' + modulesLoadName : `probe-roster-${route.variant === true ? 'simulator' : route.variant}`) }));
   const compileProbe = ({ variant, built, packages: packagesIn }, probeMain = resolve(linkRoot, 'ExactRosterProbe.swift')) => {
     if (variant === false) { packageTargets.set(packagesIn, ['macosx', macTarget]); return arm(moduleArgs('macosx', macTarget, built, false, false, macArch, packagesIn), [...moduleSources, ...packageSources], built, frameworkStamp(false, false, macArch) + packageStamp, true, true); }
