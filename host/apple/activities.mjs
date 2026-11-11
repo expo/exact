@@ -6,12 +6,15 @@ import { wrapFramework } from './assets.mjs';
 import { activityEntries } from './widgets.mjs';
 // The checkout's root: an app outside it builds from its own directory.
 const root = fileURLToPath(new URL('../..', import.meta.url));
+// A development archive (--development) compiles unoptimized; every extension compile shares one Clang module cache.
+const swiftOpt = process.argv.includes('--development') ? '-Onone' : '-O';
+const extensionModuleCache = resolve(new URL('../..', import.meta.url).pathname, 'target', 'apple-extension-module-cache');
 export function packageActivityArm({ app, bundle, directory, triple, sdk, device, runApple }) {
   const binary = resolve(directory, 'libexact_activity.dylib');
   // The system identifies the attributes by their module and type name. Compile the
   // existing envelope in ExactSnapshot, without linking its driver or ExactCore.
-  runApple('xcrun', ['--sdk', device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', '-O', '-module-name', 'ExactSnapshot', '-target', triple, '-sdk', sdk,
-    '-module-cache-path', resolve(directory, 'cache'),
+  runApple('xcrun', ['--sdk', device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', swiftOpt, '-module-name', 'ExactSnapshot', '-target', triple, '-sdk', sdk,
+    '-module-cache-path', extensionModuleCache,
     resolve(root, 'host/apple/Sources/ExactSnapshot/ActivityEnvelope.swift'), resolve(root, 'host/apple/activityarm/ActivityArm.swift'), '-o', binary]);
   const frameworks = resolve(bundle, 'Frameworks');
   copyFileSync(binary, resolve(frameworks, 'libexact_activity.dylib'));
