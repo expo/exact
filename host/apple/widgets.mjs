@@ -163,7 +163,9 @@ const tree = dir => readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isD
 export function prepareWidgetCore({ app, directory, swiftBuildRoot, swiftArgs, swiftc, triple, device, platform = 'ios' }) {
   const scratch = resolve(swiftBuildRoot, 'core');
   const args = swiftArgs.map(a => a === swiftBuildRoot ? scratch : a);
-  const key = createHash('sha256').update(JSON.stringify([app.id, args, swiftc, triple, 'versioned-framework-module-bundles']));
+  // A development archive (--development, a build service's) keeps one shared core path for every app: the path is a
+  // binary target to SwiftPM, so a path per app recompiled all of ExactKit for each widget app. Others keep one per app.
+  const key = createHash('sha256').update(JSON.stringify([process.argv.includes('--development') ? 'development' : app.id, args, swiftc, triple, 'versioned-framework-module-bundles']));
   for (const file of [resolve(pkg, 'Package.swift'), resolve(pkg, 'include/exact.h'), ...['ExactCore', 'ExactSnapshot', 'CExact'].flatMap(name => tree(resolve(pkg, 'Sources', name)))].sort()) key.update(file).update(readFileSync(file));
   const base = resolve(directory, key.digest('hex').slice(0, 20));
   return { base, scratch, args, triple, device, platform, framework: resolve(base, 'ExactCore.framework'), xcframework: resolve(base, 'ExactCore.xcframework') };
