@@ -41,6 +41,8 @@ extension NodeView {
 
     /// The scroll is over: its last `scroll` first, then `scrollend`, once.
     func endScroll() {
+        // Rows a landing page drew above their place go back to it first (`CollectionHost.settleOrigin`)
+        if presenter?.views[id] === self { presenter?.collections.settleOrigin(id) }
         guard (handlers.contains("scrollend") || presenter?.session?.timerAdmissions.enabled == true), presenter?.views[id] === self, let end = scrollEnd, end.take(), hasScrollLayoutBox else { return }
         // The last `scroll` may run its handler at once, and a batch it
         // commits may give this view to another node.

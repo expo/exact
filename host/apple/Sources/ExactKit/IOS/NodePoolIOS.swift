@@ -573,6 +573,7 @@ extension NodeView {
         sv.delegate = nil
         sv.setContentOffset(.zero, animated: false)
         presenter?.elementScrolls.forget(sv)
+        if sv.originShift != 0 { sv.contentInset.top -= sv.originShift; sv.originShift = 0 }
         sv.contentSize = .zero
         sv.delegate = delegate
         content = .zero

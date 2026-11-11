@@ -28,6 +28,13 @@ package final class PlainView: UIView {
 /// (`AgentIOS.swift`).
 package class ScrollView: UIScrollView {
     var scrollingNode: NodeView? { (superview as? NodeView) ?? (self as? Viewport)?.documentNode }
+    /// How far a list's rows are drawn above where layout put them, its top
+    /// inset grown by as much: a page that lands before the reader under a
+    /// fling UIKit projected to the top edge (`CollectionHost.shift`). The
+    /// offset stays, so the deceleration, which UIKit computes from its own
+    /// last offset, goes on over the new rows; it is folded back into the
+    /// offset once the list rests (`CollectionHost.settleOrigin`).
+    var originShift: CGFloat = 0
     package override var contentOffset: CGPoint {
         didSet { if adjustedContentInset == settledInset { settledY = contentOffset.y } }
     }

@@ -53,8 +53,9 @@ extension CollectionHost {
         let content = node.contentBox()
         let portWidth = max(0, bounds.width - insets.left - insets.right)
         // The physical port includes the page bands. Their insets are
-        // padding before and after the rows, not space removed from the port.
-        let portHeight = max(0, bounds.height + band.top + band.bottom - (insets.top - band.top) - (insets.bottom - band.bottom))
+        // padding before and after the rows, not space removed from the port,
+        // and so are the rows drawn above their place (`originShift`).
+        let portHeight = max(0, bounds.height + band.top + band.bottom - (insets.top - scroll.originShift - band.top) - (insets.bottom - band.bottom))
         guard portWidth.isFinite, portHeight.isFinite else { return nil }
         let horizontal = entries[id]?.snapshot.horizontal ?? false
         // Animating to a smooth correction: where it is headed is the port
@@ -111,7 +112,7 @@ extension CollectionHost {
     func portInsets(_ id: UInt32) -> [Double]? {
         guard let node = presenter?.views[id], let scroll = node.scroll else { return nil }
         node.layoutIfNeeded()
-        return [Double(scroll.adjustedContentInset.top - node.pageBand.top), Double(scroll.adjustedContentInset.left)]
+        return [Double(scroll.adjustedContentInset.top - scroll.originShift - node.pageBand.top), Double(scroll.adjustedContentInset.left)]
     }
     /// A fling the finger has left stops where it is, for a correction to
     /// `top`. UIKit's spring back from past an edge to that same edge goes
@@ -208,19 +209,27 @@ extension CollectionHost {
         guard scroll.contentOffset != target else { return }
         let moved = horizontal ? target.x - scroll.contentOffset.x : target.y - scroll.contentOffset.y
         let startMoved = entries[id]?.startMoved ?? false
+        let edgeBound = startMoved && scroll.isDecelerating && !scroll.isTracking && edgeBoundFlings.contains(id)
+        // UIKit decides as the finger leaves whether a deceleration will meet
+        // an edge; one that will computes each frame from the last offset it
+        // set itself, not this one, and would carry the reader back by the
+        // rows that came or went before them. A fling projected to rest short
+        // of the edges reads the offset each frame and goes on from here at
+        // its velocity (LLP 1010 §6.5), as it does for rows measured under it.
+        if edgeBound, !horizontal, moved > 0 {
+            // A page landed before the reader under a fling projected to the
+            // top (a chat's history near its first row): its rows are drawn
+            // above their place and the top inset reaches them, as a
+            // collection view's rows laid out above its origin are, and the
+            // fling glides on into them from the offset it holds.
+            raiseRows(id, by: moved, extent: extent)
+            return
+        }
         scroll.contentOffset = target
-        if startMoved, scroll.isDecelerating, !scroll.isTracking, edgeBoundFlings.contains(id) {
-            // Rows came or went before the reader under a fling UIKit
-            // projected to an edge (a page of a chat's history landed near
-            // its first row): the fling ends where they put the reader.
-            // UIKit decides as the finger leaves whether a deceleration
-            // will meet an edge; one that will computes each frame from the
-            // last offset it set itself, not this one, and would carry the
-            // reader back by the page to the new first row, where the start
-            // edge that just fired waits for the reader to leave before it
-            // fires again. A fling projected to rest short of the edges
-            // reads the offset each frame and goes on from here at its
-            // velocity (LLP 1010 §6.5), as it does for rows measured under it.
+        if edgeBound {
+            // Rows went before the reader, or came before them under a fling
+            // projected to the far end: the fling ends where they put the
+            // reader, short of the edge it would carry them back to.
             if #available(iOS 17.4, tvOS 17.4, *) { scroll.stopScrollingAndZooming() }
             else { scroll.setContentOffset(target, animated: false) }
             presenter?.scrollPump.forgetTravel(id)
@@ -255,7 +264,9 @@ extension CollectionHost {
             let width = max(scroll.bounds.width, PixelGrid.length(along, from: node.grid?.origin ?? .zero, vertical: false, scale: presenter?.gridScale ?? 1))
             if scroll.contentSize.width != width { scroll.contentSize.width = width }
         } else {
-            let height = max(node.scrollFloor(scroll), PixelGrid.length(along, from: node.grid?.origin ?? .zero, vertical: true, scale: presenter?.gridScale ?? 1))
+            // Its rows drawn above their place (`ScrollView.originShift`) end as far above their extent
+            let shift = (scroll as? ScrollView)?.originShift ?? 0
+            let height = max(node.scrollFloor(scroll), PixelGrid.length(along, from: node.grid?.origin ?? .zero, vertical: true, scale: presenter?.gridScale ?? 1) - shift)
             // A scroll to the top holds it back as it holds a scroller's
             let size = CGSize(width: scroll.contentSize.width, height: height)
             if !node.holdsSize(scroll, for: size), scroll.contentSize != size { scroll.contentSize = size }
@@ -274,7 +285,36 @@ extension CollectionHost {
     func scrollContent(_ node: NodeView) -> CGSize? {
         guard let entry = entries[node.id] else { return nil }
         let horizontal = entry.snapshot.horizontal, along = length(node, extent: entry.snapshot.extent, horizontal: horizontal)
-        return horizontal ? CGSize(width: along, height: node.content.height) : CGSize(width: node.content.width, height: along)
+        return horizontal ? CGSize(width: along, height: node.content.height)
+            : CGSize(width: node.content.width, height: along - (node.scroll?.originShift ?? 0))
+    }
+    /// `id`'s rows drawn `delta` further above their place, its top inset
+    /// grown to reach them and its content shortened by as much at its end
+    /// (`ScrollView.originShift`): nothing on the screen moves, nor the offset.
+    func raiseRows(_ id: UInt32, by delta: CGFloat, extent: Double) {
+        guard let node = presenter?.views[id], let scroll = node.scroll else { return }
+        scroll.originShift += delta
+        scroll.contentInset.top += delta
+        fit(node, scroll, extent: extent)
+        presenter?.regridChildren(of: node)
+    }
+    /// The rows landing pages drew above their place (`ScrollView.originShift`)
+    /// go back to it once the list rests (`NodeView.endScroll`), the offset
+    /// moving by as much: what shows stays where it is. Until then a fling
+    /// that a finger interrupts, a pan or another landing page keeps the
+    /// shift, which each place they read counts. The inset gives way before
+    /// the offset moves, so the move reports the reader's place as it was.
+    func settleOrigin(_ id: UInt32) {
+        guard let node = presenter?.views[id], let scroll = node.scroll, scroll.originShift != 0, !scroll.isDecelerating else { return }
+        let shift = scroll.originShift
+        UIView.performWithoutAnimation {
+            scroll.originShift = 0
+            if let extent = entries[id]?.snapshot.extent { fit(node, scroll, extent: extent) }
+            presenter?.regridChildren(of: node)
+            scroll.contentInset.top -= shift
+            scroll.contentOffset.y += shift
+        }
+        presenter?.scrollPump.shifted(id, by: shift)
     }
     /// A smooth correction's target that arrived while one was animating.
     func landAnimation(_ id: UInt32) {

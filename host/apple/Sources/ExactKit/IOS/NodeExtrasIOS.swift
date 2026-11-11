@@ -429,10 +429,12 @@ extension NodeView {
     /// over a route's bottom-edge scroller (`reachBottom`), which stays
     /// UIKit's to inset once the title collapses another: the scrollport's
     /// top is the bar's bottom, whatever its height (UIKit keeps the offset
-    /// plus that inset fixed while the title collapses), or past native content room.
+    /// plus that inset fixed while the title collapses), or past native content room
+    /// and the rows a list draws above their place (`ScrollView.originShift`).
     func scrollTopInset(_ sv: UIScrollView) -> CGFloat {
         scrollOrigin > 0 || sv.contentInsetAdjustmentBehavior != .never
-            ? sv.adjustedContentInset.top : (extras?.nativeScrollContentInsets.top ?? 0) + bandInset.top
+            ? sv.adjustedContentInset.top
+            : (extras?.nativeScrollContentInsets.top ?? 0) + bandInset.top + ((sv as? ScrollView)?.originShift ?? 0)
     }
     /// Its page band (`NodeExtras.pageBand`), zero for most.
     var pageBand: UIEdgeInsets { extras?.pageBand ?? .zero }
@@ -441,10 +443,12 @@ extension NodeView {
     var edgeInteraction: AnyObject? { get { extras?.edgeInteraction } set { if newValue != nil || extras != nil { more.edgeInteraction = newValue } } }
     /// Its scroll view's frame: its bounds, and the band past them.
     package var scrollFrame: CGRect { bounds.inset(by: UIEdgeInsets(top: -pageBand.top, left: 0, bottom: -pageBand.bottom, right: 0)) }
-    /// Native padding and footer space are content, unlike a bar or keyboard.
+    /// Native padding and footer space are content, unlike a bar or keyboard,
+    /// and so are a list's rows drawn above their place (`ScrollView.originShift`).
     package func scrollPortInsets(_ sv: UIScrollView) -> UIEdgeInsets {
         let inset = sv.adjustedContentInset, content = extras?.nativeScrollContentInsets ?? .zero
-        return UIEdgeInsets(top: inset.top - content.top, left: inset.left - content.left,
+        let raised = (sv as? ScrollView)?.originShift ?? 0
+        return UIEdgeInsets(top: inset.top - content.top - raised, left: inset.left - content.left,
                             bottom: inset.bottom - content.bottom, right: inset.right - content.right)
     }
     /// Its scrollport in `sv`'s bounds: `sv` less those insets, empty where they overlap (CSS's `clientWidth` and

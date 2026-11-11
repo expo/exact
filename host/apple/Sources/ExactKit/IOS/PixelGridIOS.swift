@@ -161,7 +161,7 @@ extension Presenter {
     func applyFrame(_ v: NodeView, _ rect: CGRect) { moveOrPlace(v) { frame(v, rect) } }
     private func frame(_ v: NodeView, _ rect: CGRect) {
         let origin = gridOrigin(above: v)
-        let place = PixelGrid.place(rect, in: origin, scale: gridScale(under: origin))
+        let place = gridPlace(v, rect, in: origin)
         let moved = place.origin != v.grid?.origin
         v.grid = place
         // A frame is set untransformed (UIKit's `frame` is undefined
@@ -204,7 +204,7 @@ extension Presenter {
         let origin = parent.grid?.origin ?? .zero
         func regrid(_ child: NodeView) {
             guard let old = child.grid else { return }
-            let place = PixelGrid.place(old.layout, in: origin, scale: gridScale(under: origin))
+            let place = gridPlace(child, old.layout, in: origin)
             guard place != old else { return }
             // Drawn where it was in its parent, which moved by whole pixels (a row below one inserted above it):
             // only the absolute origin its own children are placed from changes, and its box keeps its frame.
@@ -283,8 +283,19 @@ extension Presenter {
     /// `view`, newly among its parent's children (or the roots), drawn from there.
     func regrid(_ view: NodeView) {
         let origin = gridOrigin(above: view)
-        guard let old = view.grid, PixelGrid.place(old.layout, in: origin, scale: gridScale(under: origin)) != old else { return }
+        guard let old = view.grid, gridPlace(view, old.layout, in: origin) != old else { return }
         applyFrame(view, old.layout)
+    }
+
+    /// `rect`, layout's frame for `v`, on the grid from `origin`: drawn above
+    /// its place by its list's `originShift` (`ScrollView`), with layout's
+    /// frame kept, which a later placement draws again.
+    private func gridPlace(_ v: NodeView, _ rect: CGRect, in origin: GridOrigin) -> GridPlace {
+        let shift = (v.superview as? ScrollView)?.originShift ?? 0
+        guard shift != 0 else { return PixelGrid.place(rect, in: origin, scale: gridScale(under: origin)) }
+        var place = PixelGrid.place(rect.offsetBy(dx: 0, dy: -shift), in: origin, scale: gridScale(under: origin))
+        place.layout = rect
+        return place
     }
 }
 #endif
