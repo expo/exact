@@ -538,7 +538,14 @@ extension Agent {
            // A swipe action's control sits past its row's edge until a swipe
            // reveals it; its tap is the action's (below), wherever it sits.
            !presenter.swipeActions.ownsAction(node.id) {
-            guard let point = tapPoint(req, node: node) else {
+            // Judge a segment or bar item at what UIKit draws in its place; `drawnCovered` below judges what covers it
+            var drawn: CGRect?
+            switch drawnPlace(node) {
+            case .failure(let refusal)?: return ["error": "tap #\(node.id): \(refusal.why)"]
+            case .success(let place)?: drawn = box(place.view, region: place.region)
+            case nil: break
+            }
+            guard let point = tapPoint(req, node: node, drawn: drawn) else {
                 return ["error": "tap #\(req["id"] ?? node.id): no visible text fragment; scroll it into view first"]
             }
             if !presenter.reach(of: node).contains(point) {

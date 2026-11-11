@@ -99,6 +99,25 @@ extension Agent {
         #endif
     }
 
+    /// The segment or bar button item UIKit draws in `node`'s place, where a
+    /// finger aims at it and what covers it is judged. The node's own box is
+    /// not that place: a header the bar covers whole is laid out as
+    /// `display: none`, so its nodes' boxes are no place on the screen (LLP
+    /// 1080.000 D4). `region` is in `view`'s space; `barred`, that a bar
+    /// draws it; `inBar`, that it is a bar item, whose hit `barItemTarget`
+    /// judges. Nil for any other node; a refusal for a bar item UIKit has
+    /// not placed.
+    func drawnPlace(_ node: NodeView) -> Result<(view: UIView, region: CGRect, barred: Bool, inBar: Bool), AimRefusal>? {
+        if let (control, segment) = presenter.segments.drawn(node) {
+            return .success((control, segment, presenter.navigation.barSegment(node) != nil, false))
+        }
+        switch barItem(node) {
+        case .success(let (bar, frame))?: return .success((bar, frame, true, true))
+        case .failure?: return .failure(AimRefusal(why: "its bar item is not placed in the navigation bar; `clock settle` first waits out a push or sheet still moving"))
+        case nil: return nil
+        }
+    }
+
     #if os(iOS)
     /// The views under `roots` that an accessibility client reads as
     /// elements, shown and with a box; the walk does not enter nodes.
@@ -154,15 +173,11 @@ extension Agent {
     /// `node`'s place (a sheet over it, the keyboard), or nil: the tap that
     /// activates either is refused as a covered node's is.
     func drawnCovered(_ node: NodeView) -> String? {
-        let target: UIView, region: CGRect, inBar: Bool
-        if let (control, segment) = presenter.segments.drawn(node) { (target, region, inBar) = (control, segment, false) }
-        else if case .success(let (bar, frame))? = barItem(node) { (target, region, inBar) = (bar, frame, true) }
-        else { return nil }
-        guard let win = target.window else { return nil }
-        let p = target.convert(CGPoint(x: region.midX, y: region.midY), to: nil)
+        guard case .success(let drawn)? = drawnPlace(node), let win = drawn.view.window else { return nil }
+        let p = drawn.view.convert(CGPoint(x: drawn.region.midX, y: drawn.region.midY), to: nil)
         awaitAppOverlay(at: p, in: win)
         guard let hit = win.hitTest(p, with: nil) else { return "its middle is off the window" }
-        return obscured(inBar ? barItemTarget(node, bar: target, hit: hit) : target, at: p, hit: hit)
+        return obscured(drawn.inBar ? barItemTarget(node, bar: drawn.view, hit: hit) : drawn.view, at: p, hit: hit)
     }
 
     /// What a hit at a bar item's middle must land in: the item's own button

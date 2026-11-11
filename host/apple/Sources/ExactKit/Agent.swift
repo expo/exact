@@ -45,9 +45,11 @@ public final class Agent {
     /// Pick a visible fragment's midpoint; a wrapped link can have an earlier
     /// fragment offscreen while a later one is reachable. `box` carries canvas
     /// placement and presentation transforms into the viewport coordinates.
-    func tapPoint(_ request: [String: Any], node: NodeView) -> CGPoint? {
+    /// `drawn`: the box of what the host draws in the node's place (`drawnPlace`).
+    func tapPoint(_ request: [String: Any], node: NodeView, drawn: CGRect? = nil) -> CGPoint? {
         let bounds: CGRect
-        if let id = request["id"] as? UInt32, let run = presenter.inlineText(id) {
+        if let drawn { bounds = drawn }
+        else if let id = request["id"] as? UInt32, let run = presenter.inlineText(id) {
             let fragments = node.inlineRects(run).filter { !$0.isEmpty }.map { box(node, region: $0) }
             #if os(iOS) || os(tvOS)
             let reach = presenter.reach(of: node)

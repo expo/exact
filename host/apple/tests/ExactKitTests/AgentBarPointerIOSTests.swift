@@ -157,5 +157,22 @@ final class AgentBarPointerIOSTests: XCTestCase {
         XCTAssertTrue(item.ariaUnavailable)
         XCTAssertEqual(presses, [item.id], "ARIA state leaves the native item pressable")
     }
+
+    func testABarItemIsTappedWhereUIKitDrawsItWhereverItsHiddenBoxLies() throws {
+        let session = try fixture(), p = session.presenter, agent = Agent(session: session)
+        let item = try node(session, "compose-home"), header = try node(session, "header-home")
+        guard case .success? = agent.barItem(item) else { return XCTFail("UIKit placed the item in the bar") }
+        // The header the bar replaces is hidden and laid out as `display: none`,
+        // so its box is no place on the screen; move it off the viewport
+        XCTAssertTrue(header.isHidden)
+        header.frame.origin = CGPoint(x: -500, y: -500)
+        XCTAssertFalse(p.reach(of: item).contains(CGPoint(x: agent.box(item).midX, y: agent.box(item).midY)))
+        var presses: [UInt32] = []
+        p.onPress = { presses.append($0) }
+        let reply = agent.tap(["id": Int(item.id)])
+        XCTAssertNil(reply["error"], "\(reply)")
+        XCTAssertEqual(reply["native"] as? String, "bar-button-item")
+        XCTAssertEqual(presses, [item.id])
+    }
 }
 #endif
