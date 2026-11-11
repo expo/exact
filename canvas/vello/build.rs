@@ -85,6 +85,10 @@ fn main() {
             .output()
             .is_ok_and(|o| o.status.success())
     {
+        // A build service sets EXACT_APPLE_METAL_REQUIRED=1 (host/apple/build.mjs): a stub there is a broken app.
+        if std::env::var("EXACT_APPLE_METAL_REQUIRED").as_deref() == Ok("1") {
+            panic!("exact-canvas-vello: no Metal toolchain, and EXACT_APPLE_METAL_REQUIRED=1");
+        }
         println!("cargo:warning=exact-canvas-vello: no Metal toolchain (`xcodebuild -downloadComponent MetalToolchain`); the module is a stub");
         stub(&out);
         return;

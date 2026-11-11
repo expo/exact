@@ -169,9 +169,12 @@ export function metalVersion(sdkName) {
   metalVersions.set(sdkName, result);
   return result;
 }
+/** `EXACT_APPLE_METAL_REQUIRED=1`: a build that cannot run the Metal compiler fails rather than ship SVG filters on
+ *  Core Image and canvases on Core Graphics (a build service, whose compiler may be missing or flaky, sets it). */
+const metalRequired = () => process.env.EXACT_APPLE_METAL_REQUIRED === '1';
 export function svgFilterLibrary(sdkName, minimum, out, required = false) {
   const version = metalVersion(sdkName), install = metalToolchainInstructions(), missing = version.status !== 0;
-  if (missing && required) throw new Error(`host/apple: this build requires the Metal toolchain for its SVG filter kernels. ${install}`);
+  if (missing && (required || metalRequired())) throw new Error(`host/apple: this build requires the Metal toolchain for its SVG filter kernels${required ? '' : ' (EXACT_APPLE_METAL_REQUIRED=1)'}. ${install}`);
   if (missing) return console.warn(`host/apple: no Metal toolchain, so no ${svgFilterLibraryName}: SVG filter pictures draw with Core Image. ${install}`), null;
   const flag = { iphoneos: `-mios-version-min=${minimum}`, iphonesimulator: `-mios-simulator-version-min=${minimum}`, appletvos: `-mtvos-version-min=${minimum}`, appletvsimulator: `-mtvos-simulator-version-min=${minimum}`, macosx: `-mmacosx-version-min=${minimum}` }[sdkName];
   // Kept by what it is made of (the kernel source, the SDK, the deployment flag and the compiler), shared by every app.
@@ -862,6 +865,7 @@ async function main(args, lockHeld = false) {
   mkdirSync(moduleTarget, { recursive: true });
   startSweep(moduleTarget);
   const metalTools = metalVersion('macosx'), metal = metalTools.status === 0;
+  if (!metal && metalRequired()) throw new Error(`host/apple: no Metal toolchain, and EXACT_APPLE_METAL_REQUIRED=1: the Canvas 2D GPU module needs it. ${metalToolchainInstructions()}`);
   if (!metal) console.warn(`host/apple: no Metal toolchain, so no Canvas 2D GPU module: canvases draw with Core Graphics. ${metalToolchainInstructions()}`);
   // A development build takes a module some checkout of this machine has
   // already compiled from these bytes, and keeps each one it compiles itself
