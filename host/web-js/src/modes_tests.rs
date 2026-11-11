@@ -580,6 +580,29 @@ fn a_looks_color_is_its_rules_with_the_token() {
     assert!(out.js.contains("color:var(--x-surface-card"), "{}", out.js);
 }
 
+/// A look's `color` is also a rule for the boundaries below that its colour
+/// reaches (`modes.js` marks them `data-x-lc`), which write the colour around
+/// them again: the look's token, so it resolves in the boundary's modes,
+/// the focus's after the hover's. A look with no `color` has none.
+#[test]
+fn a_looks_color_reaches_a_boundary_below() {
+    let view = "component App\n  view\n    column\n      link href=\"/a\" color=\"surface.card\"\n        :hover\n          color = \"text.primary\"\n        :focus-visible\n          color = \"#123456\"\n        column -exact-mode=\"dark-style=dim\"\n          text \"a\"\n      link href=\"/b\"\n        :hover\n          background-color = \"surface.card\"\n        text \"b\"\n";
+    let css = emitted("look-color-below", DESIGN, view).css;
+    let below = |at: &str| css.find(at).unwrap_or_else(|| panic!("{at} in {css}"));
+    let on = ":not(:disabled,[disabled]:not([disabled=\"false\"]))";
+    let hover = below(&format!(
+        "[data-exact-looks=\"1\"]:hover{on} [data-x-lc~=\"1\"]{{color:var(--x-text-primary)!important;}}"
+    ));
+    below(&format!(
+        "[data-exact-looks=\"1\"][data-exact-held~=hover]{on} [data-x-lc~=\"1\"]{{"
+    ));
+    let focus = below(&format!(
+        "[data-exact-looks=\"1\"][data-exact-held~=focus-visible]{on} [data-x-lc~=\"1\"]{{color:rgba(18,52,86,1)!important;}}"
+    ));
+    assert!(hover < focus, "{css}");
+    assert!(!css.contains("[data-x-lc~=\"2\"]"), "{css}");
+}
+
 /// LLP 1121 stage 9 B: under a written token colour, a mode boundary below
 /// writes the token again as its implied row, no author's, so the kernel's
 /// symbol under the boundary takes no written colour; one beside it does.

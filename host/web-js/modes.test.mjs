@@ -189,6 +189,32 @@ test('a development build with no axes puts its boundaries in the empty tuple', 
   expect(b.getAttribute('data-x-modes')).toBe('');
 });
 
+// A boundary that writes the colour around it again names the state looks
+// whose colour reaches it (`data-x-lc`): those up to and with the nearest
+// element that sets the colour. One that sets its own, or writes nothing
+// again, names none.
+test('a boundary names the looks whose colour reaches it', async () => {
+  const document = createDocument();
+  Object.assign(globalThis, { document, __exactRender: true });
+  const { modes } = await import('./modes.js');
+  const el = (parent, cls, attrs = {}) => { const e = document.createElement('div'); if (cls) e.setAttribute('class', cls); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.append(e); return e; };
+  const root = document.getElementById('exact-root');
+  const page = el(root, 'c1', { 'data-exact-looks': '3' });
+  const link = el(page, '', { 'data-exact-looks': '1' });
+  const below = el(link, 'c2', { 'data-x-b': '0' });
+  const own = el(link, 'c3', { 'data-x-b': '1' });
+  const writer = el(link, 'c1', { 'data-exact-looks': '2' });
+  const inWriter = el(writer, 'c2', { 'data-x-b': '0' });
+  const plain = el(root, '');
+  const untinted = el(plain, 'c2', { 'data-x-b': '0' });
+  modes([], { c1: { 0: 0 }, c3: { 0: -1 } }, ['color:var(--x-ink)'], {}, [], { '--x-ink': 'ink' });
+  for (const f of After) f();
+  expect(below.getAttribute('data-x-lc')).toBe('1 3');
+  expect(inWriter.getAttribute('data-x-lc')).toBe('2');
+  expect(own.getAttribute('data-x-lc')).toBeNull();
+  expect(untinted.getAttribute('data-x-lc')).toBeNull();
+});
+
 // A dev reload's checkpoint carries the window's modes: each axis the
 // design still has at that value keeps it; a value gone starts again.
 test('a development build boots in the modes its reload carried', async () => {

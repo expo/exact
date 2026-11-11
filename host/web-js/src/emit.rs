@@ -826,6 +826,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
     for (i, looks) in em.looks.iter().enumerate() {
         let at = format!("[data-exact-looks=\"{}\"]", i + 1);
         css.push_str(&exact_web::host::template::look_rules(&at, looks));
+        // A boundary below that its colour reaches says so (modes.js `data-x-lc`).
+        if modes.is_some() {
+            let below = format!("[data-x-lc~=\"{}\"]", i + 1);
+            css.push_str(&exact_web::host::template::look_colour_below(
+                &at, looks, &below,
+            ));
+        }
     }
     // The classes that set a scheme read the theme's text on it.
     css.push_str(&exact_kernel::style::roles::scheme_classes(&em.classes));
