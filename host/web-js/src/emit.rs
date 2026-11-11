@@ -177,6 +177,8 @@ struct Em<'a> {
     /// Where each class and each set of looks is in `classes` and `looks`.
     class_at: HashMap<String, usize>,
     looks_at: HashMap<Vec<(u8, String)>, usize>,
+    /// The root node's class, whose background the page's canvas takes (canvas.rs).
+    root_class: Option<usize>,
 
     paint: bool,
     warnings: Vec<String>,
@@ -262,6 +264,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         looks: Vec::new(),
         class_at: HashMap::new(),
         looks_at: HashMap::new(),
+        root_class: None,
         paint,
         warnings,
         row_actions: Default::default(),
@@ -825,6 +828,9 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let _ = write!(css, ".c{}{{{c}}}", i + 1);
     }
     css.push('}');
+    if let Some(at) = em.root_class {
+        css.push_str(&crate::canvas::rule(&em.classes[at]));
+    }
     for (i, looks) in em.looks.iter().enumerate() {
         let at = format!("[data-exact-looks=\"{}\"]", i + 1);
         css.push_str(&exact_web::host::template::look_rules(&at, looks));
@@ -1062,7 +1068,11 @@ impl Em<'_> {
         let class = if css.is_empty() {
             "0".to_string()
         } else {
-            format!("{}", self.class(&css) + 1)
+            let at = self.class(&css);
+            if i == self.sites.root {
+                self.root_class = Some(at);
+            }
+            format!("{}", at + 1)
         };
         let attrs_js = if attrs.is_empty() {
             "0".to_string()

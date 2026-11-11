@@ -825,7 +825,7 @@ fn written(parts: &[Option<Parts>]) -> String {
 }
 
 /// The value of `css`'s top-level declaration of `prop`, the last one.
-fn declaration<'a>(css: &'a str, prop: &str) -> Option<&'a str> {
+pub(crate) fn declaration<'a>(css: &'a str, prop: &str) -> Option<&'a str> {
     declarations(css)
         .into_iter()
         .rev()
@@ -834,7 +834,7 @@ fn declaration<'a>(css: &'a str, prop: &str) -> Option<&'a str> {
 }
 
 /// `css`'s top-level declarations, `(property, value)`, in order.
-fn declarations(css: &str) -> Vec<(&str, &str)> {
+pub(crate) fn declarations(css: &str) -> Vec<(&str, &str)> {
     spans(css)
         .into_iter()
         .map(|(name, value, _)| (name, value))

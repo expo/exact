@@ -633,6 +633,12 @@ impl Em<'_> {
                 }
                 None => {
                     let _ = write!(self.out, "{s}({e},\"{name}\",\"{unit}\",{value});");
+                    // The root's bound background is the page's canvas too (no modes channel carries it).
+                    if i == self.sites.root && id == StyleId::BackgroundColor {
+                        let (write, opaque) = (self.uses.rt("S"), self.uses.rt("canvasColor"));
+                        self.out
+                            .push_str(&crate::canvas::bound(&write, &opaque, &value));
+                    }
                 }
             }
         }

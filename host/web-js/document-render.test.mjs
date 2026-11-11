@@ -822,15 +822,18 @@ test('both document renderers preserve browser scrolling before startup', async 
   home "/" render=build
 
 component Page
+  state night = false
   view
-    scroll document height="100%"
+    scroll document height="100%" background-color=(night ? "#000000" : "#123456")
       text "Document" height=1600
 `, async (_, html, dist) => {
       expect(html('')).toMatch(/<html[^>]* data-scrolldocument/);
       if (how === 'js') {
+        // A bound root background is the canvas before the runtime runs, as the html element's (canvas.rs).
+        expect(html('')).toMatch(/<html[^>]* style="--exact-root-background:#123456"/);
         const { renderer } = await import('./render.mjs');
         const page = await (await renderer(dist).begin('/')).finish();
-        expect(page.rest.startsWith('<script>document.documentElement.setAttribute("data-scrolldocument","")</script>')).toBe(true);
+        expect(page.rest.startsWith('<script>document.documentElement.setAttribute("data-scrolldocument","");document.documentElement.style.setProperty("--exact-root-background","#123456")</script>')).toBe(true);
       }
       const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(Bun.file(resolve(dist, 'index.html'))) });
       try {
@@ -840,6 +843,7 @@ component Page
             const page = await browser.newPage({ viewport: { width: 390, height: 844 }, javaScriptEnabled: false });
             await page.goto(server.url.href);
             expect([how, engine, await page.evaluate(() => [document.documentElement, document.body].map(e => getComputedStyle(e).overscrollBehaviorY))]).toEqual([how, engine, ['auto', 'auto']]);
+            if (how === 'js') expect([engine, await page.evaluate(() => getComputedStyle(document.documentElement).backgroundColor)]).toEqual([engine, 'rgb(18, 52, 86)']);
             await page.mouse.move(195, 400);
             await page.mouse.wheel(0, 300);
             const scrolled = () => page.evaluate(() => document.scrollingElement.scrollTop > 0);

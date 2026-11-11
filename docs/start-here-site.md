@@ -22,6 +22,10 @@ rendered ahead or per request, sent whole, then a small script for its links and
 - **A design's tokens** come in with `bun exact.mjs tamber import css tokens.css`, which
   writes `app.tamber`; a row names one as `var(--ink)` or `ink`, also inside `calc()`.
 - **A page is a route**, so Back, reload, a shared link and a new tab work.
+- **The page's colour is the root's `background-color`**, on the `App` view's outermost node. The
+  browser paints it wherever the page does not reach: behind an iPhone's status bar, in the
+  overscroll and past a short page's end, as the native hosts paint their window. A translucent
+  root leaves the platform's colour. A route's own background covers only its route.
 
 ## The workflow
 

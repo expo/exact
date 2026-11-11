@@ -284,8 +284,13 @@ export function renderer(dist, { closed = false } = {}) {
         // A complete page marks html and names the preloads in its head; a streamed head has gone already, so the rest
         // marks it before the body and names them after the head's fields, as page.rs does.
         const whole = late ? headOf(true, info.language) : head;
-        const markedHead = out.scrollDocument ? whole.replace('<html ', '<html data-scrolldocument ') : whole;
-        const mark = out.scrollDocument ? '<script>document.documentElement.setAttribute("data-scrolldocument","")</script>\n' : '';
+        // The canvas a bound root background gave the html element (canvas.rs).
+        const canvas = ctx.document.documentElement.style.getPropertyValue('--exact-root-background');
+        const htmlAttrs = (out.scrollDocument ? 'data-scrolldocument ' : '') + (canvas ? `style="--exact-root-background:${esc(canvas)}" ` : '');
+        const markedHead = htmlAttrs ? whole.replace('<html ', `<html ${htmlAttrs}`) : whole;
+        const mark = [out.scrollDocument && 'document.documentElement.setAttribute("data-scrolldocument","")',
+          canvas && `document.documentElement.style.setProperty("--exact-root-background",${JSON.stringify(canvas).replace(/</g, '\\u003c')})`].filter(Boolean).join(';');
+        const marked = mark ? `<script>${mark}</script>\n` : '';
         makeAhead();
         // The HTTP status, as the render host gives it (lib.rs `Rendered::status`, LLP 1048.000 D11): a location the router
         // sends to its notfound route is 404, or 410 if its head says so; a render at its deadline 503; else the head's own.
@@ -297,7 +302,7 @@ export function renderer(dist, { closed = false } = {}) {
         // another render would make until the first of those answers goes stale: it may be given again until then, for
         // at most 60 s (LLP 1048.007 D8).
         const keep = status === 200 && settled && !out.failed?.length && out.activation?.kept === false && !out.rust && !read.random && read.fresh > 0 && read.fresh < Infinity ? Math.min(read.fresh, 60000) : 0;
-        return { html: markedHead + body(''), rest: mark + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep };
+        return { html: markedHead + body(''), rest: marked + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep };
       } finally { made.dispose(); }
     } };
   }

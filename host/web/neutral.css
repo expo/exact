@@ -41,8 +41,9 @@
      the system red (Apple's is lighter). An author's `accent-color` is the nearer `--exact-accent`, on its node, and
      is drawn as written, as is a theme's red (`--exact-system-red-said`, roles.rs `theme_css`). */
   @supports (color: oklch(from AccentColor l c h)) { :root { --exact-accent: light-dark(oklch(from AccentColor min(l, .53) c h), oklch(from AccentColor max(l, .72) c h)); accent-color: var(--exact-accent); } #exact-root button[data-button-style][data-destructive="true"] { --exact-accent: var(--exact-system-red-said, light-dark(oklch(from var(--exact-system-red) min(l, .53) c h), oklch(from var(--exact-system-red) max(l, .72) c h))); } }
-  /* The page and its text: one ground in every browser, where each engine's dark `Canvas` is its own. */
-  html { background-color: var(--exact-background); color: var(--exact-label); }
+  /* The page and its text: one ground in every browser, where each engine's dark `Canvas` is its own. An opaque background
+     on the app's root is the canvas (`--exact-root-background`, web-js canvas.rs). */
+  html { background-color: var(--exact-root-background, var(--exact-background)); color: var(--exact-label); }
 
   /* Buttons. One box: 36 px (44 on a touch device) in every engine, so a line's height is said (`normal` is each
      engine's own, 18 px or 20 for the system font), and a 1 px edge every style keeps so they line up. `bordered` and
