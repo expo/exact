@@ -1353,6 +1353,8 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // @ref LLP 1038 D6/D11; LLP 1035.001 D2 — a cancelled swipe calls
         // willShow again for its source, in the transition already begun.
         guard let transition = pushOrPop(on: navigationController), transition.viewController(forKey: .to) === viewController else { return }
+        // A route shown again with its search still open: UIKit's own refocus of the field is refused (`HeaderSearch.refusesBegin`)
+        if let search = (viewController as? RouteController)?.search, search.controller.isActive { search.refuseBegin(through: transition, thenCloseIfIdle: true) }
         // UIKit's own (its Back button, its menu, a swipe): Observe's render
         // mark is this transition's first frame, unless it is cancelled.
         if !syncing {
