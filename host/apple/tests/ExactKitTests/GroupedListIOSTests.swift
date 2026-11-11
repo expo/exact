@@ -1471,7 +1471,7 @@ final class GroupedListIOSTests: GroupedListFixture {
             spin(0.3)
         }
         spin(0.3)
-        _ = Agent(session: session).tap(["id": Int(try node("start-open-rows").id)])
+        XCTAssertTrue(session.follow("/rows"), "by its location, as a link opens it: its button lies below what the start route shows")
         settle(2, "the list's route pushed")
         let list = try XCTUnwrap(host(p).lists[try node("rows-list").id], "the route's grouped list")
         list.collection.layoutIfNeeded()
