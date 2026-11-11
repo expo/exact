@@ -1124,9 +1124,9 @@ async function main(args, lockHeld = false) {
   // Each package's Swift module for this target, before the app's module links it: once, and only when an arm
   // linking it is compiled anew (its copied sources and `packageStamp` are that arm's key; its objects' paths this
   // build's own). A failed package stays unplaced, so the next arm that needs it compiles it again and says why.
-  // A development build's packages compile unoptimized on every core: optimized whole-module compiles run on one core
-  // (a package could take two minutes); what is distributed keeps -O.
-  const swiftModuleArgs = (name, sources, dir = packageDir) => ['--sdk', packageTargets.get(dir)[0], 'swiftc', '-module-cache-path', resolve(swiftBuildRoot, 'modules-module-cache'), '-parse-as-library', '-wmo', ...(production || distribution ? ['-O'] : ['-Onone', '-num-threads', '16']), '-swift-version', '5', '-module-name', name, '-emit-module', '-emit-module-path', resolve(dir, `${name}.swiftmodule`), '-I', dir, '-c', ...sources, '-o', resolve(dir, `${name}.o`), ...packageTargets.get(dir)[1]];
+  // A development build's packages compile unoptimized: an optimized whole-module compile runs on one core (a package
+  // could take two minutes). (-num-threads would split the object, which one -o cannot name.) Distributed builds keep -O.
+  const swiftModuleArgs = (name, sources, dir = packageDir) => ['--sdk', packageTargets.get(dir)[0], 'swiftc', '-module-cache-path', resolve(swiftBuildRoot, 'modules-module-cache'), '-parse-as-library', '-wmo', ...(production || distribution ? ['-O'] : ['-Onone']), '-swift-version', '5', '-module-name', name, '-emit-module', '-emit-module-path', resolve(dir, `${name}.swiftmodule`), '-I', dir, '-c', ...sources, '-o', resolve(dir, `${name}.o`), ...packageTargets.get(dir)[1]];
   const packageArgs = (p, i, dir) => [...swiftModuleArgs(p.module, packageCopies[i], dir), ...(!production && !distribution ? ['-D', 'EXACT_DEVELOPMENT'] : [])]; // a package's development-only paths (an injected device, LLP 1133.037 D19 item 3), as the web arm's
   // What an arm linking the packages adds to its key: each package, its sources by name, and how it compiles.
   const packageStamp = JSON.stringify(packages.map((p, i) => [p.module, p.sources, packageArgs(p, i).map(a => a.replaceAll(packageDir, '<packages>'))]));
