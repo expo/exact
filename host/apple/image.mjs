@@ -177,6 +177,12 @@ export function resizePixels(image, width, height) {
   return { width, height, data, profile: image.profile, cicp: image.cicp, space: image.space ?? 1 };
 }
 
+/** Several square sizes of one PNG, decoded once: `sizes` is [[px, outPath], ...]. */
+export function resizeSquares(source, sizes) {
+  const image = pngPixels(readFileSync(source));
+  for (const [px, output] of sizes) writeFileSync(output, pngBytes(resizePixels(image, px, px)));
+}
+
 export function resizeImageCommand(args) {
   let width, height, source, output;
   if (args.length === 6 && args[0] === '-z' && args[4] === '--out') {
