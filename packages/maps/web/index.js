@@ -40,13 +40,13 @@ const pin = () => `<svg viewBox="0 0 28 38" aria-hidden="true"><path d="M14 37C1
 const restyle = (svg, selected) => { svg.setAttribute('width', selected ? 32 : 26); svg.setAttribute('height', selected ? 42 : 34); svg.firstChild.setAttribute('fill', selected ? '#c22a1f' : '#ea4335'); };
 
 // Web Mercator in world pixels at zoom z: the world is 256 × 2^z wide.
-const project = (lat, lon, z) => {
+export const project = (lat, lon, z) => {
   const s = TILE * 2 ** z, r = Math.sin(Math.max(-85.05, Math.min(85.05, lat)) * Math.PI / 180);
   return [(lon + 180) / 360 * s, (0.5 - Math.log((1 + r) / (1 - r)) / (4 * Math.PI)) * s];
 };
-const unproject = (x, y, z) => {
+export const unproject = (x, y, z) => {
   const s = TILE * 2 ** z, n = Math.PI - 2 * Math.PI * y / s;
-  return [180 / Math.PI * Math.atan(Math.sinh(n)), ((x / s * 360 + 540) % 360) - 180];
+  return [180 / Math.PI * Math.atan(Math.sinh(n)), ((((x / s * 360) % 360) + 360) % 360) - 180];
 };
 const round = (n, places) => Math.round(n * 10 ** places) / 10 ** places;
 const markersOf = text => {
