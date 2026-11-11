@@ -26,12 +26,15 @@ class GroupedListFixture: XCTestCase {
         ])
     }
 
+    /// The test window: a session's page area on the iPhone 18 Pro, clear of the bars UIKit insets a list by (LLP 1130 D1).
+    var windowFrame: CGRect { CGRect(x: 0, y: 100, width: 402, height: 740) }
+
     func presenter(height: Double = 874, handlers: [String] = [], props: [String: String] = [:], style: [String: Any] = [:],
                            nativeButtonRow: Bool = false, on given: Presenter? = nil, _ m: @escaping () -> GroupedListModel) -> Presenter {
         ExactGroupedLists.install()
         let p = given ?? Presenter()
         host(p).model = { $0 == 1 ? m() : nil }
-        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window = UIWindow(frame: windowFrame)
         p.viewport.frame = window.bounds
         window.addSubview(p.viewport)
         window.makeKeyAndVisible()

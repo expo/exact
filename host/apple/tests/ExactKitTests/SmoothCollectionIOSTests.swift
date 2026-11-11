@@ -15,8 +15,11 @@ final class SmoothCollectionIOSTests: XCTestCase {
         // In the test host's scene: UIKit animates a scroll view only in a
         // window on a screen.
         let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
-        window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
-        window.frame = CGRect(x: 0, y: 0, width: 400, height: 400)
+        // Clear of the status bar, whose safe area UIKit would inset the list
+        // by: UIKit's offsets are then the kernel's. A test that wants a bar
+        // gives the window one.
+        window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 100, width: 400, height: 400))
+        window.frame = CGRect(x: 0, y: 100, width: 400, height: 400)
         p.viewport.frame = window.bounds
         window.addSubview(p.viewport)
         window.makeKeyAndVisible()

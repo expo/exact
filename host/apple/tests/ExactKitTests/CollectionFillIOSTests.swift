@@ -16,7 +16,10 @@ final class CollectionFillIOSTests: XCTestCase {
     /// place in a 100-row list under 20 points of padding.
     private func fixture(_ indices: [Int] = Array(0..<4)) throws -> (Presenter, UIWindow, UIScrollView) {
         let p = Presenter()
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 300, height: 200))
+        // Clear of the status bar, as a session's page area is: under it, a
+        // covered scroll's first report is often an ordinary one, ahead of the
+        // pump's slice (QUEUE.md)
+        let window = UIWindow(frame: CGRect(x: 0, y: 100, width: 300, height: 200))
         window.addSubview(p.viewport)
         p.viewport.frame = window.bounds
         window.makeKeyAndVisible()

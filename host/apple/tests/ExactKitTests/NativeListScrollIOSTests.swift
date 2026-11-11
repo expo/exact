@@ -80,7 +80,7 @@ final class NativeListScrollIOSTests: GroupedListFixture {
         p.apply(wireBatch([["op": "props", "id": 1, "set": ["scrollTop": "100"]]]))
         native.setContentOffset(CGPoint(x: 0, y: 100), animated: false)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        XCTAssertEqual(exact.contentOffset.y, 100, accuracy: 0.5, "list-cell margins do not grow under the status bar")
+        XCTAssertEqual(exact.contentOffset.y, 100, accuracy: 0.5, "the list scrolls as the native reference does")
         XCTAssertEqual(native.contentOffset.y, 100, accuracy: 0.5)
         XCTAssertEqual(exact.contentSize.height, native.contentSize.height, accuracy: 0.5)
         for section in model.sections.indices {

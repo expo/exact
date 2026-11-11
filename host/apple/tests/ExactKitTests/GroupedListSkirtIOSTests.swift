@@ -7,6 +7,9 @@ import XCTest
 /// A grouped list's background past a viewport short of its container's
 /// edge (moved whole from GroupedListIOSTests.swift for its line cap).
 final class GroupedListSkirtIOSTests: GroupedListFixture {
+    /// The whole screen: the list's background goes on to its edge.
+    override var windowFrame: CGRect { CGRect(x: 0, y: 0, width: 402, height: 874) }
+
     /// LLP 1116.004 D2 (chat-rooms, round 6): a page with no navigation
     /// container keeps its viewport inside the safe area, and a grouped list
     /// at its bottom left the root's white under the home indicator. Where
