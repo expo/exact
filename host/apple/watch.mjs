@@ -8,7 +8,7 @@ import { appleProduction, stripProductionExecutable } from './link.mjs';
 import { reportBuilt } from '../../scripts/help.mjs';
 import { copyStaticTreeIfPresent } from '../web/serve.mjs';
 import { ensureWatchSimulatorSDK } from './sdk.mjs';
-import { platformWidgetEntries, prepareWidgetCore, sharedWidgetCore, packageWidgets } from './widgets.mjs';
+import { platformWidgetEntries, prepareWidgetCore, sharedWidgetCore, placeCoreFramework, packageWidgets } from './widgets.mjs';
 import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url))), pkg = resolve(root, 'host/apple');
 
@@ -75,7 +75,7 @@ export async function buildWatch(app, args, { runApple, appleArtifacts, appleBui
     const swiftEnv = { ...process.env, WATCHOS_DEPLOYMENT_TARGET: '10.0', EXACT_LIB_DIR: libDir, EXACT_LIB: crate.replaceAll('-', '_'), EXACT_WIDGET_GALLERY: '0', EXACT_UPDATE_TRUST: production ? 'production' : 'development' };
     delete swiftEnv.SDKROOT;
     const swiftc = runApple('xcrun', ['swiftc', '--version'], { read: true }).stdout;
-    const prepared = prepareWidgetCore({ app: watch, directory: resolve(directory, 'core'), swiftBuildRoot: swiftRoot, swiftArgs, triple, platform: 'watchos', device: false, swiftc });
+    const prepared = prepareWidgetCore({ directory: resolve(directory, 'core'), swiftBuildRoot: swiftRoot, swiftArgs, triple, platform: 'watchos', device: false, swiftc });
     const shared = sharedWidgetCore({ app: watch, prepared, libDir, crate, env: swiftEnv, runApple });
     const group = `group.${watch.id}`, entitlements = plistFile({ 'com.apple.security.application-groups': [group] });
     const entitlementPath = resolve(directory, 'watch-entitlements.plist');
@@ -83,7 +83,7 @@ export async function buildWatch(app, args, { runApple, appleArtifacts, appleBui
     // Simulator entitlements are embedded in __TEXT by each link.
     const sign = (path, _embeddedEntitlements) => runApple('codesign', ['--force', '--sign', '-', path]);
     mkdirSync(resolve(bundle, 'Frameworks'), { recursive: true });
-    cpSync(shared.framework, resolve(bundle, 'Frameworks/ExactCore.framework'), { recursive: true });
+    placeCoreFramework(shared.framework, resolve(bundle, 'Frameworks/ExactCore.framework'), watch, 'watchos');
     mkdirSync(resolve(bundle, 'plans'), { recursive: true });
     for (const entry of entries) copyFileSync(resolve(output, `plans/${entry.kind}.plan`), resolve(bundle, `plans/${entry.kind}.plan`));
     if (live) copyFileSync(resolve(output, 'plans/watch.plan'), resolve(bundle, 'plans/watch.plan'));

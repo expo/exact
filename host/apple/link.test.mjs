@@ -364,7 +364,7 @@ test("the ActivityKit arm compiles the checkout's sources when the build runs fr
   try {
     // A child process, so the working directory is the app's and not this process's.
     const script = `const { packageActivityArm } = await import(${JSON.stringify(new URL('./activities.mjs', import.meta.url).href)});
-try { packageActivityArm({ directory: process.cwd(), device: false, triple: 'arm64-apple-ios17.0-simulator', sdk: '/sdk', runApple: (cmd, args) => { console.log(JSON.stringify(args)); throw new Error('stop'); } }); } catch {}`;
+try { packageActivityArm({ shared: { base: process.cwd() }, device: false, triple: 'arm64-apple-ios17.0-simulator', sdk: '/sdk', runApple: (cmd, args) => { console.log(JSON.stringify(args)); throw new Error('stop'); } }); } catch {}`;
     const r = spawnSync(process.execPath, ['-e', script], { cwd: dir, encoding: 'utf8' });
     const sources = JSON.parse(r.stdout || '[]').filter(arg => arg.endsWith('.swift'));
     assert.equal(sources.length, 2, r.stderr);
