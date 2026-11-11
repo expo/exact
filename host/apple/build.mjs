@@ -154,15 +154,35 @@ export function deploymentTargets(app) {
  *  an install paid 113–264 ms inside the commit that shows it. The host
  *  tests need Xcode's Metal toolchain for it (`required`); an app built
  *  without it gets `null`, and its filter pictures draw with Core Image. */
+/** `metal --version` for an SDK, kept: off a Mac the compiler runs under Wine (about a second a call, several per build),
+ * so its answer is kept on disk by the compiler file's size and time, and in this process. */
+const metalVersions = new Map();
+export function metalVersion(sdkName) {
+  if (metalVersions.has(sdkName)) return metalVersions.get(sdkName);
+  const tool = process.env.EXACT_APPLE_METAL_TOOLS && resolve(process.env.EXACT_APPLE_METAL_TOOLS, 'bin/metal.exe');
+  const stamp = tool && existsSync(tool) ? `${statSync(tool).size}-${statSync(tool).mtimeMs}` : null;
+  const file = stamp && resolve(root, 'target', 'metal-kept', `version-${sdkName}.json`);
+  if (file) try { const kept = JSON.parse(readFileSync(file, 'utf8')); if (kept.stamp === stamp) { metalVersions.set(sdkName, kept.result); return kept.result; } } catch {}
+  const r = read('xcrun', ['-sdk', sdkName, 'metal', '--version']), result = { status: r.status, stdout: r.stdout };
+  if (file && r.status === 0) try { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, JSON.stringify({ stamp, result })); } catch {}
+  metalVersions.set(sdkName, result);
+  return result;
+}
 export function svgFilterLibrary(sdkName, minimum, out, required = false) {
-  const install = metalToolchainInstructions(), missing = read('xcrun', ['-sdk', sdkName, 'metal', '--version']).status !== 0;
+  const version = metalVersion(sdkName), install = metalToolchainInstructions(), missing = version.status !== 0;
   if (missing && required) throw new Error(`host/apple: this build requires the Metal toolchain for its SVG filter kernels. ${install}`);
   if (missing) return console.warn(`host/apple: no Metal toolchain, so no ${svgFilterLibraryName}: SVG filter pictures draw with Core Image. ${install}`), null;
   const flag = { iphoneos: `-mios-version-min=${minimum}`, iphonesimulator: `-mios-simulator-version-min=${minimum}`, appletvos: `-mtvos-version-min=${minimum}`, appletvsimulator: `-mtvos-simulator-version-min=${minimum}`, macosx: `-mmacosx-version-min=${minimum}` }[sdkName];
+  // Kept by what it is made of (the kernel source, the SDK, the deployment flag and the compiler), shared by every app.
+  const source = resolve(root, 'host/apple/metal/SvgFilter.metal');
+  const key = createHash('sha256').update(JSON.stringify([readFileSync(source, 'utf8'), sdkName, flag, version.stdout])).digest('hex').slice(0, 20);
+  const kept = resolve(root, 'target', 'metal-kept', `${key}-${svgFilterLibraryName}`);
+  if (existsSync(kept)) { copyFileSync(kept, out); return out; }
   const air = out.replace(/\.metallib$/, '') + '.air';
-  run('xcrun', ['-sdk', sdkName, 'metal', '-std=metal3.0', flag, '-c', resolve(root, 'host/apple/metal/SvgFilter.metal'), '-o', air], { stdio: 'pipe' });
+  run('xcrun', ['-sdk', sdkName, 'metal', '-std=metal3.0', flag, '-c', source, '-o', air], { stdio: 'pipe' });
   run('xcrun', ['-sdk', sdkName, 'metallib', air, '-o', out], { stdio: 'pipe' });
   rmSync(air, { force: true });
+  try { mkdirSync(dirname(kept), { recursive: true }); copyFileSync(out, `${kept}.${process.pid}.tmp`); renameSync(`${kept}.${process.pid}.tmp`, kept); } catch {}
   return out;
 }
 export const svgFilterLibraryName = 'ExactSvgFilter.metallib';
@@ -716,7 +736,8 @@ async function main(args, lockHeld = false) {
   const swiftWhole = production || distribution;
   // One `swift build` per product: given two `--product` flags SwiftPM
   // builds only the last; the second build is incremental and quick.
-  const swiftArgs = ['build', '-c', swiftWhole ? 'release' : 'debug', '--scratch-path', swiftBuildRoot, ...(swiftWhole ? [] : ['-Xswiftc', '-O']),
+  // A development archive (--development) ships no dSYM, so SwiftPM writes no debug info for dsymutil to gather (~5 s).
+  const swiftArgs = ['build', '-c', swiftWhole ? 'release' : 'debug', '--scratch-path', swiftBuildRoot, ...(swiftWhole ? [] : ['-Xswiftc', '-O']), ...(args.includes('--development') ? ['-debug-info-format', 'none'] : []),
     ...(production && optimize === 'size' ? ['-Xswiftc', '-Osize', '-Xswiftc', '-Xfrontend', '-Xswiftc', '-internalize-at-link'] : [])];
   if (ios) {
     swiftArgs.push(
@@ -824,7 +845,7 @@ async function main(args, lockHeld = false) {
   const moduleLibDir = resolve(moduleTarget, target, cargoProfile);
   mkdirSync(moduleTarget, { recursive: true });
   startSweep(moduleTarget);
-  const metalTools = read('xcrun', ['-sdk', 'macosx', 'metal', '--version']), metal = metalTools.status === 0;
+  const metalTools = metalVersion('macosx'), metal = metalTools.status === 0;
   if (!metal) console.warn(`host/apple: no Metal toolchain, so no Canvas 2D GPU module: canvases draw with Core Graphics. ${metalToolchainInstructions()}`);
   // A development build takes a module some checkout of this machine has
   // already compiled from these bytes, and keeps each one it compiles itself
