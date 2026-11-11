@@ -42,6 +42,9 @@ package protocol GroupedLists: AnyObject {
     func scrollAnchors(for id: UInt32) -> [(node: NodeView, y: CGFloat)]
     /// Whether a list draws `id` (a row, or a row's toggle or detail button).
     func draws(_ id: UInt32) -> Bool
+    /// The collection view whose row `id` is, custom or standard: its own
+    /// context menu opens the row's (`ContextMenuHost.listMenu`).
+    func rowList(_ id: UInt32) -> UICollectionView?
     /// A route's screen is about to show again (a pop back to it, with the
     /// transition it rides, if any): the rows its lists kept selected under
     /// the screen they pushed let go (LLP 1115.000 D11.3).
@@ -91,13 +94,15 @@ package enum GroupedListsLink {
 #endif
 
 #if os(iOS)
-package protocol GroupedMenuSurface: AnyObject {
-    var menuSource: NodeView? { get }
-}
-
 extension Presenter {
-    package func syncGroupedMenu(on view: UIView & GroupedMenuSurface) {
-        menus.context.syncProjected(view)
+    /// Row `id`'s menu, which its list's collection view asks for
+    /// (`collectionView(_:contextMenuConfigurationForItemsAt:point:)`) at
+    /// `point` in the collection view.
+    package func groupedMenu(row id: UInt32, at point: CGPoint, in collection: UICollectionView) -> UIContextMenuConfiguration? {
+        menus.context.listMenu(row: id, at: point, in: collection)
     }
+    /// What a list's own context menu tells the menu host as it shows, ends
+    /// and commits, as a node's interaction tells it.
+    package var groupedMenus: UIContextMenuInteractionDelegate { menus.context }
 }
 #endif

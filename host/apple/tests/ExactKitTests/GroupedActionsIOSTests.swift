@@ -28,6 +28,7 @@ final class GroupedActionsIOSTests: GroupedListFixture {
     }
 
     func testAStandardRowsContextMenuLiftsItsNativeCellAndFollowsReuse() throws {
+        if ExactEnv.agentPaints { throw XCTSkip("the agent paints the popover (D4)") }
         let p = presenter { self.model() }
         defer { window.isHidden = true }
         let row = try XCTUnwrap(p.views[10])
@@ -38,18 +39,22 @@ final class GroupedActionsIOSTests: GroupedListFixture {
             ["op": "children", "id": 40, "ids": [41]],
             ["op": "children", "id": 1, "ids": [2, 3, 40]],
         ]))
-        let native = try cell(p, 10)
-        let interaction = try XCTUnwrap(native.interactions.compactMap { $0 as? UIContextMenuInteraction }.first)
+        let native = try cell(p, 10), collection = try list(p).collection
+        XCTAssertFalse(native.interactions.contains { $0 is UIContextMenuInteraction }, "no interaction of its own")
+        let delegate = try XCTUnwrap(collection.delegate), path = try XCTUnwrap(collection.indexPath(for: native))
+        let point = native.convert(CGPoint(x: 20, y: 20), to: collection)
         let menu = p.menus.context
-        let configuration = try XCTUnwrap(menu.contextMenuInteraction(interaction, configurationForMenuAtLocation: CGPoint(x: 20, y: 20)))
-        XCTAssertTrue(menu.contextMenuInteraction(interaction, configuration: configuration, highlightPreviewForItemWithIdentifier: configuration.identifier)?.view === native)
+        let configuration = try XCTUnwrap(delegate.collectionView?(collection, contextMenuConfigurationForItemsAt: [path], point: point))
         let owner = try XCTUnwrap(menu.open)
         XCTAssertTrue(owner.source === row)
         XCTAssertEqual(menu.menu(owner)?.children.count, 1)
-        menu.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil)
+        XCTAssertFalse(delegate.responds(to: #selector(UICollectionViewDelegate.collectionView(_:contextMenuConfiguration:highlightPreviewForItemAt:))),
+                       "UIKit lifts the cell itself")
+        delegate.collectionView?(collection, willEndContextMenuInteraction: configuration, animator: nil)
+        XCTAssertNil(menu.open)
         row.applyProps(set: [:], clear: ["contextPopover"])
         try list(p).mount()
-        XCTAssertFalse(native.interactions.contains { $0 is UIContextMenuInteraction })
+        XCTAssertNil(delegate.collectionView?(collection, contextMenuConfigurationForItemsAt: [path], point: point), "a row without its menu has none")
     }
 
     func testALabelledTextSpeaksItsWordsAsItsValue() {

@@ -692,11 +692,11 @@ final class GroupedCustomRowsIOSTests: GroupedListFixture {
         XCTAssertFalse(cell.accessibilityElementsHidden, "VoiceOver reads it")
     }
 
-    /// A custom row's peek lifts its cell, as UIKit lifts the cells it draws
-    /// itself: its ground, selected, highlighted or the card's, in its
-    /// background's shape (`ContextMenuHost.targeted`); a plain list's ground
-    /// is the cell's whole width.
-    func testACustomRowsPeekLiftsItsCellInItsGroundsShape() throws {
+    /// A custom row's peek is its list's own context menu, as a hand-built
+    /// list's is: the row has no interaction of its own, and the collection
+    /// view asks for the menu and lifts the cell itself, in its background's
+    /// shape over the ground below it (`GroupedListMenusIOS`).
+    func testACustomRowsPeekIsItsListsOwnContextMenu() throws {
         if ExactEnv.agentPaints { throw XCTSkip("the agent paints the popover (D4)") }
         let p = presenter(props: ["listStyle": "plain"]) { self.model("plain", custom: true) }
         p.apply(wireBatch([
@@ -712,14 +712,17 @@ final class GroupedCustomRowsIOSTests: GroupedListFixture {
         p.menus.context.sync()
         let row = try XCTUnwrap(p.views[21]), cell = try cell(p, 21)
         XCTAssertTrue(row.superview === cell.contentView, "carried into its cell")
-        let host = p.menus.context
-        let interaction = try XCTUnwrap(row.interactions.compactMap { $0 as? UIContextMenuInteraction }.first, "the row's peek is UIKit's context menu")
-        let configuration = try XCTUnwrap(host.contextMenuInteraction(interaction, configurationForMenuAtLocation: CGPoint(x: 20, y: 10)))
-        let lifted = try XCTUnwrap(host.contextMenuInteraction(interaction, configuration: configuration, highlightPreviewForItemWithIdentifier: configuration.identifier))
-        XCTAssertTrue(lifted.view === cell, "the row lifts with its cell")
-        let shape = lifted.parameters.visiblePath?.bounds ?? .null
-        XCTAssertTrue(shape.insetBy(dx: -0.01, dy: -0.01).contains(cell.bounds) && cell.bounds.insetBy(dx: -0.01, dy: -0.01).contains(shape), "its whole width: \(shape)")
-        host.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil)
+        XCTAssertTrue(row.interactions.compactMap { $0 as? UIContextMenuInteraction }.isEmpty, "no interaction of its own")
+        let collection = try XCTUnwrap(sequence(first: cell.superview, next: { $0?.superview }).compactMap { $0 as? UICollectionView }.first)
+        XCTAssertNotNil(collection.contextMenuInteraction, "the list's own context menu")
+        let delegate = try XCTUnwrap(collection.delegate), path = try XCTUnwrap(collection.indexPath(for: cell))
+        let configuration = try XCTUnwrap(delegate.collectionView?(collection, contextMenuConfigurationForItemsAt: [path], point: cell.convert(CGPoint(x: 20, y: 10), to: collection)))
+        XCTAssertTrue(p.menus.context.open?.source === row)
+        XCTAssertNotNil(p.menus.context.menu(try XCTUnwrap(p.menus.context.open)))
+        XCTAssertFalse(delegate.responds(to: #selector(UICollectionViewDelegate.collectionView(_:contextMenuConfiguration:highlightPreviewForItemAt:))),
+                       "UIKit lifts the cell itself")
+        delegate.collectionView?(collection, willEndContextMenuInteraction: configuration, animator: nil)
+        XCTAssertNil(p.menus.context.open)
     }
 }
 #endif

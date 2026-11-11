@@ -18,7 +18,6 @@ final class GroupedCell: UICollectionViewListCell {
         return state
     }
     #if os(iOS)
-    weak var menuSource: NodeView?
     private var detailButton: UIButton?
     private var detailAction: (() -> Void)?
 
@@ -122,6 +121,3 @@ extension UICollectionViewListCell {
 }
 #endif
 
-#if os(iOS)
-extension GroupedCell: GroupedMenuSurface {}
-#endif

@@ -1,7 +1,8 @@
 // @ref LLP 1021 §5.1 — the context menu on UIKit: a node naming a popover
-// with `contextPopover` gets a UIContextMenuInteraction. UIKit owns the long
-// press, the lift of the node itself (its targeted preview), the menu's
-// placement and the morph. The popover's menu rows are the UIMenu (D3's
+// with `contextPopover` gets a UIContextMenuInteraction, and a list's row
+// its collection view's own, which lifts the row's cell (`listMenu`). UIKit
+// owns the long press, the lift of the node itself (its targeted preview),
+// the menu's placement and the morph. The popover's menu rows are the UIMenu (D3's
 // extraction), and its `contextPreview` row, moved out of the hidden popover
 // into the preview controller's view, is the preview, sized by its layout.
 // Tapping the preview presses that row (UIKit's commit): a press that
@@ -98,15 +99,11 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         view.interactions.compactMap { $0 as? UIContextMenuInteraction }.filter { $0.delegate === self }
     }
 
-    func syncProjected(_ view: UIView & GroupedMenuSurface) {
-        syncProjected(view, source: view.menuSource)
-    }
     func syncTitle(_ view: HeaderTitleView) {
         syncProjected(view, source: view.menuSource)
     }
     private func projectedSource(_ view: UIView) -> NodeView? {
-        if let title = view as? HeaderTitleView { return title.menuSource }
-        return (view as? GroupedMenuSurface)?.menuSource
+        (view as? HeaderTitleView)?.menuSource
     }
     private func syncProjected(_ view: UIView, source: NodeView?) {
         let key = ObjectIdentifier(view)
@@ -147,10 +144,13 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             restore(owner)
         }
         if let owner = open, let pop = current(owner) { menus?.rejectActiveMenuProperties(in: pop) }
-        var wanted: [UInt32: NodeView] = [:]
+        var wanted: [UInt32: NodeView] = [:], listed: [NodeView] = []
         if !ExactEnv.agentPaints {
             for v in presenter.textViews.values where v.hasInlineContextPopover { wanted[v.id] = v }
-            for v in presenter.carrying("contextPopover") where v.props["contextPopover"]?.isEmpty == false { wanted[v.id] = v }
+            for v in presenter.carrying("contextPopover") where v.props["contextPopover"]?.isEmpty == false {
+                // A list's row opens its list's own menu (`listMenu`)
+                if presenter.groupedLists?.rowList(v.id) != nil { listed.append(v) } else { wanted[v.id] = v }
+            }
         }
         for (key, interaction) in projected {
             if let view = interaction.view { syncProjected(view, source: projectedSource(view)) }
@@ -195,6 +195,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             }
             v.contextRecognizer?.isEnabled = (v.handlers.contains("contextmenu") && v.props["contextPopover"]?.isEmpty != false) || v.hasInlinePlainContextMenu
         }
+        for v in listed { v.contextRecognizer?.isEnabled = v.hasInlinePlainContextMenu }
     }
 
     /// A frame op on the lifted row: the frame it has in its popover, which
@@ -294,7 +295,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     private func current(_ owner: Open) -> NodeView? {
         if owner.titleSurface != nil, open !== owner || owner.touched == nil { return nil }
         // A cell may have been reused while UIKit still holds its menu.
-        if let view = owner.interaction?.view, !(view is NodeView), !(view is PresentationMount), projectedSource(view) !== owner.source { return nil }
+        if let view = owner.interaction?.view, !(view is NodeView), !(view is PresentationMount), !(view is UICollectionView),
+           projectedSource(view) !== owner.source { return nil }
         // Its own action, which has run, may have disabled, hidden or moved it.
         guard let source = owner.source, live(source), source.incarnation == owner.sourceIncarnation, contextName(owner) == owner.name,
               eligible(source, titleSurface: owner.titleSurface), let pop = popover(named: owner.name) else { return nil }
@@ -328,7 +330,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     }
 
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, configurationForMenuAtLocation location: CGPoint) -> UIContextMenuConfiguration? {
-        guard let menus, let view = interaction.view else { return nil }
+        guard let view = interaction.view else { return nil }
         let source: NodeView, point: CGPoint, hit: UIView?
         if let node = view as? NodeView {
             source = node; point = location; hit = node.hitTest(location, with: nil)
@@ -339,6 +341,28 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             // menu, unless a node in the sheet is nearer (`MountRelay`)
             source = found; point = mount.convert(location, to: found); hit = mount.hitTest(location, with: nil)
         } else { return nil }
+        return configuration(interaction, at: location, in: view, source: source, point: point, hit: hit)
+    }
+
+    /// Row `id`'s menu, which its list's collection view asks for at
+    /// `location` in it: a custom row is its own view in its cell; a
+    /// standard row's node is hidden, and its cell stands for it, as it does
+    /// for the row's press. UIKit lifts the cell itself.
+    func listMenu(row id: UInt32, at location: CGPoint, in collection: UICollectionView) -> UIContextMenuConfiguration? {
+        guard !ExactEnv.agentPaints, let interaction = collection.contextMenuInteraction, let source = presenter?.views[id] else { return nil }
+        if source.isDescendant(of: collection) {
+            let point = source.convert(location, from: collection)
+            return configuration(interaction, at: location, in: collection, source: source, point: point, hit: source.hitTest(point, with: nil))
+        }
+        guard let path = collection.indexPathForItem(at: location), let cell = collection.cellForItem(at: path) else { return nil }
+        return configuration(interaction, at: location, in: collection, source: source, point: cell.convert(location, from: collection), hit: cell)
+    }
+
+    /// The menu of `source`, pressed at `point` in it, for `interaction`
+    /// on `view` at `location`; `hit` is the view the press fell on.
+    private func configuration(_ interaction: UIContextMenuInteraction, at location: CGPoint, in view: UIView, source: NodeView,
+                               point: CGPoint, hit: UIView?) -> UIContextMenuConfiguration? {
+        guard let menus else { return nil }
         let titleSurface = (view as? HeaderTitleView).map(ObjectIdentifier.init)
         let run = source.inlineContextTarget(at: point)
         guard live(source), let name = run?.props["contextPopover"] ?? (run == nil ? source.props["contextPopover"] : nil),
@@ -486,10 +510,10 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     }
 
     /// UIKit lifts the node itself, live, clipped to its outline (LLP 1021
-    /// §5.1): it hides the node, lifts it and returns it, or the list cell
-    /// that draws it, in its background's shape (`cell(drawing:)`), or a node
-    /// painting no ground of its own in the grounds the nodes inside it paint
-    /// (`grounds(in:)`). A run of text cannot lift its paragraph, which UIKit
+    /// §5.1): it hides the node, lifts it and returns it, or a node painting
+    /// no ground of its own in the grounds the nodes inside it paint
+    /// (`grounds(in:)`). A list's row is its list's, whose cell UIKit lifts
+    /// (`listMenu`). A run of text cannot lift its paragraph, which UIKit
     /// would hide whole: it lifts a picture of what lies under the run's lines
     /// (`runPreview`), and the paragraph stays shown. All rise over `container(of:)`.
     private func targeted(_ configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
@@ -513,13 +537,6 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             shown = title.avatar
             parameters.visiblePath = UIBezierPath(cgPath: BorderPaint.roundedRect(shown.bounds, face.corners, shape: nil))
             parameters.backgroundColor = .clear
-        } else if let cell = Self.cell(drawing: shown), let background = cell.backgroundConfiguration {
-            // A row a list's cell draws lifts as UIKit lifts the cells it draws
-            // itself: the cell, its ground included (selected, highlighted or the
-            // card's), in its background's shape, one radius UIKit keeps through
-            // the morph as it keeps `rounded`'s.
-            shown = cell
-            parameters.visiblePath = Self.shape(of: background, in: cell)
         } else {
             parameters.visiblePath = Self.rounded(shown)
         }
@@ -557,26 +574,6 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             return UIBezierPath(roundedRect: node.bounds, cornerRadius: corner.width)
         }
         return corners.contains(where: { $0.width > 0 }) ? node.roundedPath(in: node.bounds) : nil
-    }
-
-    /// The list cell drawing `view`: the cell itself, or the cell whose content view carries it.
-    private static func cell(drawing view: UIView) -> UICollectionViewCell? {
-        if let cell = view as? UICollectionViewCell { return cell }
-        guard let content = view.superview, let cell = content.superview as? UICollectionViewCell, cell.contentView === content else { return nil }
-        return cell
-    }
-    /// A cell's background as its configuration draws it: the cell's bounds
-    /// less the configuration's insets, with its corner radius.
-    private static func shape(of background: UIBackgroundConfiguration, in cell: UICollectionViewCell) -> UIBezierPath {
-        var insets = background.backgroundInsets
-        let margins = cell.directionalLayoutMargins, edges = background.edgesAddingLayoutMarginsToBackgroundInsets
-        if edges.contains(.top) { insets.top += margins.top }
-        if edges.contains(.leading) { insets.leading += margins.leading }
-        if edges.contains(.bottom) { insets.bottom += margins.bottom }
-        if edges.contains(.trailing) { insets.trailing += margins.trailing }
-        let rtl = cell.effectiveUserInterfaceLayoutDirection == .rightToLeft
-        let box = cell.bounds.inset(by: UIEdgeInsets(top: insets.top, left: rtl ? insets.trailing : insets.leading, bottom: insets.bottom, right: rtl ? insets.leading : insets.trailing))
-        return UIBezierPath(roundedRect: box, cornerRadius: background.cornerRadius)
     }
 
     /// The grounds the nodes inside `view` paint, in `view`'s space, joined

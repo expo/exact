@@ -314,6 +314,7 @@ final class GroupedListHost: GroupedLists {
     /// Whether a list draws `id` (a row, or a row's toggle or detail
     /// button): the agent finds it in UIKit's cell, not the hidden row.
     func draws(_ id: UInt32) -> Bool { list(drawing: id) != nil }
+    func rowList(_ id: UInt32) -> UICollectionView? { lists.values.first { $0.rows[id] != nil }?.collection }
 
     /// A route's screen is coming back into view: the rows its lists kept
     /// selected under the screen they pushed let go (LLP 1115.000 D11.3).
@@ -1435,12 +1436,6 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         assign(cell, \.isUserInteractionEnabled, !inert)
         assign(cell, \.accessibilityElementsHidden, inert)
         let node = host.presenter.views[id]
-        #if os(iOS)
-        if let cell = cell as? GroupedCell {
-            cell.menuSource = rows[id]?.custom == false ? node : nil
-            host.presenter.syncGroupedMenu(on: cell)
-        }
-        #endif
         // Reading a list cell's traits searches its subviews: only a cell marked before or now does.
         let unavailable = node?.disabled == true || node?.ariaUnavailable == true
         if let cell = cell as? GroupedCell, !unavailable, !cell.markedNotEnabled { return }

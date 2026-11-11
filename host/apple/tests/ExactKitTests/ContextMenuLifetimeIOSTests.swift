@@ -62,32 +62,6 @@ final class ContextMenuLifetimeIOSTests: XCTestCase {
         XCTAssertNil(p.menus.context.open)
     }
 
-    private final class ProjectedCell: UIView, GroupedMenuSurface {
-        var menuSource: NodeView?
-    }
-
-    func testProjectedContextMenuFollowsThePresentationOwnerAndRetiresOnReuse() throws {
-        let p = presenter(kind: "view")
-        defer { p.menus.reset(); window.isHidden = true }
-        let cell = ProjectedCell(frame: CGRect(x: 0, y: 200, width: 400, height: 60))
-        p.viewport.addSubview(cell)
-        cell.menuSource = try XCTUnwrap(p.views[1])
-        p.menus.context.syncProjected(cell)
-        let interactions = cell.interactions.compactMap { $0 as? UIContextMenuInteraction }
-        XCTAssertEqual(interactions.count, ExactEnv.agentPaints ? 0 : 1)
-        if !ExactEnv.agentPaints {
-            let interaction = try XCTUnwrap(interactions.first)
-            let configuration = try XCTUnwrap(p.menus.context.contextMenuInteraction(interaction, configurationForMenuAtLocation: .zero))
-            XCTAssertNotNil(p.menus.context.menu(try XCTUnwrap(p.menus.context.open)))
-            p.menus.context.contextMenuInteraction(interaction, willEndFor: configuration, animator: nil)
-            XCTAssertNil(p.menus.context.open)
-        }
-        cell.menuSource = nil
-        p.menus.context.syncProjected(cell)
-        XCTAssertTrue(cell.interactions.isEmpty, "reuse removes the menu and its UIKit companions")
-        XCTAssertNil(p.menus.context.open)
-    }
-
     func testDisabledOnAContainerDoesNotSuppressItsContextMenu() throws {
         let p = presenter(kind: "view")
         defer { p.menus.reset(); window.isHidden = true }
