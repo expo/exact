@@ -2607,6 +2607,10 @@ if let scroll = arrangement.viewController(for: .secondary)?.contentScrollView(f
 }
 ```
 
+A pane's view controller reports its scroll view only while UIKit insets the pane, so it
+reports none for a pane UIKit hides. A pane `scroll` with an element hatch always has its
+scroller in the hatch's `element.scrollView`.
+
 The route hatch's `contentScrollView` is the actual selected view, including a
 native collection view or an app-owned `UIScrollView`.
 
@@ -2622,7 +2626,10 @@ folds and resizes preserve their controls, bindings and state. Older systems and
 other hosts use the authored CSS layout. Duo Lab's
 [Panes screen](../apps/duo-lab/arrangement.contract) and
 [hatch](../apps/duo-lab/modules/apple/ArrangedPanes.swift) use UIKit split and overlay
-arrangements and responsive CSS elsewhere. See Apple's
+arrangements and responsive CSS elsewhere. Duo Lab's
+[Arrangement screen](../apps/duo-lab/arrangement-view.contract) sets title display, bar
+minimization, safe-area adjustment and the bar's scroll view through the
+[route hatch](../apps/duo-lab/modules/apple/ArrangementOptions.swift). See Apple's
 [arrangement guidance](https://developer.apple.com/design/human-interface-guidelines/designing-for-iphone-duo).
 
 ## Routes and web documents

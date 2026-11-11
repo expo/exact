@@ -4,6 +4,9 @@ shape PaneViewport
   horizontalViewportSegments: number
   verticalViewportSegments: number
 
+// The panes' CSS direction: side by side across a vertical fold or in a wide window, else stacked
+fn paneDirection(v: PaneViewport): string = v.horizontalViewportSegments == 2 or (v.verticalViewportSegments != 2 and v.width >= 700) ? "row" : "column"
+
 component ArrangementScreen
   props
     openNext: action
@@ -18,7 +21,7 @@ component ArrangementScreen
   derive active = nativeArrangement ? mode : "css"
   derive across = viewport.horizontalViewportSegments == 2
   derive down = viewport.verticalViewportSegments == 2
-  derive direction = across or (not down and viewport.width >= 700) ? "row" : "column"
+  derive direction = paneDirection(viewport)
   derive anchored = active == "css" and (across or down)
   action layout(value: string)
     mode = value

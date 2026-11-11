@@ -1,4 +1,18 @@
 tamber duolab
 
+// The Arrangement screen's pane tints: iOS 27's systemBlue and systemOrange at
+// the UIKit app's alphas (12% under the pane, 30% and 16% on alternate rows).
+// They are fixed light and dark pairs, without the colours' increased-contrast
+// values, until a system colour can take an alpha (LLP 1095 D10).
+theme
+  pane.primary = light-dark(rgb(0 136 255 / 0.12), rgb(0 145 255 / 0.12))
+  pane.primary.stripe = light-dark(rgb(0 136 255 / 0.30), rgb(0 145 255 / 0.30))
+  pane.primary.band = light-dark(rgb(0 136 255 / 0.16), rgb(0 145 255 / 0.16))
+  pane.secondary = light-dark(rgb(255 141 40 / 0.12), rgb(255 146 48 / 0.12))
+  pane.secondary.stripe = light-dark(rgb(255 141 40 / 0.30), rgb(255 146 48 / 0.30))
+  pane.secondary.band = light-dark(rgb(255 141 40 / 0.16), rgb(255 146 48 / 0.16))
+
 icons
   icon.keyboard = icon(sf "keyboard", svg "icons/keyboard.svg")
+  icon.split = icon(sf "rectangle.split.2x1", svg "icons/split.svg")
+  icon.next = icon(sf "arrow.right", svg "icons/next.svg")

@@ -18,8 +18,14 @@ final class DuoArrangements {
             let cached = containers[key]
             let controller = cached?.controller as? UIArrangementViewController ?? UIArrangementViewController()
             if cached?.mode != mode {
-                if mode == "overlay" { controller.updateArrangement(.overlay) }
-                else { controller.updateArrangement(.split) }
+                // Animate a change on screen; one made off screen has nothing to animate
+                let animated = controller.viewIfLoaded?.window != nil
+                switch mode {
+                case "horizontal": controller.updateArrangement(.split.axes(.horizontal), animated: animated)
+                case "vertical": controller.updateArrangement(.split.axes(.vertical), animated: animated)
+                case "overlay": controller.updateArrangement(.overlay, animated: animated)
+                default: controller.updateArrangement(.split, animated: animated)
+                }
             }
             if element.arrange(using: controller) { containers[key] = (controller, mode) }
         }

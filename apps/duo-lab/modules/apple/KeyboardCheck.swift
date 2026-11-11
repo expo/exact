@@ -256,20 +256,29 @@ private final class DuoModule: ExactModule {
     override func element(_ value: ExactElement) {
         arrangements.update(value)
         #if os(iOS)
+        options.update(value)
         check.update(value)
         #endif
     }
     override func elementEnded(_ value: ExactElement) {
         arrangements.remove(value)
         #if os(iOS)
+        options.remove(value)
         check.remove(value)
         #endif
     }
     #if os(iOS)
+    private let options = ArrangementOptions()
     private lazy var check = KeyboardCheck(temporary: context.temporary)
     override func navigation(_ value: ExactNavigation) { check.install(value) }
-    override func route(_ value: ExactRoute) { check.update(value) }
-    override func routeEnded(_ value: ExactRoute) { check.remove(value) }
+    override func route(_ value: ExactRoute) {
+        options.update(value)
+        check.update(value)
+    }
+    override func routeEnded(_ value: ExactRoute) {
+        options.remove(value)
+        check.remove(value)
+    }
     override func destroy() { check.stop() }
     #endif
 }

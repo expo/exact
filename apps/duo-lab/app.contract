@@ -1,4 +1,5 @@
 use ArrangementScreen from "./arrangement.contract"
+use ArrangementView, ArrangementSettings from "./arrangement-view.contract"
 
 // Duo Lab (LLP 1078 D8): the first consumer of `device-posture` and the
 // viewport segments, and the iPhone Duo's stress fixture — what
@@ -12,6 +13,8 @@ use ArrangementScreen from "./arrangement.contract"
 // an absolutely positioned sheet holding a textarea, so keyboard + sheet +
 // pushed screen + fold is one sequence of taps. Keyboard adds physical-device
 // checks with an app-local geometry recorder and a native share sheet.
+// Arrangement is a UIKit app's arrangement screen: two scrolling panes in a
+// `UIArrangementViewController`, with the bar's options.
 
 routes nav
   tab fold "/"
@@ -25,6 +28,8 @@ routes nav
     keyboard-editor "/keyboard/editor"
     keyboard-form "/keyboard/form"
     keyboard-search "/keyboard/search"
+  tab arrangement "/arrangement"
+    arrangement-next "/arrangement/:depth"
 
 // The web's vocabulary, exactly (LLP 1078 D1, D2): two postures, two counts.
 shape Viewport
@@ -122,6 +127,8 @@ component DuoLab
   resource doc = document() as shape Document
   resource feed = feed() as shape FeedRow[]
   resource keyboardRows = keyboardRows() as shape KeyboardRow[]
+  // The settings the next Arrangement screen starts with: those of the screen that pushes it
+  state arrangementSeed = ArrangementSettings(layout="split", titleDisplay="automatic", barMinimization="automatic", safeAreaAdjustment="automatic", contentScroll="automatic")
   // Shared across the Fold screen's two layouts: a fold mid-reading keeps the item.
   state selected = 1
   state title = ""
@@ -162,10 +169,16 @@ component DuoLab
     nav = push(nav, path("note"))
   action openPanesNext
     nav = push(nav, path("panes-next"))
+  action openArrangement(settings: ArrangementSettings, depth: number)
+    arrangementSeed = settings
+    nav = push(nav, path("arrangement-next", depth))
   action back
     nav = back(nav)
+  // A location on the shown tab moves through its stack, back to a screen already there for the
+  // platform's Back; one of another tab opens on that tab, where this view draws its screens
   action navigate(location: string)
-    nav = open(nav, location)
+    let opened = open(nav, location)
+    nav = opened.tab == nav.tab ? go(nav, location) : opened
   action writeTitle(value: string)
     title = value
   action write(value: string)
@@ -215,7 +228,7 @@ component DuoLab
       column flex=1 min-height=0 position="relative"
         for t in nav.tabs key=t.name
           column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
-            for entry in t.stack key=entry.id
+            for entry, i in t.stack key=entry.id
               if t.name == "keyboard"
                 column navigationKey=`${entry.id}` navigationScroll=`keyboard-scroll-${entry.id}` id=`keyboard-route-${entry.id}` hatch="keyboard-route" data-keyboard-screen=entry.name data-focus-on-show=(entry.name == "keyboard-editor" ? "keyboard-editor" : entry.name == "keyboard" and returnFocus ? "keyboard-return" : "") class=Screen background-color=((entry.name == "keyboard" or entry.name == "keyboard-form") ? "-exact-grouped-background" : "Canvas") testId=`screen-${entry.name}`
                   header class=Head display="flex" align-items="center" gap=8
@@ -328,7 +341,9 @@ component DuoLab
                   ArrangementScreen(routeKey=`${entry.id}`, routeName=entry.name, prefix="panes", title="Panes", nextTitle="Next", openNext=openPanesNext, nativeArrangement=paneSupport.available)
                 else
                   ArrangementScreen(routeKey=`${entry.id}`, routeName=entry.name, prefix="pushed", title="Pushed panes", nextTitle="Back", openNext=back, nativeArrangement=paneSupport.available)
-              if entry.name != "images" and entry.name != "reflow" and t.name != "keyboard" and t.name != "panes"
+              if t.name == "arrangement"
+                ArrangementView(routeKey=`${entry.id}`, depth=i + 1, native=paneSupport.available, seed=arrangementSeed, openNext=openArrangement)
+              if entry.name != "images" and entry.name != "reflow" and t.name != "keyboard" and t.name != "panes" and t.name != "arrangement"
                 column navigationKey=`${entry.id}` navigationBar="none" class=Screen testId=`screen-${entry.name}`
                   if entry.name == "fold"
                     // Two segments across: the list on the first, the detail on the
@@ -415,6 +430,9 @@ component DuoLab
         button role="tab" aria-controls="panel-keyboard" aria-selected=(nav.tab == "keyboard") press=selectTab("keyboard") testId="tab-keyboard" flex=1
           image "symbol:icon.keyboard"
           text "Keyboard"
+        button role="tab" aria-controls="panel-arrangement" aria-selected=(nav.tab == "arrangement") press=selectTab("arrangement") testId="tab-arrangement" flex=1
+          image "symbol:icon.split"
+          text "Arrange"
 
 // The three facts and the viewport, printed so a screenshot is its own evidence.
 component Facts
