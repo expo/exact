@@ -322,11 +322,9 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// controller.
     var stack: UIViewController? { (parent as? PlainTab) ?? navigationController }
 
-    private var projectingContentScrollView = false
     private(set) var nativeContentScrollEdges: NSDirectionalRectEdge = []
     var nativeContentScroller: NodeView? {
-        // UIKit's getter reports explicit selection only; nil keeps automatic scroll targeting.
-        guard let selected = contentScrollView(for: .top) else { return Presenter.firstVerticalScroller(under: node) }
+        guard let selected = contentScrollView(for: .top) else { return nil }
         var owner = (selected as? Viewport)?.documentNode
         var ancestor = selected.superview
         while owner == nil, let view = ancestor {
@@ -336,25 +334,49 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
         return owner.flatMap { $0 === node || $0.isDescendant(of: node) ? $0 : nil }
     }
 
-    /// Authored layout supplies defaults; an app's native selection owns that edge, including nil.
+    /// Exact's selection for the top edge: the scroller the title collapses with, else one drawn
+    /// through control bars there (LLP 1131 D2).
+    var automaticTopScroll: UIScrollView? { collapseScrollView ?? bandedTop }
+    /// Exact's selection for the bottom edge: the scroller at the route's bottom edge, else one drawn
+    /// through control bars there.
+    var automaticBottomScroll: UIScrollView? { edgeScroll?.scrollView ?? bandedBottom }
+
+    /// Select Exact's scroller for an edge the app leaves automatic. UIKit
+    /// makes an automatic selection by finding the scroll view itself, and it
+    /// cannot find an authored scroller through the route's views, so Exact's
+    /// selection stands in for it. An app's native selection holds the edge
+    /// until it selects nil, UIKit's automatic selection, again.
     func projectContentScrollView(_ scrollView: UIScrollView?, for edge: NSDirectionalRectEdge) {
         guard nativeContentScrollEdges.intersection(edge).isEmpty else { return }
-        projectingContentScrollView = true
-        defer { projectingContentScrollView = false }
-        setContentScrollView(scrollView, for: edge)
+        select(scrollView, for: edge)
+    }
+
+    /// An app's selection; Exact's own goes through `projectContentScrollView`.
+    override func setContentScrollView(_ scrollView: UIScrollView?, for edge: NSDirectionalRectEdge) {
+        if let scrollView {
+            // Exact selects only the top and bottom edges, the ones UIKit's bars follow
+            nativeContentScrollEdges.formUnion(edge.intersection([.top, .bottom]))
+            select(scrollView, for: edge)
+        } else {
+            // An app's nil makes the edges it selected automatic again, and the navigation host
+            // selects them as for a route no app touched. UIKit gets the nil first: the passes take
+            // an edge's current scroll view for Exact's last selection and would undo its insets.
+            let released = nativeContentScrollEdges.intersection(edge)
+            guard !released.isEmpty else { return }
+            nativeContentScrollEdges.subtract(released)
+            select(nil, for: released)
+            host?.selectScrollEdges(of: self)
+        }
+        #if os(iOS)
+        if edge.contains(.top) { host?.presenter.syncScrollsToTop() }
+        #endif
     }
 
     // A plain tab's tab bar follows the route's scroll views as a navigation controller's follows its top's.
-    override func setContentScrollView(_ scrollView: UIScrollView?, for edge: NSDirectionalRectEdge) {
-        if !projectingContentScrollView { nativeContentScrollEdges.formUnion(edge) }
+    private func select(_ scrollView: UIScrollView?, for edge: NSDirectionalRectEdge) {
         super.setContentScrollView(scrollView, for: edge)
         (parent as? PlainTab)?.setContentScrollView(scrollView, for: edge)
-        if edge.contains(.top) {
-            followTopEdge(scrollView)
-            #if os(iOS)
-            if !projectingContentScrollView { host?.presenter.syncScrollsToTop() }
-            #endif
-        }
+        if edge.contains(.top) { followTopEdge(scrollView) }
     }
 
     private var topEdgeWatch: NSKeyValueObservation?

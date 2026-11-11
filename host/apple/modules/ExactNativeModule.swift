@@ -723,8 +723,8 @@ public final class ExactRoute {
     public internal(set) var data: ExactData
     /// The route's content scroll view: its native top-edge selection, else the one named
     /// by `navigationScroll` or its first vertical scroller. Select with UIKit's
-    /// `controller.setContentScrollView(_:for:)`; nil leaves discovery to UIKit and
-    /// keeps the first vertical scroller as Exact's automatic scroll-to-top target.
+    /// `controller.setContentScrollView(_:for:)`; nil makes an edge automatic again, as in
+    /// UIKit, and Exact makes the selection that UIKit cannot make through Exact's views.
     /// An authored scroller's offset, insets, size and delegate remain Exact's.
     public internal(set) weak var contentScrollView: UIScrollView?
     /// Whether this call is the controller's first.

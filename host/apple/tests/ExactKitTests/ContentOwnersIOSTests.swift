@@ -333,10 +333,14 @@ final class ContentOwnersIOSTests: XCTestCase {
         let p = session.presenter, navigation = try XCTUnwrap(route.navigationController)
         let primary = try XCTUnwrap(first.scrollView), secondary = try XCTUnwrap(second.scrollView)
         route.setContentScrollView(primary, for: .bottom)
+        // nil is UIKit's automatic selection: the authored one, the pane `navigationScroll` names
+        // (pane-second from the second pass on)
         for selected in [secondary, primary, nil] as [UIScrollView?] {
             route.setContentScrollView(selected, for: .top)
-            XCTAssertTrue((selected ?? primary).scrollsToTop, "a native write updates scroll-to-top without an authored batch")
-            XCTAssertFalse((selected === secondary ? primary : secondary).scrollsToTop)
+            let target = selected ?? secondary
+            XCTAssertTrue(target.scrollsToTop, "a native write updates scroll-to-top without an authored batch")
+            XCTAssertFalse((target === secondary ? primary : secondary).scrollsToTop)
+            XCTAssertTrue(route.contentScrollView(for: .top) === target, "the bar follows the selection at once")
             route.node.props["navigationScroll"] = selected === secondary ? "pane-first" : "pane-second"
             p.navigation.prepareRoutes([route], in: navigation)
             p.apply(wireBatch([]))
@@ -345,24 +349,26 @@ final class ContentOwnersIOSTests: XCTestCase {
                 return abs(first.convert(first.bounds, to: route.view).minY) < 1
                     && abs(second.convert(second.bounds, to: route.view).minY) < 1
             }
-            XCTAssertTrue(route.contentScrollView(for: .top) === selected, "authored defaults do not overwrite a native selection, including nil")
+            XCTAssertTrue(route.contentScrollView(for: .top) === target, "authored defaults do not overwrite a native selection, and nil gives the edge back to them")
             XCTAssertTrue(route.contentScrollView(for: .bottom) === primary, "the other edge keeps its own native selection")
-            XCTAssertTrue(p.navigation.contentScrollView(of: route) === (selected ?? primary))
-            XCTAssertTrue(p.scrollsToTopTarget() === (selected ?? primary), "nil keeps automatic scroll-to-top instead of disabling it")
+            XCTAssertTrue(p.navigation.contentScrollView(of: route) === target)
+            XCTAssertTrue(p.scrollsToTopTarget() === target, "nil gives scroll-to-top back to the authored scroller")
             XCTAssertTrue([primary, secondary].allSatisfy { $0.contentInsetAdjustmentBehavior == .automatic })
         }
-        for selected in [secondary, nil] as [UIScrollView?] {
+        for selected in [primary, nil] as [UIScrollView?] {
             route.setContentScrollView(selected, for: .all)
-            XCTAssertTrue((selected ?? primary).scrollsToTop)
-            XCTAssertFalse((selected === secondary ? primary : secondary).scrollsToTop)
+            let target = selected ?? secondary
+            XCTAssertTrue(target.scrollsToTop)
+            XCTAssertFalse((target === secondary ? primary : secondary).scrollsToTop)
+            // Exact's bottom scroller here is the pane `navigationScroll` names
+            XCTAssertTrue(route.contentScrollView(for: .bottom) === target, "nil gives the bottom edge back to Exact's bottom scroller at once")
             p.navigation.prepareRoutes([route], in: navigation)
             p.apply(wireBatch([]))
             self.window?.layoutIfNeeded()
-            for edge in [NSDirectionalRectEdge.top, .bottom] {
-                XCTAssertTrue(route.contentScrollView(for: edge) === selected, "UIKit's all-edges selection survives projection")
-            }
-            XCTAssertTrue(p.navigation.contentScrollView(of: route) === (selected ?? primary))
-            XCTAssertTrue(p.scrollsToTopTarget() === (selected ?? primary))
+            XCTAssertTrue(route.contentScrollView(for: .top) === target, "UIKit's all-edges selection survives projection")
+            XCTAssertTrue(route.contentScrollView(for: .bottom) === target)
+            XCTAssertTrue(p.navigation.contentScrollView(of: route) === target)
+            XCTAssertTrue(p.scrollsToTopTarget() === target)
         }
     }
 

@@ -533,8 +533,6 @@ extension NavigationHost {
             projectBack(routes, in: nav)
         }
         followTablist(routes, in: stack)
-        let stackShows = nav.map(barShows) ?? false
-        let back = container?.props["navigationBack"]
         let presented = nav.map { nav in presentedNavigations.contains { $0 === nav } } ?? false
         // Count UIKit's list before a tab's root under More: More pushes the root over it, with a Back to it
         let front = nav?.stackFront.count ?? 0
@@ -545,8 +543,7 @@ extension NavigationHost {
             // where the route says so or has nothing to go back to.
             c.pushed = index + front > 0
             let transparent = Self.transparentBar(c.node)
-            let shape = stackShows ? HeaderShape.bar(of: c.node, back: back, backIsUIKits: c.pushed) : nil
-            let bar = stackShows ? self.bar(of: c.node, pushed: c.pushed) : .hidden
+            let (shape, bar) = barShape(of: c, in: nav)
             let shows = bar != .hidden
             if shows {
                 for entry in (shape?.leading ?? []) + (shape?.trailing ?? []) where entry.menu {
@@ -609,6 +606,25 @@ extension NavigationHost {
         if let nav, nav.transitionCoordinator == nil, let top = nav.topViewController as? RouteController, routes.contains(top) {
             showBar(nav, animated: nav.view.window != nil)
         }
+    }
+
+    /// The header shape and the bar a route shows in its stack (`prepareRoutes`, `selectScrollEdges`).
+    private func barShape(of c: RouteController, in nav: UINavigationController?) -> (HeaderShape?, NavigationRules.Bar) {
+        guard nav.map(barShows) ?? false else { return (nil, .hidden) }
+        return (HeaderShape.bar(of: c.node, back: container?.props["navigationBack"], backIsUIKits: c.pushed), bar(of: c.node, pushed: c.pushed))
+    }
+
+    /// Select `c`'s top and bottom scroll views again, as its stack's pass
+    /// does (`collapse`, `reachBottom`), for edges an app gave back to
+    /// Exact's selection with nil: at once, since a native call outside a
+    /// batch starts no pass.
+    func selectScrollEdges(of c: RouteController) {
+        guard let stack = c.stack else { return }
+        let nav = stack as? UINavigationController
+        let (shape, bar) = barShape(of: c, in: nav)
+        collapse(c, shape: shape, shows: bar != .hidden, scroller: contentScroller(of: c))
+        reachBottom(c, presented: nav.map { nav in presentedNavigations.contains { $0 === nav } } ?? false)
+        coversChanged()
     }
 
     /// The header a bar stands for takes no room from the turn it is lifted,
@@ -910,7 +926,16 @@ extension NavigationHost {
             let adjustment: UIScrollView.ContentInsetAdjustmentBehavior = Self.transparentBar(c.node) ? .never : .automatic
             if sv.contentInsetAdjustmentBehavior != adjustment { sv.contentInsetAdjustmentBehavior = adjustment }
         }
-        guard c.collapseScroll !== target || c.collapseScrollView !== physical else { return }
+        guard c.collapseScroll !== target || c.collapseScrollView !== physical else {
+            // Select it again where the route's selection differs (an app gave the edge back with
+            // nil), as `reachBottom` does for the bottom edge, and lay the bar out for a pushed large
+            // title as below
+            if c.contentScrollView(for: .top) !== c.automaticTopScroll {
+                c.projectContentScrollView(c.automaticTopScroll, for: .top)
+                c.navigationController?.navigationBar.setNeedsLayout()
+            }
+            return
+        }
         let old = c.collapseScroll, oldView = c.collapseScrollView
         if let old, let sv = oldView { old.retainScrollPosition(from: sv) }
         c.collapseScroll = target
@@ -927,7 +952,7 @@ extension NavigationHost {
         // …and is there before UIKit is handed it: a bar handed a
         // scroller that far from its top closes an open large title.
         if atStart, let sv = shown, sv.contentOffset.y != -sv.adjustedContentInset.top { sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -sv.adjustedContentInset.top), in: sv) }
-        c.projectContentScrollView(shown ?? c.bandedTop, for: .top) // or the scroller its control bars are over (LLP 1131)
+        c.projectContentScrollView(c.automaticTopScroll, for: .top)
         // The scroller left behind gets the page's offsets back only once the
         // bar follows the new one: UIKit reads its inset taken away while the
         // bar still follows it as a scroll, and closes an open large title.
@@ -999,8 +1024,8 @@ extension NavigationHost {
         let found = presented || presenter.viewportFit != "cover" ? (Self.bottomScroller(in: c.node, cover: c.bottomClearance) ?? peer) : nil
         let target = found === c.collapseScroll && Self.transparentBar(c.node) ? nil : found
         let projects = !c.nativeContentScrollEdges.contains(.bottom)
-        guard c.edgeScroll !== target || (projects && c.contentScrollView(for: .bottom) !== (target?.scrollView ?? c.bandedBottom)) else { return }
-        if let old = c.edgeScroll, let sv = old.scrollView, old !== c.collapseScroll, !arrangementInsets(sv, in: c) { sv.contentInsetAdjustmentBehavior = .never }
+        guard c.edgeScroll !== target || (projects && c.contentScrollView(for: .bottom) !== c.automaticBottomScroll) else { return }
+        if let old = c.edgeScroll, old !== target, let sv = old.scrollView, old !== c.collapseScroll, !arrangementInsets(sv, in: c) { sv.contentInsetAdjustmentBehavior = .never }
         if projects, let previous = c.contentScrollView(for: .bottom), previous !== target?.scrollView,
            previous !== c.collapseScrollView, !arrangementInsets(previous, in: c) { previous.contentInsetAdjustmentBehavior = .never }
         c.edgeScroll = target
@@ -1015,7 +1040,7 @@ extension NavigationHost {
         if atStart, let sv = shown, sv.contentOffset.y != -sv.adjustedContentInset.top { sv.contentOffset = PixelGrid.offset(CGPoint(x: sv.contentOffset.x, y: -sv.adjustedContentInset.top), in: sv) }
         // tvOS has no bottom bar whose edge follows a scroller.
         #if !os(tvOS)
-        c.projectContentScrollView(shown ?? c.bandedBottom, for: .bottom)
+        c.projectContentScrollView(c.automaticBottomScroll, for: .bottom)
         #endif
         presenter.session?.log("navigation: route \(c.key) \(target == nil ? "keeps its content above the bottom edge" : "scrolls its content to the bottom edge")")
     }

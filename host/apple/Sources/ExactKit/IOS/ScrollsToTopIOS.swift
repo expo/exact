@@ -91,7 +91,12 @@ extension NavigationHost {
     /// Native selection wins over `navigationScroll`, then the first vertical scroller
     /// (LLP 1115.000 D11.1). The bar, scroll-to-top actions and route hatch share this rule.
     func contentScroller(of c: RouteController) -> NodeView? {
-        if c.nativeContentScrollEdges.contains(.top) { return c.nativeContentScroller }
+        c.nativeContentScrollEdges.contains(.top) ? c.nativeContentScroller : automaticContentScroller(of: c)
+    }
+
+    /// The content scroller with no native selection: the one `navigationScroll` names, else the
+    /// first vertical scroller.
+    func automaticContentScroller(of c: RouteController) -> NodeView? {
         if let name = c.node.props["navigationScroll"], !name.isEmpty {
             return element(named: name, in: c.node).flatMap { $0.scrollView == nil ? nil : $0 }
         }

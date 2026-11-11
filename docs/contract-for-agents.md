@@ -2588,10 +2588,16 @@ item.navigationBarMinimization.safeAreaAdjustment = .automatic
 Set only the native properties the app needs to change. For a fixed header, set
 `minimizationBehavior` to `.never`. Select the bar's scroll view with
 `route.controller.setContentScrollView(_:for:)`. An explicit native selection
-survives authored layout updates; passing `nil` leaves discovery to UIKit and keeps
-the first visible vertical scroller as Exact's scroll-to-top target. UIKit's
-`contentScrollView(for:)` getter reports only explicit selections, so `nil` does not
-mean scrolling is disabled. Each edge is independent, and `.all` selects all edges.
+survives authored layout updates. Passing `nil` makes the edge automatic again, as
+in UIKit, where the view controller then finds the scroll view itself. UIKit cannot
+find an authored scroller through Exact's views, so Exact selects as it does on a
+route the app never touched: for the top edge, the scroller `navigationScroll` names,
+else the first visible vertical one, when it sits under the bar (none when content other
+than control bars sits above it), and for the bottom edge the scroller at the route's
+bottom.
+`contentScrollView(for:)` reports Exact's selection too, so it does not tell an
+automatic edge from a selected one. Each edge is independent, and `.all` selects
+all edges.
 For example, a menu action can select the secondary pane after the arrangement
 has mounted:
 

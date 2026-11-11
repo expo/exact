@@ -89,7 +89,8 @@ final class StillTitleIOSTests: XCTestCase {
         let route = try XCTUnwrap(nav.topViewController)
         XCTAssertEqual(route.navigationItem.title, "Rooms")
         XCTAssertEqual(route.navigationItem.largeTitleDisplayMode, .always)
-        XCTAssertTrue(route.contentScrollView(for: .top) is GroupedScroller, "the title collapses with the list")
+        let list = try XCTUnwrap(route.contentScrollView(for: .top))
+        XCTAssertTrue(list is GroupedScroller, "the title collapses with the list")
         XCTAssertGreaterThan(try titleInk(nav), 100, "'Rooms' is drawn large under the bar")
 
         // A failed load's reason between the header and the list: nothing
@@ -97,6 +98,12 @@ final class StillTitleIOSTests: XCTestCase {
         try tap("fail")
         XCTAssertNotNil(find("rooms-error"), "the reason shows")
         XCTAssertNil(route.contentScrollView(for: .top), "the list no longer follows the header, so nothing collapses the title")
+        // An app's nil gives the edge back to Exact's selection, which names no scroller here
+        route.setContentScrollView(nil, for: .top)
+        XCTAssertNil(route.contentScrollView(for: .top))
+        route.setContentScrollView(list, for: .top)
+        route.setContentScrollView(nil, for: .top)
+        XCTAssertNil(route.contentScrollView(for: .top), "a selection given back with nil leaves the title still")
         XCTAssertEqual(route.navigationItem.largeTitleDisplayMode, .always)
         XCTAssertGreaterThan(try titleInk(nav), 100, "'Rooms' is still drawn with the reason above the list")
 

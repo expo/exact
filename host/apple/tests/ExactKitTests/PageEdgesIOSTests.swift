@@ -223,6 +223,19 @@ final class PageEdgesIOSTests: XCTestCase {
         let hit = try XCTUnwrap(filter.window?.hitTest(filter.convert(CGPoint(x: filter.bounds.midX, y: filter.bounds.midY), to: nil), with: nil))
         XCTAssertTrue(hit.isDescendant(of: filter), "a tap on the switcher is the switcher's, not \(type(of: hit))")
         XCTAssertTrue(filter.interactions.contains { $0 is UIScrollEdgeElementContainerInteraction }, "UIKit's edge effect over the list")
+        // An app's own scroll view holds the bar's edge through a batch, and its nil gives the edge
+        // back to the list at once: the title does not collapse with it, so only its band can
+        let route = try XCTUnwrap(p.navigation.activeRoute)
+        XCTAssertNil(route.collapseScroll, "the switcher stands between the title and the list")
+        XCTAssertTrue(route.contentScrollView(for: .top) === sv, "the bar follows the list under the switcher")
+        let own = UIScrollView(frame: route.view.bounds)
+        route.view.addSubview(own)
+        route.setContentScrollView(own, for: .top)
+        p.apply(wireBatch([]))
+        XCTAssertTrue(route.contentScrollView(for: .top) === own)
+        route.setContentScrollView(nil, for: .top)
+        own.removeFromSuperview()
+        XCTAssertTrue(route.contentScrollView(for: .top) === sv, "nil gives the edge back to the list drawn under the switcher")
         sv.contentOffset.y = 100 - list.scrollTopInset(sv)
         p.press(try node(session, "pick-chat").id)
         until("the switcher goes and a composer comes") { list.pageBand.top == 0 && list.pageBand.bottom > 0 }

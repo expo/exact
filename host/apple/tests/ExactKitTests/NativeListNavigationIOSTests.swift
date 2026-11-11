@@ -272,6 +272,14 @@ final class NativeListNavigationIOSTests: XCTestCase {
         let session = try fixture("native-scroll-selection")
         let (nav, route, node) = try second(session)
         let p = session.presenter, automatic = try XCTUnwrap(node.scrollView)
+        // UIKit cannot find the authored scroller through the route's views, so Exact selects it
+        XCTAssertTrue(route.contentScrollView(for: .top) === automatic)
+        let automaticBottom = try XCTUnwrap(route.contentScrollView(for: .bottom))
+        let topCover = { () -> CGFloat in
+            if case .edges(let edges)? = p.navigation.covers[route.node.id] { return edges.top }
+            return 0
+        }
+        let automaticCover = topCover()
         let firstNative = UIScrollView(frame: route.view.bounds), secondNative = UIScrollView(frame: route.view.bounds)
         firstNative.scrollsToTop = false; secondNative.scrollsToTop = false
         firstNative.contentInsetAdjustmentBehavior = .always
@@ -285,6 +293,8 @@ final class NativeListNavigationIOSTests: XCTestCase {
         p.navigation.prepareRoutes([route], in: nav)
         XCTAssertEqual(route.projected?.scroll, ObjectIdentifier(firstNative), "the route hatch receives an app-owned native view")
         XCTAssertEqual(firstNative.contentInsetAdjustmentBehavior, .always, "projection preserves the native bottom selection's inset policy")
+        p.navigation.reportCovers()
+        XCTAssertNotEqual(topCover(), automaticCover, "the authored list leaves the bar's edge, so the route is covered for the bar")
 
         route.setContentScrollView(secondNative, for: .top)
         XCTAssertFalse(firstNative.scrollsToTop, "the previous native target stops competing for status-bar taps")
@@ -306,16 +316,28 @@ final class NativeListNavigationIOSTests: XCTestCase {
         XCTAssertTrue(secondNative.scrollsToTop)
         #endif
 
+        // nil is UIKit's automatic selection, which Exact makes for the route's authored scrollers
         route.setContentScrollView(nil, for: .all)
         XCTAssertFalse(firstNative.scrollsToTop)
         XCTAssertFalse(secondNative.scrollsToTop)
         XCTAssertTrue(automatic.scrollsToTop)
+        XCTAssertTrue(route.contentScrollView(for: .top) === automatic, "the bar follows the automatic scroller again")
+        XCTAssertTrue(route.contentScrollView(for: .bottom) === automaticBottom)
+        XCTAssertEqual(topCover(), automaticCover, "the covers follow the edge given back at once")
         p.navigation.prepareRoutes([route], in: nav)
         XCTAssertEqual(route.projected?.scroll, ObjectIdentifier(automatic))
-        XCTAssertNil(route.contentScrollView(for: .top), "UIKit retains automatic discovery")
-        XCTAssertNil(route.contentScrollView(for: .bottom))
+        XCTAssertTrue(route.contentScrollView(for: .top) === automatic, "and keeps it through the next pass")
+        XCTAssertTrue(route.contentScrollView(for: .bottom) === automaticBottom)
         XCTAssertEqual(firstNative.contentInsetAdjustmentBehavior, .always)
         XCTAssertEqual(secondNative.contentInsetAdjustmentBehavior, .automatic)
+
+        // nil on an automatic edge changes nothing, and an app that selects the scroller Exact
+        // selects and gives it back gets it again at once, from the top edge's pass
+        route.setContentScrollView(nil, for: .top)
+        XCTAssertTrue(route.contentScrollView(for: .top) === automatic)
+        route.setContentScrollView(automatic, for: .top)
+        route.setContentScrollView(nil, for: .top)
+        XCTAssertTrue(route.contentScrollView(for: .top) === automatic, "the pass selects its unchanged scroller again")
 
         route.setContentScrollView(firstNative, for: .top)
         XCTAssertTrue(firstNative.scrollsToTop)

@@ -71,8 +71,9 @@ extension Presenter {
                     // even though its scroll view draws the band outside that box.
                     if !route.ridingBars.isEmpty { own.top += min(found.band.top, route.view.safeAreaInsets.top) }
                     var r = routes[ObjectIdentifier(route)] ?? (nil, nil)
-                    // The bar follows the route's scroller drawn under it, as UIKit's follows a list that is the controller's own.
-                    if !found.top.isEmpty || found.band.top > 0.5, navigation.contentScroller(of: route) === v { r.top = sv }
+                    // The bar follows the route's scroller drawn under it, as UIKit's follows a list that is the controller's
+                    // own: the automatic one, which an app's selection overrides until it gives the edge back with nil.
+                    if !found.top.isEmpty || found.band.top > 0.5, navigation.automaticContentScroller(of: route) === v { r.top = sv }
                     if !found.bottom.isEmpty { r.bottom = sv }
                     routes[ObjectIdentifier(route)] = r
                 } else { found = pageBands(of: v, sv, margins: m, area: area, edgeEffect ? judge : nil); own = found.band }
@@ -84,8 +85,8 @@ extension Presenter {
         // The bar's and the bottom bar's own edge effects follow a banded scroller (D2).
         for c in navigation.controllers.values {
             let r = routes[ObjectIdentifier(c)]
-            if c.bandedTop !== r?.top { c.bandedTop = r?.top; c.projectContentScrollView(r?.top ?? c.collapseScrollView, for: .top) }
-            if c.bandedBottom !== r?.bottom { c.bandedBottom = r?.bottom; c.projectContentScrollView(r?.bottom ?? c.edgeScroll?.scrollView, for: .bottom) }
+            if c.bandedTop !== r?.top { c.bandedTop = r?.top; c.projectContentScrollView(c.automaticTopScroll, for: .top) }
+            if c.bandedBottom !== r?.bottom { c.bandedBottom = r?.bottom; c.projectContentScrollView(c.automaticBottomScroll, for: .bottom) }
         }
         #endif
         ControlBars.sync(bars, in: self)
