@@ -205,6 +205,10 @@ pub(crate) struct Collection {
     /// animation where the port is: until a report says where, nothing
     /// anchors and a request waits.
     port_unknown: bool,
+    /// The update visiting the list ([`Update::serial`]), and the one that
+    /// planned its correction: a correction this update planned reached no host.
+    visit: u64,
+    planned_in: u64,
     /// The requests begun here, counted: a host tells a new one from the
     /// one before by it ([`CollectionSnapshot::request`]).
     request: u64,
@@ -514,6 +518,8 @@ impl Collection {
             scrolling: false,
             animating: false,
             port_unknown: false,
+            visit: 0,
+            planned_in: 0,
             request: 0,
             into_view_status: None,
             covered: [0.0; 2],
@@ -538,6 +544,7 @@ impl Collection {
         fresh: bool,
         remount: bool,
     ) -> Result<(), InstanceError> {
+        self.visit = u.serial;
         let deps = &u.sites.deps;
         let index = self.region.0 as usize;
         let keys_stale = fresh || u.stale_outside(&deps.keys[index], 1);
@@ -740,6 +747,7 @@ impl Collection {
                     from,
                     smooth,
                 });
+                self.planned_in = self.visit;
                 g.offset = corrected;
                 if self.restored_at.is_some() {
                     // Where a restored list now expects the host to be.

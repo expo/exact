@@ -166,6 +166,7 @@ impl<D: DataSource> Runner<D> {
         settled: bool,
     ) -> Result<CommitReceipt, RunnerError> {
         let result = self.update_into_views_inner(requests, settled);
+        self.commit_serial = None;
         if result.is_err() {
             self.poison();
         }
@@ -188,6 +189,7 @@ impl<D: DataSource> Runner<D> {
                     }
                 },
             )?;
+        self.commit_serial = Some(self.ids.updates);
         // The queued patches' colours stay kept until this commit marks them.
         let (mut prefix, _queued) = self.take_reorder_ops();
         if !prefix.is_empty() {

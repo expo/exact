@@ -321,7 +321,10 @@ impl Collection {
         self.restored_at = None;
         self.at_end = false;
         // A new request stops the host's animation where the port is (§2.5).
-        self.port_unknown |= self.host_animating();
+        // A smooth correction this update planned reached no host: the
+        // request replaces it.
+        let unsent = self.planned_in == u.serial;
+        self.port_unknown |= self.animating || self.correction.is_some_and(|c| c.smooth && !unsent);
         self.request = self.request.wrapping_add(1).max(1);
         let key = self.index.shared_key(position).expect("resolved").clone();
         self.target = Some(Target {

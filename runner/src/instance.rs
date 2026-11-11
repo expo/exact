@@ -245,6 +245,8 @@ pub struct Ids {
     pub(crate) tabs: tabs::Tabs, // tab panels waiting for their first selection (tabs.rs)
     /// Seed new collections before their port is reported.
     pub(crate) bootstrap_extent: Option<f64>,
+    /// The updates begun: the last one's number ([`Update::serial`]).
+    pub(crate) updates: u64,
 }
 
 impl Ids {
@@ -398,6 +400,9 @@ pub struct Update<'a> {
     pub sites: &'a SiteIndex,
     /// The id allocator.
     pub ids: &'a mut Ids,
+    /// This update's number among the runner's ([`Ids::updates`]); the later
+    /// phases of a scroll into view's one commit take its first phase's.
+    pub(crate) serial: u64,
     /// Ops accumulated for one atomic `Kernel::apply`.
     pub ops: Vec<Op>,
     /// Surface inputs that changed, in tree order.
@@ -465,6 +470,8 @@ pub struct Update<'a> {
 impl<'a> Update<'a> {
     /// A context over `env` with no ops yet.
     pub fn new(env: Env<'a>, sites: &'a SiteIndex, ids: &'a mut Ids) -> Self {
+        ids.updates += 1;
+        let serial = ids.updates;
         // A visit starts in the window's modes (LLP 1121 D5).
         let theme = theme::Around {
             tuple: ids.theme.window,
@@ -476,6 +483,7 @@ impl<'a> Update<'a> {
             fonts: None,
             sites,
             ids,
+            serial,
             ops: Vec::new(),
             surfaces: Vec::new(),
             work: InstanceWork::default(),

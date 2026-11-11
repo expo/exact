@@ -391,3 +391,38 @@ fn dom_integer_end_append_follows_but_a_reader_a_pixel_up_does_not() {
         }
     }
 }
+
+/// LLP 1070.000 §2.5: a request stops the host's smooth correction where the
+/// port is and waits for a report to say where, once the host has been sent
+/// that correction. One in the update that planned the correction, which no
+/// host has seen, replaces it and does not wait.
+#[test]
+fn a_request_waits_behind_a_smooth_correction_sent_but_not_one_still_unsent() {
+    for sent in [true, false] {
+        let plan = plan_with(100, false, true, true);
+        let slots = vec![
+            values(100),
+            Value::Number(0.0),
+            Value::Number(0.0),
+            Value::Number(16.0),
+            Value::Unit,
+        ];
+        let mut h = Harness::from_parts(plan, slots);
+        h.send(h.feedback(2880.0));
+        h.slots[0] = values(101);
+        h.update().unwrap();
+        assert!(h.snapshot().correction.unwrap().smooth);
+        let planned = h.ids.updates;
+        let mut u = Update::new(env(&h.plan, &h.slots), &h.sites, &mut h.ids);
+        if !sent {
+            u.serial = planned;
+        }
+        let Child::Node(root) = &mut h.tree.children[0] else {
+            panic!()
+        };
+        let list = root.collection_mut().unwrap();
+        list.begin_into_view(&mut u, &[], "n:50", Align::Start, false, None)
+            .unwrap();
+        assert_eq!(list.request_waits(), sent, "sent={sent}");
+    }
+}

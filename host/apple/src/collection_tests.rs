@@ -356,6 +356,18 @@ fn a_batch_that_lays_rows_out_above_the_anchor_keeps_it_in_place() {
 /// then come back from on the next report.
 #[test]
 fn a_batch_that_lays_a_row_out_aims_its_scroll_into_view_at_its_size() {
+    aims_a_new_row_into_view_at_its_size("");
+}
+
+/// The same on a list that follows its end smoothly: the commit plans the
+/// end's smooth correction before the request, and that correction, which
+/// no host has seen, is not the host animating, so the request aims at once.
+#[test]
+fn a_smooth_end_the_same_commit_planned_does_not_hold_its_scroll_into_view() {
+    aims_a_new_row_into_view_at_its_size(" scrollFollowEnd=true scroll-behavior=\"smooth\"");
+}
+
+fn aims_a_new_row_into_view_at_its_size(list: &str) {
     let source = SOURCE
         .replace(
             "action toggle",
@@ -367,7 +379,7 @@ fn a_batch_that_lays_a_row_out_aims_its_scroll_into_view_at_its_size() {
         )
         .replace(
             "list virtualized=true",
-            "list id=\"history\" virtualized=true scroll-start=\"end\" estimated-item-height=40",
+            &format!("list id=\"history\" virtualized=true scroll-start=\"end\" estimated-item-height=40{list}"),
         )
         .replace("for row in rows key=row", "for row in range(count) key=row");
     let (mut bridge, _, _) = fixture(&source);

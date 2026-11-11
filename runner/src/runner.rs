@@ -379,6 +379,9 @@ pub struct Runner<D: DataSource> {
     intersections: intersect::Intersections,
     /// Refused requests, for `state` (LLP 1070.000 §2.2).
     into_view_refused: std::collections::VecDeque<String>,
+    /// While a scroll into view's one logical commit runs, the number its
+    /// first phase's update took, which its later phases share ([`Update::serial`]).
+    commit_serial: Option<u64>,
     surfaces: Vec<SurfaceUpdate>,
     /// Views the next applied batch renews (LLP 1078): rebound list rows.
     renewed: Vec<ViewId>,
@@ -821,6 +824,7 @@ impl<D: DataSource> Runner<D> {
             resized: Vec::new(),
             intersections: Vec::new(),
             into_view_refused: Default::default(),
+            commit_serial: None,
             surfaces: Vec::new(),
             renewed: Vec::new(),
             shown: Default::default(),

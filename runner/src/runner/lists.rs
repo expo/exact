@@ -100,6 +100,9 @@ impl<D: DataSource> Runner<D> {
             let scroll_margin = |view| super::collection::scroll_margin(&self.kernel, view);
             let scroll_padding = |view| super::collection::scroll_padding(&self.kernel, view);
             let mut u = Update::new(self.env(&[], &[]), &self.sites, &mut ids);
+            if let Some(serial) = self.commit_serial {
+                u.serial = serial;
+            }
             u.fonts = Some(self.fonts.clone());
             u.scroll_padding = Some(&scroll_padding);
             u.scroll_margin = Some(&scroll_margin);
