@@ -320,6 +320,48 @@ final class NavigationCollapseIOSTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(pull["scrolledBy"] as? [Double])[1], -300, accuracy: 0.5, "the content moved back by the 300 it went")
     }
 
+    /// An appearance, tint or text-size change that comes with a new size (an
+    /// iPhone Duo's snapshot of the app unfolded) applies the size in its
+    /// first batch, ahead of the change's own: every batch lays the
+    /// navigation out, and UIKit must not lay it out in the old size's frames
+    /// (ExactViewIOS's `fitAheadOfLayout`).
+    @MainActor
+    func testATraitOrTintChangeWithANewSizeAppliesTheSizeFirst() throws {
+        let session = try booted("EXACT_LARGE_TITLE_PLAN", label: "appearance-resize")
+        let view = try XCTUnwrap(session.view)
+        let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
+        XCTAssertEqual(nav.view.bounds.width, 402, accuracy: 0.5)
+        // Fix the window's tint so the appearance change reaches the view
+        // through its trait callback alone: the system tint changes with the
+        // appearance, and its callback comes first.
+        let tint = UIColor(red: 0.8, green: 0.1, blue: 0.1, alpha: 1)
+        window?.tintColor = tint
+        window?.layoutIfNeeded()
+        func resize(to width: CGFloat, with change: String, _ make: () -> Void) {
+            XCTAssertFalse(session.ownerInFlight, "no owner work lands ahead of the \(change) change's first batch")
+            let before = session.appliedBatches
+            var resizedIn: Int?
+            let observation = nav.view.layer.observe(\.bounds, options: [.new]) { _, bounds in
+                if resizedIn == nil, let new = bounds.newValue?.width, abs(new - width) < 0.5 { resizedIn = session.appliedBatches - before }
+            }
+            defer { observation.invalidate() }
+            view.frame = CGRect(x: 0, y: 0, width: width, height: 700)
+            make()
+            XCTAssertEqual(resizedIn, 1, "the batch the navigation took the new size in, counted from the \(change) change")
+            XCTAssertGreaterThan(session.appliedBatches - before, 1, "the \(change) change applied a batch after the size")
+        }
+        resize(to: 600, with: "appearance") {
+            window?.overrideUserInterfaceStyle = view.traitCollection.userInterfaceStyle == .dark ? .light : .dark
+            window?.updateTraitsIfNeeded()
+        }
+        XCTAssertEqual(window?.tintColor, tint, "the tint the appearance change left alone")
+        resize(to: 500, with: "tint") { window?.tintColor = UIColor(red: 0.1, green: 0.5, blue: 0.2, alpha: 1) }
+        resize(to: 450, with: "text size") {
+            window?.traitOverrides.preferredContentSizeCategory = .accessibilityLarge
+            window?.updateTraitsIfNeeded()
+        }
+    }
+
     /// LLP 1054 A4: the agent's drag pulls to refresh as a finger does. A
     /// real touch's 200 points past the top refreshed, 180 did not (iOS 27).
     func testTheAgentsDragPullsToRefreshAsAFingerDoes() throws {

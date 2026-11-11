@@ -30,6 +30,8 @@ public final class ExactView: UIView {
     private var lastRegions: [CGFloat]?
     private var lastFold = ViewportFold.flat
     private var lastScreen: CGSize?
+    /// The bounds' size the last fit read (`fitAheadOfLayout`).
+    private var fittedSize = CGSize.zero
     /// The hinge's last status from `UIHingeInteraction` (1 closed, 2
     /// partially open, 3 fully open; nil before it reports or without a
     /// hinge), and how many layouts have re-read the division regions since
@@ -114,7 +116,7 @@ public final class ExactView: UIView {
             }
         }
         session.presenter.observeKeyboard()
-        registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitLegibilityWeight.self, UITraitDisplayScale.self]) { (view: ExactView, _: UITraitCollection) in view.session.controlTextChanged() }
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self, UITraitLegibilityWeight.self, UITraitDisplayScale.self]) { (view: ExactView, _: UITraitCollection) in view.fitAheadOfLayout(); view.session.controlTextChanged() }
         registerForTraitChanges([UITraitUserInterfaceStyle.self, UITraitDisplayScale.self, UITraitAccessibilityContrast.self]) { (view: ExactView, _: UITraitCollection) in view.reportScheme(); view.setNeedsLayout() }
         // The tvOS SDK has no Swift UITraitDefinition for this trait. OS
         // suppression still applies to its layers without a re-decode (D9).
@@ -137,12 +139,23 @@ public final class ExactView: UIView {
         }
     }
 
+    /// Fits now when a native container holds the page and the bounds changed
+    /// since the last fit. UIKit reports trait and tint changes before layout,
+    /// and one can come with a new size: an iPhone Duo's background snapshot
+    /// resizes the window, then changes the appearance. Each batch lays the
+    /// container out (`NavigationHost.sync`); laid out at the old size in the
+    /// resized window, UIKit reads a large title as one that collapses, moves
+    /// a refreshing control into the bar and leaves the scroller's refresh
+    /// inset behind. `fit` still applies a new display scale's batches before
+    /// the size.
+    private func fitAheadOfLayout() { if session.booted, window != nil, session.presenter.navigation.primaryOwner != nil, bounds.size != fittedSize { fit() } }
+
     /// Paint motion resolves `light-dark()` by this view's appearance (LLP 1062).
     /// A system appearance change reaches the view as a trait change too:
     /// `prefers-color-scheme` is told again (LLP 1069.000 D1).
-    private func reportScheme() { session.scheme(dark: traitCollection.userInterfaceStyle == .dark); session.tellPreferences(); session.natives.scopesChanged() }
+    private func reportScheme() { fitAheadOfLayout(); session.scheme(dark: traitCollection.userInterfaceStyle == .dark); session.tellPreferences(); session.natives.scopesChanged() }
     /// An app or window tint changed: `AccentColor` is reported again (LLP 1095 D9).
-    public override func tintColorDidChange() { super.tintColorDidChange(); session.reportColors() }
+    public override func tintColorDidChange() { super.tintColorDidChange(); fitAheadOfLayout(); session.reportColors() }
 
     required init?(coder: NSCoder) { nil }
     deinit {
@@ -355,6 +368,7 @@ public final class ExactView: UIView {
             return
         }
         guard bounds.width > 0, bounds.height > 0 else { return }
+        fittedSize = bounds.size
         // @ref LLP 1123 D1 — the document is the session view's; a
         // presentation lays its routes out in their own blocks (D2)
         let safe = safeAreaInsets
