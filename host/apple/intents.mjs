@@ -215,6 +215,15 @@ export function intentsMetadata({ moduleName, dir, sdk, triple, platform, deploy
   writeFileSync(resolve(dir, 'sources.txt'), sources.join('\n') + '\n');
   writeFileSync(resolve(dir, 'values.txt'), values + '\n');
   writeFileSync(resolve(dir, 'none.txt'), '');
+  // Linux has no Xcode: the portable emitter writes the same file from the module's constant values.
+  if (process.platform === 'linux') {
+    const major = parseInt(JSON.parse(readFileSync(resolve(sdk, 'SDKSettings.json'), 'utf8')).Version);
+    const actions = emittedIntentsMetadata(JSON.parse(readFileSync(values, 'utf8')), major, { module: moduleName });
+    mkdirSync(metadata, { recursive: true });
+    writeFileSync(resolve(metadata, 'extract.actionsdata'), JSON.stringify(actions));
+    writeFileSync(resolve(metadata, 'version.json'), JSON.stringify({ toolsVersion: 'exact-1', version: '3.0' }));
+    return metadata;
+  }
   const xcode = /Build version (\S+)/.exec(spawnSync('xcodebuild', ['-version'], { encoding: 'utf8' }).stdout ?? '')?.[1] ?? '';
   runApple(processor, ['--toolchain-dir', toolchain, '--module-name', moduleName, '--sdk-root', sdk,
     '--xcode-version', xcode, '--platform-family', platform === 'macos' ? 'macOS' : platform === 'watchos' ? 'watchOS' : 'iOS', '--deployment-target', deployment, '--target-triple', triple,
