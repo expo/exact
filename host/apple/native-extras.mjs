@@ -13,11 +13,11 @@ import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const canonical = (value) => Array.isArray(value) ? `[${value.map(canonical).join(',')}]` : value && typeof value === 'object' ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}` : JSON.stringify(value ?? null);
 
-export function nativeExtras(app, platform = 'ios') {
+export function nativeExtras(app, platform = 'ios', extensions, contractSources = []) {
   // Paths say where a checkout is, not what it holds: every file is named by where it is in its package or app,
   // and by its bytes.
   const named = (value) => typeof value === 'string' && value.startsWith('/') ? (existsSync(value) ? `${basename(value)}:${sha(readFileSync(value))}` : `missing:${basename(value)}`) : Array.isArray(value) ? value.map(named) : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, named(v)])) : value;
-  const packages = appleImplementations(app.dir, platform).map(named);
+  const packages = appleImplementations(app.dir, platform, extensions, contractSources).map(named);
   const modules = app.modulesFor(platform);
   const own = (modules.apple ?? []).map(file => [relative(app.dir, file), sha(readFileSync(file))]);
   const frameworks = (modules.frameworks ?? []).map(file => relative(app.dir, file));

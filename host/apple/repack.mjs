@@ -20,7 +20,8 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { appleArtifacts, appClip, COMPATIBLE_SDK, deploymentTargets, designCompatible, distributionKeys, entitlements, infoPlist, modulePlist, receipt, shippedReceipt, writeUsageStrings, copyAppleStaticTrees } from './build.mjs';
+import { appleArtifacts, appClip, COMPATIBLE_SDK, compiledTargets, designCompatible, distributionKeys, entitlements, infoPlist, receipt, shippedReceipt, writeUsageStrings, copyAppleStaticTrees } from './build.mjs';
+import { modulePlist } from './plist.mjs';
 import { bakeOutput, bakeWatchEnv, developmentBuildEnv, executableName, gpuModules, HOST_DEV, resolveApp } from '../../scripts/app.mjs';
 import { HOST_MACOS, withHostDeployment } from '../../scripts/filesystem.mjs';
 import { prepareRustBundle, nativeSource } from '../../scripts/rust.mjs';
@@ -69,8 +70,8 @@ export async function repack(args) {
   if (existsSync(resolve(app.dir, 'library')) || app.manifest.library) refuse('a package framework builds in full');
 
   // The bake, as build.mjs's buildBake prepares it for a development device archive, outside Cargo.
-  const targets = deploymentTargets(app), sdk = tool('xcrun', ['--sdk', SDK_NAME, '--show-sdk-path']).stdout.trim();
-  let env = withHostDeployment({ ...process.env, ...developmentBuildEnv(), EXACT_WIDGET_GALLERY: '0', SDKROOT: sdk, MACOSX_DEPLOYMENT_TARGET: process.env.MACOSX_DEPLOYMENT_TARGET || HOST_MACOS, IPHONEOS_DEPLOYMENT_TARGET: targets.ios, EXACT_APPLE_LINK: 'all' });
+  const sdk = tool('xcrun', ['--sdk', SDK_NAME, '--show-sdk-path']).stdout.trim();
+  let env = withHostDeployment({ ...process.env, ...developmentBuildEnv(), EXACT_WIDGET_GALLERY: '0', SDKROOT: sdk, MACOSX_DEPLOYMENT_TARGET: process.env.MACOSX_DEPLOYMENT_TARGET || HOST_MACOS, IPHONEOS_DEPLOYMENT_TARGET: compiledTargets(app, 'development').ios, EXACT_APPLE_LINK: 'all' });
   if (env.EXACT_UPDATE_TRUST && env.EXACT_UPDATE_TRUST !== 'development') refuse('only a development archive repacks');
   env.CARGO_TARGET_DIR = app.target; env.EXACT_BAKE_OUTPUT = bakeOutput(app, env);
   mkdirSync(env.EXACT_BAKE_OUTPUT, { recursive: true });
@@ -109,7 +110,7 @@ export async function repack(args) {
     // The Swift module's generated inputs, which compat.json does not carry (a package `use`, data words, the theme).
     const baseReceipt = JSON.parse(readFileSync(resolve(base, 'receipt.json'), 'utf8'));
     if (!baseReceipt.build?.nativeExtras) refuse('the base build recorded no Swift module digest (built before repacks)');
-    const extras = nativeExtras(app, 'ios'); mark('extras');
+    const extras = nativeExtras(app, 'ios', graph.extensions, graph.contractSources); mark('extras');
     if (baseReceipt.build.nativeExtras !== extras) refuse('the app\'s Swift module inputs changed (a package use or import, data words, or the theme of an app with Swift)');
     for (const entry of readdirSync(base)) if (entry !== executable && !NATIVE_ENTRIES.has(entry) && !REBUILT(entry)) refuse(`the base bundle holds ${entry}, which repack does not rebuild`);
 
@@ -124,7 +125,7 @@ export async function repack(args) {
     const fitted = JSON.parse(readLinkedSections(resolve(bundle, executable)).compat.toString('utf8'));
     if (fitted.id !== compat.id || fitted.inputs?.app !== app.id) throw new Error('the fitted executable does not name this bake');
     mark('sections');
-    const appleReach = modulePlist(app, compat.reach, 'ios');
+    const appleReach = modulePlist(app, compat.reach, 'ios', graph.extensions, graph.contractSources);
     mark('reach');
     // Keys the native build computed and repack cannot: the module roster's first-frame modules (none on Linux).
     // (Converting the plist is a process of its own: only when the key is there at all.)
