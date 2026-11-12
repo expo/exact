@@ -296,8 +296,8 @@ extension NodeView {
     /// A replacement keeps the logical offset; an authored write takes priority.
     func retainScrollPosition(from view: UIScrollView) {
         let authored = extras?.pendingScrollTransfer != true && (pendingScrollTop != nil || pendingScrollLeft != nil)
-        if pendingScrollTop == nil { pendingScrollTop = Double(view.contentOffset.y + scrollTopInset(view)) }
-        if pendingScrollLeft == nil { pendingScrollLeft = Double(view.contentOffset.x) }
+        if pendingScrollTop == nil { pendingScrollTop = Double(hiddenScroll?.y ?? (view.contentOffset.y + scrollTopInset(view))) }
+        if pendingScrollLeft == nil { pendingScrollLeft = Double(hiddenScroll?.x ?? view.contentOffset.x) }
         more.pendingScrollTransfer = !authored
         presenter?.pendingScrolls.insert(id)
     }
@@ -434,6 +434,8 @@ extension NodeView {
 
 
     func applyPendingScroll() {
+        // A shown pane may still have the empty layout of its former cover. Keep every write until it has a port.
+        if let sv = scrollView, hasScrollLayoutBox, sv.bounds.isEmpty { return }
         defer { pendingScrollTop = nil; pendingScrollLeft = nil }
         guard let sv = scrollView else { return }
         // An authored position takes over from a smooth correction.
@@ -449,10 +451,8 @@ extension NodeView {
             }
             return
         }
-        // Restore a saved position once the port has a size to hold it, or with an authored position, which replaces it.
-        // A pane its arrangement hid stays covered whole, laid out as `display: none`, until the covers that follow the
-        // arrangement's retirement are delivered, and a write before then would clamp to the top.
-        if let saved = hiddenScroll, !sv.bounds.isEmpty || pendingScrollTop != nil || pendingScrollLeft != nil {
+        // Restore the saved axes before an authored write replaces either of them.
+        if let saved = hiddenScroll {
             hiddenScroll = nil
             writeScrollPosition(in: sv, left: Double(saved.x), top: Double(saved.y), animated: false, titleSlack: false)
         }

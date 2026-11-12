@@ -489,27 +489,46 @@ final class NativeListScrollIOSTests: GroupedListFixture {
     }
 
     func testAHiddenPositionWaitsForAPortThatCanHoldItUnlessTheAuthorWritesOne() throws {
-        for authored in [false, true] {
-            let p = presenter(height: 180) { self.model() }
-            let owner = try XCTUnwrap(p.views[1])
-            let style: [String: Any] = ["overflow_y": "scroll"]
-            let laidOut = { (h: Double, content: Double) -> [[String: Any]] in
-                [["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": h], ["op": "content", "id": 1, "w": 402.0, "h": content]]
-            }
-            let plain: [[String: Any]] = [["op": "style", "id": 1, "style": style], ["op": "props", "id": 1, "set": [String: String](), "clear": ["listStyle"]]]
-            let scrolled: [[String: Any]] = [["op": "props", "id": 1, "set": ["scrollTop": "140"]]]
-            p.apply(wireBatch(plain + laidOut(180, 9000) + scrolled))
-            p.apply(wireBatch([["op": "style", "id": 1, "style": style.merging(["display": "none"]) { $1 }]]))
-            // Shown before it is laid out, as a pane is while the cover that hid it in its arrangement still applies
-            var shown: [[String: Any]] = [["op": "style", "id": 1, "style": style]]
-            shown += laidOut(0, 0)
-            if authored { shown.append(["op": "props", "id": 1, "set": ["scrollTop": "0"]]) }
-            p.apply(wireBatch(shown))
-            p.apply(wireBatch(laidOut(180, 9000)))
-            let scroll = try XCTUnwrap(owner.scrollView)
-            XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), authored ? 0 : 140, accuracy: 0.5,
-                           authored ? "an authored position replaces the saved one" : "the saved position is restored once the port has a size")
+        try checkHiddenPosition(native: false, authored: "")
+        try checkHiddenPosition(native: false, authored: "scrollTop")
+    }
+
+    func testAHiddenPositionSurvivesAReplacementInAnEmptyPort() throws {
+        try checkHiddenPosition(native: true, authored: "")
+        try checkHiddenPosition(native: true, authored: "scrollTop")
+    }
+
+    func testAHorizontalWriteInAnEmptyPortKeepsTheHiddenVerticalPosition() throws {
+        try checkHiddenPosition(native: false, authored: "scrollLeft")
+    }
+
+    private func checkHiddenPosition(native: Bool, authored: String) throws {
+        let p = presenter(height: 180) { self.model() }
+        let owner = try XCTUnwrap(p.views[1])
+        let style: [String: Any] = ["overflow_y": "scroll", "overflow_x": authored == "scrollLeft" ? "scroll" : "hidden"]
+        let laidOut = { (h: Double, content: Double) -> [[String: Any]] in
+            [["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 402.0, "h": h], ["op": "content", "id": 1, "w": 9000.0, "h": content]]
         }
+        let plain: [[String: Any]] = [["op": "style", "id": 1, "style": style], ["op": "props", "id": 1, "set": [String: String](), "clear": ["listStyle"]]]
+        let scrolled: [[String: Any]] = [["op": "props", "id": 1, "set": ["scrollTop": "140"]]]
+        p.apply(wireBatch((native ? [["op": "style", "id": 1, "style": style]] : plain) + laidOut(180, 9000) + scrolled))
+        let original = try XCTUnwrap(owner.scrollView)
+        XCTAssertEqual(original.contentOffset.y + owner.scrollTopInset(original), 140, accuracy: 0.5)
+        p.apply(wireBatch([["op": "style", "id": 1, "style": style.merging(["display": "none"]) { $1 }]]))
+        // Shown before it is laid out, as a pane is while the cover that hid it in its arrangement still applies
+        var shown: [[String: Any]] = [["op": "style", "id": 1, "style": style]]
+        shown += laidOut(0, 0)
+        if !authored.isEmpty { shown.append(["op": "props", "id": 1, "set": [authored: "80"]]) }
+        p.apply(wireBatch(shown))
+        if native {
+            p.apply(wireBatch(plain))
+            XCTAssertFalse(owner.scrollView === original)
+        }
+        p.apply(wireBatch(laidOut(180, 9000)))
+        let scroll = try XCTUnwrap(owner.scrollView)
+        XCTAssertEqual(scroll.contentOffset.y + owner.scrollTopInset(scroll), authored == "scrollTop" ? 80 : 140, accuracy: 0.5,
+                       "native=\(native), authored=\(authored): the logical position waits for the port")
+        if authored == "scrollLeft" { XCTAssertEqual(scroll.contentOffset.x, 80, accuracy: 0.5) }
     }
 
     func testRevealingACarriedRowDoesNotReserveContentPaddingForAKeyboard() throws {
