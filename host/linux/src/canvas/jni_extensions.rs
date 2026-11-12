@@ -190,6 +190,16 @@ macro_rules! canvas_jni_extensions {
             with(|h| h.orientation_applied(&applied, conflict == JNI_TRUE, line.as_deref()));
         }
 
+        /// The optional sound arm's output state. Any thread.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_soundState(
+            env: *mut JNIEnv,
+            _class: jclass,
+            state: jstring,
+        ) {
+            $crate::sound::report(&$crate::canvas::field::text(env, state));
+        }
+
         /// The activity started (`false`) or stopped (`true`): the page's
         /// `visibilityState` (LLP 1133.010 §9).
         #[no_mangle]

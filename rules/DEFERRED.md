@@ -949,6 +949,14 @@ reading. Nothing that isn't HTML is added by it.
   fades. Take: none offered; waived by that assignment. Still out: loops, a
   change at a future time (`at=`), curves other than a straight line, and a
   handle to one voice (a group names it).
+- **Expanded (Charlie, 2026-11-12, #356; LLP 1096/1125):** Android
+  Contract sound output through an on-demand AAudio arm sharing Apple's mixer,
+  with scheduled gain, rate, pan and cancellation, output state, and the host's
+  existing audio-focus owner. Consumer: Cameron Chisholm's React Native port,
+  whose short cues need to play on Android as on iOS. Take: none named; Charlie's
+  ruling to build Android output waives it. This lifts Android sound output
+  from LLP 1125's deferred set. Linux and Windows output, Android MIDI output,
+  timed haptics and background sound playback stay out.
 - **Expanded (LLP 1098; admitted by the orchestrator under Charlie's
   2026-10-04 delegation, "make decisions without me"):** the media session,
   by the Media Session API's names, on HTML's media element:

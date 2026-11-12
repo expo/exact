@@ -215,3 +215,6 @@ fn test_compile(source: &str) -> Vec<u8> {
     let _ = std::fs::remove_dir_all(&dir);
     plan.unwrap().encode()
 }
+
+/// Android Contract sound handoff; the mixer lives in its optional native arm.
+pub mod sound;

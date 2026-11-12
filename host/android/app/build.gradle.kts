@@ -56,6 +56,7 @@ android {
         (project.findProperty("idSuffix") as String?)?.let { applicationIdSuffix = it }
         versionName = providers.environmentVariable("EXACT_VERSION").orElse("0.1.0").get()
         ndk { abiFilters += "arm64-v8a" }
+        manifestPlaceholders["audioSession"] = manifest["audio_session"] as String? ?: "ambient"
         manifestPlaceholders["appName"] = identity["name"] as String
         manifestPlaceholders["screenOrientation"] = screenOrientation
         manifestPlaceholders["exactDevelopment"] = providers.gradleProperty("exactDevelopment").orNull == "1"

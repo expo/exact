@@ -6,6 +6,7 @@ import java.nio.ByteBuffer
 /** exact2 on the main thread: layout, shaping and the paint walk, recorded as Canvas ops. */
 object Native {
     init { System.loadLibrary("exactcanvas") }
+    @JvmStatic external fun soundState(state: String)
     /** Boot the app's host on the calling thread, in a window of this size in pixels ([window] told its insets);
      * whether it booted. Where a host already runs on this thread (the activity was made again in this process,
      * LLP 1115.001 D15.1) nothing boots: that host is adopted in this window, and paints everything again for the

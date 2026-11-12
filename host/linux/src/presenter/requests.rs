@@ -89,6 +89,8 @@ pub enum Request {
     /// `exact_gpu::haptics` wrote it: the shell plays it on the vibrator.
     /// The canvas's view id, then the JSON.
     SurfaceHaptic(u32, String),
+    /// Contract sound operations for the reader's on-demand AAudio arm.
+    Sound(String),
 }
 
 /// What a picker is opened with, each value as HTML writes it and empty
@@ -130,6 +132,7 @@ impl Request {
             Request::Orientation(_) => 13,
             Request::PadInput(_) => 14,
             Request::SurfaceHaptic(..) => 15,
+            Request::Sound(_) => 16,
         }
     }
 }
@@ -271,7 +274,8 @@ fn encode(id: u32, request: &Request, out: &mut Vec<i32>) {
         Request::Open(text)
         | Request::Copy(text)
         | Request::Module(text)
-        | Request::Presence(text) => string(out, text),
+        | Request::Presence(text)
+        | Request::Sound(text) => string(out, text),
         Request::Haptic(haptic) => out.push(*haptic as i32),
         Request::Share(share) => {
             // Which of the three the app gave (bit 0 the title, 1 the text,
