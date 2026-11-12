@@ -171,6 +171,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a module in Swift that `app.ts` asks; a value from the launch environment (a resource that reads `native.available` or calls `native.call` keeps its answer across launches)|`native-module`|
 |a canvas drawn in Rust on the GPU (a `Surface`); Rust of the app's own, in its own Cargo workspace|`gpu-module`|
 |app.json keys, `assets/`, the `modules` folder|`app-json`|
+|an action Siri, Shortcuts or a browser's agent calls (a `tool` line and its face)|`tools`|
 |a phone manifest: orientation, appearance, HTTP, a public setting|`phone-manifest`|
 |a section of the long guides, whole, by its heading|`bun exact.mjs docs <heading words>`|
 

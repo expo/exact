@@ -1882,6 +1882,15 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `nav = top(nav).name == "shop" and (url == "/" or url.slice(0, 2) == "/?") ? replace(nav, url) : go(nav, url)`,
   so Back leaves the shop rather than stepping through each filter. (The same store, 2026-11-01.)
 
+- **A route that says `activate=interaction` offers a browser's agent no tools at load.** Its page
+  registers its faced tools with `document.modelContext` only when its script starts: at the
+  person's first use of a control, on a page with an `intersect` handler at a scroll or when that
+  element shows, or when the viewport differs from one the page's comparisons were rendered for.
+  Until then `getTools()` is empty. Leave `activate` unsaid on such a route: in an app with a faced
+  tool on the web door, an undeclared route whose page would wait for the reader activates `idle`
+  instead, and registers its tools once the page has loaded and is idle. (Exact Bistro, a WebMCP
+  demo site, 2026-11-12.)
+
 ## Working on Exact itself
 
 - **A CDP adapter re-sends known children and Styles stays empty.**
