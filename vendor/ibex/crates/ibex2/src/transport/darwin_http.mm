@@ -340,7 +340,8 @@ void ibex2_darwin_session_destroy(void *handle) {
 // headers. Inputs are copied by Foundation before this function returns.
 void *ibex2_darwin_http_start(void *session_handle, const char *method,
     const char *url, const char *header_block, const unsigned char *body,
-    size_t body_len, size_t max_body, double timeout_seconds, char **out_error) {
+    size_t body_len, size_t max_body, double timeout_seconds, int speculative,
+    char **out_error) {
   @autoreleasepool {
     *out_error = nullptr;
     NSURL *nsurl = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
@@ -362,6 +363,8 @@ void *ibex2_darwin_http_start(void *session_handle, const char *method,
     }
     if (body_len > 0) request.HTTPBody = [NSData dataWithBytes:body length:body_len];
     if (timeout_seconds > 0) request.timeoutInterval = timeout_seconds;
+    // Low Data Mode refuses a request nobody has asked for yet (Exact patch 35).
+    if (speculative) request.allowsConstrainedNetworkAccess = NO;
     Ibex2Exchange *exchange = [[Ibex2Exchange alloc] initWithLimit:max_body];
     exchange.pool = pool;
     exchange.request = request;

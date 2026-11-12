@@ -958,6 +958,8 @@ fn start_indices(
         let transport = Arc::new(fetch.blocking_adapter(workers.clone()));
         let mut req = fetch_request(request, false);
         req.max_body = Some(cache::MAX_ENTRY);
+        // A preload is asked for by nobody yet: Low Data Mode refuses it (LLP 1162.000 D4).
+        req.speculative = true;
         if let Some((name, observer)) = &observed {
             observer(name, Observation::Handed);
         }

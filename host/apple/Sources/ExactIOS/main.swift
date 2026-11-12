@@ -268,6 +268,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     var window: UIWindow?
+    func sceneWillEnterForeground(_ scene: UIScene) { ExactLaunch.shared.opened() }
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let ws = scene as? UIWindowScene else { return }
         ExactEnv.stamp("scene")

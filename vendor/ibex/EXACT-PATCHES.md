@@ -775,3 +775,11 @@ it reports `head`. Both call the embedder outside the task's lock, since what
 it calls may abort the fetch.
 
 Replay all of it on a refresh.
+
+## Local patch 35, a speculative fetch
+
+`stdlib::fetch::Request` carries `speculative`. The Darwin transport sends
+such a request with `allowsConstrainedNetworkAccess` false, so URLSession
+refuses it under Low Data Mode; the portable transport ignores the field.
+Exact sets it on a preload, a request made before the app asks for it
+(LLP 1162.000 D4, LLP 1162 D7). Unset, nothing changes. Replay it on a refresh.

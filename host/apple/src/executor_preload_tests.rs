@@ -102,7 +102,11 @@ fn equality_folds_header_names_and_compares_every_body_byte_and_url_for_any_meth
             );
             let mut def = definition(&server, "/equal");
             def.request.method = method.into();
-            def.request.body = b"one".to_vec();
+            // URLSession refuses a GET that has a body, as a browser's fetch does.
+            let bodied = method != "GET";
+            if bodied {
+                def.request.body = b"one".to_vec();
+            }
             def.request.headers = vec![("X-A".into(), "1".into()), ("X-B".into(), "2".into())];
             let mut equal = def.request.clone();
             equal.headers = vec![("x-b".into(), "2".into()), ("x-a".into(), "1".into())];
@@ -114,6 +118,9 @@ fn equality_folds_header_names_and_compares_every_body_byte_and_url_for_any_meth
             assert!(cached);
             assert_eq!(reply.status, status);
             for difference in 0..3 {
+                if difference == 1 && !bodied {
+                    continue;
+                }
                 let mut request = equal.clone();
                 match difference {
                     0 => request.headers[0].1 = "different".into(),
@@ -130,7 +137,7 @@ fn equality_folds_header_names_and_compares_every_body_byte_and_url_for_any_meth
                 assert!(!cached);
                 assert_eq!(response.body, b"sent");
             }
-            assert_eq!(server.count(), 4);
+            assert_eq!(server.count(), if bodied { 4 } else { 3 });
         }
     }
 }
