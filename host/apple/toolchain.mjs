@@ -184,9 +184,10 @@ export function appleCommand(command, args, options = {}, platform = process.pla
   }
   if (command === 'xcrun') {
     args = [...args];
-    const flag = ['--sdk', '-sdk'].find(flag => args.includes(flag));
-    const name = flag ? valueAfter(args, flag) : sdkForTriple(valueAfter(args, '-target')) ?? 'macosx';
-    if (flag) args = withoutOption(args, flag);
+    // Only xcrun's own leading `--sdk` names its SDK; a later `-sdk` is the tool's argument.
+    const flag = ['--sdk', '-sdk'].includes(args[0]) ? args[0] : null;
+    const name = flag ? args[1] : sdkForTriple(valueAfter(args, '-target')) ?? 'macosx';
+    if (flag) args = args.slice(2);
     if (args[0] === '--show-sdk-path' || args[0] === '--show-sdk-version') {
       const sdk = crossSdk(name, env), value = args[0] === '--show-sdk-path' ? sdk.sdk : sdk.version;
       if (!value) throw new Error(`host/apple: ${name} has no SDK version`);

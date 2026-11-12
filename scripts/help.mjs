@@ -640,6 +640,7 @@ export function appleBuildRefusal(args, env = process.env) {
   if (unsigned && args.includes('--watchos')) return '--unsigned takes no --watchos: a watch build is the simulator companion, which no one re-signs';
   if (unsigned && !args.includes('--device')) return '--unsigned needs --device: it builds an ad-hoc signed device bundle';
   if (args.includes('--development') && !(archive && unsigned)) return '--development needs --archive and --unsigned: it packages the development build as an .ipa a service re-signs';
+  if (args.includes('--development') && (args.includes('--release') || env.EXACT_UPDATE_TRUST === 'production')) return '--development packages the development build, so it takes neither --release nor EXACT_UPDATE_TRUST=production';
   if (unsigned && args.includes('--run')) return '--unsigned takes no --run: an ad-hoc signed device bundle cannot launch on a stock device; use a development profile and identity';
   if (archive && (!args.includes('--device') || args.includes('--run') || args.includes('--host') || !unsigned && (!env.EXACT_IDENTITY || !env.EXACT_PROFILE))) return '--archive needs --device and EXACT_IDENTITY and EXACT_PROFILE (or --unsigned), and takes neither --run nor --host';
   return null;

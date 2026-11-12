@@ -816,6 +816,8 @@ export function singleFramework(framework, output, triple) {
   if (!target) throw new Error(`host/apple: cannot package a framework for ${triple}`);
   const [, arch, os, variant] = target, platform = os === 'macosx' ? 'macos' : os;
   const identifier = `${platform}-${arch}${variant ?? ''}`, name = basename(framework, '.framework');
+  // A directory without its Info.plist is an interrupted run's: start again.
+  if (existsSync(output) && !existsSync(resolve(output, 'Info.plist'))) rmSync(output, { recursive: true, force: true });
   if (existsSync(output)) throw new Error(`host/apple: framework output already exists: ${output}`);
   mkdirSync(output, { recursive: true });
   try {
