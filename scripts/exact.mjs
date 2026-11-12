@@ -1364,7 +1364,8 @@ async function main(argv) {
     const rest = flags.filter((_, i) => i !== at && i !== at + 1 || at < 0);
     if (rest.some(flag => !['--check', '--device'].includes(flag)) || at >= 0 && (!flags.includes('--check') || !['ios', 'macos', 'android', 'web', 'linux', 'windows'].includes(platform)) || flags.includes('--device') && platform !== 'ios')
       throw new Error('Usage: exact setup [--check [--platform ios|macos|android|web|linux|windows [--device]]]');
-    if (['ios', 'macos'].includes(platform) && process.platform !== 'darwin') throw new Error(`${platform} needs a Mac with Xcode`);
+    // iOS also builds on Linux with the cross SDK, whose rows the check reports (app-shells.mjs bringPlatform agrees).
+    if (platform === 'macos' && process.platform !== 'darwin' || platform === 'ios' && !['darwin', 'linux'].includes(process.platform)) throw new Error(`${platform} needs a Mac with Xcode${platform === 'ios' ? ', or Linux with the Apple cross SDK' : ''}`);
     return setup({check:flags.includes('--check'), platform, device:flags.includes('--device')});
   }
   if (verb === 'list') return list();
