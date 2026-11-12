@@ -4,7 +4,7 @@ import XCTest
 @testable import ExactKit
 
 /// A header's search field and the keyboard as the search's route is covered and shown again, and as editing ends
-/// with nothing typed (`HeaderSearch.refusesBegin`, `HeaderSearch.closeIfIdle`).
+/// with nothing typed (`NavigationHost.searchCovered`, `HeaderSearch.settle`).
 final class SearchKeyboardIOSTests: XCTestCase {
     private var session: ExactSession?
     private var window: UIWindow?
@@ -15,10 +15,9 @@ final class SearchKeyboardIOSTests: XCTestCase {
         super.tearDown()
     }
 
-    /// UIKit's search controller makes a field it resigned for a push the first responder again in the completion of
-    /// the pop that shows its route (`_navigationControllerWillShowViewController:`, with the Duo's toolbar search);
-    /// the test asks there as UIKit does. The field stays as it was left: the search open with its text, the
-    /// keyboard down.
+    /// UIKit makes a bar's search field the first responder again as the pop shows its route only when the field was
+    /// editing as the push covered it (measured on the Duo's toolbar search). The host ends the editing before the
+    /// push, so Back leaves the field as the person left it: the search open with its text, the keyboard down.
     func testBackToAnOpenSearchKeepsTheKeyboardDown() throws {
         guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
         let (session, nav, search) = try openSearch()
@@ -26,11 +25,9 @@ final class SearchKeyboardIOSTests: XCTestCase {
         field.insertText("a")
         // As a result opened from the search does
         session.presenter.press(try node(session, "detail").id)
+        until("editing ends as the push is written") { !field.isFirstResponder }
         until("the detail shows") { nav.topViewController !== home && nav.transitionCoordinator == nil }
-        XCTAssertFalse(field.isFirstResponder, "UIKit resigns the field for the push")
         nav.popViewController(animated: true)
-        let pop = try XCTUnwrap(nav.transitionCoordinator)
-        pop.animate(alongsideTransition: nil) { _ in _ = field.becomeFirstResponder() }
         until("the search's route shows again") { nav.topViewController === home && nav.transitionCoordinator == nil }
         spin(0.5)
         XCTAssertFalse(field.isFirstResponder, "the keyboard stays down")
@@ -57,6 +54,45 @@ final class SearchKeyboardIOSTests: XCTestCase {
         XCTAssertTrue(field.resignFirstResponder())
         until("the empty search closes", 10) { !search.isActive }
         until("its close ends", 10) { search.transitionCoordinator == nil }
+    }
+
+    /// The person's close takes UIKit's emptying of the field to the app, the platform's default; an app whose
+    /// `cancel` calls `preventDefault()` keeps its text, which the bar shows, closed, once UIKit has dismissed it.
+    /// (`isActive = false` from outside the host is the person's close, as the Duo's close button dismisses the
+    /// controller without the bar's Cancel action.)
+    func testTheCloseButtonClearsTheTextUnlessCancelPreventsIt() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        for (typed, kept) in [("abc", ""), ("keep it", "keep it")] {
+            let (session, _, search) = try openSearch()
+            let field = search.searchBar.searchTextField, input = try node(session, "header-search")
+            field.insertText(typed)
+            until("the app hears \(typed)") { input.props["value"] == typed }
+            search.isActive = false
+            until("UIKit closes the search (\(typed))") { !search.isActive && search.transitionCoordinator == nil && !field.isFirstResponder }
+            spin(0.3)
+            XCTAssertEqual(input.props["value"], kept, typed)
+            XCTAssertEqual(search.searchBar.text ?? "", kept, typed)
+            if !kept.isEmpty {
+                session.presenter.focusElement(["keyboard-search"])
+                until("the search opens again with its text") { search.isActive && field.isFirstResponder && search.transitionCoordinator == nil }
+                XCTAssertEqual(search.searchBar.text, kept)
+            }
+            session.destroy(); self.session = nil; window?.isHidden = true
+        }
+    }
+
+    /// The host's own close (`HeaderSearch.close()`) fires no `cancel` and keeps the text, whatever the app's `cancel`.
+    func testTheHostsOwnCloseKeepsTheText() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "UIKit presents a search in a transition only in a window a scene holds") }
+        let (session, nav, search) = try openSearch()
+        let field = search.searchBar.searchTextField, input = try node(session, "header-search")
+        field.insertText("abc")
+        until("the app hears the text") { input.props["value"] == "abc" }
+        try XCTUnwrap((nav.topViewController as? RouteController)?.search).close()
+        until("the search closes") { !search.isActive && search.transitionCoordinator == nil && !field.isFirstResponder }
+        spin(0.3)
+        XCTAssertEqual(input.props["value"], "abc")
+        XCTAssertEqual(search.searchBar.text, "abc")
     }
 
     /// The fixture's home route with its header's search open and its field editing.

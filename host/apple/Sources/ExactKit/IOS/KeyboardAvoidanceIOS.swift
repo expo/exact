@@ -285,6 +285,8 @@ extension NodeView {
             #if os(iOS)
             let route = ViewPresentation.controllers(for: self).lazy.compactMap { $0 as? RouteController }.first
             if route?.search?.controller.searchBar.searchTextField.isEditing == true { return .onDrag }
+            // A search's results too, while its field edits
+            if let route, presenter?.navigation.searchEditing(over: route) != nil { return .onDrag }
             #endif
             return .interactive
         }

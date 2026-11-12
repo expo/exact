@@ -202,7 +202,6 @@ extension HeaderSearch {
         // The press's batch may not reach the bar (one that changes only list rows): its answer is read here.
         if let list = scopeList, presenter.views[list.id] === list { scope(list) }
     }
-    func didPresentSearchController(_ search: UISearchController) { showScopes() }
 }
 /// LLP 1135: a filter as the segmented controls under a large title and
 /// under the inline title it collapses to, kept in step.

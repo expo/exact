@@ -295,6 +295,9 @@ component NativeFixture
   state query = ""
   action setQuery(text: string)
     query = text
+  action closeSearch
+    if query.slice(0, 4) == "keep"
+      preventDefault()
   state segment = "all"
   action chooseSegment(name: string)
     segment = name
@@ -416,8 +419,9 @@ component NativeFixture
                       // A popover's invoker is a bar item opening a UIMenu.
                       button popovertarget="bar-menu" aria-label="More" testId="menu-item" padding=6 background-color="#e5e7eb"
                         image "symbol:sf/ellipsis.circle" width=20 height=20
-                      // A search field in the header: the item's search controller.
-                      input type="search" value=query input=setQuery placeholder="Search the fixture" testId="header-search" width=80
+                      // A search field in the header: the item's search controller. Its close button keeps text
+                      // that starts with "keep" (`closeSearch`), and clears any other, the platform's default.
+                      input type="search" value=query input=setQuery cancel=closeSearch placeholder="Search the fixture" testId="header-search" width=80
                       // A text tablist in the header: the item's segmented title view.
                       row role="tablist" testId="header-segments"
                         // The projected segmented control owns the chrome; its

@@ -129,7 +129,7 @@ final class Picker: NSObject {
 
     func cancel(_ view: UInt32) {
         open.remove(view)
-        session.apply(session.runtime.pickerCancel(view, now: session.now()))
+        session.apply(session.runtime.cancel(view, now: session.now()))
     }
 
     /// Copy each file in, converting per D6, describe it (D3), fire `change`.

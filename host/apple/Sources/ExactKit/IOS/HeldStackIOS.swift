@@ -58,7 +58,10 @@ extension UIViewController {
     /// The routes of a stack Exact built, its root first: a navigation
     /// controller's, or the one a held stack shows.
     var stackRoutes: [UIViewController] {
-        if let nav = self as? UINavigationController { return nav.viewControllers }
+        // A search's results drawn in a route's controller are the stack's, on top of that route (`placingResults`)
+        if let nav = self as? UINavigationController {
+            return nav.viewControllers.flatMap { c in [c] + (c is RouteController ? c.children.filter { $0 is RouteController } : []) }
+        }
         return ((self as? HeldStack)?.route).map { [$0] } ?? []
     }
 }

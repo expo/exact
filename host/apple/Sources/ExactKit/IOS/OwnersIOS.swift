@@ -66,10 +66,12 @@ extension Presenter {
         return viewportPoints(viewport.convert(shown, from: nil))
     }
 
-    /// Ends editing wherever the session is mounted; whether any editor resigned.
+    /// Ends editing wherever the session is mounted; whether any editor resigned. A bar's search field ends
+    /// through its search, which holds the end back while UIKit moves the bar into search (`HeaderSearch.resign`).
     @discardableResult
     package func endEditing() -> Bool {
-        presentations(includingRetiring: true).reduce(documentHost.endEditing(true)) { $1.endEditing(true) || $0 }
+        if let search = navigation.searchInUseRoute?.search { search.resign(); return true }
+        return presentations(includingRetiring: true).reduce(documentHost.endEditing(true)) { $1.endEditing(true) || $0 }
     }
 
     /// The next view reached by a touch or its listeners: the superview,

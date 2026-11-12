@@ -2338,6 +2338,18 @@ restart, start another drive on the same `--storage`. See [host commands](contra
   one written in it is still its button's menu, never more bar buttons.
 - The header's `input type="search"` hides when scrolling while it is empty, as UIKit's
   does; `position="sticky" top=0` on it keeps the search field visible.
+- The search's close button (iOS's ✕ beside an open search) empties the field, as UIKit's
+  does, and the field hears `input` with `""`. It fires `cancel` at the field first, HTML's
+  event for a close the person asks for: an action that calls `preventDefault()` there keeps
+  the text, so the closed bar still holds it and opening the search again shows it
+  (`input type="search" value=query input=search cancel=keepQuery` with `action keepQuery`
+  calling `preventDefault()`).
+- Results that are a level of their own: `aria-controls` on the header's search input names an
+  element of another route, the results route, which `focus` enters (`nav = go(nav,
+  "/search")`). iOS pushes it as any route, but over a list alone in its stack it is drawn
+  over the list, so the field stays in reach; Back, the ✕ or another page leaves it and the
+  search closes, keeping its text (LLP 1127.000). Without `aria-controls` the search filters
+  its own route.
 - A header's buttons that press, and its disabled ones (dimmed, as UIKit's), are bar
   items; a readout nothing presses ("● Clock") is a `row` or `text` with `role="status"`
   ("Tabs and stacks"). Past the subtitle, the first text after the heading, other texts

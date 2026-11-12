@@ -159,7 +159,7 @@ extension Picker {
     func documentCancelled(_ view: UInt32, _ name: String) {
         answerHold(view, nil)
         session.log("\(name): cancelled")
-        session.apply(session.runtime.pickerCancel(view, now: session.now()))
+        session.apply(session.runtime.cancel(view, now: session.now()))
     }
 
     /// The manifest's `file_handlers`, as the bake wrote them into

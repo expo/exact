@@ -385,7 +385,7 @@ final class DialogHost {
             close(dialog)
             if live(dialog), dialog.handlers.contains("cancel") {
                 if let onCancel { onCancel(dialog.id) }
-                else if let session = presenter?.session { session.apply(session.runtime.pickerCancel(dialog.id, now: session.now())) }
+                else if let session = presenter?.session { session.apply(session.runtime.cancel(dialog.id, now: session.now())) }
             }
             return
         }

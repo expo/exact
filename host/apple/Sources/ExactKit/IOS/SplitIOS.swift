@@ -41,11 +41,12 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     private(set) var inspector: UINavigationController?
     /// The person closed the inspector's column; the router has yet to hear it.
     var inspectorClosed: () -> Void = {}
+    /// The detail is about to cover the list as the columns collapse.
+    var listWillBeCovered: () -> Void = {}
+    /// Whether the router's stack is the list, alone or with its search's results (`NavigationHost.listOnTop`).
+    var listOnTop: () -> Bool = { false }
     /// UIKit is moving the columns, inside its animation (`moveAlong`).
     var columnsMove: () -> Void = {}
-    /// UIKit is about to collapse or expand the columns (a fold), and has done so.
-    var columnsWillChange: () -> Void = {}
-    var columnsDidChange: () -> Void = {}
     /// UIKit has said the columns will move and has yet to open its animation. It lays them out itself, inside that
     /// animation, as it does a view constrained to the safe area: nothing here may lay them out before then, or what
     /// the safe area moves jumps to its end.
@@ -101,6 +102,8 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// `expansion`, for a split moves one way at a time. A mark left set held
     /// every later stack and the inspector back (`show`, `inspect`).
     private var collapsing = false
+    /// Whether UIKit is collapsing or expanding the columns, from its question until its report.
+    var moving: Bool { expansion || collapsing }
     /// Whether the split is expanded and no longer moving between its forms: UIKit reads it expanded before it has
     /// said so (`splitViewControllerDidExpand`), and a sync can come between.
     var settledExpanded: Bool { !controller.isCollapsed && !expansion && !collapsing }
@@ -119,7 +122,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
     /// The stack, root first, in the two columns: what UIKit shows of it is
     /// UIKit's. A push or pop within the detail is animated as a stack's is;
     /// a new detail replaces the last at once, as a hand-built split's does.
-    func show(_ stack: [RouteController], animated: Bool) {
+    func show(_ stack: [RouteController], animated: Bool, revealsDetail: Bool = true) {
         guard let root = stack.first else { return }
         let moved = self.stack.map(ObjectIdentifier.init) != stack.map(ObjectIdentifier.init)
         self.stack = stack
@@ -148,7 +151,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         if !same(next) { detail.setViewControllers(next, animated: animated && within) }
         // A selection while UIKit shows the list over the detail shows the
         // detail (LLP 1127 D6); any other change (a search typed in the list) leaves the list.
-        if moved, !rest.isEmpty, controller.displayMode == .oneOverSecondary { controller.show(.secondary) }
+        if moved, revealsDetail, !rest.isEmpty, controller.displayMode == .oneOverSecondary { controller.show(.secondary) }
     }
 
     /// The route the inspector's column shows, while the split is expanded.
@@ -303,7 +306,6 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
                              topColumnForCollapsingToProposedTopColumn proposedTopColumn: UISplitViewController.Column) -> UISplitViewController.Column {
         expansion = false
         collapsing = true
-        columnsWillChange()
         // Collapsing with its inspector shown, UIKit presents the inspector's
         // column as a sheet of its own: the route goes to the sheet it says
         // instead (LLP 1127 D14), and the column, emptied for it, would be a
@@ -311,13 +313,14 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         #if os(iOS)
         if #available(iOS 26.0, *), let inspector, svc.viewController(for: .inspector) === inspector { svc.setViewController(nil, for: .inspector) }
         #endif
-        return detail.viewControllers.contains { $0 is RouteController } ? .secondary : .primary
+        let covers = detail.viewControllers.contains { $0 is RouteController }
+        if covers { listWillBeCovered() }
+        return covers ? .secondary : .primary
     }
     func splitViewController(_ svc: UISplitViewController,
                              displayModeForExpandingToProposedDisplayMode proposedDisplayMode: UISplitViewController.DisplayMode) -> UISplitViewController.DisplayMode {
         collapsing = false
         expansion = true
-        columnsWillChange()
         return proposedDisplayMode
     }
 
@@ -333,7 +336,7 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         expansion = false
         collapsing = false
         show(stack, animated: false)
-        DispatchQueue.main.async { self.changed(); self.columnsDidChange() }
+        DispatchQueue.main.async { self.changed() }
     }
     func splitViewControllerDidExpand(_ svc: UISplitViewController) {
         collapsing = false
@@ -341,14 +344,15 @@ final class SplitIOS: NSObject, UISplitViewControllerDelegate {
         // Collapsed, a pop of the detail's controller left its routes in it.
         show(stack, animated: false)
         // At the list after a Back while collapsed, the detail goes back to the page the person left. Asked once the
-        // expansion is over, as the router's answer changes the columns.
+        // expansion is over, as the router's answer changes the columns, while the router is still at the list, alone or
+        // with its search's results (which may have moved to the detail, or left with an empty search, meanwhile).
         if stack.count == 1, let location = left {
             DispatchQueue.main.async { [weak self] in
-                guard let self, stack.count == 1, !controller.isCollapsed else { return }
+                guard let self, listOnTop(), !controller.isCollapsed else { return }
                 returnTo(location)
             }
         }
-        DispatchQueue.main.async { self.changed(); self.columnsDidChange() }
+        DispatchQueue.main.async { self.changed() }
     }
     func splitViewController(_ svc: UISplitViewController, willChangeTo displayMode: UISplitViewController.DisplayMode) {
         if let coordinator = svc.transitionCoordinator {
@@ -371,17 +375,6 @@ extension Presenter {
 }
 
 extension NavigationHost {
-    /// The columns collapsed or expanded (a fold or an unfold): the field that had the focus before has it
-    /// again while its route still shows, as the person left it typing; UIKit takes a field moved to another
-    /// column out of its responder chain. Covered (a page over the list on a folded Duo), it keeps none.
-    func keepFocusAcrossColumns() {
-        guard let node = focusAcrossColumns else { return }
-        focusAcrossColumns = nil
-        guard presenter.views[node.id] === node, presenter.focusedNode !== node,
-              !isInactiveRoute(containing: node) else { return }
-        presenter.focusNode(node)
-    }
-
     /// Whether the stack whose first route is `root` shows as UIKit's split:
     /// its list's rows push, by the runner's rule, under the platform's chrome.
     /// An installed split keeps its list while that list has no row to act on.
@@ -405,9 +398,9 @@ extension NavigationHost {
         split.changed = { [weak self] in self?.splitChanged() }
         split.returnTo = { [weak self] location in self?.go(to: location) }
         split.inspectorClosed = { [weak self] in self?.inspectorClosed() }
+        split.listWillBeCovered = { [weak split] in (split?.list.viewControllers.first as? RouteController)?.search?.resign() }
+        split.listOnTop = { [weak self] in self?.listOnTop() ?? false }
         split.columnsMove = { [weak self] in self?.reportCovers(); self?.presenter.owners.publish() }
-        split.columnsWillChange = { [weak self] in self?.focusAcrossColumns = self?.presenter.focusedNode }
-        split.columnsDidChange = { [weak self] in self?.keepFocusAcrossColumns() }
         self.split = split
         primaryNavigation = list
         prepareRoutes(Array(first.prefix(1)), in: list)
@@ -427,10 +420,16 @@ extension NavigationHost {
 
     /// The stack in the split's columns, its routes projected into each.
     func syncSplit(_ split: SplitIOS, _ stack: [RouteController], animated: Bool) {
+        // Collapsed, results typed at the list are drawn in it; expanded they are the detail's
+        let stack = placingResults(stack, on: split.controller.isCollapsed ? split.list : nil, inPlace: !split.settledExpanded)
         prepareRoutes(Array(stack.prefix(1)), in: split.list)
         prepareRoutes(Array(stack.dropFirst()), in: split.detail, firstPushed: true)
+        if let results = resultsInPlace { prepareRoutes([results], in: split.list, firstPushed: true) }
         let shown = split.shown
-        split.show(stack, animated: animated)
+        // A list over the detail stays as its search's results come or go: only another page shows the detail
+        let results = resultsRoute(of: stack.first?.search?.field, in: stack)
+        let pages = { (routes: [RouteController]) in routes.filter { $0 !== results }.map(ObjectIdentifier.init) }
+        split.show(stack, animated: animated, revealsDetail: pages(stack) != pages(shown))
         noteDetail(split, stack)
         for nav in [split.list, split.detail] { recordOwned(nav) }
         // A sidebar's selected row follows the detail.
@@ -444,7 +443,9 @@ extension NavigationHost {
     /// (`SplitIOS.left`). The stack at its root on a split settled expanded leaves none: the router took the page
     /// away, not a Back the person made from it on the collapsed split.
     private func noteDetail(_ split: SplitIOS, _ stack: [RouteController]) {
-        guard let root = stack.first, let top = stack.dropFirst().last else {
+        // Never the search's results: the page under them is the one left
+        let results = resultsRoute(of: stack.first?.search?.field, in: stack)
+        guard let root = stack.first, let top = stack.dropFirst().last(where: { $0 !== results }) else {
             if split.settledExpanded { split.left = nil }
             return
         }
@@ -452,10 +453,34 @@ extension NavigationHost {
         if let location = presenter.session?.runtime.stackSplit(root.node.id, retaining: nil)?.locations[top.node.id] { split.left = location }
     }
 
+    /// The router's stack, root first.
+    private var routerRoutes: [RouteController] { shownKeys.compactMap { key in controllers.values.first { $0.key == key } } }
+
+    /// Whether the router's stack is the list, alone or with its search's results over it.
+    func listOnTop() -> Bool {
+        let routes = routerRoutes
+        return routes.count == 1 || (routes.count == 2 && resultsRoute(of: routes[0].search?.field, in: routes) === routes[1])
+    }
+
     /// The router goes to `location`, as a link there takes it: the root's `navigate`, else the runner's own `go`.
     /// Nothing is asked under a presentation, as the router would push the page onto the presented stack.
     private func go(to location: String) {
         guard let session = presenter.session, presenter.modals.routes.isEmpty else { return }
+        // The list with its search's results over it: they go back on top of the page it left, so Back from them shows
+        // that page. Back from the results, the page, the results again, as the person would ask for each, unanimated.
+        let routes = routerRoutes
+        if routes.count == 2, resultsRoute(of: routes[0].search?.field, in: routes) === routes[1], routes[1].key == selectedKey,
+           let again = session.runtime.visitLocation(routes[1].key) {
+            unanimated = true
+            goBack()
+            for next in [location, again] {
+                unanimated = true
+                if let root = container, root.handlers.contains("navigate") { session.navigate(next, at: root) } else { session.hostGo(next) }
+            }
+            // A request the app did not answer leaves no unanimated write owed
+            if !inTransition { unanimated = false }
+            return
+        }
         if let root = container, root.handlers.contains("navigate") { session.navigate(location, at: root) } else { session.hostGo(location) }
     }
 
@@ -467,8 +492,13 @@ extension NavigationHost {
         coversChanged()
         presenter.owners.publish()
         presenter.groupedLists?.sync(changed: nil)
-        // An inspector moves between its column and its sheet as the split expands and collapses.
-        if selectedRoute?.props["navigationInspector"] == "true" { sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil)) }
+        // An inspector moves between its column and its sheet as the split expands and collapses, and results drawn
+        // in the list go to the detail as it expands.
+        if selectedRoute?.props["navigationInspector"] == "true" || (resultsInPlace != nil && split?.settledExpanded == true) {
+            sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+        }
+        // A search settles once the columns stop: one left open over a fold whose results a Back took closes then
+        settleSearches()
     }
 
     /// The sheet an expanded split shows as its inspector (`navigationInspector`,

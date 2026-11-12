@@ -95,7 +95,7 @@ extension Picker {
 
     func saveCancelled(_ view: UInt32) {
         session.log("saveFile: cancelled")
-        session.apply(session.runtime.pickerCancel(view, now: session.now()))
+        session.apply(session.runtime.cancel(view, now: session.now()))
     }
 }
 
