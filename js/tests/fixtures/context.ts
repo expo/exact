@@ -58,7 +58,7 @@ async function batch(count: number, store?: any): Promise<{ text: string }> {
   const values = await Promise.all(Array.from({ length: count }, (_, i) =>
     fetch(`${API}/batch/${i}`).then(async r => {
       const value = await r.text();
-      if (store) { store.get("token"); store.set("token", value); console.log(`wrote ${value}`); }
+      if (store) { const before = store.get("token"); store.set("token", value); console.log(`wrote ${value} after ${before}`); }
       return value;
     })));
   return { text: values.join("/") };

@@ -913,8 +913,7 @@ impl Module {
         // amendment of 2026-10-18); a call for no target sends nothing.
         let mutation = match target {
             Some(Target::Mutation(_) | Target::Sent(..)) if session => "mutation",
-            Some(Target::Resource(_)) if session && self.main_thread => "resource",
-            Some(Target::Resource(_)) if session => "answer",
+            Some(Target::Resource(_)) if session => "resource",
             None if session && source.starts_with(TOOL) => "tool",
             _ => "",
         };

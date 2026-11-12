@@ -5,8 +5,8 @@ use exact_js::Module;
 use exact_kernel::Kernel;
 use exact_plan::Value;
 use exact_runner::{
-    Answer, DataSource, Dispatch, InFlight, Outcome, Request, RequestClass, Response, Runner,
-    Store, Target,
+    Answer, DataSource, Dispatch, InFlight, Outcome, Placement, Reply, Request, RequestClass,
+    Response, Runner, Store, Target, Work,
 };
 
 const HBC: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/context.hbc"));
@@ -109,6 +109,41 @@ fn deliver(
     text: &str,
 ) -> Option<Answer> {
     m.parse_fetch_for(target, request.fetch, s, source, args, response(text))
+        .unwrap()
+}
+
+fn run(dispatch: Dispatch) -> Outcome {
+    match dispatch {
+        Dispatch::Run(Work::Now(work)) => work(),
+        Dispatch::Run(Work::Later(work)) => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            work(Reply::new(move |outcome| {
+                tx.send(outcome).unwrap();
+            }));
+            rx.recv_timeout(std::time::Duration::from_secs(20))
+                .expect("the owner replied")
+        }
+        _ => panic!("a runnable turn"),
+    }
+}
+fn placed(placement: Placement) -> exact_data::Placed<Module> {
+    let mut module = Module::new(HBC.to_vec(), "test.context", GRANTS);
+    module.set_budget_ms(f64::INFINITY);
+    let mut data = module.placed(placement);
+    data.bind(&contract::compile(SRC).unwrap());
+    data.activate().unwrap();
+    data
+}
+fn worker_turn(
+    data: &mut impl DataSource,
+    s: &mut Store,
+    target: Target,
+    source: &str,
+    args: &[Value],
+    request: &Request,
+) -> Option<Answer> {
+    let outcome = run(data.dispatch(request.continuation.expect("an owner turn"), s));
+    data.parse_fetch_for(target, request.fetch, s, source, args, outcome)
         .unwrap()
 }
 
@@ -338,12 +373,17 @@ fn a_fetch_before_a_throw_is_still_handed_over() {
 }
 
 #[test]
-fn the_runner_emits_three_reads_and_settles_on_the_third_reply() {
+fn the_runner_emits_five_reads_from_one_turn_and_settles_on_the_last_reply() {
     use exact_data::{Mixed, Placed};
     use exact_data_host::Storage;
     use exact_logic::Swappable;
-    for ordered in [false, true] {
-        let data = Mixed::new(module(), RustSource(ordered), &["batch"], &[]).unwrap();
+    for (worker, ordered) in [(false, false), (false, true), (true, false), (true, true)] {
+        let module = placed(if worker {
+            Placement::Worker
+        } else {
+            Placement::Main
+        });
+        let data = Mixed::new(module, RustSource(ordered), &["batch"], &[]).unwrap();
         let data = Placed::built(data, exact_runner::Placement::Main, |_| {
             unreachable!("inline")
         });
@@ -354,7 +394,7 @@ fn the_runner_emits_three_reads_and_settles_on_the_third_reply() {
 shape Result
   text: string
 component App
-  resource result = batch(3) as shape Result
+  resource result = batch(5) as shape Result
   view
     text "sets"
 "#,
@@ -369,91 +409,100 @@ component App
         )
         .unwrap();
         let mut requests = r.take_requests();
-        if ordered {
+        if ordered || worker {
             assert_eq!(requests.len(), 1);
             let turn = requests.remove(0);
-            let outcome = match r.dispatch_work(turn.request.continuation.unwrap()) {
-                Dispatch::Run(exact_runner::Work::Now(work)) => work(),
-                _ => panic!("the ordered main turn runs here"),
-            };
+            let outcome = run(r.dispatch_work(turn.request.continuation.unwrap()));
             r.fulfill(turn.ticket, outcome).unwrap();
             requests = r.take_requests();
         }
-        assert_eq!(requests.len(), 3);
-        for request in &requests {
+        assert_eq!(requests.len(), 5);
+        for (i, request) in requests.iter().enumerate() {
             assert_eq!(request.class, RequestClass::Read);
+            assert_eq!(
+                request.request.url,
+                format!("https://context.test/batch/{i}")
+            );
         }
         let initial = r.resource("result").cloned();
-        for i in [2, 0, 1] {
+        for i in (0..5).rev() {
             r.fulfill(requests[i].ticket, response(&i.to_string()))
                 .unwrap();
-            if ordered {
+            if ordered || worker {
                 let turns = r.take_requests();
                 assert_eq!(turns.len(), 1);
                 let turn = &turns[0];
-                let outcome = match r.dispatch_work(turn.request.continuation.unwrap()) {
-                    Dispatch::Run(exact_runner::Work::Now(work)) => work(),
-                    _ => panic!("the ordered reply turn runs here"),
-                };
+                let outcome = run(r.dispatch_work(turn.request.continuation.unwrap()));
                 r.fulfill(turn.ticket, outcome).unwrap();
             }
             assert!(r.take_requests().is_empty());
-            if i != 1 {
+            if i != 0 {
                 assert_eq!(r.resource("result"), initial.as_ref());
                 assert!(r.has_pending());
             }
         }
-        assert_eq!(r.resource("result"), Some(&value("0/1/2")));
+        assert_eq!(r.resource("result"), Some(&value("0/1/2/3/4")));
         assert!(!r.has_pending());
     }
 }
 
 #[test]
-fn an_ordered_main_child_keeps_each_fetch_ticket_and_empty_turn_writes() {
+fn an_ordered_child_keeps_each_fetch_ticket_and_pending_turn_writes() {
     use exact_data::Mixed;
-    use exact_runner::Work;
-    let mut data = Mixed::new(module(), RustSource(true), &["writes"], &[]).unwrap();
-    let mut s = store();
-    let target = Target::Resource(0);
-    fn run(data: &mut impl DataSource, s: &Store, request: &Request) -> Outcome {
-        match data.dispatch(request.continuation.unwrap(), s) {
-            Dispatch::Run(Work::Now(work)) => work(),
-            _ => panic!("an ordered main turn runs here"),
-        }
-    }
-    let turn = later(data.answer_for(target, &mut s, "writes", &[]).unwrap());
-    let outcome = run(&mut data, &s, &turn);
-    let first = later(
-        data.parse_fetch_for(target, turn.fetch, &mut s, "writes", &[], outcome)
-            .unwrap()
-            .unwrap(),
-    );
-    let mut requests = vec![first];
-    requests.extend(data.more_for(target));
-    assert_eq!(requests.len(), 3);
-    for (step, i) in [2, 0, 1].into_iter().enumerate() {
-        let turn = later(
-            data.parse_fetch_for(
-                target,
-                requests[i].fetch,
-                &mut s,
-                "writes",
-                &[],
-                response(&i.to_string()),
-            )
-            .unwrap()
-            .unwrap(),
-        );
-        assert_eq!(turn.fetch, requests[i].fetch);
-        let outcome = run(&mut data, &s, &turn);
-        let answer = data
-            .parse_fetch_for(target, turn.fetch, &mut s, "writes", &[], outcome)
-            .unwrap();
-        assert_eq!(s.get("token"), Some(i.to_string().as_str()));
-        if step == 2 {
-            assert_eq!(answer, Some(Answer::Now(value("0/1/2"))));
+    for worker in [false, true] {
+        let child = placed(if worker {
+            Placement::Worker
         } else {
-            assert!(answer.is_none());
+            Placement::Main
+        });
+        let mut data = Mixed::new(child, RustSource(true), &["writes"], &[]).unwrap();
+        data.activate().unwrap();
+        let mut s = store();
+        let target = Target::Resource(0);
+        let turn = later(data.answer_for(target, &mut s, "writes", &[]).unwrap());
+        let outcome = run(data.dispatch(turn.continuation.unwrap(), &s));
+        let first = later(
+            data.parse_fetch_for(target, turn.fetch, &mut s, "writes", &[], outcome)
+                .unwrap()
+                .unwrap(),
+        );
+        let mut requests = vec![first];
+        requests.extend(data.more_for(target));
+        assert_eq!(requests.len(), 3);
+        for (step, i) in [2, 0, 1].into_iter().enumerate() {
+            let turn = later(
+                data.parse_fetch_for(
+                    target,
+                    requests[i].fetch,
+                    &mut s,
+                    "writes",
+                    &[],
+                    response(&i.to_string()),
+                )
+                .unwrap()
+                .unwrap(),
+            );
+            assert_eq!(turn.fetch, requests[i].fetch);
+            let before = format!("committed-{step}");
+            s.set("token", &before).unwrap();
+            let reads = s.reads();
+            let outcome = run(data.dispatch(turn.continuation.unwrap(), &s));
+            let answer = data
+                .parse_fetch_for(target, turn.fetch, &mut s, "writes", &[], outcome)
+                .unwrap();
+            assert!(s.reads() > reads, "the pending turn's read crosses");
+            assert_eq!(s.get("token"), Some(i.to_string().as_str()));
+            assert!(
+                data.take_logs()
+                    .iter()
+                    .any(|l| l.contains(&format!("wrote {i} after {before}"))),
+                "the turn read the store committed at dispatch"
+            );
+            if step == 2 {
+                assert_eq!(answer, Some(Answer::Now(value("0/1/2"))));
+            } else {
+                assert!(answer.is_none());
+            }
         }
     }
 }
@@ -477,4 +526,140 @@ fn a_timer_adopts_the_fetch_it_names_when_siblings_have_different_wakes() {
         .unwrap();
     assert_eq!(Some(token), requests[1].fetch);
     assert!(request.continuation.is_some());
+}
+
+#[test]
+fn a_worker_drops_all_three_fetches_and_ignores_their_late_replies() {
+    fn check(mut data: impl DataSource) {
+        let mut s = store();
+        let target = Target::Resource(0);
+        let turn = later(data.answer_for(target, &mut s, "gone", &[]).unwrap());
+        let mut old = vec![later(
+            worker_turn(&mut data, &mut s, target, "gone", &[], &turn).unwrap(),
+        )];
+        old.extend(data.more_for(target));
+        assert_eq!(old.len(), 3);
+        data.forgotten(&s, &[]);
+        let check = Target::Mutation(7);
+        let turn = later(data.answer_for(check, &mut s, "rejected", &[]).unwrap());
+        assert_eq!(
+            worker_turn(&mut data, &mut s, check, "rejected", &[], &turn),
+            Some(Answer::Now(value("3")))
+        );
+        let turn = later(data.answer_for(target, &mut s, "gone", &[]).unwrap());
+        let mut next = vec![later(
+            worker_turn(&mut data, &mut s, target, "gone", &[], &turn).unwrap(),
+        )];
+        next.extend(data.more_for(target));
+        assert_eq!(next.len(), 3);
+        for request in &old {
+            assert!(data
+                .parse_fetch_for(target, request.fetch, &mut s, "gone", &[], response("late"))
+                .unwrap()
+                .is_none());
+        }
+        for (i, request) in next.iter().enumerate().rev() {
+            let turn = later(
+                data.parse_fetch_for(target, request.fetch, &mut s, "gone", &[], response("ok"))
+                    .unwrap()
+                    .unwrap(),
+            );
+            let answer = worker_turn(&mut data, &mut s, target, "gone", &[], &turn);
+            if i == 0 {
+                assert_eq!(answer, Some(Answer::Now(value("done"))));
+            } else {
+                assert!(answer.is_none());
+            }
+        }
+        assert!(data.more_for(target).is_empty());
+    }
+    check(placed(Placement::Worker));
+    check(
+        exact_data::Mixed::new(
+            placed(Placement::Worker),
+            RustSource(true),
+            &["gone", "rejected"],
+            &[],
+        )
+        .unwrap(),
+    );
+}
+
+#[test]
+fn a_worker_mutations_promise_all_hands_over_one_request_at_a_time() {
+    fn check(mut data: impl DataSource) {
+        let mut s = store();
+        let target = Target::Mutation(0);
+        let args = [Value::Number(5.)];
+        let turn = later(data.answer_for(target, &mut s, "batch", &args).unwrap());
+        let mut request =
+            later(worker_turn(&mut data, &mut s, target, "batch", &args, &turn).unwrap());
+        for i in 0..5 {
+            assert_eq!(request.url, format!("https://context.test/batch/{i}"));
+            assert!(data.more_for(target).is_empty());
+            let turn = later(
+                data.parse_fetch_for(
+                    target,
+                    request.fetch,
+                    &mut s,
+                    "batch",
+                    &args,
+                    response(&i.to_string()),
+                )
+                .unwrap()
+                .unwrap(),
+            );
+            let answer = worker_turn(&mut data, &mut s, target, "batch", &args, &turn).unwrap();
+            if i == 4 {
+                assert_eq!(answer, Answer::Now(value("0/1/2/3/4")));
+            } else {
+                request = later(answer);
+            }
+        }
+    }
+    check(placed(Placement::Worker));
+    check(
+        exact_data::Mixed::new(placed(Placement::Worker), RustSource(true), &["batch"], &[])
+            .unwrap(),
+    );
+}
+
+#[test]
+fn a_worker_reply_can_hand_over_a_new_set() {
+    let mut data = placed(Placement::Worker);
+    let mut s = store();
+    let target = Target::Resource(0);
+    let turn = later(data.answer_for(target, &mut s, "wave", &[]).unwrap());
+    let first = later(worker_turn(&mut data, &mut s, target, "wave", &[], &turn).unwrap());
+    assert!(data.more_for(target).is_empty());
+    let turn = later(
+        data.parse_fetch_for(target, first.fetch, &mut s, "wave", &[], response("start"))
+            .unwrap()
+            .unwrap(),
+    );
+    let mut next = vec![later(
+        worker_turn(&mut data, &mut s, target, "wave", &[], &turn).unwrap(),
+    )];
+    next.extend(data.more_for(target));
+    assert_eq!(next.len(), 3);
+    for (i, request) in next.iter().enumerate().rev() {
+        let turn = later(
+            data.parse_fetch_for(
+                target,
+                request.fetch,
+                &mut s,
+                "wave",
+                &[],
+                response(&i.to_string()),
+            )
+            .unwrap()
+            .unwrap(),
+        );
+        let answer = worker_turn(&mut data, &mut s, target, "wave", &[], &turn);
+        if i == 0 {
+            assert_eq!(answer, Some(Answer::Now(value("0/1/2"))));
+        } else {
+            assert!(answer.is_none());
+        }
+    }
 }

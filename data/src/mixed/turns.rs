@@ -17,22 +17,6 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
         }
     }
 
-    pub(super) fn child_parse(
-        &mut self,
-        rust: bool,
-        target: Option<Target>,
-        store: &mut Store,
-        source: &str,
-        args: &[Value],
-        outcome: Outcome,
-    ) -> Result<Answer, DataError> {
-        if rust {
-            crate::parse(&mut self.rust, target, store, source, args, outcome)
-        } else {
-            crate::parse(&mut self.javascript, target, store, source, args, outcome)
-        }
-    }
-
     #[allow(clippy::too_many_arguments)]
     pub(super) fn child_parse_fetch(
         &mut self,
@@ -112,11 +96,6 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
     ) -> Result<Option<Answer>, DataError> {
         let rust = self.owner(source)?;
         let grants = self.child_grants(rust);
-        let fetch = if self.child_placement(rust) == Placement::Worker {
-            None
-        } else {
-            fetch
-        };
         if let Some(set) = self.set_of[rust as usize] {
             let call_key = key(rust, target, source, args);
             let k = (call_key.clone(), fetch);
@@ -131,13 +110,14 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                     self.sets[set].running = None;
                     let answer = if self.child_placement(rust) == Placement::Worker {
                         store.with_grants(&grants, |store| {
-                            self.child_parse(rust, target, store, source, args, outcome)
-                                .map(Some)
+                            self.child_parse_fetch(
+                                rust, target, fetch, store, source, args, outcome,
+                            )
                         })
                     } else {
                         let mut logs = Vec::new();
                         let answer = store.with_grants(&grants, |store| {
-                            envelope::apply_optional(outcome, store, &mut logs)
+                            envelope::apply_optional(outcome, store, &mut logs, &mut Vec::new())
                         });
                         self.logs.extend(logs);
                         answer
@@ -170,13 +150,9 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                             } else {
                                 Stage::Yielded
                             };
-                            let next_fetch = if self.child_placement(rust) == Placement::Main {
-                                match &answer {
-                                    Answer::Later(r) => r.fetch,
-                                    _ => None,
-                                }
-                            } else {
-                                None
+                            let next_fetch = match &answer {
+                                Answer::Later(r) => r.fetch,
+                                _ => None,
                             };
                             self.stages
                                 .entry((call_key.clone(), next_fetch))
@@ -215,6 +191,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                         },
                     )
                     .map(Some),
+                None if self.child_placement(rust) == Placement::Worker => Ok(None),
                 None => Err(unavailable(format!(
                     "`{source}`: a reply for an answer not in flight"
                 ))),

@@ -1188,7 +1188,7 @@
     if (typeof f !== "function") { e = new Error("the data module's `tools` has no `" + name + "`"); e.kind = "UnknownSource"; throw e; } r = f(args, store, storage); return r && typeof r.then === "function" ? r.then(text) : text(r); }
   global.__exact_call = function (source, argsJson, mutation) {
     initializing = false;
-    var call = { id: nextCall++, status: "pending", value: undefined, error: undefined, tickets: [], storage: 0, replied: false, mutation: mutation === "mutation", answer: mutation === "answer" || mutation === "resource", set: mutation === "resource", sync: false, socketOps: null, epoch: gcEpoch() };
+    var call = { id: nextCall++, status: "pending", value: undefined, error: undefined, tickets: [], storage: 0, replied: false, mutation: mutation === "mutation", answer: mutation === "resource", set: mutation === "resource", sync: false, socketOps: null, epoch: gcEpoch() };
     var result;
     currentCall = call; work.setTurn(call);
     calls.set(call.id, call);

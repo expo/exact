@@ -406,8 +406,13 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                     source,
                     args,
                     outcome,
+                    fetch,
                     ..
-                } => self.child_parse(rust, target, &mut scratch, &source, &args, outcome),
+                } => self
+                    .child_parse_fetch(rust, target, fetch, &mut scratch, &source, &args, outcome)
+                    .and_then(|answer| {
+                        answer.ok_or_else(|| unavailable("a worker turn was expected"))
+                    }),
             };
             return match answer {
                 // A long poll on a member's own work (LLP 1016.000 D8): no request a host could run, so the
@@ -474,7 +479,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
                 ..
             } => self.child_parse_fetch(rust, target, fetch, &mut local, &source, &args, outcome),
         };
-        let outcome = envelope::encode_optional(result, &mut local, Vec::new());
+        let outcome = envelope::encode_optional(result, vec![], &mut local, Vec::new());
         Dispatch::Run(Work::Now(Box::new(move || outcome)))
     }
 

@@ -27,12 +27,13 @@ pub fn snapshot(store: &Store, grants: &str) -> Vec<(String, Vec<u8>)> {
 /// device observations it made; its `console` lines; and the answer — a
 /// value, the next request (a yield at storage or `fetch`), or an error.
 pub fn encode(result: Result<Answer, DataError>, local: &mut Store, logs: Vec<String>) -> Outcome {
-    encode_optional(result.map(Some), local, logs)
+    encode_optional(result.map(Some), vec![], local, logs)
 }
 
 /// A resource's turn may leave its other fetches in flight (LLP 1162 D2).
 pub fn encode_optional(
     result: Result<Option<Answer>, DataError>,
+    more: Vec<Request>,
     local: &mut Store,
     logs: Vec<String>,
 ) -> Outcome {
@@ -57,7 +58,10 @@ pub fn encode_optional(
             let why = request.long_poll_refusal().unwrap_or_default();
             body["error"] = error_json(&unavailable(why));
         }
-        Ok(Some(Answer::Later(request))) => body["request"] = request_json(&request),
+        Ok(Some(Answer::Later(request))) => {
+            body["request"] = request_json(&request);
+            body["more"] = Json::Array(more.iter().map(request_json).collect());
+        }
         Ok(None) => body["waiting"] = Json::Bool(true),
         Err(error) => body["error"] = error_json(&error),
     }
@@ -82,7 +86,8 @@ pub fn apply(
     store: &mut Store,
     logs: &mut Vec<String>,
 ) -> Result<Answer, DataError> {
-    apply_optional(outcome, store, logs)?.ok_or_else(|| unavailable("turn reply: no answer"))
+    apply_optional(outcome, store, logs, &mut Vec::new())?
+        .ok_or_else(|| unavailable("turn reply: no answer"))
 }
 
 /// Apply the turn's writes and observations even while its answer waits.
@@ -90,6 +95,7 @@ pub fn apply_optional(
     outcome: Outcome,
     store: &mut Store,
     logs: &mut Vec<String>,
+    more: &mut Vec<Request>,
 ) -> Result<Option<Answer>, DataError> {
     let body = match outcome {
         Outcome::Response(r)
@@ -137,7 +143,15 @@ pub fn apply_optional(
         return Err(error_from(error));
     }
     if let Some(request) = json.get("request") {
-        return request_from(request).map(|r| Some(Answer::Later(r)));
+        let request = request_from(request)?;
+        let requests = json["more"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(request_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        more.extend(requests);
+        return Ok(Some(Answer::Later(request)));
     }
     if json["waiting"] == Json::Bool(true) {
         return Ok(None);
