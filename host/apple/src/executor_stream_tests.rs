@@ -323,6 +323,18 @@ fn settled(core: &Core) -> bool {
 }
 
 #[test]
+fn protocols_on_an_http_stream_are_refused_before_opening() {
+    let (core, script, _) = setup();
+    let mut request = stream(1, "/plain", 4096);
+    request.request.protocols = vec!["events.v1".into()];
+    assert_eq!(
+        core.run_owned(request, None).unwrap_err(),
+        "exactProtocols: only a WebSocket stream takes protocols"
+    );
+    assert!(script.feeds.lock().unwrap().is_empty());
+}
+
+#[test]
 fn three_messages_then_a_close_and_the_worker_stays_free() {
     let (core, script, woke) = setup();
     core.run_owned(stream(1, "/events", 4096), None).unwrap();
@@ -555,6 +567,7 @@ fn the_parser_reads_lines_fields_and_cursors_as_html_does() {
                 id: "7".into(),
                 data: "{\"a\":\n1}".into(),
                 coalesced: 0,
+                protocol: Box::default(),
                 binary: None,
             },
             Message {

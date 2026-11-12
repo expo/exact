@@ -716,7 +716,7 @@ fn an_executor_is_linked_only_for_a_named_module() {
 
 #[test]
 fn rust_capability_receipts_bind_executor_abi_target_and_module() {
-    assert_eq!(super::RUST_ABI, 7);
+    assert_eq!(super::RUST_ABI, 8);
     let dir = app("rust-capabilities");
     let mut manifest = Manifest::read(&dir).unwrap();
     let mut ids = Vec::new();
@@ -936,6 +936,10 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
     assert_eq!(
         needs(b"fetch(u, {exactStream: m, exactIdleTimeout: 6e4})"),
         9
+    );
+    assert_eq!(
+        needs(b"fetch(u, {exactStream: m, exactProtocols: names})"),
+        12
     );
     // A transaction's options are data: what decides 10 is the grant.
     assert_eq!(needs(b"await db.transaction(m.commands, m.options)"), 0);

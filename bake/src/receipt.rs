@@ -596,7 +596,7 @@ fn artifact_graph(
         } else {
             target.to_string()
         };
-        json!({"rustMode":mode,"rustAbi":2,"rustTarget":target,"grantCeiling":inputs["grantCeiling"],"rustGrants":inputs["rustGrants"]})
+        json!({"rustMode":mode,"rustAbi":crate::compat::RUST_ABI,"rustTarget":target,"grantCeiling":inputs["grantCeiling"],"rustGrants":inputs["rustGrants"]})
     } else {
         json!({})
     };

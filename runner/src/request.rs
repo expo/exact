@@ -115,6 +115,8 @@ pub struct Request {
     /// coalesced, and a [`Outcome::Closed`] end; mutations send on it
     /// ([`SocketSend`]). Unset, a socket only listens, as in D4.
     pub socket: bool,
+    /// Ordered WebSocket protocol names (LLP 1016.000); set with [`Request::protocols`].
+    pub protocols: Vec<String>,
     /// An HTTP stream whose body, when it is not `text/event-stream`,
     /// arrives as bytes (LLP 1016.000, the byte stream of 2026-10-23): each
     /// [`Message`] is `binary`, the bytes read since the runner took the
@@ -296,6 +298,7 @@ impl Request {
             body,
             stream: false,
             socket: false,
+            protocols: Vec::new(),
             bytes: false,
             upload_progress: false,
             long_poll: None,
@@ -402,6 +405,7 @@ impl Request {
             body: Vec::new(),
             stream: false,
             socket: false,
+            protocols: Vec::new(),
             bytes: false,
             upload_progress: false,
             long_poll: None,
@@ -447,6 +451,7 @@ impl Request {
             body: json.as_bytes().to_vec(),
             stream: false,
             socket: false,
+            protocols: Vec::new(),
             bytes: false,
             upload_progress: false,
             long_poll: None,
@@ -899,6 +904,8 @@ pub struct Message {
     /// taken them yet (LLP 1016.000 D4: display data coalesces to the
     /// newest). Non-zero is a gap a log re-asks across from its cursor.
     pub coalesced: u32,
+    /// The negotiated WebSocket protocol; empty for other streams or no offer.
+    pub protocol: Box<str>,
     /// A two-way socket's binary frame (LLP 1016.000 D7): its bytes, with
     /// `data` empty. `None` for text and for every server-sent event.
     pub binary: Option<Vec<u8>>,
@@ -1449,3 +1456,6 @@ mod scheduling_tests {
 #[cfg(test)]
 #[path = "request_tests.rs"]
 mod tests;
+
+#[path = "request_socket.rs"]
+mod socket_protocols;

@@ -1781,6 +1781,25 @@ commit coalesce to the newest, counted in `coalesced`. The end is
 closed: `the socket closed (1000)`), `Refused` (outside the grants), `Aborted`,
 or `Response` with the status and body of a reply that was not an event stream.
 
+For authentication, use the runnable [single-use ticket recipe](recipes/socket-ticket.md):
+an authorized HTTPS request obtains a ticket, and a second source opens its WSS
+stream. Each reconnect obtains another ticket.
+
+A socket can offer protocol names in preference order with
+`exactProtocols: ["events.v2", "events.v1"]` beside `exactStream` (LLP 1016.000).
+Rust calls `Request::get(url).protocols(["events.v2", "events.v1"])`, handles
+its `Result<Request, String>`, then passes the request to `Answer::stream`. Each name must be a
+nonempty [RFC 7230 token](https://www.rfc-editor.org/rfc/rfc7230#section-3.2.6),
+and duplicate names are refused by name before opening. Names are case-sensitive.
+The mapper's `event.protocol` (Rust `Message::protocol`) reports the selection
+on `open` and each message; receive-only hosts report it on each message.
+An omitted or empty list preserves an ordinary socket with an empty selection.
+If protocols were offered, a missing selection fails the connection, as does an
+unoffered selection, following the
+[WebSocket opening handshake](https://websockets.spec.whatwg.org/#opening-handshake).
+Do not put access tokens in protocol names: their alphabets differ, and the server
+echoes the selected protocol.
+
 A TypeScript source's `http:`/`https:` stream whose 2xx body is not
 `text/event-stream` is a **byte stream** (LLP 1016.000, the amendment of
 2026-10-23): each `message` has an ArrayBuffer `data`, the bytes read since the

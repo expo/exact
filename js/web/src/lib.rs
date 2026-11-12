@@ -406,6 +406,20 @@ impl Module {
                     .as_str()
                     .ok_or_else(|| unavailable("fetch has no URL"))?,
             );
+            if let Some(names) = r.get("protocols") {
+                let names = names
+                    .as_array()
+                    .and_then(|names| {
+                        names
+                            .iter()
+                            .map(|name| name.as_str().map(str::to_owned))
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .ok_or_else(|| {
+                        unavailable("exactProtocols must be an array of protocol names")
+                    })?;
+                request = request.protocols(names).map_err(unavailable)?;
+            }
             request.method = r["method"]
                 .as_str()
                 .ok_or_else(|| unavailable("fetch has no method"))?
@@ -514,6 +528,7 @@ fn outcome_json(outcome: Outcome) -> Result<Json, DataError> {
                 ("id", m.id.into()),
                 ("data", m.data.into()),
                 ("coalesced", m.coalesced.into()),
+                ("protocol", m.protocol.to_string().into()),
             ]),
         )]),
         // The web's wasm host keeps every socket listening (LLP 1016.000 D7):
@@ -1195,6 +1210,52 @@ mod tests {
             .parse_for(target, &mut store, "feed", &[], end)
             .is_err());
         assert_eq!(module.streams.len(), 0, "its end closes it");
+    }
+
+    #[test]
+    fn stream_protocol_names_cross_the_browser_module_seam() {
+        let mut module = Module::new("test", "", "revision");
+        module
+            .signatures
+            .insert("feed".into(), (vec![], Shape::String));
+        let mut store = Store::new("", []);
+        for (names, expected) in [
+            (serde_json::json!([]), Ok(vec![])),
+            (
+                serde_json::json!(["chat.v2", "chat.v1"]),
+                Ok(vec!["chat.v2", "chat.v1"]),
+            ),
+            (
+                serde_json::json!(["bad/name"]),
+                Err("invalid WebSocket protocol"),
+            ),
+            (
+                serde_json::json!(["chat", "chat"]),
+                Err("duplicate WebSocket protocol"),
+            ),
+            (
+                serde_json::json!("chat"),
+                Err("exactProtocols must be an array"),
+            ),
+        ] {
+            let turn = serde_json::json!({"tag":1,"request":{"method":"GET",
+                "url":"ws://example.test", "headers":[], "stream":true,"protocols":names}});
+            let answer = module.step(
+                &mut store,
+                "feed",
+                "feed".into(),
+                &serde_json::to_vec(&turn).unwrap(),
+            );
+            match expected {
+                Ok(names) => {
+                    let Answer::Later(request) = answer.unwrap() else {
+                        panic!("a stream request")
+                    };
+                    assert_eq!(request.protocols, names);
+                }
+                Err(message) => assert!(format!("{:?}", answer.unwrap_err()).contains(message)),
+            }
+        }
     }
 
     #[test]

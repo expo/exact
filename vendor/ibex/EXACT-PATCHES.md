@@ -776,7 +776,18 @@ it calls may abort the fetch.
 
 Replay all of it on a refresh.
 
-## Local patch 32, an asynchronous fetch's reply body destination
+## Local patch 32, gated WebSocket subprotocols
+
+The host binding passes protocol names through its existing network gate
+(LLP 1016.000). It checks the selected name against the offer, including the
+browser rule that an offer requires a selection. Protocol names are case-sensitive,
+including duplicate detection in the JavaScript constructor. Gated opens, receive-only
+opens and event watches share the selection check; a refused watch reports error
+then close 1006, without open. `stdlib/websocket.rs` tests those entry points.
+`host/apple/src/executor_protocol_tests.rs` exercises
+URLSession and the portable transport against a local handshake server.
+
+## Local patch 33, an asynchronous fetch's reply body destination
 
 `stdlib::fetch::Request::response_body` optionally names a `BodyDestination`
 and an error-body allowance. `FetchTask` sends only the final 2xx body's
@@ -794,7 +805,7 @@ Exact uses that boundary to arbitrate abort and deadline against publication
 
 Replay both on a refresh.
 
-## Local patch 33, asynchronous transport retirement
+## Local patch 34, asynchronous transport retirement
 
 `AsyncTransport::retire` releases a lane's idle resources while accepted
 exchanges retain their physical owners (LLP 1162 D8). `BlockingAdapter`
@@ -807,7 +818,7 @@ Retirement refuses further preparation and task completions still arrive.
 
 Replay these lifecycle methods and the retained-pool and lane tests on a refresh.
 
-## Local patch 34, a redirect's next hop names its destination
+## Local patch 35, a redirect's next hop names its destination
 
 The asynchronous fetch tells its embedder that a redirect's next hop is
 ready (`next_hop`). The call now carries the hop's URL, so the embedder

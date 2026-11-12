@@ -213,6 +213,7 @@ fn request_json(request: &Request) -> Json {
         "headers": request.headers,
         "body": base64(&request.body),
         "stream": request.stream,
+        "protocols": request.protocols,
         "upload_progress": request.upload_progress.then_some(true),
         "long_poll": request.long_poll.as_ref().map(|p| json!({
             "cursor": p.cursor, "from": p.from, "same_cursor_event": p.same_cursor_event,
@@ -310,6 +311,8 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
                 }))
             }
         },
+        protocols: serde_json::from_value(json["protocols"].clone())
+            .map_err(|_| unavailable("invalid socket protocols"))?,
         idle_timeout_ms: match &json["idle_timeout_ms"] {
             Json::Null => None,
             value => Some(
@@ -347,6 +350,7 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         wake_ms: json["wake_ms"].as_u64(),
         fetch: json["fetch"].as_u64(),
     };
+    request.check_protocols().map_err(unavailable)?;
     // A long poll's terms, checked as every host checks them (LLP 1016.000 D8), and an upload's.
     match request
         .long_poll_refusal()

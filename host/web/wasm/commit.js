@@ -426,7 +426,7 @@ function apply(batch) {
               if (messages++ === 0) {
                 first();
               }
-              safelyFulfill(requestIncarnation, op.ticket, 8, 0, `event: ${m.event}\nid: ${m.id}\ncoalesced: ${m.coalesced}`, encoder.encode(m.data));
+              safelyFulfill(requestIncarnation, op.ticket, 8, 0, `event: ${m.event}\nid: ${m.id}\ncoalesced: ${m.coalesced}\nprotocol: ${m.protocol ?? ""}`, encoder.encode(m.data));
             }
           };
           controllers.add(controller);

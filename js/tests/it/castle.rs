@@ -348,6 +348,7 @@ fn fetch_carries_its_redirect_mode_and_refuses_an_unknown_one() {
 
 fn event(id: &str, data: &str, coalesced: u32) -> Outcome {
     Outcome::Message(exact_runner::Message {
+        protocol: Box::default(),
         event: String::new(),
         id: id.into(),
         data: data.into(),

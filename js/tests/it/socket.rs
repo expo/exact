@@ -63,6 +63,7 @@ fn boot_both() -> (Runner<Module>, u64, u64) {
     assert_eq!(out[0].request.url, "wss://echo.test/a");
     assert_eq!(out[1].request.url, "wss://echo.test/side");
     // `exactIdleTimeout` reaches the request the executor is given (LLP 1016.000 D11).
+    assert_eq!(out[0].request.protocols, ["chat.v2", "chat.v1"]);
     assert_eq!(out[0].request.idle_timeout_ms, None);
     assert_eq!(out[1].request.idle_timeout_ms, Some(60_000));
     (r, out[0].ticket, out[1].ticket)

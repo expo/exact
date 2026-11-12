@@ -14,7 +14,7 @@ use exact_runner::{
 pub mod draw;
 
 /// Seam version, independent of the plan format version.
-pub const ABI: u32 = 7;
+pub const ABI: u32 = 8;
 /// Maximum request or response bytes, enforced on both sides.
 pub const MAX_MESSAGE: usize = exact_runner::MAX_HOST_WORK_BYTES;
 
@@ -327,6 +327,7 @@ fn encode_outcome(w: &mut Writer, outcome: &Outcome) {
                 None => w.string(&m.data),
             }
             w.u32(m.coalesced);
+            w.string(&m.protocol);
         }
         Outcome::Closed {
             code,
@@ -384,6 +385,7 @@ fn read_outcome(r: &mut Reader<'_>) -> Result<Outcome, String> {
             id,
             data,
             coalesced: r.u32().map_err(error)?,
+            protocol: r.string().map_err(error)?.into(),
             binary,
         }));
     }
@@ -568,6 +570,12 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
             w.string(&r.url);
             pairs(w, &r.headers);
             bytes(w, &r.body);
+            if r.stream {
+                w.u32(r.protocols.len() as u32);
+                for name in &r.protocols {
+                    w.string(name);
+                }
+            }
             if let (Some(p), HttpScheduling::Independent { .. }) = (poll, r.http) {
                 w.string(&p.cursor);
                 w.string(&p.from);
@@ -669,6 +677,7 @@ fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
         long_poll: None,
         timeout_ms: None,
         idle_timeout_ms: None,
+        protocols: Vec::new(),
         body_from: None,
         body_to: None,
         redirect: Redirect::Follow,
@@ -708,6 +717,12 @@ fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
         headers: read_pairs(r)?,
         body: read_bytes(r)?.to_vec(),
     };
+    if tag >= 9 {
+        for _ in 0..r.count().map_err(error)? {
+            request.protocols.push(r.string().map_err(error)?);
+        }
+        request.check_protocols()?;
+    }
     if tag == 10 {
         let (cursor, from) = (r.string().map_err(error)?, r.string().map_err(error)?);
         let same = r.u8().map_err(error)?;

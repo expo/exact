@@ -191,8 +191,11 @@ fn open_socket(
         HttpScheduling::Ordered => MAX_BODY,
         HttpScheduling::Independent { max_response_bytes } => max_response_bytes as usize,
     };
+    request
+        .check_protocols()
+        .map_err(|e| failed(FailureKind::Refused, e))?;
     b.websocket
-        .open(&request.url, limit, &abort.signal())
+        .open_with_protocols(&request.url, limit, &abort.signal(), &request.protocols)
         .map(|socket| Opened::Socket(socket, limit))
         .map_err(|e| fetch_failure(e, abort))
 }
@@ -214,6 +217,7 @@ fn read_socket(
             Ok(Incoming::Text(data)) => {
                 let m = Message {
                     data,
+                    protocol: socket.protocol().into(),
                     ..Message::default()
                 };
                 if !message(shared, ticket, m) {
@@ -548,6 +552,7 @@ impl EventStream {
                 id: self.id.clone(),
                 data,
                 coalesced: 0,
+                protocol: Box::default(),
                 binary: None,
             }));
         }
@@ -593,3 +598,7 @@ mod tests;
 #[cfg(test)]
 #[path = "executor_stream_timeout_tests.rs"]
 mod timeout_tests;
+
+#[cfg(test)]
+#[path = "executor_protocol_tests.rs"]
+pub(crate) mod protocol_tests;

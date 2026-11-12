@@ -1367,10 +1367,11 @@ With a token in hand, the caller owns where and how it is sent:
 If the API requires a credential on the handshake URL, it refuses an
 unauthenticated upgrade before `open`; a first message cannot authenticate it.
 Use the ticket exchange:
-call `provider.fetch` over HTTPS for a short-lived, single-use ticket, then open
+call `provider.fetch(store, url, { method: "POST" })` over HTTPS for a short-lived,
+single-use ticket, then open
 `fetch('wss://…?ticket=…', { exactStream })` synchronously in a fresh source call.
 Keep the ticket in data code and obtain a new one for each reconnect. See the
-socket-ticket recipe under `docs/recipes/socket-ticket`.
+[socket-ticket recipe](recipes/socket-ticket.md).
 
 The following excerpt is only for an API that accepts the upgrade without a
 credential, then accepts an `authenticate` message and reports expiry with

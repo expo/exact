@@ -258,7 +258,7 @@ pub struct Request {
     pub sent: Option<Sent>,
     /// Each hop's response head, before redirects or body reads (LLP 1162 D4).
     pub received: Option<Received>,
-    /// The asynchronous fetch's final 2xx body destination (Exact patch 32).
+    /// The asynchronous fetch's final 2xx body destination (Exact patch 33).
     pub response_body: Option<crate::stdlib::fetch_async::ResponseBody>,
 }
 

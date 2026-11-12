@@ -263,6 +263,17 @@ impl WebSocket {
         max_message: usize,
         signal: &crate::stdlib::abort::AbortSignal,
     ) -> Result<Box<dyn MessageSource>, HostError> {
+        self.open_with_protocols(url, max_message, signal, &[])
+    }
+
+    /// Open with ordered subprotocols, retaining the host's network gate.
+    pub fn open_with_protocols(
+        &self,
+        url: &str,
+        max_message: usize,
+        signal: &crate::stdlib::abort::AbortSignal,
+        protocols: &[String],
+    ) -> Result<Box<dyn MessageSource>, HostError> {
         websocket::open_gated(
             self.transport.as_ref(),
             &self.grants,
@@ -270,6 +281,7 @@ impl WebSocket {
             url,
             max_message,
             signal,
+            protocols,
         )
     }
 

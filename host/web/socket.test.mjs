@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { readSocket } from './http-body.js';
+import { readSocket, request } from './http-body.js';
 
 // Drive transport events without a scheduler or network: a burst stays in
 // the host queue until close flushes it, so order and overflow are exact.
@@ -8,7 +8,7 @@ function fakeSocket(run) {
   let wire;
   globalThis.WebSocket = class {
     readyState = 0; bufferedAmount = 0; sent = [];
-    constructor() { wire = this; }
+    constructor(url, protocols) { wire = this; this.protocols = protocols; this.protocol = ""; }
     send(data) { this.sent.push(data); }
     close(code, reason) { this.readyState = 2; this.closed = [code, reason]; }
   };
@@ -90,4 +90,45 @@ test.each([
   expect(messages.every(m => m.coalesced === 0)).toBe(true);
   expect(outcome.kind).toBe(2);
   expect(new TextDecoder().decode(outcome.body)).toContain(reason);
+});
+
+test('a socket offers protocols in order and reports the selection', async () => {
+  let done;
+  const messages = [];
+  fakeSocket(wire => {
+    done = readSocket('ws://example.test', 1024, m => messages.push(m), new AbortController(),
+      { socket() {}, admit: () => true }, undefined, ['chat.v2', 'chat.v1']);
+    expect(wire().protocols).toEqual(['chat.v2', 'chat.v1']);
+    wire().protocol = 'chat.v1'; wire().readyState = 1; wire().onopen();
+    wire().onmessage({ data: 'hello' });
+    wire().onclose({ code: 1000, reason: '', wasClean: true });
+    expect(messages.map(m => m.protocol)).toEqual(['chat.v1', 'chat.v1']);
+  });
+  await done;
+});
+
+test('the host WebSocket constructor accepts case variants and refuses exact duplicates', async () => {
+  const source = await Bun.file(new URL('../../vendor/ibex/crates/ibex2/src/bindings/websocket.js', import.meta.url)).text();
+  const globals = Object.assign(Object.create(globalThis), { __ibex2_fire_trusted_event() {} });
+  const factory = new Function('globalThis', 'return ' + source.slice(source.indexOf('(function')))(globals);
+  const offered = [];
+  const Socket = factory({ supported: true, open(_socket, _receive, _url, names) { offered.push(names); return 1; } }, () => {});
+  expect(() => new Socket('ws://example.test', ['events.v1', 'Events.v1'])).not.toThrow();
+  expect(offered).toEqual(['events.v1\nEvents.v1']);
+  expect(() => new Socket('ws://example.test', ['events.v1', 'events.v1'])).toThrow('duplicates');
+});
+
+test('protocols on a non-socket request are refused before fetching', async () => {
+  // The normalized grant also used by module-storage.test.mjs.
+  const grantSet = {version:1,entries:[[1,'net.fetch https://api.castle.test',['fetch','https','api.castle.test',443],null]],error:null,seal:'825ec7a8503217b3'};
+  const original = globalThis.fetch;
+  let hits = 0;
+  globalThis.fetch = async () => { hits++; return new Response('discarded protocols'); };
+  try {
+    for (const stream of [false, true]) {
+      const outcome = await request({ method: 'GET', url: 'https://api.castle.test/events', headers: {}, stream, protocols: ['events.v1'] }, { grantSet, controllers: new Set() });
+      expect([outcome.kind, new TextDecoder().decode(outcome.body)]).toEqual([2, 'exactProtocols: only a WebSocket stream takes protocols']);
+    }
+    expect(hits).toBe(0);
+  } finally { globalThis.fetch = original; }
 });
