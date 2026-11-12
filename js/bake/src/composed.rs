@@ -77,6 +77,9 @@ impl exact_runner::DataSourceWrapper for Composed {
     fn app_id(&self) -> &str {
         self.0.app_id()
     }
+    fn launch(&self) -> Option<exact_runner::request::Launch> {
+        self.0.launch()
+    }
     fn preloads(&self) -> &[exact_runner::request::Preload] {
         self.0.preloads()
     }

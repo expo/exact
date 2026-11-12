@@ -21,6 +21,10 @@ struct Server {
 }
 impl Server {
     fn new(replies: usize) -> Self {
+        Self::responding(vec![b"HTTP/1.1 503 Unavailable\r\nContent-Length: 7\r\nConnection: close\r\n\r\ncontent".to_vec(); replies])
+    }
+    fn responding(responses: Vec<Vec<u8>>) -> Self {
+        let replies = responses.len();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let (send, requests) = channel();
@@ -31,13 +35,13 @@ impl Server {
         let stopping = stop.clone();
         let thread = std::thread::spawn(move || {
             let mut clients = Vec::new();
-            let mut held = held.into_iter();
+            let mut held = held.into_iter().zip(responses);
             for socket in listener.incoming() {
                 let mut socket = socket.unwrap();
                 if stopping.load(Ordering::Acquire) {
                     break;
                 }
-                let held = held.next().expect("unexpected duplicate request");
+                let (held, response) = held.next().expect("unexpected duplicate request");
                 let send = send.clone();
                 let seen = seen.clone();
                 clients.push(std::thread::spawn(move || {
@@ -45,13 +49,15 @@ impl Server {
                     let mut head = Vec::new();
                     while !head.ends_with(b"\r\n\r\n") {
                         let mut byte = [0];
-                        if socket.read(&mut byte).unwrap_or(0) == 0 { return; }
+                        if socket.read(&mut byte).unwrap_or(0) == 0 {
+                            return;
+                        }
                         head.push(byte[0]);
                     }
                     seen.fetch_add(1, Ordering::AcqRel);
                     send.send(String::from_utf8(head).unwrap()).unwrap();
                     let _ = held.recv_timeout(HANG);
-                    let _ = socket.write_all(b"HTTP/1.1 503 Unavailable\r\nContent-Length: 7\r\nConnection: close\r\n\r\ncontent");
+                    let _ = socket.write_all(&response);
                 }));
             }
             for client in clients {
@@ -186,6 +192,26 @@ fn factory(source: &Source) -> impl FnOnce() -> Source + Send + 'static {
 fn ready(launch: &LaunchPreloads) {
     launch.0.set.get().unwrap().control.wait_ready(1);
 }
+fn memory_endow(grants: &str, _: &str, _: bool) -> crate::store::Endowed {
+    let grants = format!(
+        "{}\nstorage.kv {}\nstorage.kv exact.state",
+        exact_runner::io_grants(grants),
+        crate::store::KEPT
+    );
+    let bindings = ibex2::host::Host::new()
+        .with_secret_store(Box::new(ibex2::secrets::MemoryStore::new()))
+        .with_kv_store(Box::new(ibex2::kv::MemoryStore::new()))
+        .endow(ibex2::grant::GrantSet::parse(&grants).unwrap());
+    let secrets = crate::store::Platform::of(&bindings)
+        .with_namespace(exact_data::secrets::Namespace::memory());
+    crate::store::Endowed {
+        bindings: Some(bindings),
+        snapshot: Vec::new(),
+        secrets: Some(Box::new(secrets)),
+        unbound: None,
+        presence: None,
+    }
+}
 struct Driven {
     bridge: Bridge<Source>,
     _wake: Box<Sender<()>>,
@@ -205,6 +231,7 @@ fn boot(source: Source, plan: &[u8], candidate: bool, wakes: Sender<()>) -> (Dri
     let mut bridge = Bridge::with_links(Links {
         io: Some(IoLinks {
             preloads: local,
+            endow: memory_endow,
             ..IoLinks::LINKED
         }),
         ..Links::ALL
@@ -326,6 +353,7 @@ fn discarding_a_prepared_batch_does_not_mark_an_unrelated_reply_as_preload_conte
     let mut bridge = Bridge::with_links(Links {
         io: Some(IoLinks {
             preloads: local,
+            endow: memory_endow,
             ..IoLinks::LINKED
         }),
         ..Links::ALL
@@ -658,3 +686,6 @@ fn setting_or_forgetting_a_secret_drops_inflight_and_ready_preloads_before_and_a
         }
     }
 }
+
+#[path = "launch_rust_tests.rs"]
+mod rust_launch;

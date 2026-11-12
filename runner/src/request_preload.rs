@@ -1,7 +1,63 @@
 //! Engine-free process-start request definitions (LLP 1162.000 D2).
 
-use crate::Request;
+use crate::{Request, Response};
 use std::collections::BTreeMap;
+use std::sync::Arc;
+
+/// Capabilities available before an engine or runner exists (LLP 1162.000 D2).
+pub trait LaunchContext {
+    /// A granted, unguarded kept secret, from this launch's snapshot.
+    fn secret(&mut self, name: &str) -> Option<String>;
+    /// Persist a granted kept secret before returning.
+    fn set_secret(&mut self, name: &str, value: &str) -> Result<(), String>;
+    /// Durably forget a granted kept secret before returning.
+    fn forget_secret(&mut self, name: &str) -> Result<(), String>;
+    /// Fetch synchronously, under the binary's grants, without the HTTP cache.
+    fn fetch(&mut self, request: Request) -> Result<Response, String>;
+}
+
+/// A crate's optional process-start entry point, retained from the binary.
+#[derive(Clone)]
+pub struct Launch {
+    /// The crate name, used without payload text in the journal.
+    pub name: &'static str,
+    /// Runs only on the host's launch thread.
+    pub run: Arc<LaunchFunction>,
+}
+/// The engine-free entry point's signature.
+pub type LaunchFunction = dyn Fn(&mut dyn LaunchContext) -> Vec<LaunchRequest> + Send + Sync;
+impl Launch {
+    /// Register a function with `env!("CARGO_PKG_NAME")` as its name.
+    pub fn new(
+        name: &'static str,
+        run: impl Fn(&mut dyn LaunchContext) -> Vec<LaunchRequest> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            name,
+            run: Arc::new(run),
+        }
+    }
+}
+
+/// One named request returned by a crate's launch function.
+pub struct LaunchRequest {
+    /// Unique among this crate's and the manifest's names.
+    pub name: String,
+    /// A bounded plain HTTP request; its `timeout_ms` is its deadline.
+    pub request: Request,
+    /// Foreground requests wait for the host's Opened event.
+    pub when: PreloadWhen,
+}
+impl LaunchRequest {
+    /// A request sent at process start by default.
+    pub fn new(name: impl Into<String>, request: Request) -> Self {
+        Self {
+            name: name.into(),
+            request,
+            when: PreloadWhen::Start,
+        }
+    }
+}
 
 /// A string parsed at bake; secrets are read only when the request leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,7 +68,7 @@ pub enum PreloadPart {
     Secret(&'static str),
 }
 
-/// When a host may start a manifest request.
+/// When a host may start a launch request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreloadWhen {
     /// Any process start, including a background start.

@@ -366,7 +366,19 @@ timeoutMs?: integer, when?: "start" | "foreground" }` (LLP 1162.000 D2).
 `method` defaults to `GET`, `when` to `"start"`. URL, header values and body may
 reference a kept secret as `{secret:NAME}`; write `{{` for a literal brace.
 The bake checks at most eight entries against fetch and `secret.keep` grants.
-Hosts that support preloads send them at process start.
+Hosts that support preloads send them at process start. A Rust data source may
+implement `launch() -> Option<exact_runner::request::Launch>` and register its
+`launch` function with `Launch::new(env!("CARGO_PKG_NAME"), launch)`. The function
+takes `&mut dyn LaunchContext` and returns `Vec<LaunchRequest>`: named requests,
+with `when` defaulting to `Start` and the request's `timeout_ms` as its deadline.
+The context offers `secret`, durable `set_secret` and `forget_secret`, and blocking
+`fetch` under the binary's grants, without the cache. It exposes no app storage.
+On hosts that start preloads, it runs before the app's module, after the manifest's
+start requests reach the client. Its requests share the eight-entry bound; writes
+of any secret it read invalidate them. After five seconds, boot reads waiting for
+its definitions proceed and its late requests are discarded.
+A panic in it yields no requests where the build unwinds (a development build);
+a release build aborts on a panic there as anywhere in the crate.
 
 A one-window Mac app ends when its window closes. An app with work the person
 expects to go on without the window (a server, a sync), as Mail and Messages

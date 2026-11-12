@@ -8,7 +8,11 @@ impl Backend for SecretBackend {
         self.0.get(name).map_err(|error| error.to_string())
     }
     fn write(&self, name: &str, value: Option<&str>) -> Result<(), String> {
-        crate::launch_preloads::drop_secret(name);
+        crate::launch_preloads::with_secret_write(name, || self.persist(name, value))
+    }
+}
+impl SecretBackend {
+    pub(super) fn persist(&self, name: &str, value: Option<&str>) -> Result<(), String> {
         match value {
             Some(value) => self.0.set(name, value),
             None => self.0.forget(name),
@@ -94,4 +98,25 @@ pub(crate) fn read_launch_secrets(
                 .map(|value| (name.into(), value))
         })
         .collect()
+}
+
+struct LaunchBackend(SecretBackend);
+impl Backend for LaunchBackend {
+    fn read(&self, name: &str) -> Result<Option<String>, String> {
+        self.0.read(name)
+    }
+    fn write(&self, name: &str, value: Option<&str>) -> Result<(), String> {
+        self.0.persist(name, value)
+    }
+}
+pub(crate) fn launch_backend(grants: &str, app: &str) -> Result<impl Backend, String> {
+    let bindings = super::endow_for(grants, app)?;
+    Ok(launch_backend_in(bindings.secrets, secret_directory(app)))
+}
+
+pub(crate) fn launch_backend_in(
+    secrets: Secrets,
+    directory: Option<std::path::PathBuf>,
+) -> impl Backend {
+    LaunchBackend(SecretBackend(secrets, directory))
 }

@@ -11,6 +11,7 @@ const MAX_PRELOADS: usize = 8;
 const MAX_BODY_BYTES: usize = 64 << 10;
 
 /// A plain HTTP request prepared by the host, with its present secrets filled in.
+#[derive(Clone)]
 pub struct Definition {
     /// Stable app-defined name used in the journal.
     pub name: String,
@@ -27,6 +28,23 @@ pub struct Definition {
 pub enum Event {
     /// Handed to the repository fetch client.
     Sent,
+    /// The crate returned its process-start definitions.
+    LaunchRan {
+        /// Time spent in the entry point, in milliseconds.
+        elapsed_ms: u64,
+        /// Number of requests returned, before validation.
+        requests: usize,
+    },
+    /// The crate panicked; no payload is retained.
+    LaunchPanicked {
+        /// Time until the panic was caught, in milliseconds.
+        elapsed_ms: u64,
+    },
+    /// The crate exceeded its own launch window.
+    LaunchDeadline {
+        /// Time until the deadline was observed, in milliseconds.
+        elapsed_ms: u64,
+    },
     /// The device could not supply a named secret.
     MissingSecret,
     /// The first hop or a redirect exceeded the grants.
@@ -170,6 +188,7 @@ enum Message {
     Reply(usize, Result<Collected, HostError>, Instant),
     Hop(Box<dyn FnOnce() + Send>),
     Start(std::ops::Range<usize>, String),
+    Barrier(mpsc::Sender<()>),
     Tick,
     Stop,
 }
@@ -284,6 +303,13 @@ impl Preloads {
     }
 }
 impl Control {
+    /// Wait only on the launch thread until earlier definitions have reached the client.
+    pub(crate) fn handed(&self) {
+        let (send, receive) = mpsc::channel();
+        if self.send.send(Message::Barrier(send)).is_ok() {
+            let _ = receive.recv();
+        }
+    }
     /// A boot can dispatch before its launch thread has read the definitions;
     /// hold those reads without delaying its first batch (LLP 1162.000 D4).
     pub fn definitions_pending(&self, pending: bool) {
@@ -904,10 +930,93 @@ fn run(
                 update(destination, |c| finish(c, i, result, at));
             }
             Ok(Message::Hop(start)) => start(),
+            Ok(Message::Barrier(ready)) => {
+                let _ = ready.send(());
+            }
             Ok(Message::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Ok(Message::Tick) | Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
+}
+
+/// Runtime checks for requests supplied by Rust, including filled manifest references.
+pub(crate) fn valid_request(request: &Request) -> bool {
+    use ibex2::stdlib::fetch::{is_valid_name, is_valid_value, Headers};
+    let Ok(url) = url::Url::parse(&request.url) else {
+        return false;
+    };
+    let userinfo = request.url.split_once(':').is_some_and(|(_, tail)| {
+        tail.trim_start_matches(['/', '\\'])
+            .split(['/', '\\', '?', '#'])
+            .next()
+            .is_some_and(|authority| authority.contains('@'))
+    });
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || userinfo
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+        || !is_valid_name(&request.method)
+        || !request.is_plain_http()
+        || request.body.len() > MAX_BODY_BYTES
+        || (matches!(request.method.to_ascii_uppercase().as_str(), "GET" | "HEAD")
+            && !request.body.is_empty())
+        || request.timeout_refusal().is_some()
+    {
+        return false;
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for (name, value) in &request.headers {
+        if !is_valid_name(name)
+            || !is_valid_value(value)
+            || !names.insert(name.to_ascii_lowercase())
+        {
+            return false;
+        }
+        let mut headers = Headers::new();
+        headers.set(name, value);
+        if headers.for_request().entries().is_empty() {
+            return false;
+        }
+    }
+    true
+}
+
+/// A launch-context fetch bypasses the executor's cache in both directions (LLP 1162.000 D2).
+pub(crate) fn launch_fetch(request: Request, grants: &str) -> Result<Response, String> {
+    if !valid_request(&request) {
+        return Err("invalid launch fetch".into());
+    }
+    cache::granted(grants, &request).map_err(|_| "launch fetch refused".to_owned())?;
+    let scope = exact_data::storage::scope(grants, request.grants.as_deref())?;
+    let grants = ibex2::grant::GrantSet::parse(&exact_runner::io_grants(scope))
+        .map_err(|_| "invalid launch grants")?;
+    let abort = AbortController::new();
+    let deadline = super::outcome::Deadline::arm(
+        request
+            .timeout_ms
+            .unwrap_or(DEFAULT_DEADLINE.as_millis() as u32),
+        &abort,
+    )?;
+    let fetch = reach::gate_fetch(ibex2::host::Host::new().endow(grants).fetch, request.reach);
+    let mut req = fetch_request(request, false);
+    req.max_body = Some(cache::MAX_ENTRY);
+    req.speculative = true;
+    let result = fetch
+        .stream(req, &abort.signal())
+        .and_then(check_headers)
+        .and_then(|r| r.collect());
+    if deadline.passed() {
+        return Err("launch fetch deadline".into());
+    }
+    result
+        .map(|r| Response {
+            status: r.status,
+            headers: r.headers.entries().to_vec(),
+            body: r.body,
+        })
+        .map_err(|_| "launch fetch failed".into())
 }
 
 fn start_indices(
@@ -926,7 +1035,7 @@ fn start_indices(
                 return None;
             };
             let request = &held.definition.request;
-            if request.body.len() > MAX_BODY_BYTES || !request.is_plain_http() {
+            if !valid_request(request) {
                 drop_held(cache, i, Event::Refused);
                 return None;
             }

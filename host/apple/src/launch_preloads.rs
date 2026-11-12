@@ -1,9 +1,11 @@
 //! Process-start requests and their boot handoff (LLP 1162.000 D4).
 use crate::executor::{Io, Preload, PreloadControl, PreloadFact, PreloadObservation, Preloads};
 use exact_runner::{request::PreloadWhen, DataSource, Runner};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
+#[path = "launch_rust.rs"]
+mod rust;
 
 const BEGUN: u8 = 1;
 const PREWARM: u8 = 2;
@@ -28,7 +30,10 @@ pub struct LaunchPreloads(Arc<Launch>);
 struct Launch {
     phase: AtomicU8,
     set: OnceLock<Set>,
-    invalidated: Mutex<BTreeSet<String>>,
+    invalidated: Mutex<BTreeMap<String, u64>>,
+    rust: OnceLock<Arc<rust::Running>>,
+    #[cfg(test)]
+    backend: Mutex<Option<Arc<dyn exact_data::secrets::Backend>>>,
     journal: Mutex<Vec<PreloadFact>>,
     marks: Mutex<Marks>,
     #[cfg(test)]
@@ -52,7 +57,7 @@ struct Set {
 }
 #[derive(Default)]
 struct Marks {
-    entries: Vec<(&'static str, LaunchMark)>,
+    entries: Vec<(String, LaunchMark)>,
     tickets: BTreeMap<u64, String>,
 }
 /// Seconds on CACurrentMediaTime's mach_absolute_time clock; zero means unobserved.
@@ -149,6 +154,8 @@ impl LaunchPreloads {
                 let data = factory();
                 let definitions: Vec<_> = data.preloads().iter().copied().take(8).collect();
                 let grants = data.grants().to_owned();
+                let entry = data.launch();
+                let app = data.app_id().to_owned();
                 #[cfg(test)]
                 let custom = launch.0.reader.lock().unwrap().clone();
                 #[cfg(test)]
@@ -160,15 +167,25 @@ impl LaunchPreloads {
                 let secrets = crate::store::launch_secrets(&grants, data.app_id(), &definitions);
                 drop(data);
                 let mut marks = launch.0.marks.lock().unwrap();
-                marks
-                    .entries
-                    .extend(definitions.iter().map(|d| (d.name, LaunchMark::default())));
+                marks.entries.extend(
+                    definitions
+                        .iter()
+                        .map(|d| (d.name.into(), LaunchMark::default())),
+                );
                 drop(marks);
                 launch.start_definitions(&definitions, &secrets, &grants, PreloadWhen::Start);
+                let returned = if let Some(entry) = entry {
+                    launch.0.set.get().unwrap().control.handed();
+                    rust::run(&launch, entry, &app, &grants, &definitions)
+                } else {
+                    Vec::new()
+                };
+                launch.start_rust(&returned, &grants, PreloadWhen::Start);
                 drop(pending);
-                if !definitions
-                    .iter()
-                    .any(|d| d.when == PreloadWhen::Foreground)
+                if returned.iter().all(|d| d.when != PreloadWhen::Foreground)
+                    && !definitions
+                        .iter()
+                        .any(|d| d.when == PreloadWhen::Foreground)
                 {
                     return;
                 }
@@ -185,6 +202,7 @@ impl LaunchPreloads {
                         &grants,
                         PreloadWhen::Foreground,
                     );
+                    launch.start_rust(&returned, &grants, PreloadWhen::Foreground);
                 }
             });
         if spawned.is_err() {
@@ -210,7 +228,7 @@ impl LaunchPreloads {
             if definition
                 .secrets
                 .iter()
-                .any(|name| invalidated.contains(*name))
+                .any(|name| invalidated.contains_key(*name))
             {
                 self.record_definition(definition, crate::executor::PreloadEvent::DroppedBySecret);
                 continue;
@@ -313,10 +331,57 @@ impl LaunchPreloads {
         }
     }
     pub(crate) fn drop_secret(&self, name: &str) {
-        self.0.invalidated.lock().unwrap().insert(name.into());
+        self.invalidate(name);
+    }
+    fn invalidate(&self, name: &str) -> u64 {
+        let mut versions = self.0.invalidated.lock().unwrap();
+        let version = versions.entry(name.into()).or_default();
+        *version += 1;
         if let Some(set) = self.0.set.get() {
             set.control.drop_secret(name);
         }
+        *version
+    }
+    fn with_secret_write<T>(&self, name: &str, write: impl FnOnce() -> T) -> T {
+        // A snapshot read during backend I/O must not publish after it (LLP 1162.000 D3).
+        self.invalidate(name);
+        let result = write();
+        self.invalidate(name);
+        result
+    }
+    fn start_rust(&self, definitions: &[rust::Prepared], grants: &str, when: PreloadWhen) {
+        if definitions.is_empty() {
+            return;
+        }
+        let versions = self.0.invalidated.lock().unwrap();
+        let mut ready = Vec::new();
+        for definition in definitions.iter().filter(|d| d.when == when) {
+            if definition
+                .versions
+                .iter()
+                .any(|(name, version)| versions.get(name).copied().unwrap_or(0) != *version)
+            {
+                self.0.journal.lock().unwrap().push(PreloadFact {
+                    name: definition.preload.name.clone(),
+                    origin: rust::origin(&definition.preload.request),
+                    outcome: crate::executor::PreloadEvent::DroppedBySecret,
+                });
+            } else {
+                ready.push(definition.preload.clone());
+            }
+        }
+        let weak = Arc::downgrade(&self.0);
+        let observer = Arc::new(move |name: &str, observation| {
+            if let Some(launch) = weak.upgrade().map(LaunchPreloads) {
+                launch.observe(name, observation);
+            }
+        });
+        self.0
+            .set
+            .get()
+            .unwrap()
+            .control
+            .extend(ready, grants, observer);
     }
     pub(crate) fn journal(&self) -> Vec<PreloadFact> {
         let mut facts = std::mem::take(&mut *self.0.journal.lock().unwrap());
@@ -331,26 +396,26 @@ impl LaunchPreloads {
     pub(crate) fn committed(&self, names: Vec<String>, sequence: u64) {
         let mut marks = self.0.marks.lock().unwrap();
         for (name, mark) in &mut marks.entries {
-            if mark.committed == 0. && names.iter().any(|n| n.as_str() == *name) {
+            if mark.committed == 0. && names.iter().any(|n| n.as_str() == name) {
                 mark.committed = clock();
                 mark.sequence = sequence;
             }
         }
     }
-    /// Baked definition order; no request bytes cross the measurement ABI.
-    pub fn mark(&self, index: usize) -> Option<(&'static str, LaunchMark)> {
-        self.0.marks.lock().unwrap().entries.get(index).copied()
+    /// Definition order; no request bytes cross the measurement ABI.
+    pub fn mark(&self, index: usize) -> Option<(String, LaunchMark)> {
+        self.0.marks.lock().unwrap().entries.get(index).cloned()
     }
-    /// Number of baked definitions whose marks can be read.
+    /// Number of launch definitions whose marks can be read.
     pub fn count(&self) -> usize {
         self.0.marks.lock().unwrap().entries.len()
     }
 }
 
-/// Invalidate even before a boot has adopted the launch work (D3).
-pub(crate) fn drop_secret(name: &str) {
-    if let Some(launch) = current() {
-        launch.drop_secret(name);
+pub(crate) fn with_secret_write<T>(name: &str, write: impl FnOnce() -> T) -> T {
+    match current() {
+        Some(launch) => launch.with_secret_write(name, write),
+        None => write(),
     }
 }
 
@@ -391,7 +456,7 @@ pub fn copy_name(index: usize, out: *mut u8, capacity: usize) -> usize {
         return 0;
     };
     if !out.is_null() {
-        // SAFETY: the ABI caller supplies capacity writable bytes, without aliasing the baked name.
+        // SAFETY: the ABI caller supplies capacity writable bytes, without aliasing the launch name.
         unsafe {
             std::ptr::copy_nonoverlapping(name.as_ptr(), out, capacity.min(name.len()));
         }

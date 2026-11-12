@@ -5,6 +5,7 @@ use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::ffi::c_void;
 #[path = "executor_core.rs"]
 mod core;
+pub(crate) use core::preload::{launch_fetch, valid_request};
 pub use core::preload::{
     Control as PreloadControl, Definition as Preload, Event as PreloadEvent, Fact as PreloadFact,
     Observation as PreloadObservation, Observer as PreloadObserver, Preloads,

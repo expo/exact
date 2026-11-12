@@ -1,0 +1,316 @@
+//! Rust data capabilities before the engine exists (LLP 1162.000 D2, D3).
+use super::*;
+use crate::executor::PreloadEvent;
+use exact_data::secrets::Backend;
+use exact_runner::request::{LaunchContext, LaunchRequest};
+use exact_runner::{Request, Response};
+use std::sync::Condvar;
+use std::time::{Duration, Instant};
+
+// Five seconds allows a token refresh while bounding reads held for unknown definitions.
+// It is shorter than the ordinary fetch deadline: speculative code cannot hold boot reads for 60 seconds.
+pub(super) const LAUNCH_DEADLINE: Duration = Duration::from_secs(5);
+
+pub(super) struct Running {
+    started: Instant,
+    done: Mutex<bool>,
+    changed: Condvar,
+    name: &'static str,
+    launch: std::sync::Weak<Launch>,
+    #[cfg(test)]
+    returned: (Mutex<bool>, Condvar),
+}
+impl Running {
+    #[cfg(test)]
+    pub(super) fn expire_now(&self) {
+        self.expire(self.started + LAUNCH_DEADLINE);
+    }
+    #[cfg(test)]
+    pub(super) fn wait_returned(&self) {
+        let (returned, timeout) = self
+            .returned
+            .1
+            .wait_timeout_while(
+                self.returned.0.lock().unwrap(),
+                Duration::from_secs(10),
+                |returned| !*returned,
+            )
+            .unwrap();
+        assert!(!timeout.timed_out() && *returned, "launch did not return");
+    }
+
+    fn record(&self, launch: &LaunchPreloads, outcome: PreloadEvent) {
+        launch.0.journal.lock().unwrap().push(PreloadFact {
+            name: self.name.into(),
+            origin: String::new(),
+            outcome,
+        });
+    }
+    pub(super) fn expire(&self, now: Instant) {
+        let mut done = self.done.lock().unwrap();
+        if !*done && now.saturating_duration_since(self.started) >= LAUNCH_DEADLINE {
+            *done = true;
+            if let Some(launch) = self.launch.upgrade().map(LaunchPreloads) {
+                self.record(
+                    &launch,
+                    PreloadEvent::LaunchDeadline {
+                        elapsed_ms: now.saturating_duration_since(self.started).as_millis() as u64,
+                    },
+                );
+                launch
+                    .0
+                    .set
+                    .get()
+                    .unwrap()
+                    .control
+                    .definitions_pending(false);
+            }
+            self.changed.notify_all();
+        }
+    }
+}
+
+pub(super) struct Prepared {
+    pub preload: Preload,
+    pub when: PreloadWhen,
+    pub versions: BTreeMap<String, u64>,
+}
+
+pub(super) fn origin(request: &Request) -> String {
+    url::Url::parse(&request.url)
+        .map(|u| u.origin().ascii_serialization())
+        .unwrap_or_default()
+}
+
+pub(super) fn run(
+    launch: &LaunchPreloads,
+    entry: exact_runner::request::Launch,
+    app: &str,
+    grants: &str,
+    definitions: &[exact_runner::request::Preload],
+) -> Vec<Prepared> {
+    let running = Arc::new(Running {
+        started: Instant::now(),
+        done: Mutex::new(false),
+        changed: Condvar::new(),
+        name: entry.name,
+        launch: Arc::downgrade(&launch.0),
+        #[cfg(test)]
+        returned: Default::default(),
+    });
+    #[cfg(test)]
+    struct Returned(Arc<Running>);
+    #[cfg(test)]
+    impl Drop for Returned {
+        fn drop(&mut self) {
+            *self.0.returned.0.lock().unwrap() = true;
+            self.0.returned.1.notify_all();
+        }
+    }
+    #[cfg(test)]
+    let _returned = Returned(running.clone());
+    let _ = launch.0.rust.set(running.clone());
+    let watch = running.clone();
+    if std::thread::Builder::new()
+        .name("exact-launch-deadline".into())
+        .spawn(move || {
+            let done = watch.done.lock().unwrap();
+            let (done, _) = watch
+                .changed
+                .wait_timeout_while(
+                    done,
+                    (watch.started + LAUNCH_DEADLINE).saturating_duration_since(Instant::now()),
+                    |done| !*done,
+                )
+                .unwrap();
+            let expired = !*done;
+            drop(done);
+            if expired {
+                watch.expire(Instant::now());
+            }
+        })
+        .is_err()
+    {
+        running.expire(running.started + LAUNCH_DEADLINE);
+        return Vec::new();
+    }
+    let mut context = Context::new(launch, app, grants, running.clone());
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (entry.run)(&mut context)));
+    running.expire(Instant::now());
+    let mut done = running.done.lock().unwrap();
+    if *done {
+        return Vec::new();
+    }
+    *done = true;
+    running.changed.notify_all();
+    let elapsed_ms = running.started.elapsed().as_millis() as u64;
+    let returned = match result {
+        Ok(requests) => {
+            running.record(
+                launch,
+                PreloadEvent::LaunchRan {
+                    elapsed_ms,
+                    requests: requests.len(),
+                },
+            );
+            requests
+        }
+        Err(_) => {
+            running.record(launch, PreloadEvent::LaunchPanicked { elapsed_ms });
+            return Vec::new();
+        }
+    };
+    let mut names: std::collections::BTreeSet<String> =
+        definitions.iter().map(|d| d.name.into()).collect();
+    let mut accepted = Vec::new();
+    for LaunchRequest {
+        name,
+        request,
+        when,
+    } in returned
+    {
+        let valid_name = name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+            && name
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-');
+        let outcome = if !valid_name
+            || !names.insert(name.clone())
+            || definitions.len() + accepted.len() >= 8
+            || !crate::executor::valid_request(&request)
+        {
+            Some(PreloadEvent::Refused)
+        } else if exact_runner::grants::admitting_request(grants, &request).is_none() {
+            Some(PreloadEvent::RefusedGrant)
+        } else {
+            None
+        };
+        if let Some(outcome) = outcome {
+            launch.0.journal.lock().unwrap().push(PreloadFact {
+                name,
+                origin: origin(&request),
+                outcome,
+            });
+            continue;
+        }
+        launch
+            .0
+            .marks
+            .lock()
+            .unwrap()
+            .entries
+            .push((name.clone(), LaunchMark::default()));
+        accepted.push(Prepared {
+            preload: Preload {
+                name,
+                deadline_ms: request.timeout_ms,
+                request,
+                secrets: context.used.keys().cloned().collect(),
+            },
+            when,
+            versions: context.used.clone(),
+        });
+    }
+    accepted
+}
+
+struct Context<'a> {
+    launch: &'a LaunchPreloads,
+    grants: &'a str,
+    backend: Option<Arc<dyn Backend>>,
+    snapshot: BTreeMap<String, String>,
+    versions: BTreeMap<String, u64>,
+    allowed: std::collections::BTreeSet<String>,
+    guarded: std::collections::BTreeSet<String>,
+    used: BTreeMap<String, u64>,
+    running: Arc<Running>,
+}
+impl<'a> Context<'a> {
+    fn new(launch: &'a LaunchPreloads, app: &str, grants: &'a str, running: Arc<Running>) -> Self {
+        let backend = crate::store::launch_backend(grants, app)
+            .ok()
+            .map(|b| Arc::new(b) as Arc<dyn Backend>);
+        #[cfg(test)]
+        let backend = launch.0.backend.lock().unwrap().clone().or(backend);
+        let policies = crate::presence_secrets::lines(grants);
+        let allowed: std::collections::BTreeSet<_> =
+            policies.iter().map(|(name, _)| name.clone()).collect();
+        let guarded: std::collections::BTreeSet<_> = policies
+            .into_iter()
+            .filter(|(_, policy)| policy.is_some())
+            .map(|(name, _)| name)
+            .collect();
+        let versions = launch.0.invalidated.lock().unwrap().clone();
+        let snapshot = allowed
+            .iter()
+            .filter(|name| !guarded.contains(*name))
+            .filter_map(|name| {
+                backend
+                    .as_ref()?
+                    .read(name)
+                    .ok()
+                    .flatten()
+                    .map(|value| (name.clone(), value))
+            })
+            .collect();
+        Self {
+            launch,
+            grants,
+            backend,
+            snapshot,
+            versions,
+            allowed,
+            guarded,
+            used: BTreeMap::new(),
+            running,
+        }
+    }
+    fn write(&mut self, name: &str, value: Option<&str>) -> Result<(), String> {
+        if !self.allowed.contains(name) || self.guarded.contains(name) {
+            return Err("launch secret refused".into());
+        }
+        if *self.running.done.lock().unwrap() {
+            return Err("launch deadline".into());
+        }
+        let backend = self.backend.as_ref().ok_or("launch secrets unavailable")?;
+        self.launch.invalidate(name);
+        let result = backend.write(name, value);
+        let version = self.launch.invalidate(name);
+        result?;
+        self.versions.insert(name.into(), version);
+        if self.used.contains_key(name) {
+            self.used.insert(name.into(), version);
+        }
+        match value {
+            Some(value) => {
+                self.snapshot.insert(name.into(), value.into());
+            }
+            None => {
+                self.snapshot.remove(name);
+            }
+        }
+        Ok(())
+    }
+}
+impl LaunchContext for Context<'_> {
+    fn secret(&mut self, name: &str) -> Option<String> {
+        if !self.allowed.contains(name) {
+            return None;
+        }
+        self.used
+            .insert(name.into(), self.versions.get(name).copied().unwrap_or(0));
+        self.snapshot.get(name).cloned()
+    }
+    fn set_secret(&mut self, name: &str, value: &str) -> Result<(), String> {
+        self.write(name, Some(value))
+    }
+    fn forget_secret(&mut self, name: &str) -> Result<(), String> {
+        self.write(name, None)
+    }
+    fn fetch(&mut self, request: Request) -> Result<Response, String> {
+        if *self.running.done.lock().unwrap() {
+            return Err("launch deadline".into());
+        }
+        crate::executor::launch_fetch(request, self.grants)
+    }
+}
