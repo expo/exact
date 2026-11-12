@@ -435,7 +435,7 @@
   // ends its watch on `signal`.
   var pending = new Map(), currentCall = null, mapping = null, inMapper = false; // the answer a fetch belongs to; a socket's mapper answering a frame (D7); any mapper call
   var work = global.__exact_module_work({ host: host, live: function (c) { return !!c && c !== background && !c.stream && !c.module && c.status === "pending" && !c.replied && !c.letGo; } }); delete global.__exact_module_work; // work that outlives its answer (LLP 1146 D2, binary.js): an adopted fetch's reply reaches its let-go answer in a module turn; `route` keeps a live answer's async step in its own turn
-  global.__exact_async_context = Object.freeze({ current: function () { return currentCall; }, swap: function (call) { var before = currentCall; currentCall = call; return before; }, route: work.route }); // the bundle's async helper resumes each step under its answer (LLP 1133.002 D14)
+  global.__exact_async_context = Object.freeze({ current: function () { return currentCall; }, swap: function (call) { var before = currentCall; currentCall = call; if (call) call.ran = true; return before; }, route: work.route }); // the bundle's async helper resumes each step under its answer (LLP 1133.002 D14)
   // Calls with storage steps in flight, settled or not: a step a settled
   // call left behind is still the module's work (see `settle`).
   var storing = new Set();
@@ -1056,15 +1056,7 @@
     var reason = e && typeof e === "object" && typeof e.reason === "string" ? e.reason : "";
     return JSON.stringify({ tag: 2, kind: kind, code: e && e.code, failure: failureCode(e), reason: reason, message: String(message) });
   }
-  // Natively, liveness is the module's, as a browser's event loop has it
-  // (LLP 1027.003.000 §13; hn-reader F7): an answer awaiting a promise
-  // another answer started (one memoized fetch, a queue chained through
-  // another's storage) waits while any fetch or storage step of the module
-  // is outstanding, and the executor asks again after each one lands. The
-  // web's module realm (module-glue.js, the wasm target's) runs one answer
-  // at a time and keeps the per-answer rule.
-  //
-  // A fetch no answer owns is claimed one to a waiting answer (LLP 1162 D2).
+  // A fetch with no live owner is claimed by one waiter (LLP 1162 D2).
   var moduleWide = bytesDoor !== undefined;
   function claim(call, ticket) {
     var p = pending.get(ticket);
@@ -1124,9 +1116,7 @@
         storing.delete(call); storing.add(background);
         call.moved = true;
       } else {
-        // It waits on its own storage: the one continuation is its when its
-        // operation is in flight; queued behind another owner's, it waits
-        // with the module and is asked again after each delivery (D3).
+        // Only the head's owner can deliver the shared storage queue (LLP 1097 D3).
         var at = headOwner();
         if (!at || at === call) return JSON.stringify({ tag:1, call:call.id, ticket:0 });
         return JSON.stringify({ tag: 1, call: call.id, ticket: 0, waiting: true });
@@ -1156,9 +1146,7 @@
       // worker, which runs one turn to its end and so cannot wait on another's).
       if (!final && (due === undefined || moving && later) && (pending.size || storing.size || yielded || work.outstanding())) return JSON.stringify({ tag: 1, call: call.id, ticket: 0, waiting: true, timer: due });
     } else if (due === undefined && moving && !final && background.storage > 0) {
-      // The page's realm runs one answer at a time, but background work
-      // goes on beside it: an answer awaiting it parks and is asked again
-      // after a background delivery (LLP 1097 D7).
+      // The page's realm keeps its background-delivery rule (LLP 1097 D7).
       return JSON.stringify({ tag: 1, call: call.id, ticket: 0, waiting: true });
     }
     if (due !== undefined) return JSON.stringify({ tag: 1, call: call.id, ticket: 0, timer: due });
@@ -1287,10 +1275,12 @@
   global.__exact_calls_open = function () { return String(calls.size); };
   global.__exact_call_id = function () { return String(currentCall ? currentCall.id : 0); };
   global.__exact_more = function (id) { var call = calls.get(Number(id)), more = call && call.more || []; if (call) call.more = []; return JSON.stringify(more); };
+  global.__exact_ready = global.__exact_waiting_answers(calls, pending, work, headOwner); delete global.__exact_waiting_answers;
   global.__exact_settle = function (id, final) {
     timers.checkpoint();
     currentCall = null;
     var call = calls.get(Number(id));
+    if (call) call.ran = false;
     return call ? settle(call, final === "final") : fail(new Error("no such call"));
   };
   // The runner let this call's request go (LLP 1016 D5): drop the call, and reject the fetches it waits on, so its
@@ -1383,7 +1373,8 @@
       value.then(function (v) { mine.status = "done"; mine.value = v; }, function (e) { mine.status = "failed"; mine.error = e; });
       return JSON.stringify({ tag: 3, call: mine.id });
     } catch (e) { if (mine !== call) { endYields(mine); mine.replied = true; } return fail(e); }
-    finally { mine.sync = false; currentCall = null; mapping = null; inMapper = false; if (turn) handSocketOps(turn); }
+    // A synchronous mapper has no drain: its queued reactions still need a waiter's turn (LLP 1162 D3).
+    finally { if (mine !== call && mine.replied) calls.forEach(function (c) { c.ran = true; }); mine.sync = false; currentCall = null; mapping = null; inMapper = false; if (turn) handSocketOps(turn); }
   };
   // The module's storage, after a call or a delivery (LLP 1097 D5, D8):
   // whether the operation in flight is the background's (`head`), the

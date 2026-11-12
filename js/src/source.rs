@@ -158,7 +158,6 @@ impl DataSource for Module {
     }
 
     fn dispatch(&mut self, token: u64, store: &Store) -> Dispatch {
-        let _ = store;
         if let Some(dispatch) = self.host.secrets.dispatch(token) {
             return dispatch;
         }
@@ -170,7 +169,8 @@ impl DataSource for Module {
             .iter()
             .any(|(_, p)| p.call == token && p.ticket == WAITING)
         {
-            return self.wake(token).unwrap_or_else(|| {
+            self.refresh_waiting();
+            return self.wake(token, store.clock_ms()).unwrap_or_else(|| {
                 self.waiters.push(token);
                 Dispatch::Held
             });
@@ -185,11 +185,11 @@ impl DataSource for Module {
     }
 
     fn release(&mut self, store: &Store) -> Vec<(u64, Dispatch)> {
-        let _ = store;
+        self.refresh_waiting();
         // Waiting answers whose wait may be over are asked again.
         let mut released = self.host.secrets.release();
         for token in std::mem::take(&mut self.waiters) {
-            match self.wake(token) {
+            match self.wake(token, store.clock_ms()) {
                 Some(work) => released.push((token, work)),
                 None if self.parked.iter().any(|(_, p)| p.call == token) => {
                     self.waiters.push(token)

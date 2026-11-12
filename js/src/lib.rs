@@ -180,17 +180,15 @@ struct Parked {
     /// let go, it runs to its end (LLP 1146 D2).
     effects: bool,
     work_taken: bool,
-    /// The module's progress when it parked: an answer waiting on another
-    /// answer's work is asked again once something has landed since.
-    progress: u64,
+    ready: bool,
+    due: Option<u64>,
     /// Asked again with nothing outstanding in the module: its last settle.
     last: bool,
 }
 
 /// The ticket of an answer that awaits another answer's work (a fetch it
 /// shares, a queue behind another's storage): it waits while the module has
-/// work outstanding, and is asked again after each delivery (LLP
-/// 1027.003.000 §13, the module-wide rule; hn-reader F7).
+/// work outstanding, and is asked again when its chain moves (LLP 1162 D3).
 const WAITING: u64 = u64::MAX - 1;
 
 /// The ticket of an answer that awaited `scheduler.yield()` (LLP 1141.001
@@ -352,8 +350,6 @@ pub struct Module {
     streams: Vec<(Key, Parked)>,
     /// Answers waiting on another answer's work whose dispatch was held.
     waiters: Vec<u64>,
-    /// Deliveries and new answers so far: what a waiting answer waits for.
-    progress: u64,
     /// Overlays whose answer was encoded for the module's `exact.overlay`.
     overlays_encoded: u64,
     /// Whether the module had an `exact.overlay` when it loaded.
@@ -441,7 +437,6 @@ impl Module {
             retired: std::collections::HashMap::new(),
             streams: Vec::new(),
             waiters: Vec::new(),
-            progress: 0,
             overlays_encoded: 0,
             has_overlay: true,
             budget_ms: DEFAULT_BUDGET_MS,
@@ -909,8 +904,6 @@ impl Module {
             );
         }
         let args_text = Json::Array(json_args).to_string();
-        // A new answer's JavaScript may settle what another answer awaits.
-        self.progress += 1;
         let mut store = store;
         self.host.store = store.as_mut().map(|s| &mut **s as *mut Store);
         self.host.socket_ops.clear();
@@ -1052,10 +1045,6 @@ impl Module {
                 } else {
                     Vec::new()
                 };
-                // Park first. The let-go delivery below bumps progress after
-                // that, so an answer waiting on the discarded call is asked
-                // again (files F18). Delivering first parks it at the new
-                // progress, and nothing asks it again.
                 self.park(key.clone(), call, ticket, &request)?;
                 self.park_more(&key, call)?;
                 self.forget_calls(replaced);

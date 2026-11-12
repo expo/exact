@@ -162,8 +162,6 @@ impl Module {
             .and_then(|_| engine.drain());
         self.host.between_answers = false;
         let _ = engine.call("__exact_turn", ["", "", ""]);
-        // What landed may settle an answer waiting on another's work.
-        self.progress += 1;
         self.refresh_background();
         let unfinished = self.host.secrets.retire_fetch(token);
         ran.map_err(|e| DataError::Unavailable(format!("module work threw: {e}")))?;

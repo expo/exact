@@ -84,9 +84,6 @@ impl Module {
                 return Err(DataError::Unavailable(message));
             }
         }
-        if ticket != WAITING {
-            self.progress += 1; // a delivery: what a waiting answer waits for
-        }
         let outcome_text = outcome_to_json(&outcome).to_string();
         let now = store
             .as_deref()
@@ -213,10 +210,7 @@ impl Module {
                 Ok(Some(Answer::Later(request)))
             }
         };
-        // After the park, so a waiter records this progress and the let-go
-        // delivery is a later one it is asked again for (files F18). No
-        // store: the let-go call's file writes land and its Store writes do
-        // not (LLP 1097; a934686a0).
+        // No store: a let-go call's file writes land and its Store writes do not (LLP 1097).
         self.finish_let_go();
         answer
     }
@@ -245,7 +239,8 @@ impl Module {
             more: None,
             effects: request.has_effects(),
             work_taken: false,
-            progress: self.progress,
+            ready: false,
+            due: request.wake_ms.or(request.due_ms),
             last: false,
         };
         if request.stream {
@@ -298,7 +293,6 @@ impl Module {
         };
         let call = self.streams[at].1.call;
         let ended = !matches!(outcome, Outcome::Message(_));
-        self.progress += 1;
         let (outcome_text, binary) = wire::message_to_json(outcome);
         self.host.binary = binary;
         self.host.socket_buffered = socket::snapshot(&self.streams, store);

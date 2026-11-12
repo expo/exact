@@ -17,7 +17,7 @@
 //! The run is event-driven: the shared load's first fetch waits at a gate
 //! the test opens after boot has dispatched every answer, and after the
 //! first pump each pump waits for the executor's wake; a missing wake fails
-//! the drive. The pump counts it prints are informative, not asserted.
+//! the drive. Pump counts bound the re-asks to answers whose chains moved (LLP 1162 D3).
 
 #![cfg(all(exact_js_engine, target_os = "macos"))]
 
@@ -266,8 +266,11 @@ fn assert_all_loaded(drove: Drove, n: usize, own: bool) {
         expected(if own { n } else { 0 }),
         "each fetch once, each row its own"
     );
-    // The baseline for LLP 1041 §8.4 Q6 (the herd): pumps to load every row.
     eprintln!("{n} rows loaded in {} pumps", drove.pumps);
+    // Two shared replies, one re-ask per waiter, each row's own reply if any,
+    // and eight pumps for boot and executor wakes (LLP 1162 D3).
+    let bound = 2 + (n - 1) + if own { n } else { 0 } + 8;
+    assert!(drove.pumps <= bound, "{} pumps exceed {bound}", drove.pumps);
 }
 
 /// Twelve answers awaiting the shared load: every row loads.

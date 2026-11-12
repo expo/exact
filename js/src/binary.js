@@ -908,9 +908,33 @@
         return steps.length;
       },
       inModuleTurn: function () { return turn === MODULE.id; },
+      readied: function (call) { return ready.has(call); },
       adopted: function () { adopted++; note(); },
       landed: function () { adopted--; note(); },
       outstanding: function () { return adopted + waiting() > 0; },
     });
+  };
+})(globalThis);
+
+// A parked answer needs a turn only when its chain or its next operation moved (LLP 1162 D3).
+(function (global) {
+  "use strict";
+  global.__exact_waiting_answers = function (calls, pending, work, headOwner) {
+    return function (ids) {
+      var own = new Set(), unclaimed = false, at = headOwner(), ready = [];
+      pending.forEach(function (p) {
+        if (p.claimed || p.stream || p.module) return;
+        if (p.call && p.call.status === "pending" && !p.call.letGo && calls.has(p.call.id)) own.add(p.call.id);
+        else unclaimed = true;
+      });
+      JSON.parse(ids).forEach(function (id) {
+        var c = calls.get(id);
+        if (!c) return;
+        var claims = unclaimed && c.status === "pending" && !c.storage;
+        if (claims) unclaimed = false;
+        if (c.ran || c.status !== "pending" || work.readied(c) || own.has(id) || c.storage && (!at || at === c) || claims) ready.push(id);
+      });
+      return JSON.stringify(ready);
+    };
   };
 })(globalThis);

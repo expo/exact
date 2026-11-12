@@ -361,38 +361,17 @@ fn an_observer_cannot_claim_a_live_owners_continuation_fetch() {
         Some(Answer::Now(value("loaded")))
     );
     let mut released = m.release(&s);
-    let mut again = |token| {
-        let at = released
-            .iter()
-            .position(|(t, _)| *t == token)
-            .expect("the waiter is re-asked");
-        run(released.remove(at).1)
-    };
-    let outcome = again(b.continuation.unwrap());
-    let b = later(
-        m.parse_for(observer, &mut s, "ownership", &observer_args, outcome)
-            .unwrap(),
-    );
-    assert!(b.continuation.is_some(), "the observer still waits");
-    assert!(b.fetch.is_none(), "the live owner's detail stays its own");
-    let outcome = again(a.continuation.unwrap());
+    assert_eq!(released.len(), 1, "only the live owner's promise moved");
+    let (token, dispatch) = released.pop().unwrap();
+    assert_eq!(token, a.continuation.unwrap());
+    let outcome = run(dispatch);
     let detail = later(
         m.parse_for(owner, &mut s, "ownership", &owner_args, outcome)
             .unwrap(),
     );
     assert_eq!(detail.url, "https://context.test/detail");
     assert!(m.more_for(observer).is_empty());
-    m.forgotten(
-        &s,
-        &[InFlight {
-            target: owner,
-            source: "ownership",
-            args: &owner_args,
-            fetch: detail.fetch,
-            continuation: None,
-        }],
-    );
-    assert_eq!(m.in_flight(), 1);
+    assert!(m.release(&s).is_empty(), "the observer stays parked");
     assert_eq!(
         deliver(
             &mut m,
@@ -405,6 +384,20 @@ fn an_observer_cannot_claim_a_live_owners_continuation_fetch() {
         ),
         Some(Answer::Now(value("detail")))
     );
+    let mut released = m.release(&s);
+    assert_eq!(
+        released.len(),
+        1,
+        "the detail completed the observer's promise"
+    );
+    let (token, dispatch) = released.pop().unwrap();
+    assert_eq!(token, b.continuation.unwrap());
+    assert_eq!(
+        m.parse_for(observer, &mut s, "ownership", &observer_args, run(dispatch))
+            .unwrap(),
+        Answer::Now(value("detail"))
+    );
+    assert_eq!(m.in_flight(), 0);
     assert_eq!(m.calls_open(), Some(0));
 }
 
@@ -421,6 +414,12 @@ fn a_waiter_claims_a_finished_owners_continuation_fetch() {
         m.dispatch(wait.continuation.unwrap(), &s),
         Dispatch::Held
     ));
+    let other = Target::Resource(2);
+    let other_wait = start(&mut m, &mut s, other, "handoff", &waiter_args).remove(0);
+    assert!(matches!(
+        m.dispatch(other_wait.continuation.unwrap(), &s),
+        Dispatch::Held
+    ));
     assert_eq!(
         deliver(
             &mut m,
@@ -433,12 +432,17 @@ fn a_waiter_claims_a_finished_owners_continuation_fetch() {
         ),
         Some(Answer::Now(value("owner")))
     );
-    let (_, dispatch) = m.release(&s).pop().expect("the waiter is re-asked");
+    let mut released = m.release(&s);
+    assert_eq!(released.len(), 1, "one waiter claims the orphan");
+    let (token, dispatch) = released.pop().unwrap();
+    assert_eq!(token, wait.continuation.unwrap());
+    assert!(matches!(dispatch, Dispatch::Again));
     let orphan = later(
         m.parse_for(waiter, &mut s, "handoff", &waiter_args, run(dispatch))
             .unwrap(),
     );
     assert_eq!(orphan.url, "https://context.test/orphan");
+    assert!(m.release(&s).is_empty(), "the orphan was claimed once");
     assert_eq!(
         deliver(
             &mut m,
@@ -450,6 +454,19 @@ fn a_waiter_claims_a_finished_owners_continuation_fetch() {
             "adopted"
         ),
         Some(Answer::Now(value("adopted")))
+    );
+    let mut released = m.release(&s);
+    assert_eq!(
+        released.len(),
+        1,
+        "the orphan's reply completed the other waiter"
+    );
+    let (token, dispatch) = released.pop().unwrap();
+    assert_eq!(token, other_wait.continuation.unwrap());
+    assert_eq!(
+        m.parse_for(other, &mut s, "handoff", &waiter_args, run(dispatch))
+            .unwrap(),
+        Answer::Now(value("adopted"))
     );
     assert_eq!(m.in_flight(), 0);
     assert_eq!(m.calls_open(), Some(0));

@@ -1,9 +1,8 @@
-//! Liveness: an answer waiting on another's work, or on the background's,
-//! is asked again after each delivery (LLP 1027.003.000 §13; LLP 1097 D2);
+//! Liveness: a waiting answer is asked again when its chain moves (LLP 1162 D3);
 //! a call let go mid-turn runs its steps to the end (ledger F12).
 use super::{secrets, Key, Module, TIMER, WAITING, YIELDED};
 use exact_runner::{Dispatch, InFlight, Outcome, Request};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl Module {
     /// A waiting answer's work: nothing to run, only an answer to ask again
@@ -22,9 +21,7 @@ impl Module {
             .any(|(_, p)| p.call == token && matches!(p.ticket, YIELDED | TIMER))
     }
 
-    /// Whether anything in the module may yet settle a waiting answer: a
-    /// fetch, a storage step, a stream, a yield, or a re-ask still owed after
-    /// progress: it may own an unclaimed fetch (LLP 1162 D2).
+    /// Whether anything in the module may yet settle a waiting answer.
     /// The module's storage queued or in flight counts, an answer's or the
     /// background's (LLP 1097 D2: an answer may await background work).
     pub(crate) fn outstanding(&self) -> bool {
@@ -34,20 +31,40 @@ impl Module {
             || self
                 .parked
                 .iter()
-                .any(|(_, p)| p.ticket != WAITING || p.progress < self.progress)
+                .any(|(_, p)| p.ticket != WAITING || p.ready || p.due.is_some())
     }
 
-    /// Ask a waiting answer again when something landed since it parked,
-    /// or, with nothing outstanding, for its last settle, which refuses it
-    /// as pending on nothing if it still waits.
-    pub(crate) fn wake(&mut self, token: u64) -> Option<Dispatch> {
+    pub(crate) fn refresh_waiting(&mut self) {
+        let waiting: Vec<_> = self
+            .parked
+            .iter()
+            .filter(|(_, p)| p.ticket == WAITING)
+            .map(|(_, p)| p.call)
+            .collect();
+        if waiting.is_empty() {
+            return;
+        }
+        let ids = serde_json::to_string(&waiting).expect("call ids");
+        let ready = self.engine.as_mut().and_then(|engine| {
+            let text = engine.call("__exact_ready", [&ids, "", ""]).ok()?;
+            serde_json::from_str::<HashSet<u64>>(&text).ok()
+        });
+        for (_, p) in &mut self.parked {
+            if p.ticket == WAITING {
+                // A failed readiness query must not strand an answer (LLP 1162 D3).
+                p.ready = ready.as_ref().is_none_or(|ids| ids.contains(&p.call));
+            }
+        }
+    }
+
+    /// With nothing outstanding, a last settle refuses an answer still pending on nothing.
+    pub(crate) fn wake(&mut self, token: u64, now: f64) -> Option<Dispatch> {
         let outstanding = self.outstanding();
-        let progress = self.progress;
         let (_, parked) = self
             .parked
             .iter_mut()
             .find(|(_, p)| p.call == token && p.ticket == WAITING)?;
-        if parked.progress < progress || !outstanding {
+        if parked.ready || parked.due.is_some_and(|due| due as f64 <= now) || !outstanding {
             parked.last = !outstanding;
             return Some(Module::ask_again());
         }
@@ -85,7 +102,6 @@ impl Module {
         let parked = &mut self.parked[at].1;
         parked.ticket = TIMER;
         parked.effects = false;
-        parked.progress = self.progress;
         Some((ticket, Request::continuation(call)))
     }
 
@@ -140,11 +156,7 @@ impl Module {
                 drained = engine.drain();
             }
             self.host.between_answers = false;
-            if drained.is_ok() {
-                // A continuation another answer shared may have settled it:
-                // a waiter counts this as progress (`wake`).
-                self.progress += 1;
-            } else {
+            if drained.is_err() {
                 self.watch.take();
             }
             // Storage a continuation started is the background's: arm it.
@@ -228,8 +240,6 @@ impl Module {
         if !delivered {
             return;
         }
-        // What landed may settle an answer waiting on another's work.
-        self.progress += 1;
         self.refresh_background();
     }
 }
