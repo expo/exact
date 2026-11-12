@@ -872,57 +872,70 @@ fn an_unnamed_reply_requires_a_single_fetch_on_placed_and_mixed_sources() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn twenty_promise_all_replies_are_twenty_transactions_one_layout_and_one_batch() {
+fn twenty_promise_all_replies_are_twenty_transactions_and_the_layouts_and_batch_of_one() {
     use exact_apple::{
         executor::{pump::Pump, Executor},
         host::Host,
     };
     use exact_kernel::MonospaceMeasurer;
-    let plan = contract::compile("shape Result\n  text: string\ncomponent App\n  resource result = batch(20) as shape Result\n  view\n    text result.text testId=\"result\"\n").unwrap().encode();
-    let mut module = Module::loaded(HBC.to_vec(), "test.context", GRANTS).unwrap();
-    module.set_budget_ms(f64::INFINITY);
-    let (mut host, _) = Host::boot(
-        &plan,
-        module,
-        Box::new(MonospaceMeasurer::default()),
-        390.,
-        844.,
-    )
-    .unwrap();
-    let requests = host.take_requests();
-    assert_eq!(requests.len(), 20);
-    let executor = Executor::start(None, "", None);
-    for request in requests {
-        executor.again(&request).unwrap();
-    }
-    host.runner_mut().measure(true, true);
-    host.runner_mut().measure_kernel_layouts();
-    let before = host.runner().seq();
-    let now = std::time::Instant::now();
-    let mut pump = Pump::new(|| now);
-    executor.begin_pump();
-    let mut transactions = 0;
-    let outcomes =
-        std::iter::from_fn(|| pump.take(|| executor.drain().pop())).map(|(ticket, _, timing)| {
-            let outcome = response(&transactions.to_string());
-            transactions += 1;
-            (ticket, outcome, timing)
-        });
-    let batch = host.fulfill_all(outcomes, 0.);
-    let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
-    assert!(batch["error"].is_null(), "{batch}");
-    assert_eq!(transactions, 20);
-    assert_eq!(host.runner().seq() - before, 20);
-    assert!(!host.runner().has_pending());
-    let perf: serde_json::Value =
-        serde_json::from_str(&exact_runner::perf::reply(host.runner(), "{}")).unwrap();
-    assert_eq!(perf["work"]["counts"]["kernelLayouts"], 1);
-    assert!(
-        batch["ops"].as_array().unwrap().iter().any(|op| op
-            .to_string()
-            .contains("0/1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17/18/19")),
-        "{batch}"
-    );
+    // The kernel layouts one pump enters for `count` replies, and the text it shows.
+    let pumped = |count: usize| {
+        let plan = contract::compile(&format!("shape Result\n  text: string\ncomponent App\n  resource result = batch({count}) as shape Result\n  view\n    text result.text testId=\"result\"\n")).unwrap().encode();
+        let mut module = Module::loaded(HBC.to_vec(), "test.context", GRANTS).unwrap();
+        module.set_budget_ms(f64::INFINITY);
+        let (mut host, _) = Host::boot(
+            &plan,
+            module,
+            Box::new(MonospaceMeasurer::default()),
+            390.,
+            844.,
+        )
+        .unwrap();
+        let requests = host.take_requests();
+        assert_eq!(requests.len(), count);
+        let executor = Executor::start(None, "", None);
+        for request in requests {
+            executor.again(&request).unwrap();
+        }
+        host.runner_mut().measure(true, true);
+        host.runner_mut().measure_kernel_layouts();
+        let before = host.runner().seq();
+        let now = std::time::Instant::now();
+        let mut pump = Pump::new(|| now);
+        executor.begin_pump();
+        let mut transactions = 0;
+        let outcomes = std::iter::from_fn(|| pump.take(|| executor.drain().pop())).map(
+            |(ticket, _, timing)| {
+                let outcome = response(&transactions.to_string());
+                transactions += 1;
+                (ticket, outcome, timing)
+            },
+        );
+        let batch = host.fulfill_all(outcomes, 0.);
+        let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
+        assert!(batch["error"].is_null(), "{batch}");
+        assert_eq!(transactions, count);
+        assert_eq!(host.runner().seq() - before, count as u64);
+        assert!(!host.runner().has_pending());
+        let text = (0..count)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("/");
+        assert!(
+            batch["ops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|op| op.to_string().contains(&format!("\"{text}\""))),
+            "{batch}"
+        );
+        let perf: serde_json::Value =
+            serde_json::from_str(&exact_runner::perf::reply(host.runner(), "{}")).unwrap();
+        perf["work"]["counts"]["kernelLayouts"].as_u64().unwrap()
+    };
+    // A commit that shows new text can enter kernel layout more than once, so
+    // twenty replies are held to what one reply's commit enters.
+    assert_eq!(pumped(20), pumped(1));
 }
 
 #[cfg(unix)]
