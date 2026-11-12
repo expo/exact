@@ -535,10 +535,10 @@ internal object Exact {
         if (o != null) { o.input(); if (o.answer(KEY_WAIT_MS) { Native.key(code, backspace) }) answered() } else Native.key(code, backspace)
     }
 
-    /** A gamepad's whole state ([Pads]): 17 buttons, then 4 axes. */
-    fun pad(index: Int, connected: Boolean, values: FloatArray) {
+    /** A gamepad's whole state ([Pads]): 17 buttons, then 4 axes. `at` is the event's `eventTime`, 0 for none. */
+    fun pad(index: Int, connected: Boolean, values: FloatArray, at: Long) {
         val o = owner
-        if (o != null) { o.input(); if (o.answer(KEY_WAIT_MS) { Native.pad(index, connected, values) }) answered() } else Native.pad(index, connected, values)
+        if (o != null) { o.input(); if (o.answer(KEY_WAIT_MS) { Native.pad(index, connected, values, at) }) answered() } else Native.pad(index, connected, values, at)
     }
 
     fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean) {

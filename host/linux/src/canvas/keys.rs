@@ -17,6 +17,7 @@
 //!
 //! @ref LLP 1076 §3.3 (Exact plus Android Canvas)
 
+use super::reader::monotonic_ns;
 use super::CanvasHost;
 use exact_runner::DataSource;
 
@@ -29,9 +30,14 @@ impl<D: DataSource + Default> CanvasHost<D> {
         self.force = true;
     }
 
-    /// A gamepad's state (`Pads.kt`): to the canvas a key would reach.
-    pub fn pad(&mut self, index: u8, connected: bool, buttons: [f32; 17], axes: [f32; 4]) {
-        let now = self.now();
+    /// A gamepad's state (`Pads.kt`): to the canvas a key would reach. `at`
+    /// is the event's `eventTime`: `SystemClock.uptimeMillis()` reads
+    /// `CLOCK_MONOTONIC`, the clock [`monotonic_ns`] and `Instant` read, so
+    /// the stamp is `now` less the time's age; 0 for a send no event caused,
+    /// stamped on arrival as before.
+    pub fn pad(&mut self, index: u8, connected: bool, buttons: [f32; 17], axes: [f32; 4], at: i64) {
+        let age = (monotonic_ns() as f64 / 1e6 - at as f64).max(0.);
+        let now = self.now() - if at > 0 { age } else { 0. };
         self.p.hardware_pad(index, connected, buttons, axes, now);
         self.force = true;
     }

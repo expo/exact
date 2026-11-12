@@ -170,8 +170,9 @@ object Native {
      * Backspace. A hosted field ([Fields]) takes its keys itself. */
     @JvmStatic external fun key(code: Int, backspace: Boolean)
     /** A gamepad's state for the canvas a key would reach (LLP 1127.003 D2): [values] its 17 standard buttons, then
-     * its 4 axes; [connected] false when it went away. */
-    @JvmStatic external fun pad(index: Int, connected: Boolean, values: FloatArray)
+     * its 4 axes; [connected] false when it went away. [at] is the event's `eventTime`
+     * (`SystemClock.uptimeMillis()`), 0 for a send no event caused: the host stamps it on arrival then. */
+    @JvmStatic external fun pad(index: Int, connected: Boolean, values: FloatArray, at: Long)
     /** A remote's key, down or up, by the web's `code` and `key` (LLP 1115.001.003 D3): a D-pad arrow, or Select. */
     @JvmStatic external fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean)
     /** System Back (LLP 1115.001 D6): whether the app took it. From its navigation root's selected route it goes to
