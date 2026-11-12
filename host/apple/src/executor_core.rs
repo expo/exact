@@ -1,6 +1,6 @@
 //! Native transport scheduling shared by Apple and Linux (LLP 1041 D1–D4).
-//! Only explicitly independent HTTP leaves the ordered lane. Each worker has
-//! its own bindings and transport, so held data cannot consume control leases.
+//! Read-class GETs and HEADs overlap on shared workers, retaining their place
+//! in the ordered lane (LLP 1162 D1). Each worker owns its transport.
 use exact_runner::{
     FailureKind, HttpScheduling, Outcome, Reply, Request, RequestOut, Response, Work as OwnedWork,
 };
@@ -11,7 +11,7 @@ use std::sync::{
     Arc, Condvar, Mutex,
 };
 
-/// Independent HTTP workers, each with its own transport: a browser's six
+/// Shared HTTP workers, each with its own transport: a browser's six
 /// connections a host, so a source's `Promise.all` of reads overlaps.
 const INDEPENDENT: usize = build_number(option_env!("EXACT_HTTP_WORKERS"), 6);
 /// The ordered owner and the independent ones.
@@ -55,6 +55,7 @@ struct Job {
     /// The runner no longer wants its reply (`Core::forget`).
     forgotten: bool,
     queued_deadline: Option<forget::QueuedDeadline>,
+    overlap: bool,
 }
 /// A job a worker took, until its outcome is complete.
 struct Running {
@@ -76,6 +77,7 @@ struct Running {
     waiting: bool,
     /// An ordered safe read: once complete it holds no effect slot.
     read: bool,
+    overlap: bool,
     /// The asynchronous core's (LLP 1120 D3, D5); workers leave them be.
     /// The outcome is published.
     terminal: bool,
@@ -471,6 +473,7 @@ impl Core {
         work: Option<OwnedWork>,
     ) -> Result<(), (&'static str, Option<OwnedWork>)> {
         let ordered = r.request.is_ordered();
+        let overlap = self.machine.is_none() && reads::overlaps(&r, work.is_some());
         let mut state = self.shared.state.lock().unwrap();
         // A deadline on work that cannot take one (a stream but an upload, a continuation, native work), or a
         // long poll that is no stream's HTTP GET (LLP 1016.000 D8), is refused here, before any path.
@@ -481,10 +484,13 @@ impl Core {
             .or(r.request.body_from_refusal())
             .or(r.request.body_to_refusal())
             .or(r.request.upload_progress_refusal())
-            .map_or_else(|| reservation(&r.request), Err)
+            .map_or_else(|| reads::reservation(&r.request, overlap), Err)
             .and_then(|charge| state.book.reserve_inline_copy(&r.request, charge));
         let lane = checked.as_ref().map_or(0, |(lane, _, _)| *lane);
-        if self.disabled || !self.start_workers(&mut state, lane) {
+        if self.disabled
+            || !self.start_workers(&mut state, lane)
+            || (overlap && !self.start_workers(&mut state, 1))
+        {
             return Err(("native executor worker limit reached", work));
         }
         if state.retired {
@@ -640,6 +646,7 @@ impl Core {
                 stream,
                 waiting: waits || one_shot,
                 read: false,
+                overlap: false,
                 terminal: false,
                 live: 0,
                 drained: false,
@@ -681,6 +688,7 @@ impl Core {
             limit,
             forgotten: false,
             queued_deadline,
+            overlap,
         });
         #[cfg(test)]
         self.shared
@@ -975,46 +983,6 @@ fn has_ready(state: &State) -> bool {
             .is_some_and(|ticket| state.completed[0].iter().any(|done| done.ticket == *ticket))
 }
 
-/// The next job `lane`'s worker may start, with its abort, charging an
-/// ordered one its response ceiling — or `None` until those bytes are free.
-fn next_job(state: &mut State, lane: usize) -> Option<(Job, AbortController)> {
-    let job = state.jobs[lane].front()?;
-    // A module handoff's outcome is the owner's to make; it is charged
-    // what it retains when it completes.
-    let more = if handed_off(job) {
-        0
-    } else {
-        job.limit - job.charge
-    };
-    if more > BYTES[lane].saturating_sub(state.bytes[lane]) {
-        return None;
-    }
-    let mut job = state.jobs[lane].pop_front()?;
-    job.charge += more;
-    state.bytes[lane] += more;
-    let abort = AbortController::new();
-    state.running.push(Running {
-        started: std::time::Instant::now(),
-        ticket: job.ticket,
-        lane,
-        charge: job.charge,
-        limit: job.limit,
-        abort: safe(&job.request).then(|| abort.clone()),
-        exchange: (job.work.is_none() && !job.request.stream).then(|| abort.clone()),
-        forgotten: job.forgotten,
-        stream: job.request.stream,
-        waiting: false,
-        read: lane == 0 && read(&job.request, job.work.is_some()),
-        terminal: false,
-        live: 0,
-        drained: false,
-        blocking: false,
-        generation: 0,
-        claim: asynch::Claim::None,
-    });
-    Some((job, abort))
-}
-
 fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
     let mut state = shared.state.lock().unwrap();
     if state.retired {
@@ -1228,7 +1196,7 @@ fn worker(
                     state = shared.state.lock().unwrap();
                     continue;
                 }
-                if let Some(next) = next_job(&mut state, lane) {
+                if let Some(next) = reads::next_job(&mut state, lane) {
                     break next;
                 }
                 state = shared.ready.wait(state).unwrap();
@@ -1240,6 +1208,7 @@ fn worker(
             forced,
             work,
             queued_deadline,
+            overlap,
             ..
         } = job;
         if let Some(deadline) = queued_deadline {
@@ -1276,7 +1245,9 @@ fn worker(
             };
             match scoped_bindings(&grants, request.grants.as_deref(), &host) {
                 Some(Err(message)) => failed(FailureKind::Refused, message),
-                Some(Ok(ref scoped)) => execute(Ok(scoped), request, forced, work, &abort, &files),
+                Some(Ok(ref scoped)) => {
+                    execute(Ok(scoped), request, forced, work, &abort, &files, overlap)
+                }
                 None => execute(
                     bindings.as_ref().ok_or(unbound.as_str()),
                     request,
@@ -1284,6 +1255,7 @@ fn worker(
                     work,
                     &abort,
                     &files,
+                    overlap,
                 ),
             }
         }))
@@ -1331,6 +1303,7 @@ fn execute(
     work: Option<Work>,
     abort: &AbortController,
     files: &Files<'_>,
+    overlap: bool,
 ) -> Outcome {
     if abort.signal().aborted() {
         return failed(FailureKind::Aborted, "native request aborted");
@@ -1365,7 +1338,7 @@ fn execute(
         return failed(FailureKind::Refused, why);
     }
     let limit = body_to::limit(&request);
-    let within = reads_within_ceiling(&request);
+    let within = overlap || reads_within_ceiling(&request);
     let timeout = request.timeout_ms;
     let fetch = reach::gate_fetch(b.fetch.clone(), request.reach);
     // The whole exchange, headers and body, ends by the deadline: the
@@ -1470,6 +1443,13 @@ mod reach;
 mod body;
 #[path = "executor_body_to.rs"]
 mod body_to;
+
+#[path = "executor_reads.rs"]
+mod reads;
+
+#[cfg(test)]
+#[path = "executor_read_tests.rs"]
+mod read_tests;
 
 #[cfg(test)]
 #[path = "executor_idle_tests.rs"]

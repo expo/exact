@@ -1,6 +1,6 @@
-//! Bounded native I/O (LLP 1016 / 1041). Unannotated requests and native
-//! continuations share one FIFO. Explicit independent HTTP uses six workers
-//! with separate transports; their held sockets cannot occupy the ordered lane.
+//! Bounded native I/O (LLP 1016 / 1041 / 1162). Read-class GETs and HEADs
+//! overlap on six shared HTTP workers while retaining ordered delivery.
+//! Independent HTTP shares them; its held sockets cannot occupy the ordered worker.
 use exact_runner::{Outcome, RequestOut, Work};
 use std::ffi::c_void;
 #[path = "executor_core.rs"]
@@ -37,7 +37,7 @@ impl Launch {
 }
 
 impl Executor {
-    /// Start one ordered owner and six independent HTTP owners. Bindings are
+    /// Start one ordered owner and six shared HTTP owners. Bindings are
     /// never shared between owners. Retired but unfinished workers remain
     /// charged against a process limit; exhaustion refuses new work.
     pub fn start(

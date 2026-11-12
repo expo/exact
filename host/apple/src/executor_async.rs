@@ -552,6 +552,7 @@ impl Machine {
             stream: false,
             waiting: false,
             read: lane == 0 && super::read(&job.request, job.work.is_some()),
+            overlap: false,
             terminal: false,
             // The start holds its run until it has run (`starter`).
             live: 1,
