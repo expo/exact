@@ -221,7 +221,7 @@ test('unsigned device builds and archives refuse incompatible options before bui
     const args = flags.filter((_, bit) => mask & (1 << bit));
     const [unsigned, archive, run, device, host] = flags.map(flag => args.includes(flag));
     const env = signed ? { EXACT_PROFILE: 'profile', EXACT_IDENTITY: 'identity' } : {};
-    const refusal = appleBuildRefusal(args, env);
+    const refusal = appleBuildRefusal(args, env, 'darwin');
     assert.equal(refusal == null, !(unsigned && (!device || run) || archive && (!device || run || host || !unsigned && !signed)), JSON.stringify({ args, signed, refusal }));
   }
   assert.match(appleBuildRefusal(['--device', '--unsigned', '--run'], {}, 'darwin'), /ad-hoc signed device bundle cannot launch on a stock device/);
@@ -229,11 +229,11 @@ test('unsigned device builds and archives refuse incompatible options before bui
   assert.match(appleBuildRefusal(['--device', '--unsigned'], {}, 'linux'), /--device on Linux needs --archive/);
   assert.equal(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned'], {}, 'linux'), null);
   assert.equal(appleBuildRefusal(['--ios'], {}, 'linux'), null);
-  for (const args of [['--watchos', '--unsigned'], ['--watchos', '--device', '--unsigned']]) assert.match(appleBuildRefusal(args, {}), /--unsigned takes no --watchos/);
-  for (const args of [['--device', '--development'], ['--device', '--unsigned', '--development'], ['--device', '--archive', 'a.ipa', '--development']]) assert.match(appleBuildRefusal(args, {}), /--development needs --archive and --unsigned/);
-  assert.equal(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned', '--development'], {}), null);
-  assert.match(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned', '--development', '--release'], {}), /takes neither --release/);
-  assert.match(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned', '--development'], { EXACT_UPDATE_TRUST: 'production' }), /takes neither --release/);
+  for (const args of [['--watchos', '--unsigned'], ['--watchos', '--device', '--unsigned']]) assert.match(appleBuildRefusal(args, {}, 'darwin'), /--unsigned takes no --watchos/);
+  for (const args of [['--device', '--development'], ['--device', '--unsigned', '--development'], ['--device', '--archive', 'a.ipa', '--development']]) assert.match(appleBuildRefusal(args, {}, 'darwin'), /--development needs --archive and --unsigned/);
+  assert.equal(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned', '--development'], {}, 'darwin'), null);
+  assert.match(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned', '--development', '--release'], {}, 'darwin'), /takes neither --release/);
+  assert.match(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned', '--development'], { EXACT_UPDATE_TRUST: 'production' }, 'darwin'), /takes neither --release/);
   const result = spawnSync(process.execPath, ['host/apple/build.mjs', '--device', '--unsigned', '--run', 'no-such-app'], { encoding: 'utf8' });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /--unsigned takes no --run/);
