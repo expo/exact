@@ -1,8 +1,9 @@
 //! Native transport scheduling shared by Apple and Linux (LLP 1041 D1–D4).
-//! Read-class GETs and HEADs overlap on shared workers, retaining their place
+//! Reads and parallel sends overlap on shared workers, retaining their place
 //! in the ordered lane (LLP 1162 D1). Each worker owns its transport.
 use exact_runner::{
-    FailureKind, HttpScheduling, Outcome, Reply, Request, RequestOut, Response, Work as OwnedWork,
+    FailureKind, HttpScheduling, Outcome, Reply, Request, RequestClass, RequestOut, Response,
+    Work as OwnedWork,
 };
 use ibex2::stdlib::abort::AbortController;
 use std::collections::VecDeque;
@@ -56,6 +57,7 @@ struct Job {
     forgotten: bool,
     queued_deadline: Option<forget::QueuedDeadline>,
     overlap: bool,
+    class: RequestClass,
 }
 /// A job a worker took, until its outcome is complete.
 struct Running {
@@ -78,6 +80,7 @@ struct Running {
     /// An ordered safe read: once complete it holds no effect slot.
     read: bool,
     overlap: bool,
+    class: RequestClass,
     /// The asynchronous core's (LLP 1120 D3, D5); workers leave them be.
     /// The outcome is published.
     terminal: bool,
@@ -85,7 +88,7 @@ struct Running {
     live: usize,
     /// Its outcome is drained or dropped while `live` held its bytes.
     drained: bool,
-    /// The ordered lane's one blocking job.
+    /// Its end still holds dependent requests (LLP 1162 D1).
     blocking: bool,
     /// Its run's generation (a parked upload starts a new one): events and
     /// deadlines of another are stale.
@@ -114,8 +117,8 @@ struct Completed {
 }
 /// A place behind the ordered barrier.
 enum Fenced {
-    /// A request to admit when the barrier lifts, and its request buffers.
-    Held(Box<RequestOut>, Option<OwnedWork>, usize),
+    /// A request, its retained buffers, and whether its outcome is forgotten.
+    Held(Box<RequestOut>, Option<OwnedWork>, usize, bool),
     /// A request refused while the barrier was up: refused when its turn
     /// comes, after the held requests before it are admitted.
     Refused(u64, &'static str),
@@ -160,7 +163,8 @@ struct State {
     ordered_barrier: bool,
     /// Ordered requests behind the barrier, in order: held rather than
     /// refused with the refusal before them, and admitted when the host
-    /// lifts it (`resume_ordered`). Each is a current runner ticket. Held
+    /// lifts it (`resume_ordered`), or effect slots free for waiting reads
+    /// (LLP 1162 D1). Held
     /// requests are capped at 128 and 64 MiB of request buffers; one refused
     /// meanwhile (invalid, or past those caps) keeps its place as a refusal,
     /// so that it settles after the held work before it.
@@ -462,245 +466,14 @@ impl Core {
         r: RequestOut,
         work: Option<OwnedWork>,
     ) -> Result<(), &'static str> {
-        self.admit(r, work).map_err(|(reason, _work)| reason)
-    }
-
-    /// Admit `r`, hold it behind the ordered barrier, or refuse it, handing
-    /// back its work for the caller to destroy.
-    fn admit(
-        &self,
-        r: RequestOut,
-        work: Option<OwnedWork>,
-    ) -> Result<(), (&'static str, Option<OwnedWork>)> {
-        let ordered = r.request.is_ordered();
-        let overlap = self.machine.is_none() && reads::overlaps(&r, work.is_some());
-        let mut state = self.shared.state.lock().unwrap();
-        // A deadline on work that cannot take one (a stream but an upload, a continuation, native work), or a
-        // long poll that is no stream's HTTP GET (LLP 1016.000 D8), is refused here, before any path.
-        let checked = r
-            .request
-            .long_poll_refusal()
-            .or(r.request.timeout_refusal())
-            .or(r.request.body_from_refusal())
-            .or(r.request.body_to_refusal())
-            .or(r.request.upload_progress_refusal())
-            .map_or_else(|| reads::reservation(&r.request, overlap), Err)
-            .and_then(|charge| state.book.reserve_inline_copy(&r.request, charge));
-        let lane = checked.as_ref().map_or(0, |(lane, _, _)| *lane);
-        if self.disabled
-            || !self.start_workers(&mut state, lane)
-            || (overlap && !self.start_workers(&mut state, 1))
-        {
-            return Err(("native executor worker limit reached", work));
-        }
-        if state.retired {
-            return Err(("native executor retired", work));
-        }
-        if ordered && state.ordered_barrier {
-            // Behind an earlier ordered refusal: held until it settles, so
-            // that later work neither bypasses its settlement nor is refused
-            // with it (one refusal must not poison the lane). One refused
-            // now keeps its place, to settle after what is held before it.
-            let held = state
-                .fenced
-                .iter()
-                .filter(|f| matches!(f, Fenced::Held(..)))
-                .count();
-            let place = match checked {
-                Err(why) => Err(why),
-                Ok((_, charge, _))
-                    if held >= ORDERED_READS
-                        || charge > ORDERED_WAITING_BYTES.saturating_sub(state.fenced_bytes) =>
-                {
-                    Err("earlier ordered admission refusal must settle first")
-                }
-                Ok((_, charge, _)) => Ok(charge),
-            };
-            match place {
-                Ok(charge) => {
-                    state.fenced_bytes += charge;
-                    state
-                        .fenced
-                        .push_back(Fenced::Held(Box::new(r), work, charge));
-                }
-                Err(why) => {
-                    state.fenced.push_back(Fenced::Refused(r.ticket, why));
-                    self.discard(&mut state, work);
-                }
-            }
-            return Ok(());
-        }
-        // An upload waits for its start holding no count, bytes or place of
-        // its lane, so a queue of them refuses no other request; it takes
-        // them as it starts (`stream::start`).
-        let waits = r.request.stream && r.request.upload_progress;
-        // A process one-shot runs on a thread of its own with room of its
-        // own, so a slow one leaves the lane's requests theirs (LLP 1133.007 D3).
-        let one_shot = r.request.is_process() && !r.request.stream;
-        let admitted = (|| {
-            let (lane, charge, limit) = checked?;
-            let streams: usize = state
-                .running
-                .iter()
-                .filter(|run| run.lane == lane && run.stream)
-                .map(|run| run.charge)
-                .sum();
-            if lane == 1 && !r.request.stream && limit > BYTES[lane].saturating_sub(streams) {
-                return Err("native response ceiling exceeds the lane budget held by open streams");
-            }
-            // A stream starts at once, so it is charged its ceiling now.
-            let (full, charge) = if r.request.stream {
-                (state.streams >= STREAMS && !waits, limit)
-            } else {
-                let streams = if lane == 1 { state.streams } else { 0 };
-                // Plain reads may wait in a larger, still ordered backlog:
-                // every ordered ticket counts against its 128. Writes and
-                // opaque work keep the sixteen, counted over everything
-                // admitted but re-ask markers and finished reads, which
-                // hold no effect (LLP 1041 §8.4, amended 2026-10-09).
-                let full = if lane == 1 {
-                    state.counts[1] - streams >= COUNTS[1]
-                } else if read(&r.request, work.is_some()) {
-                    state.counts[0] - state.agains >= ORDERED_READS
-                } else {
-                    state.counts[0] - state.light >= COUNTS[0]
-                        || state.counts[0] - state.agains >= ORDERED_READS
-                };
-                (full && !one_shot, if one_shot { 0 } else { charge })
-            };
-            // A parked upload's outstanding charge counts as taken, so a
-            // later request can't crowd it out (LLP 1120 §6 question 8).
-            let parked = state.book.parked(lane, &state.jobs[lane]);
-            if full || (!waits && charge > BYTES[lane].saturating_sub(state.bytes[lane] + parked)) {
-                return Err("native executor admission limit reached");
-            }
-            if waits && stream::uploads_full(&self.shared, r.request.body.len()) {
-                return Err("native executor upload queue limit reached");
-            }
-            if lane == 0 {
-                // Count every waiting request, including writes. Otherwise
-                // 128 large reads could fill the lane before its first job
-                // can reserve the response bytes it needs to start.
-                let waiting = state.jobs[0].iter().map(|job| job.charge).sum();
-                if charge > ORDERED_WAITING_BYTES.saturating_sub(waiting) {
-                    return Err("native ordered queue byte limit reached");
-                }
-            }
-            if one_shot {
-                process::admit_one_shot(&self.shared, r.ticket, limit)?;
-            }
-            Ok((lane, charge, limit))
-        })();
-        let (lane, charge, limit) = match admitted {
-            Ok(value) => value,
-            Err(reason) => {
-                // Failure parsing can mutate Store too. Refusals live on
-                // runner tickets, but fence later ordered work here until
-                // the host has settled/forgotten all those tickets.
-                if ordered {
-                    state.ordered_barrier = true;
-                }
-                return Err((reason, work));
-            }
-        };
-        let queued_deadline = if lane == 1 && !r.request.stream && work.is_none() {
-            match r
-                .request
-                .timeout_ms
-                .map(|ms| forget::QueuedDeadline::arm(&self.shared, lane, r.ticket, ms))
-                .transpose()
-            {
-                Ok(deadline) => deadline,
-                Err(()) => return Err(("native queued deadline could not be armed", work)),
-            }
-        } else {
-            None
-        };
-        if ordered {
-            state.ordered.push_back(r.ticket);
-        }
-        if !waits && !one_shot {
-            state.counts[lane] += 1;
-            state.bytes[lane] += charge;
-        }
-        if r.request.stream || r.request.is_process() {
-            // Never queued behind held replies: a stream opens on its own
-            // thread with its own transport, and reads there (LLP 1067 D3).
-            // An upload takes its place and thread once its budget has room.
-            // A process request runs on a thread of its own, and only a
-            // child's stream takes a stream's place (LLP 1133.007).
-            let upload = r.request.upload_progress;
-            let stream = r.request.stream && !upload;
-            state.streams += usize::from(stream);
-            let abort = AbortController::new();
-            state.running.push(Running {
-                started: std::time::Instant::now(),
-                ticket: r.ticket,
-                lane,
-                charge: if waits || one_shot { 0 } else { charge },
-                limit,
-                abort: Some(abort.clone()),
-                // An app's abort ends a one-shot's child, as a forget does (LLP 1133.007 D3).
-                exchange: (r.request.is_process() && !r.request.stream).then(|| abort.clone()),
-                forgotten: false,
-                stream,
-                waiting: waits || one_shot,
-                read: false,
-                overlap: false,
-                terminal: false,
-                live: 0,
-                drained: false,
-                blocking: false,
-                generation: 0,
-                claim: asynch::Claim::None,
-            });
-            drop(state);
-            let (shared, grants) = (self.shared.clone(), self.grants.clone());
-            let (ticket, request, forced) = (r.ticket, r.request, r.forced);
-            let host = self.stream_host.clone();
-            if upload {
-                stream::queue_upload(&shared, ticket, request, forced, grants, host, abort);
-                return Ok(());
-            }
-            let spawned = std::thread::Builder::new()
-                .name(format!("exact-stream-{ticket}"))
-                .spawn({
-                    let shared = shared.clone();
-                    move || match request.is_process() {
-                        true => process::run(&shared, ticket, request, &grants, &*host, abort),
-                        false => {
-                            stream::run(&shared, ticket, request, forced, &grants, &*host, abort)
-                        }
-                    }
-                });
-            if let Err(e) = spawned {
-                process::release_one_shot(&shared, ticket);
-                complete(&shared, ticket, failed(FailureKind::Network, e.to_string()));
-            }
-            return Ok(());
-        }
-        state.jobs[lane].push_back(Job {
-            ticket: r.ticket,
-            request: r.request,
-            forced: r.forced,
-            work,
-            charge,
-            limit,
-            forgotten: false,
-            queued_deadline,
-            overlap,
-        });
-        #[cfg(test)]
-        self.shared
-            .worker_notifications
-            .fetch_add(1, Ordering::Relaxed);
-        self.shared.ready.notify_all();
-        Ok(())
+        self.admit(r, work, false, false)
+            .map_err(|(reason, _work)| reason)
     }
 
     /// One complete transaction per pump. Alternate ready lanes; never drain
     /// and lose later results when parsing one reply fails.
     pub(super) fn drain(&self) -> Vec<(u64, Outcome, Option<u64>)> {
+        self.resume_waiting();
         let mut state = self.shared.state.lock().unwrap();
         let ready = |lane: usize, state: &State| {
             if lane == 0 {
@@ -747,54 +520,12 @@ impl Core {
         // The independent lane's bytes and perhaps a stream's place, which
         // an upload waiting may take.
         stream::place_freed(&self.shared, state, done.ticket, lane == 1 && !done.message);
+        self.resume_waiting();
         vec![(done.ticket, done.outcome, Some(done.elapsed_ms))]
     }
 
     pub(super) fn ordered_idle(&self) -> bool {
         self.shared.state.lock().unwrap().counts[0] == 0
-    }
-
-    /// Lift the barrier once the runner retains no ordered refusal, and
-    /// admit the requests held behind it, in order. One past a limit is
-    /// refused, raising the barrier again over the rest: its ticket and
-    /// reason are returned for the host to record (`refuse_request`).
-    pub(super) fn resume_ordered(&self) -> Vec<(u64, &'static str)> {
-        let fenced = {
-            let mut state = self.shared.state.lock().unwrap();
-            state.ordered_barrier = false;
-            state.fenced_bytes = 0;
-            std::mem::take(&mut state.fenced)
-        };
-        let mut refused = Vec::new();
-        for place in fenced {
-            match place {
-                Fenced::Held(r, work, _) => {
-                    let ticket = r.ticket;
-                    // Behind a refusal made just now, it is held again.
-                    if let Err((reason, work)) = self.admit(*r, work) {
-                        refused.push((ticket, reason));
-                        let mut state = self.shared.state.lock().unwrap();
-                        self.discard(&mut state, work);
-                    }
-                }
-                Fenced::Refused(ticket, reason) => {
-                    let mut state = self.shared.state.lock().unwrap();
-                    if state.ordered_barrier {
-                        state.fenced.push_back(Fenced::Refused(ticket, reason));
-                    } else {
-                        state.ordered_barrier = true;
-                        refused.push((ticket, reason));
-                    }
-                }
-            }
-        }
-        // The re-asks that waited enter after the requests held before them.
-        let mut state = self.shared.state.lock().unwrap();
-        place_waiting(&mut state);
-        if has_ready(&state) {
-            wake(&mut state);
-        }
-        refused
     }
 
     /// Settle `ticket`, a re-ask (`Dispatch::Again`), in its place in the
@@ -839,6 +570,7 @@ impl Core {
     }
 
     pub(super) fn begin_pump(&self) {
+        self.resume_waiting();
         let mut state = self.shared.state.lock().unwrap();
         state.notified = false;
         // A refusal may use this turn instead of a completion. Preserve the
@@ -920,7 +652,7 @@ fn fenced_bytes(fenced: &VecDeque<Fenced>) -> usize {
     fenced
         .iter()
         .map(|f| match f {
-            Fenced::Held(.., charge) => *charge,
+            Fenced::Held(_, _, charge, _) => *charge,
             Fenced::Refused(..) => 0,
         })
         .sum()
@@ -931,7 +663,7 @@ fn fenced_bytes(fenced: &VecDeque<Fenced>) -> usize {
 /// neither settle before it nor take the fence's room for real requests.
 fn place_waiting(state: &mut State) {
     while let Some(&ticket) = state.waiting.front() {
-        if state.ordered_barrier || !settle_again(state, ticket) {
+        if state.ordered_barrier || !state.fenced.is_empty() || !settle_again(state, ticket) {
             return;
         }
         state.waiting.pop_front();
@@ -1002,7 +734,7 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
         state.bytes[lane] -= run.charge;
         // The lane going idle can let a retained ordered refusal settle,
         // and the work held behind it go: the host needs a pump for that.
-        if lane == 0 && state.counts[0] == 0 {
+        if lane == 0 && (state.counts[0] == 0 || !state.fenced.is_empty()) {
             wake(&mut state);
         }
         // The room it held, in its lane and among the streams, may start an
@@ -1209,6 +941,7 @@ fn worker(
             work,
             queued_deadline,
             overlap,
+            class,
             ..
         } = job;
         if let Some(deadline) = queued_deadline {
@@ -1228,6 +961,11 @@ fn worker(
                 // The module owner completes asynchronously; the I/O owner stays free.
                 // Reply's drop path publishes an aborted outcome if the handoff panics.
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hand(reply)));
+                let mut state = shared.state.lock().unwrap();
+                if let Some(run) = state.running.iter_mut().find(|r| r.ticket == ticket) {
+                    run.blocking = false;
+                }
+                rouse(&shared, &state);
                 continue;
             }
             Some(OwnedWork::Now(work)) => Some(work),
@@ -1245,9 +983,15 @@ fn worker(
             };
             match scoped_bindings(&grants, request.grants.as_deref(), &host) {
                 Some(Err(message)) => failed(FailureKind::Refused, message),
-                Some(Ok(ref scoped)) => {
-                    execute(Ok(scoped), request, forced, work, &abort, &files, overlap)
-                }
+                Some(Ok(ref scoped)) => execute(
+                    Ok(scoped),
+                    request,
+                    forced,
+                    work,
+                    &abort,
+                    &files,
+                    overlap && class == RequestClass::Read,
+                ),
                 None => execute(
                     bindings.as_ref().ok_or(unbound.as_str()),
                     request,
@@ -1255,7 +999,7 @@ fn worker(
                     work,
                     &abort,
                     &files,
-                    overlap,
+                    overlap && class == RequestClass::Read,
                 ),
             }
         }))
@@ -1444,6 +1188,8 @@ mod body;
 #[path = "executor_body_to.rs"]
 mod body_to;
 
+#[path = "executor_admission.rs"]
+mod admission;
 #[path = "executor_reads.rs"]
 mod reads;
 

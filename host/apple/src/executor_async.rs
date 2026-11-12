@@ -13,7 +13,7 @@
 //! run (ticket and generation): a parked upload's next run ignores the last
 //! one's late events.
 use super::{
-    body, bounded_outcome, failed, fetch_failure, fetch_request, handoff, retained, safe,
+    body, bounded_outcome, failed, fetch_failure, fetch_request, handoff, retained,
     scoped_bindings, Completed, Job, Running, Shared, State, StreamHost, BYTES, MAX_BODY,
     MAX_HEADERS,
 };
@@ -546,13 +546,15 @@ impl Machine {
             charge: job.charge,
             limit: job.limit,
             // Only an exchange is cancelled by a forget (a safe read's).
-            abort: (kind == Kind::Http && safe(&job.request)).then(|| abort.clone()),
+            abort: (kind == Kind::Http && super::reads::safe_to_forget(&job.request, job.class))
+                .then(|| abort.clone()),
             exchange: (kind == Kind::Http).then(|| abort.clone()),
             forgotten: job.forgotten,
             stream: false,
             waiting: false,
-            read: lane == 0 && super::read(&job.request, job.work.is_some()),
+            read: lane == 0 && super::reads::safe_read(&job.request, job.work.is_some(), job.class),
             overlap: false,
+            class: job.class,
             terminal: false,
             // The start holds its run until it has run (`starter`).
             live: 1,

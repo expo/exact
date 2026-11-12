@@ -258,6 +258,7 @@ impl Machine {
                 forgotten: r.forgotten,
                 queued_deadline: None,
                 overlap: false,
+                class: r.class,
             },
         );
         Some(Box::new(move |m: &Arc<Machine>| m.timer.remove(run)))
@@ -368,6 +369,7 @@ mod tests {
                 forgotten: false,
                 queued_deadline: None,
                 overlap: false,
+                class: exact_runner::RequestClass::Ordered,
             });
             state.bytes[lane] += charge;
             state.counts[lane] += 1;

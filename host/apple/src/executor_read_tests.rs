@@ -343,9 +343,8 @@ fn reads_keep_posts_storage_work_and_handoffs_in_their_places() {
     server.reply(5, b"five");
     running.recv_timeout(HANG).unwrap();
     let reply = replies.recv_timeout(HANG).unwrap();
-    assert_queued(&core, 8);
-    reply.send(Outcome::Storage(vec![7]));
     server.seen(&[8]);
+    reply.send(Outcome::Storage(vec![7]));
     server.reply(8, b"eight");
     let done = collect(&core, &woke, 8);
     assert_eq!(tickets(&done), (1..=8).collect::<Vec<_>>());
@@ -565,7 +564,7 @@ fn retiring_reads_releases_every_worker_and_its_reservations() {
 }
 
 #[test]
-fn read_posts_and_parallel_requests_keep_ordered_worker_behavior() {
+fn post_reads_overlap_but_a_parallel_send_waits_for_them() {
     let server = Server::new();
     let (core, woke) = server.core(false);
     core.run(job(1, server.post(1), RequestClass::Read), None)
@@ -574,8 +573,7 @@ fn read_posts_and_parallel_requests_keep_ordered_worker_behavior() {
     core.run(job(3, server.request(3), RequestClass::Parallel(3)), None)
         .unwrap();
     core.run(read_job(&server, 4), None).unwrap();
-    server.seen(&[1]);
-    assert_queued(&core, 2);
+    server.seen(&[1, 2]);
     assert_queued(&core, 3);
     {
         let mut state = core.shared.state.lock().unwrap();
@@ -583,7 +581,7 @@ fn read_posts_and_parallel_requests_keep_ordered_worker_behavior() {
         assert!(reads::next_job(&mut state, 1).is_none());
     }
     server.reply(1, b"post");
-    server.seen(&[2]);
+    completed(&core, 1);
     assert_queued(&core, 3);
     server.reply(2, b"read");
     server.seen(&[3]);
@@ -646,4 +644,317 @@ fn the_asynchronous_core_keeps_read_and_parallel_classes_ordered() {
     server.seen(&[3]);
     server.reply(3, b"three");
     assert_eq!(tickets(&collect(&core, &woke, 3)), [1, 2, 3]);
+}
+
+#[test]
+fn reads_and_parallel_sends_wait_for_a_handoff_to_be_made_but_not_completed() {
+    for class in [RequestClass::Read, RequestClass::Parallel(0)] {
+        let server = Server::new();
+        let (core, woke) = server.core(false);
+        let (entered, entering) = channel();
+        let (release, held) = channel();
+        core.run(
+            job(1, Request::continuation(1), RequestClass::Ordered),
+            Some(Box::new(move || {
+                entered.send(()).unwrap();
+                held.recv_timeout(HANG).unwrap();
+                Outcome::Storage(vec![1])
+            })),
+        )
+        .unwrap();
+        entering.recv_timeout(HANG).unwrap();
+        let (handed, replies) = channel();
+        core.run_owned(
+            job(2, Request::continuation(2), RequestClass::Ordered),
+            Some(OwnedWork::Later(Box::new(move |reply| {
+                handed.send(reply).unwrap();
+            }))),
+        )
+        .unwrap();
+        core.run(job(3, server.post(3), class), None).unwrap();
+        {
+            let mut state = core.shared.state.lock().unwrap();
+            assert!(state.jobs[0].iter().any(|j| j.ticket == 2));
+            assert!(state.jobs[0].iter().any(|j| j.ticket == 3));
+            assert!(reads::next_job(&mut state, 1).is_none());
+        }
+        release.send(()).unwrap();
+        let reply = replies.recv_timeout(HANG).unwrap();
+        server.seen(&[3]);
+        // Admission after the handoff must obey the same rule.
+        core.run(job(4, server.post(4), class), None).unwrap();
+        server.seen(&[4]);
+        server.reply(4, b"later");
+        completed(&core, 4);
+        server.reply(3, b"earlier");
+        completed(&core, 3);
+        assert_eq!(tickets(&collect(&core, &woke, 1)), [1]);
+        assert!(core.drain().is_empty());
+        reply.send(Outcome::Storage(vec![2]));
+        assert_eq!(tickets(&collect(&core, &woke, 3)), [2, 3, 4]);
+    }
+}
+
+#[test]
+fn twenty_four_post_reads_wait_at_sixteen_and_drain_in_order_without_a_refusal() {
+    let server = Server::new();
+    let (core, woke) = server.core(false);
+    for ticket in 1..=24 {
+        let mut request = job(ticket, server.post(ticket), RequestClass::Read);
+        request.target = format!("resource-{}", (ticket - 1) / 8);
+        core.run(request, None).unwrap();
+        let state = core.shared.state.lock().unwrap();
+        assert!(state.counts[0] - state.light <= COUNTS[0]);
+    }
+    server.seen(&[1, 2, 3, 4, 5, 6]);
+    {
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!(state.counts, [16, 0]);
+        assert_eq!(state.light, 0);
+        assert_eq!(state.fenced.len(), 8);
+        assert!(!state.ordered_barrier);
+    }
+    core.run(job(25, server.post(25), RequestClass::Ordered), None)
+        .unwrap();
+    core.run(read_job(&server, 26), None).unwrap();
+    let mut done = Vec::new();
+    for first in [1, 7, 13, 19] {
+        let wave: Vec<_> = (first..first + 6).collect();
+        server.seen(&wave);
+        for &ticket in wave.iter().rev() {
+            server.reply(ticket, b"query");
+            completed(&core, ticket);
+        }
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!(state.light, 0, "a POST read holds its effect until drained");
+        assert!(state.counts[0] <= COUNTS[0]);
+        drop(state);
+        for _ in 0..6 {
+            done.extend(collect(&core, &woke, 1));
+            let state = core.shared.state.lock().unwrap();
+            assert!(state.counts[0] - state.light <= COUNTS[0]);
+            assert!(!state.ordered_barrier);
+        }
+    }
+    assert_eq!(tickets(&done), (1..=24).collect::<Vec<_>>());
+    assert!(done.iter().all(|(_, o)| matches!(o, Outcome::Response(_))));
+    server.seen(&[25]);
+    assert_queued(&core, 26);
+    server.reply(25, b"send");
+    server.seen(&[26]);
+    server.reply(26, b"read");
+    assert_eq!(tickets(&collect(&core, &woke, 2)), [25, 26]);
+    assert!(core.ordered_idle());
+    assert_eq!(core.shared.state.lock().unwrap().bytes, [0, 0]);
+}
+
+#[test]
+fn forgotten_running_queued_and_fenced_post_reads_are_sent_and_drop_their_outcomes() {
+    let server = Server::new();
+    let (core, woke) = server.core(false);
+    for ticket in 1..=17 {
+        core.run(job(ticket, server.post(ticket), RequestClass::Read), None)
+            .unwrap();
+    }
+    server.seen(&[1, 2, 3, 4, 5, 6]);
+    assert_queued(&core, 7);
+    core.forget(|ticket| ![1, 7, 17].contains(&ticket));
+    {
+        let state = core.shared.state.lock().unwrap();
+        let running = state.running.iter().find(|r| r.ticket == 1).unwrap();
+        assert!(running.forgotten && running.abort.is_none());
+        assert!(
+            state.jobs[0]
+                .iter()
+                .find(|j| j.ticket == 7)
+                .unwrap()
+                .forgotten
+        );
+        assert!(
+            matches!(state.fenced.front(), Some(Fenced::Held(r, _, _, true)) if r.ticket == 17)
+        );
+    }
+    server.reply(1, b"forgotten running");
+    let mut done = Vec::new();
+    for ticket in 2..=17 {
+        server.seen(&[ticket]);
+        server.reply(ticket, b"query");
+        if ticket == 7 || ticket == 17 {
+            wait_state(&core, |s| !s.running.iter().any(|r| r.ticket == ticket));
+        } else {
+            done.extend(collect(&core, &woke, 1));
+        }
+    }
+    assert_eq!(
+        tickets(&done),
+        (2..=16).filter(|t| *t != 7).collect::<Vec<_>>()
+    );
+    assert!(core.drain().is_empty());
+    assert!(core.ordered_idle());
+    assert_eq!(core.shared.state.lock().unwrap().bytes, [0, 0]);
+}
+
+#[test]
+fn three_parallel_sends_leave_shared_workers_for_three_independent_reads() {
+    let server = Server::new();
+    let (core, woke) = server.core(false);
+    for ticket in 1..=4 {
+        core.run(
+            job(ticket, server.post(ticket), RequestClass::Parallel(0)),
+            None,
+        )
+        .unwrap();
+    }
+    server.seen(&[1, 2, 3]);
+    assert_queued(&core, 4);
+    for ticket in 5..=7 {
+        core.run(
+            job(
+                ticket,
+                server.request(ticket).independent_http(4096),
+                RequestClass::Read,
+            ),
+            None,
+        )
+        .unwrap();
+    }
+    server.seen(&[5, 6, 7]);
+    {
+        let mut state = core.shared.state.lock().unwrap();
+        assert_eq!(state.running.len(), 6);
+        assert!(reads::next_job(&mut state, 0).is_none());
+        assert!(reads::next_job(&mut state, 1).is_none());
+    }
+    server.reply(3, b"third");
+    server.seen(&[4]);
+    server.reply(4, b"fourth");
+    completed(&core, 4);
+    assert!(core.drain().is_empty());
+    for ticket in [2, 1, 5, 6, 7] {
+        server.reply(ticket, b"done");
+    }
+    let done = collect(&core, &woke, 7);
+    let ordered: Vec<_> = tickets(&done).into_iter().filter(|t| *t <= 4).collect();
+    assert_eq!(ordered, [1, 2, 3, 4]);
+    assert!(done.iter().all(|(_, o)| matches!(o, Outcome::Response(_))));
+}
+
+#[test]
+fn non_siblings_wait_for_every_parallel_send_to_end() {
+    for class in [
+        RequestClass::Ordered,
+        RequestClass::Read,
+        RequestClass::Parallel(1),
+    ] {
+        let server = Server::new();
+        let (core, woke) = server.core(false);
+        for ticket in 1..=2 {
+            core.run(
+                job(ticket, server.post(ticket), RequestClass::Parallel(0)),
+                None,
+            )
+            .unwrap();
+        }
+        core.run(job(3, server.post(3), class), None).unwrap();
+        server.seen(&[1, 2]);
+        assert_queued(&core, 3);
+        server.reply(2, b"second");
+        completed(&core, 2);
+        assert_queued(&core, 3);
+        server.reply(1, b"first");
+        server.seen(&[3]);
+        server.reply(3, b"last");
+        assert_eq!(tickets(&collect(&core, &woke, 3)), [1, 2, 3]);
+    }
+}
+
+#[test]
+fn the_ordered_worker_runs_a_parallel_send_and_post_under_held_independent_http() {
+    let server = Server::new();
+    let (core, woke) = server.core(false);
+    for ticket in 1..=6 {
+        core.run(
+            job(
+                ticket,
+                server.request(ticket).independent_http(4096),
+                RequestClass::Ordered,
+            ),
+            None,
+        )
+        .unwrap();
+    }
+    server.seen(&[1, 2, 3, 4, 5, 6]);
+    core.run(job(7, server.post(7), RequestClass::Parallel(0)), None)
+        .unwrap();
+    core.run(job(8, server.post(8), RequestClass::Ordered), None)
+        .unwrap();
+    server.seen(&[7]);
+    server.reply(7, b"parallel");
+    server.seen(&[8]);
+    server.reply(8, b"ordered");
+    assert_eq!(tickets(&collect(&core, &woke, 2)), [7, 8]);
+    assert_eq!(server.state.0.lock().unwrap().held.len(), 6);
+    core.forget(|_| false);
+    wait_state(&core, |s| s.counts == [0, 0]);
+}
+
+#[test]
+fn a_seventeenth_parallel_send_is_refused_and_forgotten_sends_still_run() {
+    let server = Server::new();
+    let (core, _) = server.core(false);
+    for ticket in 1..=16 {
+        core.run(
+            job(ticket, server.post(ticket), RequestClass::Parallel(0)),
+            None,
+        )
+        .unwrap();
+    }
+    server.seen(&[1, 2, 3]);
+    assert_eq!(
+        core.run(job(17, server.post(17), RequestClass::Parallel(0)), None),
+        Err("native executor admission limit reached")
+    );
+    core.forget(|_| false);
+    for ticket in 1..=16 {
+        server.seen(&[ticket]);
+        server.reply(ticket, b"forgotten send");
+    }
+    wait_state(&core, |s| s.counts == [0, 0]);
+    assert!(core.drain().is_empty());
+    assert_eq!(server.state.0.lock().unwrap().seen.len(), 16);
+    assert_eq!(core.shared.state.lock().unwrap().bytes, [0, 0]);
+}
+
+#[test]
+fn post_reads_keep_the_fences_count_and_byte_caps_and_refusals_wait_their_turn() {
+    for large in [false, true] {
+        let server = Server::new();
+        let (core, _) = server.core(false);
+        for ticket in 1..=16 {
+            core.run(job(ticket, server.post(ticket), RequestClass::Read), None)
+                .unwrap();
+        }
+        server.seen(&[1, 2, 3, 4, 5, 6]);
+        let held = if large { 21 } else { 128 };
+        for ticket in 17..=17 + held {
+            let mut request = server.post(ticket);
+            if large {
+                request.body = Vec::with_capacity(3 << 20);
+            }
+            core.run(job(ticket, request, RequestClass::Read), None)
+                .unwrap();
+        }
+        core.resume_waiting();
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!(state.counts[0], 16);
+        assert!(!state.ordered_barrier, "a refusal cannot pass held reads");
+        assert_eq!(state.fenced.len(), held as usize + 1);
+        assert!(state.fenced_bytes <= ORDERED_WAITING_BYTES);
+        assert!(matches!(state.fenced.back(), Some(Fenced::Refused(t, _)) if *t == 17 + held));
+        assert!(state
+            .fenced
+            .iter()
+            .take(held as usize)
+            .all(|f| matches!(f, Fenced::Held(..))));
+    }
 }

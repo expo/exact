@@ -105,7 +105,9 @@ impl Core {
                     if held(job.ticket) {
                         return true;
                     }
-                    if job.work.is_none() && (safe(&job.request) || explicit.contains(&job.ticket))
+                    if job.work.is_none()
+                        && (reads::safe_to_forget(&job.request, job.class)
+                            || explicit.contains(&job.ticket))
                     {
                         *counts -= 1;
                         *streams -= usize::from(job.request.stream);
@@ -163,18 +165,26 @@ impl Core {
             // A re-ask let go before it found room: dropped, never settled.
             state.waiting.retain(|ticket| held(*ticket));
             state.waiting_set.retain(|ticket| held(*ticket));
-            // A held request has not begun: one let go is dropped unsent,
-            // its work destroyed by a worker.
-            let (kept, gone): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut state.fenced)
-                .into_iter()
-                .partition(|f| held(f.ticket()));
-            state.fenced = kept;
-            state.fenced_bytes = fenced_bytes(&state.fenced);
-            for f in gone {
-                if let Fenced::Held(_, work, _) = f {
-                    self.discard(state, work);
+            let mut kept = VecDeque::new();
+            for mut place in std::mem::take(&mut state.fenced) {
+                if held(place.ticket()) {
+                    kept.push_back(place);
+                    continue;
+                }
+                if let Fenced::Held(r, work, _, forgotten) = &mut place {
+                    if !explicit.contains(&r.ticket)
+                        && (reads::effect_read(r, work.is_some())
+                            || matches!(r.class, RequestClass::Parallel(_)))
+                    {
+                        *forgotten = true;
+                        kept.push_back(place);
+                    } else {
+                        self.discard(state, work.take());
+                    }
                 }
             }
+            state.fenced = kept;
+            state.fenced_bytes = fenced_bytes(&state.fenced);
             rouse(&self.shared, state);
             place_waiting(state);
             // As in `complete`: emptying the lane can let a refusal settle.
@@ -188,6 +198,7 @@ impl Core {
                 machine.cancelled(lane, run);
             }
         }
+        self.resume_waiting();
         stream::release(&self.shared, aborts);
         // An upload let go while it waits ends unsent; the places freed may start others.
         stream::forget_uploads(&self.shared, &held);

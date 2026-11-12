@@ -1,11 +1,30 @@
-//! Worker selection for reads that overlap in the ordered sequence (LLP 1162 D1).
+//! Worker selection and dependencies in the ordered sequence (LLP 1162 D1).
 use super::*;
 
 pub(super) fn overlaps(r: &RequestOut, work: bool) -> bool {
-    r.class == exact_runner::RequestClass::Read
-        && r.request.is_ordered()
-        && r.request.is_plain_http()
-        && read(&r.request, work)
+    r.class != RequestClass::Ordered && r.request.is_plain_http() && !work
+}
+
+pub(super) fn effect_read(r: &RequestOut, work: bool) -> bool {
+    r.class == RequestClass::Read && overlaps(r, work) && !safe(&r.request)
+}
+
+pub(super) fn safe_to_forget(request: &Request, class: RequestClass) -> bool {
+    safe(request) && !matches!(class, RequestClass::Parallel(_))
+}
+
+pub(super) fn safe_read(request: &Request, work: bool, class: RequestClass) -> bool {
+    read(request, work) && safe_to_forget(request, class)
+}
+
+// A made handoff has ended for scheduling (LLP 1120 D3). Otherwise each
+// class waits for all earlier classes except its peers (LLP 1162 D1).
+fn waits_for(class: RequestClass, before: RequestClass) -> bool {
+    match class {
+        RequestClass::Read => before != RequestClass::Read,
+        RequestClass::Parallel(m) => before != RequestClass::Parallel(m),
+        RequestClass::Ordered => true,
+    }
 }
 
 pub(super) fn reservation(
@@ -25,20 +44,34 @@ pub(super) fn next_job(state: &mut State, worker: usize) -> Option<(Job, AbortCo
         }
     }
     let job = state.jobs[0].front()?;
-    if job.overlap {
-        let mut reads = 0;
-        for run in state.running.iter().filter(|r| r.lane == 0) {
-            if !run.overlap {
-                return None;
-            }
-            reads += 1;
-        }
-        // The ordered worker is an escape from held independent requests,
-        // not a seventh overlapping read (LLP 1162 D1).
-        if reads >= INDEPENDENT {
+    let class = if job.overlap {
+        job.class
+    } else {
+        RequestClass::Ordered
+    };
+    if !job.overlap && worker != 0 {
+        return None;
+    }
+    let mut overlapping = 0;
+    let mut parallel = 0;
+    for run in state.running.iter().filter(|r| r.lane == 0 && r.blocking) {
+        let before = if run.overlap {
+            run.class
+        } else {
+            RequestClass::Ordered
+        };
+        if waits_for(class, before) {
             return None;
         }
-    } else if worker != 0 || state.running.iter().any(|r| r.overlap) {
+        overlapping += usize::from(run.overlap);
+        parallel += usize::from(matches!(before, RequestClass::Parallel(_)));
+    }
+    // The ordered worker provides progress under held independent HTTP;
+    // it does not enlarge the overlap limits (LLP 1162 D1).
+    if job.overlap
+        && (overlapping >= INDEPENDENT
+            || (matches!(class, RequestClass::Parallel(_)) && parallel >= 3))
+    {
         return None;
     }
     take_job(state, 0)
@@ -66,17 +99,18 @@ fn take_job(state: &mut State, lane: usize) -> Option<(Job, AbortController)> {
         lane,
         charge: job.charge,
         limit: job.limit,
-        abort: safe(&job.request).then(|| abort.clone()),
+        abort: safe_to_forget(&job.request, job.class).then(|| abort.clone()),
         exchange: (job.work.is_none() && !job.request.stream).then(|| abort.clone()),
         forgotten: job.forgotten,
         stream: job.request.stream,
         waiting: false,
-        read: lane == 0 && read(&job.request, job.work.is_some()),
+        read: lane == 0 && safe_read(&job.request, job.work.is_some(), job.class),
         overlap: job.overlap,
+        class: job.class,
         terminal: false,
         live: 0,
         drained: false,
-        blocking: false,
+        blocking: lane == 0,
         generation: 0,
         claim: asynch::Claim::None,
     });

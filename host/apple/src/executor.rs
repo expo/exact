@@ -1,4 +1,4 @@
-//! Bounded native I/O (LLP 1016 / 1041 / 1162). Read-class GETs and HEADs
+//! Bounded native I/O (LLP 1016 / 1041 / 1162). Reads and parallel sends
 //! overlap on six shared HTTP workers while retaining ordered delivery.
 //! Independent HTTP shares them; its held sockets cannot occupy the ordered worker.
 use exact_runner::{Outcome, RequestOut, Work};
