@@ -270,3 +270,50 @@ fn the_ask_made_with_sends_waiting_for_the_source_is_not_a_refresh() {
     let read = requests.iter().find(|o| o.target == "feed").unwrap();
     assert!(!read.forced, "the launch's own ask");
 }
+
+const LIST_REFRESHED: &str = r##"component App
+  state names: string[] = ["a"]
+  resource feeds = feed(n) for n in names as shape string
+  mutation saved as shape string refreshes feeds
+  action save
+    send saved = save("draft")
+  view
+    text feeds.join(",")
+"##;
+
+struct Saves {
+    ready: bool,
+}
+impl DataSource for Saves {
+    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+        Err(DataError::UnknownSource(source.into()))
+    }
+    fn answer(&mut self, _: &mut Store, source: &str, _: &[Value]) -> Result<Answer, DataError> {
+        Ok(match source {
+            "save" => Answer::Now(Value::str("saved")),
+            _ => Answer::Later(Request::get("https://example.test/feed")),
+        })
+    }
+    fn ready(&self) -> bool {
+        self.ready
+    }
+}
+
+#[test]
+fn a_send_that_refreshes_a_list_at_activation_refreshes_its_members() {
+    let mut r = Runner::boot(
+        contract::compile(LIST_REFRESHED).unwrap(),
+        Saves { ready: false },
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    r.act("save", vec![]).unwrap();
+    assert!(r.take_requests().is_empty(), "the source is not ready");
+    r.data().ready = true;
+    r.data_ready().unwrap();
+    let requests = r.take_requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert!(requests[0].forced, "the send's declared refresh");
+}
