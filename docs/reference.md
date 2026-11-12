@@ -3340,7 +3340,7 @@ A data crate answers the view's sources in Rust instead of `app.ts`: an app's
 An app `exact new` made outside this checkout that answers in Rust writes its own Cargo workspace
 (LLP 1153 D1.4). Read its crates from [Sparkline](../apps/sparkline)'s `data/`, `web/` and `apple/`:
 each `Cargo.toml`, `build.rs` and `src/lib.rs`, not the TypeScript ones `.exact/shells/` holds. Sparkline's
-paths into exact2 are relative to this checkout: in the copies, write each as `<exact2>/…` before running
+paths into Exact are relative to this checkout: in the copies, write each as `<exact2>/…` before running
 `bun exact.mjs update`, `contract` as `<exact2>/contract/cli` too. `update` points `exact-*` crates at this
 checkout by name, and any other path only through that placeholder. The web build copies the source
 `web/build.rs` passes to `contract::bake(plan, …)` into a module of its own, where build.rs's `use`s and

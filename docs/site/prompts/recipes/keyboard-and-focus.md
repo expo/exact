@@ -1,5 +1,5 @@
 ```prompt Make the keyboard work in my app
-Make the text fields in the Exact app in this folder keep the keyboard up or put it away as the person expects. Use https://github.com/expo/exact/blob/main/docs/recipes/keyboard-and-focus.md as the source for each step. The exact2 checkout has the same page at docs/recipes/keyboard-and-focus.md.
+Make the text fields in the Exact app in this folder keep the keyboard up or put it away as the person expects. Use https://github.com/expo/exact/blob/main/docs/recipes/keyboard-and-focus.md as the source for each step. The Exact checkout has the same page at docs/recipes/keyboard-and-focus.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. For each field, decide what Return does: add and keep typing, move to the next field, or put the keyboard away. If I did not say, propose it from what the app does and ask me before you write code.

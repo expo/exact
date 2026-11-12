@@ -39,7 +39,7 @@ capabilities.
 
 1. Identify the app, its root `app.contract`, `app.json`, data module, imports,
    authored tests, and requested target hosts. An external app uses `EXACT_APP_DIR`
-   with the same exact2 build/driver scripts.
+   with the same Exact build/driver scripts.
 2. Read the nearest working example for the feature. Search `contract/corpus/`,
    `contract/cli/tests/it/`, and the app's sources before designing new syntax.
 3. Decide whether the change belongs in Contract, the app's data module, its
@@ -98,7 +98,7 @@ hold, such as a script that fetches photos into a folder Git ignores, goes in
 the Bun that runs `exact.mjs`, so it runs on every host): each verb that
 builds, runs, compiles or checks the app runs it first in the app's
 directory, and stops if it fails. Make it finish at once when the files are there.
-`exact.mjs`'s `contract` verb is exact2's compiler, with paths relative to where you run it:
+`exact.mjs`'s `contract` verb is Exact's compiler, with paths relative to where you run it:
 
 ```sh
 bun exact.mjs contract types app.contract -o app.contract.d.ts   # what app.ts imports
@@ -109,7 +109,7 @@ bun exact.mjs contract vocab padding                              # is it accept
 bun exact.mjs web
 ```
 
-Inside the exact2 checkout, for its own apps, the same commands are
+Inside the Exact checkout, for its own apps, the same commands are
 `cargo run -q -p contract -- <command> apps/<name>/app.contract …` and
 `bun host/web/dev.mjs --app <name>`. Run `bun install --frozen-lockfile` there once.
 
@@ -225,7 +225,7 @@ glass, blur and the keyboard as the device draws them. So are a plain one's wher
 or a blur lies in the page; where the display cannot be read (the app not in front, an
 overlay) the reply says its materials are approximate, and why.
 
-Inside the exact2 checkout, for Caltrain:
+Inside the Exact checkout, for Caltrain:
 
 ```sh
 bun host/web/build.mjs caltrain-web
@@ -233,7 +233,7 @@ bun scripts/agent.mjs web tree "tap change-station" "type station-search Palo" s
 bun scripts/agent.mjs web --test apps/caltrain/app.test.contract
 ```
 
-For an external app driven from the exact2 root, set `EXACT_APP_DIR` on both build
+For an external app driven from the Exact root, set `EXACT_APP_DIR` on both build
 and drive. A stale
 artifact is a failed verification; rebuild what the driver names. A successful
 Cargo rlib build does not prove a native app launches or behaves correctly.
@@ -254,7 +254,7 @@ A script drives the same session in JavaScript: `const s = await open({ host:
 CLI's operations by the same names. Their replies are the CLI's `--json` output: `s.tree()`
 is `{ roots, nodes: [{ id, type, depth, props: { testId, text, value, … }, children }] }`,
 every node in one preorder list (`depth` and `children` give the nesting), and `s.state()` is `{ slots, derives, resources,
-pending, … }`. `app` is the app's name; an app outside the exact2
+pending, … }`. `app` is the app's name; an app outside the Exact
 checkout is found through `EXACT_APP_DIR` (its directory), as its own `exact.mjs agent`
 sets it, so a script run with plain `bun` sets it to the app's directory too
 (`EXACT_APP_DIR=/path/to/app bun verify.mjs`; a script that `app.ts` never imports
@@ -1767,7 +1767,7 @@ dialog or popover with `commandfor` and `command="show-modal"`,
 bound, and an empty target is no target. `href`, `action` and swipe attributes
 remain refused. `-exact-enabled` transitions are not available.
 
-**Exact2's menu rule** (LLP 1021): a row of a menu (`popover role="menu"`)
+**Exact's menu rule** (LLP 1021): a row of a menu (`popover role="menu"`)
 whose `popovertarget` (or `commandfor` with `command="show-popover"` or `"toggle-popover"`) names a
 popover that is no menu opens it as if by the menu's own invoker (the button
 that opened the menu, or the node its context menu opened on), as
@@ -1900,7 +1900,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | `select` of `option`s | a pop-up button with its menu |
 | `progress value=done max=goal` (a goal, an upload; as wide as what holds it) | `UIProgressView`, tinted by `accent-color` (LLP 1116 D8); never a drawn track and fill |
 | `progress` (no `value`) | `UIActivityIndicatorView`, `.large` from a 37-point box (LLP 1069.001) |
-| `popover="auto" role="menu"` of `button`s, opened by `popovertarget` (a row whose `popovertarget` names another menu: its submenu; one naming any other popover opens it from the menu's own invoker, exact2's menu rule) | `UIMenu`, nested (LLP 1021) |
+| `popover="auto" role="menu"` of `button`s, opened by `popovertarget` (a row whose `popovertarget` names another menu: its submenu; one naming any other popover opens it from the menu's own invoker, Exact's menu rule) | `UIMenu`, nested (LLP 1021) |
 | `dialog role="alertdialog" aria-label="Remove book?"` of a `text`, its action(s) and one Cancel; or a `text` and one closing button alone | `UIAlertController(.alert)`: the label its title, the text its message; the one-button alert when it has no action (LLP 1115 D6; recipe [below](#a-confirmation)) |
 | any other `dialog` (a field, Save, Cancel), opened by `showModal(id)` or a button's `command="show-modal"` | a sheet as tall as its content, up to the large detent, its content laid out as written and centred across it (`width="100%" box-sizing="border-box"` fills it); `close(id)`, its `command="close"` button or a swipe down closes it. `closedby="none"` refuses the swipe, `"any"` also takes a tap on the page behind, and a dismissal the person made fires `cancel` (LLP 1115.000 D11.5). A form with a title bar is still a sheet route |
 | `role="tablist"`: each tab a symbol over a label / one text or image | `UITabBar` / `UISegmentedControl`, the tablist at least its native height unless `min-height` says otherwise (LLP 1059) |
@@ -3769,7 +3769,7 @@ web-view inspection disabled.
 
 An Apple build's dev menu (a four-finger tap, or ⌘D on a hardware keyboard or a simulator's; on a Mac, Develop › App Info…, ⌘D, in a development build: a Mac build with production trust, `EXACT_UPDATE_TRUST=production`, or made by `exact release` has no Develop menu and takes none of its chords unless it is built or launched with `EXACT_DEV_MENU=1`, or a person runs `defaults write <bundle id> ExactDevMenu -bool YES` and the build did not say `0`; an iOS build, a release one too, has the menu unless it is built or launched with `EXACT_DEV_MENU=0`, LLP 1115 D9) uses a native grouped navigation sheet on iOS. Project commands and diagnostics have full-width rows; Build Information opens a separate, selectable text screen. On macOS, App Info opens with the
 build it is in: the app and version, when, where and with which Xcode it was
-built, the exact2 commit and the app's own (with branch and a dirty flag), the
+built, the Exact commit and the app's own (with branch and a dirty flag), the
 build kind, the device, and the app's release notes. `host/apple/build.mjs`
 stamps these into the bundle's Info.plist on every build, `--archive` included,
 so a shipped binary carries the build machine's host name and the commits too.

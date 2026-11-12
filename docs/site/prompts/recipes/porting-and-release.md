@@ -1,7 +1,7 @@
 ```prompt Port my app to Exact
-Port an existing app to Exact in this folder, and make the build that ships. Use https://github.com/expo/exact/blob/main/docs/recipes/porting-and-release.md as the source for each step. The exact2 checkout has the same page at docs/recipes/porting-and-release.md.
+Port an existing app to Exact in this folder, and make the build that ships. Use https://github.com/expo/exact/blob/main/docs/recipes/porting-and-release.md as the source for each step. The Exact checkout has the same page at docs/recipes/porting-and-release.md.
 
-1. Find the exact2 checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is. Ask me which app to port and where its code is, which platforms the port runs on, its name and bundle id, and whether it replaces the original on a device (then it keeps the original's name and bundle id).
+1. Find the Exact checkout (the folder with scripts/exact.mjs); if you cannot find it, ask me where it is. Ask me which app to port and where its code is, which platforms the port runs on, its name and bundle id, and whether it replaces the original on a device (then it keeps the original's name and bundle id).
 2. Make the app with its name and id before the first build: `bun <exact2>/scripts/exact.mjs new <path> --name "<Name>" --bundle-id <id>`, then `cd <path>`. A bundle id changed later makes the next build cold and leaves the old app installed.
 3. If the original is a React Native app, read its pitfalls first: `bun exact.mjs docs porting a react native app`.
 4. Port the screens to app.contract, the data to app.ts, and a test in app.test.contract for each thing a person does. Sound, MIDI and a transport are Exact's: never port an audio or MIDI engine into a native module. Use a native module only for what Exact lacks, and tell me first.

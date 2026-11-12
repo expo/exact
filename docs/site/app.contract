@@ -1,4 +1,4 @@
-// The Exact docs: exact2's own Markdown, one page per route, rendered at build.
+// The Exact docs: Exact's own Markdown, one page per route, rendered at build.
 // tools/gen.ts turns ../*.md into content/<route>.ts and content/nav.ts from constants/navigation.ts;
 // app.ts imports one page's module per route, so a reader downloads only the page it reads.
 // Each route waits for the reader before its runtime loads.
@@ -159,7 +159,7 @@ routes nav
   referencePitfallsInput "/reference/pitfalls/input" render=build activate=idle
   referencePitfallsDrivingAndTesting "/reference/pitfalls/driving-and-testing" render=build activate=idle
   referencePitfallsWebsites "/reference/pitfalls/websites" render=build activate=idle
-  referencePitfallsWorkingOnExact2Itself "/reference/pitfalls/working-on-exact2-itself" render=build activate=idle
+  referencePitfallsWorkingOnExactItself "/reference/pitfalls/working-on-exact-itself" render=build activate=idle
   referencePitfallsGames "/reference/pitfalls/games" render=build activate=idle
   referencePitfallsAccessHatches "/reference/pitfalls/access-hatches" render=build activate=idle
   referencePitfallsTransformdragforHasOneOwnerAtATime "/reference/pitfalls/transformdragfor-has-one-owner-at-a-time" render=build activate=idle

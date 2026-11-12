@@ -1,5 +1,5 @@
 ```prompt Give a component a timer
-Move a timer that a component needs into the root of the Exact app in this folder, so the component can start and stop it. Use https://github.com/expo/exact/blob/main/docs/recipes/timer-in-a-component.md as the source for each step. The exact2 checkout has the same page at docs/recipes/timer-in-a-component.md.
+Move a timer that a component needs into the root of the Exact app in this folder, so the component can start and stop it. Use https://github.com/expo/exact/blob/main/docs/recipes/timer-in-a-component.md as the source for each step. The Exact checkout has the same page at docs/recipes/timer-in-a-component.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not name the component that needs the timer, find it from what the app does and ask me before you write code.

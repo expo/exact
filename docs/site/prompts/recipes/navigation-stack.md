@@ -1,5 +1,5 @@
 ```prompt Add a navigation stack
-Give the Exact app in this folder a navigation stack: a list that pushes a detail, a sheet to add, and an alert before a delete. Use https://github.com/expo/exact/blob/main/docs/recipes/navigation-stack.md as the source for each step. The exact2 checkout has the same page at docs/recipes/navigation-stack.md.
+Give the Exact app in this folder a navigation stack: a list that pushes a detail, a sheet to add, and an alert before a delete. Use https://github.com/expo/exact/blob/main/docs/recipes/navigation-stack.md as the source for each step. The Exact checkout has the same page at docs/recipes/navigation-stack.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not name the screens, propose them from the app's data (the list, the detail, the sheet) and ask me before you write code.

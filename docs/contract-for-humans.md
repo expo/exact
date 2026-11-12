@@ -40,7 +40,7 @@ collects syntax, operator precedence, built-in functions, tags, and events.
 
 ## Run an app
 
-From an exact2 checkout with its pinned Rust toolchain and Bun installed:
+From an Exact checkout with its pinned Rust toolchain and Bun installed:
 
 ```sh
 bun install --frozen-lockfile
@@ -53,7 +53,7 @@ reports unsupported features rather than silently selecting a different result.
 Native builds require their platform tools. See the root
 [quick start](../README.md#quick-start) for toolchain installation.
 
-To scaffold a separate application, run from exact2:
+To scaffold a separate application, run from the Exact checkout:
 
 ```sh
 bun scripts/exact.mjs new ../hello

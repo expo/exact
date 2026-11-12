@@ -1,5 +1,5 @@
 ```prompt Add tests to my app
-Add tests to the Exact app in this folder, in app.test.contract, so verify checks each screen. Use https://github.com/expo/exact/blob/main/docs/recipes/tests.md as the source for each step. The exact2 checkout has the same page at docs/recipes/tests.md.
+Add tests to the Exact app in this folder, in app.test.contract, so verify checks each screen. Use https://github.com/expo/exact/blob/main/docs/recipes/tests.md as the source for each step. The Exact checkout has the same page at docs/recipes/tests.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. Read app.contract and list what a person does on each screen, and each refusal the app makes (an empty or repeated entry, a lost connection). Show me the list and ask before you write the tests.

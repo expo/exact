@@ -40,7 +40,7 @@ The only required reading; the rest is lookup. A website reads [Start here: a we
 
 ```sh
 bun <exact2>/scripts/exact.mjs new ~/groceries && cd ~/groceries
-bun exact.mjs pattern      # lists the starters; `pattern <name>` writes one; source: docs/patterns/<name>/app.contract in exact2
+bun exact.mjs pattern      # lists the starters; `pattern <name>` writes one; source: docs/patterns/<name>/app.contract in Exact
 bun exact.mjs ios --prebuild  # the first iOS build: ten to fifteen minutes, in the background; it names iOS in app.json
 ```
 
