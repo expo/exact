@@ -343,8 +343,9 @@ impl Module {
         let ops = std::mem::take(&mut self.host.socket_ops);
         let staged = self.stage_sockets(store, ops);
         if let Err(why) = &staged {
-            (self.logs).push(format!(
-                "mapper `{source}` failed: {why}; socket frames were refused"
+            (self.logs).push((
+                None,
+                format!("mapper `{source}` failed: {why}; socket frames were refused"),
             ));
         }
         let result = match staged {

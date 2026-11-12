@@ -371,6 +371,11 @@ pub struct Presenter<D: DataSource> {
 fn r2(x: f32) -> f64 {
     (x as f64 * 100.0).round() / 100.0
 }
+/// The app's `console` lines, on standard error in every build (LLP 1027.009
+/// D1): the sink of each runner the presenter shows.
+fn console_line(_: exact_runner::Console, line: &str) {
+    eprintln!("console: {line}");
+}
 impl<D: DataSource> Presenter<D> {
     /// Boot from entry zero or one selected generation. The selected asset
     /// roster is complete: absent names cannot fall through to `root`.
@@ -630,6 +635,8 @@ impl<D: DataSource> Presenter<D> {
         if let Some(reason) = p.assets.take_refusal() {
             return Err(HostError::Asset(reason));
         }
+        // Past the last refusal: a boot refused writes none of its lines.
+        p.host.runner_mut().set_console(console_line);
         Ok((p, error.or(e)))
     }
 
@@ -1293,6 +1300,7 @@ impl<D: DataSource> Presenter<D> {
         self.top_replaced();
         self.holds_changed();
         self.hosts += 1;
+        self.host.runner_mut().set_console(console_line);
         self.measure();
     }
 

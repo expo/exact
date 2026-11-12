@@ -116,7 +116,8 @@ fn main() {
         );
     };
 
-    // Ibex's abort binding captures console.error at installation.
+    // Ibex's abort binding captures its exception reporter at installation:
+    // console.js's `reportError`, the runtime's line.
     compile(&manifest.join("src/console.js"), &out.join("console.hbc"));
 
     // Ibex installs PURE | CRYPTO | ABORT before Exact's trusted policy
@@ -129,6 +130,7 @@ fn main() {
         "src/binary.js",
         "src/prelude.js",
         "src/process.js",
+        // Last: it deletes console.js's hand-offs to the files above.
         "src/intl.js",
     ]
     .iter()
@@ -225,6 +227,7 @@ fn main() {
         "outlive",
         "kept-json",
         "nul-byte",
+        "runtime-lines",
     ] {
         let source = manifest.join(format!("tests/fixtures/{name}.ts"));
         println!("cargo:rerun-if-changed={}", source.display());

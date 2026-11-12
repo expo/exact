@@ -49,13 +49,17 @@
   fixed(global.Math, "random", function () {
     throw new Error("Math.random() is unavailable in data sources; seed from crypto.getRandomValues in a source (docs/recipes/random-and-shuffle.md), or pass a seed as an argument; a roll in the view needs no source (docs/recipes/random-rolls.md)");
   });
+  // What the runtime itself says through `console`: natively a line that is
+  // not the app's, so no host writes it to the platform's log
+  // (js/src/console.js, LLP 1027.009 D1); in a browser realm, its console.
+  var runtimeLine = global.__exact_runtime_line || function (line) { if (global.console) global.console.error(line); };
   // The runtime's own journal line (LLP 1097 D8): a failed storage
   // operation, an unhandled rejection. Natively it is the runner's journal
   // (`logs`) as it is; a realm without that door writes it to its console.
   function journal(line) {
     var written;
     try { written = host(13, String(line), ""); } catch (e) { written = undefined; }
-    if (written !== "1" && global.console) global.console.error(String(line));
+    if (written !== "1") runtimeLine(String(line));
   }
   function errorText(e) {
     try { return e && typeof e === "object" && e.message !== undefined ? String(e.message) : String(e); }
@@ -568,7 +572,7 @@
     // (where the web lets it run; a request with effects already sent runs to its end, LLP 1146 D2, §2.4).
     if (!call) {
       var refused = new Error(work.inModuleTurn() ? "fetch() called from a plain .then callback a let-go answer's request settled: it was never run. Await that result in an async function, which resumes in its own answer's turn" : "fetch() called outside an answer: it was never run. Start a fetch inside an answer");
-      if (global.console) global.console.error(refused.message);
+      runtimeLine(refused.message);
       return Promise.reject(refused);
     }
     // No fetch from background work (LLP 1097 D2; a background fetch is

@@ -10,6 +10,7 @@
 import CExact
 import Foundation
 import QuartzCore
+import os
 
 /// One batch from the library: the ops, and whether the presenter should keep
 /// the clock (timers) or the display link (motion) running.
@@ -138,7 +139,28 @@ package final class Runtime {
     private let hooks: RuntimeHooks
     package init(hooks: RuntimeHooks = .headless) {
         self.hooks = hooks
-        rt = Owner.shared.sync { exact_create() }
+        rt = Owner.shared.sync {
+            let rt = exact_create()
+            exact_set_console(rt, Runtime.console)
+            return rt
+        }
+    }
+
+    /// The app's `console` lines (LLP 1027.009 D1), in every build, on the owner thread as the
+    /// runner journals each: the unified log, subsystem the app's bundle identifier, category
+    /// `console`, `console.debug` at debug level, `console.error` at error, the rest at the
+    /// default level. Public, as `print` and `NSLog` are: an author keeps tokens and personal
+    /// data out of them (`docs/start-here.md`).
+    private static let consoleLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? ProcessInfo.processInfo.processName, category: "console")
+    private static let console: ExactConsoleFn = { method, bytes, count in
+        // The log reads its argument as a C string: a NUL would end the line there.
+        let line = String(decoding: UnsafeBufferPointer(start: bytes, count: count), as: UTF8.self)
+            .replacingOccurrences(of: "\0", with: "\u{2400}")
+        switch method {
+        case 4: consoleLog.debug("\(line, privacy: .public)")
+        case 3: consoleLog.error("\(line, privacy: .public)")
+        default: consoleLog.log("\(line, privacy: .public)")
+        }
     }
 
     deinit { destroy() }

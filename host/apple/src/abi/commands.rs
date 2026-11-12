@@ -200,7 +200,8 @@ impl<D: DataSource> Bridge<D> {
     }
 
     /// A host this bridge boots: inline geometry, Canvas 2D text measurement
-    /// (LLP 1056 D8), and where its draws run (LLP 1072 §8.5).
+    /// (LLP 1056 D8), where its draws run (LLP 1072 §8.5), and where its
+    /// app's `console` lines go (LLP 1027.009).
     pub(super) fn presenter_hooks(&self, host: &mut crate::host::Host<D>, hooks: &super::Hooks) {
         host.runner_mut()
             .set_inline_geometry(self.inline_geometry.clone());
@@ -213,6 +214,7 @@ impl<D: DataSource> Bridge<D> {
             .hold_waits(exact_runner::WaitKinds::from_bits(self.wait_kinds));
         host.runner_mut()
             .set_live_clock(self.live_clock.map(super::preferences::sampler));
+        hooks.console_into(host.runner_mut());
     }
 
     /// Canvas draws in a turn of their own from now on, or in every turn

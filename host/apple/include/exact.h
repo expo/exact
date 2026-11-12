@@ -415,6 +415,12 @@ typedef struct {
 /* Return the UTF-8 byte count, writing at most cap bytes. Zero: fallback children. */
 typedef size_t (*ExactTimeFormatFn)(void *, const ExactTimeRequest *, uint8_t *, size_t);
 void exact_set_time_format(ExactRuntime rt, ExactTimeFormatFn format);
+/* LLP 1027.009 D1: an app's console line for the platform's log, called on the
+ * runtime's thread as the runner journals it, once its host is the one presented:
+ * method 0 log, 1 info, 2 warn, 3 error, 4 debug; the UTF-8 line, borrowed for
+ * the call. NULL (the default): the lines stay in the journal only. */
+typedef void (*ExactConsoleFn)(uint8_t method, const uint8_t *line, size_t len);
+void exact_set_console(ExactRuntime rt, ExactConsoleFn console);
 void exact_set_measure(ExactRuntime rt, ExactMeasureFn measure, void *ctx);   /* NULL: a monospace reference measurer */
 /* LLP 1056 D8: one Canvas 2D run measured with Core Text where the draw
  * runs, with the context exact_set_measure was given. The strings live for

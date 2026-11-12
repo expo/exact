@@ -71,7 +71,9 @@ struct CapturedString {
 
 struct State {
   std::unique_ptr<facebook::hermes::HermesRuntime> rt;
-  std::vector<std::string> log;
+  // Each console line with the method that wrote it (`log`, `warn`, …), or
+  // empty for the runtime's own (console.js).
+  std::vector<std::pair<std::string, std::string>> log;
   HostFn host;
   BytesFn bytes;
   void *ctx;
@@ -193,14 +195,15 @@ void install_console(State *state) {
   jsi::Runtime &rt = *state->rt;
   rt.global().setProperty(rt, "__exact_log",
       jsi::Function::createFromHostFunction(
-          rt, jsi::PropNameID::forAscii(rt, "__exact_log"), 1,
+          rt, jsi::PropNameID::forAscii(rt, "__exact_log"), 2,
           [state](jsi::Runtime &rt, const jsi::Value &, const jsi::Value *args,
                   size_t count) -> jsi::Value {
-            if (count != 1 || !args[0].isString())
-              throw jsi::JSError(rt, "console requires a formatted string");
+            if (count != 2 || !args[0].isString() || !args[1].isString())
+              throw jsi::JSError(rt, "console requires a formatted string and its method");
             auto line = args[0].getString(rt).utf8(rt);
+            auto method = args[1].getString(rt).utf8(rt);
             if (state->log.size() >= kLogLines) state->log.erase(state->log.begin());
-            state->log.push_back(std::move(line));
+            state->log.emplace_back(std::move(method), std::move(line));
             return jsi::Value::undefined();
           }));
 }
@@ -496,12 +499,14 @@ int exact_js_drain(void *h, char **out) {
   }
 }
 
-// Borrow each record for the synchronous callback, keeping NULs and line endings.
+// Borrow each record and its method for the synchronous callback, keeping
+// NULs and line endings.
 void exact_js_take_log(void *h, void *ctx,
-                       void (*record)(void *, const uint8_t *, size_t)) {
+                       void (*record)(void *, const uint8_t *, size_t, const uint8_t *, size_t)) {
   auto *state = static_cast<State *>(h);
-  for (const auto &line : state->log) {
-    record(ctx, reinterpret_cast<const uint8_t *>(line.data()), line.size());
+  for (const auto &[method, line] : state->log) {
+    record(ctx, reinterpret_cast<const uint8_t *>(method.data()), method.size(),
+           reinterpret_cast<const uint8_t *>(line.data()), line.size());
   }
   state->log.clear();
 }
