@@ -201,9 +201,6 @@ impl<D: exact_runner::DataSource> crate::Host<D> {
                                     (&*wake as *const std::thread::Thread).cast_mut().cast(),
                                 )),
                             );
-                            if let Some(preloads) = (io.preloads)() {
-                                preloads.adopt(&*executor);
-                            }
                             if let Some(roots) = roots.clone() {
                                 executor.set_app_roots(roots);
                             }

@@ -5,6 +5,7 @@ use ibex2::stdlib::fetch_async::{Collected, FetchEvents, HeaderCaps};
 use std::sync::{mpsc, Weak};
 use std::time::{Duration, Instant};
 
+pub(super) const DEFINITIONS_WAIT: Duration = Duration::from_secs(1);
 pub(super) const HOLD: Duration = Duration::from_secs(10);
 const DEFAULT_DEADLINE: Duration = Duration::from_secs(60);
 const MAX_PRELOADS: usize = 8;
@@ -61,6 +62,8 @@ pub enum Event {
     Cancelled,
     /// A write invalidated the request URL.
     DroppedByWrite,
+    /// A refresh replaced the request.
+    DroppedByRefresh,
     /// A write changed a secret the definition used.
     DroppedBySecret,
     /// The reply exceeded the cache entry limit.
@@ -80,9 +83,14 @@ pub struct Fact {
 
 struct Ready {
     response: Response,
+    visited: Vec<String>,
     completed: Instant,
     bytes: usize,
     used: usize,
+}
+struct Answered {
+    at: Instant,
+    visited: Vec<String>,
 }
 enum ReplyState {
     Pending {
@@ -98,7 +106,7 @@ pub(super) struct Held {
     reply: ReplyState,
     taken: bool,
     started: Instant,
-    answered_at: Arc<Mutex<Option<Instant>>>,
+    answered_at: Arc<Mutex<Option<Answered>>>,
     observer: Option<Observer>,
 }
 #[derive(Default, PartialEq, Eq)]
@@ -193,9 +201,15 @@ enum Message {
     Stop,
 }
 
+struct Startup {
+    receive: mpsc::Receiver<Message>,
+    host: StreamHost,
+}
+
 /// Owns the launch work until adoption. Dropping it cancels every exchange;
 /// the launch thread never needs to join a transport (D4).
 pub struct Preloads {
+    startup: Arc<Mutex<Option<Startup>>>,
     destination: Arc<Location>,
     send: mpsc::Sender<Message>,
 }
@@ -256,21 +270,13 @@ impl Preloads {
         });
         let (send, receive) = mpsc::channel();
         let set = Self {
-            destination: destination.clone(),
-            send: send.clone(),
+            startup: Arc::new(Mutex::new(Some(Startup { receive, host }))),
+            destination,
+            send,
         };
-        #[cfg(test)]
-        let thread_guard = ThreadGuard::new(&destination);
-        let launch_grants = grants.to_owned();
-        let spawned = std::thread::Builder::new()
-            .name("exact-preload".into())
-            .spawn(move || {
-                #[cfg(test)]
-                let _guard = thread_guard;
-                run(&destination, &send, receive, &host, &launch_grants, count)
-            });
-        if spawned.is_err() {
-            update(&set.destination, cancel_all);
+        if count > 0 {
+            set.control().start_worker();
+            let _ = set.send.send(Message::Start(0..count, grants.into()));
         }
         set
     }
@@ -290,6 +296,7 @@ impl Preloads {
 /// A launch's control remains usable after the executor adopts its owner.
 #[derive(Clone)]
 pub struct Control {
+    startup: Arc<Mutex<Option<Startup>>>,
     destination: Arc<Location>,
     send: mpsc::Sender<Message>,
 }
@@ -297,6 +304,7 @@ impl Preloads {
     /// Keep cancellation, settlement and late foreground starts across adoption.
     pub fn control(&self) -> Control {
         Control {
+            startup: self.startup.clone(),
             destination: self.destination.clone(),
             send: self.send.clone(),
         }
@@ -305,16 +313,64 @@ impl Preloads {
 impl Control {
     /// Wait only on the launch thread until earlier definitions have reached the client.
     pub(crate) fn handed(&self) {
+        if self.startup.lock().unwrap().is_some() {
+            return;
+        }
         let (send, receive) = mpsc::channel();
         if self.send.send(Message::Barrier(send)).is_ok() {
             let _ = receive.recv();
         }
     }
+    fn start_worker(&self) {
+        let Some(Startup { receive, host }) = self.startup.lock().unwrap().take() else {
+            return;
+        };
+        let destination = self.destination.clone();
+        let send = self.send.clone();
+        #[cfg(test)]
+        let thread_guard = ThreadGuard::new(&destination);
+        let spawned = std::thread::Builder::new()
+            .name("exact-preload".into())
+            .spawn(move || {
+                #[cfg(test)]
+                let _guard = thread_guard;
+                run(&destination, &send, receive, &host)
+            });
+        if spawned.is_err() {
+            update(&self.destination, cancel_all);
+        }
+    }
     /// A boot can dispatch before its launch thread has read the definitions;
-    /// hold those reads without delaying its first batch (LLP 1162.000 D4).
+    /// hold those reads for at most one second without delaying its first batch
+    /// (LLP 1162.000 D4).
     pub fn definitions_pending(&self, pending: bool) {
-        update(&self.destination, |cache| cache.preload_starting = pending);
+        update(&self.destination, |cache| {
+            cache.preload_definitions_due = pending.then(|| (cache.clock)() + DEFINITIONS_WAIT);
+        });
         let _ = self.send.send(Message::Tick);
+    }
+    pub(crate) fn launch_pending(&self, deadline: Option<Duration>) {
+        update(&self.destination, |cache| {
+            cache.preload_definitions_due = None;
+            cache.preload_launch_due = deadline.map(|wait| (cache.clock)() + wait);
+        });
+        let _ = self.send.send(Message::Tick);
+    }
+    #[cfg(test)]
+    pub(crate) fn test_clock(&self, clock: Arc<dyn Fn() -> Instant + Send + Sync>) {
+        update(&self.destination, |cache| cache.clock = clock);
+    }
+    #[cfg(test)]
+    pub(crate) fn test_tick(&self) -> bool {
+        update(&self.destination, |cache| {
+            expire(cache);
+            pending_due(cache).is_some()
+        })
+        .unwrap_or(false)
+    }
+    #[cfg(test)]
+    pub(crate) fn thread_count(&self) -> usize {
+        *self.destination.threads.lock().unwrap()
     }
     #[cfg(test)]
     pub(crate) fn wait_definitions(&self) {
@@ -325,7 +381,7 @@ impl Control {
             .wait_timeout_while(
                 state,
                 Duration::from_secs(10),
-                |s| matches!(s, Destination::Staging(cache) if cache.preload_starting),
+                |s| matches!(s, Destination::Staging(cache) if cache.preload_definitions_due.is_some() || cache.preload_launch_due.is_some()),
             )
             .unwrap();
         drop(state);
@@ -369,14 +425,16 @@ impl Control {
             }
             first..cache.preloads.len()
         });
-        if let Some(range) = range {
+        if let Some(range) = range.filter(|range| !range.is_empty()) {
+            self.start_worker();
             if self
                 .send
                 .send(Message::Start(range, grants.into()))
                 .is_err()
             {
                 update(&self.destination, |cache| {
-                    cache.preload_starting = false;
+                    cache.preload_definitions_due = None;
+                    cache.preload_launch_due = None;
                     cancel_all(cache);
                 });
             }
@@ -454,6 +512,17 @@ impl Core {
             return Err(set);
         };
         cache.grants = self.grants.clone();
+        if let (Some(machine), Some(due)) = (&self.machine, pending_due(&cache)) {
+            let destination = Arc::downgrade(&set.destination);
+            machine.timer.arm_callback(
+                due.saturating_duration_since((cache.clock)()),
+                Box::new(move || {
+                    if let Some(destination) = destination.upgrade() {
+                        update(&destination, expire);
+                    }
+                }),
+            );
+        }
         state.cache = Some(*cache);
         *destination = Destination::Adopted(Arc::downgrade(&self.shared));
         drop(destination);
@@ -478,8 +547,8 @@ impl Core {
             .map(|cache| std::mem::take(&mut cache.journal))
             .unwrap_or_default()
     }
-    /// Boot may fulfil a complete equal reply before its first commit. It
-    /// waits for neither the launch request nor any earlier ticket (D4).
+    /// Boot may fulfil complete replies from its initial requests, in ticket
+    /// order, until the first unresolved request (LLP 1162.000 D1, D4).
     pub(in super::super) fn settle_preload(
         &self,
         r: &RequestOut,
@@ -511,6 +580,9 @@ fn settle(cache: &mut cache::Cache, r: &RequestOut) -> Option<(Outcome, Completi
     expire(cache);
     let i = find(cache, &r.request)?;
     if !matches!(cache.preloads[i].reply, ReplyState::Ready(_)) {
+        return None;
+    }
+    if !can_take(cache, &r.request, i) {
         return None;
     }
     let checked = reach::admit_cached(&r.request);
@@ -576,16 +648,36 @@ fn matching(cache: &cache::Cache, request: &Request, equal_body: bool) -> Option
             }
     })
 }
+// A read must be allowed every hop its preload followed (LLP 1162.000 D1).
+fn can_take(cache: &cache::Cache, request: &Request, i: usize) -> bool {
+    match &cache.preloads[i].reply {
+        ReplyState::Ready(ready) => ready
+            .visited
+            .iter()
+            .all(|url| cache::granted_url(&cache.grants, request, url).is_ok()),
+        ReplyState::Pending { .. } => true,
+        ReplyState::Gone => false,
+    }
+}
+pub(super) fn pending_due(cache: &cache::Cache) -> Option<Instant> {
+    cache
+        .preload_launch_due
+        .or(cache.preload_definitions_due)
+        .filter(|due| (cache.clock)() < *due)
+}
 pub(super) fn matches(cache: Option<&cache::Cache>, r: &RequestOut, work: bool) -> bool {
     eligible(&r.request, r.class, r.forced, work)
-        && cache.is_some_and(|c| c.preload_starting || find(c, &r.request).is_some())
+        && cache.is_some_and(|c| {
+            pending_due(c).is_some()
+                || find(c, &r.request).is_some_and(|i| can_take(c, &r.request, i))
+        })
 }
 pub(super) fn waiting(state: &State, job: &Job) -> bool {
     eligible(&job.request, job.class, job.forced, job.work.is_some())
-        && state
-            .cache
-            .as_ref()
-            .is_some_and(|c| c.preload_starting || find(c, &job.request).is_some())
+        && state.cache.as_ref().is_some_and(|c| {
+            (pending_due(c).is_some() && job.preload_due.is_some_and(|due| (c.clock)() < due))
+                || find(c, &job.request).is_some_and(|i| can_take(c, &job.request, i))
+        })
 }
 // The earliest queued request keeps room to finish before later replies
 // can fill its lane. A preload failure still needs that room (D1).
@@ -611,14 +703,16 @@ pub(super) fn effect_count(state: &State) -> usize {
     if state
         .cache
         .as_ref()
-        .is_none_or(|c| !c.preload_starting && c.preloads.is_empty())
+        .is_none_or(|c| pending_due(c).is_none() && c.preloads.is_empty())
     {
         return effects;
     }
     effects
         - state.jobs[0]
             .iter()
-            .filter(|job| waiting(state, job))
+            .filter(|job| {
+                waiting(state, job) && reads::safe_read(&job.request, job.work.is_some(), job.class)
+            })
             .count()
 }
 
@@ -657,6 +751,10 @@ pub(super) fn serve_ready(state: &mut State) {
             index += 1;
             continue;
         };
+        if !can_take(cache, &job.request, i) {
+            index += 1;
+            continue;
+        }
         let outcome = match cache::granted(&cache.grants, &job.request) {
             Err(outcome) => outcome,
             Ok(()) => {
@@ -744,6 +842,12 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
 // Completion wins over a later timer observation (LLP 1162.000 D1).
 pub(super) fn expire(cache: &mut cache::Cache) {
     let now = (cache.clock)();
+    if cache.preload_definitions_due.is_some_and(|due| now >= due) {
+        cache.preload_definitions_due = None;
+    }
+    if cache.preload_launch_due.is_some_and(|due| now >= due) {
+        cache.preload_launch_due = None;
+    }
     for i in 0..cache.preloads.len() {
         match &cache.preloads[i].reply {
             ReplyState::Pending { due, .. }
@@ -752,7 +856,8 @@ pub(super) fn expire(cache: &mut cache::Cache) {
                         .answered_at
                         .lock()
                         .unwrap()
-                        .is_none_or(|at| at >= *due) =>
+                        .as_ref()
+                        .is_none_or(|answer| answer.at >= *due) =>
             {
                 drop_held(cache, i, Event::Cancelled)
             }
@@ -767,6 +872,26 @@ pub(super) fn drop_urls(cache: &mut cache::Cache, urls: &[String]) {
     for i in 0..cache.preloads.len() {
         if urls.contains(&cache.preloads[i].key.url) {
             drop_held(cache, i, Event::DroppedByWrite);
+        }
+    }
+}
+pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
+    if r.class != RequestClass::Read
+        || !r.request.is_plain_http()
+        || !(r.forced
+            || matches!(
+                r.request.cache,
+                exact_runner::CacheMode::Reload | exact_runner::CacheMode::NoCache
+            ))
+    {
+        return;
+    }
+    let key = Equal::of(&r.request);
+    for i in 0..cache.preloads.len() {
+        if cache.preloads[i].key == key
+            && cache.preloads[i].definition.request.body == r.request.body
+        {
+            drop_held(cache, i, Event::DroppedByRefresh);
         }
     }
 }
@@ -795,13 +920,17 @@ struct Events {
     send: mpsc::Sender<Message>,
     index: usize,
     clock: Arc<dyn Fn() -> Instant + Send + Sync>,
-    answered_at: Arc<Mutex<Option<Instant>>>,
+    answered_at: Arc<Mutex<Option<Answered>>>,
     observed: Option<(String, Observer)>,
+    visited: Mutex<Vec<String>>,
 }
 impl FetchEvents for Events {
     fn outcome(&self, result: Result<Collected, HostError>) {
         let at = (self.clock)();
-        *self.answered_at.lock().unwrap() = Some(at);
+        *self.answered_at.lock().unwrap() = Some(Answered {
+            at,
+            visited: std::mem::take(&mut *self.visited.lock().unwrap()),
+        });
         if result.is_ok() {
             if let Some((name, observer)) = &self.observed {
                 observer(name, Observation::Complete);
@@ -809,7 +938,8 @@ impl FetchEvents for Events {
         }
         let _ = self.send.send(Message::Reply(self.index, result, at));
     }
-    fn next_hop(&self, _url: &str, start: Box<dyn FnOnce() + Send>) {
+    fn next_hop(&self, url: &str, start: Box<dyn FnOnce() + Send>) {
+        self.visited.lock().unwrap().push(url.into());
         let _ = self.send.send(Message::Hop(start));
     }
 }
@@ -839,6 +969,15 @@ fn finish(
             return;
         }
     };
+    let visited = std::mem::take(
+        &mut held
+            .answered_at
+            .lock()
+            .unwrap()
+            .as_mut()
+            .expect("completed exchange")
+            .visited,
+    );
     let started = held.started;
     let request = held.definition.request.clone();
     let mut response = Response {
@@ -847,6 +986,8 @@ fn finish(
         body: reply.body,
     };
     let bytes = response_bytes(&response)
+        + visited.capacity() * std::mem::size_of::<String>()
+        + visited.iter().map(String::capacity).sum::<usize>()
         + std::mem::size_of::<Held>()
         + held.key.method.len()
         + held.key.url.len()
@@ -864,6 +1005,7 @@ fn finish(
     let used = cache.touch();
     cache.preloads[index].reply = ReplyState::Ready(Ready {
         response: response.clone(),
+        visited,
         completed,
         bytes,
         used,
@@ -877,8 +1019,6 @@ fn run(
     send: &mpsc::Sender<Message>,
     receive: mpsc::Receiver<Message>,
     host: &StreamHost,
-    launch_grants: &str,
-    count: usize,
 ) {
     // Adapt the binding itself so every host honours its supplied transport (D4).
     #[cfg(test)]
@@ -897,7 +1037,6 @@ fn run(
             return;
         }
     };
-    start_indices(destination, send, host, launch_grants, &workers, 0..count);
     loop {
         let delay = update(destination, |cache| {
             expire(cache);
@@ -984,7 +1123,11 @@ pub(crate) fn valid_request(request: &Request) -> bool {
 }
 
 /// A launch-context fetch bypasses the executor's cache in both directions (LLP 1162.000 D2).
-pub(crate) fn launch_fetch(request: Request, grants: &str) -> Result<Response, String> {
+pub(crate) fn launch_fetch(
+    request: Request,
+    grants: &str,
+    host: ibex2::host::Host,
+) -> Result<Response, String> {
     if !valid_request(&request) {
         return Err("invalid launch fetch".into());
     }
@@ -999,10 +1142,9 @@ pub(crate) fn launch_fetch(request: Request, grants: &str) -> Result<Response, S
             .unwrap_or(DEFAULT_DEADLINE.as_millis() as u32),
         &abort,
     )?;
-    let fetch = reach::gate_fetch(ibex2::host::Host::new().endow(grants).fetch, request.reach);
+    let fetch = reach::gate_fetch(host.endow(grants).fetch, request.reach);
     let mut req = fetch_request(request, false);
     req.max_body = Some(cache::MAX_ENTRY);
-    req.speculative = true;
     let result = fetch
         .stream(req, &abort.signal())
         .and_then(check_headers)
@@ -1065,6 +1207,7 @@ fn start_indices(
             .expect("checked grants");
         let fetch = reach::gate_fetch(host().endow(grants).fetch, request.reach);
         let transport = Arc::new(fetch.blocking_adapter(workers.clone()));
+        let visited = Mutex::new(vec![request.url.clone()]);
         let mut req = fetch_request(request, false);
         req.max_body = Some(cache::MAX_ENTRY);
         // A preload is asked for by nobody yet: Low Data Mode refuses it (LLP 1162.000 D4).
@@ -1087,6 +1230,7 @@ fn start_indices(
                 clock,
                 answered_at,
                 observed,
+                visited,
             }),
         );
     }

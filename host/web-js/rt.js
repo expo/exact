@@ -480,8 +480,8 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
   const m = memo(() => { const shown = Ov.shown(r, (() => {
     ver(); if (args.gate && !args.gate()) return asleep(); if (r.asleep) { r.asleep = false; r.forced = true; } // `when` (LLP 1161.002): closed, nothing is asked; waking asks again, forced
     const a = r.asked = args(); if (Restoring) return flag(fail, failure()), r.value; // `asked`: the overlay's arguments while a placeholder stands; a refused commit put `failed` back, and `fail` follows it there too
-    const forced = r.forced, rev = r.rev, reconciling = r.reconciling, mk = finiteArguments(a) ? data.uploads.at(r, a) : null; // `reconciling`: asked after a write ended, a refusal fails it (overlay.js); `mk`: an upload asked at these arguments, not asked again (LLP 1016.000 D10), and none at non-finite ones (settlement.rs `valid_args`)
-    r.forced = r.rev = r.reconciling = false;
+    const forced = r.forced, waited = r.launch, rev = r.rev, reconciling = r.reconciling, mk = finiteArguments(a) ? data.uploads.at(r, a) : null; // `reconciling`: asked after a write ended, a refusal fails it (overlay.js); `mk`: an upload asked at these arguments, not asked again (LLP 1016.000 D10), and none at non-finite ones (settlement.rs `valid_args`)
+    r.forced = r.rev = r.reconciling = false; if (forced) r.launch = undefined; // `launch`: true while the launch's own ask waits for the source, false once a refresh was asked meanwhile
     // A failure keeps the value for its arguments, including NaN; `refresh` or new ones ask again (settlement.rs), but not an upload's. `fail` follows.
     if (r.failed && (forced && !mk?.failed || !unchangedArguments(a, r.failed))) { r.failed = null; r.error = r.code = r.reason = undefined; }
     flag(fail, failure());
@@ -501,8 +501,8 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
       if (r.ticket && equal(a, r.ticket.args)) return r.value;
     }
     let ans; Inspections.begin(r);
-    const refresh = forced && !r.launch; // the launch's own ask is sent as an ordinary one (LLP 1162.000 D1, `launch_ask` in the runner)
-    try { ans = ask(source, a, name, false, refresh); if (ans) r.launch = false; Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
+    const refresh = forced && waited !== true; // the launch's own ask is sent as an ordinary one (LLP 1162.000 D1, `launch_ask` in the runner)
+    try { ans = ask(source, a, name, false, refresh); Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
     catch (e) {
       if (data.threwRead?.()) r.store = true;
       if (e instanceof Refusal && !(reconciling && e instanceof Failed)) throw e;
@@ -534,18 +534,18 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
     // Not ready (Rust loads after first paint): the bake's answer stands, not pending, asked at `ready` as at data_ready (review B3); another compiled
     // value stands, stale, forced then (LLP 1027 D4). That ask's refusal fails it, not the commit; a commit refused otherwise is followed by one failing it.
     const shown = baked && eq(a, r.settled);
-    r.launch = !forced && r.launch !== false; // a refresh asked while waiting stays one
+    r.launch = !forced && waited !== false;
     if (!shown) { hold(); flag(pend, true); }
     if (!r.waiting) { r.waiting = true; data.ready(() => { r.waiting = false; r.forced = r.reconciling = true; r.baked ||= shown; recommit(() => { r.ov = null; W(ver, ver.n.v + 1); W(pend, false); }, `data ready ${name}`); }); }
     return r.value;
   })(), r.settled ?? r.asked, r.origin); flag(cur, !r.placeholder && !r.slept && r.settled !== undefined && r.asked !== undefined && equal(id(r.settled), id(r.asked))); return shown; }, type);
   Object.assign(r, {
-    save: () => [r.value, r.settled, r.ticket, r.ticket?.args, r.store, r.failed, r.baked, r.error, r.ticket?.again, r.code, r.origin, r.forced, r.reconciling, r.rev, r.reason, r.inspection && { ...r.inspection }, r.ticket?.generation, r.marks, r.placeholder, pend.n.v, r.asleep, r.slept],
-    restore: x => { [r.value, r.settled, r.ticket] = x; if (r.ticket) { r.ticket.args = x[3]; r.ticket.again = x[8]; r.ticket.generation = x[16]; } r.store = x[4]; r.failed = x[5]; r.baked = x[6]; r.error = x[7]; r.code = x[9]; r.origin = x[10]; r.forced = x[11]; r.reconciling = x[12]; r.rev = x[13]; r.reason = x[14]; r.inspection = x[15]; r.marks = x[17]; r.placeholder = x[18]; r.asleep = x[20]; r.slept = x[21]; write(pend.n, x[19]); write(ver.n, ver.n.v + 1); }, // and what it shows is read again, from what was put back
+    save: () => [r.value, r.settled, r.ticket, r.ticket?.args, r.store, r.failed, r.baked, r.error, r.ticket?.again, r.code, r.origin, r.forced, r.reconciling, r.rev, r.reason, r.inspection && { ...r.inspection }, r.ticket?.generation, r.marks, r.placeholder, pend.n.v, r.asleep, r.slept, r.launch],
+    restore: x => { [r.value, r.settled, r.ticket] = x; if (r.ticket) { r.ticket.args = x[3]; r.ticket.again = x[8]; r.ticket.generation = x[16]; } r.store = x[4]; r.failed = x[5]; r.baked = x[6]; r.error = x[7]; r.code = x[9]; r.origin = x[10]; r.forced = x[11]; r.reconciling = x[12]; r.rev = x[13]; r.reason = x[14]; r.inspection = x[15]; r.marks = x[17]; r.placeholder = x[18]; r.asleep = x[20]; r.slept = x[21]; r.launch = x[22]; write(pend.n, x[19]); write(ver.n, ver.n.v + 1); }, // and what it shows is read again, from what was put back
     force: undo => { r.forced = true; flag(ver, ver.n.v + 1, undo); },
     touch: undo => flag(ver, ver.n.v + 1, undo), // its writes changed: what it shows is laid over again
     reconcile: undo => { r.forced = r.reconciling = true; flag(ver, ver.n.v + 1, undo); },
-    revise: undo => { r.rev = true; flag(ver, ver.n.v + 1, undo); }, giveUp: why => { r.baked = r.forced = r.reconciling = false; fails(r.asked ?? [], why, "error"); }, // owed by a refused commit (`commit`)
+    revise: undo => { r.rev = true; flag(ver, ver.n.v + 1, undo); }, giveUp: why => { r.baked = r.forced = r.reconciling = r.launch = false; fails(r.asked ?? [], why, "error"); }, // owed by a refused commit (`commit`)
   });
   onEnd(() => { r.gone = true; }); // its region ended: an open stream closes (`Open`)
   Resources.push(r);

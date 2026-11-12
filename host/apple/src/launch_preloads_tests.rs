@@ -107,6 +107,9 @@ impl Server {
             parsed: Arc::new(AtomicUsize::new(0)),
             activated: Arc::new(AtomicUsize::new(0)),
             forget: false,
+            reask: false,
+            first_unloaded: false,
+            order: Arc::default(),
         }
     }
 }
@@ -125,6 +128,9 @@ struct Source {
     parsed: Arc<AtomicUsize>,
     activated: Arc<AtomicUsize>,
     forget: bool,
+    reask: bool,
+    first_unloaded: bool,
+    order: Arc<Mutex<Vec<String>>>,
 }
 impl DataSource for Source {
     fn preloads(&self) -> &[Baked] {
@@ -154,6 +160,12 @@ impl DataSource for Source {
             }
             return Ok(Answer::Now(Value::record(vec![Value::str("changed")])));
         }
+        if source == "first" && self.first_unloaded {
+            let url = self.definitions[0].fill(|_| None).unwrap().url;
+            return Ok(Answer::Later(exact_runner::Request::get(&format!(
+                "{url}/first"
+            ))));
+        }
         Ok(Answer::Later(
             self.definitions[usize::from(source == "after")]
                 .fill(|_| Some("present-secret".into()))
@@ -163,25 +175,65 @@ impl DataSource for Source {
     fn parse(
         &mut self,
         _: &mut Store,
-        _: &str,
+        source: &str,
         _: &[Value],
         outcome: Outcome,
     ) -> Result<Answer, DataError> {
         let Outcome::Response(reply) = outcome else {
             panic!("{outcome:?}")
         };
-        self.parsed.fetch_add(1, Ordering::AcqRel);
+        self.order.lock().unwrap().push(source.into());
+        let previous = self.parsed.fetch_add(1, Ordering::AcqRel);
+        if self.reask {
+            assert_eq!(
+                previous, 0,
+                "boot settled a request produced by a fulfillment"
+            );
+            return Ok(Answer::Later(self.definitions[0].fill(|_| None).unwrap()));
+        }
+        if source == "timeline" {
+            return Ok(Answer::Now(Value::list(vec![Value::record(vec![
+                Value::Number(1000.),
+                Value::record(vec![Value::str("timeline")]),
+            ])])));
+        }
         Ok(Answer::Now(Value::record(vec![Value::str(
             &String::from_utf8(reply.body).unwrap(),
         )])))
     }
+}
+thread_local! { static ASYNCHRONOUS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
+fn start_io(
+    bindings: Option<ibex2::host::Bindings>,
+    grants: &str,
+    wake: Option<(crate::executor::WakeFn, *mut std::ffi::c_void)>,
+) -> Box<dyn Io> {
+    Box::new(crate::executor::Executor::test_start(
+        ASYNCHRONOUS.with(|v| v.get()),
+        bindings,
+        grants,
+        wake,
+    ))
 }
 thread_local! { static LOCAL: std::cell::RefCell<Option<LaunchPreloads>> = const { std::cell::RefCell::new(None) }; }
 fn local() -> Option<LaunchPreloads> {
     LOCAL.with(|l| l.borrow().clone())
 }
 fn fixture() -> LaunchPreloads {
+    crate::store::PLATFORM
+        .with(|p| *p.borrow_mut() = Some(Arc::new(ibex2::secrets::MemoryStore::new())));
     let launch = LaunchPreloads::default();
+    *launch.0.reader.lock().unwrap() = Some(Arc::new(|grants, _, definitions| {
+        let bindings = memory_endow(grants, "", false).bindings.unwrap();
+        crate::store::read_launch_secrets(&bindings, grants, definitions)
+    }));
+    let bindings = memory_endow("secret.keep session", "", false)
+        .bindings
+        .unwrap();
+    *launch.0.backend.lock().unwrap() = Some(Arc::new(crate::store::launch_backend_in(
+        bindings.secrets,
+        None,
+    )));
     LOCAL.with(|l| *l.borrow_mut() = Some(launch.clone()));
     launch
 }
@@ -232,6 +284,7 @@ fn boot(source: Source, plan: &[u8], candidate: bool, wakes: Sender<()>) -> (Dri
         io: Some(IoLinks {
             preloads: local,
             endow: memory_endow,
+            start: start_io,
             ..IoLinks::LINKED
         }),
         ..Links::ALL
@@ -354,6 +407,7 @@ fn discarding_a_prepared_batch_does_not_mark_an_unrelated_reply_as_preload_conte
         io: Some(IoLinks {
             preloads: local,
             endow: memory_endow,
+            start: start_io,
             ..IoLinks::LINKED
         }),
         ..Links::ALL
@@ -684,6 +738,194 @@ fn setting_or_forgetting_a_secret_drops_inflight_and_ready_preloads_before_and_a
                 assert_eq!(server.count.load(Ordering::Acquire), 1);
             }
         }
+    }
+}
+
+#[test]
+fn boot_stops_at_the_first_unresolved_ticket_and_the_executor_delivers_in_order() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        let server = Server::new(2);
+        let mut source = server.source(PreloadWhen::Start, false);
+        source.first_unloaded = true;
+        let launch = fixture();
+        launch.begin(false, factory(&source));
+        server.request();
+        server.release(0);
+        ready(&launch);
+        let plan = contract::compile("shape Reply\n  value: string\ncomponent App\n  resource first = first() as shape Reply\n  resource second = read() as shape Reply\n  view\n    column\n      text first.value\n      text second.value\n").unwrap().encode();
+        let (wake, wakes) = channel();
+        let (mut bridge, batch) = boot(source.clone(), &plan, false, wake);
+        assert!(!batch.contains("\"text\":\"content\""), "{batch}");
+        assert_eq!(source.parsed.load(Ordering::Acquire), 0);
+        assert!(server.request().contains("/first"));
+        server.release(1);
+        while source.parsed.load(Ordering::Acquire) < 2 {
+            wakes.recv_timeout(HANG).unwrap();
+            bridge.pump(0.);
+        }
+        assert_eq!(*source.order.lock().unwrap(), ["first", "read"]);
+        assert_eq!(server.count.load(Ordering::Acquire), 2);
+    }
+}
+
+#[test]
+fn boot_fulfills_a_reasking_source_once_and_hands_its_next_ask_to_the_executor() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        let server = Server::new(1);
+        let mut source = server.source(PreloadWhen::Start, false);
+        source.reask = true;
+        let launch = fixture();
+        launch.begin(false, factory(&source));
+        server.request();
+        server.release(0);
+        ready(&launch);
+        let (wake, _) = channel();
+        let (mut bridge, batch) = boot(source.clone(), &plan(), false, wake);
+        assert!(!batch.contains("\"error\":\""), "{batch}");
+        assert_eq!(source.parsed.load(Ordering::Acquire), 1);
+        assert!(launch.0.set.get().unwrap().owner.lock().unwrap().is_none());
+        let size = bridge.input_write(br#"{"op":"outstanding"}"#);
+        let size = bridge.agent(size);
+        assert!(String::from_utf8_lossy(bridge.output_bytes(size as usize)).contains("feed"));
+        assert_eq!(server.count.load(Ordering::Acquire), 1);
+    }
+}
+
+#[test]
+fn begin_with_no_definitions_starts_no_preload_workers_and_adopts_without_holding_reads() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        let server = Server::new(1);
+        let source = server.source(PreloadWhen::Start, false);
+        let mut empty = source.clone();
+        empty.definitions = &[];
+        let launch = fixture();
+        launch.begin(false, factory(&empty));
+        let control = &launch.0.set.get().unwrap().control;
+        control.wait_definitions();
+        assert_eq!(control.thread_count(), 0);
+        let (wake, wakes) = channel();
+        let (mut bridge, _) = boot(source.clone(), &plan(), false, wake);
+        assert!(launch.0.set.get().unwrap().owner.lock().unwrap().is_none());
+        server.request();
+        server.release(0);
+        while source.parsed.load(Ordering::Acquire) == 0 {
+            wakes.recv_timeout(HANG).unwrap();
+            bridge.pump(0.);
+        }
+        assert_eq!(control.thread_count(), 0);
+    }
+}
+
+#[test]
+fn definitions_wait_ends_at_one_second_while_the_secret_read_is_held() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        let server = Server::new(2);
+        let source = server.source(PreloadWhen::Start, true);
+        let launch = fixture();
+        let (entered, entering) = channel();
+        let (release, released) = channel();
+        let released = Mutex::new(released);
+        *launch.0.reader.lock().unwrap() = Some(Arc::new(move |_, _, _| {
+            entered.send(()).unwrap();
+            released.lock().unwrap().recv_timeout(HANG).unwrap();
+            BTreeMap::from([("session".into(), "present-secret".into())])
+        }));
+        launch.begin(false, factory(&source));
+        entering.recv_timeout(HANG).unwrap();
+        let control = &launch.0.set.get().unwrap().control;
+        let now = Arc::new(Mutex::new(std::time::Instant::now()));
+        let clock = now.clone();
+        control.test_clock(Arc::new(move || *clock.lock().unwrap()));
+        control.definitions_pending(true);
+        let (wake, wakes) = channel();
+        let (mut bridge, _) = boot(source.clone(), &plan(), false, wake);
+        *now.lock().unwrap() += Duration::from_millis(999);
+        control.test_tick();
+        assert_eq!(server.count.load(Ordering::Acquire), 0);
+        *now.lock().unwrap() += Duration::from_millis(1);
+        control.test_tick();
+        server.request();
+        server.release(0);
+        while source.parsed.load(Ordering::Acquire) == 0 {
+            wakes.recv_timeout(HANG).unwrap();
+            bridge.pump(0.);
+        }
+        release.send(()).unwrap();
+        server.request();
+        server.release(1);
+        assert_eq!(
+            server.count.load(Ordering::Acquire),
+            2,
+            "late definitions still start"
+        );
+    }
+}
+
+fn widget_plan() -> Vec<u8> {
+    let widget = contract::Widget {
+        requires_secrets: false,
+        kind: "feed-widget".into(),
+        title: None,
+        description: None,
+        families: vec!["systemSmall".into()],
+        watch_families: vec![],
+        component: "Card".into(),
+        props: "Props".into(),
+        refresh: "timeline".into(),
+        preview: serde_json::json!({"title":"preview"}),
+        configuration: None,
+    };
+    let snapshot = contract::snapshot::compile("shape Props\n  title: string\ncomponent App\n  view\n    text \"app\"\ncomponent Card\n  props\n    title: string\n  view\n    text title\n", &widget).unwrap();
+    snapshot.encode()
+}
+
+#[test]
+fn a_timeline_leaves_launch_preloads_for_the_app_boot() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        let server = Server::new(2);
+        let source = server.source(PreloadWhen::Start, false);
+        let launch = fixture();
+        launch.begin(false, factory(&source));
+        server.request();
+        server.release(0);
+        ready(&launch);
+        server.release(1);
+        let bytes = widget_plan();
+        let mut entry = Bridge::with_links(Links {
+            io: Some(IoLinks {
+                preloads: local,
+                endow: memory_endow,
+                start: start_io,
+                ..IoLinks::LINKED
+            }),
+            ..Links::ALL
+        });
+        entry.input_write(&[bytes.as_slice(), b"feed-widget"].concat());
+        entry.boot_entry(
+            bytes.len(),
+            "feed-widget".len(),
+            0,
+            0,
+            source.clone(),
+            Hooks::none(),
+            100.,
+            100.,
+        );
+        let size = entry.entry_timeline(1000.);
+        let result = String::from_utf8(entry.output_bytes(size as usize).to_vec()).unwrap();
+        assert!(result.contains("timeline"), "{result}");
+        assert!(launch.0.set.get().unwrap().owner.lock().unwrap().is_some());
+        server.request();
+        let (wake, _) = channel();
+        let (_bridge, batch) = boot(source.clone(), &plan(), false, wake);
+        assert!(batch.contains("\"text\":\"content\""), "{batch}");
+        assert!(launch.0.set.get().unwrap().owner.lock().unwrap().is_none());
+        assert_eq!(server.count.load(Ordering::Acquire), 2);
     }
 }
 

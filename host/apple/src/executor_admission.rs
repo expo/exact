@@ -29,7 +29,6 @@ impl Core {
         let overlap = reads::overlaps(&r, work.is_some());
         let mut state = self.shared.state.lock().unwrap();
         state.dispatched = true;
-        let use_preload = preload::matches(state.cache.as_ref(), &r, work.is_some());
         // A deadline on work that cannot take one (a stream but an upload, a continuation, native work), or a
         // long poll that is no stream's HTTP GET (LLP 1016.000 D8), is refused here, before any path.
         let checked = r
@@ -55,7 +54,7 @@ impl Core {
         if state.retired {
             return Err(("native executor retired", work));
         }
-        let effect_read = reads::effect_read(&r, work.is_some()) && !use_preload;
+        let effect_read = reads::effect_read(&r, work.is_some());
         let waits_for_effect =
             (effect_read || waiting) && preload::effect_count(&state) >= COUNTS[0];
         if ordered && (state.ordered_barrier || !state.fenced.is_empty() || waits_for_effect) {
@@ -114,7 +113,7 @@ impl Core {
                 // hold no effect (LLP 1041 §8.4, amended 2026-10-09).
                 let full = if lane == 1 {
                     state.counts[1] - streams >= COUNTS[1]
-                } else if use_preload || reads::safe_read(&r.request, work.is_some(), r.class) {
+                } else if reads::safe_read(&r.request, work.is_some(), r.class) {
                     state.counts[0] - state.agains >= ORDERED_READS
                 } else {
                     preload::effect_count(&state) >= COUNTS[0]
@@ -249,7 +248,12 @@ impl Core {
             }
             return Ok(());
         }
+        if let Some(cache) = state.cache.as_mut() {
+            preload::refresh(cache, &r);
+        }
+        let preload_due = state.cache.as_ref().and_then(preload::pending_due);
         state.jobs[lane].push_back(Job {
+            preload_due,
             ticket: r.ticket,
             request: r.request,
             forced: r.forced,

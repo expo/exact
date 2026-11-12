@@ -34,7 +34,7 @@ impl DataSource for RustSource {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, DataError> {
-        if source == "rotate" {
+        if matches!(source, "rotate" | "first") {
             self.base.answer(store, source, args)
         } else if source == "public" {
             Ok(Answer::Later(
@@ -61,7 +61,7 @@ fn composed(source: RustSource) -> Data {
             (),
             exact_data::Placed::new(source, Placement::Main),
             &[],
-            &["read", "rotate", "public"],
+            &["read", "rotate", "public", "first", "timeline"],
         )
         .unwrap(),
     )
@@ -111,6 +111,7 @@ impl Drive {
             io: Some(IoLinks {
                 preloads: local,
                 endow: memory_endow,
+                start: start_io,
                 ..IoLinks::LINKED
             }),
             ..Links::ALL
@@ -145,24 +146,33 @@ fn definitions(launch: &LaunchPreloads) {
 
 #[test]
 fn rust_request_reaches_a_held_server_without_a_runner_and_boot_takes_it_once() {
-    let server = Server::new(1);
-    let url = format!("http://{}/private-path?private-query", server.address);
-    let caller = std::thread::current().id();
-    let source = source(&server, move |_| {
-        assert_ne!(caller, std::thread::current().id());
-        vec![LaunchRequest::new("rust-feed", Request::get(&url))]
-    });
-    let launch = fixture();
-    begin(&launch, &source, false);
-    server.request();
-    assert_eq!(source.base.parsed.load(Ordering::Acquire), 0);
-    let (mut drive, batch) = Drive::boot(&source, &plan());
-    assert!(!batch.contains("\"text\":\"content\""));
-    server.release(0);
-    drive.complete(&source);
-    assert_eq!(server.count.load(Ordering::Acquire), 1);
-    assert!(launch.mark(0).unwrap().1.committed > 0.);
-    assert!(drive.logs().contains("Taken"));
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for complete in [false, true] {
+            let server = Server::new(1);
+            let url = format!("http://{}/private-path?private-query", server.address);
+            let caller = std::thread::current().id();
+            let source = source(&server, move |_| {
+                assert_ne!(caller, std::thread::current().id());
+                vec![LaunchRequest::new("rust-feed", Request::get(&url))]
+            });
+            let launch = fixture();
+            begin(&launch, &source, false);
+            server.request();
+            assert_eq!(source.base.parsed.load(Ordering::Acquire), 0);
+            if complete {
+                server.release(0);
+                ready(&launch);
+            }
+            let (mut drive, batch) = Drive::boot(&source, &plan());
+            assert_eq!(batch.contains("\"text\":\"content\""), complete, "{batch}");
+            server.release(0);
+            drive.complete(&source);
+            assert_eq!(server.count.load(Ordering::Acquire), 1);
+            assert!(launch.mark(0).unwrap().1.committed > 0.);
+            assert!(drive.logs().contains("Taken"));
+        }
+    }
 }
 
 #[test]
@@ -313,32 +323,62 @@ fn a_manifest_start_leaves_while_rust_fetch_is_blocked_and_boot_does_not_wait() 
 
 #[test]
 fn a_launch_past_its_deadline_releases_reads_and_discards_late_requests() {
-    let server = Server::new(1);
-    let (entered, entering) = channel();
-    let (release, released) = channel();
-    let released = Mutex::new(released);
-    let url = format!("http://{}/private-path?private-query", server.address);
-    let source = source(&server, move |_| {
-        entered.send(()).unwrap();
-        released.lock().unwrap().recv_timeout(HANG).unwrap();
-        vec![LaunchRequest::new("too-late", Request::get(&url))]
-    });
-    let launch = fixture();
-    begin(&launch, &source, false);
-    entering.recv_timeout(HANG).unwrap();
-    let (mut drive, batch) = Drive::boot(&source, &plan());
-    assert!(!batch.contains("\"text\":\"content\""));
-    let running = launch.0.rust.get().unwrap();
-    running.expire_now();
-    server.request();
-    server.release(0);
-    drive.complete(&source);
-    release.send(()).unwrap();
-    running.wait_returned();
-    definitions(&launch);
-    assert_eq!(launch.count(), 0);
-    assert!(format!("{:?} {}", launch.journal(), drive.logs()).contains("LaunchDeadline"));
-    assert_eq!(server.count.load(Ordering::Acquire), 1);
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        let server = Server::new(1);
+        let (entered, entering) = channel();
+        let (release, released) = channel();
+        let released = Mutex::new(released);
+        let url = format!("http://{}/private-path?private-query", server.address);
+        let source = source(&server, move |_| {
+            entered.send(()).unwrap();
+            released.lock().unwrap().recv_timeout(HANG).unwrap();
+            vec![LaunchRequest::new("too-late", Request::get(&url))]
+        });
+        let launch = fixture();
+        let (reading, reading_started) = channel();
+        let (allow, allowed) = channel();
+        let allowed = Mutex::new(allowed);
+        *launch.0.reader.lock().unwrap() = Some(Arc::new(move |_, _, _| {
+            reading.send(()).unwrap();
+            allowed.lock().unwrap().recv_timeout(HANG).unwrap();
+            BTreeMap::new()
+        }));
+        begin(&launch, &source, false);
+        reading_started.recv_timeout(HANG).unwrap();
+        let control = &launch.0.set.get().unwrap().control;
+        let now = Arc::new(Mutex::new(std::time::Instant::now()));
+        let clock = now.clone();
+        control.test_clock(Arc::new(move || *clock.lock().unwrap()));
+        control.definitions_pending(true);
+        // Adoption arms the definition timer before Rust replaces that wait (LLP 1162.000 D2).
+        let mut executor = Executing::new(&launch, &source.base.grants);
+        allow.send(()).unwrap();
+        entering.recv_timeout(HANG).unwrap();
+        executor
+            .io
+            .run(read(1, source.request.clone()), None)
+            .unwrap();
+        *now.lock().unwrap() += Duration::from_secs(1);
+        assert!(
+            control.test_tick(),
+            "reading definitions cannot end Rust's wait"
+        );
+        let running = launch.0.rust.get().unwrap();
+        running.expire_now();
+        server.request();
+        server.release(0);
+        let (ticket, outcome, timing) = executor.next();
+        assert_eq!(ticket, 1);
+        assert!(!timing.cached);
+        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"content"));
+        release.send(()).unwrap();
+        running.wait_returned();
+        definitions(&launch);
+        assert_eq!(launch.count(), 0);
+        assert!(format!("{:?}", launch.journal()).contains("LaunchDeadline"));
+        assert_eq!(server.count.load(Ordering::Acquire), 1);
+    }
 }
 
 #[test]
@@ -637,4 +677,297 @@ fn context_fetch_checks_the_binary_grants_again_at_a_redirect() {
             .any(|f| matches!(f.outcome, PreloadEvent::LaunchRan { requests: 0, .. })),
         "{journal:?}"
     );
+}
+
+struct Executing {
+    io: Box<dyn Io>,
+    _wake: Box<Sender<()>>,
+    wakes: Receiver<()>,
+    ready: std::collections::VecDeque<(u64, Outcome, Option<exact_runner::CompletionTiming>)>,
+}
+impl Executing {
+    fn new(launch: &LaunchPreloads, grants: &str) -> Self {
+        extern "C" fn wake(ctx: *mut std::ffi::c_void) {
+            // SAFETY: Executing retains the sender until the executor retires.
+            #[allow(unsafe_code)]
+            let sender = unsafe { &*ctx.cast::<Sender<()>>() };
+            let _ = sender.send(());
+        }
+        let (send, wakes) = channel();
+        let sender = Box::new(send);
+        let io = start_io(
+            memory_endow(grants, "", false).bindings,
+            grants,
+            Some((wake, (&*sender as *const Sender<()>).cast_mut().cast())),
+        );
+        launch.adopt(&*io);
+        Self {
+            io,
+            _wake: sender,
+            wakes,
+            ready: Default::default(),
+        }
+    }
+    fn next(&mut self) -> (u64, Outcome, exact_runner::CompletionTiming) {
+        loop {
+            if let Some((ticket, outcome, timing)) = self.ready.pop_front() {
+                return (ticket, outcome, timing.unwrap());
+            }
+            self.io.begin_pump();
+            self.ready.extend(self.io.drain());
+            if self.ready.is_empty() {
+                self.wakes.recv_timeout(HANG).unwrap();
+            }
+        }
+    }
+}
+fn read(ticket: u64, request: Request) -> exact_runner::RequestOut {
+    exact_runner::RequestOut {
+        ticket,
+        target: "feed".into(),
+        request,
+        class: exact_runner::RequestClass::Read,
+        forced: false,
+    }
+}
+
+#[test]
+fn a_rust_redirected_reply_requires_the_readers_scope_at_every_hop() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for pending in [false, true] {
+            let final_hop = Server::new(1);
+            let redirect = format!("HTTP/1.1 302 Found\r\nLocation: http://{}/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", final_hop.address).into_bytes();
+            let middle = Server::responding(vec![redirect]);
+            let redirect = format!("HTTP/1.1 302 Found\r\nLocation: http://{}/middle\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", middle.address).into_bytes();
+            let server = Server::responding(vec![redirect.clone(), redirect]);
+            let url = format!("http://{}/private-path?private-query", server.address);
+            let mut source = source(&server, move |_| {
+                vec![LaunchRequest::new("rust-feed", Request::get(&url))]
+            });
+            source.base.grants.push_str(&format!(
+                "\nnet.fetch http://{}\nnet.fetch http://{}",
+                middle.address, final_hop.address
+            ));
+            let launch = fixture();
+            begin(&launch, &source, false);
+            server.request();
+            server.release(0);
+            middle.request();
+            middle.release(0);
+            final_hop.request();
+            if !pending {
+                final_hop.release(0);
+                ready(&launch);
+            }
+            let mut restricted = source.request.clone();
+            restricted.grants = Some(format!(
+                "net.fetch http://{}\nnet.fetch http://{}",
+                server.address, final_hop.address
+            ));
+            assert!(launch
+                .0
+                .set
+                .get()
+                .unwrap()
+                .control
+                .settle(&read(1, restricted.clone()))
+                .is_none());
+            let mut executor = Executing::new(&launch, &source.base.grants);
+            executor.io.run(read(1, restricted), None).unwrap();
+            if pending {
+                final_hop.release(0);
+            }
+            server.request();
+            server.release(1);
+            let (_, outcome, timing) = executor.next();
+            assert!(!timing.cached);
+            assert!(
+                matches!(
+                    outcome,
+                    Outcome::Failed {
+                        kind: exact_runner::FailureKind::Refused,
+                        ..
+                    }
+                ),
+                "{outcome:?}"
+            );
+            executor
+                .io
+                .run(read(2, source.request.clone()), None)
+                .unwrap();
+            let (_, outcome, timing) = executor.next();
+            assert!(timing.cached);
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"content"));
+            assert_eq!(server.count.load(Ordering::Acquire), 2);
+            assert_eq!(final_hop.count.load(Ordering::Acquire), 1);
+            assert_eq!(middle.count.load(Ordering::Acquire), 1);
+        }
+    }
+}
+
+#[test]
+fn an_equal_refresh_drops_a_rust_reply_and_cancels_its_exchange() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for pending in [false, true] {
+            for mode in 0..3 {
+                let old = b"HTTP/1.1 503 Unavailable\r\nContent-Length: 3\r\nConnection: close\r\n\r\nold".to_vec();
+                let new = b"HTTP/1.1 503 Unavailable\r\nContent-Length: 3\r\nConnection: close\r\n\r\nnew".to_vec();
+                let server = Server::responding(vec![old, new.clone(), new.clone(), new]);
+                let url = format!("http://{}/private-path?private-query", server.address);
+                let source = source(&server, move |_| {
+                    vec![LaunchRequest::new("rust-feed", Request::get(&url))]
+                });
+                let launch = fixture();
+                begin(&launch, &source, false);
+                server.request();
+                if !pending {
+                    server.release(0);
+                    ready(&launch);
+                }
+                for response in 1..4 {
+                    server.release(response);
+                }
+                let mut executor = Executing::new(&launch, &source.base.grants);
+                if pending {
+                    executor
+                        .io
+                        .run(read(1, source.request.clone()), None)
+                        .unwrap();
+                }
+                let mut refresh = read(2, source.request.clone());
+                match mode {
+                    0 => refresh.forced = true,
+                    1 => refresh.request.cache = exact_runner::CacheMode::Reload,
+                    _ => refresh.request.cache = exact_runner::CacheMode::NoCache,
+                }
+                executor.io.run(refresh, None).unwrap();
+                assert!(launch
+                    .journal()
+                    .iter()
+                    .any(|f| f.name == "rust-feed" && f.outcome == PreloadEvent::DroppedByRefresh));
+                server.release(0);
+                for ticket in if pending { vec![1, 2] } else { vec![2] } {
+                    server.request();
+                    let (got, outcome, timing) = executor.next();
+                    assert_eq!(got, ticket);
+                    assert!(!timing.cached);
+                    assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
+                }
+                executor
+                    .io
+                    .run(read(3, source.request.clone()), None)
+                    .unwrap();
+                server.request();
+                let (_, outcome, timing) = executor.next();
+                assert!(!timing.cached);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
+                assert_eq!(
+                    server.count.load(Ordering::Acquire),
+                    if pending { 4 } else { 3 }
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn boot_settles_rust_replies_once_in_ticket_order() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for reask in [false, true] {
+            let server = Server::new(if reask { 1 } else { 2 });
+            let url = format!("http://{}/private-path?private-query", server.address);
+            let mut source = source(&server, move |_| {
+                vec![LaunchRequest::new("rust-feed", Request::get(&url))]
+            });
+            source.base.reask = reask;
+            source.base.first_unloaded = !reask;
+            let launch = fixture();
+            begin(&launch, &source, false);
+            server.request();
+            server.release(0);
+            ready(&launch);
+            let bytes = if reask {
+                plan()
+            } else {
+                contract::compile("shape Reply\n  value: string\ncomponent App\n  resource first = first() as shape Reply\n  resource second = read() as shape Reply\n  view\n    column\n      text first.value\n      text second.value\n").unwrap().encode()
+            };
+            let (mut drive, batch) = Drive::boot(&source, &bytes);
+            assert_eq!(
+                source.base.parsed.load(Ordering::Acquire),
+                usize::from(reask)
+            );
+            assert!(!batch.contains("\"text\":\"content\""), "{batch}");
+            if reask {
+                let size = drive.bridge.input_write(br#"{"op":"outstanding"}"#);
+                let size = drive.bridge.agent(size);
+                assert!(
+                    String::from_utf8_lossy(drive.bridge.output_bytes(size as usize))
+                        .contains("feed")
+                );
+            } else {
+                assert!(server.request().contains("/first"));
+                server.release(1);
+                while source.base.parsed.load(Ordering::Acquire) < 2 {
+                    drive.wakes.recv_timeout(HANG).unwrap();
+                    drive.bridge.pump(0.);
+                }
+                assert_eq!(*source.base.order.lock().unwrap(), ["first", "read"]);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_timeline_neither_adopts_rust_preloads_nor_runs_the_function() {
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        let server = Server::new(2);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let called = calls.clone();
+        let url = format!("http://{}/private-path?private-query", server.address);
+        let source = source(&server, move |_| {
+            called.fetch_add(1, Ordering::AcqRel);
+            vec![LaunchRequest::new("rust-feed", Request::get(&url))]
+        });
+        let launch = fixture();
+        begin(&launch, &source, false);
+        server.request();
+        server.release(0);
+        ready(&launch);
+        server.release(1);
+        let bytes = widget_plan();
+        let mut entry = Bridge::with_links(Links {
+            io: Some(IoLinks {
+                preloads: local,
+                endow: memory_endow,
+                start: start_io,
+                ..IoLinks::LINKED
+            }),
+            ..Links::ALL
+        });
+        entry.input_write(&[bytes.as_slice(), b"feed-widget"].concat());
+        entry.boot_entry(
+            bytes.len(),
+            "feed-widget".len(),
+            0,
+            0,
+            composed(source.clone()),
+            Hooks::none(),
+            100.,
+            100.,
+        );
+        let size = entry.entry_timeline(1000.);
+        let result = String::from_utf8(entry.output_bytes(size as usize).to_vec()).unwrap();
+        assert!(result.contains("timeline"), "{result}");
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        assert!(launch.0.set.get().unwrap().owner.lock().unwrap().is_some());
+        server.request();
+        let (_drive, batch) = Drive::boot(&source, &plan());
+        assert!(batch.contains("\"text\":\"content\""), "{batch}");
+        assert_eq!(calls.load(Ordering::Acquire), 1);
+        assert_eq!(server.count.load(Ordering::Acquire), 2);
+    }
 }

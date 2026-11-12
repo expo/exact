@@ -84,7 +84,8 @@ pub(super) struct Exchange {
 }
 
 pub(super) struct Cache {
-    pub(super) preload_starting: bool,
+    pub(super) preload_definitions_due: Option<Instant>,
+    pub(super) preload_launch_due: Option<Instant>,
     pub(super) grants: String,
     entries: VecDeque<Arc<Entry>>,
     // In-flight validations still own these bytes (LLP 1162 D4's bound).
@@ -98,7 +99,8 @@ pub(super) struct Cache {
 impl Cache {
     pub(super) fn new(grants: String) -> Self {
         Self {
-            preload_starting: false,
+            preload_definitions_due: None,
+            preload_launch_due: None,
             grants,
             entries: VecDeque::new(),
             retired: Vec::new(),
@@ -232,10 +234,14 @@ fn replacing_before(state: &State, ticket: u64, key: &Key) -> bool {
 }
 
 pub(super) fn granted(grants: &str, request: &Request) -> Result<(), Outcome> {
+    granted_url(grants, request, &request.url)
+}
+
+pub(super) fn granted_url(grants: &str, request: &Request, url: &str) -> Result<(), Outcome> {
     let grants = exact_data::storage::scope(grants, request.grants.as_deref())
         .and_then(|s| ibex2::grant::GrantSet::parse(&exact_runner::io_grants(s)))
         .map_err(|message| failed(FailureKind::Refused, message))?;
-    let checked = ibex2::stdlib::fetch::origin_of(&request.url).and_then(|origin| {
+    let checked = ibex2::stdlib::fetch::origin_of(url).and_then(|origin| {
         ibex2::boundary::admit(&grants, &ibex2::grant::Operation::Fetch { origin })
     });
     checked.map_err(|e| fetch_failure(e, &AbortController::new()))

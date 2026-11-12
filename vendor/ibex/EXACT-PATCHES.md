@@ -830,8 +830,11 @@ Replay the parameter and its test on a refresh.
 
 ## Local patch 36, a speculative fetch
 
-`stdlib::fetch::Request` carries `speculative`. The Darwin transport sends
-such a request with `allowsConstrainedNetworkAccess` false, so URLSession
-refuses it under Low Data Mode; the portable transport ignores the field.
+`stdlib::fetch::Request` carries `speculative`. `stdlib::fetch_async::HopRequest`
+keeps it on every redirect hop, and `run_blocking` passes it to the blocking
+transport. Both Darwin transports (`transport/darwin.rs`,
+`transport/darwin_async.rs` and `darwin_task.mm`) send such a request with
+`allowsConstrainedNetworkAccess` false, so URLSession refuses it under Low
+Data Mode; the portable transport ignores the field.
 Exact sets it on a preload, a request made before the app asks for it
 (LLP 1162.000 D4, LLP 1162 D7). Unset, nothing changes. Replay it on a refresh.

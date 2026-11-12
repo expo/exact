@@ -482,116 +482,123 @@ fn dropping_a_set_or_its_adopting_executor_retires_every_launch_thread() {
 
 #[test]
 fn held_replies_keep_read_order_without_starting_a_worker() {
-    let server = Server::new();
-    server.plan("/preload", Plan::new(200, &[], b"held"));
-    let set = launch(&server, vec![definition(&server, "/preload")]);
-    complete_set(&set);
-    let (core, woke) = server.core(false, true);
-    adopt(&core, set);
-    let mut releases = Vec::new();
-    for ticket in 1..=6 {
-        let path = format!("/read/{ticket}");
-        releases.push(held_plan(&server, &path, b"read"));
-        core.run(job(ticket, server.request(&path)), None).unwrap();
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        server.plan("/preload", Plan::new(200, &[], b"held"));
+        let set = launch(&server, vec![definition(&server, "/preload")]);
+        complete_set(&set);
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        let mut releases = Vec::new();
+        for ticket in 1..=6 {
+            let path = format!("/read/{ticket}");
+            releases.push(held_plan(&server, &path, b"read"));
+            core.run(job(ticket, server.request(&path)), None).unwrap();
+        }
+        server.seen(7);
+        core.run(job(7, server.request("/preload")), None).unwrap();
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(state.running.len(), 6);
+            assert!(state.completed[0].iter().any(|c| c.ticket == 7 && c.cached));
+        }
+        assert!(core.drain().is_empty());
+        assert_eq!(server.count(), 7, "the held reply starts no exchange");
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        for ticket in 1..=7 {
+            let (got, _, timing) = collect(&core, &woke);
+            assert_eq!(got, ticket);
+            assert_eq!(timing.cached, ticket == 7);
+        }
+        assert_eq!(server.count(), 7);
     }
-    server.seen(7);
-    core.run(job(7, server.request("/preload")), None).unwrap();
-    {
-        let state = core.shared.state.lock().unwrap();
-        assert_eq!(state.running.len(), 6);
-        assert!(state.completed[0].iter().any(|c| c.ticket == 7 && c.cached));
-    }
-    assert!(core.drain().is_empty());
-    for release in releases {
-        release.send(()).unwrap();
-    }
-    for ticket in 1..=7 {
-        let (got, _, timing) = collect(&core, &woke);
-        assert_eq!(got, ticket);
-        assert_eq!(timing.cached, ticket == 7);
-    }
-    assert_eq!(server.count(), 7);
 }
 
 #[test]
 fn held_replies_share_the_cache_budget_and_its_eviction_and_store_http_fresh_replies() {
-    let server = Server::new();
-    let mut definitions = Vec::new();
-    for i in 0..8 {
-        let path = format!("/{i}");
-        server.plan(&path, Plan::new(200, &[], &vec![0; 3 << 20]));
-        definitions.push(definition(&server, &path));
-    }
-    let set = launch(&server, definitions);
-    complete_set(&set);
-    let (bytes, held) = update(&set.destination, |cache| {
-        (
-            cache.bytes,
-            cache.preloads.iter().filter(|p| p.used().is_some()).count(),
-        )
-    })
-    .unwrap();
-    assert!(bytes <= cache::CAPACITY);
-    assert!((1..8).contains(&held));
-    let (core, woke) = server.core(false, true);
-    adopt(&core, set);
-    server.plan(
-        "/http-cache",
-        Plan::new(200, &[("Cache-Control", "max-age=60")], &vec![0; 3 << 20]),
-    );
-    assert!(!read(&core, &woke, &server, 1, "/http-cache").1);
-    let (bytes, remaining) = {
-        let state = core.shared.state.lock().unwrap();
-        let cache = state.cache.as_ref().unwrap();
-        (
-            cache.bytes,
-            cache.preloads.iter().filter(|p| p.used().is_some()).count(),
-        )
-    };
-    assert!(bytes <= cache::CAPACITY);
-    assert!(
-        remaining < held,
-        "an HTTP cache entry can evict a held reply"
-    );
-    drop(core);
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let mut definitions = Vec::new();
+        for i in 0..8 {
+            let path = format!("/{i}");
+            server.plan(&path, Plan::new(200, &[], &vec![0; 3 << 20]));
+            definitions.push(definition(&server, &path));
+        }
+        let set = launch(&server, definitions);
+        complete_set(&set);
+        let (bytes, held) = update(&set.destination, |cache| {
+            (
+                cache.bytes,
+                cache.preloads.iter().filter(|p| p.used().is_some()).count(),
+            )
+        })
+        .unwrap();
+        assert!(bytes <= cache::CAPACITY);
+        assert!((1..8).contains(&held));
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        server.plan(
+            "/http-cache",
+            Plan::new(200, &[("Cache-Control", "max-age=60")], &vec![0; 3 << 20]),
+        );
+        assert!(!read(&core, &woke, &server, 1, "/http-cache").1);
+        let (bytes, remaining) = {
+            let state = core.shared.state.lock().unwrap();
+            let cache = state.cache.as_ref().unwrap();
+            (
+                cache.bytes,
+                cache.preloads.iter().filter(|p| p.used().is_some()).count(),
+            )
+        };
+        assert!(bytes <= cache::CAPACITY);
+        assert!(
+            remaining < held,
+            "an HTTP cache entry can evict a held reply"
+        );
+        drop(core);
 
-    server.plan(
-        "/fresh",
-        Plan::new(200, &[("Cache-Control", "max-age=60")], b"fresh"),
-    );
-    let (set, clock) = fresh_clock(&server, vec![definition(&server, "/fresh")]);
-    complete_set(&set);
-    let (core, woke) = server.core(false, true);
-    adopt(&core, set);
-    *clock.lock().unwrap() += HOLD;
-    assert!(
-        read(&core, &woke, &server, 1, "/fresh").1,
-        "HTTP freshness survives the launch hold"
-    );
-    assert_eq!(server.count(), 10);
+        server.plan(
+            "/fresh",
+            Plan::new(200, &[("Cache-Control", "max-age=60")], b"fresh"),
+        );
+        let (set, clock) = fresh_clock(&server, vec![definition(&server, "/fresh")]);
+        complete_set(&set);
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        *clock.lock().unwrap() += HOLD;
+        assert!(
+            read(&core, &woke, &server, 1, "/fresh").1,
+            "HTTP freshness survives the launch hold"
+        );
+        assert_eq!(server.count(), 10);
+    }
 }
 
 #[test]
 fn a_taking_source_checks_its_own_grants_and_adoption_is_before_dispatch() {
-    let server = Server::new();
-    server.plan("/held", Plan::new(200, &[], b"held"));
-    let set = launch(&server, vec![definition(&server, "/held")]);
-    complete_set(&set);
-    let (core, woke) = server.core(false, true);
-    adopt(&core, set);
-    let mut scoped = server.request("/held");
-    scoped.grants = Some("".into());
-    core.run(job(1, scoped), None).unwrap();
-    assert!(matches!(
-        collect(&core, &woke).1,
-        Outcome::Failed {
-            kind: FailureKind::Refused,
-            ..
-        }
-    ));
-    assert_eq!(server.count(), 1);
-    let set = launch(&server, Vec::new());
-    assert!(core.adopt_preloads(set).is_err());
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        server.plan("/held", Plan::new(200, &[], b"held"));
+        let set = launch(&server, vec![definition(&server, "/held")]);
+        complete_set(&set);
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        let mut scoped = server.request("/held");
+        scoped.grants = Some("".into());
+        core.run(job(1, scoped), None).unwrap();
+        assert!(matches!(
+            collect(&core, &woke).1,
+            Outcome::Failed {
+                kind: FailureKind::Refused,
+                ..
+            }
+        ));
+        assert_eq!(server.count(), 1);
+        let set = launch(&server, Vec::new());
+        assert!(core.adopt_preloads(set).is_err());
+    }
 }
 
 #[test]
@@ -670,4 +677,488 @@ fn a_waiting_preload_read_keeps_room_for_its_reply_or_its_network_fallback() {
             assert_eq!(server.count(), if failure { 3 } else { 1 });
         }
     }
+}
+
+#[test]
+fn a_redirected_reply_checks_every_hops_scope_before_boot_and_queued_adoption() {
+    for asynchronous in [false, true] {
+        for pending in [false, true] {
+            let first = Server::new();
+            let middle = Server::new();
+            let grants = format!(
+                "net.fetch http://{}\nnet.fetch http://{}",
+                first.address, middle.address
+            );
+            let target = middle.request("/middle").url;
+            for _ in 0..2 {
+                first.plan("/start", Plan::new(302, &[("Location", &target)], b""));
+            }
+            let target = first.request("/final").url;
+            middle.plan("/middle", Plan::new(302, &[("Location", &target)], b""));
+            let release = held_plan(&first, "/final", b"visited middle");
+            let set = Preloads::start(
+                vec![definition(&first, "/start")],
+                &grants,
+                ibex2::host::Host::new,
+            );
+            first.seen(2);
+            let mut scoped = first.request("/start");
+            scoped.grants = Some(format!("net.fetch http://{}", first.address));
+            let restricted = job(1, scoped);
+            if !pending {
+                release.send(()).unwrap();
+                complete_set(&set);
+                assert!(set.control().settle(&restricted).is_none());
+            }
+            let (core, woke) = first.core_grants(asynchronous, true, &grants);
+            adopt(&core, set);
+            if !pending {
+                assert!(core.settle_preload(&restricted).is_none());
+            }
+            core.run(restricted, None).unwrap();
+            if pending {
+                release.send(()).unwrap();
+            }
+            let (_, outcome, timing) = collect(&core, &woke);
+            assert!(!timing.cached);
+            assert!(matches!(
+                outcome,
+                Outcome::Failed {
+                    kind: FailureKind::Refused,
+                    ..
+                }
+            ));
+            assert_eq!(first.count(), 3);
+            assert_eq!(middle.count(), 1);
+            let (reply, cached) = read(&core, &woke, &first, 2, "/start");
+            assert!(cached);
+            assert_eq!(reply.body, b"visited middle");
+            assert_eq!(first.count(), 3);
+        }
+    }
+}
+
+#[test]
+fn refresh_admission_drops_equal_ready_and_pending_preloads_and_releases_waiters() {
+    for asynchronous in [false, true] {
+        for pending in [false, true] {
+            for mode in 0..3 {
+                for method in ["GET", "POST"] {
+                    let server = Server::new();
+                    let release = held_plan(&server, "/refresh", b"old");
+                    let mut def = definition(&server, "/refresh");
+                    def.request.method = method.into();
+                    if method == "POST" {
+                        def.request.body = b"query".to_vec();
+                    }
+                    let request = def.request.clone();
+                    let set = launch(&server, vec![def]);
+                    server.seen(1);
+                    let (core, woke) = server.core(asynchronous, true);
+                    adopt(&core, set);
+                    if pending {
+                        core.run(job(1, request.clone()), None).unwrap();
+                        server.plan("/refresh", Plan::new(200, &[], b"new"));
+                    } else {
+                        release.send(()).unwrap();
+                        ready(&core, 1);
+                    }
+                    server.plan(
+                        "/refresh",
+                        Plan::new(200, &[("Cache-Control", "max-age=60")], b"new"),
+                    );
+                    let mut refresh = job(2, request.clone());
+                    match mode {
+                        0 => refresh.forced = true,
+                        1 => refresh.request.cache = exact_runner::CacheMode::Reload,
+                        _ => refresh.request.cache = exact_runner::CacheMode::NoCache,
+                    }
+                    core.run(refresh, None).unwrap();
+                    let dropped = {
+                        let state = core.shared.state.lock().unwrap();
+                        matches!(
+                            state.cache.as_ref().unwrap().preloads[0].reply,
+                            ReplyState::Gone
+                        )
+                    };
+                    assert!(dropped);
+                    if pending {
+                        release.send(()).unwrap();
+                        let (ticket, outcome, timing) = collect(&core, &woke);
+                        assert_eq!(ticket, 1);
+                        assert!(!timing.cached);
+                        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
+                    }
+                    let (ticket, outcome, timing) = collect(&core, &woke);
+                    assert_eq!(ticket, 2);
+                    assert!(!timing.cached);
+                    assert!(matches!(outcome, Outcome::Response(r) if r.body == b"new"));
+                    server.plan("/refresh", Plan::new(200, &[], b"new"));
+                    assert_eq!(ask(&core, &woke, job(3, request)).0.body, b"new");
+                    let journal = core.take_preload_journal();
+                    assert_eq!(
+                        journal
+                            .iter()
+                            .filter(|f| format!("{:?}", f.outcome) == "DroppedByRefresh")
+                            .count(),
+                        1
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_post_preload_waiter_counts_as_an_effect_from_admission_and_a_hit_frees_it() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let release = held_plan(&server, "/preload", b"held");
+        let mut def = definition(&server, "/preload");
+        def.request.method = "POST".into();
+        let request = def.request.clone();
+        let set = launch(&server, vec![def]);
+        server.seen(1);
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        core.run(job(1, request), None).unwrap();
+        let effects = effect_count(&core.shared.state.lock().unwrap());
+        assert_eq!(effects, 1);
+        let mut releases = Vec::new();
+        for ticket in 2..=17 {
+            let path = format!("/post/{ticket}");
+            releases.push(held_plan(&server, &path, b"post"));
+            let mut request = server.request(&path);
+            request.method = "POST".into();
+            core.run(job(ticket, request), None).unwrap();
+        }
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(state.counts[0], 16);
+            assert_eq!(state.fenced.front().unwrap().ticket(), 17);
+        }
+        release.send(()).unwrap();
+        ready(&core, 1);
+        core.resume_waiting();
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(effect_count(&state), 16);
+            assert!(state.fenced.is_empty());
+            assert!(state.completed[0].iter().any(|r| r.ticket == 1 && r.cached));
+        }
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        for ticket in 1..=17 {
+            assert_eq!(collect(&core, &woke).0, ticket);
+        }
+    }
+}
+
+#[test]
+fn a_seventeenth_post_waits_for_an_effect_place_on_either_preload_outcome_or_no_definition() {
+    for asynchronous in [false, true] {
+        for outcome in 0..3 {
+            let server = Server::new();
+            let mut def = definition(&server, "/preload");
+            def.request.method = "POST".into();
+            let request = def.request.clone();
+            let (release, held) = channel();
+            let mut plan = Plan::new(200, &[], b"held");
+            plan.held = Some(held);
+            plan.disconnect = outcome == 1;
+            if outcome != 2 {
+                server.plan("/preload", plan);
+            }
+            let set = launch(&server, if outcome == 2 { Vec::new() } else { vec![def] });
+            let control = set.control();
+            if outcome == 2 {
+                control.definitions_pending(true);
+            } else {
+                server.seen(1);
+            }
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            let mut releases = Vec::new();
+            for ticket in 1..=16 {
+                let path = format!("/post/{ticket}");
+                releases.push(held_plan(&server, &path, b"post"));
+                let mut request = server.request(&path);
+                request.method = "POST".into();
+                core.run(job(ticket, request), None).unwrap();
+            }
+            core.run(job(17, request), None).unwrap();
+            let (count, fenced) = {
+                let state = core.shared.state.lock().unwrap();
+                (state.counts[0], state.fenced.front().map(Fenced::ticket))
+            };
+            assert_eq!(count, 16);
+            assert_eq!(fenced, Some(17));
+            if outcome == 2 {
+                control.definitions_pending(false);
+            } else {
+                release.send(()).unwrap();
+                let state = core.shared.state.lock().unwrap();
+                let (state, timeout) = core
+                    .shared
+                    .ready
+                    .wait_timeout_while(state, HANG, |s| {
+                        matches!(
+                            s.cache.as_ref().unwrap().preloads[0].reply,
+                            ReplyState::Pending { .. }
+                        )
+                    })
+                    .unwrap();
+                drop(state);
+                assert!(!timeout.timed_out());
+            }
+            if outcome != 0 {
+                server.plan("/preload", Plan::new(200, &[], b"sent"));
+            }
+            core.resume_waiting();
+            server.seen(if outcome == 2 { 6 } else { 7 });
+            {
+                let state = core.shared.state.lock().unwrap();
+                assert_eq!(state.counts[0], 16);
+                assert_eq!(state.fenced.front().unwrap().ticket(), 17);
+                assert!(!state.jobs[0].iter().any(|j| j.ticket == 17));
+                assert!(!state.running.iter().any(|r| r.ticket == 17));
+            }
+            assert_eq!(server.count(), if outcome == 2 { 6 } else { 7 });
+            releases.remove(0).send(()).unwrap();
+            assert_eq!(collect(&core, &woke).0, 1);
+            {
+                let state = core.shared.state.lock().unwrap();
+                assert!(state.fenced.is_empty());
+                assert!(state.ordered.contains(&17));
+            }
+            for release in releases {
+                release.send(()).unwrap();
+            }
+            for ticket in 2..=17 {
+                let (got, _, timing) = collect(&core, &woke);
+                assert_eq!(got, ticket);
+                if got == 17 {
+                    assert_eq!(timing.cached, outcome == 0);
+                }
+            }
+            assert_eq!(
+                server.count(),
+                if outcome == 0 || outcome == 2 { 17 } else { 18 }
+            );
+        }
+    }
+}
+
+#[test]
+fn refresh_admission_leaves_preloads_with_a_different_method_url_header_or_body() {
+    for asynchronous in [false, true] {
+        for difference in 0..4 {
+            let server = Server::new();
+            server.plan("/equal", Plan::new(200, &[], b"held"));
+            let mut def = definition(&server, "/equal");
+            def.request.method = "POST".into();
+            def.request.headers = vec![("X-Query".into(), "one".into())];
+            def.request.body = b"one".to_vec();
+            let mut refresh = job(1, def.request.clone());
+            refresh.forced = true;
+            match difference {
+                0 => refresh.request.method = "PUT".into(),
+                1 => refresh.request.url.push_str("?other"),
+                2 => refresh.request.headers[0].1 = "two".into(),
+                _ => refresh.request.body.push(0),
+            }
+            let set = launch(&server, vec![def]);
+            complete_set(&set);
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            let release = held_plan(
+                &server,
+                if difference == 1 {
+                    "/equal?other"
+                } else {
+                    "/equal"
+                },
+                b"new",
+            );
+            core.run(refresh, None).unwrap();
+            server.seen(2);
+            let held = {
+                let state = core.shared.state.lock().unwrap();
+                state.cache.as_ref().unwrap().preloads[0].used().is_some()
+            };
+            assert!(held);
+            release.send(()).unwrap();
+            assert!(!collect(&core, &woke).2.cached);
+        }
+    }
+}
+
+#[test]
+fn an_empty_set_starts_no_preload_thread_or_workers_and_does_not_hold_reads() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let set = launch(&server, Vec::new());
+        let location = set.destination.clone();
+        assert_eq!(*location.threads.lock().unwrap(), 0);
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        server.plan("/ordinary", Plan::new(200, &[], b"ordinary"));
+        assert!(!read(&core, &woke, &server, 1, "/ordinary").1);
+        assert_eq!(*location.threads.lock().unwrap(), 0);
+    }
+}
+
+#[test]
+fn definitions_arriving_after_the_wait_bound_still_hold_their_replies() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (set, clock) = fresh_clock(&server, Vec::new());
+        let control = set.control();
+        control.definitions_pending(true);
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        server.plan("/late", Plan::new(200, &[], b"network"));
+        core.run(job(1, server.request("/late")), None).unwrap();
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(state.jobs[0].len(), 1);
+            assert!(state.running.is_empty());
+        }
+        *clock.lock().unwrap() += DEFINITIONS_WAIT;
+        if let Some(machine) = &core.machine {
+            machine.timer.expire((0, 0));
+        } else {
+            core.shared.ready.notify_all();
+        }
+        assert!(!collect(&core, &woke).2.cached);
+        server.plan("/late", Plan::new(200, &[], b"preload"));
+        control.extend(
+            vec![definition(&server, "/late")],
+            &format!("net.fetch http://{}", server.address),
+            Arc::new(|_, _| {}),
+        );
+        control.definitions_pending(false);
+        ready(&core, 1);
+        let (reply, cached) = read(&core, &woke, &server, 2, "/late");
+        assert!(cached);
+        assert_eq!(reply.body, b"preload");
+        assert_eq!(server.count(), 2);
+    }
+}
+
+#[test]
+fn a_read_keeps_its_definition_wait_when_rust_launch_begins() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (set, clock) = fresh_clock(&server, Vec::new());
+        let control = set.control();
+        control.definitions_pending(true);
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        server.plan("/definitions", Plan::new(200, &[], b"one second"));
+        server.plan("/launch", Plan::new(200, &[], b"five seconds"));
+        core.run(job(1, server.request("/definitions")), None)
+            .unwrap();
+        *clock.lock().unwrap() += Duration::from_millis(500);
+        let launch_wait = Duration::from_secs(5);
+        control.launch_pending(Some(launch_wait));
+        core.run(job(2, server.request("/launch")), None).unwrap();
+        *clock.lock().unwrap() += DEFINITIONS_WAIT - Duration::from_millis(500);
+        if let Some(machine) = &core.machine {
+            machine.timer.expire((0, 0));
+        } else {
+            core.shared.ready.notify_all();
+        }
+        let (ticket, outcome, timing) = collect(&core, &woke);
+        assert_eq!(ticket, 1);
+        assert!(!timing.cached);
+        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"one second"));
+        *clock.lock().unwrap() += launch_wait - Duration::from_millis(501);
+        control.test_tick();
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(state.jobs[0].len(), 1);
+            assert_eq!(state.jobs[0][0].ticket, 2);
+            assert!(waiting(&state, &state.jobs[0][0]));
+            assert_eq!(server.count(), 1);
+        }
+        *clock.lock().unwrap() += Duration::from_millis(1);
+        control.test_tick();
+        let (ticket, outcome, timing) = collect(&core, &woke);
+        assert_eq!(ticket, 2);
+        assert!(!timing.cached);
+        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"five seconds"));
+        assert_eq!(server.count(), 2);
+    }
+}
+
+#[test]
+fn preloads_are_speculative_on_every_hop_and_a_context_fetch_is_not() {
+    struct Recording(Sender<(String, bool)>);
+    impl ibex2::stdlib::fetch::Transport for Recording {
+        fn open(
+            &self,
+            request: &ibex2::stdlib::fetch::Request,
+            signal: &ibex2::stdlib::abort::AbortSignal,
+        ) -> Result<ibex2::stdlib::fetch::StreamingResponse, HostError> {
+            self.0
+                .send((request.url.clone(), request.speculative))
+                .unwrap();
+            let mut headers = ibex2::stdlib::fetch::Headers::new();
+            let status = if request.url.ends_with("/first") {
+                headers.set_response("Location", "/second");
+                302
+            } else {
+                200
+            };
+            Ok(ibex2::stdlib::fetch::Response {
+                status,
+                status_text: String::new(),
+                headers,
+                body: b"content".to_vec(),
+                url: request.url.clone(),
+                redirected: false,
+            }
+            .into_stream(request.body_limit(), signal.clone()))
+        }
+    }
+    let (send, seen) = channel();
+    let host = move || ibex2::host::Host::with_transport(Box::new(Recording(send.clone())));
+    let grants = "net.fetch https://a.example";
+    let request = Request::get("https://a.example/first");
+    let set = Preloads::start(Vec::new(), grants, host.clone());
+    let control = set.control();
+    let (send, handed) = channel();
+    let thread = std::thread::spawn(move || {
+        control.handed();
+        send.send(()).unwrap();
+    });
+    handed.recv_timeout(HANG).unwrap();
+    thread.join().unwrap();
+    assert_eq!(set.control().thread_count(), 0);
+    set.control().extend(
+        vec![Definition {
+            name: "rust-feed".into(),
+            request: request.clone(),
+            deadline_ms: None,
+            secrets: Vec::new(),
+        }],
+        grants,
+        Arc::new(|_, _| {}),
+    );
+    set.control().wait_ready(1);
+    assert_eq!(
+        launch_fetch(request, grants, host()).unwrap().body,
+        b"content"
+    );
+    for speculative in [true, false] {
+        for path in ["first", "second"] {
+            assert_eq!(
+                seen.recv_timeout(HANG).unwrap(),
+                (format!("https://a.example/{path}"), speculative)
+            );
+        }
+    }
+    assert!(seen.try_recv().is_err());
 }

@@ -57,13 +57,7 @@ impl Running {
                         elapsed_ms: now.saturating_duration_since(self.started).as_millis() as u64,
                     },
                 );
-                launch
-                    .0
-                    .set
-                    .get()
-                    .unwrap()
-                    .control
-                    .definitions_pending(false);
+                launch.0.set.get().unwrap().control.launch_pending(None);
             }
             self.changed.notify_all();
         }
@@ -110,6 +104,13 @@ pub(super) fn run(
     #[cfg(test)]
     let _returned = Returned(running.clone());
     let _ = launch.0.rust.set(running.clone());
+    launch
+        .0
+        .set
+        .get()
+        .unwrap()
+        .control
+        .launch_pending(Some(LAUNCH_DEADLINE));
     let watch = running.clone();
     if std::thread::Builder::new()
         .name("exact-launch-deadline".into())
@@ -227,11 +228,15 @@ struct Context<'a> {
 }
 impl<'a> Context<'a> {
     fn new(launch: &'a LaunchPreloads, app: &str, grants: &'a str, running: Arc<Running>) -> Self {
-        let backend = crate::store::launch_backend(grants, app)
-            .ok()
-            .map(|b| Arc::new(b) as Arc<dyn Backend>);
+        let backend = || {
+            crate::store::launch_backend(grants, app)
+                .ok()
+                .map(|b| Arc::new(b) as Arc<dyn Backend>)
+        };
         #[cfg(test)]
-        let backend = launch.0.backend.lock().unwrap().clone().or(backend);
+        let backend = launch.0.backend.lock().unwrap().clone().or_else(backend);
+        #[cfg(not(test))]
+        let backend = backend();
         let policies = crate::presence_secrets::lines(grants);
         let allowed: std::collections::BTreeSet<_> =
             policies.iter().map(|(name, _)| name.clone()).collect();
@@ -311,6 +316,6 @@ impl LaunchContext for Context<'_> {
         if *self.running.done.lock().unwrap() {
             return Err("launch deadline".into());
         }
-        crate::executor::launch_fetch(request, self.grants)
+        crate::executor::launch_fetch(request, self.grants, ibex2::host::Host::new())
     }
 }

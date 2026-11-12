@@ -262,6 +262,7 @@ impl Machine {
                 limit: r.limit,
                 forgotten: r.forgotten,
                 queued_deadline: None,
+                preload_due: None,
                 overlap: false,
                 class: r.class,
             },
@@ -380,6 +381,7 @@ mod tests {
                 limit,
                 forgotten: false,
                 queued_deadline: None,
+                preload_due: None,
                 overlap: false,
                 class: exact_runner::RequestClass::Ordered,
             });
