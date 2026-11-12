@@ -2571,10 +2571,18 @@ each voice ended is the same on every host and under the driver's clock
 | --- | --- |
 | web (both targets) | Web Audio: a one-shot `AudioBufferSourceNode` per voice at `start(when)` with its `playbackRate`, through a `StereoPannerNode` when its `pan` is not 0, aimed at the speaker through the context's output timestamp; the first sound after the page's first tap or key (one before it is dropped and journaled `sound blocked`) |
 | macOS, iOS, tvOS | one `AVAudioEngine` with a C mixer behind an `AVAudioSourceNode`, sample-accurate (a playback rate reads between frames by linear interpolation; a pan follows the `StereoPannerNode`'s equal-power algorithm), in an arm loaded on demand (`libexact_sound.dylib`; `ExactSound.framework` in an `.ipa`) |
-| Linux, Windows | none: the record only (`state.sounds.output` is `"none"` outside the driver) |
+| Linux, Windows, Android (the Linux host in its reader) | no Contract sound output: the runner keeps the voice record |
 
-Under the driver no scheduled sound plays on any host (`output: "agent"`). `app.json`'s
-root `audio_session` chooses the session every sound, video and canvas shares.
+Under the driver no scheduled sound plays on any host (`output: "agent"`). The
+runner initializes `state.sounds.output` to `"agent"`; Linux, Windows and Android
+leave it there even outside the driver. Outside the driver, macOS, iOS and tvOS
+replace it with an object whose `kind` is `"avaudioengine"` and whose `state` is `"closed"`,
+`"running"`, `"stopped"` or `"failed"`. Both web targets report an object with
+`kind: "web-audio"` and the audio context's `state` once the output loads; before
+that, the JS target reports `{kind: "web-audio", state: "loading"}` and the wasm
+target retains `"agent"`.
+
+`app.json`'s root `audio_session` chooses the session every sound, video and canvas shares.
 On iOS and tvOS, `"ambient"` (the default) obeys the ring/silent switch and
 mixes with other apps' audio. `"playback"` ignores the switch and interrupts
 other audio. `"playback-mix"` is for an instrument, toy or metronome played
@@ -3322,11 +3330,19 @@ The bundle includes its assets and native modules; it is not a notarized downloa
 Browser navigation, both Apple cold/warm handlers and malformed-link refusals are
 tested. The page cannot detect installation, and does not trigger signing/builds.
 
-**Limits.** Linux native hosts don't run TypeScript yet (use a Rust data crate
-there); `app.ts` imports pure-JavaScript packages only (Node's modules, the DOM, a computed `import()` and native addons are refused; a use that a `typeof` test guards is not, nor a read through the global object, such as `globalThis.process?.env`, whose value is only tested, compared, spread into an object, returned, or held in a `const` whose uses are guarded in turn). Code from a string throws on every host through `Function` and `eval`, and through their own `constructor`: each throws `SyntaxError: Parsing source code unsupported`, as Hermes does. The build warns (`code-from-string`) at the uses of the global `Function` or `eval` it can see by name, a package's or `app.ts`'s: a direct call or `new`, a member of `globalThis`, destructuring a global object's property, a parameter initializer, or a JSX component name (`<Function />`). A use reached another way builds without a warning and throws the same error when it runs. Either way, code that uses them works only if it catches that error and takes another path, as zod does. What reaches `Function.prototype.constructor` or a function's own `constructor` (`(function () {}).constructor`) still runs code from a string on the web, and not on Hermes: the warning is a tripwire, not a sandbox, and refuses nothing. Under the render server's CSP and in the JS server render that throws too. A package may not read `import.meta.env`, which is app.ts's to read and pass in; a read the bundle drops, in a function nothing calls, is not one. That check keeps a module portable between Hermes and the page; it is no security boundary: on the web the module runs in the page's realm, and a package is code the author chose, trusted as their own. A package's `/// <reference lib>` to an ES library newer than the data module's (`esnext.disposable`) loads nothing, so what that library declares (`Symbol.dispose`, which Hermes lacks) stays undeclared for the app. Signed delivery of TypeScript and Rust
-modules isn't implemented, so set `deploy.store` to `"0"`. The history of how this
-was proved on each host is in LLP 1027
-and git.
+Linux native apps can run TypeScript through `exact-js` and Hermes;
+`apps/shelf/linux` is an entry using that executor.
+
+**Limits.** `app.ts` imports pure-JavaScript packages only (Node's modules, the DOM, a computed `import()` and native addons are refused; a use that a `typeof` test guards is not, nor a read through the global object, such as `globalThis.process?.env`, whose value is only tested, compared, spread into an object, returned, or held in a `const` whose uses are guarded in turn). Code from a string throws on every host through `Function` and `eval`, and through their own `constructor`: each throws `SyntaxError: Parsing source code unsupported`, as Hermes does. The build warns (`code-from-string`) at the uses of the global `Function` or `eval` it can see by name, a package's or `app.ts`'s: a direct call or `new`, a member of `globalThis`, destructuring a global object's property, a parameter initializer, or a JSX component name (`<Function />`). A use reached another way builds without a warning and throws the same error when it runs. Either way, code that uses them works only if it catches that error and takes another path, as zod does. What reaches `Function.prototype.constructor` or a function's own `constructor` (`(function () {}).constructor`) still runs code from a string on the web, and not on Hermes: the warning is a tripwire, not a sandbox, and refuses nothing. Under the render server's CSP and in the JS server render that throws too. A package may not read `import.meta.env`, which is app.ts's to read and pass in; a read the bundle drops, in a function nothing calls, is not one. That check keeps a module portable between Hermes and the page; it is no security boundary: on the web the module runs in the page's realm, and a package is code the author chose, trusted as their own. A package's `/// <reference lib>` to an ES library newer than the data module's (`esnext.disposable`) loads nothing, so what that library declares (`Symbol.dispose`, which Hermes lacks) stays undeclared for the app.
+
+Signed delivery carries one module pair, and which pair depends on the host. The
+Apple loader accepts TypeScript or a Rust module enabled by the binary's Rust policy.
+A Linux binary built with its update entry installs a Rust pair only. A Linux app
+whose module is TypeScript, and every Windows app, sets that platform's
+`deploy.store` to `"0"`: with any other level the binary exits at start. The
+installed binary must supply the required runtime and admit the module's app
+identity and grants. An app with both TypeScript and Rust modules sets every
+`deploy.store` entry to `"0"`: delivery of both together is not implemented. See LLP 1027 for the design record.
 
 ## Access hatches
 
@@ -3492,7 +3508,7 @@ A data crate answers the view's sources in Rust instead of `app.ts`: an app's
 An app `exact new` made outside this checkout that answers in Rust writes its own Cargo workspace
 (LLP 1153 D1.4). Read its crates from [Sparkline](../apps/sparkline)'s `data/`, `web/` and `apple/`:
 each `Cargo.toml`, `build.rs` and `src/lib.rs`, not the TypeScript ones `.exact/shells/` holds. Sparkline's
-paths into exact2 are relative to this checkout: in the copies, write each as `<exact2>/…` before running
+paths into Exact are relative to this checkout: in the copies, write each as `<exact2>/…` before running
 `bun exact.mjs update`, `contract` as `<exact2>/contract/cli` too. `update` points `exact-*` crates at this
 checkout by name, and any other path only through that placeholder. The web build copies the source
 `web/build.rs` passes to `contract::bake(plan, …)` into a module of its own, where build.rs's `use`s and

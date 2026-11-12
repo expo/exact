@@ -975,3 +975,18 @@ fn a_reselected_tabs_scroll_to_the_top_gives_way_to_a_request_its_press_made() {
         "a list the press made the screen's, which asked for nothing there"
     );
 }
+
+/// A reload before anyone touched the app boots the new kernel to the
+/// epoch the old one had: the bars are read from the new tree all the same.
+#[test]
+fn a_reload_at_the_same_epoch_reads_the_bars_again() {
+    let (mut p, _) = barred(APP);
+    assert_eq!(top(&mut p).title, "Home");
+    let epoch = p.host().kernel().epoch();
+    let next = APP.replace("text \"Home\" role", "text \"Start\" role");
+    p.reload(&crate::test_plan(&next), Nothing).unwrap();
+    settle(&mut p);
+    assert_eq!(p.host().kernel().epoch(), epoch, "the case: the same epoch");
+    assert_eq!(text(&p, "home-title"), "Start");
+    assert_eq!(top(&mut p).title, "Start");
+}

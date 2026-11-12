@@ -1,5 +1,5 @@
 ```prompt Add an edit sheet
-Let a person edit an item in the Exact app in this folder, in a sheet. Use https://github.com/expo/exact/blob/main/docs/recipes/edit-sheet.md as the source for each step. The exact2 checkout has the same page at docs/recipes/edit-sheet.md.
+Let a person edit an item in the Exact app in this folder, in a sheet. Use https://github.com/expo/exact/blob/main/docs/recipes/edit-sheet.md as the source for each step. The Exact checkout has the same page at docs/recipes/edit-sheet.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say which item and which fields to edit, propose them from the app's data and ask me before you write code.

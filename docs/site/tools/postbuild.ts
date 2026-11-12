@@ -73,7 +73,7 @@ for (const p of pages) {
   writeFileSync(join(DIST, p.path === '/' ? 'index.md' : `${p.path.slice(1)}.md`), `${frontmatter(p)}> ## Documentation index\n> Fetch the complete documentation index at: ${ORIGIN}/llms.txt\n> Use this file to discover all available pages before exploring further.\n\n${body}`);
 }
 
-// exact2's mark (assets/brand/exact-mark.svg) as the favicon, in place of the build's placeholder square.
+// Exact's mark (assets/brand/exact-mark.svg) as the favicon, in place of the build's placeholder square.
 copyFileSync(resolve(SITE, '../../assets/brand/exact-mark.svg'), join(DIST, 'favicon.svg'));
 const FAVICON = '<link rel="icon" href="/favicon.svg" type="image/svg+xml">';
 
@@ -150,7 +150,7 @@ const start = pages.find(p => p.path === '/start');
 function prerequisites(p: Page): string {
   const parent = parentOf(p);
   if (parent) return `[${parent.title}](${mdUrl(parent)})`;
-  if (p.path === '/recipes/website') return 'start-here-site.md in the exact2 checkout (a website reads it in place of Start here)';
+  if (p.path === '/recipes/website') return 'start-here-site.md in the Exact checkout (a website reads it in place of Start here)';
   if (!start || ['Home', 'Get started', 'For AI agents'].includes(p.section)) return 'None';
   return `[${start.title}](${mdUrl(start)})`;
 }

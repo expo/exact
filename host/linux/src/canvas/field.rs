@@ -92,17 +92,17 @@ unsafe impl Sync for Reader {}
 static READER: OnceLock<Option<Reader>> = OnceLock::new();
 
 /// A question: the face's numbers and the width, its slant and whether it
-/// wraps, its file, and the text.
+/// wraps, its file, axes and features, and the text.
 type Asked = ([u32; 5], bool, bool, String, String);
 /// Every question asked so far, with its answer. Emptied when it grows
 /// large: a form asks a handful, a field typed into one a key.
 static MEMO: Mutex<Option<HashMap<Asked, [f32; 3]>>> = Mutex::new(None);
 const MEMO_MOST: usize = 512;
 
-/// `Fields.measure(size, weight, flags, spacing, line, family, text, width)`.
+/// `Fields.measure(size, weight, flags, spacing, line, family, axes, features, text, width)`.
 const MEASURE: (&std::ffi::CStr, &std::ffi::CStr) = (
     c"measure",
-    c"(FIIFFLjava/lang/String;Ljava/lang/String;Ljava/lang/String;F)J",
+    c"(FIIFFLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;F)J",
 );
 
 /// The reader boots the host (`Native.start`, `Native.startAsync`): its
@@ -196,6 +196,7 @@ impl Bridge {
         }
         let family = java(env, &face.family);
         let axes = java(env, &face.axes);
+        let features = java(env, &face.features);
         let string = java(env, text);
         let flags = i32::from(face.italic) | i32::from(face.multiline) << 1;
         let args = [
@@ -208,6 +209,7 @@ impl Bridge {
             jvalue { f: face.line },
             jvalue { l: family },
             jvalue { l: axes },
+            jvalue { l: features },
             jvalue { l: string },
             jvalue {
                 f: width.unwrap_or(-1.0),
@@ -222,6 +224,7 @@ impl Bridge {
         }
         ((**env).DeleteLocalRef.expect("jni"))(env, family);
         ((**env).DeleteLocalRef.expect("jni"))(env, axes);
+        ((**env).DeleteLocalRef.expect("jni"))(env, features);
         ((**env).DeleteLocalRef.expect("jni"))(env, string);
         if attached {
             ((**vm).DetachCurrentThread.expect("jni"))(vm);
@@ -244,7 +247,7 @@ impl FieldMetrics for Bridge {
             ],
             face.italic,
             face.multiline,
-            format!("{}\0{}", face.family, face.axes),
+            format!("{}\0{}\0{}", face.family, face.axes, face.features),
             text.to_owned(),
         );
         let known = |memo: &Option<HashMap<Asked, [f32; 3]>>| memo.as_ref()?.get(&key).copied();

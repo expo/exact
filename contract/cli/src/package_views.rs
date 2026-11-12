@@ -100,10 +100,23 @@ pub fn declared(app_root: &Path) -> Result<BTreeMap<String, PackageView>, Declar
                 } else {
                     interface
                 };
-                let agent = located(app_root, interface)
-                    .map(|(_, json)| json["agent"].clone())
+                let declaration = located(app_root, interface)
+                    .map(|(_, json)| json)
                     .unwrap_or_default();
-                found.extend(views(&json, &extension_of(interface), interface, &agent)?);
+                let agent = &declaration["agent"];
+                let extension = extension_of(interface);
+                let shared = views(&declaration, &extension, interface, agent)?;
+                for view in views(&json, &extension, interface, agent)? {
+                    // A served tag takes its interface's declaration regardless
+                    // of which dependency is read first.
+                    found.push(
+                        shared
+                            .iter()
+                            .find(|decl| decl.tag == view.tag)
+                            .cloned()
+                            .unwrap_or(view),
+                    );
+                }
             }
             _ => {}
         }

@@ -1384,7 +1384,7 @@ extension XCTestCase {
         XCTAssertEqual(presses, [ancestor.id], "only the nearest authored ancestor presses", file: file, line: line)
         XCTAssertEqual(pointers, ["\(ancestor.id) down", "\(ancestor.id) up"], file: file, line: line)
         XCTAssertFalse(ancestor.pressed, file: file, line: line)
-        XCTAssertEqual(p.interacting, 0, file: file, line: line)
+        XCTAssertTrue(p.mouseChain.bubbledPress == nil && p.pointerHeld == nil, file: file, line: line)
         XCTAssertTrue(window.firstResponder === focus, file: file, line: line)
         XCTAssertTrue(pageWindow.firstResponder === pageFocus, "a bubbled press never takes the page's focus", file: file, line: line)
         XCTAssertTrue(isOpen(), file: file, line: line)
@@ -1413,7 +1413,7 @@ extension XCTestCase {
         XCTAssertTrue(ancestor.pressed, file: file, line: line)
         try send(.leftMouseUp, outside)
         XCTAssertEqual(presses, [ancestor.id, content.id], "a drag off the content cancels", file: file, line: line)
-        XCTAssertEqual(p.interacting, 0, file: file, line: line)
+        XCTAssertTrue(p.mouseChain.bubbledPress == nil && p.pointerHeld == nil, file: file, line: line)
         XCTAssertTrue(isOpen(), file: file, line: line)
 
         // AppKit retains the hit for the up even when an authored inert
@@ -1423,7 +1423,7 @@ extension XCTestCase {
         try send(.leftMouseUp, inside)
         XCTAssertFalse(ancestor.pressed, file: file, line: line)
         XCTAssertEqual(presses, [ancestor.id, content.id], "authored inertness silences the ancestor", file: file, line: line)
-        XCTAssertEqual(p.interacting, 0, "the cancelled bubbled contact ends on up", file: file, line: line)
+        XCTAssertTrue(p.mouseChain.bubbledPress == nil && p.pointerHeld == nil, "the cancelled bubbled contact ends on up", file: file, line: line)
         if p.dialogs.active != nil {
             // A modal escapes its authored parent's inertness for hit
             // testing, but that parent's own listener must still refuse it.

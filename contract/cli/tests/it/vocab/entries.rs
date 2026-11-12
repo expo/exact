@@ -4,6 +4,28 @@
 use super::*;
 
 #[test]
+fn module_tags_distinguish_app_props_from_package_declarations() {
+    let one: Value = serde_json::from_str(&stdout(&vocab(&["--json", "exact-map"]))).unwrap();
+    let note = one["note"].as_str().unwrap();
+    for expected in [
+        "app.json's `modules`",
+        "direct dependency's exact.json `views`",
+        "an app module's other attributes are its props",
+        "a package view accepts only its declared props and events",
+        "standard box attributes",
+        "press, change, hover, focus, blur, key, submit, load and message",
+    ] {
+        assert!(note.contains(expected), "missing {expected}: {note}");
+    }
+    let all: Value = serde_json::from_str(&stdout(&vocab(&["--json"]))).unwrap();
+    assert_eq!(all["notes"]["modules"], note);
+    for args in [&["exact-map"][..], &["--all"]] {
+        let text = stdout(&vocab(args));
+        assert!(text.contains(note), "{args:?}: {text}");
+    }
+}
+
+#[test]
 fn compiler_attributes_answer_in_text_json_and_listings() {
     for source in [
         "style Card\n  padding=12\ncomponent App\n  view\n    column class=Card -exact-row-look=\"platform\"\n      text \"a\"\n",

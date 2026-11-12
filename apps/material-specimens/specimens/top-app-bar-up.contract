@@ -1,5 +1,4 @@
-// The page draws a line far from the bar, outside every crop: a reader whose page draws
-// nothing never tells a driver it is ready (`oracle.mjs --phone`).
+// Page text stays outside the bar's comparison crops.
 routes nav
   tab library "/"
     detail "/detail"

@@ -274,7 +274,8 @@ open class BenchActivity(private val key: String) : ExactActivity() {
 `drive` is called once in `onCreate`, where the reader used to construct the benchmark's `Driver` (the host has
 begun to boot, the view is not made yet), with the call that scrolls the feed by a distance in pixels
 (`ExactView.scrollBy`, `Native.scroll`: the scroller under the viewport's centre, or the one a finger last moved).
-The `Drive` it returns is told when the first content has been drawn. The default returns null.
+The `Drive` it returns is told once, after the first frame following successful startup, even when the page is empty
+or only bars draw. The default returns null.
 
 Without a driver the activity no longer does what `Driver` did: show over the keyguard, turn the screen on, keep the
 screen on, ask for a 120 Hz display mode, and call `reportFullyDrawn()`. The shell's manifest asks for none of them
@@ -616,14 +617,14 @@ is the `EditText`'s to say: when the kernel measures a text control's text it as
 nothing), and on Android that calls up into the reader, from the thread layout runs on, and has the answer before
 it returns:
 
-    Fields.measure(size px, weight, flags, tracking em, line px, font file, text, width px): Long
+    Fields.measure(size px, weight, flags, tracking em, line px, font file, axes, features, text, width px): Long
 
 An `EditText` of that thread's own, never attached, is set as the field is (no background, no padding, no font
-padding, the field's size, weight, slant, tracking, line height and face) and measured; the answer is its width,
-height and first baseline in pixels. A single line is as long as its text; a `textarea` wraps at the width
-offered. Each distinct question is asked once (a form of twenty fields in one font asks two). It is no request (D5):
-that queue is taken after the frame. The container's own insets are still the painter's (its border and padding,
-`field_chrome`); the `EditText` has none.
+padding, the field's size, weight, slant, tracking, line height, face, axes and OpenType features) and measured;
+the answer is its width, height and first baseline in pixels. A single line is as long as its text; a `textarea`
+wraps at the width offered. Each distinct question is asked once (a form of twenty fields in one font asks two).
+It is no request (D5): that queue is taken after the frame. The container's own insets are still the painter's
+(its border and padding, `field_chrome`); the `EditText` has none.
 
 **What exact2 tells** (`Native.fields(): IntArray?`, null while nothing changed; taken with each stream, before the
 stream is drawn). A count, then for each live field, in tree order:
@@ -646,8 +647,11 @@ stream is drawn). A count, then for each live field, in tree order:
   `caret-color` or `accent-color` winning); its font's size in pixels, weight, tracking and line height (the
   computed font, whose own starting size is 16 by the device's font scale); and the revision, start and end of
   the selection a command last set (`setSelectionRange`, `select()`);
-- four strings: its placeholder, its `autocomplete`, its font's file and its axes (`'wght' 650, 'wdth' 75`;
-  empty for none).
+- five strings: its placeholder, its `autocomplete`, its font's file, its axes (`'wght' 650, 'wdth' 75`;
+  empty for none), and its effective OpenType features (`'tnum' 1`). The features combine
+  `font-variant-numeric` and `font-variant-ligatures` with `font-feature-settings`, whose values win for tags
+  they name. Measurement and displayed fields use the same features; an empty features string clears
+  `fontFeatureSettings`, restoring the font's defaults.
 
 A field a statement leaves out is gone, and its view with it. A field that was not painted (its row is out of the
 page's view) keeps its view, its focus and its keyboard, out of sight.
@@ -900,7 +904,8 @@ Not built of D10:
   `alertdialog` today, so the two cannot be told apart (LLP 1115.000 D13.4).
 - The arrow keys reach a surface; nothing else of D7.6's hardware keys is built for the page.
 
-Not seen on a phone: Shelf itself (it has no `android/` crate; the fixture uses its shapes); an `alertdialog`
+Not checked on a phone in this menu/dialog qualification: Shelf itself (its Android crate is
+`apps/shelf/android`; the fixture uses its shapes); an `alertdialog`
 written as a popover, and an `aria-checked` row (neither is in a test either); a font scale changed with a menu
 open; rotation with a surface open; a second display; TalkBack. The dialog's width between
 its limits is the window less 24 dp a side, which was not compared with a Compose dialog on the same phone, and no

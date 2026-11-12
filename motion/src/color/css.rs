@@ -141,19 +141,6 @@ fn wide(w: exact_color::Wide) -> Option<Parsed> {
     Some(Parsed::Wide(rgba(w.srgb8()), w.css()))
 }
 
-/// A number as JavaScript's `String(n)` writes it, for the shapes canvas
-/// serialisations take (finite, not huge).
-pub fn js_number(v: f64) -> String {
-    if v == v.trunc() && v.abs() < 1e15 {
-        return format!("{}", v as i64);
-    }
-    let mut s = format!("{v}");
-    if s.contains('e') {
-        s = format!("{v:.6}");
-    }
-    s
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

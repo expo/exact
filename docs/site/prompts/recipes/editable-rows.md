@@ -1,5 +1,5 @@
 ```prompt Let a person add and remove rows
-Let a person add and remove rows in a list of the Exact app in this folder while they edit it, such as a poll's options or a recipe's steps. Use https://github.com/expo/exact/blob/main/docs/recipes/editable-rows.md as the source for each step. The exact2 checkout has the same page at docs/recipes/editable-rows.md.
+Let a person add and remove rows in a list of the Exact app in this folder while they edit it, such as a poll's options or a recipe's steps. Use https://github.com/expo/exact/blob/main/docs/recipes/editable-rows.md as the source for each step. The Exact checkout has the same page at docs/recipes/editable-rows.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say which list, propose one from the app's data, with its fewest and most rows, and ask me before you write code.

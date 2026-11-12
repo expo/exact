@@ -33,10 +33,10 @@ ios` each variant first. `SIMCTL_CHILD_EXACT_SMOKE=1 xcrun simctl launch --conso
 <bundle id>` prints Exact's phases to first draw (exec→main, scene, runner and layout, apply,
 painted) and exits; a data module's first answer is a hook's to stamp.
 
-**Sound, MIDI and a transport are Exact's** (`sequence`, `play(tracks…)`, `exactMIDI()`,
-`sendMIDI`, `midimessage`: [the guide's "Sound, MIDI and media"](../contract-for-agents.md#sound-midi-and-media),
-`apps/metronome`). A [native module](native-module.md) is for what Exact lacks; never port an
-audio or MIDI engine into one.
+**Contract's sampler, MIDI and transport** ([guide](../contract-for-agents.md#sound-midi-and-media)):
+do not replace them in a native module. Continuous or synthesized sound Contract lacks may use
+[a GPU module's output](../../gpu/README.md#a-modules-own-audio-output), with session and
+lifecycle handling and no Contract sound journal.
 
 **Splitting a port among helpers:** commit the seam between the halves first (the shared types,
 the native module's interface), then start each helper in the background from that commit,

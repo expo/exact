@@ -103,6 +103,7 @@ impl<D: DataSource> Bridge<D> {
         let crate::store::Endowed {
             bindings,
             snapshot,
+            unread_kept,
             secrets,
             unbound,
             presence,
@@ -152,6 +153,7 @@ impl<D: DataSource> Bridge<D> {
                 if let Some(why) = unbound {
                     host.log(&format!("{why}; every request is refused"));
                 }
+                host.runner_mut().forget_unread_kept(&unread_kept);
                 if let Some((backend, keystore)) = presence {
                     host.runner_mut().install_presence(backend, keystore);
                 }

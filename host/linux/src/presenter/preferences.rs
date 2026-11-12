@@ -40,6 +40,9 @@ impl<D: DataSource> Presenter<D> {
         if let Some(error) = host.set_display_scale(runner.display_scale()) {
             return Err(HostError::Layout(error));
         }
+        // The room a shell's bars take, without which the new host projects no bars.
+        host.set_bar_room(self.host.bars().room)
+            .map_err(HostError::Layout)?;
         let time = self.host.runner().wall_time();
         if let Some(error) = host.set_place(self.host.runner().place()) {
             return Err(HostError::Layout(error));

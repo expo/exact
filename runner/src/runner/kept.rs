@@ -91,16 +91,17 @@ pub(super) fn refuse(
         .push((i, super::lines::kept_refused(name, Some(&json(kept)), &why)));
 }
 
-/// The store name a resource's kept answer lives under.
-/// The kept entries in `snapshot` no declared reader of `plan` seeds. A
+/// The kept entries in `names` no declared reader of `plan` seeds. A
 /// cold boot seeds a first frame only from declared readers' kept answers,
 /// so any other entry (a reader made `transient`, a resource removed) is
 /// forgotten on disk, not carried forever. A reload's carried readers are
 /// checked for compatibility instead.
-pub(super) fn obsolete(plan: &exact_plan::Plan, snapshot: &[(String, Vec<u8>)]) -> Vec<String> {
-    snapshot
-        .iter()
-        .filter_map(|(name, _)| {
+pub(super) fn obsolete<'n>(
+    plan: &exact_plan::Plan,
+    names: impl Iterator<Item = &'n String>,
+) -> Vec<String> {
+    names
+        .filter_map(|name| {
             let resource = name.strip_prefix(Store::KEPT)?;
             (!(0..plan.resources.len()).any(|i| {
                 (kept_surface(plan, i)
@@ -131,16 +132,16 @@ pub(super) fn transient<'n>(
         .collect()
 }
 
-/// Every kept entry in `snapshot`: what an app that keeps no answers
+/// Every kept entry in `names`: what an app that keeps no answers
 /// forgets (LLP 1069.008.000 D7).
-pub(super) fn all(snapshot: &[(String, Vec<u8>)]) -> Vec<String> {
-    snapshot
-        .iter()
-        .filter(|(name, _)| name.starts_with(Store::KEPT))
-        .map(|(name, _)| name.clone())
+pub(super) fn all<'n>(names: impl Iterator<Item = &'n String>) -> Vec<String> {
+    names
+        .filter(|name| name.starts_with(Store::KEPT))
+        .cloned()
         .collect()
 }
 
+/// The store name a resource's kept answer lives under.
 pub(super) fn kept_name(resource: &str) -> String {
     let mut name = String::from(Store::KEPT);
     name.push_str(resource);
@@ -672,6 +673,21 @@ impl<D: DataSource> Runner<D> {
         let result = self.restore_store(snapshot);
         self.conclude(checkpoint, &result, was_poisoned);
         result
+    }
+
+    /// After a cold boot, the kept entries the host has and left out of the
+    /// snapshot (past [`Store::KEPT_TOTAL_BYTES`]): those the boot would
+    /// have forgotten had they been read are forgotten, which needs no
+    /// value. A name the store holds was read, and the boot judged it.
+    pub fn forget_unread_kept(&mut self, names: &[String]) {
+        let unread = names.iter().filter(|name| self.store.kept(name).is_none());
+        let forgotten = match crate::device::keeps_no_answers(self.data.grants()) {
+            true => all(unread),
+            false => obsolete(&self.plan, unread),
+        };
+        for name in &forgotten {
+            self.store.forget_unread_kept(name);
+        }
     }
 
     fn restore_store(

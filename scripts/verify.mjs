@@ -53,8 +53,6 @@ import { contractVerify, semanticsSummary } from './verify-semantics.mjs';
 import { byRule, groups, ruleOf } from './verify-findings.mjs';
 export { byRule, groups, ruleOf };
 
-import { declaredSettings, settingValues } from '../js/bake/src/__exact_env.mjs';
-
 import { inlineSettings } from '../js/bake/src/__exact_env.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));

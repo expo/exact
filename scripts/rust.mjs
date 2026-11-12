@@ -261,9 +261,16 @@ function rustGrants(compat) {
   if(scope.split('\n').map(s=>s.trim()).filter(Boolean).some(s=>!admitted.includes(s)))throw new Error('Rust source grants exceed the app ceiling');
   return scope;
 }
+/** The Rust module seam's ABI, read from the one place it is declared: the bake
+ *  writes the same constant into a Rust cohort and refuses a receipt of another. */
+export function rustAbi() {
+  const abi = /^pub const ABI: u32 = (\d+);$/m.exec(readFileSync(resolve(ROOT, 'logic/abi/src/lib.rs'), 'utf8'))?.[1];
+  if (!abi) throw new Error('logic/abi/src/lib.rs declares no `pub const ABI: u32`');
+  return Number(abi);
+}
 export function rustReceipt(app, compat, plan, module, target, executor) {
   const extension = executor === 'tiered' ? 'bin' : executor === 'wasm' ? 'wasm' : target.includes('apple') ? 'dylib' : target.includes('windows') ? 'dll' : 'so';
-  return { version: 1, kind: 'rust', abi: 9, appId: app.id, grants: rustGrants(compat), target, executor,
+  return { version: 1, kind: 'rust', abi: rustAbi(), appId: app.id, grants: rustGrants(compat), target, executor,
     source: nativeSource(app), plan: rustCard('app.plan', plan), module: rustCard(`app.module.${extension}`, module) };
 }
 

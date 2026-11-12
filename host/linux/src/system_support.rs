@@ -19,21 +19,23 @@ const STATE: &str = "exact.state";
 /// nameless drive contribute nothing. A fresh drive's
 /// tree is emptied first, once a process and before anything is written there
 /// (`picker::empty_fresh_tree`); one that cannot be emptied gives nothing,
-/// said at boot and again by the activation.
-pub(super) fn store_snapshot(app_id: &str, carried: bool) -> Vec<(String, Vec<u8>)> {
+/// said at boot and again by the activation. Beside it, the kept answers
+/// past the read budget, by name, for the runner to forget what it would
+/// had it read them (`Runner::forget_unread_kept`).
+pub(super) fn store_read(app_id: &str, carried: bool) -> (Vec<(String, Vec<u8>)>, Vec<String>) {
     // What an earlier host in this process committed is on disk before it is read back.
     super::store_writer::settle();
     if carried {
-        return Vec::new();
+        return Default::default();
     }
     // A tree that could not be emptied is not read: a fresh drive starts
     // with nothing, never with what the last one left (b6 review C1).
     if let Err(e) = crate::picker::empty_fresh_tree(app_id) {
         eprintln!("exact: {e:?}");
-        return Vec::new();
+        return Default::default();
     }
     let Ok(Some(root)) = crate::picker::store_root(app_id) else {
-        return Vec::new();
+        return Default::default();
     };
     let kv = ibex2::kv::FileStore::new(root.join("kv"));
     let mut out = Vec::new();
@@ -62,6 +64,7 @@ pub(super) fn store_snapshot(app_id: &str, carried: bool) -> Vec<(String, Vec<u8
     // each a kv scope of its own beside the secrets. No more kept answers
     // are read than the runner keeps together (LLP 1027 D4).
     let mut left = exact_runner::Store::KEPT_TOTAL_BYTES;
+    let mut unread = Vec::new();
     for (scope, prefix) in [
         (KEPT, exact_runner::Store::KEPT),
         (STATE, exact_runner::Store::STATE),
@@ -70,6 +73,7 @@ pub(super) fn store_snapshot(app_id: &str, carried: bool) -> Vec<(String, Vec<u8
             if let Ok(Some(value)) = ibex2::kv::KvStore::get(&kv, scope, &key) {
                 if scope == KEPT {
                     let Some(rest) = left.checked_sub(value.len()) else {
+                        unread.push(format!("{prefix}{key}"));
                         continue;
                     };
                     left = rest;
@@ -78,7 +82,13 @@ pub(super) fn store_snapshot(app_id: &str, carried: bool) -> Vec<(String, Vec<u8
             }
         }
     }
-    out
+    (out, unread)
+}
+
+/// [`store_read`]'s snapshot alone.
+#[cfg(test)]
+pub(super) fn store_snapshot(app_id: &str, carried: bool) -> Vec<(String, Vec<u8>)> {
+    store_read(app_id, carried).0
 }
 
 pub(super) fn secret_namespace(roots: &StoreRoots) -> Option<exact_data::secrets::Namespace> {

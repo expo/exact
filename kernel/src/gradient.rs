@@ -786,7 +786,7 @@ pub fn color_text(out: &mut String, color: ColorValue, mode: ColorText) {
         },
         ColorValue::Moving(..) => {
             let ([r, g, b], a) = color.moving_linear().unwrap_or_default();
-            let n = exact_color::number_text;
+            let n = exact_num::js;
             let _ = write!(out, "color(srgb-linear {} {} {}", n(r), n(g), n(b));
             if a < 1.0 {
                 let _ = write!(out, " / {}", n(a));

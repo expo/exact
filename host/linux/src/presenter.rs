@@ -75,6 +75,7 @@ mod pump;
 mod radio;
 mod range;
 mod range_frame;
+mod replace;
 #[cfg(test)]
 mod save_tests;
 mod select;
@@ -713,16 +714,6 @@ impl<D: DataSource> Presenter<D> {
         self.module = module;
         self.text = candidate_text.clone();
         self.brush.text = candidate_text;
-        self.parked.clear();
-        self.scroll.clear();
-        self.collection = collection::State::default();
-        self.contact = None;
-        self.retained_motion = None;
-        self.transform_geometry = Default::default();
-        self.arrange = None;
-        self.group = None;
-        self.brush.lift = Default::default();
-        self.page = (0.0, 0.0);
         self.images.reset();
         self.restore_focus(kept);
         let e = self.after_commit();
@@ -1258,42 +1249,6 @@ impl<D: DataSource> Presenter<D> {
     /// Whether a request is in flight.
     pub fn pending(&self) -> bool {
         self.host.runner().has_pending()
-    }
-
-    /// Another host took over, with its executor: it is measured as the
-    /// last was, given what the last was given, and counted.
-    pub(crate) fn replaced(&mut self) {
-        self.read_ranges();
-        self.scroll_end = Default::default();
-        self.give_clock();
-        self.modules_replaced();
-        self.brush.replaced();
-        // A new runner reuses view ids and node keys: an unbound control's
-        // own state, a choice or typed text (LLP 1069.001 D4), an edit to
-        // commit, a caret, an open menu, a hover, a held pointer, a picker's
-        // answer or a GPU surface is not its tree's, as Apple's reset and
-        // the web's rebuilt page have it.
-        self.picks_replaced();
-        self.chosen.clear();
-        self.controls.clear();
-        self.edited = None;
-        self.fields.clear();
-        self.field_drag = None;
-        self.range_drag = None;
-        self.field_history = Default::default();
-        self.ime = None;
-        self.window_focus = None;
-        self.close_menu();
-        self.hovered.clear();
-        self.pointer_held = None;
-        self.pointer_path.clear();
-        self.surfaces.replaced(&mut self.host);
-        self.control_bindings.clear();
-        self.hatch_reset();
-        self.top_replaced();
-        self.holds_changed();
-        self.hosts += 1;
-        self.measure();
     }
 
     /// Measure the work of every binary but a production one (LLP 1079

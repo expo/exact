@@ -465,11 +465,12 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         android.os.Trace.beginSection("exact replay")
         ops?.let { main.replay(canvas, it, 0, it.limit()) }
         android.os.Trace.endSection()
-        // First content is this frame: its mark goes before any turn this frame schedules.
+        // The first frame after startup counts even with no page ops (an empty page, or only bars).
+        // Its mark goes before any turn this frame schedules.
         // Asynchronous: a traversal this frame schedules (rows made on the worker draw at the next) holds posted
         // messages behind its barrier, and the mark then waited for that frame, which waits for this one's on
         // RenderThread (30-45 ms, the first with text): 82 ms where the same launch otherwise marked 47.
-        if (first && ops != null) { first = false; android.os.Handler.createAsync(android.os.Looper.getMainLooper()).post(onFirst); if (warm) postDelayed({ warmer.prepare() }, 300) }
+        if (first) { first = false; android.os.Handler.createAsync(android.os.Looper.getMainLooper()).post(onFirst); if (warm) postDelayed({ warmer.prepare() }, 300) }
         if (!owned) schedule()
     }
 

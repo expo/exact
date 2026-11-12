@@ -152,6 +152,11 @@ fn every_form_parses_into_its_own_space_and_serialises() {
     );
     assert_eq!(wide("lab(50% 40 59.5)").css(), "lab(50 40 59.5)");
     assert_eq!(wide("color(xyz 0 0 0)").css(), "color(xyz-d65 0 0 0)");
+    // Components are written as JavaScript's `String(n)` writes them.
+    assert_eq!(
+        wide("color(xyz 1e-7 0.5 1.5e21)").css(),
+        "color(xyz-d65 1e-7 0.5 1.5e+21)"
+    );
 }
 
 #[test]

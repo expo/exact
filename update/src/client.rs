@@ -537,6 +537,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// A check whose record write fails stages nothing, in this process or
+    /// the next: what `status` reports matches the record on disk.
+    #[test]
+    #[cfg(unix)]
+    fn a_check_whose_record_write_fails_stages_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = temp("record-write");
+        let mut client = Client::open_at(&base, &base, COMPAT, b"embedded", Some(ORIGIN)).unwrap();
+        let downloaded = client.begin_check().unwrap().fetch(&mut |url| {
+            Ok(if url.ends_with("exact.json") {
+                head(1, b"one")
+            } else {
+                b"one".to_vec()
+            })
+        });
+        let dir = client.dir().to_path_buf();
+        let mode = |bits| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(bits));
+        mode(0o555).unwrap();
+        let outcome = client.finish_check(downloaded);
+        mode(0o755).unwrap();
+        assert!(
+            matches!(&outcome, Outcome::Refused(why) if why.contains("cannot write")),
+            "{outcome}"
+        );
+        assert!(!client.status().staged);
+        assert_eq!(client.status().selected_seq, 0);
+        // The same head stages once the record can be written.
+        let downloaded = client.begin_check().unwrap().fetch(&mut |url| {
+            Ok(if url.ends_with("exact.json") {
+                head(1, b"one")
+            } else {
+                b"one".to_vec()
+            })
+        });
+        assert!(matches!(
+            client.finish_check(downloaded),
+            Outcome::Staged { seq: 1, .. }
+        ));
+        assert_eq!(client.status().selected_seq, 1);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn a_stripped_binary_and_a_bad_file_open_no_store() {
         let base = temp("stripped");

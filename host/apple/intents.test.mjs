@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { intentsSource } from './intents.mjs';
+import { intentsMetadata as metadataPass, intentsSource } from './intents.mjs';
 import { intentsMetadata } from './intents-metadata.mjs';
 
 // Input connections and type-specific metadata are sets and keyed pairs;
@@ -74,3 +74,18 @@ test.skipIf(process.platform !== 'darwin')('portable App Intents metadata matche
     expect(canonical(noShortcuts)).toEqual(canonical(JSON.parse(readFileSync(resolve(dir, 'Metadata.appintents/extract.actionsdata'), 'utf8'))));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 120000);
+
+test('the metadata pass runs the processor and toolchain of the Xcode xcrun selects', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-intents-tool-'));
+  const toolchain = '/Applications/Xcode-beta.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain';
+  const ran = [];
+  try {
+    expect(() => metadataPass({ moduleName: 'ExactIntents', dir, sdk: '/sdk', triple: 'arm64-apple-ios17.0', platform: 'ios',
+      deployment: '17.0', binary: resolve(dir, 'ExactIntents.o'), sources: [], values: resolve(dir, 'values'),
+      runApple: (command, args) => ran.push([command, args[args.indexOf('--toolchain-dir') + 1]]),
+      find: tool => ({ status: 0, stdout: `${toolchain}/usr/bin/${tool}\n` }) })).toThrow('wrote no');
+    expect(ran).toEqual([[`${toolchain}/usr/bin/appintentsmetadataprocessor`, toolchain]]);
+    expect(() => metadataPass({ dir, sources: [], runApple: () => {}, find: () => ({ status: 1, stdout: '', stderr: 'xcrun: error: unable to find utility' }) }))
+      .toThrow('unable to find utility');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

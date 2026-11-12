@@ -364,7 +364,7 @@ pub(crate) fn absolute(
                 Some(a) => component(a, Slot::Channel(1.0), &NO_CHANNELS, names)?,
                 None => 1.0,
             };
-            let n = exact_color::number_text;
+            let n = exact_num::js;
             return match exact_color::parse(&format!(
                 "color({id} {} {} {} / {})",
                 n(c[0]),
@@ -429,7 +429,7 @@ pub(crate) fn absolute(
         Some(a) => component(a, Slot::Channel(1.0), &NO_CHANNELS, names)?,
         None => 1.0,
     };
-    let n = exact_color::number_text;
+    let n = exact_num::js;
     let canonical = match space {
         MixSpace::Hsl | MixSpace::Hwb => {
             format!("{name}({} {}% {}% / {})", n(c[0]), n(c[1]), n(c[2]), n(a))

@@ -1,4 +1,4 @@
-# Pitfalls when writing exact2 apps
+# Pitfalls when writing Exact apps
 
 **Adding an entry:** only a pitfall you hit and reproduced on current `main`, written
 as symptom → cause → what to do, with where it was found. Delete the entry in the
@@ -642,7 +642,7 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 What a port writes from habit, what the compiler says, and what to write (the euxy port,
 2026-10-17: 19 of 50 compiles refused, most of them these). A warning builds; fix it anyway.
 
-| React Native writes | exact2 says | Write |
+| React Native writes | Exact says | Write |
 |---|---|---|
 | `line-height=20` | `lower-line-height-multiplier` (warning) | `line-height="20px"`: a bare number is a multiplier, as in CSS |
 | `color="rgba(0,0,0,0.5)"`, `"#00000080"` | `lower-colour-one-scheme` (warning) | a role (`-exact-secondary-label`, `-exact-fill`), `light-dark(<light>, <dark>)`, or nothing |
@@ -691,7 +691,7 @@ screen, 2026-10-16.)
   Lane sheet, scrolled to its end, left 58 points under Delete lane where the original
   left 24. Cause: a React Native `ScrollView` does not inset its content on iOS
   (`contentInsetAdjustmentBehavior` is `never`), so its `paddingBottom: 24` was the whole
-  gap and the last row sat over the home indicator. A route's last scroller in exact2 is
+  gap and the last row sat over the home indicator. A route's last scroller in Exact is
   inset by UIKit as a hand-built one is (`automatic`: the home indicator's 34 points, and
   the tab bar's height on a tab; a dialog sheet's outer scroller is `always`), and the
   ported padding adds to that. That inset is the platform's, as a hand-built table view in
@@ -1281,7 +1281,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   (`EXACT_VISION_FIXTURE`, `packages/barcode-detection/test/agent.mjs`). (LLP
   1133.027, 2026-10-26.)
 
-- **A host timing bug on iOS is chased with `NSLog` and rebuilds of exact2.** A
+- **A host timing bug on iOS is chased with `NSLog` and rebuilds of Exact.** A
   development build already journals what the host did: `logs` has `host:` lines for
   navigation (`willShow`, `didShow`, and whether the app, UIKit's Back or the edge swipe
   started it), sheets presented and dismissed, autofocus applied or skipped with what holds
@@ -1383,7 +1383,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   the agent's own `screenshot`, which targets the app's simulator. (Authoring
   bench, LLP 1087, t9-profile, 2026-10-07.)
 
-- **`axe tap` misses on an exact2 app about one time in three.** Its default
+- **`axe tap` misses on an Exact app about one time in three.** Its default
   style (FBSimulator `tapAt`) sometimes lands as nothing: a mute button toggled
   1 of 3, a drawer button did not open, and the app looked frozen until
   relaunched. Fix: `axe tap … --tap-style physical` (a real touch down and up),
@@ -1834,7 +1834,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `nav = top(nav).name == "shop" and (url == "/" or url.slice(0, 2) == "/?") ? replace(nav, url) : go(nav, url)`,
   so Back leaves the shop rather than stepping through each filter. (The same store, 2026-11-01.)
 
-## Working on exact2 itself
+## Working on Exact itself
 
 - **A CDP adapter re-sends known children and Styles stays empty.**
   `DOM.setChildNodes` replaces the frontend's node objects. Repeating it for
@@ -2062,7 +2062,7 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   dependencies in `logic/Cargo.toml`, not `.shells/logic/Cargo.toml`.
 
 A game's pitfalls (the world and its saves, game input, its tests, proof and setup)
-are in [Pitfalls when writing exact2 games](game-pitfalls.md).
+are in [Pitfalls when writing Exact games](game-pitfalls.md).
 
 
 ## Access hatches
