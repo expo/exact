@@ -559,6 +559,14 @@ extensions' factors; a model that uses either extension's textures
 `sheenColorTexture`, `sheenRoughnessTexture`) is refused by name, and so is one
 that lists either extension as required, which the glTF reader does not accept.
 
+Generated models can set `clearcoat_mask_from_alpha: true` to multiply the coat
+factor by the alpha channel of `metallic_roughness_texture`. Green and blue keep
+their roughness and metallic meanings; alpha is linear and uses that texture's
+UV transform. This lets paint or engravings stay uncoated without another draw
+or sampler. The default is false, so existing alpha channels keep their pixels
+and model bytes. A missing texture acts as alpha one. This packing is opt-in;
+the baker still refuses the glTF extensions' separate layer textures.
+
 A material with either layer draws in a *layered* pipeline, a variant key bit
 (`MODEL_LAYERED`) beside the others above, made on first use like them and with
 its own uniform-driven fallback; a material with neither never compiles or runs

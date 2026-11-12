@@ -108,7 +108,7 @@ fn model_shade(input:ModelVarying, front:bool, visibility:f32) -> vec4<f32> {
     if LAYERED && !MATTE {
         // The roughness floors keep the coat's GGX peak and the sheen's 1/alpha finite.
         let coat_normal=normalize(input.normal)*select(-1.0,1.0,front);
-        surface_layer=SurfaceLayer(clamp(baked.coat.x,0.0,1.0),clamp(baked.coat.y,0.045,1.0),clamp(baked.coat.z,0.07,1.0),max(baked.sheen.rgb,vec3(0.0)),coat_normal);
+        surface_layer=SurfaceLayer(clamp(baked.coat.x*select(1.0,mr.a,baked.coat.w>0.0),0.0,1.0),clamp(baked.coat.y,0.045,1.0),clamp(baked.coat.z,0.07,1.0),max(baked.sheen.rgb,vec3(0.0)),coat_normal);
         environment=layered_ambient(n,v,environment);
         // KHR_materials_clearcoat, "Emission": the coat darkens what the base emits.
         let under=shading(1.0-surface_layer.coat*coat_fresnel(max(dot(coat_normal,v),0.0001)));

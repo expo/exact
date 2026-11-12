@@ -906,7 +906,8 @@ fn baked(m: &MaterialData) -> Vec<f32> {
     for uv in m.uv_transforms {
         values.extend([uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], 0., 0.]);
     }
-    values.extend([m.clearcoat, m.clearcoat_roughness, m.sheen_roughness, 0.]);
+    let mask = if m.clearcoat_mask_from_alpha { 1. } else { 0. };
+    values.extend([m.clearcoat, m.clearcoat_roughness, m.sheen_roughness, mask]);
     values.extend(m.sheen_color);
     values.push(0.);
     values
