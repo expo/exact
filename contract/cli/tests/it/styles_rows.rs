@@ -538,7 +538,10 @@ fn user_select_text_and_all_compile_and_contain_is_refused_by_name() {
     let source = "component App\n  view\n    text \"x\" user-select=\"contain\"\n";
     let error = contract::compile(source).unwrap_err().to_string();
     assert!(error.contains("`user-select=\"contain\"`"), "{error}");
-    assert!(error.contains("auto, none, text and all"), "{error}");
+    assert!(
+        error.contains("Write one of auto, none, text, all"),
+        "{error}"
+    );
     assert!(!error.contains("unknown attribute"), "{error}");
 }
 

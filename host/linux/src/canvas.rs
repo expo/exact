@@ -916,6 +916,7 @@ impl Backend for Recorder {
             }
         }
         self.need(Some(bounds));
+        self.layers.row_drawn(id);
         let s = self.scale;
         self.ops.extend([ROW_DRAW, id]);
         self.f((origin.0 - ROW_PAD) * s);
@@ -1305,6 +1306,17 @@ impl<D: DataSource + Default> CanvasHost<D> {
         let since = self.tracks_epoch;
         self.tracks_epoch = epoch;
         for (id, key, base) in alive {
+            // An indicator's tracks change only with the device's motion
+            // setting: sent with its layer, and again when that changes.
+            if crate::host::lower::is_spinner(key) {
+                let words = self.p.host().spinner_tracks();
+                if self.tracks.get(&id) != Some(&words) {
+                    ops.extend([layer::TRACKS, id, words.len() as u32]);
+                    ops.extend(&words);
+                    self.tracks.insert(id, words);
+                }
+                continue;
+            }
             let key = exact_kernel::motion::node_key(key);
             if self.tracks.contains_key(&id)
                 && (epoch == since || !self.p.host().lowered_changed_after(key, since))

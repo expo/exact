@@ -71,6 +71,89 @@ fn app(dir: &Dir, uses: &[&str], design: Option<&str>) -> PathBuf {
 
 const READING: &str = "tamber reading\n\ntheme\n  reading.card = #112233\n  reading.gap = 12px\n  reading.unused = #445566\n";
 
+#[test]
+fn a_missing_package_design_watches_its_path_without_watching_the_package_tree() {
+    const CHILD: &str = "EXACT_PACKAGE_DESIGN_WATCH_TEST";
+    if let Some(root) = std::env::var_os(CHILD) {
+        contract::rerun_if_changed(Path::new(&root));
+        return;
+    }
+    let dir = Dir::new("watch-inputs");
+    package(&dir, "reading", None);
+    let root = app(&dir, &["reading"], None);
+    let pkg = dir.0.join("app/node_modules/@acme/reading");
+    dir.write("app/node_modules/@acme/reading/test/drives.mjs", "test");
+    let graph = contract::source_graph(&root);
+    assert!(graph.errors.is_empty(), "{:?}", graph.errors);
+    assert!(graph.consulted.contains(&pkg.join("reading.tamber")));
+    assert!(graph.consulted.contains(&pkg.join("package.json")));
+    assert!(graph
+        .sources
+        .iter()
+        .any(|s| s.path == pkg.join("index.contract")));
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "package_designs::a_missing_package_design_watches_its_path_without_watching_the_package_tree",
+            "--nocapture",
+        ])
+        .env(CHILD, &root)
+        .env("EXACT_BAKE_INPUTS", "fixture")
+        .env("CARGO_MANIFEST_DIR", &dir.0)
+        .env("EXACT_BAKE_PACKAGE_DIR", &dir.0);
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let paths: Vec<_> = stdout
+        .lines()
+        .filter_map(|line| line.strip_prefix("cargo:rerun-if-changed="))
+        .map(PathBuf::from)
+        .collect();
+    for name in ["package.json", "index.contract"] {
+        assert!(paths.contains(&pkg.join(name)), "{stdout}");
+    }
+    let optional = format!(
+        "cargo:metadata=exact-optional-input={}",
+        pkg.join("reading.tamber").display()
+    );
+    assert!(stdout.lines().any(|line| line == optional), "{stdout}");
+    assert!(!paths.contains(&pkg.join("reading.tamber")), "{stdout}");
+    assert!(!paths.contains(&pkg), "{stdout}");
+    // A dependency inherits the builder's environment, but its watches are
+    // outside the selected package's bake revision and linked-bake record.
+    command.env("CARGO_MANIFEST_DIR", &pkg);
+    for mode in ["bake", "linked", "direct"] {
+        if mode == "linked" {
+            command.env_remove("EXACT_BAKE_INPUTS");
+            command.env("EXACT_BAKED", dir.0.join("baked"));
+        } else if mode == "direct" {
+            command.env_remove("EXACT_BAKE_PACKAGE_DIR");
+            command.env_remove("EXACT_BAKED");
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let paths: Vec<_> = stdout
+            .lines()
+            .filter_map(|line| line.strip_prefix("cargo:rerun-if-changed="))
+            .map(PathBuf::from)
+            .collect();
+        assert!(
+            paths.contains(&pkg),
+            "{mode} must watch the existing parent: {stdout}"
+        );
+        assert!(!paths.contains(&pkg.join("reading.tamber")), "{stdout}");
+        assert!(stdout.lines().any(|line| line == optional), "{stdout}");
+    }
+    dir.write("app/node_modules/@acme/reading/reading.tamber", READING);
+    let graph = contract::source_graph(&root);
+    assert!(graph
+        .sources
+        .iter()
+        .any(|s| s.path == pkg.join("reading.tamber")));
+}
+
 fn plan(root: &Path) -> String {
     format!(
         "{:?}",

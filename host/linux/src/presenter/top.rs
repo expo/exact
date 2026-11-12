@@ -49,7 +49,7 @@ mod overlay;
 pub(crate) mod shape;
 pub use look::Target;
 use look::{Inputs, Layout};
-pub use shape::{Plan, Row};
+pub use shape::{Entry, Plan, Row};
 
 /// What a shell's windows are drawn from: it records what `paint` draws
 /// for a surface of `size` points at `scale` pixels a point, and returns
@@ -1456,11 +1456,21 @@ impl<D: DataSource> Presenter<D> {
             Plan::Alert { title, message, .. } => (title.clone(), message.clone()),
             Plan::Menu(_) => (None, None),
         };
+        // A menu's section titles, in order.
+        let headers: Vec<&str> = match shown.plan {
+            Plan::Menu(entries) => (entries.iter())
+                .filter_map(|e| match e {
+                    shape::Entry::Header(title, _) => Some(title.as_str()),
+                    _ => None,
+                })
+                .collect(),
+            Plan::Alert { .. } => Vec::new(),
+        };
         serde_json::json!({
             "serial": shown.serial,
             "kind": match shown.kind { SurfaceKind::Alert => "alert", SurfaceKind::Menu => "menu" },
             "node": shown.node, "title": title, "message": message,
-            "w": r2(shown.size.0), "h": r2(shown.size.1), "rows": rows,
+            "w": r2(shown.size.0), "h": r2(shown.size.1), "rows": rows, "headers": headers,
         })
     }
 }
@@ -1472,3 +1482,7 @@ mod tests;
 #[cfg(test)]
 #[path = "top_invocation_tests.rs"]
 mod invocation_tests;
+
+#[cfg(test)]
+#[path = "top_section_tests.rs"]
+mod section_tests;

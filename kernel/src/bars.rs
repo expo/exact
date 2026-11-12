@@ -33,6 +33,8 @@ use crate::id::ViewId;
 use crate::kernel::{Kernel, NodeRef};
 use crate::props::PropValue;
 
+mod symbols;
+
 // Paint predicates are broader than the projection rules below.
 impl NodeRef<'_> {
     /// The neutral sheet removes an ordinary bar button's edge anywhere
@@ -87,6 +89,10 @@ pub mod fact {
     /// dimmed, whether or not anything would press it (a "● Clock" written
     /// as one); never the title's tap.
     pub const DISABLED: u32 = 1 << 12;
+    /// A site's `nav`, including one inside a menu.
+    pub const NAV: u32 = 1 << 13;
+    /// An `href` or `role="link"`.
+    pub const LINK: u32 = 1 << 14;
     /// A heading's `aria-level`, 1 to 6, shifted this far; 0 where it says
     /// none (ARIA's default is then 2).
     pub const LEVEL: u32 = 16;
@@ -112,6 +118,11 @@ pub mod fact {
             ),
             (role == Some("tablist"), TABLIST),
             (role == Some("status"), STATUS),
+            (props.str(PropId::SemanticTag) == Some("nav"), NAV),
+            (
+                props.str(PropId::Href).is_some() || role == Some("link"),
+                LINK,
+            ),
             (
                 props.str(PropId::Popover).is_some()
                     || props.str(PropId::SemanticTag) == Some("dialog"),
@@ -153,6 +164,22 @@ pub trait Tree {
     fn facts(&self, node: Self::Node) -> u32;
     /// Its children, in order.
     fn children(&self, node: Self::Node) -> Vec<Self::Node>;
+}
+
+/// LLP 1153 D8: a site's header holds a `nav` anywhere, or more than one
+/// link outside a popover or dialog.
+pub fn site_header<T: Tree>(tree: &T, header: T::Node) -> bool {
+    fn holds<T: Tree>(tree: &T, node: T::Node, menu: bool, links: &mut u32) -> bool {
+        tree.children(node).into_iter().any(|child| {
+            let facts = tree.facts(child);
+            let menu = menu || facts & fact::LAYER != 0;
+            if facts & fact::LINK != 0 && !menu {
+                *links += 1;
+            }
+            facts & fact::NAV != 0 || *links > 1 || holds(tree, child, menu, links)
+        })
+    }
+    holds(tree, header, false, &mut 0)
 }
 
 /// A header-shaped route's header, as a bar shows it.

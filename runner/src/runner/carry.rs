@@ -21,6 +21,11 @@ pub struct Carried {
     pub resources: Vec<(String, String, Vec<Value>, Value)>,
     /// (Resource name, source name) pairs whose answer depends on the store.
     pub store_readers: Vec<(String, String)>,
+    /// Of `store_readers`, those asked in the run that carried them, and
+    /// whether each read what the store holds: one that only drew randomness
+    /// is not asked again by a store change after the reload either
+    /// (LLP 1069.005 D2).
+    pub read_contents: Vec<(String, String, bool)>,
     /// The clock, milliseconds.
     pub now_ms: f64,
     /// The store's kept values (LLP 1018): what the host has persisted.
@@ -88,6 +93,19 @@ impl<D: super::DataSource> super::Runner<D> {
                     (
                         self.plan.str(resource.name).to_string(),
                         self.plan.str(resource.source).to_string(),
+                    )
+                })
+                .collect(),
+            read_contents: self
+                .resource_rows()
+                .take(self.declared_resources().len())
+                .enumerate()
+                .filter(|(i, _)| self.resources[*i].store_reader && self.resources[*i].reads_known)
+                .map(|(i, resource)| {
+                    (
+                        self.plan.str(resource.name).to_string(),
+                        self.plan.str(resource.source).to_string(),
+                        self.resources[i].contents_reader,
                     )
                 })
                 .collect(),

@@ -211,7 +211,7 @@ pub(crate) fn describe(e: &StyleValueError) -> String {
         StyleValueError::UnknownEnumValue { style: StyleId::FontVariantLigatures } => "expected `normal`, `none`, or a space-separated list taking at most one of each pair: `common-ligatures` or `no-common-ligatures`, `discretionary-ligatures` or `no-discretionary-ligatures`, `historical-ligatures` or `no-historical-ligatures`, `contextual` or `no-contextual`".into(),
         StyleValueError::UnknownEnumValue { style } => format!(
             "expected one of {}",
-            style.enum_names().iter().map(|name| format!("{name:?}")).collect::<Vec<_>>().join(", ")
+            vocab::authored_names(*style).iter().map(|name| format!("{name:?}")).collect::<Vec<_>>().join(", ")
         ),
         StyleValueError::AutoNotAdmitted { .. } => "`auto` is not admitted here".into(),
         StyleValueError::OutOfRange { .. } => "out of the row's range".into(),
@@ -364,6 +364,25 @@ pub(crate) fn check_position_area(attrs: &[Attr]) -> Result<(), LowerError> {
         "lower-css-position-area",
         "`position-area` and `position-try-fallbacks` are admitted on a `popover` only: its anchor is the button whose `popovertarget` opens it. `anchor-name` and `position-anchor` are not implemented",
         a.span,
+    )
+}
+/// A keyword CSS defines that no presenter builds: the row's reason, then
+/// the keywords an author may write instead.
+fn refused_keyword(row: StyleId, name: &str, v: &str, span: Span) -> Result<(), LowerError> {
+    let (id, why) = match row {
+        // @ref LLP 1115.000 D11.6 — `text` and `all` are honoured where a
+        // host has text selection (the web, macOS, iOS).
+        StyleId::UserSelect => ("lower-css-user-select", "it keeps a selection from leaving its element, and the native presenters' text selection ownership has no such bound"),
+        StyleId::WrapFlow => ("lower-attr-value", "CSS Exclusions defines it, and exact2 v1 builds `both` (an exclusion) and `auto` (none)"),
+        _ => ("lower-attr-value", "no presenter builds it"),
+    };
+    err(
+        id,
+        format!(
+            "`{name}=\"{v}\"` is not implemented: {why}. Write one of {}",
+            vocab::authored_names(row).join(", ")
+        ),
+        span,
     )
 }
 /// Refuse `paragraphDirs` except on a `textarea` with a literal
@@ -519,19 +538,18 @@ fn style_value(
                     span,
                 );
             }
-            // @ref LLP 1115.000 D11.6 — `text` and `all` are honoured where a
-            // host has text selection (the web, macOS, iOS); `contain` names
-            // a selection behaviour no native presenter has.
-            if rows.contains(&StyleId::UserSelect) && v == "contain" {
-                return err("lower-css-user-select", "CSS `user-select=\"contain\"` is not implemented by the native presenters: it keeps a selection from leaving its element, and their text selection ownership has no such bound. Supported values are auto, none, text and all", span);
+            // @ref LLP 1043.000 §3 D1 — the schema's `refused` keywords, which
+            // the wire keeps and `contract vocab` leaves out.
+            if let Some(row) = rows
+                .iter()
+                .find(|row| row.refused_enum_names().contains(&v.trim()))
+            {
+                return refused_keyword(*row, &a.name, v.trim(), span);
             }
             if rows.contains(&StyleId::PositionArea)
                 && !StyleId::PositionArea.enum_names().contains(&v.trim())
             {
                 return err("lower-css-position-area", format!("`position-area=\"{v}\"`: exact2 places an invoker's popover in a subset of CSS `position-area`: {}. Logical areas and other spellings are not implemented by the native top layers", StyleId::PositionArea.enum_names().join(", ")), span);
-            }
-            if rows.contains(&StyleId::WrapFlow) && !matches!(v.as_str(), "auto" | "both") {
-                return err("lower-attr-value", "unsupported `wrap-flow` value: CSS Exclusions defines it; exact2 v1 implements `both` (or `auto`)", span);
             }
             if rows.contains(&StyleId::FlexBasis)
                 && matches!(

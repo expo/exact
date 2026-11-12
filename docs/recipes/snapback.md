@@ -1,5 +1,9 @@
 # Recipe: a Snapback backend (shared server data)
 
+This needs the Snapback client at `<exact2>/snapback4/`, which the exact2
+repository does not include; in a checkout without it, `exact new --snapback`
+and `bun exact.mjs snapback` refuse, naming the missing client.
+
 For shared server data, `bun <exact2>/scripts/exact.mjs new app --snapback
 [--port <n>]` from the backend’s directory writes a guestbook and wires its
 driver, generated operations and device. The origin defaults to 4400.
@@ -13,6 +17,9 @@ matching `net.fetch` line and a `net.websocket` line at the same host (`ws:` for
 `http:`, `wss:` for `https:`). For grants keyed by origin, the selected origin
 must have its own entry, except that a development build may take a loopback entry
 for the same server at a LAN address; see [keyed grants](../reference.md#bake-and-deliver-a-typescript-module).
+A native drive refuses a build baked for another backend than the one selected
+(or `app.ts`'s literal `origin`); `--backend <url>` drives it. A build with a
+literal `origin` and no backend record must be rebuilt.
 Password sign-in, stored sessions and refresh with Contract time are
 in [the adapter guide](../../snapback4/README.md#personas-and-password-accounts).
 For a server-only schema, add `--online`; `snapback` and `update` preserve it.

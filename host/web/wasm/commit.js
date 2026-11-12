@@ -63,6 +63,9 @@ function apply(batch) {
         case "theme":
           (document.getElementById("exact-theme") ?? document.head.appendChild(Object.assign(document.createElement("style"), { id: "exact-theme" }))).textContent = op.css;
           break;
+        case "large-title":
+          root.style.setProperty("--exact-large-title-size", `${op.size}px`);
+          break;
         // LLP 1055 D7: the page's @keyframes; LLP 1121 D8: a view's state looks (src/host/looks.rs); LLP 1095 D4: the theme's :root rule
         case "language":
           if (op.lang) {
@@ -405,7 +408,7 @@ function apply(batch) {
           // forgot it (`letGo`), as the native executor does: a write that
           // was sent was sent, and runs on, uncounted (LLP 1016 D5).
           const requestIncarnation = host.incarnation, controller = new AbortController(), started = performance.now();
-          let p, first, messages = 0;
+          let p, first, messages = 0, batch = [];
           const opened = new Promise((r) => {
             first = r;
           });
@@ -422,11 +425,20 @@ function apply(batch) {
             active: () => requestIncarnation === host.incarnation,
             // A stream's message (LLP 1016.000): after its first, the stream is open, not in flight, so `clock settle`
             // stops waiting on it (D5), an upload only at its reply — what is counted ends there, so a wait already racing it wakes (LLP 1069.004).
+            // Messages that arrive together (`more`) are one delivery, one commit (D4; host.rs `outcome_from`).
             message: (m) => {
               if (messages++ === 0) {
                 first();
               }
-              safelyFulfill(requestIncarnation, op.ticket, 8, 0, `event: ${m.event}\nid: ${m.id}\ncoalesced: ${m.coalesced}`, encoder.encode(m.data));
+              batch.push(m);
+              if (m.more) {
+                return;
+              }
+              const data = batch.map((m) => encoder.encode(m.data)), body = new Uint8Array(data.reduce((n, d) => n + d.length, 0));
+              data.reduce((at, d) => (body.set(d, at), at + d.length), 0);
+              const head = batch.map((m, i) => `event: ${m.event}\nid: ${m.id}\ncoalesced: ${m.coalesced}\nprotocol: ${m.protocol ?? ""}${batch.length > 1 ? `\nlength: ${data[i].length}` : ""}`).join("\n\n");
+              batch = [];
+              safelyFulfill(requestIncarnation, op.ticket, 8, 0, head, body);
             }
           };
           controllers.add(controller);
@@ -771,6 +783,8 @@ function apply(batch) {
             }
           } else if (op.name === "setWindowOpacity") {
             log("setWindowOpacity refused: a page cannot change its window's opacity");
+          } else if (op.name === "hideWindow") {
+            log("hideWindow refused: a page cannot hide its window");
           } else if (!/^(playSound|playSounds|stopSounds|sendMIDI|requestMIDIAccess)$/.test(op.name)) {
             console.warn(`exact: unknown command ${op.name}`);
           }

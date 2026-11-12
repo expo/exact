@@ -267,8 +267,11 @@ private struct LiveRoot: View {
 @main struct ExactWatch: App {
     init() {
         LaunchPhases.mark("main")
-        if Bundle.main.object(forInfoDictionaryKey: "ExactWatchPlan") != nil { EarlyBoot.start() }
+        // The boot, on another thread, reads the app group's variables once to
+        // bind its stores, so they are set first: the group's stores, which the
+        // complications read, on every launch.
         WidgetContainer.configure()
+        if Bundle.main.object(forInfoDictionaryKey: "ExactWatchPlan") != nil { EarlyBoot.start() }
     }
     var body: some Scene {
         WindowGroup {

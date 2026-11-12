@@ -88,6 +88,7 @@ package final class ChainingScrollView: NSScrollView {
             userInterfaceLayoutDirection = owner.userInterfaceLayoutDirection
         }
         super.tile()
+        insetScrollersFromChrome()
         guard let owner = pointerOwner else { return }
         // Clip geometry can differ through rounding or insets even without
         // a scrollbar. Only a visible legacy scroller occupies a gutter.
@@ -384,6 +385,15 @@ final class RangeClipView: NSClipView {
         }
         super.scroll(to: NSPoint(x: clamp(newOrigin.x, document.minX - inset.left, document.maxX + inset.right - size.width),
                                  y: clamp(newOrigin.y, document.minY - inset.top, document.maxY + inset.bottom - size.height)))
+    }
+}
+extension Presenter {
+    /// Every scroller's insets from the window's chrome again, after the
+    /// title bar or a scroll view's place in the window changed (a batch's
+    /// frames, the toolbar, full screen) without the scroll view tiling.
+    func insetScrollersFromChrome() {
+        viewport.insetScrollersFromChrome()
+        for id in scrollers { views[id]?.scroll?.insetScrollersFromChrome() }
     }
 }
 #endif

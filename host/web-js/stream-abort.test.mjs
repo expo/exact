@@ -356,3 +356,58 @@ test('a JS upload with effective only-if-cached fails before sending; a forced u
     rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+for (const protocols of [false, true]) test(`private-field option getters keep their receiver ${protocols ? 'with' : 'without'} protocols`, async () => {
+  const { fetch: appFetch, answering } = await import(at(dir, 'ts-fetch.js'));
+  const caller = new AbortController();
+  class Options {
+    #mapper = event => event.data;
+    #signal = caller.signal;
+    #redirect = 'manual';
+    exactProtocols = ['events.v1'];
+    get exactStream() { return this.#mapper; }
+    get signal() { return this.#signal; }
+    get redirect() { return this.#redirect; }
+  }
+  const options = new Options();
+  if (!protocols) delete options.exactProtocols;
+  answering.call = { turn: true };
+  try {
+    void appFetch('wss://example.test/events', options).catch(() => {});
+    const registered = answering.call.stream;
+    expect(registered).toBeDefined();
+    expect(registered.init).toBe(options);
+    expect(registered.init.exactStream).toBe(options.exactStream);
+    expect(registered.init.signal).toBe(caller.signal);
+    expect(registered.redirect).toBe('manual');
+    const stream = new AbortController();
+    const ended = open(registered, v => v, null, () => {}, stream);
+    const reason = new Error('cancelled'); caller.abort(reason);
+    expect(stream.signal.reason).toBe(reason);
+    await ended;
+  } finally { answering.call = null; }
+});
+
+for (const inherited of [true, false]) test(`protocols preserve ${inherited ? 'inherited' : 'non-enumerable'} stream options and cancellation`, async () => {
+  const { fetch: appFetch, answering } = await import(at(dir, 'ts-fetch.js'));
+  const caller = new AbortController(), mapper = e => e.data;
+  const members = { exactStream: mapper, signal: caller.signal, redirect: 'manual' };
+  const options = inherited ? Object.create(members) : Object.defineProperties({}, Object.fromEntries(Object.entries(members).map(([key, value]) => [key, { value }])));
+  const protocols = ['events.v1']; options.exactProtocols = protocols;
+  answering.call = { turn: true };
+  try {
+    void appFetch('ws://example.test/events', options).catch(() => {});
+    const registered = answering.call.stream;
+    expect(registered).toBeDefined();
+    expect(registered.init.exactStream).toBe(mapper);
+    expect(registered.init.signal).toBe(caller.signal);
+    expect(registered.redirect).toBe('manual');
+    protocols.push('later');
+    expect(registered.protocols).toEqual(['events.v1']);
+    const stream = new AbortController();
+    const ended = open(registered, v => v, null, () => {}, stream);
+    const reason = new Error('cancelled'); caller.abort(reason);
+    expect(stream.signal.reason).toBe(reason);
+    await ended;
+  } finally { answering.call = null; }
+});

@@ -454,6 +454,21 @@ test('two copies of a new game derive byte-identical shell locks from the SDK lo
   } finally {rmSync(root,{recursive:true,force:true});}
 }, 120000);
 
+test('Rivals\' captured lock resolves its generated hosts without changing dependencies', async () => {
+  const {prepareGame, gameDefaults} = await import('./app/shells.mjs');
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'rivals-lock-')));
+  const dir = resolve(root, 'rivals'), source = resolve(import.meta.dir, 'games/rivals');
+  try {
+    mkdirSync(dir);
+    for (const entry of ['app.json', 'Cargo.lock', 'logic'])
+      cpSync(resolve(source, entry), resolve(dir, entry), {recursive:true});
+    const captured = readFileSync(resolve(dir, 'Cargo.lock'), 'utf8');
+    prepareGame(dir, gameDefaults(dir).game);
+    assert.equal(readFileSync(resolve(dir, 'Cargo.lock'), 'utf8'), captured);
+    assert.equal(readFileSync(resolve(dir, '.shells/Cargo.lock'), 'utf8'), captured);
+  } finally {rmSync(root, {recursive:true, force:true});}
+});
+
 test('game and generated shell workspaces inherit every root vendor patch', async () => {
   const {outsideWorkspaceProblems} = await import('../scripts/app.mjs');
   assert.deepEqual(outsideWorkspaceProblems(import.meta.dir), []);

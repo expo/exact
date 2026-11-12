@@ -141,6 +141,7 @@ impl Parser {
     }
 
     pub(super) fn unary(&mut self) -> R<Expr> {
+        self.refuse_update_operator()?;
         let op = if self.at_punct("-") {
             UnOp::Neg
         } else if self.at_punct("!") || self.at_ident("not") {
@@ -160,8 +161,11 @@ impl Parser {
     pub(super) fn postfix(&mut self) -> R<Expr> {
         let mut e = self.primary()?;
         loop {
-            // `xs[i]`, `s[0]`: the web's bracket indexing, directly after its value.
             let (last, next) = (self.tokens[self.pos - 1].span, self.peek().span);
+            if next.line == last.line {
+                self.refuse_update_operator()?;
+            }
+            // `xs[i]`, `s[0]`: the web's bracket indexing, directly after its value.
             if self.at_punct("[") && next.line == last.line && next.col == last.end_col {
                 return self.err(
                     "syntax-refused-idiom",
@@ -212,6 +216,29 @@ impl Parser {
             };
         }
         Ok(e)
+    }
+
+    // Only expression positions distinguish updates from CSS's dashed names.
+    // Keep the signs separate in the lexer for `color-profile --brand`.
+    fn refuse_update_operator(&self) -> R<()> {
+        let first = self.peek();
+        let Some(second) = self.tokens.get(self.pos + 1) else {
+            return Ok(());
+        };
+        if let (TokenKind::Punct(sign @ ("-" | "+")), TokenKind::Punct(other)) =
+            (&first.kind, &second.kind)
+        {
+            if sign == other
+                && first.span.line == second.span.line
+                && first.span.end_col == second.span.col
+            {
+                return self.err(
+                    "syntax-refused-idiom",
+                    format!("Contract has no `{sign}{sign}`: write `n {sign} 1`, or `n = n {sign} 1` in an action; for double negation write `-(-n)` or `- -n`"),
+                );
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn primary(&mut self) -> R<Expr> {

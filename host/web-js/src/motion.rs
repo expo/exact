@@ -36,6 +36,20 @@ impl Em<'_> {
         }
     }
 
+    /// Hands the runtime the probes through which each commit reads bound exits
+    /// and layout transitions (presence-bindings.js), before the first commit
+    /// builds the view: only a plan that binds one links them.
+    pub(super) fn presence_bindings(&mut self, body: &mut String) {
+        if ["px", "lt"]
+            .iter()
+            .any(|name| self.uses.names.contains(*name))
+        {
+            let install = self.uses.rt("usePresenceBindings");
+            let probes = self.uses.rt("presenceUse");
+            let _ = write!(body, "{install}({probes}());");
+        }
+    }
+
     /// Whether the motion engine follows node `i`: one a swipe holds, a
     /// swipe's indicator, or one whose `transition` can be a spring (css.rs
     /// leaves springs to the engine).
@@ -94,6 +108,7 @@ impl Em<'_> {
             (StyleId::Rotate, "0"),
             (StyleId::Opacity, "1"),
             (StyleId::Transition, "\"\""),
+            (StyleId::TranslateVelocity, "null"),
         ] {
             values.push(match binding(id as u16, BindingKind::Style) {
                 None => initial.to_string(),

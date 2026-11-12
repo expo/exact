@@ -39,6 +39,14 @@ export const pageTable = () => globalThis.exact.nativeModule();
 export function pageModule({ changed, agent, now }) {
   page ??= globalThis.exact.pageNative(true, { changed, ready: () => true, generation: () => 0, agent, now });
   return page.then(p => ({
-    later: request => p.later(btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify(request))))).then(JSON.parse),
+    later: request => p.later(base64(new TextEncoder().encode(JSON.stringify(request)))).then(JSON.parse),
   }));
+}
+
+/** Bytes as base64, a slice at a time: spreading a whole request into one
+ * `String.fromCharCode` call overflows the stack past a few hundred KB. */
+function base64(bytes) {
+  let text = '';
+  for (let i = 0; i < bytes.length; i += 16384) text += String.fromCharCode(...bytes.subarray(i, i + 16384));
+  return btoa(text);
 }

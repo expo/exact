@@ -102,6 +102,7 @@ pub struct Mixed<J, R> {
     javascript: J,
     rust: R,
     sources: BTreeMap<String, bool>,
+    javascript_reached: bool,
     app_id: String,
     grants: String,
     revision: String,
@@ -240,6 +241,7 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
             javascript,
             rust,
             sources,
+            javascript_reached: true,
             app_id,
             grants,
             revision,
@@ -577,13 +579,16 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
     }
 
     fn preload(&self) -> Result<bool, DataError> {
-        let javascript = self.javascript.preload()?;
+        let javascript = !self.javascript_reached || self.javascript.preload()?;
         let rust = self.rust.preload()?;
         Ok(javascript && rust)
     }
     /// Wakes when either loading half finishes, so a failure in one is seen
     /// while the other still loads.
     fn when_preloaded(&self, wake: Box<dyn FnOnce() + Send>) {
+        if !self.javascript_reached {
+            return self.rust.when_preloaded(wake);
+        }
         match (self.javascript.preload(), self.rust.preload()) {
             (Ok(false), Ok(false)) => {
                 type Wake = Box<dyn FnOnce() + Send>;
@@ -939,7 +944,7 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         Some(&self.revision)
     }
     fn ready(&self) -> bool {
-        self.javascript.ready() && self.rust.ready()
+        (!self.javascript_reached || self.javascript.ready()) && self.rust.ready()
     }
 
     /// Both halves' rosters (LLP 1056 D1); a name in both is the bake's
@@ -995,6 +1000,16 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
     }
 
     fn bind(&mut self, plan: &Plan) {
+        self.javascript_reached = plan
+            .sources
+            .iter()
+            .any(|row| self.sources.get(plan.str(row.name)) == Some(&false))
+            || plan.surfaces.iter().any(|row| {
+                self.javascript
+                    .canvas_surfaces()
+                    .iter()
+                    .any(|(name, _)| name == plan.str(row.name))
+            });
         self.javascript.bind(plan);
         self.rust.bind(plan);
     }
@@ -1008,12 +1023,16 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
     }
 
     fn activate(&mut self) -> Result<(), DataError> {
-        self.javascript.activate()?;
+        if self.javascript_reached {
+            self.javascript.activate()?;
+        }
         self.rust.activate()
     }
 
     fn activate_for_validation(&mut self) -> Result<(), DataError> {
-        self.javascript.activate_for_validation()?;
+        if self.javascript_reached {
+            self.javascript.activate_for_validation()?;
+        }
         self.rust.activate_for_validation()
     }
 

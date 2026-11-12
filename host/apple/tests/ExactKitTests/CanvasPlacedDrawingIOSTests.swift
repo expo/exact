@@ -10,6 +10,7 @@ private var placedIndices: Set<UInt32> = []
 /// The indices the fake surface hides (`gpu_placement` 2).
 private var hiddenIndices: Set<UInt32> = []
 private let placedShift: Float = 100
+private var capturedChildPixels: [[UInt8]]?
 
 /// A canvas child its surface places (LLP 1014 D5) is drawn by the surface,
 /// so UIKit must not draw it at its own box; that is done without alpha 0,
@@ -20,7 +21,7 @@ private let placedShift: Float = 100
 ///   bun host/apple/build.mjs --test --ios --only CanvasPlacedDrawingIOSTests
 final class CanvasPlacedDrawingIOSTests: XCTestCase {
     override class func setUp() { super.setUp(); ExactSurfaces.install() } // LLP 1047.001 D4
-    override func setUp() { placedIndices = []; hiddenIndices = [] }
+    override func setUp() { placedIndices = []; hiddenIndices = []; capturedChildPixels = nil }
 
     private struct Deck {
         let session: ExactSession, host: CanvasesHost, canvas: NodeView, overlay: PlainView, window: UIWindow
@@ -33,7 +34,13 @@ final class CanvasPlacedDrawingIOSTests: XCTestCase {
             render: { _, _, _, _, _ in 0 }, dirty: { _ in 0 }, destroy: { _ in },
             texture: { _, _, _, _, _ in 0 }, textureMetal: nil, sync: nil,
             childrenMode: { _ in 3 }, readback: { _, _, _, _, _, _, _ in 0 },
-            child: { _, _, _, _, _, _, _, _, _, _, _, _ in 0 }, childrenCount: { _, _ in 0 },
+            child: { _, _, _, _, _, _, _, _, w, h, bytes, _ in
+                if capturedChildPixels != nil, let bytes, w > 0, h > 0 {
+                    let at = Int((h / 2 * w + w / 2) * 4)
+                    capturedChildPixels?.append(Array(UnsafeBufferPointer(start: bytes + at, count: 4)))
+                }
+                return 0
+            }, childrenCount: { _, _ in 0 },
             placement: { _, index, out, _ in
                 if hiddenIndices.contains(index) { return 2 }
                 guard placedIndices.contains(index) else { return 0 }
@@ -348,11 +355,95 @@ final class CanvasPlacedDrawingIOSTests: XCTestCase {
         XCTAssertTrue(picture.isHidden, "placed, its picture still shows only through the surface")
     }
 
-    /// The CPU capture raises a child's alpha to 1 and puts it back
-    /// (`Capture.draw`): for a child at its author's `opacity: 0` that is no
-    /// change of its transparency, so its canvas is not asked to capture
-    /// again, which would raise and put it back again, and so on. Placed or
-    /// left in place, the capture settles; an author's change still asks.
+    func testLayerFiltersReachCanvasTexturesAfterStyleBatches() throws {
+        let d = try deck("canvas-opacity-style-batch")
+        defer { d.session.destroy() }
+        try XCTUnwrap(d.host.entries[100]).through = true
+        let p = d.session.presenter
+        let child = node(101, p, CGRect(x: 40, y: 40, width: 100, height: 100), in: d.overlay)
+        let nested = node(102, p, child.bounds, in: child)
+        paint(.red, into: nested)
+        placedIndices = [0]
+        p.apply(wireBatch([["op": "present", "id": 101, "property": "opacity", "x": 0.8]]))
+        d.frame()
+        capturedChildPixels = []
+        func opacity(_ factor: Double) -> [String: Any] {
+            ["p": [0, 0, 0, 0, 1, 9, -1, -3, -1e6, -1e6, 2e6, 2e6, 0, 0, 0, 0, 1, 2, 0, factor]]
+        }
+        func restyle(_ id: Int, _ filter: [String: Any]?, alpha: Double) throws {
+            capturedChildPixels = []
+            p.apply(wireBatch([["op": "style", "id": id, "style": filter.map { ["filter": $0] } ?? [:]]]))
+            waitForMainQueue()
+            let pixel = try XCTUnwrap(capturedChildPixels?.last, "the style batch uploads a texture")
+            let cpu = try XCTUnwrap(Bitmap.blank(width: 100, height: 100))
+            Capture.draw(child, scale: 1, into: cpu)
+            let bytes = try XCTUnwrap(cpu.bytes).assumingMemoryBound(to: UInt8.self)
+            let cpuAlpha = bytes[(50 * 100 + 50) * 4 + 3]
+            let state = "node \(id), filter \(String(describing: p.views[UInt32(id)]?.boxFilter?.opacity)), captured \(pixel), CPU alpha \(cpuAlpha)"
+            XCTAssertEqual(Double(cpuAlpha), alpha * 255, accuracy: 1, state)
+            XCTAssertEqual(Double(pixel[3]), alpha * 255, accuracy: 1, state)
+            XCTAssertEqual(pixel[0], pixel[3], "the red child remains visible")
+            XCTAssertFalse(d.canvas.needsCapture, "the capture settles")
+        }
+        try restyle(101, opacity(0.5), alpha: 0.5)
+        try restyle(101, opacity(0.25), alpha: 0.25)
+        try restyle(101, nil, alpha: 1)
+        p.apply(wireBatch([["op": "present", "id": 102, "property": "opacity", "x": 0.8]]))
+        try restyle(102, opacity(0.5), alpha: 0.4)
+        try restyle(102, opacity(0.25), alpha: 0.2)
+        try restyle(102, nil, alpha: 0.8)
+        p.apply(wireBatch([["op": "present", "id": 102, "property": "opacity", "x": 1.0]]))
+        let sub: [Double] = [-4, -4, 8, 8]
+        let shadow: [Double] = sub + [1, 6, -1, -3] + sub + [0, 2, 2, 0, 0, 0, 0, 0, 1]
+        try restyle(101, ["p": shadow], alpha: 1)
+        XCTAssertTrue(child.boxFilter?.casts == true)
+    }
+
+    func testUnchangedLayerFilterClipsDoNotRecaptureCanvasTextures() throws {
+        let d = try deck("canvas-layer-filter-clips")
+        defer { d.session.destroy() }
+        try XCTUnwrap(d.host.entries[100]).through = true
+        let p = d.session.presenter
+        let child = node(101, p, CGRect(x: 40, y: 40, width: 100, height: 100), in: d.overlay)
+        paint(.red, into: child)
+        placedIndices = [0]
+        let opacity: [Double] = [0, 0, 0, 0, 1, 9, -1, -3, -1e6, -1e6, 2e6, 2e6, 0, 0, 0, 0, 1, 2, 0, 0.5]
+        let sub: [Double] = [-4, -4, 8, 8]
+        let shadow: [Double] = sub + [1, 6, -1, -3] + sub + [0, 2, 2, 0, 0, 0, 0, 0, 1]
+        let clips: [[String: Any]] = [
+            ["clip_path": ["commands": [["M", [0, 0]], ["L", [100, 0]], ["L", [0, 100]], ["Z", []]]]],
+            ["mask_image": ["linear": 90, "stops": [0, 0, 0, 0, 0, 1, 0, 0, 0, 255]]],
+            ["overflow_x": "hidden", "overflow_y": "hidden", "corner_shape": [0, 0, 0, 0], "border_radius": 20],
+        ]
+        for program in [opacity, shadow] {
+            for clip in clips {
+                if program == shadow, clip["corner_shape"] != nil { continue }
+                var style = clip
+                style["filter"] = ["p": program]
+                p.apply(wireBatch([["op": "style", "id": 101, "style": style]]))
+                d.frame()
+                waitForMainQueue()
+                let mask = try XCTUnwrap(child.ownMask)
+                XCTAssertNil(child.filterPicture)
+                capturedChildPixels = []
+                for _ in 0..<3 { p.apply(wireBatch([])) }
+                waitForMainQueue()
+                XCTAssertTrue(child.ownMask === mask, "an unchanged clip reuses its mask")
+                XCTAssertTrue(capturedChildPixels?.isEmpty == true, "unrelated batches upload no texture")
+                XCTAssertFalse(d.canvas.needsCapture)
+                p.apply(wireBatch([["op": "frame", "id": 101, "x": 40, "y": 40, "w": 90, "h": 90]]))
+                waitForMainQueue()
+                XCTAssertFalse(child.ownMask === mask, "a size change rebuilds the mask")
+                XCTAssertFalse(capturedChildPixels?.isEmpty == true, "a changed clip uploads its texture")
+                p.apply(wireBatch([["op": "frame", "id": 101, "x": 40, "y": 40, "w": 100, "h": 100]]))
+                waitForMainQueue()
+            }
+        }
+    }
+
+    /// A CPU capture ignores root opacity without changing the child's
+    /// transparency or asking its canvas to capture again. An author's
+    /// change still asks, whether placed or left in place.
     func testTheCPUCaptureOfATransparentChildSettles() throws {
         let d = try deck("canvas-transparent-capture")
         defer { d.session.destroy() }

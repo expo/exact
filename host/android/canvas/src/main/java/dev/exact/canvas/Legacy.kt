@@ -68,6 +68,15 @@ object Legacy {
             (if (statusLight) status else 0) or (if (navigationLight) navigation else 0)
     }
 
+    /** The system bars hidden, or shown again, before `WindowInsetsController` (API 30): sticky immersive mode, where a
+     * swipe from an edge shows them over the page for a moment. */
+    internal fun hideBars(window: Window, hidden: Boolean) {
+        val v = window.decorView
+        val bits = View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or
+            View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+        v.systemUiVisibility = if (hidden) v.systemUiVisibility or bits else v.systemUiVisibility and bits.inv()
+    }
+
     /** [ExactActivity]'s four insets from what API 29 has (`WindowInsets.Type` is API 30), read from the root's
      * window insets: the decor view consumes the stable insets of those it dispatches. Under `ADJUST_RESIZE` the
      * system window insets include the software keyboard; the stable insets are the bars alone, shown or not. */

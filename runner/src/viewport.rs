@@ -12,6 +12,12 @@ pub const SOURCE: &str = "exactViewport";
 pub const FIELDS: &[&str] = &[
     "width",
     "height",
+    "devicePixelRatio",
+    "safeAreaTop",
+    "safeAreaRight",
+    "safeAreaBottom",
+    "safeAreaLeft",
+    "segments",
     "prefersReducedMotion",
     "prefersReducedTransparency",
     "prefersContrast",
@@ -35,6 +41,8 @@ pub struct Viewport {
     pub width: f64,
     /// Height in CSS pixels, under the host's interactive-widget policy.
     pub height: f64,
+    /// Display pixels per logical point; absent until a host reports its scale.
+    pub device_pixel_ratio: Option<f64>,
     /// The user's display preferences; a host that cannot read them says
     /// `no-preference`, as a browser does.
     pub preferences: Preferences,
@@ -85,9 +93,8 @@ impl Posture {
 
 /// `device-posture` and the viewport segment counts (Media Queries 5's
 /// `horizontal-viewport-segments` and `vertical-viewport-segments`), as
-/// `exactViewport()` answers them (LLP 1078 D1, D2). The segments' rects are
-/// the kernel's (`Kernel::set_segments`), not the app's: an app reads them
-/// as `env()` lengths.
+/// `exactViewport()` answers them (LLP 1078 D1, D2). The kernel also
+/// supplies their rectangles to `segments` and CSS `env()` lengths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Fold {
     /// `devicePosture`.
@@ -447,6 +454,7 @@ impl Viewport {
         Self {
             width,
             height,
+            device_pixel_ratio: None,
             preferences: Preferences::default(),
             fold: Fold::default(),
         }
@@ -458,6 +466,9 @@ impl Viewport {
             && self.height.is_finite()
             && self.width > 0.0
             && self.height > 0.0
+            && self
+                .device_pixel_ratio
+                .is_none_or(|s| s.is_finite() && s > 0.0)
         {
             Ok(())
         } else {
@@ -470,6 +481,10 @@ impl Viewport {
         match name {
             "width" => Some(Value::Number(self.width)),
             "height" => Some(Value::Number(self.height)),
+            "devicePixelRatio" => Some(
+                self.device_pixel_ratio
+                    .map_or(Value::NONE, |s| Value::some(Value::Number(s))),
+            ),
             "prefersReducedMotion" => Some(Value::Bool(self.preferences.reduced_motion)),
             "prefersReducedTransparency" => {
                 Some(Value::Bool(self.preferences.reduced_transparency))
@@ -668,5 +683,98 @@ mod tests {
         for bits in [32, 64, 128, 32 | 128, 64 | 128 | 16] {
             assert_eq!(Preferences::from_bits(bits).bits(), bits);
         }
+    }
+}
+
+/// The kernel environment last published to viewport readers.
+#[derive(Clone, PartialEq)]
+pub(crate) struct Geometry {
+    pub insets: [f32; 4],
+    pub segments: Vec<exact_kernel::Rect>,
+    pub cols: u8,
+    pub rows: u8,
+}
+
+impl Geometry {
+    pub fn of(kernel: &exact_kernel::Kernel) -> Self {
+        let env = kernel.env();
+        Self {
+            insets: [env.top, env.right, env.bottom, env.left],
+            segments: env.segments,
+            cols: env.cols,
+            rows: env.rows,
+        }
+    }
+
+    pub fn restore(&self, kernel: &mut exact_kernel::Kernel) {
+        let [top, right, bottom, left] = self.insets;
+        let env = kernel.env().with_insets(top, right, bottom, left);
+        let _ = kernel.set_env(env);
+        let _ = kernel.set_segments(self.cols, self.rows, self.segments.clone());
+    }
+
+    pub fn field(
+        &self,
+        plan: &exact_plan::Plan,
+        ty: exact_plan::TypesId,
+        name: &str,
+        viewport: Viewport,
+    ) -> Result<Option<Value>, crate::DataError> {
+        if let Some(i) = [
+            "safeAreaTop",
+            "safeAreaRight",
+            "safeAreaBottom",
+            "safeAreaLeft",
+        ]
+        .iter()
+        .position(|n| *n == name)
+        {
+            return Ok(Some(Value::Number(self.insets[i] as f64)));
+        }
+        if name != "segments" {
+            return Ok(None);
+        }
+        let list = plan.type_(ty);
+        let record = list
+            .elem
+            .map(|t| plan.type_(t))
+            .filter(|t| {
+                list.kind == exact_plan::TypeKind::List && t.kind == exact_plan::TypeKind::Record
+            })
+            .ok_or_else(|| {
+                crate::DataError::Unavailable(
+                    "exactViewport.segments needs a list of rectangle records".into(),
+                )
+            })?;
+        let fields = record
+            .fields
+            .iter()
+            .map(|f| {
+                let field = plan.field(f);
+                let name = plan.str(field.name);
+                ["x", "y", "width", "height"]
+                    .iter()
+                    .position(|n| *n == name)
+                    .filter(|_| plan.type_(field.ty).kind == exact_plan::TypeKind::Number)
+                    .ok_or_else(|| {
+                        crate::DataError::Unavailable(format!(
+                            "exactViewport.segments has no numeric field `{name}`"
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let rect = |[x, y, w, h]: [f64; 4]| {
+            let values = [x, y, w, h];
+            Value::record(fields.iter().map(|i| Value::Number(values[*i])).collect())
+        };
+        let values = if viewport.fold.cols == 1 && viewport.fold.rows == 1 {
+            vec![rect([0.0, 0.0, viewport.width, viewport.height])]
+        } else {
+            self.segments
+                .iter()
+                .map(|r| rect([r.x as f64, r.y as f64, r.width as f64, r.height as f64]))
+                .collect()
+        };
+        Ok(Some(Value::list(values)))
     }
 }

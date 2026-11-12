@@ -69,6 +69,9 @@ pub struct ModuleDecl {
     /// The app's TypeScript data code imports its package, so the module is
     /// in the plan though no Contract file reads one of its names.
     pub imported: bool,
+    /// Read only to type a package view, with no explicit Contract or data
+    /// import. Its names enter the plan only if the expanded root uses it.
+    pub view_only: bool,
     /// The agent's substitute as the package declares it, a JSON object
     /// (LLP 1133.002 §6): `default`, `from`, `ticket`, `short`, `fill`,
     /// `cancel`, `timeout`, and the interface's `permission`.

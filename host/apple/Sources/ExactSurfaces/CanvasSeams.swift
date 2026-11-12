@@ -162,6 +162,12 @@ extension CanvasesHost {
     func bindSurface(_ m: GpuModule, _ e: Entry) -> UInt32 {
         guard let data = try? JSONSerialization.data(withJSONObject: e.values) else { return 1 }
         let now = session?.now() ?? 0
+        // The size first: a stamped bind may tick a new world, which frames
+        // itself for its canvas before its first tick (`Game::first_frame`).
+        let bounds = e.view.bounds.size
+        if bounds.width > 0, bounds.height > 0, let size = m.canvasSize, size(e.id, Float(bounds.width), Float(bounds.height)) != 0 {
+            fputs("exact gpu: \(m.error())\n", stderr)
+        }
         return data.withUnsafeBytes { bytes in
             if let bindAt = m.bindAt { return bindAt(e.id, bytes.bindMemory(to: UInt8.self).baseAddress, data.count, now) }
             return m.bind(e.id, bytes.bindMemory(to: UInt8.self).baseAddress, data.count)
@@ -298,6 +304,22 @@ extension CanvasesHost {
         return true
     }
 
+    /// The canvas's record, when the module has a new one, to the app.
+    func publishRecord(_ e: Entry) {
+        guard live(e.view.id) === e, publishers[e.name] === e, let m = e.module, let take = m.published else { return }
+        let length = take(e.id)
+        if length != UInt32.max, let data = length == 0 ? Data() : m.output(length) {
+            surfaceRecord(e.name, String(decoding: data, as: UTF8.self))
+        }
+    }
+
+    /// A frame went to the compositor (`gpu_on_presented`): the records whose
+    /// `presented` changed reach the app now, since a canvas that wants no
+    /// further frame is not serviced again (LLP 1009).
+    func publishPresented() {
+        for e in Array(entries.values) { publishRecord(e) }
+    }
+
     func claimPublisher(_ e: Entry) {
         if publishers[e.name] == nil { publishers[e.name] = e }
         else { fputs("exact gpu: surface \(e.name): duplicate live publisher ignored\n", stderr) }
@@ -306,7 +328,35 @@ extension CanvasesHost {
     func releasePublisher(_ e: Entry) {
         guard publishers[e.name] === e else { return }
         publishers.removeValue(forKey: e.name)
+        updatePerformanceTimer()
         surfaceRecord(e.name, nil)
+        if e.performance { session?.canvasPerformanceRecord(e.name, nil) }
+    }
+
+    func updatePerformanceTimer() {
+        guard visible, session?.clock == nil, publishers.values.contains(where: { $0.performance && $0.id != 0 }) else {
+            performanceTimer?.invalidate(); performanceTimer = nil; return
+        }
+        guard performanceTimer == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            self.updatePerformanceTimer()
+            guard self.performanceTimer != nil else { return }
+            for e in Array(self.publishers.values) { self.performanceRecord(e) }
+        }
+        timer.tolerance = 0.1
+        performanceTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    func performanceRecord(_ e: Entry) {
+        if e.performance, live(e.view.id) === e, publishers[e.name] === e, let m = e.module, let take = m.performance {
+            if performanceTimer == nil { updatePerformanceTimer() }
+            let length = take(e.id, ProcessInfo.processInfo.systemUptime * 1000)
+            if length != UInt32.max, length <= 16 * 1024, let data = m.output(length) {
+                session?.canvasPerformanceRecord(e.name, String(decoding: data, as: UTF8.self))
+            }
+        }
     }
 
     func surfaceRecord(_ name: String, _ json: String?) {
@@ -358,12 +408,8 @@ extension CanvasesHost {
             }
         }
         if let m = e.module { finishRestore(m, e) }
-        if live(e.view.id) === e, publishers[e.name] === e, let m = e.module, let take = m.published {
-            let length = take(e.id)
-            if length != UInt32.max, let data = length == 0 ? Data() : m.output(length) {
-                surfaceRecord(e.name, String(decoding: data, as: UTF8.self))
-            }
-        }
+        publishRecord(e)
+        performanceRecord(e)
         guard live(e.view.id) === e, let m = e.module, let take = m.messages else { return }
         let length = take(e.id)
         guard length != UInt32.max, let data = m.output(length) else { return }
@@ -678,6 +724,7 @@ final class CanvasLifecycle: NSObject {
         AppBackground.invalidate()
         #endif
         let next = !(owner?.visible ?? false)
+        owner?.updatePerformanceTimer()
         let becameVisible = hidden && !next
         if next { CanvasAudio.active = false }
         if next != hidden { hidden = next; send(hidden ? 0 : 1, excluding: id) }

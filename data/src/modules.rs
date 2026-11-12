@@ -111,11 +111,13 @@ impl<T: ModuleValue> ModuleValue for Vec<T> {
     }
 }
 
-/// A WebAuthn dictionary passed whole (`json<T>`, LLP 1133.011 D10): the
-/// module checks only that it is JSON, the platform the rest.
+/// A value passed whole as JSON (`json<T>`, a WebAuthn dictionary among
+/// them, LLP 1133.011 D10): the module checks only that it is JSON, the
+/// platform the rest. A JSON null is sent as one, `json<option<T>>`'s none;
+/// only an option of the binding's own (`Option<Value>`) omits its field.
 impl ModuleValue for Json {
     fn encode(&self) -> Result<Option<Json>, String> {
-        Ok((!self.is_null()).then(|| self.clone()))
+        Ok(Some(self.clone()))
     }
     fn decode(json: &Json) -> Result<Self, String> {
         Ok(json.clone())
@@ -208,4 +210,22 @@ pub fn malformed(name: &str, why: String) -> ModuleError {
         "NotSupportedError",
         format!("{name}: the reply is not its shape: {why}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_json_null_is_sent_and_an_absent_option_is_omitted() {
+        let mut body = Map::new();
+        put(&mut body, "value", &Json::Null).unwrap();
+        put(&mut body, "list", &vec![Json::Null, Json::from(1)]).unwrap();
+        put(&mut body, "unset", &None::<Json>).unwrap();
+        put(&mut body, "set", &Some(Json::Null)).unwrap();
+        assert_eq!(
+            Json::Object(body),
+            serde_json::json!({"value": null, "list": [null, 1], "set": null})
+        );
+    }
 }

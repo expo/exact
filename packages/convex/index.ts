@@ -52,18 +52,25 @@ export interface ConvexClient {
    *  the same turn. A failed query throws `ConvexFailure`, and so does one asked while the socket is closed. */
   query<Q extends Reference<'query'>, T = ReturnOf<Q>>(rev: number, ref: Q, args: ArgsOf<Q>, shape?: (value: ReturnOf<Q>) => T): T | Promise<T>;
   /** A mutation: its result once the queries show its write. It rejects with `ConvexFailure` when Convex refuses it,
-   *  when the socket is not open (nothing is sent), and when the socket closes first (it may have run). */
+   *  when the socket is not open (nothing is sent), when Convex refused the token it was sent behind (its words;
+   *  it did not run), and when the socket closes first (it may have run, and an expired token's words say why). */
   mutation<M extends Reference<'mutation'>>(ref: M, args: ArgsOf<M>): Promise<ReturnOf<M>>;
-  /** An action: its result. It rejects as a mutation does. */
+  /** An action: its result, as soon as Convex has it; the queries may show what it wrote a moment later. It rejects
+   *  as a mutation does. */
   action<A extends Reference<'action'>>(ref: A, args: ArgsOf<A>): Promise<ReturnOf<A>>;
   /** The person's token (a JWT the deployment is configured to accept), or `undefined` signed out. Call it in a
-   *  mutation's source; in an `async` one it may follow an `await`. From a plain `.then` callback its send throws on the web. */
+   *  mutation's source; in an `async` one it may follow an `await`. From a plain `.then` callback its send throws on the web.
+   *  It sends on the socket, so the same turn may not `fetch`: the runner refuses that mutation and sends nothing. Await
+   *  the fetch first, then call it. Until Convex confirms the token, no answer computed for another is given, and each
+   *  mutation and action is sent behind the token again, so none runs as the person before; a call whose frame never
+   *  left may be made again. Convex says nothing when a token expires on a quiet socket: renew it before it expires. */
   setAuth(token: string | undefined): void;
   /** The queries Convex is asked for and the requests in flight, for a test or a log. */
   inspect(): { queries: { id: number; udfPath: string; sent: boolean; answered: boolean }[]; requests: number };
 }
 
-/** A client for the deployment at `address` (its `CONVEX_URL`), over `functions`, Convex's own. */
+/** A client for the deployment at `address` (its `CONVEX_URL`, or the same origin as a socket's, `wss:` or `ws:`), over
+ *  `functions`, Convex's own. */
 export function convex(address: string, functions: ConvexFunctions, options: ConvexOptions = {}): ConvexClient {
   const sync = new Sync(functions);
   const { getFunctionName } = functions;
@@ -90,7 +97,7 @@ export function convex(address: string, functions: ConvexFunctions, options: Con
         if (mine !== epoch) return snapshot();
         if (event.type === 'open') { socket = given; send(sync.opened()); }
         else if (event.type === 'message') {
-          try { if (typeof event.data === 'string') sync.frame(event.data); }
+          try { if (typeof event.data === 'string') send(sync.frame(event.data)); }
           catch (e) {
             // A frame the client cannot follow ends the socket; the snapshot says why, where a throw would keep the last one.
             socket = undefined;
@@ -124,9 +131,7 @@ export function convex(address: string, functions: ConvexFunctions, options: Con
 
   function request<T>(kind: 'Mutation' | 'Action', name: string, args: Record<string, unknown>): Promise<T> {
     if (sync.status !== 'open' && sync.status !== 'ready') return Promise.reject(new ConvexFailure(`Not connected to Convex: the ${kind.toLowerCase()} was not sent.`));
-    const { frames, outcome } = sync.request(kind, name, args);
-    send(frames);
-    return outcome.then(o => settle<T>(o));
+    return sync.request(kind, name, args, send).outcome.then(o => settle<T>(o));
   }
 
   return {

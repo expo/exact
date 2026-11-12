@@ -2,7 +2,8 @@ use super::*;
 
 impl<D: DataSource> Presenter<D> {
     /// The open surface's nodes, in its own window's points: an alert's
-    /// headline, its supporting text and its buttons; a menu's items.
+    /// headline, its supporting text and its buttons; a menu's items, each
+    /// section's title a heading before its items.
     pub(super) fn access_surface(&self, b: &mut Build) -> u32 {
         let Some(shown) = self.surface() else {
             return 0;
@@ -61,7 +62,42 @@ impl<D: DataSource> Presenter<D> {
                 });
             }
         }
-        for (row, target) in shown.plan.rows().zip(shown.targets) {
+        // A menu's section titles, by the item each heads (its index in the
+        // rows).
+        let mut headers: Vec<(usize, &String, ViewId)> = Vec::new();
+        if let Plan::Menu(entries) = shown.plan {
+            let mut items = 0;
+            for entry in entries {
+                match entry {
+                    Entry::Item(_) => items += 1,
+                    Entry::Header(title, node) => headers.push((items, title, *node)),
+                    Entry::Separator => {}
+                }
+            }
+        }
+        let mut headers = headers.into_iter().peekable();
+        for (index, (row, target)) in shown.plan.rows().zip(shown.targets).enumerate() {
+            while let Some((_, title, node)) = headers.next_if(|h| h.0 == index) {
+                let rect = shown
+                    .texts
+                    .iter()
+                    .find(|(n, _)| *n == node)
+                    .map(|(_, r)| *r);
+                let Some(rect) =
+                    rect.and_then(|r| shown.clip.map_or(Some(r), |clip| intersect(r, clip)))
+                else {
+                    continue;
+                };
+                self.access_bar_node(
+                    b,
+                    node,
+                    parent,
+                    role::HEADING,
+                    0,
+                    title.clone(),
+                    (rect, whole),
+                );
+            }
             let rect = if let Some(clip) = shown.clip {
                 let Some(rect) = intersect(target.rect, clip) else {
                     continue;

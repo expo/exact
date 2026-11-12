@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import {randomUUID} from 'node:crypto';
 import {readFileSync, writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {proof, captureWorld, diffWorlds, formatWorldDiff, equal, axNames} from '../../proof.mjs';
@@ -30,7 +31,18 @@ export function compare(rows, {root}) {
   console.log('TAPS first affected tick and world hash agree across hosts');
 }
 
-if (import.meta.main) await proof(import.meta, async ({open, check, equal, out, host, pin, pinSave, say}) => {
+export function storedSessions(openSession) {
+  const suffix = randomUUID();
+  return async (options = {}) => {
+    const s = await openSession({...options, storage:`${options.storage ?? 'beacons-proof'}-${suffix}`,
+      env:{...(options.storage ? {} : {EXACT_AGENT_STORAGE_FRESH:'1'}), ...options.env}});
+    await s.clock('settle');
+    return s;
+  };
+}
+
+if (import.meta.main) await proof(import.meta, async ({open: openSession, check, equal, out, host, pin, pinSave, say}) => {
+  const open = storedSessions(openSession);
   const node = (tree, id) => tree.nodes.find(n => n.props?.testId === id);
   const world = s => s.world('world');
   const snapshot = s => world(s).snapshot();
@@ -234,7 +246,63 @@ if (import.meta.main) await proof(import.meta, async ({open, check, equal, out, 
   // included (QUEUE.md): tilt is driven where they run.
   if (host !== 'web') await tiltLeg({open, check, node, world});
   else say('SKIP tilt on web: the wasm host has no extension modules; run this proof on linux, macos or ios.');
+  await bindingLeg({open, check, node, world, out});
 });
+
+async function bindingLeg({open, check, node, world, out}) {
+  const savedJ = resolve(out, 'jump-j.world'), savedSpace = resolve(out, 'jump-space.world');
+  const launch = options => open({fresh:true, storage:'binding-preference', ...options});
+  const preference = async s => node(await s.tree(), 'jump-preference')?.props.checked;
+  const jumps = async (s, key) => {
+    await world(s).tap(key); await world(s).run(100);
+    const jumped = (await world(s).local_position('player'))[1] > 0.9;
+    await world(s).run(1500);
+    return jumped;
+  };
+  const controls = async (s, active, inactive) => {
+    check(`${active} jumps and ${inactive} does not`, !await jumps(s, inactive) && await jumps(s, active));
+    check('the south pad button still jumps', await jumps(s, 'GamepadSouth'));
+  };
+  const change = async (s, on) => {
+    await s.tap('pause');
+    const before = await world(s).snapshot();
+    await s.tap('jump-preference'); await s.clock('settle');
+    check(`jump preference saved as ${on ? 'J' : 'Space'}`, await preference(s) === on && !node(await s.tree(), 'binding-error'));
+    check('saving a preference leaves the paused world intact', equal(before, await world(s).snapshot()));
+    await s.tap('pause');
+  };
+  const first = await launch({env:{EXACT_AGENT_STORAGE_FRESH:'1'}});
+  check('an empty store starts with Space', await preference(first) === false);
+  await first.tap('jump-preference'); await first.clock('settle');
+  check('the title saves J', await preference(first) === true && !node(await first.tree(), 'binding-error'));
+  await first.tap('play');
+  await controls(first, 'KeyJ', 'Space');
+  await world(first).save(savedJ);
+  await change(first, false);
+  await controls(first, 'KeyJ', 'Space');
+  await first.close();
+
+  const second = await launch({world:savedJ});
+  check('relaunch reads the saved Space preference', await preference(second) === false);
+  await second.tap('play');
+  check('the J save is restored', (await second.state()).world[0].restored === true);
+  await controls(second, 'KeyJ', 'Space');
+  await second.tap('pause'); await second.tap('new-game');
+  await controls(second, 'Space', 'KeyJ');
+  await world(second).save(savedSpace);
+  await change(second, true);
+  await controls(second, 'Space', 'KeyJ');
+  await second.close();
+
+  const third = await launch({world:savedSpace});
+  check('relaunch reads the saved J preference', await preference(third) === true);
+  await third.tap('play');
+  check('the Space save is restored', (await third.state()).world[0].restored === true);
+  await controls(third, 'Space', 'KeyJ');
+  await third.tap('pause'); await third.tap('new-game');
+  await controls(third, 'KeyJ', 'Space');
+  await third.close();
+}
 
 /// D6's map, as `exact_game::tilt_stick` computes it (game/engine/src/input/sensor.rs).
 export function tiltStick(g, n, max = 20, dead = 2) {

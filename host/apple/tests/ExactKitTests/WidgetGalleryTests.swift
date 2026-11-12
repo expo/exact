@@ -405,5 +405,55 @@ final class WidgetGalleryTests: XCTestCase {
         let assets = AssetResolver(root: directory, names: ["plans/widgets.json"], generation: "reload") { _ in registry }
         XCTAssertEqual(WidgetGallery.entries(in: assets).map(\.kind), ["added"])
     }
+    /// A configured widget's render reads the agent's choice over the defaults, the gallery lists
+    /// each other choice, and a parameter or value the configuration does not declare is refused.
+    func testConfiguredWidgetRendersEachChoice() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let plan = URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_SNAPSHOT_CONFIGURED_PLAN"]))
+        let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: plan.deletingLastPathComponent().appendingPathComponent("entries/configured/app.json"))) as! [String: Any]
+        let directory = plan.deletingLastPathComponent().appendingPathComponent("configured-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("plans"), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: plan, to: directory.appendingPathComponent("plans/configured.plan"))
+        // The registry as the bake writes it: the configuration with its defaults filled in.
+        var widget = try XCTUnwrap((manifest["widgets"] as? [[String: Any]])?.first)
+        var configuration = try XCTUnwrap(widget["configuration"] as? [String: Any])
+        var parameters = try XCTUnwrap(configuration["parameters"] as? [[String: Any]])
+        parameters[0]["default"] = "automatic"; configuration["parameters"] = parameters; widget["configuration"] = configuration
+        try JSONSerialization.data(withJSONObject: [widget]).write(to: directory.appendingPathComponent("plans/widgets.json"))
+        let app = ExactApp.shared, previous = app.assetRoot
+        defer { app.assetRoot = previous; try? FileManager.default.removeItem(at: directory) }
+        app.assetRoot = directory
+        let entry = try XCTUnwrap(WidgetGallery.entries(in: app.resolver).first)
+        XCTAssertEqual(WidgetGallery.choices(entry), [["rows": "one"], ["rows": "three"]])
+        let session = ExactSession(app: app, label: "configured-widget", launchPlace: LaunchPlace(environment: ["EXACT_AGENT":"1"]))
+        session.clock = 0
+        defer { session.destroy() }
+        let agent = Agent(session: session)
+        func read(_ op: String, _ chosen: String?) -> [String: Any] {
+            var address = ["entry":"configured", "props":"{\"title\":\"Rows\"}"]
+            address["configuration"] = chosen
+            return WidgetGallery.answer(op, request: ["widget":address], agent: agent)
+        }
+        for (chosen, rows) in [(nil, "automatic"), ("{\"rows\":\"one\"}", "one"), ("{\"rows\":\"three\"}", "three")] {
+            let state = read("state", chosen)
+            XCTAssertNil(state["error"])
+            XCTAssertEqual(state["configuration"] as? [String: String], ["rows": rows])
+            XCTAssertEqual((state["slots"] as? [String: Any])?["snapshot_configuration"] as? [String: String], ["rows": rows])
+            let nodes = try XCTUnwrap(read("tree", chosen)["nodes"] as? [[String: Any]])
+            XCTAssertTrue(nodes.contains { ($0["props"] as? [String: String])?["text"] == "Rows \(rows)" }, rows)
+        }
+        XCTAssertEqual(read("state", "{\"rows\":\"seven\"}")["error"] as? String, "widget --configuration: rows is one of automatic, one, three")
+        XCTAssertEqual(read("state", "{\"columns\":\"one\"}")["error"] as? String, "widget --configuration: configured has no parameter columns; parameters: rows")
+        for (saved, rows) in [("{\"rows\":\"removed\"}", "automatic"), ("{\"renamed\":\"one\"}", "automatic"),
+                              ("{\"rows\":\"one\",\"removed\":\"old\"}", "one")] {
+            let restored = try HeadlessSession(plan: Data(contentsOf: plan), entry: "configured",
+                configuration: Data(saved.utf8), size: CGSize(width: 160, height: 160),
+                facts: SessionFacts(displayScale: 1, preferences: []), assetRoot: directory)
+            defer { restored.close() }
+            XCTAssertTrue(try restored.snapshot().nodes.values.contains { $0.props["text"] == "Rows \(rows)" }, saved)
+        }
+    }
 }
 #endif

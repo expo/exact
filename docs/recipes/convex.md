@@ -12,8 +12,9 @@ import { getFunctionName } from 'convex/server';
 import { convexToJson, jsonToConvex } from 'convex/values';
 import { api } from './convex/_generated/api';
 
-// The deployment twice, literally: its URL, and its origin as a socket's.
-const CONVEX = 'https://happy-otter-123.convex.cloud';
+// The deployment twice, literally (a grant is a constant): `convex()` takes its
+// URL or, as here, the origin the grant names.
+const CONVEX = 'wss://happy-otter-123.convex.cloud';
 export const grants = 'net.websocket wss://happy-otter-123.convex.cloud';
 
 const cx = convex(CONVEX, { getFunctionName, convexToJson, jsonToConvex });
@@ -62,5 +63,7 @@ component Chat
 - **Shape a result in the same call,** `cx.query`'s fourth argument: `(b) => ({
   tiles: b.cells.map(…) })`. An `async` wrapper makes every change a pending
   frame.
+- **`cx.setAuth(jwt)`** in a mutation's source, after any `fetch` it awaits,
+  never before one (the runner refuses that mutation).
 - **A drive against a real deployment** takes a new `--seed` each
   launch, or Convex answers the second launch's writes without running them.

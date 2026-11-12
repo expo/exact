@@ -257,6 +257,14 @@ export function refreshSymbols() {
   }
 }
 export function writeValue(el, value) {
+  // An option's value getter falls back to its label, so a bound value equal to the label is written still: the
+  // attribute holds it when the label changes.
+  if (el.localName === "option") {
+    if (el.getAttribute("value") !== value) {
+      el.value = value;
+    }
+    return;
+  }
   if (el.exactMarkup) {
     el.exactMarkup.setValue(value);
     return;
@@ -367,7 +375,11 @@ export function applyProps(el, set, clear) {
       }
     } else if (name === "value") {
       el.exactValue = undefined;
-      writeValue(el, "");
+      if (el.localName === "option") {
+        el.removeAttribute("value");
+      } else {
+        writeValue(el, "");
+      }
     } else if (name === "checked") {
       el.exactChecked = undefined;
       el.checked = false;

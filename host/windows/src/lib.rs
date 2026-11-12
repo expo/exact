@@ -11,8 +11,7 @@ mod appearance;
 mod caret;
 #[cfg(windows)]
 mod clicks;
-#[cfg(windows)]
-mod clipboard;
+pub mod clipboard;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod desktop;
 #[cfg(windows)]
@@ -21,6 +20,8 @@ mod edit_menu;
 mod icon;
 #[cfg(windows)]
 mod ime;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod instance;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod jump_list;
 #[cfg(any(windows, test))]
@@ -39,6 +40,8 @@ mod placement;
 mod probe;
 #[cfg(windows)]
 mod timers;
+#[cfg(windows)]
+mod tooltip;
 #[cfg(any(windows, test))]
 mod touch;
 #[cfg(windows)]
@@ -48,9 +51,9 @@ mod wheel;
 #[cfg(windows)]
 mod window;
 
-/// The window an app opens in, in logical pixels: `host.windows.window` in
-/// its `app.json`, which the bake writes as `WINDOW`. `EXACT_SIZE` overrides
-/// the size.
+/// The window an app opens in, in logical pixels, and what closing it does:
+/// `host.windows.window` in its `app.json`, which the bake writes as
+/// `WINDOW`. `EXACT_SIZE` overrides the size.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Window {
     /// The width it opens at.
@@ -61,6 +64,9 @@ pub struct Window {
     pub min_width: f32,
     /// The shortest a person can make it; 0 sets no minimum.
     pub min_height: f32,
+    /// Closing it hides it and the app keeps running (`keepRunning`, LLP
+    /// 1133.025 D4); otherwise the app ends with it.
+    pub keep_running: bool,
 }
 
 impl Default for Window {
@@ -70,6 +76,7 @@ impl Default for Window {
             height: 720.0,
             min_width: 0.0,
             min_height: 0.0,
+            keep_running: false,
         }
     }
 }
@@ -163,7 +170,126 @@ fn refuse() -> i32 {
 }
 
 #[cfg(test)]
+extern crate self as exact_windows;
+
+#[cfg(test)]
+mod clipboard_package {
+    include!("../../../packages/clipboard/windows/lib.rs");
+
+    mod tests {
+        include!("../../../packages/clipboard/test/windows.rs");
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn a_bare_close_reaches_the_window_but_a_dialog_close_does_not() {
+        super::on_desktop_stack(|| {
+            use std::{cell::Cell, rc::Rc};
+            let plan = contract::compile(
+                r#"component App
+  action leave
+    close()
+  action dismiss
+    close("dialog")
+  view
+    column
+      button "Close window" press=leave testId="window"
+      button "Close dialog" press=dismiss testId="dialog"
+"#,
+            )
+            .unwrap()
+            .encode();
+            let (mut p, error) = exact_linux::Presenter::boot_with(
+                &plan,
+                (),
+                (400., 300.),
+                1.,
+                Default::default(),
+                exact_linux::presenter::PainterChoice::Cpu,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            let closed = Rc::new(Cell::new(0));
+            let count = closed.clone();
+            p.set_window_closer(move || count.set(count.get() + 1));
+            for (target, expected) in [("dialog", 0), ("window", 1), ("window", 2)] {
+                let key = p.host().kernel().find_by_test_id(target)[0];
+                let id = p.host().kernel().node_by_key(key).unwrap().id;
+                p.tap(id).unwrap();
+                p.run_commands(|| ());
+                assert_eq!(closed.get(), expected, "{target}");
+            }
+        });
+    }
+
+    /// A bare `focus()` reaches the window (LLP 1133.025 §8), which shows it
+    /// if hidden, and `hideWindow()` too (D4); `focus(id)` stays an
+    /// element's. With no window `focus()` is refused in the journal, as on
+    /// the headless and DRM hosts.
+    #[test]
+    fn focus_and_hide_window_reach_the_window_but_an_elements_focus_does_not() {
+        super::on_desktop_stack(|| {
+            use std::{cell::Cell, rc::Rc};
+            let plan = contract::compile(
+                r#"component App
+  action show
+    focus()
+  action field
+    focus("name")
+  action away
+    hideWindow()
+  view
+    column
+      button "Show" press=show testId="window"
+      button "Field" press=field testId="field"
+      button "Hide" press=away testId="hide"
+      input id="name"
+"#,
+            )
+            .unwrap()
+            .encode();
+            let boot = || {
+                let (p, error) = exact_linux::Presenter::boot_with(
+                    &plan,
+                    (),
+                    (400., 300.),
+                    1.,
+                    Default::default(),
+                    exact_linux::presenter::PainterChoice::Cpu,
+                )
+                .unwrap();
+                assert!(error.is_none(), "{error:?}");
+                p
+            };
+            let tap = |p: &mut exact_linux::Presenter<()>, target: &str| {
+                let key = p.host().kernel().find_by_test_id(target)[0];
+                let id = p.host().kernel().node_by_key(key).unwrap().id;
+                p.tap(id).unwrap();
+                p.run_commands(|| ());
+            };
+            let mut p = boot();
+            let shown = Rc::new(Cell::new(0));
+            let count = shown.clone();
+            p.set_window_focuser(move || count.set(count.get() + 1));
+            for (target, expected) in [("field", 0), ("window", 1)] {
+                tap(&mut p, target);
+                assert_eq!(shown.get(), expected, "{target}");
+            }
+            // `hideWindow()` reaches the window the same way.
+            let hidden = Rc::new(Cell::new(0));
+            let count = hidden.clone();
+            p.set_window_hider(move || count.set(count.get() + 1));
+            tap(&mut p, "hide");
+            assert_eq!((shown.get(), hidden.get()), (1, 1));
+            let mut p = boot();
+            tap(&mut p, "window");
+            let said = exact_runner::agent::logs(p.host().runner(), 0);
+            assert!(said.contains("focus window: unsupported"), "{said}");
+        });
+    }
+
     /// Keep 6 MiB of frames live: beyond the default Windows main stack
     /// and Rust test stack. Reading each frame after recursion prevents
     /// an optimized test build from turning the recursion into a loop.

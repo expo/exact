@@ -106,6 +106,8 @@ fn an_elements_state_part_is_linted_as_lowering_folds_it() {
         ("active", "color=\"#000000\""),
         ("hover", "color=\"#000000\""),
         ("focus-visible", "color=\"#000000\""),
+        ("hover", "scale=1.08"),
+        ("focus-visible", "scale = 1.1"),
     ] {
         assert!(
             lint(state, row).is_empty(),

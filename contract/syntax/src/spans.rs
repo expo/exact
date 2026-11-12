@@ -122,7 +122,7 @@ structs! {
     PropertyDecl { span, kind, name, lines }
     PropertyLine { span, form }
     FnDecl { name, params, ret, body, span }
-    ModuleDecl { name, declared, package, extension, kind, options, words, answers, args, raised, hold, budget, handler, live, request, sync, data_only, imported, substitute, span }
+    ModuleDecl { name, declared, package, extension, kind, options, words, answers, args, raised, hold, budget, handler, live, request, sync, data_only, imported, view_only, substitute, span }
     PlatformWords { platform, package, words }
     UseDecl { names, path, span }
     UseName { name, alias, span }
@@ -146,7 +146,7 @@ structs! {
     Sequence { name, gate, key, tracks, options, ended, span }
     Persist { name, span }
     Binding { name, expr, span }
-    ResourceDecl { name, source, args, identity, shape, placeholder, each, transient, gate, span }
+    ResourceDecl { name, source, args, identity, shape, placeholder, each, transient, keep, gate, span }
     ResourceEach { item, list, key, span }
     Placeholder { source, args, span }
     MutationDecl { name, shape, mode, refreshes, then, span }

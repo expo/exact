@@ -30,6 +30,7 @@ mod order;
 mod publication;
 mod rebuild;
 mod table;
+mod titles;
 pub use publication::compute;
 
 use crate::id::{IdMap, IdSet};
@@ -186,6 +187,7 @@ pub struct LayoutTree {
     hoist_paths_prior: IdSet<NodeId>,
     // The live fitted paragraphs measured since they last stopped fitting (`fit`).
     fitting: IdSet<u32>,
+    neutral_titles: IdSet<NodeId>,
     // @ref LLP 1153 D7.3 — the tables laid out as grids.
     tables: table::Tables,
 }
@@ -409,6 +411,7 @@ impl LayoutTree {
             hoist_paths: IdSet::default(),
             hoist_paths_prior: IdSet::default(),
             fitting: IdSet::default(),
+            neutral_titles: IdSet::default(),
             tables: table::Tables::default(),
         }
     }
@@ -503,6 +506,7 @@ impl LayoutTree {
 
     /// Remove a node.
     pub fn remove(&mut self, node: NodeId) {
+        self.neutral_titles.remove(&node);
         self.field_chrome.remove(&node);
         self.field_minima.remove(&node);
         self.button_records.remove(&node);
@@ -903,6 +907,7 @@ impl LayoutTree {
         // Resolve percentage trees under this layout's environment.
         let _env = crate::style::LayoutEnv::set(arena.env());
         self.refresh_tables(arena, node_for);
+        self.prepare_titles(root, arena, measurer)?;
         self.prepare_fields(root, arena, measurer)?;
         let buttons = self.prepare_buttons(root, arena, measurer)?;
         // Percentage padding uses the containing block's final width. Settle

@@ -60,8 +60,6 @@ export function presenceRows(row, list, key, identify = rowKey) {
   };
 }
 
-export const exitOf = node => (node.$exit ?? node.style.getPropertyValue(EXIT)).trim();
-
 // The runner ends an arm without updating its bindings (region.rs). Capture before writes, even when
 // shared.js defers the DOM update: its first flush can run several commits' coalesced effects.
 // A scope already absent from the logical tree keeps the snapshot taken before its removal.
@@ -117,3 +115,6 @@ export function restyled() {
   }
   return ops;
 }
+
+/** What rt.js calls through `usePresenceBindings`. */
+export const presenceUse = () => ({ capture: captureExits, bind: exitBinding, arm: presenceArm, rows: presenceRows, gains, restyled });

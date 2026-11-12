@@ -993,3 +993,19 @@ fn nested_visible_inline_backgrounds_keep_both_boxes_square() {
         );
     }
 }
+
+#[test]
+fn a_clipping_text_keeps_its_own_glyphs_inside_its_padding_box() {
+    // CSS Overflow 3 §3: `overflow: hidden` clips the box's own inline
+    // content, not only its descendant boxes. The text box is x 20..70.
+    let mut p = fixture("      text \"MMMMMMMMMMMMMMMM\" width=50 height=30 white-space=\"nowrap\" overflow=\"hidden\" font-size=20 color=\"#000000\"\n");
+    let frame = p.frame();
+    let ink = |columns: std::ops::Range<usize>| {
+        let pixels = frame.data().chunks_exact(4).enumerate();
+        pixels
+            .filter(|(i, px)| columns.contains(&(i % 300)) && px[0] < 128)
+            .count()
+    };
+    assert!(ink(20..70) > 0, "the text paints inside its box");
+    assert_eq!(ink(70..300), 0, "no glyph past the box's right edge");
+}

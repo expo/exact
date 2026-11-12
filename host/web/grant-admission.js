@@ -371,3 +371,18 @@ export function coversPath(set, capability, path) {
   return !!target && set.entries.some(([, , grant]) => grant?.[0] === kind && grant.slice(1).every((part, index) => target[index] === part));
 }
 export { isLocalNetwork, isCloudMetadata } from "./navigation/network.js";
+
+// Protocol names, never credentials (LLP 1016.000; RFC 7230 token).
+export function socketProtocols(value, socket = true) {
+  if (value === undefined) return [];
+  if (!socket) throw new TypeError('exactProtocols: only a WebSocket stream takes protocols');
+  if (!Array.isArray(value)) throw new TypeError('exactProtocols must be an array of protocol names');
+  const names = [];
+  for (const name of value) {
+    if (typeof name !== 'string' || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
+      throw new TypeError(`invalid WebSocket protocol ${JSON.stringify(name)}: expected a non-empty RFC 7230 token`);
+    if (names.includes(name)) throw new TypeError(`duplicate WebSocket protocol ${JSON.stringify(name)}`);
+    names.push(name);
+  }
+  return names;
+}

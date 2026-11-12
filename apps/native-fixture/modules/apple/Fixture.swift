@@ -18,13 +18,16 @@
 // gives the stack a cross-fade through the forwarded delegate.
 //
 // On every Apple host, nodes the Contract marks `hatch` (LLP 1075.003.000)
-// reach `element`: the `badge` gets a context menu, an interaction Exact
-// leaves to the app; each list row's `dot` hatch does nothing, so what a
-// hatched node costs is the cost of being hatched; with `data-violate` the
-// detail's scroller (`detail-list`) gets an inset Exact owns; the `frame`
-// hatch names the app in its web view's user agent before the view is made.
+// reach `element`: the `badge` gets a seal and, on iOS and macOS, a context
+// menu, an interaction Exact leaves to the app; each list row's `dot` hatch
+// does nothing, so what a hatched node costs is the cost of being hatched;
+// with `data-violate` the detail's scroller (`detail-list`) gets an inset
+// Exact owns; the `frame` hatch names the app in its web view's user agent
+// before the view is made, on hosts with WebKit.
 import Foundation
+#if canImport(WebKit)
 import WebKit
+#endif
 #if os(macOS)
 import AppKit
 #else
@@ -188,17 +191,19 @@ final class FixtureModule: ExactModule {
         guard element.isNew else { return }
         #if os(iOS)
         view.addInteraction(UIContextMenuInteraction(delegate: badgeMenu))
-        #else
+        #elseif os(macOS)
         view.menu = NSMenu(title: "Badge \(element.data[.tone] ?? "")")
         #endif
     }
 
+    #if canImport(WebKit)
     /// The frame's configuration before its web view is made (LLP 1020.002 §9).
     override func elementConfiguration(_ element: ExactElement, _ configuration: AnyObject) {
         guard element.hatch == .frame, let configuration = configuration as? WKWebViewConfiguration else { return }
         element.diagnostics.count("configuring")
         configuration.applicationNameForUserAgent = "NativeFixture/1"
     }
+    #endif
 
     override func elementEnded(_ element: ExactElement) {
         element.diagnostics.count("ended")
@@ -315,7 +320,9 @@ final class FixtureTabs: UIViewController {
         control.selectedSegmentIndex = contents.selected
     }
 }
+#endif
 
+#if os(iOS) || os(tvOS)
 /// A native screen: a whole controller in the node's box, a child of the
 /// route's controller (LLP 1075.003 §3.6).
 final class Screen: ExactNativeScreen {
@@ -327,7 +334,9 @@ final class Screen: ExactNativeScreen {
         label.frame = controller.view.bounds
         label.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         controller.view.addSubview(label)
+        #if os(iOS)
         controller.view.backgroundColor = .secondarySystemBackground
+        #endif
         super.init(screen: controller, events: events)
     }
 }

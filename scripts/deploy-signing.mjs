@@ -1,4 +1,4 @@
-import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -77,6 +77,124 @@ export function validateRawIntegers(text) {
 export function canonicalBytes(head) {
   if (!head || typeof head !== 'object' || Array.isArray(head)) refuse('the envelope is not a JSON object');
   return Buffer.from(canonicalJson(head, true), 'utf8');
+}
+
+// ------------------------------------------------------- the envelope's files
+
+/** An envelope's bound and its asset index's, in bytes: `update/src/lib.rs`
+ * `MAX_ENVELOPE_BYTES` and `MAX_ASSET_INDEX_BYTES`, which every client
+ * applies. The asset cards live in the index so that the envelope stays a
+ * pointer card whatever the asset count. */
+export const ENVELOPE_BYTES = 64 * 1024, ASSET_INDEX_BYTES = 4 * 1024 * 1024;
+const kib = (n) => `${(n / 1024).toFixed(1)} KiB`;
+
+/** Named snapshot plans share the asset roster's authenticated cards (LLP
+ * 1126 D2): the index's `plans`, by entry kind. */
+export function entryPlans(assets) {
+  const plans = Object.fromEntries(assets.flatMap(card => {
+    const kind = /^plans\/([A-Za-z][A-Za-z0-9_-]*)\.plan$/.exec(card.name)?.[1];
+    return kind ? [[kind, card]] : [];
+  }));
+  return Object.keys(plans).length ? { plans } : {};
+}
+
+/** `cards`' asset index at `url` (or at `url(sha256)`, for a blob named by its digest): its bytes, the canonical JSON of
+ * `{"assets":[…],"plans":{…}}`, and the envelope's card for it
+ * (`update/src/envelope.rs`). A card's URL resolves against the index's own.
+ * Null for no assets, whose envelope omits `assets`. Refused over its bound. */
+export function assetIndex(cards, url) {
+  if (!cards.length) return null;
+  const bytes = canonicalBytes({ assets: cards, ...entryPlans(cards) });
+  if (bytes.length > ASSET_INDEX_BYTES) refuse(`the asset index is ${kib(bytes.length)} for ${cards.length} assets; the most is ${kib(ASSET_INDEX_BYTES)}`);
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  return { bytes, card: { url: typeof url === 'function' ? url(sha256) : url, sha256, bytes: bytes.length, count: cards.length } };
+}
+
+/** An envelope's bytes as served, refused over its bound with what it holds. */
+export function envelopeBytes(envelope) {
+  const bytes = Buffer.from(JSON.stringify(envelope) + '\n', 'utf8');
+  if (bytes.length > ENVELOPE_BYTES) refuse(`the envelope is ${kib(bytes.length)}; the most is ${kib(ENVELOPE_BYTES)} (its asset index names ${envelope.assets?.count ?? 0} assets)`);
+  return bytes;
+}
+
+/** `envelope` as served: its asset cards moved to the index at `indexUrl`,
+ * the bytes of both (`index` null for no assets), and a line stating each
+ * size against its bound with the card count, so an author sees it at build. */
+export function sealEnvelope({ assets = [], ...envelope }, indexUrl = './assets.json') {
+  const index = assetIndex(assets, indexUrl);
+  if (index) envelope.assets = index.card;
+  const bytes = envelopeBytes(envelope);
+  return { envelope, bytes, index: index?.bytes ?? null, report: envelopeReport(bytes.length, index?.bytes.length ?? null, assets.length) };
+}
+
+/** Both files' sizes against their bounds and the card count, as a line; a
+ * file over its bound is said to be one every client refuses. */
+export function envelopeReport(envelope, index, count) {
+  const over = (n, most) => n > most ? ' (over its bound: every client refuses it)' : '';
+  return `exact.json ${kib(envelope)} of ${kib(ENVELOPE_BYTES)}${over(envelope, ENVELOPE_BYTES)}, ${index === null ? 'no asset index:' : `assets.json ${kib(index)} of ${kib(ASSET_INDEX_BYTES)}${over(index, ASSET_INDEX_BYTES)} for`} ${count} asset${count === 1 ? '' : 's'}`;
+}
+
+export function fileCard(object, name) {
+  if (!object || typeof object !== 'object' || Array.isArray(object)) throw new Error(`the envelope names no ${name}`);
+  if (typeof object.url !== 'string') throw new Error(`${name} has no url`);
+  if (typeof object.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(object.sha256)) throw new Error(`${name}'s sha256 is not 64 lowercase hex digits`);
+  if (!Number.isSafeInteger(object.bytes) || object.bytes < 0) throw new Error(`${name} has no exact nonnegative byte count`);
+}
+
+/** The envelope's card for its asset index, refused over the index's bound
+ * unless `bounded` is false (a web root, which a browser loads at any size). */
+export function indexCard(card, bounded = true) {
+  fileCard(card, 'assets.json');
+  if (!Number.isSafeInteger(card.count) || card.count < 0) refuse('assets.json has no exact nonnegative card count');
+  if (bounded && card.bytes > ASSET_INDEX_BYTES) refuse(`the asset index is ${kib(card.bytes)} for ${card.count} assets; the most is ${kib(ASSET_INDEX_BYTES)}`);
+}
+
+/** exact-update's `safe_name`: a relative path whose segments use only the
+ * POSIX portable filename characters and `@` (`photo@2x.png`), so no
+ * filesystem can fold or normalize two names into one file. */
+function safeAssetName(name) {
+  if (typeof name !== 'string' || !name) throw new Error('an asset has no nonempty name');
+  for (const part of name.split('/')) {
+    if (!part || part === '.' || part === '..') throw new Error(`the asset name ${name} is not a relative path`);
+    if (!/^[A-Za-z0-9._@-]+$/.test(part)) throw new Error(`the asset name ${name} is not portable: segments use A-Z, a-z, 0-9, '.', '_', '-' and '@'`);
+  }
+}
+
+/** exact-update's `check_asset_names`: a roster stages as distinct files on a
+ * case-insensitive filesystem (APFS's default), so no two names differ only
+ * by case and none is a file where another needs a directory. The bake and
+ * every client refuse the same rosters, and name every refused name at once. */
+export function portableAssetNames(names) {
+  const files = new Map(), directories = new Map(), problems = [];
+  for (const name of names) {
+    try { safeAssetName(name); } catch (error) { problems.push(error.message); continue; }
+    const folded = name.toLowerCase(), other = files.get(folded); // ASCII after safeAssetName
+    if (other !== undefined) { problems.push(other === name ? `the envelope names the asset ${name} twice` : `the assets ${other} and ${name} differ only by case, one file on a case-insensitive filesystem`); continue; }
+    if (directories.has(folded)) { problems.push(`the asset ${name} is a file where ${directories.get(folded)} needs a directory`); continue; }
+    for (let end = folded.indexOf('/'); end !== -1; end = folded.indexOf('/', end + 1)) {
+      const directory = folded.slice(0, end);
+      if (files.has(directory)) problems.push(`the asset ${files.get(directory)} is a file where ${name} needs a directory`);
+      if (!directories.has(directory)) directories.set(directory, name);
+    }
+    files.set(folded, name);
+  }
+  if (problems.length) throw new Error(problems.join('\n'));
+}
+
+/** The asset cards of an envelope whose index `card` is these `raw` bytes:
+ * refused unless they are its exact bytes and hold `count` cards with
+ * portable, distinct names (`update/src/envelope.rs` `read_index`). */
+export function readAssetIndex(card, raw, { bounded = true } = {}) {
+  indexCard(card, bounded);
+  if (!raw || raw.length !== card.bytes || createHash('sha256').update(raw).digest('hex') !== card.sha256) refuse('the asset index is not the bytes its envelope names');
+  let index;
+  try { index = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(raw)); } catch (error) { refuse(`the asset index is not JSON: ${error.message}`); }
+  const assets = index?.assets;
+  if (!Array.isArray(assets) || assets.length !== card.count) refuse(`the asset index holds ${Array.isArray(assets) ? assets.length : 'no list of'} assets; its envelope declared ${card.count}`);
+  for (const asset of assets) fileCard(asset, typeof asset?.name === 'string' ? asset.name : 'an asset');
+  portableAssetNames(assets.map((asset) => asset.name));
+  if (index.plans !== undefined && canonicalJson(index.plans) !== canonicalJson(entryPlans(assets).plans ?? {})) refuse("the asset index's plans must index its authenticated plan assets");
+  return assets;
 }
 
 /** An Ed25519 public key from its 32 raw bytes: the SubjectPublicKeyInfo prefix the crypto API wants, then the bytes. */

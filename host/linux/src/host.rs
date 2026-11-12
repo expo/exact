@@ -1039,10 +1039,29 @@ impl<D: DataSource> Host<D> {
             left,
             ..kernel.env().clone()
         };
-        match kernel.set_env(env) {
-            Ok(true) => self.layout_unauthored().map(|_| true),
-            Ok(false) => Ok(false),
-            Err(e) => Err(format!("safe area: {e:?}")),
+        let restyled = kernel
+            .set_env(env)
+            .map_err(|e| format!("safe area: {e:?}"))?;
+        match self
+            .runner
+            .refresh_viewport_geometry()
+            .map_err(|e| format!("safe area: {e:?}"))?
+        {
+            Some(receipt) => {
+                self.presence.unauthored |= restyled;
+                match self.commit(
+                    &[Timed {
+                        at_ms: self.now_ms,
+                        receipt,
+                    }],
+                    None,
+                ) {
+                    Some(error) => Err(error),
+                    None => Ok(true),
+                }
+            }
+            None if restyled => self.layout_unauthored().map(|_| true),
+            None => Ok(false),
         }
     }
 
@@ -1096,7 +1115,9 @@ impl<D: DataSource> Host<D> {
                 {
                     continue;
                 }
-                let size = node.computed_row(exact_kernel::StyleId::FontSize, |s| s.font_size);
+                let size = node.bar_symbol_size().unwrap_or_else(|| {
+                    node.computed_row(exact_kernel::StyleId::FontSize, |s| s.font_size)
+                });
                 sizes.push((node.id, (size > 0.).then_some((size, size))));
             }
         }
@@ -1203,7 +1224,7 @@ impl<D: DataSource> Host<D> {
         };
         match self.runner.set_fold(fold) {
             Ok(Some(receipt)) => {
-                self.presence.unauthored = restyled;
+                self.presence.unauthored |= restyled;
                 self.commit(
                     &[Timed {
                         at_ms: self.now_ms,
@@ -1351,7 +1372,10 @@ impl<D: DataSource> Host<D> {
                 .engine
                 .advance((t.at_ms.min(self.now_ms) / 1000.0).max(self.engine.now()));
             debug_assert!(seek.is_ok(), "the clock never runs backwards here");
-            let sync = self.runner.kernel().motion_sync(&t.receipt);
+            let mut sync = self.runner.kernel().motion_sync(&t.receipt);
+            self.looks_shown
+                .motion
+                .apply(self.runner.kernel(), &mut sync);
             let applied = sync.apply(&mut self.engine);
             debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");
             self.lower_eligibility(&sync);

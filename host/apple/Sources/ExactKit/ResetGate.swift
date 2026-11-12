@@ -87,6 +87,7 @@ enum ResetGate {
         "fieldSelect(_:_:_:now:)": "a field's selection from the old tree",
         "press(_:held:at:now:)": "a press on a view going away",
         "hover(_:over:now:)": "a pointer leaving views going away",
+        "lookMotion(_:states:now:)": "hover or focus state of an old view; the new views report their own states",
         "key(_:_:up:capture:now:)": "a key down on the old tree",
         "scroll(_:metrics:now:)": "an old scroller's offset",
         // #1144's timer calls: each recovers by itself, so a replay would fire it twice.
@@ -126,7 +127,8 @@ enum ResetGate {
         "hostForward(_:now:)": "a forward gesture belongs to the old navigation, whose forward history is not carried",
         "buildTabs(_:now:)": "the old tree's tab panels; the new tree's are built when More shows them",
         "beforeunload(_:now:)": "the old page's unload as it goes",
-        "surfaceRecord(_:_:)": "an old canvas publisher released as the teardown ends it: the new runner starts with no surface records (none is carried), and the new tree's publishers record their own",
+        "surfaceRecord(_:_:)": "an old canvas publisher released during teardown: its release must not clear a kept launch answer, and the new publishers record their own",
+        "canvasPerformanceRecord(_:_:)": "an old canvas publisher's performance sample or release; the new publishers report their own metrics",
         "regionComplete(_:)": "an old generation's region artifact: `RegionController` drops one from another generation before it is told, and the new tree asks its own",
         "fulfillSurface(_:kind:body:now:)": "an old-tree surface completing as its view goes: `completeSurface` drops a completion from another generation before it is told",
         // Told again before the reset returns (Session `presentCommitted`, `applyTogether`): moot.
@@ -145,7 +147,7 @@ enum ResetGate {
         // The session's own steps, which run outside the hold: never set off by a teardown.
         "boot(width:height:)": "the session's boot, outside any hold",
         "bootPlan(_:width:height:)": "the session's boot, outside any hold",
-        "bootEntry(_:kind:props:width:height:)": "a widget entry's boot, outside any hold",
+        "bootEntry(_:kind:props:configuration:width:height:)": "a widget entry's boot, outside any hold",
         "preparePlan(_:width:height:token:)": "a restart's own preparation, before its reset",
         "prepareModule(_:module:token:width:height:letGo:)": "a restart's own preparation, before its reset",
         "commitPlan()": "a restart's own commit, before its reset",

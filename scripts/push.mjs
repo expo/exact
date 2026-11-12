@@ -35,7 +35,7 @@ import { homedir } from 'node:os';
 import { resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Refusal, refuse, loadSigner } from './deploy-signing.mjs';
-import { channelOf, defaultRelease, inspectHead, publishStream } from './deploy.mjs';
+import { admitHead, channelOf, defaultRelease, publishStream } from './deploy.mjs';
 import { classifyArtifacts, cohortReceipt, readBuilds, resolveApp } from './app.mjs';
 import { buildRust, rustBundle, RustBaker } from './rust.mjs';
 import { blobPath, channelOrigin, openOrigin, sha256, streamPath, validateChannel } from './origin.mjs';
@@ -76,8 +76,8 @@ async function streams(origin, app, channel, env) {
     const found = await origin.head(stream);
     if (!found) continue;
     // Apps share a channel's directory on an origin; another app's stream is not ours.
-    try { if (JSON.parse(found.bytes).app?.id !== app.id) continue; } catch { /* inspectHead says why */ }
-    const admission = inspectHead(found, app, stream);
+    try { if (JSON.parse(found.bytes).app?.id !== app.id) continue; } catch { /* admitHead says why */ }
+    const admission = await admitHead(origin, found, app, stream);
     if (!admission.usable || !admission.authenticated) refuse(`${streamPath(stream)}: the head is not admissible (${admission.problem ?? 'unauthenticated'}); run deploy`);
     const cohort = admission.head.cohort;
     if (cohort?.version !== 1 || cohort.compat?.id !== compatibilityId) refuse(`${streamPath(stream)}: the head carries no cohort receipt; run deploy`);
@@ -192,6 +192,13 @@ function gitHead() {
   return r.status === 0 ? r.stdout.trim() : '0'.repeat(40);
 }
 
+/** Whether a save to `file` (relative to the app) changes what a push reads: a source by its type, or any file under
+ * `assets/` or `deck/`, which `carriedAssets` carries whatever its type; never what a build or a tool writes. */
+function pushReads(file) {
+  if (/(^|\/)(target|node_modules|\.git|\.exact)(\/|$)/.test(file) || /(^|\/)\.DS_Store$/.test(file)) return false;
+  return /^(assets|deck)\//.test(file) || /\.(contract|tamber|rs|toml|json|png|jpe?g|webp|gif|svg|ttf|otf|mjs|ts|css|html)$/.test(file);
+}
+
 export async function pusher(opts) {
   const app = resolveApp(opts._[0]);
   requireReleasePins(app);
@@ -254,7 +261,7 @@ export async function pusher(opts) {
       });
     };
     watch(app.dir, { recursive: true }, (_, file) => {
-      if (!file || /(^|\/)(target|node_modules|\.git)(\/|$)/.test(file) || !/\.(contract|tamber|rs|toml|json|png|jpe?g|webp|gif|svg|ttf|otf|mjs|ts|css|html)$/.test(file)) return;
+      if (!file || !pushReads(file)) return;
       clearTimeout(timer);
       timer = setTimeout(() => { console.log(`edit: ${relative(app.dir, resolve(app.dir, file))}`); kick(); }, 60);
     });

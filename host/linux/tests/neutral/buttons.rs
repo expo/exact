@@ -1,5 +1,76 @@
 use super::*;
 
+pub(super) fn control_sizes_follow_the_root_in_measure_and_paint() {
+    let mut source = String::from(
+        "component App\n  view\n    column width=800 font-size=31 background-color=\"white\"\n",
+    );
+    let mut pairs = Vec::new();
+    for (size, rem) in [
+        ("mini", 0.875),
+        ("small", 0.875),
+        ("medium", 1.0),
+        ("large", 1.125),
+    ] {
+        for (variant, button_font, title_font, reference_font) in [
+            ("unsaid", "", "", format!(" font-size=\"{rem}rem\"")),
+            ("button", " font-size=19", "", " font-size=19".into()),
+            (
+                "title",
+                " font-size=19",
+                " font-size=21",
+                " font-size=21".into(),
+            ),
+        ] {
+            let name = format!("{size}-{variant}");
+            source.push_str("      row width=800 height=80 align-items=\"flex-start\"\n");
+            for (suffix, font, title) in [
+                ("", button_font, title_font),
+                ("-ref", reference_font.as_str(), ""),
+            ] {
+                source.push_str(&format!(
+                    "        column width=400 align-items=\"flex-start\"\n          button -exact-control-size=\"{size}\"{font} testId=\"{name}{suffix}\"\n            image \"symbol:book\"\n            text \"MMMM\"{title}\n"
+                ));
+            }
+            pairs.push(name);
+        }
+    }
+    let plan = contract::compile(&source).unwrap();
+    let (mut p, error) = Presenter::boot_with(
+        &plan.encode(),
+        (),
+        (800.0, 1000.0),
+        1.0,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    let _roles = p.host().runner().bind_roles();
+    assert!(error.is_none(), "{error:?}");
+    let mut initial = Vec::new();
+    for root in [16.0, 12.0, 24.0, 12.0, 16.0] {
+        assert!(p.set_root_font_size(root).is_none());
+        for (index, name) in pairs.iter().enumerate() {
+            let reference = format!("{name}-ref");
+            let measured = size(&mut p, name);
+            assert_eq!(measured, size(&mut p, &reference), "{name} at root {root}");
+            let pixels = text_pixels(&mut p, name);
+            assert!(pixels.iter().any(|c| *c != [255; 3]), "visible face");
+            assert_eq!(
+                pixels,
+                text_pixels(&mut p, &reference),
+                "{name} paint at root {root}"
+            );
+            if root == 16.0 {
+                if initial.len() < pairs.len() {
+                    initial.push((measured, pixels));
+                } else {
+                    assert_eq!((measured, pixels), initial[index], "restored {name}");
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn plain_faces_fade_without_a_wash() {
     let mut failures = Vec::new();
     for scheme in ["light", "dark"] {

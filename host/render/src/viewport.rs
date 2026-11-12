@@ -176,6 +176,7 @@ impl Hints {
             height: self.height.unwrap_or(height),
             preferences: page.preferences,
             fold: page.fold,
+            ..page
         };
         let p = &mut viewport.preferences;
         p.dark = self.dark.unwrap_or(p.dark);

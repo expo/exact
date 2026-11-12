@@ -61,9 +61,12 @@ component Harness
   state back = -1
   state sel = 0
   state tick = 0
-  // Time spent busy, measured: steps a suspension skipped still count
+  // The running turn's time, measured: steps a suspension skipped still
+  // count
   state busyMs = 0
   state stepped = 0
+  // The session's output tokens when the running turn started
+  state outBefore = 0
   state anim = ""
   state frameTick = 0
   state quitArmed = false
@@ -150,7 +153,9 @@ component Harness
               // A turn starts when its prompt is sent, not when the step
               // after it runs
               if not session.busy
+                busyMs = 0
                 stepped = performanceNow()
+                outBefore = session.tokensOut
               send sent = submit(text)
         history = [text].concat(history)
         draft = ""
@@ -255,7 +260,7 @@ component Harness
         if session.busy and session.approval.id == ""
           row margin-top="1lh" color="#d78700"
             text `${star(tick)} ${phaseWord(session.phase)}…` font-weight=700
-            text ` (${seconds(busyMs)} · ↓ ${kilo(session.tokensOut)} tokens · esc to interrupt)` white-space="pre" color="#8a8a8a"
+            text ` (${seconds(busyMs)} · ↓ ${kilo(session.tokensOut - outBefore)} tokens · esc to interrupt)` white-space="pre" color="#8a8a8a"
         // An approval takes no default focus: Enter answers nothing, and a
         // key typed before it appeared cannot press it (LLP 1101.001 P11).
         if session.approval.id != ""

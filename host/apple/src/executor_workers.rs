@@ -3,7 +3,10 @@
 use super::*;
 
 /// Start one base thread; the job owns its process reservation.
-pub(super) fn spawn(name: String, body: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+pub(super) fn spawn(
+    name: String,
+    body: Box<dyn FnOnce() + Send>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
     #[cfg(test)]
     if FAIL_BASE_SPAWN.with(|remaining| {
         let position = remaining.get();
@@ -12,10 +15,7 @@ pub(super) fn spawn(name: String, body: Box<dyn FnOnce() + Send>) -> std::io::Re
     }) {
         return Err(std::io::Error::other("injected base worker spawn failure"));
     }
-    std::thread::Builder::new()
-        .name(name)
-        .spawn(body)
-        .map(|_| ())
+    std::thread::Builder::new().name(name).spawn(body)
 }
 
 #[cfg(test)]
@@ -48,6 +48,9 @@ mod portable {
         }
     }
     impl WorkerService for Workers {
+        fn retire(&self) {
+            *self.pool.lock().unwrap() = Some(Err("HTTP workers retired".into()));
+        }
         fn reserve(&self) -> Result<Box<dyn ReservedWorker>, HostError> {
             // Constructing an unused core starts no worker. This is called off
             // the executor state lock, only after its process slots were reserved.
@@ -76,28 +79,18 @@ mod portable {
 
     #[cfg(test)]
     mod tests {
-        use super::super::super::super::{Core, WorkerSlot, LIVE_WORKERS};
+        use super::super::super::super::{worker_budget, Core, WorkerSlot};
         use super::*;
         use std::sync::{atomic::Ordering, mpsc};
         use std::time::{Duration, Instant};
 
         #[test]
         fn portable_slots_live_until_worker_exit_and_failed_creation_never_retries() {
-            const CHILD: &str = "EXACT_WORKER_LIFETIME_CHILD";
-            if std::env::var_os(CHILD).is_none() {
-                let name = std::thread::current().name().unwrap().to_owned();
-                let status = std::process::Command::new(std::env::current_exe().unwrap())
-                    .args([&name, "--exact", "--nocapture", "--test-threads=1"])
-                    .env(CHILD, "1")
-                    .status()
-                    .unwrap();
-                assert!(status.success());
-                return;
-            }
-            assert_eq!(LIVE_WORKERS.load(Ordering::Acquire), 0);
+            let live_workers = worker_budget();
+            assert_eq!(live_workers.load(Ordering::Acquire), 0);
             let wait_for_exit = || {
                 let deadline = Instant::now() + Duration::from_secs(10);
-                while LIVE_WORKERS.load(Ordering::Acquire) != 0 {
+                while live_workers.load(Ordering::Acquire) != 0 {
                     assert!(Instant::now() < deadline, "worker slots did not retire");
                     std::thread::sleep(Duration::from_millis(50));
                 }
@@ -120,11 +113,11 @@ mod portable {
             };
             let unused = core();
             assert_eq!(
-                LIVE_WORKERS.load(Ordering::Acquire),
+                live_workers.load(Ordering::Acquire),
                 super::super::super::THREADS
             );
             drop(unused);
-            assert_eq!(LIVE_WORKERS.load(Ordering::Acquire), 0);
+            assert_eq!(live_workers.load(Ordering::Acquire), 0);
             let mut failed = Vec::new();
             for position in 0..6 {
                 let core = core();
@@ -150,8 +143,11 @@ mod portable {
                 .is_ok());
             drop(started);
             wait_for_exit();
-            LIVE_WORKERS.fetch_add(2, Ordering::AcqRel);
-            let budget = Arc::new(Budget(Mutex::new(vec![WorkerSlot, WorkerSlot])));
+            live_workers.fetch_add(2, Ordering::AcqRel);
+            let budget = Arc::new(Budget(Mutex::new(vec![
+                WorkerSlot(live_workers.clone()),
+                WorkerSlot(live_workers.clone()),
+            ])));
             let workers = Workers::new(2, budget.clone());
             let (entered, started) = mpsc::channel();
             let (release, blocked) = mpsc::channel();
@@ -165,10 +161,10 @@ mod portable {
                 "each thread owns its slot"
             );
             drop((workers, budget));
-            assert!((1..=2).contains(&LIVE_WORKERS.load(Ordering::Acquire)));
+            assert!((1..=2).contains(&live_workers.load(Ordering::Acquire)));
             release.send(()).unwrap();
             let deadline = Instant::now() + Duration::from_secs(10);
-            while LIVE_WORKERS.load(Ordering::Acquire) != 0 {
+            while live_workers.load(Ordering::Acquire) != 0 {
                 assert!(Instant::now() < deadline, "worker slots did not retire");
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -176,15 +172,19 @@ mod portable {
             let budget = Arc::new(Budget::default());
             let workers = Workers::new(1, budget.clone());
             assert!(workers.reserve().is_err());
-            LIVE_WORKERS.fetch_add(1, Ordering::AcqRel);
-            budget.0.lock().unwrap().push(WorkerSlot);
+            live_workers.fetch_add(1, Ordering::AcqRel);
+            budget
+                .0
+                .lock()
+                .unwrap()
+                .push(WorkerSlot(live_workers.clone()));
             assert!(
                 workers.reserve().is_err(),
                 "failed initialization is terminal"
             );
             assert_eq!(budget.0.lock().unwrap().len(), 1, "no second construction");
             drop((workers, budget));
-            assert_eq!(LIVE_WORKERS.load(Ordering::Acquire), 0);
+            assert_eq!(live_workers.load(Ordering::Acquire), 0);
         }
     }
 }

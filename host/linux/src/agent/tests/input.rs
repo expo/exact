@@ -1394,3 +1394,42 @@ fn an_unmarked_long_hold_is_waited_on_before_a_timer() {
     assert_eq!(reply["inflight"], 1, "{reply}");
     assert!(reply.get("held").is_none(), "{reply}");
 }
+
+#[test]
+fn datetime_type_accepts_htmls_space_separator_and_optional_seconds() {
+    let plan = contract::compile("component App\n  state value = \"\"\n  action changed(next: string)\n    value = next\n  view\n    input type=\"datetime-local\" value=value change=changed testId=\"when\"\n").unwrap();
+    let (mut p, error) = Presenter::boot_with(
+        &plan.encode(),
+        (),
+        (300.0, 300.0),
+        1.0,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let k = p.host().kernel();
+    let id = k.node_by_key(k.find_by_test_id("when")[0]).unwrap().id;
+    for text in [
+        "2026-03-04T10:30",
+        "2026-03-04T10:30:00",
+        "2026-03-04 10:30",
+        "2026-03-04T10:30:45.500",
+    ] {
+        let reply = handle(
+            &mut p,
+            &serde_json::json!({"op":"type", "id":id, "text":text}).to_string(),
+        );
+        let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert!(reply.get("error").is_none(), "{text}: {reply}");
+        assert_eq!(
+            p.host()
+                .kernel()
+                .node(id)
+                .unwrap()
+                .props
+                .str(exact_kernel::PropId::Value),
+            Some(text)
+        );
+    }
+}

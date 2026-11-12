@@ -323,10 +323,12 @@ mod tests {
         write(".exact/backend-origin", "http://127.0.0.1:4412");
         assert!(resident().unwrap().contains("4412"));
         let warning = || {
-            serde_json::from_str::<Option<String>>(
-                &std::fs::read_to_string(stage.0.join("__exact_backend_warning.json")).unwrap(),
+            serde_json::from_str::<serde_json::Value>(
+                &std::fs::read_to_string(stage.0.join("__exact_backend.json")).unwrap(),
             )
-            .unwrap()
+            .unwrap()["warning"]
+                .as_str()
+                .map(str::to_string)
         };
         assert!(warning()
             .unwrap()

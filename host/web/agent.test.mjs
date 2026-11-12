@@ -16,11 +16,12 @@ import { appRootFontSize } from './navigation/type.js';
 import { grantOrigins } from './navigation/grant-origins.js';
 import { storageKey } from './storage-environment.js';
 import { open } from '../../scripts/agent.mjs';
-import { launchFacts, launchEnvironment, parseFlags } from '../../scripts/agent-launch.mjs';
+import { suiteBrowser, launchFacts, launchEnvironment, parseFlags } from '../../scripts/agent-launch.mjs';
 import { nodeNamed } from '../../scripts/agent-test.mjs';
-import { browserMissing } from '../../scripts/agent-playwright.mjs'; import { required } from '../../scripts/coverage.mjs';
+import { browserMissing } from '../../scripts/agent-playwright.mjs'; import { required, need } from '../../scripts/coverage.mjs';
 import { declaration, deferred, fixture, requestClock, source, timedRequests } from './glue-fixture.mjs';
 
+const engineTest = Object.fromEntries(await Promise.all(['chromium', 'firefox', 'webkit'].map(async e => [e, need(e, await browserMissing(e))])));
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? fileURLToPath(new URL('../../target', import.meta.url)), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
 
 const mapAt = (digest, line = 12) => ({digest, nodes: [{file: '/app/ui/bubble.contract', line, col: 3, end_col: 9, component: 'Bubble',
@@ -722,7 +723,7 @@ const inputCode = inputSource.replace(/^export (async function|function|const) /
 const inputScript = new vm.Script(inputCode + '\n' + declaration('attach'), { filename: 'input-glue.js' });
 
 function inputFixture() {
-  const listeners = new Map(), windowListeners = new Map(), frames = new Map(), sent = [], captured = [];
+  const listeners = new Map(), windowListeners = new Map(), documentListeners = new Map(), frames = new Map(), sent = [], captured = [];
   let serial = 0;
   const el = { dataset: {}, inert: false, disabled: false, isConnected: true,
     addEventListener(kind, fn) { const list = listeners.get(kind) ?? []; list.push(fn); listeners.set(kind, list); },
@@ -733,7 +734,14 @@ function inputFixture() {
     views: new Map([[7, el]]), retiredViews: new WeakSet(), frames, sent, captured, el,
     root: { querySelectorAll: s => s.includes('aria-modal') ? [] : buttons, addEventListener() {}, contains: () => true }, // press feedback's listener: press.test.mjs drives it
     // The shortcuts' keydown listens in the capture phase, a pressable's activation in the bubble phase.
-    document: { addEventListener(kind, fn, capture) { if (kind === 'keydown') f[capture ? 'keydown' : 'keyActivate'] = fn; }, activeElement: { closest: () => null }, getElementById: id => (id === 'exact-snap' ? {} : null), styleSheets: [], documentElement: { dataset: {} } },
+    document: {
+      addEventListener(kind, fn, capture) {
+        if (kind === 'keydown') f[capture ? 'keydown' : 'keyActivate'] = fn;
+        const list = documentListeners.get(kind) ?? []; list.push(fn); documentListeners.set(kind, list);
+      },
+      removeEventListener(kind, fn) { documentListeners.set(kind, (documentListeners.get(kind) ?? []).filter(g => g !== fn)); },
+      activeElement: { closest: () => null }, getElementById: id => (id === 'exact-snap' ? {} : null), styleSheets: [], documentElement: { dataset: {} },
+    },
     HTMLIFrameElement: class {}, HTMLInputElement: class {}, HTMLTextAreaElement: class {}, HTMLButtonElement: class {},
     MutationObserver: class { observe() {} disconnect() {} takeRecords() { return []; } }, queueMicrotask, Element: class {}, matchMedia: () => ({ matches: false, addEventListener() {} }), // the input glue's start: sheets, looks, hover
     inertAncestor: node => node.inert, getComputedStyle: () => ({ visibility: 'visible' }),
@@ -746,6 +754,7 @@ function inputFixture() {
     removeEventListener(kind, fn) { windowListeners.set(kind, (windowListeners.get(kind) ?? []).filter(g => g !== fn)); },
   });
   f.host = f;
+  el.ownerDocument = f.document;
   inputScript.runInContext(f);
   f.attach(el, 7, ['pan']);
   function event(extra = {}) {
@@ -754,16 +763,16 @@ function inputFixture() {
       preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; },
       stopImmediatePropagation() { this.stopped = true; }, ...extra };
   }
-  return { f, el, buttons, frames, sent, captured, windowListeners,
-    // An event at this node reaches the window's capture listeners first; one outside it, only them.
-    outside(kind, extra) { const e = event(extra); for (const fn of [...windowListeners.get(kind) ?? []]) fn(e); return e; },
+  return { f, el, buttons, frames, sent, captured, windowListeners, documentListeners,
+    // Capture reaches the window, then the document; an outside event skips this node's listeners.
+    outside(kind, extra) { const e = event(extra); for (const fn of [...windowListeners.get(kind) ?? [], ...documentListeners.get(kind) ?? []]) fn(e); return e; },
     load() {
       vm.runInContext(`inputHandlers = createInputHandlers({ root, views, retiredViews,
         ready: () => inputReady, inertAncestor,
         dispatch: (id, payload) => send(wasm.exact_dispatch(id, 20, writeIn(payload), now())),
       }); inputReady = true;`, f);
     },
-    pointer(kind, extra) { const e = event(extra); for (const fn of [...windowListeners.get(kind) ?? [], ...listeners.get(kind) ?? []]) fn(e); return e; },
+    pointer(kind, extra) { const e = event(extra); for (const fn of [...windowListeners.get(kind) ?? [], ...documentListeners.get(kind) ?? [], ...listeners.get(kind) ?? []]) fn(e); return e; },
     key(extra) { const e = event({ key: 'k', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false, ...extra }); f.keydown(e); return e; },
     tick() { const pending = [...frames.values()]; frames.clear(); pending.forEach(fn => fn()); },
   };
@@ -842,6 +851,27 @@ test('a pan under a nested button hears its contact on the window until it begin
   h.pointer('pointermove', { ...nested, clientX: 15 }); h.tick();
   h.pointer('pointerup', { ...nested, clientX: 15, buttons: 0 });
   expect(h.sent).toEqual([[7, 20, '10,0', 0], [7, 20, '5,0', 0]]);
+});
+
+test('a pan waiting for an inner swipe ends at its document and removes its end listeners', () => {
+  for (const end of ['pointerup', 'pointercancel']) {
+    const h = inputFixture(); h.load();
+    (h.f.exact ??= {}).contacts = new Map([[1, 'pending']]);
+    const count = () => ['pointerup', 'pointercancel'].map(k => h.documentListeners.get(k)?.length ?? 0);
+    const base = count();
+    h.pointer('pointerdown');
+    expect(count()).toEqual(base.map(n => n + 1));
+    expect(h.captured).toEqual([]);
+    h.pointer('pointermove', { clientX: 20 }); h.tick();
+    expect(h.sent).toEqual([]);
+    h.outside(end, { clientX: 30 });
+    expect(count()).toEqual(base);
+    h.f.exact.contacts.clear();
+    h.pointer('pointermove', { clientX: 40 }); h.tick();
+    expect(h.sent).toEqual([]);
+    h.pointer('pointerdown'); h.pointer('pointerup', { clientX: 8 });
+    expect(h.sent).toEqual([[7, 20, '8,0', 0]]);
+  }
 });
 
 test('moved keyboard shortcuts preserve modifiers, readiness, repeat and modal gating', () => {
@@ -1368,3 +1398,46 @@ test('an install outside a drive waits for the drive of each app it installs, an
 }, 60000);
 test('tap parses every mouse form, refuses a word it does not use, and a carrier that cannot deliver one says unsupported (#107)', async () => {
   const { tapWords: t, pointerGap: gap } = await import('../../scripts/agent.mjs'); expect(t(['p', 'auxclick', 'at', '30', '40', 'modifiers', 'Meta'])).toEqual(['p', { auxclick: true, at: [30, 40], modifiers: 'Meta' }]); expect(t(['p', 'clicks', '3'])).toEqual(['p', { clicks: 3 }]); expect(t(['p', 'wheel', '0', '20', 'at', '10', '10'])).toEqual(['p', { wheel: [0, 20], at: [10, 10] }]); expect(t(['p', 'down', 'at', '10', '20', 'modifiers', 'Shift'])).toEqual(['p', { down: true, at: [10, 20], modifiers: 'Shift' }]); expect(t(['up', 'modifiers', 'Shift'], true)).toEqual([null, { phase: 'up', modifiers: 'Shift' }]); for (const words of [['p', 'mouse', 'foo'], ['p', 'auxclick', 'at', '1'], ['p', 'hover', 'x'], ['p', 'clicks'], ['p', 'frob']]) expect(() => t(words)).toThrow(/unknown word|takes a number/); expect(gap('macos', undefined, { auxclick: true })).toBeNull(); expect(gap('web', 'chrome', { clicks: 3, modifiers: 'Shift', down: true })).toBeNull(); for (const host of ['linux', 'windows', 'ios']) expect(gap(host, undefined, { wheel: [0, 1], at: [1, 1] })).toContain('a wheel at a point'); expect(gap('web', 'firefox', { drag: { modifiers: 'Shift' } })).toContain('modifiers'); });
+
+for (const engine of ['chromium', 'firefox', 'webkit']) engineTest[engine](`${engine}: typing accepts sanitized valid values and restores refused unbound values`, async () => {
+  const browser = await suiteBrowser(engine);
+  const server = Bun.serve({hostname: '127.0.0.1', port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/favicon.ico') return new Response(null, {status: 204});
+    return path === '/' ? new Response('<!doctype html><body></body>', {headers: {'content-type': 'text/html'}})
+      : new Response(Bun.file(new URL('.' + path, import.meta.url)));
+  }});
+  const page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const results = await page.evaluate(async engine => {
+      const { typeControl } = await import('/agent-input.js');
+      const cases = [
+        ['datetime-local', '2026-03-04T10:30:00', '2026-03-04T10:30'],
+        ['datetime-local', '2026-03-04 10:30', '2026-03-04T10:30'],
+        ['datetime-local', '2026-03-04T10:30:45.500', engine === 'firefox' ? '2026-03-04T10:30:45.500' : '2026-03-04T10:30:45.5'],
+        ['time', '10:30:00', '10:30:00'], ['time', '10:30:45.500', '10:30:45.500'],
+        ['color', '#ABCDEF', '#abcdef'], ['number', '1e2', '1e2'],
+        ['number', '01.50', '01.50'], ['email', '  a@example.com \n', 'a@example.com'],
+        ['url', '  https://example.com/ \n', 'https://example.com/'],
+        ['datetime-local', 'not-a-date', null], ['time', '25:00', null],
+        ['number', 'not-a-number', null], ['color', 'not-a-color', null],
+        ['datetime-local', '', ''],
+      ];
+      return cases.map(([kind, text, expected]) => {
+        const el = document.createElement('input'); el.type = kind; document.body.append(el);
+        el.value = kind === 'color' ? '#123456' : kind === 'datetime-local' ? '2026-01-01T00:00' : kind === 'time' ? '10:00' : '3';
+        const before = el.value, heard = [];
+        for (const event of ['input', 'change']) el.addEventListener(event, () => heard.push([event, el.value]));
+        const reply = typeControl(el, { id: 1, text }, () => false, () => {});
+        const result = {kind, text, expected, before, value: el.value, heard, error: !!reply.error};
+        el.remove(); return result;
+      });
+    }, engine);
+    for (const r of results) {
+      expect(r.error, `${r.kind} ${r.text}`).toBe(r.expected === null);
+      expect(r.value, `${r.kind} ${r.text}`).toBe(r.expected ?? r.before);
+      expect(r.heard).toEqual(r.expected === null ? [] : [['input', r.expected], ['change', r.expected]]);
+    }
+  } finally { await page.close(); await browser.close(); server.stop(true); }
+}, 30000);

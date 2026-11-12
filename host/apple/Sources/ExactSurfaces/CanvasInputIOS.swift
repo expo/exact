@@ -11,6 +11,7 @@ final class CanvasInputHost {
     weak var view: NodeView?
     private var inactive: NSObjectProtocol?
     private var touches: [ObjectIdentifier: Int] = [:]
+    private var samples: [ObjectIdentifier: (sequence: CanvasTouchSamples, buttons: Int)] = [:]
     private var keys: Set<String> = []
     private var nextTouch = 1
     private let multiple: Bool
@@ -93,10 +94,17 @@ final class CanvasInputHost {
     /// locked scene never delivers: end every live touch before GCMouse speaks.
     private func cancelTouches() {
         guard let view else { return }
-        for (_, id) in touches.sorted(by: { $0.value < $1.value }) {
-            view.canvases?.input(view, ["t": "pointer", "phase": "cancel", "id": id, "x": 0, "y": 0, "dx": 0, "dy": 0, "kind": "mouse", "buttons": 0])
+        for (token, id) in touches.sorted(by: { $0.value < $1.value }) {
+            guard var sequence = samples[token]?.sequence else { continue }
+            sequence.cancel { phase, sample, _ in
+                let p = view.local(sample.point)
+                view.canvases?.input(view, ["t": "pointer", "phase": phase, "id": id,
+                    "x": p.x, "y": p.y, "dx": 0, "dy": 0, "kind": "mouse", "buttons": 0],
+                    timestamp: sample.timestamp)
+            }
         }
         touches.removeAll()
+        samples.removeAll()
     }
     private func locked(dx: CGFloat, dy: CGFloat, bit: Int, down: Bool) {
         guard let view, sceneLocked else { return }
@@ -110,7 +118,7 @@ final class CanvasInputHost {
     private static func hasFocus(_ view: UIView) -> Bool { view.isFirstResponder || view.subviews.contains(where: hasFocus) }
     func blur() {
         unlock()
-        touches.removeAll(); keys.removeAll()
+        touches.removeAll(); samples.removeAll(); keys.removeAll()
         if let view {
             if let c=view.canvases as? CanvasesHost, let e=c.entries[view.id] {c.cancelControls(e)}
             view.canvases?.input(view, ["t": "blur"])
@@ -131,12 +139,13 @@ final class CanvasInputHost {
             let p = source.local(touch.location(in: nil))
             if source.isSurfaceControl || source.ownsSurfaceControl {
                 let ok = source.control(phase, id: id, point: p, timestamp: touch.timestamp)
-                if phase == "up" || phase == "cancel" { touches.removeValue(forKey: token) }
+                if phase == "up" || phase == "cancel" {
+                    touches.removeValue(forKey: token); samples.removeValue(forKey: token)
+                }
                 sent = ok || sent; continue
             }
             if phase == "down" { lock() }
             if sceneLocked { cancelTouches(); continue } // the locked mouse speaks through GCMouse
-            let from = phase == "down" ? p : source.local(touch.previousLocation(in: nil))
             // An iPad's mouse or trackpad (an indirect pointer) reports its buttons.
             #if os(tvOS)
             // tvOS has no mouse buttons.
@@ -146,8 +155,24 @@ final class CanvasInputHost {
             let buttons = phase == "up" || phase == "cancel" ? 0 : !mouse ? 1
                 : (mask.contains(.primary) ? 1 : 0) | (mask.contains(.secondary) ? 2 : 0) | (mask.contains(.button(3)) ? 4 : 0)
             #endif
-            view.canvases?.input(view, ["t": "pointer", "phase": phase, "id": id, "x": p.x, "y": p.y, "dx": p.x - from.x, "dy": p.y - from.y, "kind": mouse ? "mouse" : "touch", "buttons": buttons], timestamp: touch.timestamp)
-            if phase == "up" || phase == "cancel" { touches.removeValue(forKey: token) }
+            let current = CanvasTouchSamples.Sample(point: touch.location(in: nil), timestamp: touch.timestamp)
+            let coalesced = (event?.coalescedTouches(for: touch) ?? []).map {
+                CanvasTouchSamples.Sample(point: $0.location(in: nil), timestamp: $0.timestamp)
+            }
+            var sequence = samples[token]?.sequence ?? CanvasTouchSamples()
+            let previousButtons = samples[token]?.buttons ?? buttons
+            sequence.forward(phase: phase, current: current, coalesced: coalesced) { part, sample, delta in
+                let held = part == "move" && (phase == "up" || phase == "cancel") ? previousButtons : buttons
+                let p = source.local(sample.point)
+                let from = source.local(CGPoint(x: sample.point.x - delta.x, y: sample.point.y - delta.y))
+                view.canvases?.input(view, ["t": "pointer", "phase": part, "id": id,
+                    "x": p.x, "y": p.y, "dx": p.x - from.x, "dy": p.y - from.y,
+                    "kind": mouse ? "mouse" : "touch", "buttons": held], timestamp: sample.timestamp)
+            }
+            samples[token] = (sequence, buttons)
+            if phase == "up" || phase == "cancel" {
+                touches.removeValue(forKey: token); samples.removeValue(forKey: token)
+            }
             sent = true
         }
         return sent

@@ -8,6 +8,15 @@
 use super::*;
 
 impl<D: DataSource> Host<D> {
+    pub(crate) fn canvas_performance_record(
+        &mut self,
+        name: &str,
+        json: Option<&str>,
+    ) -> Option<String> {
+        let answer = self.runner.set_canvas_performance(name, json);
+        self.told(answer, "canvas performance")
+    }
+
     /// A live design batch or snapshot frame from the dev server (LLP 1121
     /// D13, stage 4), set in place in one commit: `None` when applied or
     /// already this build's design, else why not (`stale`: fetch the

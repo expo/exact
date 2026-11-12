@@ -74,6 +74,8 @@ final class ControlHost: NSObject {
     var kinds: [UInt32: String] = [:]
     /// The size last reported per control, so each is published once.
     private var reported: [UInt32: CGSize] = [:]
+    /// Sizes measured and not yet reported (`reportMeasured`).
+    private var measured: [(UInt32, CGSize?)] = []
     /// A select's menu as last built, so a batch that leaves it alone does not rebuild it.
     var menus: [UInt32: SelectMenu] = [:]
     /// A range's last reported value while it moves, so each is sent once.
@@ -224,16 +226,30 @@ final class ControlHost: NSObject {
                 sizes.append((owner.id, natural))
             }
         }
-        // Published outside the batch being applied, as images' are.
-        // A control destroyed before then reports nothing.
         if !sizes.isEmpty {
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                let live = sizes.filter { self.controls[$0.0] != nil && self.presenter.views[$0.0] != nil }
-                if !live.isEmpty { self.presenter.onIntrinsic?(live) }
-            }
+            measured += sizes
+            DispatchQueue.main.async { [weak self] in self?.presenter.session?.reportMeasured() }
         }
         syncProgress()
+    }
+
+    /// Sizes measured and not yet reported.
+    var owesSizes: Bool { !measured.isEmpty }
+
+    /// Lays out with the sizes measured since the last report, when the session
+    /// says (`ExactSession.reportMeasured`): once the batch being applied is,
+    /// before its frame shows, so a box under a layout transition never shows
+    /// where the default size put it (#134); else, for a sync outside a batch,
+    /// on the next turn or once the owner's earlier batches land. A control
+    /// destroyed before then reports nothing. A layout can size a control
+    /// again: a few rounds, as it settles.
+    func reportMeasured() {
+        for _ in 0..<3 where !measured.isEmpty {
+            var latest: [UInt32: CGSize?] = [:]
+            for (id, size) in measured where controls[id] != nil && presenter.views[id] != nil { latest[id] = size }
+            measured = []
+            if !latest.isEmpty { presenter.onIntrinsic?(latest.map { ($0.key, $0.value) }) }
+        }
     }
 
     @objc private func changed(_ sender: NSControl) {

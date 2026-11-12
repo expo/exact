@@ -40,13 +40,17 @@ The only required reading; the rest is lookup. A website reads [Start here: a we
 
 ```sh
 bun <exact2>/scripts/exact.mjs new ~/groceries && cd ~/groceries
-bun exact.mjs pattern      # lists the starters; `pattern <name>` writes one; source: docs/patterns/<name>/app.contract in exact2
+bun exact.mjs pattern      # lists the starters; `pattern <name>` writes one; source: docs/patterns/<name>/app.contract in Exact
 bun exact.mjs ios --prebuild  # the first iOS build: ten to fifteen minutes, in the background; it names iOS in app.json
 ```
 
 `new` also takes `--name Groceries --bundle-id com.yourcompany.groceries --with ios,android`. The folder's name is lowercase with hyphens, not `exact` or ending `-web`, `-apple`, `-linux`, `-gpu`.
 `bun <exact2>/scripts/exact.mjs setup` takes a few minutes, a first macOS or iOS build ten to fifteen on a laptop, later builds a minute or two.
 Run each once and let it finish, in the background with a completion notification if your tool has one, rather than polling its log.
+
+On Linux or Windows through WSL, install the [iOS cross tools](../README.md#1-install-the-tools)
+first. `ios` builds a simulator bundle without installing it; `ios --prebuild` does so
+in the background. Running an iOS simulator, including `verify ios` and `agent ios`, needs macOS.
 
 Start from the nearest pattern. The screen `exact new` writes, and its tests in
 `app.test.contract`, are placeholders: replace both. `exact.mjs` runs from any
@@ -97,7 +101,7 @@ required tool, device or simulator is unavailable, report that target as unteste
 |iOS|`bun exact.mjs verify ios`|`bun exact.mjs ios --run`|
 |Android|`bun exact.mjs verify android`|`bun exact.mjs android --run`|
 |Windows|`bun exact.mjs verify windows`|`bun exact.mjs windows --run`|
-|macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos "screenshot mac.png"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
+|macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos --chrome platform "clock data" "screenshot .exact/mac.png window"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
 |Linux|`bun exact.mjs linux`, then `bun exact.mjs test linux`|The Linux host is headless; inspect it with `bun exact.mjs agent linux tree` after building.|
 
 There is no `verify macos` or `verify linux`. Inspect the launched native app for
@@ -117,6 +121,8 @@ bun exact.mjs contract vocab list-rows search swipe            # a list with sea
 bun exact.mjs contract vocab for match persist grouped-form choice   # keywords, a settings form
 bun exact.mjs contract vocab timers dates-and-days task        # a timer, a day's log
 ```
+
+For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md).
 
 |Pattern|Already has|
 |---|---|
@@ -181,8 +187,8 @@ fragment is the same screen: `/item/7#moves` opens at its `id="moves"` once its 
 and a `link href="#moves"` goes there. Every host, the web
 too, hides a stack's covered routes itself (not the page under a sheet, nor a wide split's list
 beside its detail); `for e in stack(nav)` keeps them mounted with their scroll, which `[top(nav)]`
-loses. A query follows the path:
-`` path("home") + `?q=${v}` ``. This list takes the scroll's place:
+loses. A query follows the path, its value encoded:
+`` path("home") + `?q=${encodeURIComponent(v)}` ``. This list takes the scroll's place:
 
 ```contract
 shape Item
@@ -249,7 +255,10 @@ component Groceries
   (`first(xs)`, `round(n)`). What differs: no truthiness; absence is an option (`none`,
   `some(x)`, `match`), not `null`; a value never changes (`xs.concat([x])`, a record copy
   `Shape(old, field=value)`); `==` compares lists and records by value; a stored number is
-  finite (a `NaN` refuses the commit). A presentation order by one key is
+  finite (a `NaN` refuses the commit). Write `n = n - 1` in an action, not `--n`;
+  double negation is `-(-n)` or `- -n`. Numeric literals are decimal without leading
+  zeroes (`0.5` is valid); write `8`, not `010` or `0o10`.
+  A presentation order by one key is
   `sortBy(xs, x => x.name)`, stable (`"desc"` third; a second key is an earlier `sortBy`), not
   `sort`; grouping, joining and a stored or locale order are the data module's, and the view
   names the order it relies on where it reads it (`resource tasks = loadTasksByDueDate()`).

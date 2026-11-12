@@ -367,6 +367,8 @@ extension ExactExtensions {
         tables[ObjectIdentifier(m)] = tracks
         return ExactPackageContext(
             agent: module.agent && !real.contains(name), session: session, hostSession: module.poster["owner"] ?? "",
+            label: module.poster["session"].flatMap { $0.isEmpty ? nil : $0 },
+            data: module.data, cache: module.cache, temporary: module.temporary,
             changed: { [weak module] topic in module?.changed(topic) },
             log: { [weak module] line in module?.diagnostics.log(line) },
             now: { [weak module] in module?.now() ?? 0 },
@@ -411,14 +413,14 @@ extension ExactExtensions {
                 return box["reply"]
             },
             pads: ExactPads(driven: module.agent, injected: injectedPads),
-            after: { [weak module] ms, body in
+            after: { [weak module] ms, coalescing, body in
                 // A host without the session clock's timer: the wall's.
                 guard let module, module.afterFn != nil else {
                     let work = DispatchWorkItem(block: body)
                     DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000, execute: work)
                     return work.cancel
                 }
-                return module.after(ms, body).stop
+                return module.after(ms, coalescing: coalescing, body).stop
             },
             regions: ExactRegions { op, args in
                 let box = NSMutableDictionary(dictionary: args)

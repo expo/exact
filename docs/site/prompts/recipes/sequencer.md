@@ -1,5 +1,5 @@
 ```prompt Add a step sequencer
-Add a step sequencer to the Exact app in this folder: lanes of steps that play sounds in a loop, with Play and Pause. Use https://github.com/expo/exact/blob/main/docs/recipes/sequencer.md as the source for each step. The exact2 checkout has the same page at docs/recipes/sequencer.md.
+Add a step sequencer to the Exact app in this folder: lanes of steps that play sounds in a loop, with Play and Pause. Use https://github.com/expo/exact/blob/main/docs/recipes/sequencer.md as the source for each step. The Exact checkout has the same page at docs/recipes/sequencer.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not give the lanes (their sounds, steps, beats a step and hits) and the tempo, propose them and ask me before you write code. Use only sound files that are in the app's folder; if there are none, ask me for them.

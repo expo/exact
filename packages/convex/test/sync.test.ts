@@ -150,7 +150,6 @@ test('a new token withholds answers until Convex confirms it, and keeps the ones
   const { sync } = opened();
   sync.frame(transition(version(0, 0, T0), version(1, 0, T1), [updated(0, [HELLO])]));
   expect(sync.setAuth('jwt')).toEqual([{ type: 'Authenticate', tokenType: 'User', value: 'jwt', baseVersion: 0 }]);
-  expect(sync.setAuth('jwt')).toEqual([]);
   const asked = sync.ask(1, 'messages:list', { channel: 'general' });
   expect(asked.read()).toBeUndefined();
   // The Transition at the new identity names no query: its result is the same for this person (recorded: Convex
@@ -158,6 +157,8 @@ test('a new token withholds answers until Convex confirms it, and keeps the ones
   sync.frame(transition(version(1, 0, T1), version(1, 1, T2)));
   await asked.wait;
   expect(sync.ask(2, 'messages:list', { channel: 'general' }).read()).toEqual({ ok: true, value: [HELLO] });
+  // The token Convex has, asked for again, sends nothing.
+  expect(sync.setAuth('jwt')).toEqual([]);
   // Signed out: the same, with no token.
   expect(sync.setAuth(undefined)).toEqual([{ type: 'Authenticate', tokenType: 'None', baseVersion: 1 }]);
   expect(sync.ask(2, 'messages:list', { channel: 'general' }).read()).toBeUndefined();

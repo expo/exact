@@ -234,6 +234,11 @@
           "_comment": "@ref LLP 1156.005 D4: `resource ... transient`. The runner neither keeps this resource's answer in the device's store nor seeds a launch from one, and a boot forgets an entry an earlier build kept. It is still asked again at `data_ready` as any store reader is."
         },
         {
+          "name": "keep",
+          "codec": "bool",
+          "_comment": "Opt-in kept launch answer for an exactSurface reader. Only successful live publications are stored; other runner-owned facts cannot opt in."
+        },
+        {
           "name": "gate",
           "codec": "range:args",
           "_comment": "@ref LLP 1161.002 D1: empty for a resource asked whenever its arguments are ready; for `resource r = source(args) when cond as shape S`, one entry, `cond`, read as a derive is. While it is false the resource is idle: nothing is asked, a request in flight is let go (an upload's goes on), `pending` and `failed` are false, the value it showed stays and is not current. When it turns true the resource is asked, forced."
@@ -488,6 +493,7 @@
     {
       "name": "timers",
       "fields": [
+        { "name": "change", "codec": "bool" },
         { "name": "wait", "codec": "u8" },
         { "name": "max_ms", "codec": "u32" },
         { "name": "tolerance_ms", "codec": "u32" },
@@ -987,6 +993,11 @@
         {
           "name": "binds",
           "codec": "str"
+        },
+        {
+          "name": "agent",
+          "codec": "str",
+          "_comment": "LLP 1133.012 §9: the interface's agent vocabulary as a JSON object, including a view-only interface with no module names."
         }
       ]
     },

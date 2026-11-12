@@ -347,8 +347,15 @@ impl Parser {
                 span,
             });
         }
+        // Any JSON value; `as` and `expect`, the only other words after the
+        // path, are not JSON.
         let body = match self.peek_kind() {
-            TokenKind::Punct("{") | TokenKind::Punct("[") => Some(self.json_value()?),
+            TokenKind::Punct("{" | "[" | "-") | TokenKind::Str(_) | TokenKind::Number(_) => {
+                Some(self.json_value()?)
+            }
+            TokenKind::Ident(w) if matches!(w.as_str(), "true" | "false" | "null") => {
+                Some(self.json_value()?)
+            }
             _ => None,
         };
         let persona = if self.at_ident("as") {

@@ -60,6 +60,7 @@ pub const HAPTIC_KINDS: [&str; 10] = [
 
 pub mod shared;
 pub mod strings;
+pub mod surface_arguments;
 pub mod value;
 
 /// Generated from `tables/format.json`.
@@ -563,6 +564,17 @@ impl Plan {
             }
         }
         for (i, t) in self.timers.iter().enumerate() {
+            if t.change
+                && (!t.keyed
+                    || !t.once
+                    || t.frame
+                    || t.interval_ms != 0
+                    || t.wait != 0
+                    || t.max_ms != 0
+                    || t.tolerance_ms != 0)
+            {
+                return Err(PlanError::TimerWait { timer: i as u32 });
+            }
             if (t.tolerance_ms != 0 && (t.wait != 0 || t.frame))
                 || t.wait > 4
                 || (t.wait != 0 && t.frame)
@@ -573,7 +585,7 @@ impl Plan {
             if t.frame && (t.interval_ms != 0 || t.once) {
                 return Err(PlanError::FrameTimer { timer: i as u32 });
             }
-            if !t.frame && t.interval_ms == 0 {
+            if !t.frame && !t.change && t.interval_ms == 0 {
                 return Err(PlanError::ZeroInterval { timer: i as u32 });
             }
         }
@@ -967,6 +979,7 @@ pub const RUNNER_OWNED_SOURCES: &[&str] = &[
     "exactViewport",
     "exactPage",
     "exactSurface",
+    "exactCanvasPerformance",
     "exactTime",
     "exactTransport",
     "exactMIDI",
@@ -1017,6 +1030,7 @@ impl Plan {
         interface: (&str, &str),
         displayed: bool,
         binds: &[&str],
+        agent: &str,
     ) {
         let row = ViewsRow {
             tag: self.intern(tag),
@@ -1024,6 +1038,7 @@ impl Plan {
             package: self.intern(interface.1),
             displayed,
             binds: self.intern(&binds.join(" ")),
+            agent: self.intern(agent),
         };
         self.views.push(row);
     }

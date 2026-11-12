@@ -166,7 +166,11 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         // A dialog its sheet's height caps (`HostBlock.Axis.fit`) overflows
         // its box, and the sheet scrolls the overflow, as the web's modal
         // dialog (`overflow: auto` under its `max-height`) scrolls itself.
-        let overflow = dialog.scrollView != nil ? 0 : dialog.container.subviews.lazy.compactMap { $0 as? NodeView }.map(\.laidOutFrame.maxY).max() ?? 0
+        // Flat children have no view, but their layout extends that range too (LLP 1068 §6.1).
+        let views = dialog.container.subviews.lazy.compactMap { $0 as? NodeView }.map(\.laidOutFrame.maxY).max() ?? 0
+        let flats = dialog.presenter?.flats
+        let leaves = (flats?.children(of: dialog.id) ?? []).compactMap { flats?.leaves[$0]?.layout.maxY }.max() ?? 0
+        let overflow = dialog.scrollView != nil ? 0 : max(views, leaves)
         let port = max(0, scroller.bounds.width - inset.left - inset.right)
         let content = CGSize(width: max(port, origin.x + size.width),
                              height: max(box.height, origin.y + max(size.height, overflow)))

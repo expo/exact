@@ -88,9 +88,9 @@ component App
               main display="flex" flex-direction="column" gap=16 padding=16 max-width="48rem" margin-left="auto"
                 margin-right="auto"
                 text "Planets" role="heading" aria-level=1
-                row gap=8 align-items="center"
+                row gap=8 align-items="center" flex-wrap="wrap"
                   text "Kind" id="kind-label"
-                  select value=kind change=pickKind aria-labelledby="kind-label" testId="kind"
+                  select value=kind change=pickKind aria-labelledby="kind-label" testId="kind" min-width=0
                     option "All kinds" value=""
                     for k in ["Rocky", "Gas giant", "Ice giant"] key=k
                       option k value=k

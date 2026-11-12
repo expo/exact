@@ -18,6 +18,7 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
         ("exactPage", page::FIELDS, "page"),
         ("exactDelivery", &delivery::FIELDS[..], "delivery"),
         ("exactSurface", &[][..], "surfaces"),
+        ("exactCanvasPerformance", &[][..], "canvasPerformance"),
         (
             "exactActivities",
             &["activities", "frequentPushesEnabled", "linked"][..],
@@ -37,16 +38,35 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
             if t.kind != exact_plan::TypeKind::Record {
                 return Err(format!("resource {resource}: `{source}` answers a record"));
             }
-            let entry = if source == "exactSurface" {
+            let entry = if matches!(source, "exactSurface" | "exactCanvasPerformance") {
+                if source == "exactCanvasPerformance" {
+                    exact_runner::canvas_performance::validate(plan, r.ty)?;
+                }
                 let surface = surface_record::surface_name(plan, r).ok_or_else(|| {
-                    format!(
-                        "resource {resource}: `exactSurface` takes one string-literal surface name"
-                    )
+                    format!("resource {resource}: `{source}` takes one string-literal surface name")
                 })?;
+                let keep = if r.keep
+                    && !r.transient
+                    && source == "exactSurface"
+                    && plan.surfaces.iter().any(|s| plan.str(s.name) == surface)
+                {
+                    surface_record::keep_signature(plan, r.ty)
+                        .map(|signature| {
+                            let hex = signature
+                                .to_bytes()
+                                .iter()
+                                .map(|b| format!("{b:02x}"))
+                                .collect::<String>();
+                            serde_json::to_string(&hex).unwrap()
+                        })
+                        .unwrap_or_else(|| "false".into())
+                } else {
+                    "false".into()
+                };
                 format!(
-                    "{},{}",
+                    "{},{},{keep}",
                     serde_json::to_string(surface).unwrap(),
-                    surface_type_json(plan, r.ty)
+                    surface_type_json(plan, r.ty),
                 )
             } else {
                 let mut names = Vec::new();
@@ -55,12 +75,28 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
                     if !fields.contains(&field) {
                         return Err(format!("resource {resource}: `{source}` has no `{field}`"));
                     }
+                    if source == "exactViewport" && field == "segments" {
+                        let list = plan.type_(plan.field(f).ty);
+                        let record = list.elem.map(|t| plan.type_(t)).filter(|t| list.kind == exact_plan::TypeKind::List && t.kind == exact_plan::TypeKind::Record)
+                            .ok_or_else(|| format!("resource {resource}: exactViewport.segments needs a list of rectangle records"))?;
+                        for nested in record.fields.iter() {
+                            let nested = plan.field(nested);
+                            let name = plan.str(nested.name);
+                            if !["x", "y", "width", "height"].contains(&name)
+                                || plan.type_(nested.ty).kind != exact_plan::TypeKind::Number
+                            {
+                                return Err(format!("resource {resource}: exactViewport.segments has no numeric field `{name}`"));
+                            }
+                        }
+                    }
                     names.push(serde_json::to_string(field).unwrap());
                 }
                 let baked = plan.bytes(r.initial);
                 if source == "exactDelivery" && !baked.is_empty() {
                     let v = Value::from_bytes(baked).map_err(|e| e.to_string())?;
                     format!("[{}],{}", names.join(","), value_js(&v))
+                } else if source == "exactViewport" {
+                    format!("[{}],{}", names.join(","), surface_type_json(plan, r.ty))
                 } else {
                     format!("[{}]", names.join(","))
                 }
@@ -100,7 +136,7 @@ pub fn extensions(plan: &Plan) -> Vec<String> {
 /// members spelled out, so a preferred value outside them is refused; then a
 /// loader of each extension's web implementation (`ext-<name>.js`, which
 /// the build writes beside the app, LLP 1133.002 D15); then each package
-/// view, by its tag, `[extension, displayed, binding props]` (views.js);
+/// view, by its tag, `[extension, displayed, binding props, agent vocabulary]` (views.js);
 /// then the events the root hears.
 fn modules(plan: &Plan, body: &mut String) -> String {
     if plan.modules.is_empty() && plan.views.is_empty() && plan.module_events.is_empty() {
@@ -141,11 +177,12 @@ fn modules(plan: &Plan, body: &mut String) -> String {
         .map(|v| {
             let binds: Vec<&str> = plan.str(v.binds).split_whitespace().collect();
             format!(
-                "{}:[{},{},{}]",
+                "{}:[{},{},{},{}]",
                 serde_json::to_string(plan.str(v.tag)).unwrap(),
                 serde_json::to_string(plan.str(v.extension)).unwrap(),
                 v.displayed,
-                serde_json::to_string(&binds).unwrap()
+                serde_json::to_string(&binds).unwrap(),
+                plan.str(v.agent)
             )
         })
         .collect();
@@ -234,6 +271,24 @@ pub fn activation(plan: &Plan) -> String {
         runtime_kept(plan) || exact_runner::activation::wake(plan).is_none(),
         exact_runner::viewport_reads::Reads::of(plan).any()
     )
+}
+
+#[test]
+fn a_view_carries_its_agent_vocabulary_without_module_names() {
+    let mut plan = exact_plan::builder::PlanBuilder::new(0, 0)
+        .finish()
+        .unwrap();
+    plan.add_view(
+        "words-panel",
+        ("words", "@fixture/words"),
+        false,
+        &[],
+        r#"{"heard":"string"}"#,
+    );
+    let mut body = String::new();
+    modules(&plan, &mut body);
+    assert!(body.contains(r#""words-panel":["words",false,[],{"heard":"string"}]"#));
+    assert!(body.contains(r#""words":()=>import("./ext-words.js")"#));
 }
 
 #[test]

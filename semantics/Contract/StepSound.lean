@@ -640,6 +640,8 @@ theorem advance_go_sound {p : Program} (hp : WellTyped p) {o due pick finish}
     split
     · obtain ⟨h1, h2⟩ := hfinish c hc; rw [h2]; exact ⟨h1, trivial⟩
     next tm i hd =>
+    split
+    · exact ⟨hc, trivial⟩
     have htm := hdue c tm i hd
     have hpres := hc.present.resolve_right fun ⟨_, ht, _⟩ => by simp [ht] at htm
     obtain ⟨⟨a, ha, hpa⟩, hgk⟩ := hc.timers tm htm
@@ -648,13 +650,17 @@ theorem advance_go_sound {p : Program} (hp : WellTyped p) {o due pick finish}
       · exact hc.timers y hy
       · unfold Timer.fired; split <;> (try split) <;> (try split) <;> exact ⟨⟨a, ha, hpa⟩, hgk⟩
     dsimp only
-    generalize hr : runAction p o { c with timers := c.timers.set i tm.fired, now := tm.next }
+    generalize hr : runAction p o { c with timers := c.timers.set i tm.fired, now := if tm.change && tm.next < c.now then c.now else tm.next }
       tm.action [] [] = r
     obtain ⟨c₂, out₂⟩ := r
-    have hc₁ := hc.withTimers hpres hset tm.next
+    have hc₁ := hc.withTimers hpres hset (if tm.change && tm.next < c.now then c.now else tm.next)
     obtain ⟨hc₂, hout₂⟩ := runAction_sound hp hc₁ hpres ⟨a, ha⟩ hr
     cases out₂ with
-    | ok => exact advance_go_sound hp hdue hpick hpickN hfinish n c₂ hc₂
+    | ok =>
+      dsimp only
+      split
+      · exact ⟨hc₂, trivial⟩
+      · exact advance_go_sound hp hdue hpick hpickN hfinish n c₂ hc₂
     | refused => exact ⟨hc₂, hout₂⟩
     | poisoned => exact ⟨hc₂, hout₂⟩
 

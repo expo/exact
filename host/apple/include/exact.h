@@ -487,9 +487,10 @@ uint32_t exact_baked_compat(ExactRuntime rt);
  * viewport. Returns the first batch's length. A boot that fails leaves the
  * running app, if any, exactly as it was. */
 uint32_t exact_boot(ExactRuntime rt, float width, float height);
-/* Snapshot-only boot: concatenated plan bytes, UTF-8 kind and optional props JSON.
- * Pure boot reads no store or secrets. Timeline refresh is the only data step. */
-uint32_t exact_boot_entry(ExactRuntime rt, size_t plan, size_t kind, size_t props, float width, float height);
+/* Snapshot-only boot: concatenated plan bytes, UTF-8 kind, and optional props
+ * and configuration JSON. Pure boot reads no store or secrets. Timeline refresh
+ * is the only data step. */
+uint32_t exact_boot_entry(ExactRuntime rt, size_t plan, size_t kind, size_t props, size_t configuration, float width, float height);
 uint32_t exact_entry_timeline(ExactRuntime rt, double now_ms, double remaining_ms, const uint8_t *receipt, size_t receipt_len, const uint8_t *module, size_t module_len);
 /* Gallery-only query: a fresh data seam and scratch store, no host activation. */
 uint32_t exact_refresh_entry(ExactRuntime rt, double now_ms);
@@ -611,6 +612,7 @@ uint32_t exact_share_land(ExactRuntime rt);
  *      true|false for repeat, and optionally newline, true|false for isComposing;
  * 46 = focusin, 47 = focusout (#283): UTF-8 `<target byte length>:<target id>`
  *      then `0` (no relatedTarget) or `1<related id>`;
+ * 64 = host look states (UTF-8 bits: 1 hover, 2 focus-visible); presentation only.
  * any other kind is refused with an error batch.
  * Format lists are space-separated command tokens. Link keeps the remaining bytes.
  * A change's text, key's name, or guest message is the payload in the input
@@ -763,6 +765,8 @@ typedef double (*ExactWallFn)(void);
 uint32_t exact_set_live_clock(ExactRuntime rt, ExactWallFn wall);
 /* Input: name alone clears; name NUL JSON publishes a current record. */
 uint32_t exact_surface_record(ExactRuntime rt, size_t len);
+uint32_t exact_canvas_performance_requested(ExactRuntime rt, size_t len);
+uint32_t exact_canvas_performance_record(ExactRuntime rt, size_t len);
 /* @ref LLP 1027.000.000: the date — Unix ms at clock zero, minutes east of UTC. */
 uint32_t exact_set_time(ExactRuntime rt, double epoch_at_zero, double utc_offset);
 /* The date the next boot or candidate settles under, told before it; the
@@ -798,8 +802,9 @@ void exact_bind_extensions(ExactRuntime rt, size_t len);
  * input buffer, admitted as a read: the output is {"extension","scheme",
  * "agent","owned"?} to ask that extension's implementation for the picture,
  * {"error","message"} for an unresolved image, or empty for a source of no
- * package's scheme. Never raises a ticket. */
-uint32_t exact_picture(ExactRuntime rt, size_t len);
+ * package's scheme. Never raises a ticket. count is 0 to recheck admission
+ * without counting another draw, 1 for a view/source admission attempt. */
+uint32_t exact_picture(ExactRuntime rt, size_t len, uint8_t count);
 /* @ref LLP 1121 D5: app modes, `axis=value` pins comma-separated (the agent's `prefer mode`); a leading `?` only checks them. */
 uint32_t exact_set_mode(ExactRuntime rt, size_t len);
 /* @ref LLP 1121 D13, stage 4: a live design batch or snapshot frame from the dev

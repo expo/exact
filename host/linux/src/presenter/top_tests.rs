@@ -411,15 +411,14 @@ fn the_shape_rule_is_the_one_the_apple_hosts_follow() {
     };
     let rows: Vec<_> = entries
         .iter()
-        .map(|e| {
-            e.as_ref().map(|r| {
-                (
-                    r.title.as_str(),
-                    r.symbol.as_deref(),
-                    r.destructive,
-                    r.enabled,
-                )
-            })
+        .map(|e| match e {
+            Entry::Item(r) => Some((
+                r.title.as_str(),
+                r.symbol.as_deref(),
+                r.destructive,
+                r.enabled,
+            )),
+            _ => None,
         })
         .collect();
     assert_eq!(

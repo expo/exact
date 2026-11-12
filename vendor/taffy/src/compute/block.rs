@@ -1340,8 +1340,8 @@ fn perform_final_layout_on_in_flow_children(
                 }
             };
 
-            // Tables are shrink-to-fit rather than stretch-sized. Exact also
-            // uses this marker for form controls (including a button whose
+            // EXACT PATCH 21: tables are shrink-to-fit rather than stretch-sized. Exact
+            // also uses this marker for form controls (including a button whose
             // inner display is flex): clamp its preferred width between its
             // min-content width and the available block width.
             let known_dimensions = if item.is_table && item.size.width.is_none() {

@@ -677,7 +677,7 @@ fn check_modules(file: &File, app_root: &Path) -> Result<Vec<PackageView>, Vec<C
                 format!("the app's modules and its packages' views are {}", known.join(", "))
             };
             let add = crate::package_views::standard_with(&tag)
-                .map(|m| format!("; exact2's `{m}` module serves it: `exact add {m}` adds it to the app's package.json"))
+                .map(|m| format!("; exact2's `{m}` module serves it: `bun exact.mjs add {m}` adds it to the app's package.json"))
                 .unwrap_or_default();
             let stale = stale_manifest_hint(app_root);
             refusal(

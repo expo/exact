@@ -88,8 +88,18 @@ public final class ExactPackageContext {
     public let session: String
     /// The host's own id for the session, which what the host keeps for it
     /// is named by: under the agent, the private pasteboard its `copyText`
-    /// and @exact/clipboard write (LLP 1133.006 §7).
+    /// and @exact/clipboard write (LLP 1133.006 §7). New at each launch.
     public let hostSession: String
+    /// The session's label, the same at every launch: what the embedder
+    /// named it (`makeSession(label:)`; the sample host's `a` and `b`); in
+    /// an app, `main`, and on the Mac a later window `window-2`, `window-3`
+    /// in the order they open. What a package keeps for one session across
+    /// launches is keyed by it: the sessions of one app share `data`.
+    public let label: String
+    /// The session's directories behind `app:/data`, `app:/cache` and
+    /// `app:/tmp`: the app's own, or under the agent its drive's store (a
+    /// named one, `EXACT_AGENT_STORAGE`, kept across the drive's launches).
+    public let data: URL, cache: URL, temporary: URL
     /// Who made the call being answered now (`app`, `tool`, `wake`): set by
     /// the host before each `later`, read by an implementation at its entry,
     /// as a capture's first lease is refused to a tool's read (LLP 1133.009 D6).
@@ -127,14 +137,15 @@ public final class ExactPackageContext {
     /// The process's pad slots (LLP 1133.022 D10 item 1); nil on a host
     /// older than them, where a pad module reads no pads (item 4).
     public let pads: ExactPads?
-    private let afterFn: (Double, @escaping () -> Void) -> () -> Void
+    private let afterFn: (Double, Bool, @escaping () -> Void) -> () -> Void
     /// The host's region carrier (LLP 1133.021 D14).
     public let regions: ExactRegions
     /// The app's remote-notification registration, kept by the host (LLP
     /// 1133.004 §9 P3).
     public let push: ExactPushRegistration
 
-    public init(agent: Bool, session: String, hostSession: String = "", changed: @escaping (String) -> Void,
+    public init(agent: Bool, session: String, hostSession: String = "", label: String? = nil,
+                data: URL? = nil, cache: URL? = nil, temporary: URL? = nil, changed: @escaping (String) -> Void,
                 log: @escaping (String) -> Void, now: @escaping () -> Double,
                 tracks: ExactTracks = ExactTracks(), file: @escaping (String) -> URL? = { _ in nil },
                 audioSession: ExactAudioSession = ExactAudioSession { _, _, _, _ in nil },
@@ -148,7 +159,7 @@ public final class ExactPackageContext {
                 wakes: ExactWakes = ExactWakes { _, _ in },
                 transfers: ExactTransfers = ExactTransfers { _, _ in nil },
                 pads: ExactPads? = nil,
-                after: @escaping (Double, @escaping () -> Void) -> () -> Void = { ms, body in
+                after: @escaping (Double, Bool, @escaping () -> Void) -> () -> Void = { ms, _, body in
                     let work = DispatchWorkItem(block: body)
                     DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000, execute: work)
                     return work.cancel
@@ -157,7 +168,9 @@ public final class ExactPackageContext {
                 push: ExactPushRegistration = ExactPushRegistration { nil },
                 expireWake: @escaping (String) -> Void = { _ in },
                 state: @escaping ([String: Any]) -> Void = { _ in }) {
-        self.agent = agent; self.session = session; self.hostSession = hostSession
+        self.agent = agent; self.session = session; self.hostSession = hostSession; self.label = label ?? session
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        self.data = data ?? scratch; self.cache = cache ?? scratch; self.temporary = temporary ?? scratch
         changedFn = changed; logFn = log; nowFn = now
         self.tracks = tracks; fileFn = file; self.audioSession = audioSession; pictureFn = picture
         self.surfaces = surfaces; orientationFn = orientation; viewFn = view; invokeFn = invoke
@@ -169,7 +182,13 @@ public final class ExactPackageContext {
     /// agent, where a seek runs it at its own instant, so a drive repeats.
     /// Call what it returns to cancel it first. Main thread.
     @discardableResult
-    public func after(_ ms: Double, _ body: @escaping () -> Void) -> () -> Void { afterFn(ms, body) }
+    public func after(_ ms: Double, _ body: @escaping () -> Void) -> () -> Void { afterFn(ms, false, body) }
+
+    /// Coalesce a refresh across an agent seek: run at the next clock instant
+    /// at or past the deadline, without adding a stop or advancing settlement.
+    /// On the live clock this waits as `after` does. Main thread.
+    @discardableResult
+    public func after(_ ms: Double, coalescing: Bool, _ body: @escaping () -> Void) -> () -> Void { afterFn(ms, coalescing, body) }
 
     /// Raise the interface's wake event `name` with `args` for the platform
     /// object `id` (LLP 1133.017 D8): the events of one id are one wake, run

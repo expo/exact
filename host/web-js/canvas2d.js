@@ -204,11 +204,13 @@ export function engine(rt) {
   host();
   // The module arrives after first pixel (rust-data.js); until then causes wait.
   const ready = () => {
-    module = client(data.logic);
+    // No `data.logic`: the Rust module did not load (the entry says why in the journal).
+    module = data.logic && client(data.logic);
     if (!module) {
       // Each canvas here names a surface no GPU module registers (the build's routing), so nothing draws it: said, and
       // its state's error, rather than a canvas pending blank.
-      undrawn = 'no GPU module registers this surface, and the Rust module draws no Canvas 2D surface (exact_logic_abi::export_draw!)';
+      undrawn = data.logic ? 'no GPU module registers this surface, and the Rust module draws no Canvas 2D surface (exact_logic_abi::export_draw!)'
+        : 'the Rust module that draws this surface did not load';
       sayUndrawn();
     }
     drawAll();

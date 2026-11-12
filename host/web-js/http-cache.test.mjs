@@ -107,6 +107,50 @@ test('a stale answer within stale-while-revalidate is given while one refetch re
   expect((await o.get('http://api.test/swr')).body).toBe('answer 3');
 });
 
+test('a stale answer that must be revalidated is never given, whatever grace it or the request names', async () => {
+  const o = origin({
+    'http://api.test/must': { 'cache-control': 'max-age=1, must-revalidate, stale-while-revalidate=60' },
+    'http://api.test/proxy': { 'cache-control': 'max-age=1, proxy-revalidate, stale-while-revalidate=60' },
+    'http://api.test/shared': { 'cache-control': 's-maxage=1, stale-while-revalidate=59' },
+  });
+  for (const path of ['must', 'proxy']) {
+    const url = `http://api.test/${path}`, first = (await o.get(url)).body;
+    o.advance(2);
+    expect((await o.get(url)).body).not.toBe(first);
+    o.advance(2);
+    expect((await o.get(url, { headers: { 'cache-control': 'max-stale' } })).body).not.toBe(first);
+  }
+  // s-maxage implies proxy-revalidate (RFC 9111 §5.2.2.10), but the pair asks to be served stale.
+  const first = (await o.get('http://api.test/shared')).body;
+  o.advance(2);
+  expect((await o.get('http://api.test/shared')).body).toBe(first);
+});
+
+test('a request\'s max-age, min-fresh and max-stale bound the age of the answer it is given', async () => {
+  const o = origin({ 'http://api.test/a': { 'cache-control': 'max-age=60' } });
+  const age = seconds => ({ headers: { 'cache-control': `max-age=${seconds}` } });
+  const kept = (await o.get('http://api.test/a')).body;
+  o.advance(10);
+  expect((await o.get('http://api.test/a', age(20))).body).toBe(kept);
+  const younger = (await o.get('http://api.test/a', age(1))).body;
+  expect(younger).not.toBe(kept);
+  // What a request too strict for the kept answer brings is kept in its place.
+  expect((await o.get('http://api.test/a')).body).toBe(younger);
+  o.advance(50);
+  expect((await o.get('http://api.test/a', { headers: { 'cache-control': 'min-fresh=5' } })).body).toBe(younger);
+  const fresher = (await o.get('http://api.test/a', { headers: { 'cache-control': 'min-fresh=20' } })).body;
+  expect(fresher).not.toBe(younger);
+  // Past its lifetime, a request that accepts staleness is given it while one refetch replaces it.
+  o.advance(70);
+  expect((await o.get('http://api.test/a', { headers: { 'cache-control': 'max-stale=5' } })).body).not.toBe(fresher);
+  const now = (await o.get('http://api.test/a')).body;
+  o.advance(65);
+  const served = o.served();
+  expect((await o.get('http://api.test/a', { headers: { 'cache-control': 'max-stale=10' } })).body).toBe(now);
+  expect(o.served()).toBe(served + 1);
+  expect((await o.get('http://api.test/a')).body).not.toBe(now);
+});
+
 test('the least recently given answer goes first past the bounds', async () => {
   const o = origin(new Proxy({}, { get: () => ({ 'cache-control': 'max-age=60' }) }), { entries: 2 });
   const a = (await o.get('http://api.test/1')).body;

@@ -13,7 +13,7 @@
 //! with no cursor, an event stream, a body past the ceiling. Forgetting the
 //! ticket aborts the request in flight and any wait.
 use super::super::{check_headers, failed, fetch_failure, fetch_request, Shared};
-use super::{message, reply};
+use super::{message, reply, Delivered};
 use exact_runner::{FailureKind, LongPoll, Message, Outcome, Request, Response, Retrying};
 use ibex2::stdlib::abort::AbortController;
 use std::sync::{Arc, Condvar, Mutex};
@@ -113,8 +113,17 @@ pub(super) fn run(
                         data,
                         ..Message::default()
                     };
-                    if !message(shared, ticket, m) {
-                        return failed(FailureKind::Aborted, "the stream was let go");
+                    match message(shared, ticket, m, limit) {
+                        Delivered::Queued => {}
+                        Delivered::Gone => {
+                            return failed(FailureKind::Aborted, "the stream was let go")
+                        }
+                        Delivered::Overflow => {
+                            return failed(
+                                FailureKind::Refused,
+                                "long poll receive queue exceeds 4096 replies or 1 MiB",
+                            )
+                        }
                     }
                     url = with_query_value(&url, &terms.cursor, &next);
                     continue;
@@ -315,7 +324,8 @@ pub(crate) fn query_value(url: &str, name: &str) -> Option<String> {
 }
 
 /// `url` with query parameter `name` set to `value` (replaced where it is,
-/// else appended), every other parameter and the fragment kept.
+/// else appended), every other field, an empty one too, and the fragment
+/// kept as written.
 pub(crate) fn with_query_value(url: &str, name: &str, value: &str) -> String {
     let (base, fragment) = match url.split_once('#') {
         Some((b, f)) => (b, Some(f)),
@@ -325,7 +335,7 @@ pub(crate) fn with_query_value(url: &str, name: &str, value: &str) -> String {
     let pair = format!("{}={}", encode(name), encode(value));
     let mut found = false;
     let mut parts: Vec<String> = Vec::new();
-    for p in query.split('&').filter(|p| !p.is_empty()) {
+    for p in query.split('&').filter(|_| !query.is_empty()) {
         let k = p.split_once('=').map_or(p, |(k, _)| k);
         if decode(k) == name {
             if !found {
@@ -354,17 +364,14 @@ fn decode(s: &str) -> String {
     while i < bytes.len() {
         match bytes[i] {
             b'+' => out.push(b' '),
-            b'%' if i + 2 < bytes.len() => {
-                match u8::from_str_radix(
-                    std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
-                    16,
-                ) {
-                    Ok(b) => {
-                        out.push(b);
-                        i += 2;
-                    }
-                    Err(_) => out.push(b'%'),
-                }
+            // (`from_str_radix` would also take a sign, as in `%+1`)
+            b'%' if i + 2 < bytes.len()
+                && bytes[i + 1].is_ascii_hexdigit()
+                && bytes[i + 2].is_ascii_hexdigit() =>
+            {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+                out.push(u8::from_str_radix(hex, 16).unwrap_or(0));
+                i += 2;
             }
             b => out.push(b),
         }
@@ -508,6 +515,30 @@ mod tests {
         assert_eq!(
             with_query_value("https://x.test/c?since=1#top", "since", "2"),
             "https://x.test/c?since=2#top"
+        );
+        // Every other field stays as written, an empty one (`&&`, a leading
+        // or trailing `&`) included, and so does the web's (host/web/http-body.js).
+        assert_eq!(
+            with_query_value("https://x.test/c?&wait=25&&flag&since=0&", "since", "1"),
+            "https://x.test/c?&wait=25&&flag&since=1&"
+        );
+        assert_eq!(
+            with_query_value("https://x.test/c?wait=25&", "since", "1"),
+            "https://x.test/c?wait=25&&since=1"
+        );
+        assert_eq!(
+            with_query_value("https://x.test/c?", "since", "1"),
+            "https://x.test/c?since=1"
+        );
+        // A name is decoded whole: a leading U+FEFF is kept, and `%` names a
+        // byte only before two hex digits.
+        assert_eq!(
+            with_query_value("https://x.test/c?%EF%BB%BFsince=0&since=0", "since", "1"),
+            "https://x.test/c?%EF%BB%BFsince=0&since=1"
+        );
+        assert_eq!(
+            with_query_value("https://x.test/c?%+1since=0", "\u{1}since", "1"),
+            "https://x.test/c?%+1since=0&%01since=1"
         );
         assert_eq!(
             query_value("https://x.test/c?a=1&since=a%20b", "since").as_deref(),

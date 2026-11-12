@@ -297,7 +297,7 @@ extension WindowToolbarHost {
         lines.append("header \(header.map { "\($0.header.id) lead \($0.leading.map(\.id)) trail \($0.trailing.map(\.id)) backs \($0.backs.map(\.id))" } ?? "-")")
         lines.append("beside \(beside.map { "\($0.header.id) lead \($0.leading.map(\.id)) trail \($0.trailing.map(\.id))" } ?? "-") parts \(besideParts.map(\.node.id))")
         lines.append("order \(toolbar?.items.map(\.itemIdentifier.rawValue) ?? [])")
-        lines.append("back \(backItem.isEnabled) segments \(segments.summary(overflow: false).map { s in "\(s["tablist"] ?? "") \(s["label"] ?? "") \(s["selected"] ?? "") \((s["tabs"] as? [[String: Any]] ?? []).map { "\($0["id"] ?? "")/\($0["title"] ?? "")/\($0["enabled"] ?? "")" })" } ?? "-") \(segments.item?.isEnabled ?? false) \(segments.item?.subitems.map { "\($0.label)/\($0.isEnabled)" } ?? [])")
+        lines.append("back \(backItem.isEnabled) history \(historyItem.subitems.map(\.isEnabled)) segments \(segments.summary(overflow: false).map { s in "\(s["tablist"] ?? "") \(s["label"] ?? "") \(s["selected"] ?? "") \((s["tabs"] as? [[String: Any]] ?? []).map { "\($0["id"] ?? "")/\($0["title"] ?? "")/\($0["enabled"] ?? "")" })" } ?? "-") \(segments.item?.isEnabled ?? false) \(segments.item?.subitems.map { "\($0.label)/\($0.isEnabled)" } ?? [])")
         lines.append("search \(search.node?.id.description ?? "-") \(search.item.map { "\($0.label) | \($0.searchField.placeholderString ?? "") | \($0.isEnabled) | \($0.searchField.accessibilityLabel() ?? "")" } ?? "-")")
         for id in items.keys.sorted() {
             guard let item = items[id] else { continue }

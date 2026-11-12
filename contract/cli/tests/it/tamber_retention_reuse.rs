@@ -115,6 +115,66 @@ fn an_alias_moved_reuses_the_program_and_answers_as_fresh() {
 }
 
 #[test]
+fn a_native_params_literal_edit_answers_as_fresh() {
+    for (tag, design, library) in [
+        (
+            "direct",
+            "tamber t\n\ntheme\n  pick = #aabbcc\n\ncomponent Map\n  params\n    pin: color = pick\n",
+            None,
+        ),
+        (
+            "alias",
+            "tamber t\n\ntheme\n  pick = #aabbcc\n  alias = pick\n\ncomponent Map\n  params\n    pin: color = alias\n",
+            None,
+        ),
+        (
+            "package",
+            "tamber t\n\ntheme\n  ink = #111111\n",
+            Some("tamber reading\n\ntheme\n  reading.gap: length = space.md\n  reading.pin = reading.alias\n  reading.alias = #aabbcc\n\ncomponent Map\n  params\n    pin: color = reading.pin\n"),
+        ),
+    ] {
+        let dir = super::tamber_serve::app(&format!("ret-native-literal-{tag}"), design);
+        let file = if let Some(library) = library {
+            package(&dir, "reading", super::tamber_package_params::CARD, library);
+            std::fs::write(
+                dir.join("app.contract"),
+                "use Card from \"@acme/reading\"\ncomponent App\n  view\n    Card()\n",
+            )
+            .unwrap();
+            dir.join("node_modules/@acme/reading/reading.tamber")
+        } else {
+            dir.join("app.tamber")
+        };
+        let log = dir.join("retention.log");
+        let mut warm = Serve::start(
+            &dir,
+            &[("EXACT_TAMBER_RETENTION_LOG", log.to_str().unwrap())],
+        );
+        let (primed, _) = warm.ask(json!({"method": "propose", "ops": []}));
+        assert!(primed.get("ok").is_some(), "{tag}: {primed}");
+        let text = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, text.replace("#aabbcc", "#ddeeff")).unwrap();
+        let probes: Vec<Value> = ["ddeeff", "aabbcc", "unrelated"]
+            .into_iter()
+            .map(|name| json!({"method": "propose", "ops": [{"op": "add-token", "name": name, "value": "#112233"}]}))
+            .collect();
+        let answers: Vec<Value> = probes.iter().map(|p| warm.ask(p.clone()).0).collect();
+        drop(warm);
+        assert_eq!(std::fs::read_to_string(&log).unwrap(), "built\n", "{tag}");
+        let mut fresh = Serve::start(&dir, &[]);
+        for ((probe, answer), class) in probes.into_iter().zip(answers).zip([
+            "rebuild", "live", "live",
+        ]) {
+            let (expected, _) = fresh.ask(probe);
+            assert_eq!(expected["ok"]["class"], class, "{tag}: {expected}");
+            assert_eq!(bare(answer), bare(expected), "{tag}");
+        }
+        drop(fresh);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
 fn a_param_set_to_a_token_reuses_the_program_and_answers_as_fresh() {
     primed_as_fresh(
         &|m| with(&format!("ret-set-param-{m}"), PIN, "ink"),

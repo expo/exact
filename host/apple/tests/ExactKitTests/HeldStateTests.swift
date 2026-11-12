@@ -364,13 +364,22 @@ final class HeldStateTests: XCTestCase {
 
     #if EXACT_INSPECT
     /// The fixture plan booted in a session in a window: the card and its child (a flat leaf on iOS).
-    @MainActor private func booted(_ label: String) throws -> (ExactSession, Presenter, NodeView, UInt32) {
+    @MainActor private func booted(_ label: String, hosted: Bool = false) throws -> (ExactSession, Presenter, NodeView, UInt32) {
         let session = ExactApp.shared.makeSession(label: label)
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_HELD_STATE_PLAN"], "build.mjs --test compiles tests/fixtures/held-state.contract")))
         #if os(iOS)
-        window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        let frame = CGRect(x: 0, y: 0, width: 400, height: 400)
+        if hosted, let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            window = UIWindow(windowScene: scene)
+            window.frame = frame
+            let controller = UIViewController()
+            controller.view = session.presenter.viewport
+            window.rootViewController = controller
+        } else {
+            window = UIWindow(frame: frame)
+            window.addSubview(session.presenter.viewport)
+        }
         session.presenter.viewport.frame = window.bounds
-        window.addSubview(session.presenter.viewport)
         window.makeKeyAndVisible()
         #else
         _ = NSApplication.shared
@@ -387,6 +396,140 @@ final class HeldStateTests: XCTestCase {
         })
         return (session, p, card, child)
     }
+    @MainActor func testHoverScaleUsesTheSessionMotionAndKeepsTheLayoutBox() throws {
+        let (session, p, _, _) = try booted("hover-scale")
+        defer { session.destroy() }
+        let view = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "hover-scale" })
+        session.clock = session.now()
+        session.apply(session.runtime.tick(now: session.now()))
+        let start = session.now(), box = view.layoutBounds
+        view.lookState(hovered: true)
+        waitForMainQueue()
+        session.clock = start + 75
+        session.apply(session.runtime.tick(now: session.now()))
+        XCTAssertEqual(view.scale, 1.1, accuracy: 0.001)
+        XCTAssertEqual(view.layoutBounds, box)
+        session.clock = start + 150
+        session.apply(session.runtime.tick(now: session.now()))
+        XCTAssertEqual(view.scale, 1.2, accuracy: 0.001)
+        view.lookState(hovered: false)
+        waitForMainQueue()
+        session.clock = start + 300
+        session.apply(session.runtime.tick(now: session.now()))
+        XCTAssertEqual(view.scale, 1, accuracy: 0.001)
+        XCTAssertEqual(view.layoutBounds, box)
+    }
+
+    #if os(iOS)
+    @MainActor func testInsertedNativeRangeMeasurementKeepsTheMovingSiblingInPlace() throws {
+        let (session, p, _, _) = try booted("inserted-range-size")
+        defer { session.destroy() }
+        session.clock = session.now()
+        waitForMainQueue()
+        let following = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "range-following" })
+        let reveal = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "reveal-range" })
+        let y = following.convert(following.bounds, to: p.viewport).minY
+        session.apply(session.runtime.press(reveal.id, now: session.now()))
+        XCTAssertEqual(following.convert(following.bounds, to: p.viewport).minY, y, accuracy: 0.01)
+        waitForMainQueue()
+        let range = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "inserted-slider" })
+        let slider = try XCTUnwrap(p.controls.controls[range.id] as? UISlider)
+        XCTAssertEqual(range.layoutBounds.height, ceil(slider.intrinsicContentSize.height), accuracy: 0.01)
+        XCTAssertEqual(following.convert(following.bounds, to: p.viewport).minY, y, accuracy: 0.01, "the measurement batch keeps the current presentation")
+        session.clock = session.now() + 20
+        session.apply(session.runtime.tick(now: session.now()))
+        XCTAssertGreaterThan(following.convert(following.bounds, to: p.viewport).minY, y)
+    }
+    @MainActor func testInsertedNativeRangePaintsBelowTheMovingPositiveZSibling() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "window pixels require a hosted scene") }
+        try assertRangePaintsBelowMovingSibling(reveal: "reveal-range")
+    }
+    @MainActor func testEnteringNativeRangePaintsBelowTheMovingPositiveZSibling() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "window pixels require a hosted scene") }
+        try assertRangePaintsBelowMovingSibling(reveal: "reveal-entering-range")
+    }
+    @MainActor private func assertRangePaintsBelowMovingSibling(reveal revealId: String) throws {
+        let (session, p, _, _) = try booted("inserted-range-order", hosted: true)
+        defer { session.destroy() }
+        session.clock = session.now()
+        waitForMainQueue()
+        let reveal = try XCTUnwrap(p.views.values.first { $0.props["testId"] == revealId })
+        session.apply(session.runtime.press(reveal.id, now: session.now()))
+        waitForMainQueue()
+        let following = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "range-following" })
+        let inserted = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "inserted-range" })
+        XCTAssertGreaterThan(following.paintZPosition, inserted.paintZPosition)
+        let start = session.now()
+        for elapsed in [0.0, 20.0, 80.0] {
+            session.clock = start + elapsed
+            session.apply(session.runtime.tick(now: session.now()))
+            if revealId == "reveal-entering-range", elapsed > 0 {
+                XCTAssertGreaterThan(inserted.layer.opacity, 0)
+                XCTAssertLessThan(inserted.layer.opacity, 1)
+            }
+            let overlap = following.convert(following.bounds, to: p.viewport)
+                .intersection(inserted.convert(inserted.bounds, to: p.viewport))
+                .intersection(p.viewport.bounds).offsetBy(dx: -p.viewport.bounds.minX, dy: -p.viewport.bounds.minY).insetBy(dx: 2, dy: 2)
+            XCTAssertGreaterThan(overlap.height, 2)
+            guard !overlap.isNull, overlap.width > 0, overlap.height > 2 else { continue }
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.preferredRange = .standard
+            var captured = false
+            let shot = try XCTUnwrap(UIGraphicsImageRenderer(bounds: p.viewport.bounds, format: format).image { _ in
+                captured = p.viewport.drawHierarchy(in: p.viewport.bounds, afterScreenUpdates: true)
+            }.cgImage)
+            XCTAssertTrue(captured, "UIKit drew the hierarchy")
+            guard captured else { continue }
+            var bytes = [UInt8](repeating: 0, count: shot.width * shot.height * 4)
+            try bytes.withUnsafeMutableBytes { data in
+                let context = try XCTUnwrap(CGContext(data: data.baseAddress, width: shot.width, height: shot.height,
+                    bitsPerComponent: 8, bytesPerRow: shot.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
+                context.draw(shot, in: CGRect(x: 0, y: 0, width: shot.width, height: shot.height))
+            }
+            var uncovered = 0
+            for y in Int(ceil(overlap.minY))..<Int(floor(overlap.maxY)) {
+                for x in Int(ceil(overlap.minX))..<Int(floor(overlap.maxX)) {
+                    let i = (y * shot.width + x) * 4
+                    if bytes[i] > 2 || bytes[i + 1] > 2 || bytes[i + 2] < 253 { uncovered += 1 }
+                }
+            }
+            if uncovered > 0 {
+                let attachment = XCTAttachment(image: UIImage(cgImage: shot))
+                attachment.name = "inserted-range-overlap-\(Int(elapsed))ms"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+            XCTAssertEqual(uncovered, 0, "the opaque positive-z sibling covers the inserted label and native slider")
+        }
+    }
+    #endif
+
+    @MainActor func testKeyedChangeReadsAppliedLayoutAndFocusesTheNewControl() throws {
+        let (session, p, _, _) = try booted("keyed-change")
+        defer { session.destroy() }
+        #if os(macOS)
+        window.orderFrontRegardless()
+        XCTAssertTrue(window.isVisible, "the agent's native click needs a window on screen")
+        #endif
+        let agent = Agent(session: session)
+        let taken = try XCTUnwrap(agent.clock(["take": true])["clock"] as? Double)
+        // The runner's final live sample can exceed the host's takeover time; align them before arming tasks.
+        let from = try XCTUnwrap(agent.clock(["to": taken])["clock"] as? Double)
+        let start = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "change-start" })
+        func slots() -> [String: Any] {
+            let state = (try? JSONSerialization.jsonObject(with: Data(session.agent(#"{"op":"state"}"#).utf8))) as? [String: Any]
+            return state?["slots"] as? [String: Any] ?? [:]
+        }
+        XCTAssertNil(agent.tap(["id": Int(start.id)])["error"])
+        XCTAssertNil(agent.clock(["land": true])["error"])
+        XCTAssertEqual(slots()["changeSeen"] as? Double, 80)
+        XCTAssertEqual(slots()["changeAt"] as? Double, from)
+        waitFor("the change's focus command reaches the newly applied input") { slots()["changeFocused"] as? Bool == true }
+        XCTAssertNil(agent.clock(["to": from + 10])["error"])
+        XCTAssertEqual(slots()["changeSeen"] as? Double, 160, "the timer's size receipt must be applied before the change reads it")
+        XCTAssertEqual(slots()["changeAt"] as? Double, from + 5)
+    }
+
     private func hold(_ app: ExactApp, _ session: ExactSession, _ id: UInt32, revision: Int, plan: String? = nil) {
         let node = (try? JSONSerialization.jsonObject(with: Data(session.agent("{\"op\":\"node\",\"id\":\(id)}").utf8))) as? [String: Any] ?? [:]
         var frame: [String: Any] = ["kind": "hold", "revision": revision, "hold": ["site": node["site"] ?? NSNull(), "instance": node["instance"] ?? [], "state": "active"]]

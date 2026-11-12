@@ -70,7 +70,7 @@ final class HeaderMacTests: XCTestCase {
     }
     private func node(_ p: Presenter, _ id: UInt32) throws -> NodeView { try XCTUnwrap(p.views[id]) }
     private func identifiers() -> [String] { window.toolbar?.items.map(\.itemIdentifier.rawValue) ?? [] }
-    private let back = WindowToolbarHost.backIdentifier.rawValue
+    private let back = WindowToolbarHost.historyIdentifier.rawValue
 
     func testAuthoredClearInkReachesToolbarAndAbsenceRestoresAppKit() throws {
         let p = fixture(extra: [
@@ -176,7 +176,7 @@ final class HeaderMacTests: XCTestCase {
             XCTAssertEqual(save.style, .prominent, "a filled button is the prominent item")
             XCTAssertEqual(add.style, .plain)
         }
-        XCTAssertFalse(p.toolbar.backItem.isEnabled, "nowhere to go back to at the stack's root")
+        XCTAssertFalse(p.toolbar.backEnabled, "nowhere to go back to at the stack's root")
         // The header is the platform's: hidden, and its box out of layout.
         XCTAssertTrue(try node(p, 10).isHidden)
         XCTAssertTrue(p.toolbar.hides(try node(p, 10)))
@@ -208,8 +208,8 @@ final class HeaderMacTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(p.toolbar.items[23]).title, "Share")
         XCTAssertTrue(try node(p, 20).isHidden)
         XCTAssertEqual(p.covers.delivered, [20: .whole], "the route beneath is no longer the bar's")
-        XCTAssertTrue(p.toolbar.backItem.isEnabled)
-        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(p.toolbar.backItem.action), to: p.toolbar.backItem.target, from: p.toolbar.backItem))
+        XCTAssertTrue(p.toolbar.backEnabled)
+        XCTAssertTrue(p.toolbar.pressBack())
         XCTAssertEqual(pressed.last, 21, "Back presses the authored control, hidden as it is")
         XCTAssertEqual(p.toolbar.activate(try node(p, 21)), true, "and a driver's tap on that control is the bar's Back")
         XCTAssertEqual(pressed.suffix(2), [21, 21])
@@ -515,7 +515,7 @@ final class HeaderMacTests: XCTestCase {
         let add = try XCTUnwrap(p.toolbar.items[13])
         XCTAssertFalse(p.toolbar.validateToolbarItem(add), "the route beneath is inert under it")
         XCTAssertFalse(add.isEnabled)
-        XCTAssertFalse(p.toolbar.backItem.isEnabled, "a modal route's close is its own")
+        XCTAssertFalse(p.toolbar.backEnabled, "a modal route's close is its own")
         XCTAssertNil(p.toolbar.activate(try node(p, 23)), "its buttons are in the sheet")
         XCTAssertEqual(p.dialogs.activate(try node(p, 21)), true, "the sheet's row presses the authored button")
         XCTAssertEqual(pressed, [21])
@@ -1032,8 +1032,8 @@ final class HeaderMacTests: XCTestCase {
         XCTAssertEqual(identifiers(), [back])
         XCTAssertEqual(try named("book-page").frame.minY, 0)
         XCTAssertEqual(p.covers.delivered, [try named("book-header").id: .whole])
-        XCTAssertTrue(p.toolbar.validateToolbarItem(p.toolbar.backItem))
-        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(p.toolbar.backItem.action), to: p.toolbar.backItem.target, from: p.toolbar.backItem))
+        XCTAssertTrue(p.toolbar.validateToolbarItem(p.toolbar.backSlot))
+        XCTAssertTrue(p.toolbar.pressBack())
         XCTAssertEqual(window.title, "Library")
         XCTAssertEqual(p.covers.delivered, [header.id: .whole])
         XCTAssertEqual(page.frame.minY, 0)

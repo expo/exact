@@ -49,9 +49,19 @@ use std::time::{Duration, Instant};
 
 /// The first non-flag path or scheme argument. @ref LLP 1038 D8
 pub fn launch_location(args: impl IntoIterator<Item = String>) -> String {
-    args.into_iter()
-        .find(|arg| !arg.starts_with('-'))
-        .map_or_else(|| "/".into(), |href| exact_route::location_of(&href))
+    launch_argument(args).map_or_else(|| "/".into(), |href| exact_route::location_of(&href))
+}
+
+/// The first non-flag argument, as it was given, or `None`. The `hidden`
+/// after a login item's `--login` (the Windows host's `Run` value, LLP
+/// 1133.025 D2) is that flag's, not a location.
+pub fn launch_argument(args: impl IntoIterator<Item = String>) -> Option<String> {
+    let mut after_login = false;
+    args.into_iter().find(|arg| {
+        let login_word = after_login && arg == "hidden";
+        after_login = arg == "--login";
+        !arg.starts_with('-') && !login_word
+    })
 }
 
 /// `EXACT_SCALE`: device pixels per point, 1 when unset. A scale the
@@ -859,7 +869,7 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
     }
     show_neutral_look();
     if config.headless() {
-        return headless::<D>(config, started);
+        return run_headless::<D>(config, started, None);
     }
     #[cfg(target_os = "linux")]
     {
@@ -871,7 +881,13 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
     }
 }
 
-fn headless<D: DataSource + Default>(config: &mut Config, started: Instant) -> i32 {
+/// Run the shared headless startup and agent loop with the carrier's clipboard.
+/// The adapter lives on this thread until the session ends.
+pub fn run_headless<D: DataSource + Default>(
+    config: &mut Config,
+    started: Instant,
+    clipboard: Option<Box<dyn crate::presenter::clipboard::Clipboard>>,
+) -> i32 {
     let t_boot = Instant::now();
     let size = config.size;
     let (mut p, error) = match boot_presenter::<D>(config, size) {
@@ -881,6 +897,9 @@ fn headless<D: DataSource + Default>(config: &mut Config, started: Instant) -> i
             return 1;
         }
     };
+    if let Some(clipboard) = clipboard {
+        p.set_clipboard(clipboard);
+    }
     let runner_ms = t_boot.elapsed().as_secs_f64() * 1000.0;
     // Local files decode in a moment; a first frame with the pictures in
     // it is what a smoke, a screenshot, and an agent's first `layout` want.
@@ -1140,6 +1159,10 @@ mod tests {
             (vec!["--flag", "post/42", "/later"], "/post/42"),
             (vec!["notes", "1bad:thing"], "/notes"),
             (vec!["--agent", "--url=/post/7"], "/"),
+            (vec!["--login", "hidden"], "/"),
+            (vec!["--login"], "/"),
+            (vec!["--login", "hidden", "/add"], "/add"),
+            (vec!["hidden"], "/hidden"),
         ] {
             assert_eq!(
                 launch_location(args.into_iter().map(str::to_owned)),

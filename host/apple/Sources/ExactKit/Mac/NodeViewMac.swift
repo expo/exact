@@ -338,7 +338,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     }
     /// ⌘A and ⌘C at a focused paragraph act on the reader's selection.
     private func paragraphCommand(_ event: NSEvent) -> Bool {
-        guard isParagraph, window?.firstResponder === self, event.modifierFlags.contains(.command) else { return false }
+        guard isParagraph, window?.firstResponder === self, NodeView.isCommandAlone(event) else { return false }
         switch NodeView.commandKey(event) {
         case "a": presenter?.selection.selectAll(in: window)
         case "c": presenter?.selection.copy()
@@ -346,11 +346,9 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         }
         return true
     }
-    /// Command-A with no other chord, ignoring Caps Lock / function noise.
+    /// Command-A with no other modifier.
     static func isCommandA(_ event: NSEvent) -> Bool {
-        guard event.type == .keyDown else { return false }
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
-        return mods == .command && commandKey(event) == "a"
+        event.type == .keyDown && isCommandAlone(event) && commandKey(event) == "a"
     }
     /// Select the field's whole value. A secure editor can ignore `selectAll:`.
     static func selectAll(in f: NSTextField) {
@@ -1021,9 +1019,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
                 if let editor = editingEditor { writeValue(v, into: editor) } else if f.stringValue != v { f.stringValue = v; toldText = nil; pendingValue = nil }
             }
             applyPlaceholder(f)
-            f.contentType = Autofill.contentType(props["autocomplete"], fallback: nil) // LLP 1102 §3.6
-            f.isEnabled = !disabled
-            f.isEditable = !disabled && props["editable"] != "false"
+            applyFieldProps(f)
             styleNativeField()
             updateNumberStepper() // the platform's stepping control for `type="number"` (LLP 1116.007 D4)
         }

@@ -11,6 +11,75 @@ import { spawnOwned } from '../../scripts/test-children.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 
+test.each([[false, false], [true, false], [true, true]])('a list first opened offline uses prepared chunks without evaluating them at boot (production: %s, interaction: %s)', async (production, interaction) => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/offline-list-'));
+  const dist = resolve(dir, 'dist');
+  let browser, server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Offline List', app: { id: 'test.offline-list', name: 'Offline List' }, host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), (interaction ? 'routes nav\n  home "/" render=build activate=interaction\n\n' : '') + `component OfflineList
+  state wakes = 0
+  state shown = false
+  state items = [${Array.from({ length: 100 }, (_, i) => i).join(', ')}]
+  action boot
+    wakes = wakes + 1
+  action reveal
+    shown = true
+  view
+    column
+      button \`Wake \${wakes}\` press=boot testId="boot"
+      button "Show list" press=reveal testId="reveal"
+      if shown
+        list virtualized=true estimated-item-height=40 height=120 width=320 testId="rows"
+          for item in items key=item
+            text \`Row \${item}\` height=40 testId=\`row-\${item}\`
+`);
+    const built = spawnSync(process.execPath, ['host/web-js/build.mjs', 'offline-list', '--out', dist, '--render', interaction ? 'js' : 'none',
+      ...(production ? ['--production'] : [])], { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8' });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    const collection = readdirSync(dist).find(name => /^collection-glue-.*\.js$/.test(name));
+    expect(collection).toBeDefined();
+    // A probe in the deferred chunk distinguishes preparation from evaluation.
+    writeFileSync(resolve(dist, collection), 'globalThis.collectionEvaluated = true;\n' + readFileSync(resolve(dist, collection), 'utf8'));
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))), { headers: { 'cache-control': 'no-store' } });
+    } });
+    browser = await suiteBrowser();
+    const page = await browser.newPage(), errors = [], failed = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('requestfailed', request => failed.push(request.url()));
+    await page.addInitScript(() => {
+      globalThis.preparedModules = [];
+      document.addEventListener('load', event => {
+        if (event.target instanceof HTMLLinkElement && event.target.rel === 'modulepreload') preparedModules.push(event.target.href);
+      }, true);
+    });
+    await page.goto(server.url.href);
+    await page.getByTestId('reveal').waitFor();
+    if (interaction) {
+      await page.getByTestId('boot').dispatchEvent('click');
+      await page.waitForFunction(() => document.querySelector('[data-testid=boot]')?.textContent === 'Wake 1');
+    }
+    await page.waitForFunction(() => [...document.querySelectorAll('link[rel=modulepreload]')].every(link => preparedModules.includes(link.href)));
+    expect(await page.evaluate(() => globalThis.collectionEvaluated)).toBeUndefined();
+    expect(await page.getByTestId('rows').count()).toBe(0);
+    await page.context().setOffline(true);
+    await page.getByTestId('reveal').dispatchEvent('click');
+    await page.evaluate(() => exact.lists.pending());
+    expect(errors).toEqual([]);
+    expect(failed).toEqual([]);
+    expect(await page.evaluate(() => globalThis.collectionEvaluated)).toBe(true);
+    await page.getByTestId('rows').evaluate(el => { el.scrollTop = 3600; });
+    await page.getByTestId('row-90').waitFor();
+    expect(await page.getByTestId('row-0').count()).toBe(0);
+  } finally {
+    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
+  }
+}, 60000);
+
 test('the production starter stays within its 45 KiB budget and its header button works', async () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/starter-bytes-'));
@@ -216,14 +285,15 @@ test.each([
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 1024, bytes = [];
   const u32 = n => bytes.push(n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255);
   const string = s => { const b = new TextEncoder().encode(s); u32(b.length); bytes.push(...b); };
-  u32(7); bytes.push(0); string('test.grants'); string(grants);
+  u32(8); bytes.push(0); string('test.grants'); string(grants);
   new Uint8Array(memory.buffer, out, bytes.length).set(bytes);
   const output = mock(() => out);
+  let abi = 8;
   const instantiate = spyOn(WebAssembly, 'instantiate').mockResolvedValue({ instance: { exports: {
-    memory, exact_logic_abi: () => 7, exact_logic_create: () => 1, exact_logic_alloc: () => 0,
+    memory, exact_logic_abi: () => abi, exact_logic_create: () => 1, exact_logic_alloc: () => 0,
     exact_logic_call(_session, pointer, length) {
       const request = new DataView(memory.buffer, pointer, length);
-      return length === 5 && request.getUint32(0, true) === 7 && request.getUint8(4) === 0 ? 0 : 1;
+      return length === 5 && request.getUint32(0, true) === 8 && request.getUint8(4) === 0 ? 0 : 1;
     },
     exact_logic_output: output, exact_logic_output_len: () => bytes.length,
   } } });
@@ -231,6 +301,8 @@ test.each([
     const actual = await moduleGrants(path);
     expect(output).toHaveBeenCalledTimes(1);
     expect(actual).toBe(grants);
+    abi = 7;
+    await expect(moduleGrants(path)).rejects.toThrow('Rust module ABI 7 is not 8');
   } finally {
     instantiate.mockRestore();
     rmSync(dir, { recursive: true, force: true });
@@ -608,7 +680,7 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
   try {
     mkdirSync(app);
     writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'Site', app: { id: 'test.site', name: 'Site' } }));
-    const source = 'shape Note\n  text: string\n\nroutes nav\n  home "/" render=build\n  item "/item/:id"\n  live "/live" render=request\n  feed "/feed" render=cached\n  notfound render=build\n\n'
+    const source = 'shape Note\n  text: string\n\nroutes nav\n  home "/" render=build\n  item "/item/:id"\n  live "/live" render=request\n  feed "/feed" render=cached\n  doc "/doc/:id" render=request\n  notfound render=build\n\n'
       + 'component App\n  resource note = note("rendered") as shape Note\n  view\n    column\n      text top(nav).url\n      text note.text\n';
     writeFileSync(resolve(app, 'app.contract'), source);
     writeFileSync(resolve(app, 'app.ts'), "import type { Answer, Result, Sources } from './app.contract.d.ts';\nexport const appId = 'test.site';\nexport const grants = '';\n"
@@ -627,6 +699,7 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
       { name: 'item', pattern: '/item/:id', render: 'client', notfound: false },
       { name: 'live', pattern: '/live', render: 'request', notfound: false },
       { name: 'feed', pattern: '/feed', render: 'cached', notfound: false },
+      { name: 'doc', pattern: '/doc/:id', render: 'request', notfound: false },
       { name: 'notfound', pattern: '', render: 'build', notfound: true },
     ]);
     const files = readdirSync(out);
@@ -696,8 +769,9 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     writeFileSync(resolve(out, 'live.md'), '# Live\n');
     const md = await fetch(`http://127.0.0.1:${serve.port}/live`, { headers: { accept: 'text/markdown' } });
     expect([md.headers.get('content-type'), md.headers.get('vary'), await md.text()]).toEqual(['text/markdown; charset=utf-8', 'Accept', '# Live\n']);
-    const feedAsked = await fetch(`http://127.0.0.1:${serve.port}/feed`, { headers: { accept: 'text/markdown, text/html;q=0.9' } });
-    expect([feedAsked.status, (await feedAsked.text()).includes('>/feed<')]).toEqual([200, true]);
+    const docAsked = await fetch(`http://127.0.0.1:${serve.port}/doc/7`, { headers: { accept: 'text/markdown, text/html;q=0.9' } });
+    const docBody = await docAsked.text();
+    expect([docAsked.status, docBody.includes('>/doc/7<'), docBody.includes('>/doc/7.md<')]).toEqual([200, true, false]);
     const file = await raw('/app.js');
     const hosted = await serving(root, out, { fromEnv: true });
     try { expect((await hosted.get('/live')).body).toContain('The note, rendered.'); } finally { await hosted.stop(); }
@@ -722,14 +796,24 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     const next = await get('/live'), old = await fetch(`http://127.0.0.1:${serve.port}/.exact/gen/${id}/app.js`);
     expect([generationIn(next.body) === id, next.body.includes('Changed again.'), old.status, Buffer.from(await old.arrayBuffer()).equals(runtime)]).toEqual([false, true, 200, true]);
     // A source changed since the build: serve builds the site again before it answers a navigation, and answers a
-    // build that fails with its output (LLP 1153.001 D3).
+    // build that fails with its output (LLP 1153.001 D3). A source is one however deep in the app it is.
+    const deep = resolve(app, 'a/b/c/d/e/part.ts'), rebuilds = (text) => text.split('a source changed since the build: building it again').length - 1;
+    mkdirSync(dirname(deep), { recursive: true });
+    writeFileSync(deep, "export const part = 'one';\n");
     writeFileSync(resolve(app, 'app.contract'), source.replace('text note.text\n', 'text note.text\n      text "Edited."\n'));
     await new Promise(ok => setTimeout(ok, 350));
     expect((await get('/live')).body).toContain('Edited.');
+    await heard((text) => rebuilds(text) === 1);
+    writeFileSync(deep, "export const part = 'two';\n");
+    await new Promise(ok => setTimeout(ok, 350));
+    expect((await get('/live')).status).toBe(200);
+    await heard((text) => rebuilds(text) === 2);
     writeFileSync(resolve(app, 'app.contract'), source.replace('text note.text\n', 'text note.text\n      nosuchtag "x"\n'));
     await new Promise(ok => setTimeout(ok, 350));
-    const broken = await get('/live');
-    expect([broken.status, broken.body.startsWith("The app's build failed"), broken.body.includes('nosuchtag')]).toEqual([500, true, true]);
+    writeFileSync(resolve(out, 'live.md'), '# Stale live\n');
+    const broken = await fetch(`http://127.0.0.1:${serve.port}/live`, { headers: { accept: 'text/markdown' } });
+    const brokenBody = await broken.text();
+    expect([broken.status, brokenBody.startsWith("The app's build failed"), brokenBody.includes('nosuchtag')]).toEqual([500, true, true]);
   } finally {
     await serve?.stop();
     if (server) { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }
@@ -861,7 +945,7 @@ test('an app whose name or head entry spells a script tag renders its pages in t
     expect(built.status, built.stdout + built.stderr).toBe(0);
     const shell = readFileSync(resolve(out, 'shell.html'), 'utf8'), page = readFileSync(resolve(out, 'index.html'), 'utf8');
     expect(shell).toContain('<title>Learn &lt;script> tags</title>');
-    expect(shell).toContain('<meta name="keywords" content="&lt;script>, &lt;/script>">');
+    expect(shell).toContain('<meta name="keywords" content="&lt;script&gt;, &lt;/script&gt;">');
     const document = page.indexOf('The note, rendered.');
     expect([document > page.lastIndexOf('<div id="exact-root">'), page.split('<div id="exact-root">').length - 1, page.includes('<title>Learn &lt;script&gt; tags</title>')]).toEqual([true, 1, true]);
   } finally { rmSync(dir, { recursive: true, force: true }); }

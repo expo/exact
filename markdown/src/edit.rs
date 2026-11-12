@@ -500,7 +500,10 @@ fn footnote(source: &str, sel: B) -> Draft {
             next = next.max(rest[..digits].parse::<u64>().map_or(next, |n| n + 1));
         }
     }
-    let gap = if source.is_empty() || source.ends_with("\n\n") {
+    // At the end of the source the definition follows the reference, not the old ending.
+    let gap = if sel.end == source.len() {
+        "\n\n"
+    } else if source.ends_with("\n\n") {
         ""
     } else if source.ends_with('\n') {
         "\n"
@@ -620,7 +623,8 @@ fn newline(source: &str, mut sel: B) -> Draft {
             && sel.start <= b.range.end
     });
     let p = prefix(source, &line);
-    let split = !coded && (p.kind.is_some() || p.quoted) && sel.start >= p.content;
+    // A selection from inside the block prefix still splits what it ends in.
+    let split = !coded && (p.kind.is_some() || p.quoted);
     if split {
         // At an inline edge, keep the whole construct on its side of the break.
         for edge in [&mut sel.start, &mut sel.end] {

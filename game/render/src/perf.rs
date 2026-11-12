@@ -102,6 +102,7 @@ pub(crate) fn pipeline<T>(make: impl FnOnce() -> T) -> T {
 pub(crate) use exact_game::diagnostics::Ring;
 #[derive(Default)]
 pub(crate) struct Perf {
+    pub reporting: Option<crate::surface::performance::Report>,
     frame: Ring,
     pub tick: Ring,
     pub feed: Ring,
@@ -167,6 +168,12 @@ impl Perf {
             r.next = 0;
         }
         self.last_live = None;
+    }
+    pub fn restart(&mut self) {
+        *self = Self {
+            reporting: self.reporting.take().map(|_| Default::default()),
+            ..Default::default()
+        };
     }
     pub fn frame(&mut self, now: f64, seekable: bool) {
         if seekable {

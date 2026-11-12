@@ -205,6 +205,7 @@ impl Loader<'_> {
         if let Err(all) = self
             .load_source(&root_key, src, 0)
             .and_then(|()| self.load_data_packages())
+            .and_then(|()| self.load_view_packages())
         {
             return Err(resolve(&self.sources, all));
         }
@@ -989,7 +990,11 @@ impl Loader<'_> {
     /// `{name}__{file stem}`, numbered until unique. One file's two
     /// declarations of a name keep it, so the passes that refuse that refuse it.
     fn unique_names(&self) -> Vec<HashMap<(Kind, String), String>> {
-        let mut taken: HashSet<(Kind, String)> = HashSet::new();
+        let mut taken: HashSet<(Kind, String)> = self
+            .data_sources()
+            .into_iter()
+            .map(|name| (Kind::Call, name))
+            .collect();
         // Each file's local bindings: another file's `fn` or shape of one of
         // these names is renamed, or the binding's calls would reach it. A
         // members block's are its listing file's (LLP 1091.002 D4).

@@ -184,7 +184,7 @@ impl Painter {
         });
         if underlines && !self.decoration_warning {
             self.decoration_warning = true;
-            self.materials.1.push("CSS text-decoration: Linux uses solid font-size-based line metrics; underline text-decoration-skip-ink:auto is not implemented (LLP 1001)".into());
+            self.notes.push("CSS text-decoration: Linux uses solid font-size-based line metrics; underline text-decoration-skip-ink:auto is not implemented (LLP 1001)".into());
         }
         let mut lines = Vec::new();
         for (glyph, baseline, paint) in paragraph.paint_glyphs(palette) {

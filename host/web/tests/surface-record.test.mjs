@@ -311,7 +311,7 @@ test('failed recovery removes clones and backs off instead of retrying each fram
 });
 
 test('a missing adapter leaves a settled fallback through dirty frames and agent settle', async () => {
-  const f=await fixture();
+  const f=await fixture({metricsName:'world', snapshot:()=>'{"fps":60}'});
   // This recovery test has no runner record consumer; keep creation local to
   // the GPU harness instead of entering glue.js's extracted batch fixture.
   f.gpu.gpu_published=()=>undefined;
@@ -328,6 +328,8 @@ test('a missing adapter leaves a settled fallback through dirty frames and agent
   assert.equal(renders,1);
   assert.equal(attempts,1);
   assert.equal(f.exact.gpu.recovery.status,'no device');
+  assert.equal(f.metrics.at(-1),'world', 'a lost device leaves metrics unavailable');
+  assert.equal(f.metricTimers.size,0);
   assert.equal(f.diagnostics.filter(line=>line.includes('exact gpu recovery')).length,1);
   assert.deepEqual([canvas.width,canvas.height],[1,1]);
   const writes=f.sizeWrites.length;
@@ -657,6 +659,64 @@ test('R13 named and empty argument objects survive the web batch and GPU binding
   }
 });
 
+test('a named update sends the module only the arguments that changed since its last accepted bind', async () => {
+  const f = await fixture(), crossed = [];
+  let refuse = false;
+  f.gpu.gpu_bind_at = (id, json) => { crossed.push(['full', json]); return !refuse; };
+  f.gpu.gpu_bind_changed_at = (id, json) => { crossed.push(['changed', json]); return !refuse; };
+  const saved = 'x'.repeat(100_000), host = new f.Element('host'); host.canvas = new f.Element(); f.exact.views.set(1, host);
+  const update = values => f.applyBatch({ops:[{op:'surface',id:1,name:'world',values}],timers:false,motion:false});
+  const last = () => crossed.splice(0).map(([kind, json]) => [kind, JSON.parse(json, (_, v) => v === saved ? '<saved>' : v)]);
+  f.exact.gpu.surface(1, 'world', {saved, count: 1, at: [1, 2]});
+  assert.deepEqual(last(), [['full', {saved: '<saved>', count: 1, at: [1, 2]}]]);
+  // The batch parses a new string and a new list each time: equal by their JSON.
+  await update({saved: 'x'.repeat(100_000), count: 2, at: [1, 2]});
+  assert.deepEqual(last(), [['changed', {count: 2}]]);
+  await update({saved, count: 2, at: [1, 3]});
+  assert.deepEqual(last(), [['changed', {at: [1, 3]}]]);
+  await update({saved, count: -0, at: [1, 3], extra: true});
+  assert.deepEqual(last(), [['changed', {count: 0, extra: true}]]);
+  // The agent's clock re-binds what wants a frame: nothing changed.
+  f.exact.gpu.retier('high'); f.exact.gpu.schedule();
+  assert.deepEqual(last(), [['changed', {}]]);
+  // A refused bind leaves the module at its last accepted values, and so the baseline.
+  refuse = true; await update({saved, count: 3, at: [1, 3], extra: true});
+  refuse = false; await update({saved, count: 0, at: [1, 3], extra: true});
+  assert.deepEqual(last(), [['changed', {count: 3}], ['changed', {}]]);
+  // A gone argument returns to its default only in a full bind.
+  await update({saved, count: 4, at: [1, 3]});
+  assert.deepEqual(last(), [['full', {saved: '<saved>', count: 4, at: [1, 3]}]]);
+  await update({saved, count: 5, at: [1, 3]});
+  assert.deepEqual(last(), [['changed', {count: 5}]]);
+  // Positional values are always whole.
+  await update([1, 2]); await update([1, 2]);
+  assert.deepEqual(last(), [['full', [1, 2]], ['full', [1, 2]]]);
+  await update({saved, count: 5});
+  assert.deepEqual(last(), [['full', {saved: '<saved>', count: 5}]]);
+  // After device recovery the first bind is whole again.
+  f.gpu.gpu_recover = async surfaces => JSON.stringify({status:'recovered', instances:[...surfaces]});
+  const lost = host.canvas;
+  lost.replaceWith = el => { f.Element.prototype.replaceWith.call(lost, el); host.canvas = el; };
+  f.exact.gpu.deviceLost();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await f.exact.gpu.settled();
+  await update({saved, count: 6});
+  await update({saved, count: 7});
+  assert.deepEqual(last(), [['full', {saved: '<saved>', count: 6}], ['changed', {count: 7}]]);
+});
+
+test('R14 the canvas size reaches the module before each bind, whole or changed, which may tick a new world',async()=>{
+  const f=await fixture(), calls=[];
+  f.gpu.gpu_size=(id,w,h)=>{calls.push(['size',id,w,h]);return true;};
+  f.gpu.gpu_bind_at=id=>{calls.push(['bind',id]);return true;};
+  f.gpu.gpu_bind_changed_at=id=>{calls.push(['changed',id]);return true;};
+  f.create(1);
+  for(const seed of [2,3]) await f.applyBatch({ops:[{op:'surface',id:1,name:'world',values:{seed}}],timers:false,motion:false});
+  f.exact.gpu.retier('high'); f.exact.gpu.schedule();
+  const size=['size',1,10,10];
+  assert.deepEqual(calls,[size,['bind',1],size,['bind',1],size,['changed',1],size,['changed',1]]);
+});
+
 test('E10 focused Contract buttons consume activation keys before the world', async () => {
   const f = await fixture({input:true}), canvas=f.create(1), pause=new f.Element('button');
   let prevented=0; pause.click=()=>{};
@@ -721,4 +781,28 @@ test('the canvas backing store is the raster the module draws, at its render sca
   dirty=true; f.gpu.gpu_render_scale=()=>1;
   f.frame();
   assert.deepEqual([canvas.width,canvas.height],[30,30]);
+});
+
+
+test('canvas metrics opt in only the named first publisher and clear on disposal', async () => {
+  let reads = 0;
+  const off = await fixture({ snapshot: () => { reads++; return '{"frames":1}'; } });
+  off.create(1);
+  assert.deepEqual(off.reporting, []);
+  assert.equal(reads, 0);
+  assert.equal(off.metricTimers.size, 0);
+  const on = await fixture({ metricsName: 'world', snapshot: () => { reads++; return '{"frames":1}'; } });
+  on.create(1); on.create(2); on.create(3, 'other');
+  assert.deepEqual(on.reporting, [[1, true]]);
+  assert.ok(on.metrics.includes('world\0{"frames":1}'));
+  assert.equal(on.metricTimers.size, 1);
+  const idle = on.metrics.length; on.pollMetrics();
+  assert.equal(on.metrics.length, idle + 1, 'an idle canvas is sampled without rendering');
+  const before = on.metrics.length;
+  on.destroy(2);
+  assert.equal(on.metrics.length, before);
+  on.destroy(1);
+  assert.equal(on.metrics.at(-1), 'world');
+  assert.equal(on.metricTimers.size, 0);
+  const disposed = reads; on.pollMetrics(); assert.equal(reads, disposed);
 });

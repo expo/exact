@@ -1480,8 +1480,9 @@ A write reaches every running development build at once. Release builds take non
     gained or lost. Which tokens the plan keeps is LLP 1121 D7's retention (`tamber::Retention`):
     every role override, what the views may name, and in an app that can name a token outside its
     views (a data or native module) every token, bounded by `exports`. `propose` and a
-    transaction's `class` ask the same retention, as the build last found it, so a plain app's
-    token no view names is `live` to add, and the dev loops publish nothing for it.
+    transaction's `class` reuse the build's view analysis and close native component params
+    over the current design, including package defaults. A plain app's token no view or
+    native param names is `live` to add, and the dev loops publish nothing for it.
 - **The batch** is an event on the dev stream the builds already hold (`/__dev`; the JS target's
   `/__dev/page`): `{kind: "tamber-batch", structure, base, design, tokens: [{name, value,
   slices}]}`.

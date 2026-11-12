@@ -2,7 +2,8 @@ use super::*;
 
 impl<G: Game> Sim<G> {
     /// Queue a raw event in stamp order, preserving arrival order at equal stamps.
-    /// Paused input updates held state directly, without edges or queued wheel deltas.
+    /// Paused input updates held state directly, without edges or queued wheel deltas,
+    /// after the device events still queued from before the pause.
     pub fn input(&mut self, event: InputEvent) {
         let event = self.unmarked(event);
         if let Err(error) = self.validate_input(&event) {
@@ -12,11 +13,23 @@ impl<G: Game> Sim<G> {
         self.invalidate();
         // A posted message waits for the next tick, paused or not.
         if G::paused(&self.args) && !matches!(event, InputEvent::Message { .. }) {
+            self.pointer_samples.clear();
+            // The pause's flush leaves device events stamped after the last
+            // frame queued; they arrived first, so they apply first.
+            let queued = std::mem::take(&mut self.queue);
+            for e in queued {
+                if let InputEvent::Message { .. } = e.event {
+                    self.queue.push_back(e);
+                } else {
+                    self.deliver(e.event, self.world_us, true);
+                }
+            }
             self.deliver(event, self.world_us, true);
             return;
         }
         let host_us = micros(event.at_ms());
         let e = Queued {
+            host_sample: true,
             host_us,
             world_us: self
                 .last_us
@@ -179,6 +192,7 @@ impl<G: Game> Sim<G> {
         held.append(&mut self.queue);
         self.queue = held;
         self.input.clear_edges();
+        self.pointer_samples.clear();
     }
     /// Apply one event at world microsecond `at_us`, journaling a pad's
     /// connection; `paused` keeps no edges.

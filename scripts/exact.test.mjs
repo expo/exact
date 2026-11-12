@@ -3,6 +3,7 @@
 // `bun test ./scripts/exact.test.mjs`.
 import { test, spyOn } from 'bun:test';
 import * as childProcess from 'node:child_process';
+import { appVerbs } from './app-cli.mjs';
 import { pathFrom } from './app.mjs';
 import { encodePng } from './png.mjs';
 import assert from 'node:assert/strict';
@@ -700,7 +701,7 @@ test.skipIf(!tools)('an executable whose name ends in parentheses is read as a f
   assertLinkedSdk(executable, '15.0');
   assert.throws(() => assertLinkedSdk(executable, '27.0'), /Demo \(Beta\) records SDK 15\.0, not 27\.0/);
   // A file the tool cannot read says so, not that it records no SDK.
-  assert.throws(() => assertLinkedSdk(resolve(dir, 'Gone (Beta)'), '15.0'), /vtool -show-build failed .*Gone \(Beta\)/);
+  assert.throws(() => assertLinkedSdk(resolve(dir, 'Gone (Beta)'), '15.0'), /cannot read .*Gone \(Beta\)/);
   // dsymutil and strip take the same path as a file.
   const { saved } = stripForDistribution(executable, resolve(dir, 'Demo (Beta).dSYM'));
   assert.ok(existsSync(resolve(dir, 'Demo (Beta).dSYM/Contents/Resources/DWARF/Demo (Beta)')), 'dsymutil wrote the dSYM');
@@ -1126,6 +1127,7 @@ test('docs prints the section on its words first, matching whole words', () => {
     [['push'], 'docs/recipes/navigation-stack.md', /^routes nav$/m],
     [['deploy'], 'docs/recipes/porting-and-release.md', /Name the port when you make it/],
     [['haptics'], 'docs/start-here.md', /haptic\("selection"\)/],
+    [['platform', 'checks'], 'docs/start-here.md', /agent macos --chrome platform "clock data" "screenshot \.exact\/mac\.png window"/],
     [['glass'], 'docs/contract-for-agents.md', /glass/],
     [['detent'], 'docs/contract-for-agents.md', /detent/],
     [['tab', 'bar'], 'docs/recipes/tabs.md', /iOS's bar/],
@@ -1196,7 +1198,7 @@ test.skipIf(!tools)('release keeps Mac widget entitlements, including the provis
 test('setup refuses the removed game warmup flag before provisioning', () => {
   const result=spawnSync(process.execPath,[resolve(import.meta.dir,'exact.mjs'),'setup','--game'],{encoding:'utf8'});
   assert.notEqual(result.status,0);
-  assert.match(result.stderr,/Usage: exact setup \[--check\]/);
+  assert.match(result.stderr,/Usage: exact setup \[--check \[--platform/);
   assert.doesNotMatch(result.stdout,/warming|cargo fetch|rustup toolchain install/);
 });
 
@@ -1393,6 +1395,16 @@ test('add installs a standard package by pathFrom from an outside app with an ab
   assert.equal(JSON.parse(readFileSync(resolve(app, 'package.json'), 'utf8')).dependencies['@exact/in-app-browser'], spec);
   const frozen = spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: app, encoding: 'utf8' });
   assert.equal(frozen.status, 0, frozen.stdout + frozen.stderr);
+  // Each command add's advice names, on success and on a refusal, is a verb of the app's exact.mjs, spelled as the app
+  // runs it (`bun exact.mjs <verb>`), never as `exact <verb>`, which needs a shim the app does not have.
+  const geolocation = spawnSync(process.execPath, ['exact.mjs', 'add', 'geolocation'], { cwd: app, encoding: 'utf8' });
+  assert.equal(geolocation.status, 0, geolocation.stdout + geolocation.stderr);
+  const refused = spawnSync(process.execPath, ['exact.mjs', 'add', 'no-such-module'], { cwd: app, encoding: 'utf8' });
+  assert.notEqual(refused.status, 0, refused.stdout + refused.stderr);
+  const said = `${geolocation.stdout}${refused.stderr}`, named = [...said.matchAll(/bun exact\.mjs ([a-z-]+)/g)].map((m) => m[1]);
+  assert.deepEqual(said.match(/(?<![\w./-])exact [a-z-]+/g), null);
+  assert.ok(named.includes('add') && named.includes('docs'), said);
+  assert.deepEqual(named.filter((verb) => !(verb in appVerbs('shop', app))), []);
   rmSync(resolve(app, 'exact.mjs'));
   const fromRepo = spawnSync(process.execPath, [resolve(root, 'scripts/exact.mjs'), 'add', '@exact/in-app-browser'], {
     cwd: root, encoding: 'utf8', env: { ...process.env, EXACT_APP_DIR: app },
@@ -1409,13 +1421,14 @@ test.skipIf(process.platform === 'win32')('setup reports Gradle SDK packages and
     const sdk = resolve(root, 'SDK with spaces'), jdk = resolve(root, 'JDK with spaces');
     mkdirSync(resolve(jdk, 'bin'), { recursive: true });
     writeFileSync(resolve(jdk, 'bin/java'), '#!/bin/sh\necho \'openjdk version "21.0.1"\' >&2\n', { mode: 0o755 });
+    writeFileSync(resolve(jdk, 'bin/javac'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const tool = resolve(sdk, 'cmdline-tools/19.0/bin/sdkmanager');
     mkdirSync(dirname(tool), { recursive: true });
     writeFileSync(tool, '#!/bin/sh\nexit 99\n', { mode: 0o755 });
     const env = { ...process.env, ANDROID_HOME: sdk, JAVA_HOME: jdk }, packages = androidSdkPackages();
     assert.deepEqual(androidSdkPackages('compileSdk { version = release(42) { minorApiLevel = 3 } }\nbuildToolsVersion = "41.0.2"').map(p => p.id), ['platforms;android-42.3', 'build-tools;41.0.2']);
     assert.throws(() => androidSdkPackages(''), /cannot read/);
-    const rows = () => sdkReport(env, { only: 'android' }).filter(r => r.name.startsWith('Android'));
+    const rows = () => sdkReport(env, { only: 'android' }).filter(r => packages.some(p => p.name === r.name));
     assert.deepEqual(rows().map(r => [r.name, r.ok, r.want]), packages.map(p => [p.name, false, p.version]));
     for (const [i, row] of rows().entries()) {
       assert.equal(row.fix, `'${tool}' '--sdk_root=${sdk}' '${packages[i].id}'`);
@@ -1425,6 +1438,8 @@ test.skipIf(process.platform === 'win32')('setup reports Gradle SDK packages and
     assert.ok(rows().every(r => r.ok));
     assert.ok(!sdkReport(env, { only: 'web' }).some(r => r.name.startsWith('Android')));
     assert.ok(!platformRowNames('web').some(name => name.startsWith('Android')));
+    assert.equal(sdkReport(env, { only: 'android' }).find(r => r.name === 'Android JDK')?.ok, true);
+    assert.equal(sdkReport({ ...env, JAVA_HOME: resolve(root, 'absent') }, { only: 'android' }).find(r => r.name === 'Android JDK')?.ok, false);
     assert.equal(androidJavaEnv(env, 'linux').JAVA_HOME, jdk);
     assert.equal(androidJavaEnv({ PATH: '', JAVA_HOME: resolve(root, 'missing-jdk') }, 'linux'), null);
     assert.equal(androidJavaEnv({ PATH: '' }, 'darwin', jdk).JAVA_HOME, jdk);
@@ -1444,3 +1459,40 @@ test.skipIf(process.platform === 'win32')('setup reports Gradle SDK packages and
     assert.ok(!sdkReport(absentEnv).some(r => packages.some(p => p.name === r.name)), 'without an SDK the general report omits its packages');
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 60_000);
+
+// These recipes use job values directly; EAS also supports inputs on run steps.
+test('EAS recipes export resolved job versions directly and upload the native artifacts', () => {
+  for (const [platform, version, artifact] of [
+    ['ios', 'buildNumber', 'out.ipa'],
+    ['android', 'versionCode', 'target/android/app/outputs/bundle/release/app-release.aab'],
+  ]) {
+    const doc = readFileSync(resolve(import.meta.dir, `../docs/recipes/eas-${platform}.md`), 'utf8');
+    const { build } = Bun.YAML.parse(/```yaml\n([\s\S]*?)```/.exec(doc)[1]);
+    const steps = build.steps;
+    assert.equal(steps[0], 'eas/checkout');
+    const resolved = steps.indexOf('eas/resolve_build_config');
+    assert.ok(steps.indexOf('eas/install_node_modules') < resolved);
+    const buildStep = steps.findIndex(step => step.run?.command.includes('export EXACT_BUILD_NUMBER='));
+    assert.ok(buildStep > resolved);
+    const expression = '${ eas.job.version.' + version + ' }';
+    assert.ok(steps[buildStep].run.command.includes('export EXACT_BUILD_NUMBER="' + expression + '"'));
+    for (const step of steps.filter(step => step.run)) {
+      assert.equal(Object.hasOwn(step.run, 'inputs'), false, 'keep job expressions directly in these recipes');
+      const command = step.run.command.replaceAll(expression, '42');
+      assert.doesNotMatch(command, /\$\{\s*(inputs|eas|steps)\./);
+    }
+    assert.deepEqual(steps.at(-1), { 'eas/upload_artifact': { inputs: { type: 'application-archive', path: artifact } } });
+  }
+});
+
+test.skipIf(!existsSync('/bin/sh'))('EAS recipes have valid shell syntax after job versions resolve', () => {
+  for (const platform of ['ios', 'android']) {
+    const doc = readFileSync(resolve(import.meta.dir, `../docs/recipes/eas-${platform}.md`), 'utf8');
+    const { build } = Bun.YAML.parse(/```yaml\n([\s\S]*?)```/.exec(doc)[1]);
+    for (const { run } of build.steps.filter(step => step.run)) {
+      const command = run.command.replaceAll(/\$\{ eas\.job\.version\.(buildNumber|versionCode) }/g, '42');
+      const parsed = spawnSync('/bin/sh', ['-n'], { input: command, encoding: 'utf8' });
+      assert.equal(parsed.status, 0, parsed.stderr);
+    }
+  }
+});

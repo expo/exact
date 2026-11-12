@@ -37,14 +37,17 @@ impl Ord for Entry {
 /// The executor's one timer thread's heap (D3): it only claims, posts and
 /// aborts.
 #[derive(Default)]
-pub(super) struct Timer {
+pub(in super::super) struct Timer {
     heap: Mutex<(BinaryHeap<Entry>, u64, bool)>,
     changed: Condvar,
 }
 
 impl Timer {
-    pub(super) fn arm(&self, ms: u32, lane: usize, run: Run, abort: AbortController) {
+    pub(in super::super) fn arm(&self, ms: u32, lane: usize, run: Run, abort: AbortController) {
         let mut heap = self.heap.lock().unwrap();
+        if heap.2 {
+            return;
+        }
         heap.1 += 1;
         let seq = heap.1;
         heap.0.push(Entry {
@@ -59,13 +62,29 @@ impl Timer {
     }
 
     /// Remove `run`'s deadline: at its terminal transition, or a park.
-    pub(super) fn remove(&self, run: Run) {
+    pub(in super::super) fn remove(&self, run: Run) {
         let mut heap = self.heap.lock().unwrap();
         heap.0.retain(|e| e.run != run);
     }
 
+    #[cfg(test)]
+    pub(super) fn expire(&self, run: Run) {
+        let mut heap = self.heap.lock().unwrap();
+        assert!(heap.0.iter().any(|e| e.run == run), "run has no deadline");
+        let mut entries = std::mem::take(&mut heap.0).into_vec();
+        for entry in &mut entries {
+            if entry.run == run {
+                entry.at = Instant::now();
+            }
+        }
+        heap.0 = entries.into();
+        self.changed.notify_all();
+    }
+
     pub(super) fn stop(&self) {
-        self.heap.lock().unwrap().2 = true;
+        let mut heap = self.heap.lock().unwrap();
+        heap.2 = true;
+        heap.0.clear();
         self.changed.notify_all();
     }
 

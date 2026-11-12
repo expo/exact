@@ -31,14 +31,15 @@ pub(super) fn timers(em: &mut Em<'_>, body: &mut String) -> Result<(), String> {
             let gated = em.uses.rt("gated");
             let _ = write!(
                 body,
-                "{gated}({},a_{},{},{},()=>{gate},{key},{name},{},{},{});",
+                "{gated}({},a_{},{},{},()=>{gate},{key},{name},{},{},{},{});",
                 t.interval_ms,
                 t.action.0,
                 t.once as u8,
                 t.frame as u8,
                 t.wait,
                 t.max_ms,
-                t.tolerance_ms
+                t.tolerance_ms,
+                t.change as u8
             );
             continue;
         }

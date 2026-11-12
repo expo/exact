@@ -216,6 +216,30 @@ impl Context {
         &self.0.session
     }
 
+    /// The session's label, the same at every launch, which what a package
+    /// keeps for one session is keyed by: `main`, the one session a process
+    /// runs here, as an Apple app's window is.
+    pub fn label(&self) -> &str {
+        "main"
+    }
+
+    /// The session's directories behind `app:/data`, `app:/cache` and
+    /// `app:/tmp`: the app's own, or under the agent its drive's store (a
+    /// named one, `EXACT_AGENT_STORAGE`, kept across the drive's launches).
+    pub fn data(&self) -> std::path::PathBuf {
+        crate::picker::roots()[0].clone()
+    }
+
+    /// `app:/cache`'s directory, as [`Context::data`] says.
+    pub fn cache(&self) -> std::path::PathBuf {
+        crate::picker::roots()[1].clone()
+    }
+
+    /// `app:/tmp`'s directory, as [`Context::data`] says.
+    pub fn temporary(&self) -> std::path::PathBuf {
+        crate::picker::roots()[2].clone()
+    }
+
     /// Who made the call being answered now: `app`, `tool`, `wake` or
     /// `device`. Set before each [`Package::later`].
     pub fn origin(&self) -> String {

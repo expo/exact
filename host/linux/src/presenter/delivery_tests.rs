@@ -207,3 +207,26 @@ fn a_starting_loops_status_is_said_once_by_the_poll() {
         "said at boot, not again"
     );
 }
+
+/// A login item's hidden launch (LLP 1133.025 D6): its window takes no
+/// present, so the picture it owes stays owed, and a frame painted to pixels
+/// nothing presents is its first pixel all the same.
+#[test]
+fn a_window_that_is_not_shown_reaches_first_pixel_without_a_present() {
+    let plan = crate::test_plan("component App\n  view\n    text \"Hidden\"\n");
+    let (mut p, error) = Presenter::boot_with(
+        &plan,
+        (),
+        (200., 200.),
+        1.,
+        PathBuf::new(),
+        crate::presenter::PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    p.repaint();
+    p.first_pixel();
+    assert!(!p.first_pixel_told(), "nothing was painted");
+    p.first_pixel_unshown();
+    assert!(p.first_pixel_told());
+}

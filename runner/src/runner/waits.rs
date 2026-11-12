@@ -118,6 +118,7 @@ impl<D: DataSource> Runner<D> {
                     now_ms: self.now_ms,
                     error: Some(RunnerError::Poisoned),
                     stopped_on_request: false,
+                    needs_apply: false,
                 },
                 continuing: false,
             };
@@ -132,7 +133,9 @@ impl<D: DataSource> Runner<D> {
         if !resumed {
             let advanced = self.advance_timed(cutoff);
             if advanced.error.is_some() || !advanced.receipts.is_empty() {
-                if advanced.error.is_none() {
+                if advanced.needs_apply {
+                    self.clock.admission = None;
+                } else if advanced.error.is_none() {
                     self.clock.admission = Some(cutoff);
                 }
                 return Admitted {
@@ -161,6 +164,7 @@ impl<D: DataSource> Runner<D> {
             now_ms: self.now_ms,
             error: None,
             stopped_on_request: false,
+            needs_apply: false,
         };
         if let Some((i, nominal)) = candidate {
             self.now_ms = self.now_ms.max(cutoff);
@@ -229,6 +233,10 @@ impl<D: DataSource> Runner<D> {
         let row = &self.plan.timers[i];
         if !t.next_ms.is_finite() {
             return t.next_ms;
+        }
+        // Wakes may hold change work past the commit that queued it.
+        if row.change {
+            return t.next_ms.max(self.now_ms);
         }
         if self.clock_live() {
             if self.native_timer(i) {

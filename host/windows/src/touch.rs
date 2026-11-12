@@ -114,9 +114,30 @@ fn pen(id: u64) -> bool {
     unsafe { GetPointerType(id, &mut kind) != 0 && kind == PT_PEN }
 }
 
+/// Whether a mouse message is one Windows made from a touch or a pen: its
+/// extra information carries the signature `0xFF515700` in its upper 24 bits
+/// ([System Events and Mouse Messages](https://learn.microsoft.com/windows/win32/tablet/system-events-and-mouse-messages)).
+/// What a finger or a pen does arrives as its own touch, so such a message
+/// stands for no mouse.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn from_touch_or_pen(extra: isize) -> bool {
+    extra as usize & 0xFFFF_FF00 == 0xFF51_5700
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mouse_message_made_from_a_touch_or_a_pen_is_known_by_its_signature() {
+        // MI_WP_SIGNATURE, with the pen and touch flags in the low byte.
+        for extra in [0xFF51_5700usize, 0xFF51_5780, 0xFF51_5701] {
+            assert!(from_touch_or_pen(extra as isize), "{extra:#x}");
+        }
+        for extra in [0usize, 0xFF51_5600, 0x0051_5700, 0xFF41_5700] {
+            assert!(!from_touch_or_pen(extra as isize), "{extra:#x}");
+        }
+    }
     use exact_linux::presenter::PainterChoice;
     use exact_runner::Value;
 

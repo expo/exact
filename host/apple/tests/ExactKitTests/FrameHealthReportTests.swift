@@ -187,4 +187,43 @@ final class FrameHealthReportTests: XCTestCase {
         XCTAssertNil(session.sampler)
         XCTAssertNotNil(session.frameHealth.setAgentCapture("start", duration: .nan)["error"])
     }
+
+    /// Measuring the screen, the card's Share gives Exact's frames as a report of their own beside the screen's, and each
+    /// gives the median, p99 and maximum of every frame's timing since the reset: an app drawn by GPU surfaces has its
+    /// frame times only on Exact's clock (LLP 1079.000 §7.4)
+    func testShareGivesExactsFramesBesideTheScreensWithEveryFramesTiming() throws {
+        let screen = FrameHealth(policy: .always, source: FrameHealth.screenSource), exact = FrameHealth(enabled: true)
+        defer { screen.destroy(); exact.destroy() }
+        screen.setHUDVisible(true)
+        exact.setHUDVisible(true)
+        let now = CACurrentMediaTime()
+        // Sixty frames a refresh apart at 60 Hz, each with 4.2 ms of work, the last 20.2 ms
+        for n in 0..<60 {
+            let at = now - 1.2 + Double(n) / 60
+            exact.record(arrival: at, target: at + 1 / 60.0, period: 1 / 60.0, finished: at + (n == 59 ? 0.0202 : 0.0042))
+        }
+        screen.record(arrival: now - 0.0205, target: now - 0.012, period: 0, finished: now - 0.0102)
+        let clock = FrameHealthReport.snapshot(health: exact, session: nil, now: now, beside: screen)
+        XCTAssertEqual(clock["source"] as? String, exact.source)
+        XCTAssertEqual(clock["selection"] as? String, "one-source; the card's Share gives ui-update as a report of its own")
+        XCTAssertEqual((clock["otherSources"] as? [[String: Any]])?.compactMap { $0["source"] as? String }, ["ui-update"])
+        let core = try XCTUnwrap(clock["coreSinceReload"] as? [String: Any])
+        XCTAssertEqual(core["frameIntervals"] as? String, "59")
+        let frameTime = try XCTUnwrap(core["frameTimeBoundsNs"] as? [String: Any])
+        XCTAssertEqual(frameTime["median"] as? [UInt64], [16_500_000, 17_000_000], "16.7 ms, in its half-millisecond bin")
+        XCTAssertEqual(frameTime["maximum"] as? [UInt64], [16_500_000, 17_000_000])
+        let work = try XCTUnwrap(core["workBoundsNs"] as? [String: Any])
+        XCTAssertEqual(work["median"] as? [UInt64], [4_000_000, 4_500_000])
+        XCTAssertEqual(work["p99"] as? [UInt64], [20_000_000, 20_500_000])
+        XCTAssertEqual(work["maximum"] as? [UInt64], [20_000_000, 20_500_000])
+        XCTAssertLessThanOrEqual(FrameHealthReport.encode(clock).count + 1, 4000)
+        // The screen's report names Exact's frames as the other, and has work but no frame times
+        let shown = FrameHealthReport.snapshot(health: screen, session: nil, now: now, beside: exact)
+        XCTAssertEqual(shown["selection"] as? String, "one-source; the card's Share gives \(exact.source) as a report of its own")
+        let screenCore = try XCTUnwrap(shown["coreSinceReload"] as? [String: Any])
+        XCTAssertTrue(screenCore["frameTimeBoundsNs"] is NSNull)
+        XCTAssertEqual((screenCore["workBoundsNs"] as? [String: Any])?["maximum"] as? [UInt64], [10_000_000, 10_500_000])
+        // An agent's report names no Share
+        XCTAssertNil(FrameHealthReport.snapshot(health: exact, session: nil, now: now)["selection"])
+    }
 }

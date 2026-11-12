@@ -56,9 +56,29 @@ enum Json {
     Object(BTreeMap<String, Json>),
 }
 
+/// The members a host adds to a surface's record, never the module's: a GPU
+/// canvas's `presented` (LLP 1009 D9). A kept record never holds them.
+pub const HOST_FIELDS: &[&str] = &["presented"];
+
 /// Decode one JSON object, filling absent fields and ignoring extra keys.
 /// Errors name the field path; the runner adds the resource's name.
 pub fn decode(plan: &Plan, ty: TypesId, text: Option<&str>) -> Result<Value, String> {
+    decode_with(plan, ty, text, false)
+}
+
+/// [`decode`] what the surface's module published, [`HOST_FIELDS`] read as
+/// absent: the record kept for the next launch (LLP 1156.005 D5), where a
+/// host fact of this launch would be stale.
+pub fn decode_published(plan: &Plan, ty: TypesId, text: &str) -> Result<Value, String> {
+    decode_with(plan, ty, Some(text), true)
+}
+
+fn decode_with(
+    plan: &Plan,
+    ty: TypesId,
+    text: Option<&str>,
+    published: bool,
+) -> Result<Value, String> {
     if plan.type_(ty).kind != TypeKind::Record {
         return Err("expected a record shape".into());
     }
@@ -74,10 +94,15 @@ pub fn decode(plan: &Plan, ty: TypesId, text: Option<&str>) -> Result<Value, Str
             if reader.at != text.len() {
                 return Err(reader.error("trailing input"));
             }
-            if !matches!(value, Json::Object(_)) {
+            let Json::Object(mut fields) = value else {
                 return Err("record: expected JSON object".into());
+            };
+            if published {
+                for field in HOST_FIELDS {
+                    fields.remove(*field);
+                }
             }
-            Some(value)
+            Some(Json::Object(fields))
         }
     };
     shaped(plan, ty, json.as_ref(), "record", 0)
@@ -335,4 +360,31 @@ impl Reader<'_> {
             }
         }
     }
+}
+
+/// Structural identity of a kept public record, shared with the web target.
+pub fn keep_signature(plan: &Plan, ty: TypesId) -> Option<Value> {
+    fn walk(plan: &Plan, ty: TypesId, depth: usize, fields: &mut Vec<Value>) -> Option<()> {
+        if depth > 32 {
+            return None;
+        }
+        let row = plan.type_(ty);
+        fields.push(Value::Number(row.kind as u8 as f64));
+        fields.push(Value::str(plan.str(row.name)));
+        fields.push(Value::Bool(row.elem.is_some()));
+        if let Some(elem) = row.elem {
+            walk(plan, elem, depth + 1, fields)?;
+        }
+        fields.push(Value::Number(row.fields.len as f64));
+        for f in row.fields.iter() {
+            let f = plan.field(f);
+            fields.push(Value::str(plan.str(f.name)));
+            walk(plan, f.ty, depth + 1, fields)?;
+        }
+        Some(())
+    }
+    // Flatten the type tree so metadata does not consume the value decoder's depth budget.
+    let mut fields = Vec::new();
+    walk(plan, ty, 0, &mut fields)?;
+    Some(Value::list(fields))
 }

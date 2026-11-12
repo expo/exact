@@ -1,4 +1,4 @@
-// ICU computation backend for Ibex's Linux and Windows Intl.DateTimeFormat
+// ICU computation backend for Ibex's Linux, Android and Windows Intl.DateTimeFormat
 // binding.
 //
 // Rust chooses ECMA-402 policy and owns formatter state. This file is the

@@ -1308,8 +1308,9 @@ fn clock_stepped<D: DataSource>(
     p.clock(to)
 }
 
-/// Pump the executor until no polled module source's ask is in flight, or the deadline. Not on
-/// Android's reader, whose extensions answer on its main thread: `agent-android.mjs` waits there.
+/// Pump the executor and packages until no polled module source's ask is in flight, or the
+/// deadline. Not on Android's reader, whose extensions answer on its main thread:
+/// `agent-android.mjs` waits there.
 fn wait_for_polls<D: DataSource>(p: &mut Presenter<D>, deadline: std::time::Instant) {
     let asking = |p: &Presenter<D>| {
         p.host()
@@ -1317,6 +1318,7 @@ fn wait_for_polls<D: DataSource>(p: &mut Presenter<D>, deadline: std::time::Inst
             .contains("\"asking\":true")
     };
     while !crate::reader_driven() && asking(p) && std::time::Instant::now() < deadline {
+        p.package_turn();
         std::thread::sleep(std::time::Duration::from_millis(5));
         if let Some(e) = p.pump(p.host().now()) {
             eprintln!("exact: {e}");

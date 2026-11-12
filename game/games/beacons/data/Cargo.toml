@@ -1,4 +1,4 @@
-# Beacons' grants, and the tilt readout's trigonometry, which Contract lacks.
+# Beacons' binding preference, grants and tilt readout.
 [package]
 name = "beacons-data"
 version = "0.1.0"
@@ -8,3 +8,8 @@ workspace = "../.shells"
 
 [dependencies]
 exact-runner = { workspace = true }
+exact-data = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+exact-data-host = { workspace = true }

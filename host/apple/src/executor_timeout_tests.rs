@@ -44,8 +44,10 @@ fn a_request_that_answers_in_time_is_unaffected_by_its_deadline() {
     assert!(matches!(&collect(&core, &woke, 1)[0], (1, Outcome::Response(r)) if r.body == b"done"));
 }
 
+const REDIRECT_TIMEOUT_MS: u32 = 180;
+
 struct SlowRedirects {
-    opened: Arc<std::sync::atomic::AtomicUsize>,
+    started: Arc<std::sync::OnceLock<Instant>>,
 }
 impl Transport for SlowRedirects {
     fn open(
@@ -59,13 +61,22 @@ impl Transport for SlowRedirects {
             .next()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap();
-        self.opened.fetch_add(1, Ordering::Relaxed);
-        // Each hop is comfortably below the request's 180 ms timeout. Only
-        // Exact's one AbortSignal deadline can bound the chain as a whole.
-        for _ in 0..10 {
-            std::thread::sleep(Duration::from_millis(5));
-            signal.check()?;
-        }
+        let timeout = Duration::from_millis(REDIRECT_TIMEOUT_MS.into());
+        let left = timeout.saturating_sub(self.started.get_or_init(Instant::now).elapsed());
+        // Each redirect spends half the remaining exchange budget; the final
+        // response crosses it. Each planned hop fits a fresh deadline, so a
+        // deadline restarted per hop would let the chain finish.
+        let delay = if hop < 5 {
+            left / 2
+        } else {
+            left + timeout / 2
+        };
+        let (cancel, cancelled) = channel();
+        let _registration = signal.register(move || {
+            let _ = cancel.send(());
+        });
+        let _ = cancelled.recv_timeout(delay);
+        signal.check()?;
         let mut headers = Headers::default();
         if hop < 5 {
             headers.set_response("location", &format!("https://example.test/{}", hop + 1));
@@ -83,15 +94,15 @@ impl Transport for SlowRedirects {
 }
 
 #[test]
-#[ignore = "async lane: waits on the wall clock (a 180 ms deadline across slow redirect hops, under 3 s), timing-sensitive on a loaded machine; bun scripts/async.mjs runs it"]
+#[ignore = "async lane: waits on the wall clock (a 180 ms deadline across slow redirect hops, under 3 s); bun scripts/async.mjs runs it"]
 fn the_executor_deadline_bounds_a_slow_redirect_chain_as_one_exchange() {
-    let opened = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let started = Arc::new(std::sync::OnceLock::new());
     let grants = "net.fetch https://example.test";
     let owners = (0..WORKERS)
         .map(|_| {
             Some(
                 ibex2::host::Host::with_transport(Box::new(SlowRedirects {
-                    opened: opened.clone(),
+                    started: started.clone(),
                 }))
                 .endow(ibex2::grant::GrantSet::parse(grants).unwrap()),
             )
@@ -107,14 +118,18 @@ fn the_executor_deadline_bounds_a_slow_redirect_chain_as_one_exchange() {
     );
     let started = Instant::now();
     core.run(
-        job(1, Request::get("https://example.test/0").timeout(180)),
+        job(
+            1,
+            Request::get("https://example.test/0").timeout(REDIRECT_TIMEOUT_MS),
+        ),
         None,
     )
     .unwrap();
     let outcomes = collect(&core, &woke, 1);
-    assert!(timed_out(&outcomes[0].1, 180), "{outcomes:?}");
-    let count = opened.load(Ordering::Relaxed);
-    assert!((2..6).contains(&count), "opened {count} redirect hops");
+    assert!(
+        timed_out(&outcomes[0].1, REDIRECT_TIMEOUT_MS),
+        "{outcomes:?}"
+    );
     assert!(started.elapsed() < Duration::from_secs(3));
 }
 

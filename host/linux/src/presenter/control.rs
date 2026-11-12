@@ -156,18 +156,19 @@ impl<D: DataSource> Presenter<D> {
             }
             return true;
         }
-        // A date or time control's press opens the platform's picker.
-        if self.date_picks()
-            && matches!(
-                exact_kernel::ControlKind::of(node.node_type, node.props),
-                Some(
-                    exact_kernel::ControlKind::Date
-                        | exact_kernel::ControlKind::Time
-                        | exact_kernel::ControlKind::DateTimeLocal
-                )
+        // A date or time control's press opens the platform's picker; where
+        // none opens (desktop Linux, Windows) it has no default action.
+        if matches!(
+            exact_kernel::ControlKind::of(node.node_type, node.props),
+            Some(
+                exact_kernel::ControlKind::Date
+                    | exact_kernel::ControlKind::Time
+                    | exact_kernel::ControlKind::DateTimeLocal
             )
-        {
-            self.pick(id);
+        ) {
+            if self.date_picks() {
+                self.pick(id);
+            }
             return true;
         }
         // A select's press opens its menu (D7).
@@ -833,6 +834,51 @@ mod tests {
             }
         }
         assert_eq!(actual, expected);
+    }
+
+    /// Where no picker opens (desktop Linux, Windows), a press on a date or
+    /// time control has no default action: it is no checkbox to toggle.
+    #[test]
+    fn a_date_or_time_press_without_a_picker_does_nothing() {
+        use super::*;
+        let source = r#"component App
+  state seen = ""
+  action edited(v)
+    seen = `${seen}input `
+  action changed(v)
+    seen = `${seen}change `
+  view
+    column
+      input type="date" testId="day" value="2026-10-19" input=edited change=changed width=160 height=40
+      input type="time" testId="at" value="10:00" change=changed width=160 height=40
+      input type="datetime-local" testId="when" value="2026-10-19T10:00" change=changed width=160 height=40
+      text seen testId="seen"
+"#;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(source),
+            (),
+            (300., 300.),
+            1.,
+            PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.agent = false;
+        assert!(!p.date_picks());
+        let id = |p: &Presenter<()>, name| {
+            let k = p.host.kernel();
+            k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+        };
+        for (i, name) in ["day", "at", "when"].into_iter().enumerate() {
+            let (x, y, w, h) = p.rect_of(id(&p, name)).unwrap();
+            let t = 1000. * i as f64;
+            p.pointer_down(x + w / 2., y + h / 2., t + 1.).unwrap();
+            p.pointer_up(x + w / 2., y + h / 2., t + 2.).unwrap();
+        }
+        let k = p.host.kernel();
+        let seen = k.node(id(&p, "seen")).unwrap().props.str(PropId::Text);
+        assert_eq!((seen, &p.controls), (Some(""), &BTreeMap::new()));
     }
 
     #[test]

@@ -10,10 +10,10 @@ import { moduleBinding } from '../../../js/bake/src/__exact_binding.mjs';
 
 const pkg = resolve(import.meta.dir, '..');
 const declaration = JSON.parse(readFileSync(join(pkg, 'exact.json'), 'utf8'));
-const implementations = ['apple', 'web'].map((p) => JSON.parse(readFileSync(join(pkg, p, 'exact.json'), 'utf8')));
+const implementations = ['apple', 'web', 'windows'].map((p) => JSON.parse(readFileSync(join(pkg, p, 'exact.json'), 'utf8')));
 // Each target's binding, written before any is imported (Bun lists a directory once).
 const dir = mkdtempSync(join(tmpdir(), 'exact-clipboard-binding-'));
-for (const target of ['ios', 'tvos', 'android', 'web']) {
+for (const target of ['ios', 'tvos', 'android', 'web', 'windows']) {
   writeFileSync(join(dir, `clipboard-${target}.ts`), moduleBinding('@exact/clipboard', declaration, implementations, () => [], {}, target));
 }
 const load = (target) => import(join(dir, `clipboard-${target}.ts`));
@@ -24,6 +24,7 @@ const outcome = (p) => p.then(() => 'ok', (e) => e.name);
 
 test('supports answers the declared types where an implementation is, and none elsewhere', async () => {
   // (Bun runs the binding untyped; js/bake/tests/producer.rs bakes it through tsc for tvOS and iOS.)
+  expect((await load('windows')).ClipboardItem.supports('image/png')).toBe(true);
   expect((await load('ios')).ClipboardItem.supports('image/png')).toBe(true);
   expect((await load('web')).ClipboardItem.supports('text/plain')).toBe(true);
   expect((await load('tvos')).ClipboardItem.supports('text/plain')).toBe(false);
@@ -67,4 +68,11 @@ test('a call refused at once supersedes no pending call; a later call sent first
   resolveC('C');
   expect(await c).toBe('AbortError');
   expect(sent.map((b) => b.args.data[0]['text/plain'])).toEqual(['D']);
+});
+
+test('Windows sends the path and text as one item through the generated binding', async () => {
+  const { write, ClipboardItem } = await load('windows');
+  expect(await outcome(write([new ClipboardItem({ 'image/png': 'app:/tmp/capture.png', 'text/plain': 'caption' })]))).toBe('ok');
+  expect(sent).toHaveLength(1);
+  expect(sent[0].args.data).toEqual([{ 'image/png': 'app:/tmp/capture.png', 'text/plain': 'caption' }]);
 });

@@ -253,15 +253,24 @@ final class PaddedRefreshControl: UIRefreshControl {
 
 extension Presenter {
     func restoreScrollPositions() {
-        for id in scrollers.union(pendingScrolls).union(materialNodes) {
+        let ids = scrollers.union(pendingScrolls).union(materialNodes)
+        for id in ids {
             guard let node = views[id] else { continue }
             // Navigation can resize a native port after its row projection.
             // Settle that layout before restoring or authoring an offset.
             if node.groupedOwner { node.scrollView?.layoutIfNeeded() }
             if !collections.owns(node.id) { node.restoreScrollPosition() }
+            if let material = node.materialView { node.sendSubviewToBack(node.glassSlot ?? material) }
+        }
+        // Every capture is restored before any authored offset lands: a
+        // list's scroll outside its mounted rows reports at once, and the
+        // batch its feedback applies captures, restores and clears every
+        // scroller's capture, which a follow-end scroller still waiting here
+        // would read as having been at its end.
+        for id in ids {
+            guard let node = views[id] else { continue }
             if node.pendingScrollTop != nil || node.pendingScrollLeft != nil { collections.userIntent(node.id) }
             node.applyPendingScroll()
-            if let material = node.materialView { node.sendSubviewToBack(node.glassSlot ?? material) }
         }
         pendingScrolls = pendingScrolls.filter { views[$0]?.pendingScrollTop != nil || views[$0]?.pendingScrollLeft != nil }
     }

@@ -327,8 +327,8 @@ test('a reload: the persisted states, and the evidence that something saved was 
   assert.deepEqual(persistedStates('/no/such/app'), []);
   const dir = mkdtempSync(resolve(tmpdir(), 'verify-persist-'));
   try {
-    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  state goal = 2000 persist\n  state last-seen = "" persist // kept\n  state draft = ""\n  state label = "persist"\n  state note = "x" // persist\n  state tab = "home"  persist  \n  view\n    text "x"\n');
-    assert.deepEqual(persistedStates(dir), ['goal', 'last-seen', 'tab']);
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  state goal = 2000 persist\n  state last-seen = "" persist // kept\n  state draft = ""\n  state label = "persist"\n  state note = "x" // persist\n  state tab = "home"  persist  \n  state typed-goal: number = 8 persist\n  state saved: string[] = [] persist\n  state typed: string = "persist"\n  view\n    text "x"\n');
+    assert.deepEqual(persistedStates(dir), ['goal', 'last-seen', 'tab', 'typed-goal', 'saved']);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 
   const node = (testId, value, extra = {}) => ({ id: 1, type: 'TextInput', depth: 1, props: { testId, value }, ...extra });
@@ -1027,7 +1027,7 @@ test.skipIf(!!chromium().unavailable)('verify on a new app: clean, a failing tes
     assert.ok(readFileSync(resolve(dir, 'out/shots/web-relaunch.png')).equals(readFileSync(resolve(dir, '.exact/verify/web-relaunch.png'))));
     assert.match(clean.stdout, /^screenshots \(\.exact\/verify, copied to out\/shots\): /m);
     const bare = verify('--shots');
-    assert.deepEqual([bare.status, bare.stdout, bare.stderr], [2, '', 'verify: --shots takes a directory: the screenshots are copied there, under the names in .exact/verify/\n']);
+    assert.deepEqual([bare.status, bare.stdout, bare.stderr], [2, '', 'verify: --shots needs a value (--shots <dir>)\n']);
 
     const tests = resolve(dir, 'app.test.contract'), authored = readFileSync(tests, 'utf8');
     const property = '\nafter "like" "liking writes nothing"\n  writes none\n';

@@ -23,6 +23,11 @@ mod tests;
 /// (`inject` with `snapshot_viewport: <shape>`): the entry's wrapper answers
 /// it with `exactViewport()`, so the render stays pure (LLP 1126 D3).
 pub const VIEWPORT_SLOT: &str = "snapshot_viewport";
+/// The reserved inject and slot a widget reads its configuration from
+/// (`inject` with `snapshot_configuration: <shape>`): the entry's wrapper
+/// holds the chosen values, initially the defaults, and the host replaces
+/// them with the person's choices at render.
+pub const CONFIGURATION_SLOT: &str = "snapshot_configuration";
 pub use entry::{compile, compile_entries, write_entries, Declaration, Entry};
 
 use crate::CompileError;
@@ -197,7 +202,7 @@ fn check(file: &File, styles: &HashSet<String>) -> Result<(), Vec<CompileError>>
             errors.push(refusal("snapshot-effect", "a snapshot render is read-only; move mutations, sequences and persisted writes into the refresh function", c.span));
         }
         for b in c.states.iter().chain(&c.derives).chain(&c.provides) {
-            if b.name == PROPS_SLOT || b.name == STATE_SLOT {
+            if b.name == PROPS_SLOT || b.name == STATE_SLOT || b.name == CONFIGURATION_SLOT {
                 errors.push(refusal(
                     "snapshot-props-name",
                     format!(

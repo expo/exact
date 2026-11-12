@@ -68,7 +68,19 @@ extension NodeView {
     /// over the clip's outline (`BoxMaskIOS.swift`, `BoxMaskMac.swift`) — for
     /// a filtered box's picture.
     func resolvedClipMask() -> CALayer? {
-        composedMask(shaped: clipBox == nil ? shapedClip() : nil)
+        let outline = clipBox == nil ? shapedOutline() : nil
+        #if os(macOS)
+        let scale = pixelScale ?? 2
+        #else
+        let scale = traitCollection.displayScale
+        #endif
+        let key = BoxMaskState.FilterKey(image: style["mask_image"], clip: style["clip_path"], outline: outline,
+                                         bounds: bounds, dark: drawsDark, scale: scale)
+        let state = BoxMaskState.of(self)
+        if state.filterKey == key { return state.filterMask }
+        state.filterKey = key
+        state.filterMask = composedMask(shaped: ClipPath.mask(outline))
+        return state.filterMask
     }
 
     /// The clip's outline follows a new size or a backdrop coming or going.
@@ -83,7 +95,15 @@ final class BoxMaskState {
         var image: BatchValue?, clip: BatchValue?, outline: CGPath?, size: CGSize, dark: Bool
         var clipBox: Bool, filter: Bool, material: Bool, materialOutline: CGPath?
     }
+    struct FilterKey: Equatable {
+        var image: BatchValue?, clip: BatchValue?, outline: CGPath?
+        var bounds: CGRect
+        var dark: Bool
+        var scale: CGFloat
+    }
     var key: Key?
+    var filterKey: FilterKey?
+    var filterMask: CALayer?
     var layerMask: CALayer?
     var boxMask: CALayer?
     var effectMask: AnyObject?

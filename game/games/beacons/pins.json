@@ -4,7 +4,7 @@
     "90": "0xdf2367cf46480dc2"
   },
   "saves": {
-    "continuation": "bb3a308692972a706e8746420a154ea81ad04fe6c4317d9b73a27c20c455fff3"
+    "continuation": "1a5f555eb1ffb135c5bda2889a2fb9001eddcae055282c64da879b26440b8b4a"
   },
   "hosts": [
     "linux",
@@ -18,10 +18,10 @@
   "profiles": [
     "gpu-dev"
   ],
-  "inputs": "375f2d62321c7fba3e2788255abf02b4eb0cf8d04c6ee509263bab6c7c52ace7",
-  "sourceInputs": "5bb5595617941f6ef0e07cb82ea52d08ca3aec1fcb4aa3ae3837311e5d5ab6de",
+  "inputs": "ca8672b6a4d53f3914b1076d2b8e4b7f6aa6877318ac174b94c7141d528276c3",
+  "sourceInputs": "7fe6b76c27bf3e8282924020afe5779bb07605dd057d64791727044bab0d2d9a",
   "game": "beacons",
   "generated": "bun game/prove.mjs beacons --repin --hosts 'linux,web'",
-  "at": "7264fa20ac285687b76520e05166fbec1444a0e2",
-  "reason": "EXSIM v8 (player: u8, pads) over EXGAME v6: continuation bytes change; tick hashes unchanged; and the InputState resource its sprint hold and context put in the world"
+  "at": "63e39fa36b61f4f5fbe6d65ac26e28d5cbafd92b",
+  "reason": "a save carries the game's bindings: continuation bytes change; tick hashes unchanged"
 }

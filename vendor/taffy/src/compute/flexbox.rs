@@ -976,7 +976,7 @@ fn generate_anonymous_flex_items(
 /// For each dimension, if that dimension of the flex container’s content box is a definite size, use that;
 /// if that dimension of the flex container is being sized under a min or max-content constraint, the available space in that dimension is that constraint;
 /// otherwise, subtract border and padding from the border-box space supplied by the parent.
-/// The parent has already subtracted this container's margins.
+/// EXACT PATCH 25: the parent has already subtracted this container's margins.
 /// **This might result in an infinite value**.
 #[inline]
 #[must_use]
@@ -1144,24 +1144,17 @@ fn determine_flex_base_size(
 
         drop(child_style);
 
-        // EXACT PATCH 28: CSS Flexbox §9.2 3E. A column item whose cross size
-        // is auto and not definite is measured for its main size at
-        // fit-content: max(min-content, min(max-content, available)). Measured
-        // under the available width alone, a row container sized itself to
-        // its items' summed bases, so its text took one line, and the item's
-        // height stayed one line after it was laid out at the narrower
-        // fit-content width (determine_hypothetical_cross_size, the same
-        // condition). A leaf too: its min-content can be wider than the space
-        // (a word `overflow-wrap: break-word` breaks), and then fit-content is
-        // that width under its max, not the space it wraps to. A sizing
-        // keyword keeps its own width; a ratio keeps its own path. Measured
-        // only when a probe below needs it.
+        // EXACT PATCH 28: CSS Flexbox §9.2 3E measures an indefinite auto
+        // cross size at fit-content before determining a column item's main
+        // size. An available width alone can return a wrapped line's width
+        // rather than the item's fit-content width, shrinking a ratio leaf's
+        // derived height. A sizing keyword keeps its own constraint.
+        // Resolve the width only when a probe below needs it.
         let fit_content_available = match cross_axis_available_space.maybe_sub(cross_axis_margin_sum) {
             AvailableSpace::Definite(available)
                 if !dir.is_row()
                     && provisional_cross_removed.cross(dir).is_none()
                     && child.size_style.cross(dir).is_auto()
-                    && child.aspect_ratio.is_none()
                     && !tree.get_flexbox_child_style(child.node).is_compressible_replaced() =>
             {
                 Some(available)
@@ -2179,8 +2172,8 @@ fn determine_hypothetical_cross_size(
     available_space: Size<AvailableSpace>,
 ) {
     for child in line.items.iter_mut() {
-        // EXACT PATCH 54: retain Patch 50's content floor, transferring the
-        // used height rather than the preferred height (Flexbox §9.4).
+        // EXACT PATCH 54: transfer the used height (Flexbox §9.4). The
+        // content probe keeps height bounds when the preferred height is auto.
         if constants.is_column {
             if let Some(width) = crate::compute::ratio::minimum_ratio_width(
                 tree, child.node, constants.node_inner_size, Some(child.target_size.height),

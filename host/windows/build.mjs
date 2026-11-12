@@ -113,6 +113,15 @@ public static class ExactDesktop {
   }
 }
 
+/** Beside a packaged copy in `output`, the backend `build` was baked for and each executable and DLL it copied there,
+ * by digest: the driver reads it there (agent-launch.mjs `refuseBinaryBackend`), as the bake cache keeps only the
+ * latest build of the target and another package would replace it. */
+export function writePackagedReceipt(app, build, output) {
+  const products = build.products.filter((product) => /\.(exe|dll)$/.test(product.path))
+    .map((product) => ({ path: windowsFile(app, product.path), sha256: product.sha256 }));
+  writeFileSync(resolve(output, 'receipt.json'), JSON.stringify({ build: { backendOrigin: build.backendOrigin ?? null, products } }, null, 2) + '\n');
+}
+
 if (import.meta.main) {
   const args = guardFlags('windows', process.argv.slice(2));
   if (process.platform !== 'win32') throw new Error('build the Windows host on Windows with the MSVC Rust target');
@@ -160,6 +169,7 @@ if (import.meta.main) {
   }
   copyShaders(app, resolve(output, 'shaders'), {replace:true});
   writeFileSync(resolve(output, 'compat.json'), JSON.stringify(build.compat, null, 2) + '\n');
+  writePackagedReceipt(app, build, output);
   console.log(`Windows: ${executable}`);
   if (args.includes('--json')) reportBuilt({ path: executable, target: 'windows', trust: build.trust });
   if (args.includes('--run') && remote()) {

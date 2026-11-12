@@ -566,8 +566,13 @@ final class SvgScene {
                 shape.position = pos.count == 2 ? CGPoint(x: pos[0], y: pos[1]) : .zero
                 shape.fillColor = color(e["f"], dark: dark, tint: tint)
                 shape.strokeColor = color(e["s"], dark: dark, tint: tint)
-                painted[id] = (shape.fillColor != nil || SvgPaint.server(e["f"]) != nil,
-                               shape.strokeColor != nil || SvgPaint.server(e["s"]) != nil)
+                // Which paints take hits, by `pointer-events` (`hp`); a set
+                // paint may draw nothing. Without it (`bounding-box`), the
+                // paints drawn.
+                let hp = nums(e["hp"])
+                painted[id] = hp.count == 2 ? (hp[0] != 0, hp[1] != 0)
+                    : (shape.fillColor != nil || SvgPaint.server(e["f"]) != nil,
+                       shape.strokeColor != nil || SvgPaint.server(e["s"]) != nil)
                 shape.lineWidth = CGFloat(num(e["w"]))
                 shape.lineCap = [CAShapeLayerLineCap.butt, .round, .square][min(Int(num(e["cap"])), 2)]
                 shape.lineJoin = [CAShapeLayerLineJoin.miter, .round, .bevel][min(Int(num(e["join"])), 2)]

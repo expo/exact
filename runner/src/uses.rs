@@ -92,7 +92,7 @@ pub enum Capability {
     GroupedLists,
     /// The host's I/O: the requests a data source makes (fetch, sockets,
     /// files, SQLite) and the kept secrets and answers it stores. A plan
-    /// uses it when a resource keeps its answer (a reader); an app's grants
+    /// uses it for kept answers and surface records. An app's grants
     /// link it too, which the bake reads (LLP 1047.001). The browser does
     /// its own, so the web links nothing for it.
     Io,
@@ -281,8 +281,8 @@ pub fn uses(plan: &Plan) -> Uses {
     if plan.router.is_some() {
         uses = uses.with(Capability::Router);
     }
-    // A reader's last answer is kept in the host's store (LLP 1027 D4).
-    if plan.resources.iter().any(|r| r.reader) {
+    // Kept answers and surface records both need the host's store.
+    if plan.resources.iter().any(|r| r.reader || r.keep) {
         uses = uses.with(Capability::Io);
     }
     // A segment length is a value, not a row: any string of the plan's
@@ -292,10 +292,12 @@ pub fn uses(plan: &Plan) -> Uses {
         uses = uses.with(Capability::Segments);
     }
     if !plan.surfaces.is_empty()
-        || plan
-            .resources
-            .iter()
-            .any(|r| plan.str(r.source) == crate::surface_record::SOURCE)
+        || plan.resources.iter().any(|r| {
+            matches!(
+                plan.str(r.source),
+                crate::surface_record::SOURCE | crate::canvas_performance::SOURCE
+            )
+        })
     {
         uses = uses.with(Capability::Surfaces);
     }
@@ -606,6 +608,12 @@ pub fn keeps_midi(plan: &Plan) -> bool {
     uses_midi(plan) || !plan.sequences.is_empty()
 }
 
+/// Whether the plan's code runs `setLocale`: only then does a language the
+/// app chose, kept in the store, choose its strings at the next launch.
+pub fn chooses_locale(plan: &Plan) -> bool {
+    runs_command(plan, &["setLocale"])
+}
+
 fn runs_command(plan: &Plan, names: &[&str]) -> bool {
     let mut runs = false;
     plan.each_code(&mut |code| {
@@ -657,6 +665,40 @@ fn names_segment(s: &str) -> bool {
 #[cfg(test)]
 mod grant_tests {
     use super::{Capability, Uses};
+
+    #[test]
+    fn kept_surfaces_link_storage_without_a_data_reader() {
+        use exact_plan::{asm::Asm, builder::PlanBuilder, TypeKind};
+
+        for keep in [false, true] {
+            let mut builder = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+            let number = builder.primitive(TypeKind::Number);
+            let hud = builder.record("Hud", &[("count", number)]);
+            let world = builder.str("world");
+            let mut argument = Asm::new();
+            argument.str(world);
+            let argument = builder.code(argument);
+            let resource = builder.resource("hud", "exactSurface", &[argument], hud, None);
+            builder.surface("world", &[]);
+            if keep {
+                builder.set_resource_keep(resource);
+            }
+            builder.node(
+                exact_kernel::NodeType::View as u8,
+                None,
+                None,
+                0,
+                &[],
+                &[],
+                None,
+            );
+            let plan = builder.finish().unwrap();
+            assert!(!plan.resources[resource.0 as usize].reader);
+            let uses = super::uses(&plan);
+            assert!(uses.has(Capability::Surfaces));
+            assert_eq!(uses.has(Capability::Io), keep);
+        }
+    }
 
     #[test]
     fn sqlite_grants_select_sql_storage_apart_from_other_io() {

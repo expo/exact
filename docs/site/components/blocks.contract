@@ -33,14 +33,16 @@ component Runs
 component Permalink
   props
     slug: string
+    path: string
   view
-    link href=`#${slug}` aria-label="Link to this section"
+    link href=`${path}#${slug}` aria-label="Link to this section"
       row
         image "symbol:link" font-size="0.7em" color="var(--color-icon-tertiary)" aria-hidden=true
 
 component Blocks
   props
     block: Block
+    path: string
     opened: string[]
     toggle: action
     pick: action
@@ -51,18 +53,18 @@ component Blocks
         row align-items="baseline" gap=8 margin="40px 0 8px" intersect=seen(block.href)
           h2 id=block.href testId=`h-${block.href}` font-size="var(--text-xl)" font-weight=600 letter-spacing="-0.25px" color="var(--color-text-default)"
             Runs(runs=block.runs, weight=600)
-          Permalink(slug=block.href)
+          Permalink(slug=block.href, path=path)
       else
         if block.depth == 3
           row align-items="baseline" gap=8 margin="28px 0 4px" intersect=seen(block.href)
             h3 id=block.href testId=`h-${block.href}` font-size="var(--text-base)" font-weight=600 color="var(--color-text-default)"
               Runs(runs=block.runs, weight=600)
-            Permalink(slug=block.href)
+            Permalink(slug=block.href, path=path)
         else
           row align-items="baseline" gap=8 margin="20px 0 4px"
             h4 id=block.href testId=`h-${block.href}` font-size="var(--text-sm)" font-weight=600 color="var(--color-text-default)"
               Runs(runs=block.runs, weight=600)
-            Permalink(slug=block.href)
+            Permalink(slug=block.href, path=path)
     else
       if block.kind == "paragraph"
         text class=Prose margin-top=12 margin-left=(block.depth * 24)

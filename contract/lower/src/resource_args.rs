@@ -14,6 +14,12 @@ impl Lowerer<'_> {
         scope: &Scope,
     ) -> Result<(), LowerError> {
         for (i, r) in root.resources.iter().enumerate() {
+            if r.keep {
+                if r.source != "exactSurface" || r.transient {
+                    return Err(LowerError { id: "lower-resource-keep", message: "`keep` is only for an exactSurface reader and cannot combine with `transient`".into(), span: r.span });
+                }
+                self.b.set_resource_keep(self.resources[i]);
+            }
             let mut inner = scope.clone();
             if let Some(each) = &r.each {
                 if exact_plan::runner_owned_source(&r.source) {

@@ -75,7 +75,7 @@ pub use exact_runner::DataSource;
 pub use logic::{
     apple_linked, linux_entry, native_storage_constructor, rust_entry, web_linked, web_rust_mode,
 };
-pub use manifest::{Activity, Manifest, Widget};
+pub use manifest::{Activity, Configuration, Manifest, Parameter, Widget};
 pub use map::{plan_digest, SourceMap};
 pub use module_rust::module_rust;
 pub use resolve::Origin;
@@ -556,6 +556,7 @@ pub fn fix_uses(path: &Path) -> Result<(Vec<WrittenUses>, Vec<CompileError>), Ve
 pub fn rerun_if_changed(path: &Path) {
     // The builder also detects restored bytes whose mtime predates the bake.
     println!("cargo:rerun-if-env-changed=EXACT_BAKE_INPUTS");
+    println!("cargo:rerun-if-env-changed=EXACT_BAKE_PACKAGE_DIR");
     println!("cargo:rerun-if-changed={}", path.display());
     let graph = source_graph(path);
     for source in &graph.sources {
@@ -563,20 +564,34 @@ pub fn rerun_if_changed(path: &Path) {
             println!("cargo:rerun-if-changed={}", source.path.display());
         }
     }
-    // Only what exists: Cargo reruns a script whose path is missing on every
-    // build, and a failed build reruns it anyway (a resolution that looked
-    // for a file not there failed, or found one farther up).
+    // Cargo reruns a script whose path is missing on every build. The bake
+    // builder tracks its selected package's optional designs by existence;
+    // a linked bake records them before Cargo. Dependencies and direct Cargo
+    // watch the existing parent so an unchanged package stays warm.
+    let managed = std::env::var_os("EXACT_BAKE_PACKAGE_DIR")
+        .zip(std::env::var_os("CARGO_MANIFEST_DIR"))
+        .is_some_and(|(selected, current)| {
+            std::fs::canonicalize(selected)
+                .ok()
+                .zip(std::fs::canonicalize(current).ok())
+                .is_some_and(|(selected, current)| selected == current)
+        });
     for consulted in graph.consulted.iter().filter(|path| path.exists()) {
         println!("cargo:rerun-if-changed={}", consulted.display());
     }
     // A nearer `node_modules` an install could create or fill: installing
     // edits the `package.json` and lockfile beside it, which exist.
     for consulted in graph.consulted.iter().filter(|path| !path.exists()) {
-        // A package's design not there yet (LLP 1121 D11): its directory,
-        // which making it changes.
+        // A package's design not there yet (LLP 1121 D11).
         if consulted.extension().is_some_and(|e| e == "tamber") {
-            if let Some(dir) = consulted.parent().filter(|d| d.is_dir()) {
-                println!("cargo:rerun-if-changed={}", dir.display());
+            println!(
+                "cargo:metadata=exact-optional-input={}",
+                consulted.display()
+            );
+            if !managed {
+                if let Some(dir) = consulted.parent().filter(|dir| dir.is_dir()) {
+                    println!("cargo:rerun-if-changed={}", dir.display());
+                }
             }
             continue;
         }
@@ -966,7 +981,13 @@ fn compile_loaded(
     let placed = package_views::placed(&plan);
     for v in views.iter().filter(|v| placed.contains(&v.tag)) {
         let binds: Vec<&str> = v.binds.iter().map(String::as_str).collect();
-        plan.add_view(&v.tag, (&v.extension, &v.package), v.displayed, &binds);
+        plan.add_view(
+            &v.tag,
+            (&v.extension, &v.package),
+            v.displayed,
+            &binds,
+            &v.agent,
+        );
     }
     reach::from_manifest(path, &app_root, &file, &mut plan)?;
     Ok((plan, sites.map(|sites| SourceMap::new(sites, sources))))

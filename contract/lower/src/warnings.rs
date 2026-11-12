@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod container;
 mod counts;
 mod fixed_beside;
+mod geometry;
 mod launch;
 pub(crate) mod line_height;
 mod miswiring;
@@ -138,9 +139,7 @@ pub(crate) fn with_text_styles(checked: &Checked<'_>, lowered: &TextStyles) -> V
         };
         stack.extend(children.into_iter().rev().map(|n| (n, in_root, back)));
     }
-    for style in &checked.file.styles {
-        line_height::multiplier(&style.attrs, &mut out);
-    }
+    (checked.file.styles.iter()).for_each(|s| line_height::multiplier(&s.attrs, &mut out));
     out.extend(screens::screen_by_state(checked));
     // A `replace` the router refuses on a root route's screen, a `select` after a push.
     out.extend(root_replace::router(checked));
@@ -162,6 +161,7 @@ pub(crate) fn with_text_styles(checked: &Checked<'_>, lowered: &TextStyles) -> V
     states::dead(&root.view, &mut out);
     performance_now(root, &checked.file.fns, &mut out);
     sounds::undeclared(checked, &mut out);
+    geometry::unnamed(checked, &mut out);
     // @ref LLP 1027.005 D6 — an identifying argument of the launch's own.
     launch::launch_identity(root, &checked.file.fns, &mut out);
     width::width_padding(&root.view, &checked.file.styles, &mut out);
@@ -1049,7 +1049,7 @@ fn literal_colour(value: &str) -> bool {
         }
     }
     match exact_color::parse(&lower) {
-        Some(exact_color::Parsed::Legacy(c)) => c.a > 0.0,
+        Some(exact_color::Parsed::Legacy(c, _)) => c.a > 0.0,
         Some(exact_color::Parsed::Wide(c)) => c.alpha > 0.0,
         _ => false,
     }

@@ -14,6 +14,7 @@
 //! blobs/<sha256>                            each file's bytes, once, verified before reuse
 //! entries/<canonical envelope sha256>/exact.json  the head, as it arrived
 //! entries/<envelope sha256>/app.plan        a hard link to its blob (a copy where refused)
+//! entries/<envelope sha256>/assets.json     the asset index, likewise
 //! entries/<envelope sha256>/assets/<name>   likewise
 //! entries/.tmp-<something>/                 an entry being built; never selected
 //! ```
@@ -23,6 +24,8 @@
 //! accepted at the floor, and an entry another process runs are kept. A blob
 //! none of them names is kept until a check finishes: it may be part of a
 //! download that a launch did not finish.
+//! A witness names its asset index's blob, so the next check of an
+//! unchanged head reads the index from disk.
 //!
 //! Three rules hold the whole thing up:
 //!
@@ -728,7 +731,14 @@ impl Store {
         if let Some(why) = self.read_only() {
             return Err(why.into());
         }
-        let envelope = Envelope::parse(&fetch(head_url)?)?;
+        let mut envelope = Envelope::parse(&fetch(head_url)?)?;
+        // The signature first: an unauthenticated head names nothing to fetch.
+        self.embedded.verify(&envelope)?;
+        // Its index from the blob store when an earlier check kept it.
+        if let Some(card) = envelope.index.as_ref().map(|index| index.card.clone()) {
+            self.obtain(&card, head_url, fetch, &mut |_| None)?;
+            envelope.read_index(&read_card(&self.blobs().dir().join(&card.sha256), &card)?)?;
+        }
         if !self.admit_check(&envelope, head_url, embedded_asset)? {
             self.write_entry(&envelope, head_url, fetch, embedded_asset)?;
         }
@@ -862,6 +872,7 @@ impl Store {
         {
             return Err(format!("the head is seq {floor} but names another bundle; a used sequence cannot equivocate"));
         }
+        let roster = envelope.assets()?;
         let current = match &self.view {
             _ if self.record.pending.as_deref() == Some(envelope.digest.as_str()) => true,
             Some(view) => view.sha == envelope.digest,
@@ -875,15 +886,14 @@ impl Store {
                         .embedded_assets
                         .as_ref()
                         .is_some_and(|assets| {
-                            assets.len() == envelope.assets.len()
-                                && envelope.assets.iter().all(|a| {
+                            assets.len() == roster.len()
+                                && roster.iter().all(|a| {
                                     assets.get(&a.name).is_some_and(|(sha, bytes)| {
                                         sha == &a.sha256 && *bytes == a.bytes
                                     })
                                 })
                         })
-                    && envelope
-                        .assets
+                    && roster
                         .iter()
                         .all(|a| embedded_asset(&a.name).is_some_and(|e| e.sha256 == a.sha256))
             }
@@ -1071,12 +1081,16 @@ impl Store {
                 plan_path.display()
             ));
         }
-        let envelope = self.read_envelope(sha)?;
+        let mut envelope = self.read_envelope(sha)?;
+        if let Some(index) = &envelope.index {
+            let raw = read_card(&self.entry_dir(sha).join("assets.json"), &index.card)?;
+            envelope.read_index(&raw)?;
+        }
         Ok(EntryView {
             sha: sha.to_string(),
             seq: envelope.stream.seq,
+            assets: envelope.assets()?.to_vec(),
             plan: envelope.plan,
-            assets: envelope.assets,
         })
     }
 
@@ -1232,6 +1246,10 @@ impl Store {
             if tmp.join("assets").exists() {
                 std::fs::rename(tmp.join("assets"), &assets).map_err(|e| e.to_string())?;
             }
+            if tmp.join("assets.json").exists() {
+                std::fs::rename(tmp.join("assets.json"), target.join("assets.json"))
+                    .map_err(|e| e.to_string())?;
+            }
             sync_dir(&target)?;
             std::fs::rename(tmp.join("app.plan"), target.join("app.plan"))
                 .map_err(|e| e.to_string())?;
@@ -1268,10 +1286,15 @@ impl Store {
         // Only assets are taken from the binary, never a plan.
         self.obtain(&envelope.plan, head_url, fetch, &mut |_| None)?;
         blobs.place(&envelope.plan.sha256, &tmp.join("app.plan"))?;
+        if let Some(index) = &envelope.index {
+            // Read already, so its blob is here and verified.
+            blobs.place(&index.card.sha256, &tmp.join("assets.json"))?;
+        }
         let mut directories = std::collections::BTreeSet::from([tmp.to_path_buf()]);
-        for asset in &envelope.assets {
+        let base = envelope.asset_base(head_url)?;
+        for asset in envelope.assets()? {
             safe_name(&asset.name)?;
-            self.obtain(asset, head_url, fetch, embedded_asset)?;
+            self.obtain(asset, &base, fetch, embedded_asset)?;
             let path = tmp.join("assets").join(&asset.name);
             blobs.place(&asset.sha256, &path)?;
             directories.extend(
@@ -1296,11 +1319,11 @@ impl Store {
     fn obtain(
         &self,
         card: &crate::envelope::FileCard,
-        head_url: &str,
+        base: &str,
         fetch: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
         embedded_asset: &mut dyn FnMut(&str) -> Option<EmbeddedAsset>,
     ) -> Result<(), String> {
-        let url = resolve_url(head_url, &card.url)?;
+        let url = resolve_url(base, &card.url)?;
         let blobs = self.blobs();
         if blobs.holds(card) {
             return Ok(());
@@ -1380,14 +1403,22 @@ impl Store {
             if !keep.contains(&name) && remove_entry(&item.path()) {
                 continue;
             }
-            if let Ok(envelope) = read_bounded(
+            if let Ok(mut envelope) = read_bounded(
                 &item.path().join("exact.json"),
                 crate::MAX_ENVELOPE_BYTES as u64,
             )
             .and_then(|raw| Envelope::parse(&raw))
             {
-                digests.insert(envelope.plan.sha256);
-                digests.extend(envelope.assets.into_iter().map(|a| a.sha256));
+                digests.insert(envelope.plan.sha256.clone());
+                // A witness holds no index file, and so names no asset blobs.
+                if let Some(card) = envelope.index.as_ref().map(|index| index.card.clone()) {
+                    digests.insert(card.sha256.clone());
+                    let raw = read_card(&item.path().join("assets.json"), &card);
+                    if raw.and_then(|raw| envelope.read_index(&raw)).is_ok() {
+                        let assets = envelope.assets().unwrap_or_default();
+                        digests.extend(assets.iter().map(|a| a.sha256.clone()));
+                    }
+                }
             }
         }
         Some(digests)
@@ -1405,8 +1436,10 @@ pub fn head_url(origin: &str, channel: &str, compatibility_id: &str) -> String {
 }
 
 fn validate_card_urls(head_url: &str, envelope: &Envelope) -> Result<(), String> {
-    for card in std::iter::once(&envelope.plan).chain(envelope.assets.iter()) {
-        resolve_url(head_url, &card.url)?;
+    resolve_url(head_url, &envelope.plan.url)?;
+    let base = envelope.asset_base(head_url)?;
+    for card in envelope.assets()? {
+        resolve_url(&base, &card.url)?;
     }
     Ok(())
 }

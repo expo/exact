@@ -28,6 +28,10 @@ Each Markdown page starts with frontmatter (`title`, `description` and `modifica
 
 `/sitemap.md` lists the same pages by section, nested as the guides nest. Each line has the page's Markdown URL, its type (Guide, How-to, Reference), the date it last changed, a summary, and its prerequisites: the page to read before it.
 
+## robots.txt
+
+`/robots.txt` allows every crawler, and it states a content signal for all crawlers and for each AI crawler it names: `search=yes, ai-input=yes, ai-train=yes`. Search indexing, use as input for AI answers, and AI training are all permitted.
+
 ## Open in your agent
 
 Each page has these actions, at the top of the page and in the rail beside it:

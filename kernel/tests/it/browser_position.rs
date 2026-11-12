@@ -71,8 +71,8 @@
 //! 151.0.7922.34, using the same 10px advance. It covers growing auto-height
 //! text leaves with height caps, flex bases, explicit minima, overflow,
 //! width caps, ratios, box sizing, definite heights and stretch. Controls
-//! include equal height bounds, a growing sibling and leaves without a ratio
-//! or height cap.
+//! include equal height bounds, a growing sibling, capped columns with auto
+//! and zero height minima, and leaves without a ratio or height cap.
 //! `Chrome 151 ratio text wrapping` uses the same version and date. Letter
 //! and word spacing were normalized separately: `aaaaaa aaaaaa` measures
 //! 130px at max-content and 60px at min-content. Cases cover column cross
@@ -245,11 +245,7 @@ fn check(all: Vec<(String, Vec<String>)>, owed: &[&str]) {
 #[test]
 fn positioned_boxes_roots_and_ratios_match_chrome() {
     let fixture = include_str!("fixtures/browser_position.tsv");
-    // QUEUE: the auto-height column shrinks to 60px instead of its 100px cap.
-    check(
-        failures(fixture, true),
-        &["Chrome 151 ratio text wrapping column height cap"],
-    );
+    check(failures(fixture, true), &[]);
 }
 
 /// The same Chrome frames hold when the ratio container is the root in a

@@ -1,6 +1,6 @@
 import Foundation
 import CoreText
-// Frozen pre-S13 decoder: independent Foundation oracle, never linked into the app.
+// Independent Foundation oracle, never linked into the app.
 @testable import ExactKit
 // @ref LLP 1044.000 §6 S8 — decode the existing Apple JSON wire once, before
 // presentation. Style names/values still come from kernel/tables/schema.json;
@@ -49,6 +49,10 @@ enum OracleBatchValue: Decodable {
 }
 
 typealias OracleNodeStyle = [String: OracleBatchValue]
+
+extension CodingUserInfoKey {
+    static let oracleAssets = CodingUserInfoKey(rawValue: "oracleAssets")!
+}
 
 struct OracleBatchOp: Decodable {
     enum Kind: String {
@@ -145,7 +149,7 @@ struct OracleInlineText: Decodable {
     let parent: UInt32
     let props: [String: String]
     private let lightRun: Run
-    private let darkColor: [Double]?
+    private let color: OracleInlineColor?
     let hasSchemeColor: Bool
     let handlers: Set<String>
     let paints: Bool
@@ -162,7 +166,7 @@ struct OracleInlineText: Decodable {
         value.text = props["text"] ?? ""
         value.href = props["href"] ?? ""
         lightRun = value
-        darkColor = style.color?.dark
+        color = style.color
         hasSchemeColor = style.color?.paired ?? false
         handlers = try c.decodeIfPresent(Set<String>.self, forKey: .handlers) ?? []
         paints = try c.decodeIfPresent(Bool.self, forKey: .paint) ?? false
@@ -171,7 +175,7 @@ struct OracleInlineText: Decodable {
     var text: String { lightRun.text }
     func run(dark: Bool) -> Run {
         var value = lightRun
-        if dark { value.color = darkColor }
+        value.color = color?.channels(dark: dark)
         return value
     }
 
@@ -218,9 +222,8 @@ private struct OracleInlineStyle: Decodable {
         run.letterSpacing = CGFloat(Float(try c.decodeIfPresent(Double.self, forKey: .letter_spacing) ?? 0))
         run.decoration = try c.decodeIfPresent(String.self, forKey: .text_decoration_line) ?? ""
         color = try c.decodeIfPresent(OracleInlineColor.self, forKey: .text_color)
-        run.color = color?.light
-        // The oracle reads channels and pairs only: every one a fixed colour.
-        run.fixedInk = color != nil
+        run.color = color?.channels(dark: false)
+        run.fixedInk = color?.fixedInk ?? false
     }
 }
 
@@ -241,7 +244,32 @@ private struct OracleInlineColor: Decodable {
     let light: [Double]
     let dark: [Double]
     let paired: Bool
+    let system: String?
+    var fixedInk: Bool { system.map { $0.hasPrefix("named:") } ?? true }
+    enum CodingKeys: String, CodingKey { case sys, c, cs }
     init(from decoder: Decoder) throws {
+        if let c = try? decoder.container(keyedBy: CodingKeys.self) {
+            system = try c.decodeIfPresent(String.self, forKey: .sys)
+            let fallback = try c.decodeIfPresent(OracleInlineColor.self, forKey: .c)
+            if let system {
+                guard let l = SystemColor.channels(system, dark: false, fallback: fallback?.light),
+                      let d = SystemColor.channels(system, dark: true, fallback: fallback?.dark) else {
+                    throw DecodingError.dataCorruptedError(forKey: .c, in: c, debugDescription: "unresolvable system colour")
+                }
+                light = fallback?.light ?? l; dark = fallback?.dark ?? d
+                paired = true
+            } else {
+                let spaces = try c.decode([OracleColorSpace].self, forKey: .cs)
+                guard (1...2).contains(spaces.count) else {
+                    throw DecodingError.dataCorruptedError(forKey: .cs, in: c, debugDescription: "expected one or two colour spaces")
+                }
+                light = try spaces[0].channels(fallback: fallback?.light)
+                dark = try spaces[spaces.count - 1].channels(fallback: fallback?.dark)
+                paired = spaces.count == 2
+            }
+            return
+        }
+        system = nil
         var c = try decoder.unkeyedContainer()
         paired = c.count == 2
         if paired {
@@ -254,6 +282,59 @@ private struct OracleInlineColor: Decodable {
         guard c.isAtEnd, light.count == 4, dark.count == 4 else {
             throw DecodingError.dataCorruptedError(in: c, debugDescription: "expected RGBA or light/dark RGBA")
         }
+    }
+    func channels(dark: Bool) -> [Double] {
+        let fallback = dark ? self.dark : light
+        // Share presentation's platform lookup, but no BatchValue or batch decoder.
+        return system.flatMap { SystemColor.channels($0, dark: dark, fallback: fallback) } ?? fallback
+    }
+}
+
+private struct OracleColorSpace: Decodable {
+    let s: String
+    let v: [Double]
+    let profile: CGColorSpace?
+    let intent: CGColorRenderingIntent
+    enum CodingKeys: String, CodingKey { case s, v, i }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        s = try c.decode(String.self, forKey: .s)
+        v = try c.decode([Double].self, forKey: .v)
+        switch try c.decodeIfPresent(String.self, forKey: .i) {
+        case "perceptual": intent = .perceptual
+        case "saturation": intent = .saturation
+        case "absolute-colorimetric": intent = .absoluteColorimetric
+        default: intent = .relativeColorimetric
+        }
+        if s.hasPrefix("cg:") {
+            profile = CGColorSpace(name: String(s.dropFirst(3)) as CFString)
+        } else if s.hasPrefix("icc:"), let assets = decoder.userInfo[.oracleAssets] as? AssetResolver,
+                  let data = assets.bytes(String(s.dropFirst(4))) {
+            profile = CGColorSpace(iccData: data as CFData)
+        } else { profile = nil }
+    }
+    func channels(fallback: [Double]?) throws -> [Double] {
+        if let code = ["srgb": 0.0, "display-p3": 1, "srgb-linear": 2][s], v.count == 4, let fallback {
+            return fallback + [code] + v
+        }
+        guard let space = profile,
+              v.count == space.numberOfComponents + 1,
+              let source = CGColor(colorSpace: space, components: v.map { CGFloat($0) }),
+              let srgb = CGColorSpace(name: CGColorSpace.sRGB),
+              let extended = CGColorSpace(name: CGColorSpace.extendedSRGB) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "unresolvable colour space"))
+        }
+        // A CGColor carries no intent; an ICC colour applies it before other conversions (LLP 1100 D3).
+        let color = s.hasPrefix("icc:") ? source.converted(to: extended, intent: intent, options: nil) : source
+        guard let color,
+              let clipped = color.converted(to: srgb, intent: .relativeColorimetric, options: nil)?.components,
+              let components = color.converted(to: extended, intent: .relativeColorimetric, options: nil)?.components,
+              clipped.count == 4, components.count == 4 else {
+            throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "unresolvable colour space"))
+        }
+        let rgba = clipped.map { (Double($0) * 255).rounded() }
+        let extendedRGBA = components.map { Double($0) }
+        return rgba + [0] + extendedRGBA
     }
 }
 

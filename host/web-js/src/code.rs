@@ -628,14 +628,21 @@ impl Translator<'_> {
                         .str(exact_plan::StrId(x.args[0] as u32))
                         .to_string();
                     let args = self.popn(x.args[1] as usize)?;
-                    self.uses.commands.insert(name.clone());
                     self.flush();
-                    let c = self.uses.rt("C");
-                    self.out.push_str(&format!(
-                        "{c}({},[{}]);",
-                        serde_json::to_string(&name).unwrap(),
-                        args.join(",")
-                    ));
+                    // The app's chosen language lands with the action's
+                    // writes (chosen.js, imported by a plan that runs it).
+                    if name == "setLocale" {
+                        self.out
+                            .push_str(&format!("$setLocale({});", args.join(",")));
+                    } else {
+                        self.uses.commands.insert(name.clone());
+                        let c = self.uses.rt("C");
+                        self.out.push_str(&format!(
+                            "{c}({},[{}]);",
+                            serde_json::to_string(&name).unwrap(),
+                            args.join(",")
+                        ));
+                    }
                 }
                 Opcode::Refresh => {
                     self.flush();

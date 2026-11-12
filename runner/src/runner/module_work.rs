@@ -172,7 +172,7 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn ask_failed_readers(&mut self, except: Option<Target>) {
         for i in 0..self.resources.len() {
             // (an upload's failure is never asked again at its arguments: D10)
-            let failed = self.resources[i].store_reader
+            let failed = self.asks_on_store_change(i)
                 && self.resources[i].failed_args.is_some()
                 && !self.upload_failed(i);
             if failed && except != Some(Target::Resource(i)) {

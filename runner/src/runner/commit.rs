@@ -156,6 +156,7 @@ impl<D: DataSource> Runner<D> {
                 // A spent reply's turn read the store: its failure stands, and so does the read.
                 if let Some(i) = self.module_work.reply_reader.take() {
                     self.resources[i].store_reader = true;
+                    self.resources[i].contents_reader = true;
                 }
                 self.uploads = c.uploads;
                 self.failed_mut = c.failed_mut;
@@ -527,6 +528,8 @@ impl<D: DataSource> Runner<D> {
                 source: self.input_source,
             });
         }
+        // The app's chosen language, before the settlement reads its tables.
+        self.take_set_locale(first_command);
         // An assignment to a mutation's slot tentatively makes it not
         // pending. The pending map is changed only after settlement stands:
         // a refused assignment did not change what reply the view wants.

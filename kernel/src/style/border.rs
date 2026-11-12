@@ -103,6 +103,7 @@ fn shade(value: ColorValue, shadowed: bool) -> ColorValue {
                     space: exact_color::Space::SrgbLinear,
                     c,
                     alpha: w.alpha,
+                    missing: [false; 4],
                 }
                 .css()
             };
