@@ -27,6 +27,15 @@ pub fn snapshot(store: &Store, grants: &str) -> Vec<(String, Vec<u8>)> {
 /// device observations it made; its `console` lines; and the answer — a
 /// value, the next request (a yield at storage or `fetch`), or an error.
 pub fn encode(result: Result<Answer, DataError>, local: &mut Store, logs: Vec<String>) -> Outcome {
+    encode_optional(result.map(Some), local, logs)
+}
+
+/// A resource's turn may leave its other fetches in flight (LLP 1162 D2).
+pub fn encode_optional(
+    result: Result<Option<Answer>, DataError>,
+    local: &mut Store,
+    logs: Vec<String>,
+) -> Outcome {
     let writes: Vec<Json> = local
         .take_writes()
         .into_iter()
@@ -41,14 +50,15 @@ pub fn encode(result: Result<Answer, DataError>, local: &mut Store, logs: Vec<St
         .collect();
     let mut body = json!({"turn": 1, "reads": local.reads(), "topics": local.take_topics(), "writes": writes, "logs": logs});
     match result {
-        Ok(Answer::Now(value)) => body["value"] = Json::String(base64(&value.to_bytes())),
+        Ok(Some(Answer::Now(value))) => body["value"] = Json::String(base64(&value.to_bytes())),
         // A long poll no host may run (LLP 1016.000 D8) is refused before it crosses: the envelope carries
         // no surface, so its far side couldn't tell.
-        Ok(Answer::Later(request)) if request.long_poll_refusal().is_some() => {
+        Ok(Some(Answer::Later(request))) if request.long_poll_refusal().is_some() => {
             let why = request.long_poll_refusal().unwrap_or_default();
             body["error"] = error_json(&unavailable(why));
         }
-        Ok(Answer::Later(request)) => body["request"] = request_json(&request),
+        Ok(Some(Answer::Later(request))) => body["request"] = request_json(&request),
+        Ok(None) => body["waiting"] = Json::Bool(true),
         Err(error) => body["error"] = error_json(&error),
     }
     Outcome::Response(Response {
@@ -72,6 +82,15 @@ pub fn apply(
     store: &mut Store,
     logs: &mut Vec<String>,
 ) -> Result<Answer, DataError> {
+    apply_optional(outcome, store, logs)?.ok_or_else(|| unavailable("turn reply: no answer"))
+}
+
+/// Apply the turn's writes and observations even while its answer waits.
+pub fn apply_optional(
+    outcome: Outcome,
+    store: &mut Store,
+    logs: &mut Vec<String>,
+) -> Result<Option<Answer>, DataError> {
     let body = match outcome {
         Outcome::Response(r)
             if r.headers
@@ -118,14 +137,17 @@ pub fn apply(
         return Err(error_from(error));
     }
     if let Some(request) = json.get("request") {
-        return request_from(request).map(Answer::Later);
+        return request_from(request).map(|r| Some(Answer::Later(r)));
+    }
+    if json["waiting"] == Json::Bool(true) {
+        return Ok(None);
     }
     let bytes = json["value"]
         .as_str()
         .and_then(unbase64)
         .ok_or_else(|| unavailable("turn reply: no answer"))?;
     Value::from_bytes(&bytes)
-        .map(Answer::Now)
+        .map(|v| Some(Answer::Now(v)))
         .map_err(|e| unavailable(format!("turn reply: {e:?}")))
 }
 

@@ -55,13 +55,19 @@ impl Module {
     /// ticket in a module turn, and the answer parks on its timer, asked
     /// again at once. On the main thread only: a worker runs one turn to its
     /// end.
-    pub(crate) fn timer_first(&mut self, f: &InFlight<'_>) -> Option<(u64, Request)> {
+    pub(crate) fn timer_first(
+        &mut self,
+        f: &InFlight<'_>,
+        fetch: Option<u64>,
+    ) -> Option<(u64, Request)> {
         if !self.main_thread {
             return None;
         }
         let key = Module::key(Some(f.target), f.source, f.args);
         let at = self.parked.iter().position(|(k, p)| {
-            *k == key && !matches!(p.ticket, 0 | WAITING | YIELDED | TIMER | secrets::TICKET)
+            *k == key
+                && fetch.is_none_or(|fetch| p.ticket == fetch)
+                && !matches!(p.ticket, 0 | WAITING | YIELDED | TIMER | secrets::TICKET)
         })?;
         let (call, ticket) = (self.parked[at].1.call, self.parked[at].1.ticket);
         let adopted = self.engine.as_mut()?.call(

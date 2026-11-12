@@ -916,6 +916,30 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         Ok(None)
     }
 
+    fn more_for(&mut self, target: Target) -> Vec<Request> {
+        if self.inline() {
+            return self.here().map(|d| d.more_for(target)).unwrap_or_default();
+        }
+        Vec::new()
+    }
+    fn parse_fetch_for(
+        &mut self,
+        target: Target,
+        fetch: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        if self.inline() {
+            return self
+                .here()?
+                .parse_fetch_for(target, fetch, store, source, args, outcome);
+        }
+        self.parse_with(Some(target), store, source, args, outcome)
+            .map(Some)
+    }
+
     fn parse_for(
         &mut self,
         target: Target,
@@ -1175,10 +1199,14 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         &mut self,
         store: &Store,
         in_flight: InFlight<'_>,
+        fetch: Option<u64>,
     ) -> Option<(u64, Request)> {
         match self.owner {
             Some(_) => None,
-            None => self.inner.as_mut()?.timer_before_reply(store, in_flight),
+            None => self
+                .inner
+                .as_mut()?
+                .timer_before_reply(store, in_flight, fetch),
         }
     }
 

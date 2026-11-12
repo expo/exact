@@ -584,28 +584,38 @@ fn a_stream_answer_through_the_runner() {
 
 #[test]
 fn parallel_fetches_keep_every_request_and_binary_response() {
-    let mut m = module();
-    let mut s = store();
-    assert_eq!(
-        later(m.answer(&mut s, "parallel", &[]).unwrap()).url,
-        "https://api.castle.xyz/a"
-    );
-    let binary = Outcome::Response(Response {
-        status: 200,
-        headers: vec![],
-        body: vec![0, 255],
-    });
-    assert_eq!(
-        later(m.parse(&mut s, "parallel", &[], binary).unwrap()).url,
-        "https://api.castle.xyz/b"
-    );
-    assert_eq!(
-        session(&now(m
-            .parse(&mut s, "parallel", &[], response(200, "ok"))
-            .unwrap()))
-        .2,
-        "0,255/ok/\"\"/TypeError/TypeError/TypeError/true/TypeError"
-    );
+    use exact_runner::Target;
+    for order in [[0, 1], [1, 0]] {
+        let mut m = module();
+        let mut s = store();
+        let target = Target::Resource(0);
+        let first = later(m.answer_for(target, &mut s, "parallel", &[]).unwrap());
+        let mut requests = vec![first];
+        requests.extend(m.more_for(target));
+        assert_eq!(
+            requests.iter().map(|r| r.url.as_str()).collect::<Vec<_>>(),
+            ["https://api.castle.xyz/a", "https://api.castle.xyz/b"]
+        );
+        let mut answer = None;
+        for i in order {
+            let body = if i == 0 { vec![0, 255] } else { b"ok".to_vec() };
+            let reply = Outcome::Response(Response {
+                status: 200,
+                headers: vec![],
+                body,
+            });
+            answer = m
+                .parse_fetch_for(target, requests[i].fetch, &mut s, "parallel", &[], reply)
+                .unwrap();
+            if i == order[0] {
+                assert!(answer.is_none());
+            }
+        }
+        assert_eq!(
+            session(&now(answer.unwrap())).2,
+            "0,255/ok/\"\"/TypeError/TypeError/TypeError/true/TypeError"
+        );
+    }
 }
 
 #[test]

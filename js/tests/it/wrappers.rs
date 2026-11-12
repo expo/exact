@@ -5,7 +5,7 @@ use exact_data_host::Storage;
 use exact_logic::Swappable;
 use exact_runner::{
     exact_canvas::{Context2d, DrawError, Frame},
-    DataError, DataSource, Dispatch, Outcome, Placement, Request, Store, Value,
+    Answer, DataError, DataSource, Dispatch, Outcome, Placement, Request, Store, Target, Value,
 };
 
 #[derive(Default)]
@@ -16,6 +16,40 @@ struct Leaf {
 impl DataSource for Leaf {
     fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
         Ok(Value::Unit)
+    }
+
+    fn answer_for(
+        &mut self,
+        _: Target,
+        _: &mut Store,
+        _: &str,
+        _: &[Value],
+    ) -> Result<Answer, DataError> {
+        let mut request = Request::get("https://sets.test/first");
+        request.fetch = Some(1);
+        Ok(Answer::Later(request))
+    }
+    fn more_for(&mut self, target: Target) -> Vec<Request> {
+        assert_eq!(target, Target::Resource(9));
+        let mut request = Request::continuation(7);
+        request.fetch = Some(2);
+        vec![request]
+    }
+    fn parse_fetch_for(
+        &mut self,
+        target: Target,
+        fetch: Option<u64>,
+        _: &mut Store,
+        _: &str,
+        _: &[Value],
+        _: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        assert_eq!(target, Target::Resource(9));
+        match fetch {
+            Some(1) => Ok(None),
+            Some(2) => Ok(Some(Answer::Now(Value::Unit))),
+            _ => panic!("wrong fetch"),
+        }
     }
 
     fn note_storage_changed(&mut self) {
@@ -75,6 +109,42 @@ fn forwards(name: &str, mut source: impl DataSource) {
         (true, true, true, Ok(true)),
         "{name} forwards each call to its leaf"
     );
+    let target = Target::Resource(9);
+    assert!(matches!(
+        source.answer_for(target, &mut store, "set", &[]).unwrap(),
+        Answer::Later(_)
+    ));
+    let more = source.more_for(target);
+    assert_eq!(more.len(), 1);
+    assert_eq!(more[0].fetch, Some(2));
+    assert!(
+        source.host_continuation(more[0].continuation.unwrap()),
+        "{name} translates the child's token"
+    );
+    assert!(source
+        .parse_fetch_for(
+            target,
+            Some(1),
+            &mut store,
+            "set",
+            &[],
+            Dispatch::again_outcome()
+        )
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        source
+            .parse_fetch_for(
+                target,
+                Some(2),
+                &mut store,
+                "set",
+                &[],
+                Dispatch::again_outcome()
+            )
+            .unwrap(),
+        Some(Answer::Now(Value::Unit))
+    );
     assert!(!source.take_storage_changed());
 }
 
@@ -85,7 +155,10 @@ fn a_placed_source_forwards_leaf_calls() {
 
 #[test]
 fn a_mixed_source_forwards_leaf_calls() {
-    forwards("Mixed", Mixed::new(Leaf::default(), (), &[], &[]).unwrap());
+    forwards(
+        "Mixed",
+        Mixed::new(Leaf::default(), (), &["set"], &[]).unwrap(),
+    );
 
     let mut mixed = Mixed::new((), Leaf::default(), &[], &[]).unwrap();
     assert!(!mixed.keeps_sent(7), "kept fetches belong to JavaScript");

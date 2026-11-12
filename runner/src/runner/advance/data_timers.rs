@@ -210,7 +210,9 @@ impl<D: DataSource> Runner<D> {
             args: &p.args,
             continuation: None,
         };
-        let Some((token, mut request)) = self.data.timer_before_reply(&self.store, in_flight)
+        let Some((token, mut request)) =
+            self.data
+                .timer_before_reply(&self.store, in_flight, p.fetch)
         else {
             return false;
         };

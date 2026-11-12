@@ -59,18 +59,26 @@ fn adopted_then_aborted(m: &mut Module, s: &mut Store) -> u64 {
 
 #[test]
 fn only_a_fetch_handed_out_is_adopted() {
-    let (mut m, mut s) = module();
-    let a = m.answer_for(Target::Resource(0), &mut s, "twice", &[]);
-    assert!(matches!(a, Ok(Answer::Later(_))), "{a:?}");
-    let (call, first) = (m.parked[0].1.call, m.parked[0].1.ticket);
-    // The second POST, made before the first was awaited, is not handed out.
-    assert_eq!(m.unsent(), 1);
-    assert_eq!(
-        adopt(&mut m, call, first + 1),
-        "",
-        "an unclaimed fetch is not adopted"
-    );
-    assert_eq!(adopt(&mut m, call, first), "adopted");
+    for target in [Target::Resource(0), Target::Mutation(0)] {
+        let (mut m, mut s) = module();
+        let a = m.answer_for(target, &mut s, "twice", &[]);
+        assert!(matches!(a, Ok(Answer::Later(_))), "{a:?}");
+        let (call, first) = (m.parked[0].1.call, m.parked[0].1.ticket);
+        if target.mutation().is_some() {
+            assert_eq!(m.unsent(), 1);
+            assert_eq!(
+                adopt(&mut m, call, first + 1),
+                "",
+                "an unclaimed fetch is not adopted"
+            );
+        } else {
+            let more = m.more_for(target);
+            assert_eq!(more.len(), 1);
+            assert_eq!(m.unsent(), 0);
+            assert_eq!(adopt(&mut m, call, more[0].fetch.unwrap()), "adopted");
+        }
+        assert_eq!(adopt(&mut m, call, first), "adopted");
+    }
 }
 
 #[test]

@@ -611,13 +611,15 @@ data_source! {
     /// delivered under the token it returns ([`DataSource::module_landed`]),
     /// and returns the answer's continuation, in which the timer runs. `None`
     /// leaves the answer waiting for the reply. A source that forwards
-    /// `keep_sent` forwards this.
+    /// `keep_sent` forwards this. `fetch` names the request within a
+    /// resource's set, whose wake times may differ (LLP 1162 D2).
     fn timer_before_reply(
         &mut self,
         store: &Store,
         in_flight: InFlight<'_>,
+        fetch: Option<u64>,
     ) -> Option<(u64, crate::request::Request)> {
-        let _ = (store, in_flight);
+        let _ = (store, in_flight, fetch);
         None
     }
 

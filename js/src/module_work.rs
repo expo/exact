@@ -54,14 +54,20 @@ impl Module {
     /// worker keeps a protected secret's sent effect too: its proxy delivers
     /// the retained reply on the owner before releasing the lease.
     pub(crate) fn set_aside(&mut self, gone: Vec<(Key, Parked)>) -> Vec<u64> {
+        let protected: std::collections::HashSet<_> = gone
+            .iter()
+            .filter(|(key, p)| {
+                key.0.is_some()
+                    && (self.main_thread || self.host.secrets.holds(p.call))
+                    && p.effects
+            })
+            .map(|(_, p)| p.call)
+            .collect();
         let mut forget = Vec::new();
         for (key, parked) in gone {
-            if key.0.is_some()
-                && (self.main_thread || self.host.secrets.holds(parked.call))
-                && parked.effects
-            {
+            if protected.contains(&parked.call) {
                 self.work.calls.push((key, parked));
-            } else {
+            } else if !forget.contains(&parked.call) {
                 forget.push(parked.call);
             }
         }
@@ -85,7 +91,8 @@ impl Module {
         let mut forget = Vec::new();
         for f in let_go {
             let key = Module::key(Some(f.target), f.source, f.args);
-            let Some(at) = (self.work.calls.iter()).position(|(k, _)| *k == key) else {
+            let Some(at) = (self.work.calls.iter()).position(|(k, p)| *k == key && p.effects)
+            else {
                 kept.push(None);
                 continue;
             };
@@ -101,7 +108,7 @@ impl Module {
         }
         // The oldest call set aside under a key is the one whose request a
         // refused commit put back: the first restored, any later forgotten.
-        let mut restored = std::collections::HashSet::new();
+        let mut restored = HashMap::new();
         for (key, parked) in std::mem::take(&mut self.work.calls) {
             // Back in flight: its plain request, or its own continuation.
             let back = match self.work.flight.get(&key) {
@@ -109,9 +116,10 @@ impl Module {
                 Some(Some(call)) => *call == parked.call,
                 None => false,
             };
-            if refused && back && restored.insert(key.clone()) {
+            let oldest = *restored.entry(key.clone()).or_insert(parked.call);
+            if refused && back && oldest == parked.call {
                 let (replacing, others) = (std::mem::take(&mut self.parked).into_iter())
-                    .partition::<Vec<_>, _>(|(k, _)| *k == key);
+                    .partition::<Vec<_>, _>(|(k, p)| *k == key && p.call != parked.call);
                 self.parked = others;
                 forget.extend(replacing.into_iter().map(|(_, p)| p.call));
                 self.parked.push((key, parked));
@@ -119,6 +127,8 @@ impl Module {
                 forget.push(parked.call);
             }
         }
+        forget.sort_unstable();
+        forget.dedup();
         self.forget_calls(forget);
         kept
     }

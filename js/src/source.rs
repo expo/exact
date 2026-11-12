@@ -91,9 +91,10 @@ impl DataSource for Module {
         &mut self,
         store: &Store,
         in_flight: InFlight<'_>,
+        fetch: Option<u64>,
     ) -> Option<(u64, Request)> {
         let _ = store;
-        self.timer_first(&in_flight)
+        self.timer_first(&in_flight, fetch)
     }
 
     fn module_landed(
@@ -295,6 +296,7 @@ impl DataSource for Module {
             return;
         };
         let (_, parked) = self.parked.remove(at);
+        self.parked.retain(|(_, p)| p.call != parked.call);
         self.waiters.retain(|waiter| *waiter != token);
         self.forget_calls(vec![parked.call]);
     }
@@ -492,6 +494,28 @@ impl DataSource for Module {
         outcome: Outcome,
     ) -> Result<Answer, DataError> {
         let answer = self.resume(Some(store), Some(target), source, args, outcome);
+        self.refresh_background();
+        answer
+    }
+
+    fn more_for(&mut self, target: Target) -> Vec<Request> {
+        self.parked
+            .iter_mut()
+            .filter(|(key, _)| key.0 == Some(target))
+            .filter_map(|(_, p)| p.more.take())
+            .collect()
+    }
+
+    fn parse_fetch_for(
+        &mut self,
+        target: Target,
+        fetch: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        let answer = self.resume_fetch(Some(store), Some(target), fetch, source, args, outcome);
         self.refresh_background();
         answer
     }

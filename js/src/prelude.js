@@ -666,7 +666,7 @@
     return new Promise(function (resolve, reject) {
       // `early`: made while its answer was still in flight (its body, or its
       // own continuation), so that answer's own, whoever else is pending.
-      var p = { resolve: resolve, reject: reject, call: call, claimed: false, stream: !!stream, signal: signal, timed: timed, release: function () {}, early: call.status === "pending", bodyTo: bodyTo, head: method === "HEAD" };
+      var p = { resolve: resolve, reject: reject, call: call, claimed: false, stream: !!stream, signal: signal, timed: timed, release: function () {}, early: call.status === "pending", set: !stream && !poll && !upload && bodyFrom === undefined && bodyTo === undefined && /^https?:/i.test(url), bodyTo: bodyTo, head: method === "HEAD" };
       pending.set(ticket, p);
       // The caller's abort also makes its socket handle stale (D7); the
       // stream itself runs until the runner lets its ticket go.
@@ -1061,13 +1061,7 @@
   // web's module realm (module-glue.js, the wasm target's) runs one answer
   // at a time and keeps the per-answer rule.
   //
-  // A continuation runs as the answer whose reply settled the promise it
-  // awaited, so a fetch an answer makes after awaiting another's lands among
-  // that other's tickets (hn-reader F7, review finding 1). A fetch no settle
-  // has handed the executor yet is the module's: the next answer to settle
-  // without work of its own claims it and waits on it, so no request is left
-  // behind. Storage a settled answer left is the background's (LLP 1097 D2),
-  // which no answer claims.
+  // A fetch no answer owns is claimed one to a waiting answer (LLP 1162 D2).
   var moduleWide = bytesDoor !== undefined;
   function claim(call, ticket) {
     var p = pending.get(ticket);
@@ -1099,19 +1093,24 @@
       withdrawFetches(call);
       call.status = "failed"; call.error = new Error(SOCKET_AND_FETCH);
     }
-    // Its own work first: a fetch it made that no settle has handed out,
-    // then its storage steps, which move to the background once its value
-    // is ready. A fetch made while it was in
-    // flight is its own (an unawaited POST), and it claims it whoever else
-    // is pending. One made only after it finished ran in a continuation it
-    // settled for another answer: with another answer in flight, which may
-    // be that one, it is left to it; with none, it waits for the fetch
-    // itself. Either way nothing is left behind.
+    // Claims follow async ownership, including a waiter's continuation another reply ran (LLP 1162 D2).
     var finished = call.status === "done" || call.status === "failed", others = false;
     if (finished && moduleWide) calls.forEach(function (c) { if (c !== call && !c.letGo && c.status === "pending") others = true; });
     for (var i = 0; i < call.tickets.length; i++) {
       var own = pending.get(call.tickets[i]);
-      if (own && !own.claimed && own.call === call && (own.early || !others)) return claim(call, call.tickets[i]);
+      if (own && !own.claimed && own.call === call && (own.early || !others)) {
+        if (!moduleWide || !call.set) return claim(call, call.tickets[i]);
+        var out = [], held = false;
+        pending.forEach(function (p) { if (p.call === call && p.claimed && !p.module && (!own.set || !p.set)) held = true; });
+        if (held) break;
+        for (var j = i; j < call.tickets.length; j++) {
+          var p = pending.get(call.tickets[j]);
+          if (!p || p.claimed || p.call !== call || !(p.early || !others)) continue;
+          if (out.length && (!own.set || !p.set)) break;
+          out.push(JSON.parse(claim(call, call.tickets[j])));
+        }
+        var first = out.shift(); call.more = out; return JSON.stringify(first);
+      }
     }
     if (!finished && call.yields && call.yields.length) return JSON.stringify({ tag: 1, call: call.id, ticket: 0, yielded: true });
     if (call.storage > 0 && !call.lost) {
@@ -1189,7 +1188,7 @@
     if (typeof f !== "function") { e = new Error("the data module's `tools` has no `" + name + "`"); e.kind = "UnknownSource"; throw e; } r = f(args, store, storage); return r && typeof r.then === "function" ? r.then(text) : text(r); }
   global.__exact_call = function (source, argsJson, mutation) {
     initializing = false;
-    var call = { id: nextCall++, status: "pending", value: undefined, error: undefined, tickets: [], storage: 0, replied: false, mutation: mutation === "mutation", answer: mutation === "answer", sync: false, socketOps: null, epoch: gcEpoch() };
+    var call = { id: nextCall++, status: "pending", value: undefined, error: undefined, tickets: [], storage: 0, replied: false, mutation: mutation === "mutation", answer: mutation === "answer" || mutation === "resource", set: mutation === "resource", sync: false, socketOps: null, epoch: gcEpoch() };
     var result;
     currentCall = call; work.setTurn(call);
     calls.set(call.id, call);
@@ -1284,6 +1283,7 @@
   };
   global.__exact_calls_open = function () { return String(calls.size); };
   global.__exact_call_id = function () { return String(currentCall ? currentCall.id : 0); };
+  global.__exact_more = function (id) { var call = calls.get(Number(id)), more = call && call.more || []; if (call) call.more = []; return JSON.stringify(more); };
   global.__exact_settle = function (id, final) {
     timers.checkpoint();
     currentCall = null;
@@ -1476,7 +1476,7 @@
   // A yielded answer's new turn: its yields resolve in the drain that follows.
   global.__exact_yielded = function (id) { var call = calls.get(Number(id)); if (call) { currentCall = call; endYields(call); } };
   global.__exact_turn = function (id) { var t = id === "module" ? work.MODULE : id ? calls.get(Number(id)) || null : null; currentCall = t === work.MODULE ? null : t; work.setTurn(t); }; global.__exact_module_discarded = function () { work.runDiscarded(); }; // the executor's turns (js/src/module_work.rs): the turn's call is current, so a plain `.then` reaction runs as it (LLP 1146 D2)
-  global.__exact_adopt = function (id, ticket) { var p = pending.get(Number(ticket)); if (!p || !p.claimed || p.stream || p.module || p.call !== calls.get(Number(id))) return ""; p.module = true; work.adopted(); return "adopted"; }; // a let-go call's fetch with effects the runner keeps (LLP 1146 D2): only one handed out (`claimed`, the one the call parked on, so its abort is a cancel, door 23); forgetting the call leaves it in flight and outstanding until its reply reaches the call's continuation in a module turn
+  global.__exact_adopt = function (id, ticket) { var p = pending.get(Number(ticket)); if (!p || !p.claimed || p.stream || p.module || p.call !== calls.get(Number(id))) return ""; p.module = true; work.adopted(); return "adopted"; }; // a let-go call's fetch with effects the runner keeps (LLP 1146 D2): only fetches handed out (`claimed`, so an abort is a cancel, door 23); forgetting the call leaves it in flight and outstanding until its reply reaches the call's continuation in a module turn
   // The child-process module's seam (LLP 1133.007), natively only: js/src/process.js takes it, and it is gone.
   if (global.__exact_process_host) global.__exact_process_seam = Object.freeze({ request: function (url, init, listen, own) { return request(url, init, listen, own, true); }, socketOwner: socketOwner, host: host, copyBytes: copyBytes, toBase64: toBase64 });
   global.__exact_fulfill = function (ticket, outcomeJson) {

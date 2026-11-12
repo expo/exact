@@ -33,6 +33,7 @@ mod presence;
 mod process;
 mod pure;
 mod render;
+mod request_sets;
 mod secrets;
 mod shim;
 mod snapshot;
