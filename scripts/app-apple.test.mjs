@@ -860,6 +860,7 @@ test('an App Clip is its parent\'s app under a second identity: NSAppClip, the p
   assert.equal(appleAssociation(listed(['applinks:other.example'])), null);
   assert.equal(appleAssociation(listed([])), null);
   assert.deepEqual(Object.keys(appleAssociation(listed(['applinks:exact.test?mode=developer']))), ['applinks', 'appclips']);
+  assert.deepEqual([['applinks:*.exact.test'], ['applinks:*.test'], ['applinks:*.xexact.test']].map((l) => !!appleAssociation(listed(l))), [true, true, false]);
   assert.equal(appleAssociation({ ...team(origin), origin: undefined }), null, 'no origin, no host to claim');
   // With widgets, the clip shares the parent's App Group and Keychain group, and takes no push environment.
   const entries = { ...app, manifest: { ...app.manifest, live_activities: [{ kind: 'departure', push: true }] } };

@@ -11,7 +11,10 @@ import { appClip, associatedDomains } from '../../scripts/app.mjs';
 export function appleAssociation(app, { webcredentials = false } = {}) {
   const team = app.manifest.host?.ios?.team, clip = appClip(app);
   const host = app.origin ? new URL(app.origin).host : null;
-  const claimed = !!host && associatedDomains(app).some((d) => d.split('?')[0] === `applinks:${host}`);
+  // A wildcard entry (`applinks:*.example.com`) claims the domain it names and its subdomains (Apple, "Supporting
+  // associated domains"; TN3155), so this origin serves the file for it too.
+  const claims = (d) => { const name = d.split('?')[0]; return name === `applinks:${host}` || (name.startsWith('applinks:*.') && `.${host}`.endsWith(name.slice(10))); };
+  const claimed = !!host && associatedDomains(app).some(claims);
   if (!team || !(claimed || webcredentials)) return null;
   return {
     ...(claimed ? { applinks: { details: [{ appIDs: [`${team}.${app.id}`], components: [{ '/': '*' }] }] } } : {}),
