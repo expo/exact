@@ -701,6 +701,28 @@ test('watch archives from nightly require matching bytes and the exact compiler 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test('a cdylib copied out of deps finds its unit dep-info by its bytes', async () => {
+  const { unitDepInfo } = await import('./app.mjs');
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'exact-cdylib-dep-')));
+  try {
+    // A game's GPU crate: Cargo reports target/<profile>/libgame_gpu.dylib, a copy of deps/libgame_gpu-<hash>.dylib,
+    // whose unit dep-info is deps/game_gpu-<hash>.d (and the summary beside the copy is libgame_gpu.d, not game_gpu.d).
+    const out = resolve(root, 'target/aarch64-apple-ios/host-dev'), deps = resolve(out, 'deps'), src = resolve(root, 'gpu/src/lib.rs');
+    mkdirSync(deps, { recursive: true });
+    const artifact = resolve(out, 'libgame_gpu.dylib');
+    writeFileSync(artifact, 'dylib'); writeFileSync(resolve(deps, 'libgame_gpu-68d7406e.dylib'), 'dylib');
+    const dep = resolve(deps, 'game_gpu-68d7406e.d');
+    writeFileSync(dep, `${dep}: ${src}\n${resolve(deps, 'libgame_gpu-68d7406e.dylib')}: ${src}\n`);
+    writeFileSync(resolve(out, 'libgame_gpu.d'), `${artifact}: ${src}\n`);
+    const metadata = { target_directory: resolve(root, 'target'), build_directory: resolve(root, 'target') };
+    const message = { filenames: [artifact], executable: null, target: { name: 'game-gpu', src_path: src } };
+    assert.equal(unitDepInfo(message, root, metadata), dep);
+    // A unit with other bytes is another build's, never this product's.
+    writeFileSync(resolve(deps, 'libgame_gpu-68d7406e.dylib'), 'other');
+    assert.throws(() => unitDepInfo(message, root, metadata), /no matching rustc unit dep-info for game-gpu/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('rustc unit dep-info written under another spelling of the same directory still matches', async () => {
   const { unitDepInfo } = await import('./app.mjs');
   const root = mkdtempSync(resolve(tmpdir(), 'exact-spelled-dep-')), alias = root + '-alias';

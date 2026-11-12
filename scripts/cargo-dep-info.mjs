@@ -224,7 +224,8 @@ export function unitDepInfo(message, workspace, metadata) {
   // Cargo copies libraries and executables out of deps, and aliases build scripts
   // in their build directory. Match the copied bytes; refuse ambiguous evidence.
   const custom = message.target.kind?.includes('custom-build');
-  for (const file of message.filenames.filter(path => /\.(rlib|a)$/.test(path) || path === message.executable || custom)) {
+  // A cdylib (a game's GPU crate: libX.dylib, libX.so) is copied the same way.
+  for (const file of message.filenames.filter(path => /\.(rlib|a|dylib|so)$/.test(path) || path === message.executable || custom)) {
     const directory = custom ? dirname(intermediate(file)) : resolve(dirname(intermediate(file)), 'deps');
     if (!existsSync(directory)) continue;
     const executable = custom || file === message.executable;
