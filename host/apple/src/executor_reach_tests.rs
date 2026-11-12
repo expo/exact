@@ -276,7 +276,7 @@ fn a_redirected_preload_cannot_answer_a_tools_reach_at_boot_or_on_either_core() 
             control.wait_ready(1);
             let mut request = super::super::cache::tests::job(1, Request::get(url));
             request.request.reach = reach(CallOrigin::Tool, State::Unknown);
-            assert_eq!(control.settle(&request).is_some(), !redirected);
+            assert!(control.settle(&request).is_none());
             let owners = (0..WORKERS)
                 .map(|_| Some(host().endow(ibex2::grant::GrantSet::parse(GRANTS).unwrap())))
                 .collect();
@@ -291,10 +291,10 @@ fn a_redirected_preload_cannot_answer_a_tools_reach_at_boot_or_on_either_core() 
                 asynchronous.then(asynch::asynch_lanes),
             );
             core.adopt_preloads(set).ok().unwrap();
-            assert_eq!(core.settle_preload(&request).is_some(), !redirected);
+            assert!(core.settle_preload(&request).is_none());
             core.run(request, None).unwrap();
             let (_, outcome, timing) = collect(&core, &woke);
-            assert_eq!(timing.cached, !redirected);
+            assert!(!timing.cached);
             if redirected {
                 assert_eq!(refused(&outcome), "NotAllowedError: person-required");
                 assert_eq!(
@@ -303,7 +303,7 @@ fn a_redirected_preload_cannot_answer_a_tools_reach_at_boot_or_on_either_core() 
                 );
             } else {
                 assert!(matches!(outcome, Outcome::Response(_)));
-                assert_eq!(*seen.0.lock().unwrap(), [url]);
+                assert_eq!(*seen.0.lock().unwrap(), [url, url]);
             }
             let app = super::super::cache::tests::job(2, Request::get(url));
             core.run(app, None).unwrap();

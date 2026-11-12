@@ -91,6 +91,98 @@ fn launch_reaches_the_server_before_an_executor_and_both_cores_take_it() {
 }
 
 #[test]
+fn a_tool_read_queued_before_its_preload_starts_is_sent_after_the_send() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let sender = Server::new();
+        let grants = format!(
+            "net.fetch http://{}\nnet.fetch http://{}",
+            server.address, sender.address
+        );
+        let (set, _clock) = fresh_clock(&server, Vec::new());
+        let control = set.control();
+        let (core, woke) = server.core_grants(asynchronous, true, &grants);
+        adopt(&core, set);
+        let release = held_plan(&sender, "/send", b"send");
+        let mut send = job(1, sender.request("/send"));
+        send.class = RequestClass::Ordered;
+        send.request.method = "POST".into();
+        core.run(send, None).unwrap();
+        sender.seen(1);
+        let mut tool = job(2, server.request("/foreground"));
+        tool.request.reach = exact_runner::local_network::Reach {
+            origin: exact_runner::CallOrigin::Tool,
+            substitute: Some(exact_runner::local_network::State::Unknown),
+        };
+        core.run(tool, None).unwrap();
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert!(state.cache.as_ref().unwrap().preloads.is_empty());
+            assert!(state.jobs[0].iter().any(|j| j.ticket == 2));
+        }
+        server.plan("/foreground", Plan::new(200, &[], b"preload"));
+        control.extend(
+            vec![definition(&server, "/foreground")],
+            &grants,
+            Arc::new(|_, _| {}),
+        );
+        ready(&core, 1);
+        assert_eq!(server.count(), 1);
+        server.plan("/foreground", Plan::new(200, &[], b"sent"));
+        release.send(()).unwrap();
+        assert_eq!(collect(&core, &woke).0, 1);
+        let (ticket, outcome, timing) = collect(&core, &woke);
+        assert_eq!(ticket, 2);
+        assert!(!timing.cached);
+        assert!(matches!(outcome, Outcome::Response(r) if r.body == b"sent"));
+        assert_eq!(server.count(), 2);
+        let (reply, cached) = read(&core, &woke, &server, 3, "/foreground");
+        assert!(cached);
+        assert_eq!(reply.body, b"preload");
+        assert_eq!(server.count(), 2);
+    }
+}
+
+#[test]
+fn tool_reads_bypass_complete_and_inflight_preloads_without_waiting() {
+    for asynchronous in [false, true] {
+        for pending in [false, true] {
+            let server = Server::new();
+            let release = held_plan(&server, "/held", b"preload");
+            let (set, _clock) = fresh_clock(&server, vec![definition(&server, "/held")]);
+            server.seen(1);
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            if !pending {
+                release.send(()).unwrap();
+                ready(&core, 1);
+            }
+            server.plan("/held", Plan::new(200, &[], b"sent"));
+            let mut tool = job(1, server.request("/held"));
+            tool.request.reach.origin = exact_runner::CallOrigin::Tool;
+            let (reply, cached) = ask(&core, &woke, tool);
+            assert!(!cached);
+            assert_eq!(reply.body, b"sent");
+            assert_eq!(server.count(), 2);
+            core.run(job(2, server.request("/held")), None).unwrap();
+            if pending {
+                {
+                    let state = core.shared.state.lock().unwrap();
+                    assert!(state.jobs[0].iter().any(|j| j.ticket == 2));
+                    assert!(state.running.is_empty());
+                }
+                release.send(()).unwrap();
+            }
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            assert_eq!(ticket, 2);
+            assert!(timing.cached);
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"preload"));
+            assert_eq!(server.count(), 2);
+        }
+    }
+}
+
+#[test]
 fn equality_folds_header_names_and_compares_every_body_byte_and_url_for_any_method() {
     for asynchronous in [false, true] {
         for method in ["GET", "POST"] {
