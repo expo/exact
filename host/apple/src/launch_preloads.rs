@@ -239,12 +239,29 @@ impl LaunchPreloads {
                 continue;
             }
             match definition.fill(|name| secrets.get(name).cloned()) {
-                Ok(request) => ready.push(Preload {
-                    name: definition.name.into(),
-                    request,
-                    deadline_ms: definition.timeout_ms,
-                    secrets: definition.secrets.iter().map(|s| (*s).into()).collect(),
-                }),
+                Ok(request) => {
+                    use crate::executor::PreloadEvent;
+                    use ibex2::stdlib::fetch;
+                    let invalid = if url::Url::parse(&request.url).is_err() {
+                        Some(PreloadEvent::InvalidUrl)
+                    } else if request.headers.iter().any(|(_, value)| {
+                        !fetch::is_valid_value(value) || fetch::normalize_value(value) != value
+                    }) {
+                        Some(PreloadEvent::InvalidHeader)
+                    } else {
+                        None
+                    };
+                    if let Some(outcome) = invalid {
+                        self.record_definition(definition, outcome);
+                        continue;
+                    }
+                    ready.push(Preload {
+                        name: definition.name.into(),
+                        request,
+                        deadline_ms: definition.timeout_ms,
+                        secrets: definition.secrets.iter().map(|s| (*s).into()).collect(),
+                    });
+                }
                 Err(_) => {
                     self.record_definition(definition, crate::executor::PreloadEvent::MissingSecret)
                 }

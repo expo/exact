@@ -367,7 +367,8 @@ timeoutMs?: integer, when?: "start" | "foreground" }` (LLP 1162.000 D2).
 reference a kept secret as `{secret:NAME}`, except in a URL’s scheme or authority;
 write `{{` for a literal brace.
 The bake checks at most eight entries against fetch and `secret.keep` grants.
-Hosts that support preloads send them at process start. A Rust data source may
+Hosts that support preloads send them at process start; the app's own reads take
+a preload's reply, and a read made for a tool is sent. A Rust data source may
 implement `launch() -> Option<exact_runner::request::Launch>` and register its
 `launch` function with `Launch::new(env!("CARGO_PKG_NAME"), launch)`. The function
 takes `&mut dyn LaunchContext` and returns `Vec<LaunchRequest>`: named requests,

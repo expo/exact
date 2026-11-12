@@ -642,16 +642,6 @@ impl<D: DataSource> Runner<D> {
             .collect()
     }
 
-    /// The asks `data_ready` makes are the launch's own, but for a resource
-    /// a refresh already waits to ask.
-    fn launch_asks(&mut self, stale: &[usize]) {
-        for &i in stale {
-            if !self.refresh_next.contains(&i) {
-                self.resources[i].launch_ask = true;
-            }
-        }
-    }
-
     /// The data source is ready — a host loaded its TypeScript module after
     /// the first pixel (LLP 1027 D4): every deferred resource shown
     /// from a placeholder is asked again, and every send made before now
@@ -666,6 +656,17 @@ impl<D: DataSource> Runner<D> {
 
     /// Activation after adopting a peer's pre-pixel store revision.
     pub fn data_ready_after_store(
+        &mut self,
+        change: crate::StoreChange,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let result = self.activate(change);
+        self.launch.clear();
+        result
+    }
+
+    /// The asks it makes are the launch's own (`launch`), but for a resource
+    /// a refresh already waits to ask.
+    fn activate(
         &mut self,
         change: crate::StoreChange,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
@@ -684,6 +685,9 @@ impl<D: DataSource> Runner<D> {
         let stale: Vec<usize> = (0..self.resources.len())
             .filter(|i| self.resources[*i].stale || readers.contains(i))
             .collect();
+        let launch: Vec<usize> = (stale.iter().copied())
+            .filter(|i| !self.refresh_next.contains(i))
+            .collect();
         // Writes made before the source was ready are overlaid from here
         self.resources
             .iter_mut()
@@ -694,15 +698,8 @@ impl<D: DataSource> Runner<D> {
                 return Ok(None);
             }
             self.owe(&stale);
-            self.launch_asks(&stale);
-            let result = self.reasking(|r| r.commit_again(stale.clone(), "data_ready"));
-            // Refused, its resources failed: what asks them next is a refresh.
-            if result.is_err() {
-                for i in stale {
-                    self.resources[i].launch_ask = false;
-                }
-            }
-            return result.map(Some);
+            self.launch = launch;
+            return (self.reasking(|r| r.commit_again(stale, "data_ready"))).map(Some);
         }
         let what = format!(
             "data_ready ({} asked again, {} sent)",
@@ -711,7 +708,7 @@ impl<D: DataSource> Runner<D> {
         );
         let was_poisoned = self.poisoned;
         let checkpoint = self.checkpoint();
-        self.launch_asks(&stale);
+        self.launch = launch;
         self.refresh_next.extend(&stale);
         self.owe(&stale);
         let result = if self.poisoned {

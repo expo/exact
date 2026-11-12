@@ -11,20 +11,6 @@ impl Core {
         forgotten: bool,
         waiting: bool,
     ) -> Result<(), (&'static str, Option<OwnedWork>)> {
-        let use_preload = {
-            let state = self.shared.state.lock().unwrap();
-            preload::matches(state.cache.as_ref(), &r, work.is_some())
-        };
-        let work = if use_preload {
-            match reach::admit_cached(&r.request) {
-                Ok(()) => work,
-                Err(error) => Some(OwnedWork::Now(Box::new(move || {
-                    fetch_failure(error, &AbortController::new())
-                }))),
-            }
-        } else {
-            work
-        };
         let ordered = r.request.is_ordered();
         let overlap = reads::overlaps(&r, work.is_some());
         let mut state = self.shared.state.lock().unwrap();

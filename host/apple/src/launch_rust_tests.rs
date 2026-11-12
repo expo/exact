@@ -176,6 +176,100 @@ fn rust_request_reaches_a_held_server_without_a_runner_and_boot_takes_it_once() 
 }
 
 #[test]
+fn a_named_rust_preload_answers_only_the_apps_own_reads() {
+    use exact_runner::CallOrigin;
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for pending in [false, true] {
+            let server = Server::new(4);
+            let url = format!("http://{}/private-path?private-query", server.address);
+            let source = source(&server, move |_| {
+                vec![LaunchRequest::new("rust-feed", Request::get(&url))]
+            });
+            let request = source
+                .request
+                .clone()
+                .header("X-Trace", "new")
+                .preload("rust-feed")
+                .unwrap();
+            let launch = fixture();
+            begin(&launch, &source, false);
+            server.request();
+            if !pending {
+                server.release(0);
+                ready(&launch);
+            }
+            let control = &launch.0.set.get().unwrap().control;
+            for origin in [CallOrigin::Tool, CallOrigin::Wake, CallOrigin::Device] {
+                let mut other = request.clone();
+                other.reach.origin = origin;
+                assert!(control.settle(&read(1, other)).is_none());
+            }
+            let mut executor = Executing::new(&launch, &source.base.grants);
+            for (index, origin) in [CallOrigin::Tool, CallOrigin::Wake, CallOrigin::Device]
+                .into_iter()
+                .enumerate()
+            {
+                let mut other = request.clone();
+                other.reach.origin = origin;
+                executor
+                    .io
+                    .run(read(index as u64 + 1, other), None)
+                    .unwrap();
+                server.request();
+                server.release(index + 1);
+                assert!(!executor.next().2.cached);
+            }
+            executor.io.run(read(4, request), None).unwrap();
+            server.release(0);
+            let (_, outcome, timing) = executor.next();
+            assert!(timing.cached);
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"content"));
+            assert_eq!(server.count.load(Ordering::Acquire), 4);
+        }
+    }
+}
+
+#[test]
+fn invalid_rust_headers_and_urls_are_journaled_by_name_without_sending() {
+    for (value, invalid_url) in [
+        ("ok\nX-Other: yes", false),
+        ("\rvalue", false),
+        ("nul\0byte", false),
+        (" leading", false),
+        ("trailing\t", false),
+        ("secret-value", true),
+    ] {
+        let server = Server::new(1);
+        let url = format!("http://{}/private-path?private-query", server.address);
+        let source = source(&server, move |_| {
+            let request = if invalid_url {
+                Request::get(&format!("http://[{value}"))
+            } else {
+                Request::get(&url).header("Authorization", value)
+            };
+            vec![LaunchRequest::new("rust-feed", request)]
+        });
+        let launch = fixture();
+        begin(&launch, &source, false);
+        definitions(&launch);
+        let facts = launch.journal();
+        let refused = facts.iter().find(|f| f.name == "rust-feed").unwrap();
+        assert_eq!(
+            refused.outcome,
+            if invalid_url {
+                PreloadEvent::InvalidUrl
+            } else {
+                PreloadEvent::InvalidHeader
+            }
+        );
+        assert!(!format!("{facts:?}").contains(value));
+        assert_eq!(server.count.load(Ordering::Acquire), 0);
+        assert_eq!(launch.count(), 0);
+    }
+}
+
+#[test]
 fn token_refresh_is_durable_before_the_returned_request_uses_the_new_secret() {
     use ibex2::secrets::SecretStore;
     let token = Server::new(1);
@@ -475,14 +569,12 @@ fn rust_requests_obey_grants_validation_unique_names_and_the_total_of_eight() {
         "rust-7",
         "userinfo",
         "fragment",
-        "relative",
         "empty-userinfo",
         "method",
         "head-body",
         "oversized",
         "header",
         "repeated-header",
-        "header-value",
         "BadName",
     ] {
         assert!(
@@ -492,6 +584,17 @@ fn rust_requests_obey_grants_validation_unique_names_and_the_total_of_eight() {
                     PreloadEvent::Refused | PreloadEvent::RefusedGrant
                 )),
             "{name}: {journal:?}"
+        );
+    }
+    for (name, outcome) in [
+        ("relative", PreloadEvent::InvalidUrl),
+        ("header-value", PreloadEvent::InvalidHeader),
+    ] {
+        assert!(
+            journal
+                .iter()
+                .any(|f| f.name == name && f.outcome == outcome),
+            "{journal:?}"
         );
     }
     assert_eq!(server.count.load(Ordering::Acquire), 8);
@@ -734,74 +837,83 @@ fn read(ticket: u64, request: Request) -> exact_runner::RequestOut {
 #[test]
 fn a_rust_redirected_reply_requires_the_readers_scope_at_every_hop() {
     for asynchronous in [false, true] {
-        ASYNCHRONOUS.with(|v| v.set(asynchronous));
-        for pending in [false, true] {
-            let final_hop = Server::new(1);
-            let redirect = format!("HTTP/1.1 302 Found\r\nLocation: http://{}/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", final_hop.address).into_bytes();
-            let middle = Server::responding(vec![redirect]);
-            let redirect = format!("HTTP/1.1 302 Found\r\nLocation: http://{}/middle\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", middle.address).into_bytes();
-            let server = Server::responding(vec![redirect.clone(), redirect]);
-            let url = format!("http://{}/private-path?private-query", server.address);
-            let mut source = source(&server, move |_| {
-                vec![LaunchRequest::new("rust-feed", Request::get(&url))]
-            });
-            source.base.grants.push_str(&format!(
-                "\nnet.fetch http://{}\nnet.fetch http://{}",
-                middle.address, final_hop.address
-            ));
-            let launch = fixture();
-            begin(&launch, &source, false);
-            server.request();
-            server.release(0);
-            middle.request();
-            middle.release(0);
-            final_hop.request();
-            if !pending {
-                final_hop.release(0);
-                ready(&launch);
+        for named in [false, true] {
+            ASYNCHRONOUS.with(|v| v.set(asynchronous));
+            for pending in [false, true] {
+                let final_hop = Server::new(1);
+                let redirect = format!("HTTP/1.1 302 Found\r\nLocation: http://{}/final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", final_hop.address).into_bytes();
+                let middle = Server::responding(vec![redirect]);
+                let redirect = format!("HTTP/1.1 302 Found\r\nLocation: http://{}/middle\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", middle.address).into_bytes();
+                let server = Server::responding(vec![redirect.clone(), redirect]);
+                let url = format!("http://{}/private-path?private-query", server.address);
+                let mut source = source(&server, move |_| {
+                    vec![LaunchRequest::new("rust-feed", Request::get(&url))]
+                });
+                source.base.grants.push_str(&format!(
+                    "\nnet.fetch http://{}\nnet.fetch http://{}",
+                    middle.address, final_hop.address
+                ));
+                let launch = fixture();
+                begin(&launch, &source, false);
+                server.request();
+                server.release(0);
+                middle.request();
+                middle.release(0);
+                final_hop.request();
+                if !pending {
+                    final_hop.release(0);
+                    ready(&launch);
+                }
+                let request = if named {
+                    source
+                        .request
+                        .clone()
+                        .header("X-Trace", "new")
+                        .preload("rust-feed")
+                        .unwrap()
+                } else {
+                    source.request.clone()
+                };
+                let mut restricted = request.clone();
+                restricted.grants = Some(format!(
+                    "net.fetch http://{}\nnet.fetch http://{}",
+                    server.address, final_hop.address
+                ));
+                assert!(launch
+                    .0
+                    .set
+                    .get()
+                    .unwrap()
+                    .control
+                    .settle(&read(1, restricted.clone()))
+                    .is_none());
+                let mut executor = Executing::new(&launch, &source.base.grants);
+                executor.io.run(read(1, restricted), None).unwrap();
+                if pending {
+                    final_hop.release(0);
+                }
+                server.request();
+                server.release(1);
+                let (_, outcome, timing) = executor.next();
+                assert!(!timing.cached);
+                assert!(
+                    matches!(
+                        outcome,
+                        Outcome::Failed {
+                            kind: exact_runner::FailureKind::Refused,
+                            ..
+                        }
+                    ),
+                    "{outcome:?}"
+                );
+                executor.io.run(read(2, request), None).unwrap();
+                let (_, outcome, timing) = executor.next();
+                assert!(timing.cached);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"content"));
+                assert_eq!(server.count.load(Ordering::Acquire), 2);
+                assert_eq!(final_hop.count.load(Ordering::Acquire), 1);
+                assert_eq!(middle.count.load(Ordering::Acquire), 1);
             }
-            let mut restricted = source.request.clone();
-            restricted.grants = Some(format!(
-                "net.fetch http://{}\nnet.fetch http://{}",
-                server.address, final_hop.address
-            ));
-            assert!(launch
-                .0
-                .set
-                .get()
-                .unwrap()
-                .control
-                .settle(&read(1, restricted.clone()))
-                .is_none());
-            let mut executor = Executing::new(&launch, &source.base.grants);
-            executor.io.run(read(1, restricted), None).unwrap();
-            if pending {
-                final_hop.release(0);
-            }
-            server.request();
-            server.release(1);
-            let (_, outcome, timing) = executor.next();
-            assert!(!timing.cached);
-            assert!(
-                matches!(
-                    outcome,
-                    Outcome::Failed {
-                        kind: exact_runner::FailureKind::Refused,
-                        ..
-                    }
-                ),
-                "{outcome:?}"
-            );
-            executor
-                .io
-                .run(read(2, source.request.clone()), None)
-                .unwrap();
-            let (_, outcome, timing) = executor.next();
-            assert!(timing.cached);
-            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"content"));
-            assert_eq!(server.count.load(Ordering::Acquire), 2);
-            assert_eq!(final_hop.count.load(Ordering::Acquire), 1);
-            assert_eq!(middle.count.load(Ordering::Acquire), 1);
         }
     }
 }

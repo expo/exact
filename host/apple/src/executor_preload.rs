@@ -48,6 +48,10 @@ pub enum Event {
     },
     /// The device could not supply a named secret.
     MissingSecret,
+    /// A filled header is not a Fetch field value.
+    InvalidHeader,
+    /// The filled URL does not parse.
+    InvalidUrl,
     /// The first hop or a redirect exceeded the grants.
     RefusedGrant,
     /// The definition was not a bounded plain HTTP request.
@@ -101,12 +105,15 @@ enum ReplyState {
     Gone,
 }
 pub(super) struct Held {
-    definition: Definition,
+    name: String,
+    origin: String,
+    secrets: Vec<String>,
+    request: Option<Request>,
     key: Equal,
     reply: ReplyState,
     taken: bool,
     started: Instant,
-    answered_at: Arc<Mutex<Option<Answered>>>,
+    answered_at: Option<Arc<Mutex<Option<Answered>>>>,
     observer: Option<Observer>,
 }
 #[derive(Default, PartialEq, Eq)]
@@ -131,6 +138,34 @@ impl Equal {
     }
 }
 impl Held {
+    fn new(definition: Definition, now: Instant, observer: Option<Observer>) -> Self {
+        let deadline = definition
+            .deadline_ms
+            .or(definition.request.timeout_ms)
+            .map_or(DEFAULT_DEADLINE, |ms| Duration::from_millis(ms.into()));
+        let origin = url::Url::parse(&definition.request.url)
+            .map(|u| u.origin().ascii_serialization())
+            .unwrap_or_default();
+        Self {
+            key: if definition.request.body.len() <= MAX_BODY_BYTES {
+                Equal::of(&definition.request)
+            } else {
+                Equal::default()
+            },
+            name: definition.name,
+            origin,
+            secrets: definition.secrets,
+            request: Some(definition.request),
+            taken: false,
+            started: Instant::now(),
+            answered_at: Some(Arc::new(Mutex::new(None))),
+            observer,
+            reply: ReplyState::Pending {
+                abort: AbortController::new(),
+                due: now + deadline,
+            },
+        }
+    }
     pub(super) fn used(&self) -> Option<usize> {
         match &self.reply {
             ReplyState::Ready(r) => Some(r.used),
@@ -139,10 +174,8 @@ impl Held {
     }
     fn fact(&self, outcome: Event) -> Fact {
         Fact {
-            name: self.definition.name.clone(),
-            origin: url::Url::parse(&self.definition.request.url)
-                .map(|u| u.origin().ascii_serialization())
-                .unwrap_or_default(),
+            name: self.name.clone(),
+            origin: self.origin.clone(),
             outcome,
         }
     }
@@ -235,28 +268,7 @@ impl Preloads {
         cache.preloads = definitions
             .into_iter()
             .take(MAX_PRELOADS)
-            .map(|definition| {
-                let deadline = definition
-                    .deadline_ms
-                    .or(definition.request.timeout_ms)
-                    .map_or(DEFAULT_DEADLINE, |ms| Duration::from_millis(ms.into()));
-                Held {
-                    key: if definition.request.body.len() <= MAX_BODY_BYTES {
-                        Equal::of(&definition.request)
-                    } else {
-                        Equal::default()
-                    },
-                    definition,
-                    taken: false,
-                    started: Instant::now(),
-                    answered_at: Arc::new(Mutex::new(None)),
-                    observer: None,
-                    reply: ReplyState::Pending {
-                        abort: AbortController::new(),
-                        due: now + deadline,
-                    },
-                }
-            })
+            .map(|definition| Held::new(definition, now, None))
             .collect();
         let count = cache.preloads.len();
         let destination = Arc::new(Location {
@@ -410,22 +422,9 @@ impl Control {
             let first = cache.preloads.len();
             for definition in definitions.into_iter().take(MAX_PRELOADS - first) {
                 let now = (cache.clock)();
-                let deadline = definition
-                    .deadline_ms
-                    .or(definition.request.timeout_ms)
-                    .map_or(DEFAULT_DEADLINE, |ms| Duration::from_millis(ms.into()));
-                cache.preloads.push(Held {
-                    key: Equal::of(&definition.request),
-                    definition,
-                    taken: false,
-                    started: Instant::now(),
-                    answered_at: Arc::new(Mutex::new(None)),
-                    observer: Some(observer.clone()),
-                    reply: ReplyState::Pending {
-                        abort: AbortController::new(),
-                        due: now + deadline,
-                    },
-                });
+                cache
+                    .preloads
+                    .push(Held::new(definition, now, Some(observer.clone())));
             }
             first..cache.preloads.len()
         });
@@ -557,18 +556,6 @@ impl Core {
         &self,
         r: &RequestOut,
     ) -> Option<(Outcome, CompletionTiming)> {
-        if !eligible(&r.request, r.class, r.forced, false) || r.request.timeout_refusal().is_some()
-        {
-            return None;
-        }
-        {
-            let state = self.shared.state.lock().unwrap();
-            let cache = state.cache.as_ref()?;
-            let i = find(cache, &r.request)?;
-            if !matches!(cache.preloads[i].reply, ReplyState::Ready(_)) {
-                return None;
-            }
-        }
         let mut state = self.shared.state.lock().unwrap();
         if state.retired || state.dispatched || state.counts != [0, 0] || state.ordered_barrier {
             return None;
@@ -589,24 +576,20 @@ fn settle(cache: &mut cache::Cache, r: &RequestOut) -> Option<(Outcome, Completi
     if !can_take(cache, &r.request, i) {
         return None;
     }
-    let checked = reach::admit_cached(&r.request);
     let (_, _, limit) = reads::reservation(&r.request, true).ok()?;
-    let outcome = match checked {
-        Err(e) => fetch_failure(e, &AbortController::new()),
-        Ok(()) => match cache::granted(&cache.grants, &r.request) {
-            Err(outcome) => outcome,
-            Ok(()) => {
-                let ReplyState::Ready(ready) = &cache.preloads[i].reply else {
-                    unreachable!()
-                };
-                if response_bytes(&ready.response) + std::mem::size_of::<Completed>() > limit {
-                    return None;
-                }
-                let response = ready.response.clone();
-                taken(cache, i, r.ticket);
-                Outcome::Response(response)
+    let outcome = match cache::granted(&cache.grants, &r.request) {
+        Err(outcome) => outcome,
+        Ok(()) => {
+            let ReplyState::Ready(ready) = &cache.preloads[i].reply else {
+                unreachable!()
+            };
+            if response_bytes(&ready.response) + std::mem::size_of::<Completed>() > limit {
+                return None;
             }
-        },
+            let response = ready.response.clone();
+            taken(cache, i, r.ticket);
+            Outcome::Response(response)
+        }
     };
     let cached = matches!(outcome, Outcome::Response(_));
     Some((
@@ -621,6 +604,7 @@ fn settle(cache: &mut cache::Cache, r: &RequestOut) -> Option<(Outcome, Completi
 
 fn eligible(request: &Request, class: RequestClass, forced: bool, work: bool) -> bool {
     class == RequestClass::Read
+        && request.reach.origin == exact_runner::CallOrigin::App
         && request.is_plain_http()
         && request.preload_refusal().is_none()
         && !forced
@@ -636,7 +620,7 @@ fn find(cache: &cache::Cache, request: &Request) -> Option<usize> {
             let url = cache::identity(&request.url);
             let now = (cache.clock)();
             if let Some(i) = cache.preloads.iter().position(|p| {
-                p.definition.name == name.as_ref()
+                p.name == name.as_ref()
                     && p.key.method == request.method
                     && p.key.url == url
                     && live_at(p, now)
@@ -658,7 +642,11 @@ fn matching(cache: &cache::Cache, request: &Request, equal_body: bool) -> Option
     let key = Equal::of(request);
     let now = (cache.clock)();
     cache.preloads.iter().position(|p| {
-        p.key == key && (p.definition.request.body == request.body) == equal_body && live_at(p, now)
+        p.key == key
+            && p.request
+                .as_ref()
+                .is_some_and(|r| (r.body == request.body) == equal_body)
+            && live_at(p, now)
     })
 }
 fn live_at(held: &Held, now: Instant) -> bool {
@@ -668,7 +656,6 @@ fn live_at(held: &Held, now: Instant) -> bool {
         ReplyState::Gone => false,
     }
 }
-// A read must be allowed every hop its preload followed (LLP 1162.000 D1).
 fn can_take(cache: &cache::Cache, request: &Request, i: usize) -> bool {
     match &cache.preloads[i].reply {
         ReplyState::Ready(ready) => ready
@@ -684,13 +671,6 @@ pub(super) fn pending_due(cache: &cache::Cache) -> Option<Instant> {
         .preload_launch_due
         .or(cache.preload_definitions_due)
         .filter(|due| (cache.clock)() < *due)
-}
-pub(super) fn matches(cache: Option<&cache::Cache>, r: &RequestOut, work: bool) -> bool {
-    eligible(&r.request, r.class, r.forced, work)
-        && cache.is_some_and(|c| {
-            pending_due(c).is_some()
-                || find(c, &r.request).is_some_and(|i| can_take(c, &r.request, i))
-        })
 }
 pub(super) fn waiting(state: &State, job: &Job) -> bool {
     eligible(&job.request, job.class, job.forced, job.work.is_some())
@@ -828,10 +808,7 @@ fn response_bytes(response: &Response) -> usize {
 }
 fn taken(cache: &mut cache::Cache, i: usize, ticket: u64) {
     if let Some(observer) = &cache.preloads[i].observer {
-        observer(
-            &cache.preloads[i].definition.name,
-            Observation::Taken(ticket),
-        );
+        observer(&cache.preloads[i].name, Observation::Taken(ticket));
     }
     let used = cache.touch();
     let held = &mut cache.preloads[i];
@@ -857,6 +834,9 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
     if event != Event::NeverTaken || !held.taken {
         cache.journal.push(held.fact(event));
     }
+    held.request = None;
+    held.key = Equal::default();
+    held.answered_at = None;
     cache.release(bytes);
 }
 // Completion wins over a later timer observation (LLP 1162.000 D1).
@@ -874,6 +854,8 @@ pub(super) fn expire(cache: &mut cache::Cache) {
                 if now >= *due
                     && cache.preloads[i]
                         .answered_at
+                        .as_ref()
+                        .expect("pending exchange")
                         .lock()
                         .unwrap()
                         .as_ref()
@@ -909,7 +891,10 @@ pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
     let key = Equal::of(&r.request);
     for i in 0..cache.preloads.len() {
         if cache.preloads[i].key == key
-            && cache.preloads[i].definition.request.body == r.request.body
+            && cache.preloads[i]
+                .request
+                .as_ref()
+                .is_some_and(|request| request.body == r.request.body)
         {
             drop_held(cache, i, Event::DroppedByRefresh);
         }
@@ -917,16 +902,10 @@ pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
 }
 fn drop_secret(cache: &mut cache::Cache, name: &str) {
     for i in 0..cache.preloads.len() {
-        if cache.preloads[i]
-            .definition
-            .secrets
-            .iter()
-            .any(|s| s == name)
-        {
-            let request = cache.preloads[i].definition.request.clone();
+        if cache.preloads[i].secrets.iter().any(|s| s == name) {
             drop_held(cache, i, Event::DroppedBySecret);
             // A preload's HTTP-cache copy must not outlive its credential (D3).
-            cache::drop_preload_copy(cache, &request);
+            cache::drop_preload_copy(cache, i);
         }
     }
 }
@@ -992,6 +971,8 @@ fn finish(
     let visited = std::mem::take(
         &mut held
             .answered_at
+            .as_ref()
+            .expect("pending exchange")
             .lock()
             .unwrap()
             .as_mut()
@@ -999,7 +980,7 @@ fn finish(
             .visited,
     );
     let started = held.started;
-    let request = held.definition.request.clone();
+    let request = held.request.as_ref().expect("pending request");
     let mut response = Response {
         status: reply.status,
         headers: reply.headers.entries().to_vec(),
@@ -1009,15 +990,28 @@ fn finish(
         + visited.capacity() * std::mem::size_of::<String>()
         + visited.iter().map(String::capacity).sum::<usize>()
         + std::mem::size_of::<Held>()
-        + held.key.method.len()
-        + held.key.url.len()
-        + held.definition.request.body.len()
-        + held
-            .key
-            .headers
+        + held.name.capacity()
+        + held.origin.capacity()
+        + held.secrets.capacity() * std::mem::size_of::<String>()
+        + held.secrets.iter().map(String::capacity).sum::<usize>()
+        + held.key.method.capacity()
+        + held.key.url.capacity()
+        + cache::header_bytes(&held.key.headers)
+        + request.method.capacity()
+        + request.url.capacity()
+        + request.body.capacity()
+        + request.grants.as_ref().map_or(0, String::capacity)
+        + request.preload.as_ref().map_or(0, |name| name.len())
+        + request.protocols.capacity() * std::mem::size_of::<String>()
+        + request
+            .protocols
             .iter()
-            .map(|(k, v)| k.len() + v.len())
-            .sum::<usize>();
+            .map(String::capacity)
+            .sum::<usize>()
+        + cache::header_bytes(&request.headers)
+        + std::mem::size_of::<Mutex<Option<Answered>>>()
+        + 2 * std::mem::size_of::<usize>();
+    let request = request.clone();
     if bytes > cache::MAX_ENTRY || !cache.room(bytes) {
         drop_held(cache, index, Event::Oversized);
         return;
@@ -1031,7 +1025,14 @@ fn finish(
         used,
     });
     cache.charge(bytes);
-    cache::store_preload(cache, &request, &mut response, started, reply.redirected);
+    cache::store_preload(
+        cache,
+        index,
+        &request,
+        &mut response,
+        started,
+        reply.redirected,
+    );
 }
 
 fn run(
@@ -1100,7 +1101,7 @@ fn run(
 
 /// Runtime checks for requests supplied by Rust, including filled manifest references.
 pub(crate) fn valid_request(request: &Request) -> bool {
-    use ibex2::stdlib::fetch::{is_valid_name, is_valid_value, Headers};
+    use ibex2::stdlib::fetch::{is_valid_name, is_valid_value, normalize_value, Headers};
     let Ok(url) = url::Url::parse(&request.url) else {
         return false;
     };
@@ -1130,6 +1131,7 @@ pub(crate) fn valid_request(request: &Request) -> bool {
     for (name, value) in &request.headers {
         if !is_valid_name(name)
             || !is_valid_value(value)
+            || normalize_value(value) != value
             || !names.insert(name.to_ascii_lowercase())
         {
             return false;
@@ -1197,7 +1199,7 @@ fn start_indices(
             let ReplyState::Pending { abort, .. } = &held.reply else {
                 return None;
             };
-            let request = &held.definition.request;
+            let request = held.request.as_ref().expect("pending request");
             if !valid_request(request) {
                 drop_held(cache, i, Event::Refused);
                 return None;
@@ -1211,10 +1213,8 @@ fn start_indices(
                 abort.clone(),
                 launch_grants.to_owned(),
                 cache.clock.clone(),
-                held.answered_at.clone(),
-                held.observer
-                    .clone()
-                    .map(|o| (held.definition.name.clone(), o)),
+                held.answered_at.as_ref().expect("pending exchange").clone(),
+                held.observer.clone().map(|o| (held.name.clone(), o)),
             );
             cache.journal.push(held.fact(Event::Sent));
             Some(start)

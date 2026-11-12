@@ -292,6 +292,8 @@ struct PendingReq {
     replied: bool,
     /// Never sent: when a resource an overrun refused is asked again (`overrun.rs`).
     reask_at: Option<f64>,
+    /// The wait is for the launch's own ask, so its re-ask is the launch's too.
+    launch: bool,
     /// The re-asks after a turn over its budget this ask's streak has made.
     reasks: usize,
 }
@@ -463,6 +465,12 @@ pub struct Runner<D: DataSource> {
     /// Resources an action asked to re-request; consumed by the next settle
     /// that can ask them (LLP 1054.000.000 D2).
     refresh_next: Vec<usize>,
+    /// Resources whose ask in the commit being made is the launch's own,
+    /// replacing a stand-in: nobody asked for fresh data, so the request is
+    /// not sent as a refresh, and a reply fetched for this launch may answer
+    /// it (LLP 1162.000 D1). Set for the boot's settlement, `data_ready`'s
+    /// commit and the re-ask of a wait that carries it; empty otherwise.
+    launch: Vec<usize>,
     /// Sends to mutations that declare `refreshes`, shown over the answers
     /// of the resources they change until they end or are answered.
     writes: writes::Writes,
@@ -850,6 +858,7 @@ impl<D: DataSource> Runner<D> {
             retry_reader: None,
             mutation_requests: 0,
             refresh_next: Vec::new(),
+            launch: Vec::new(),
             writes: writes::Writes::default(),
             reconciling: Vec::new(),
             refused_unsent: Vec::new(),
@@ -996,6 +1005,7 @@ impl<D: DataSource> Runner<D> {
             })
             .collect();
         runner.gate_step()?;
+        runner.launch.clear();
         // No commit's end follows the boot's settlement: what it did here.
         runner.hear_forgotten();
         runner.keep_sent(false);

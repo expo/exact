@@ -178,8 +178,16 @@ pub(super) fn run(
         let outcome = if !valid_name
             || !names.insert(name.clone())
             || definitions.len() + accepted.len() >= 8
-            || !crate::executor::valid_request(&request)
         {
+            Some(PreloadEvent::Refused)
+        } else if url::Url::parse(&request.url).is_err() {
+            Some(PreloadEvent::InvalidUrl)
+        } else if request.headers.iter().any(|(_, value)| {
+            !ibex2::stdlib::fetch::is_valid_value(value)
+                || ibex2::stdlib::fetch::normalize_value(value) != value
+        }) {
+            Some(PreloadEvent::InvalidHeader)
+        } else if !crate::executor::valid_request(&request) {
             Some(PreloadEvent::Refused)
         } else if exact_runner::grants::admitting_request(grants, &request).is_none() {
             Some(PreloadEvent::RefusedGrant)

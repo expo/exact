@@ -18,6 +18,7 @@ const SOURCE: &str = r##"component App
 
 struct Feed {
     ready: bool,
+    overruns: usize,
 }
 
 impl DataSource for Feed {
@@ -26,6 +27,10 @@ impl DataSource for Feed {
     }
 
     fn answer(&mut self, _: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        if self.overruns > 0 {
+            self.overruns -= 1;
+            return Err(DataError::Overrun("turn budget".into()));
+        }
         Ok(Answer::Later(Request::get("https://example.test/feed")))
     }
 
@@ -47,7 +52,10 @@ impl DataSource for Feed {
 fn launch() -> Runner<Feed> {
     let mut r = Runner::boot(
         contract::compile(SOURCE).unwrap(),
-        Feed { ready: false },
+        Feed {
+            ready: false,
+            overruns: 0,
+        },
         Kernel::with_monospace(),
         Default::default(),
         "/",
@@ -81,6 +89,22 @@ fn the_ask_made_when_the_source_becomes_ready_is_not_a_refresh() {
     let first = one_request(&mut r);
     assert!(!first.forced, "the launch's own ask");
     answered(&mut r, first.ticket);
+    r.act("again", vec![]).unwrap();
+    assert!(one_request(&mut r).forced, "the app's refresh");
+}
+
+#[test]
+fn a_launch_ask_over_its_budget_stays_unforced_at_its_reask() {
+    let mut r = launch();
+    r.data().ready = true;
+    r.data().overruns = 1;
+    r.data_ready().unwrap();
+    assert!(r.take_requests().is_empty());
+    let due = r.reask_due_ms().expect("a held re-ask");
+    r.advance(due).unwrap();
+    let request = one_request(&mut r);
+    assert!(!request.forced, "the launch's re-ask");
+    answered(&mut r, request.ticket);
     r.act("again", vec![]).unwrap();
     assert!(one_request(&mut r).forced, "the app's refresh");
 }
@@ -155,4 +179,94 @@ fn a_launch_ask_ending_now_or_failed_does_not_mark_a_later_store_refresh() {
         unforced.is_empty(),
         "unforced store refreshes after launch (failed): {unforced:?}"
     );
+}
+
+#[test]
+fn a_refresh_replaces_a_launch_ask_that_waits_over_its_budget() {
+    let mut r = launch();
+    r.data().ready = true;
+    r.data().overruns = 1;
+    r.data_ready().unwrap();
+    assert!(r.take_requests().is_empty());
+    r.act("again", vec![]).unwrap();
+    assert!(one_request(&mut r).forced, "the app's refresh");
+}
+
+const LIST: &str = r##"component App
+  state names: string[] = ["a"]
+  resource feeds = feed(n) for n in names as shape string
+  action again
+    refresh feeds
+  view
+    text feeds.join(",")
+"##;
+
+fn launch_list() -> Runner<Feed> {
+    let mut r = Runner::boot(
+        contract::compile(LIST).unwrap(),
+        Feed {
+            ready: false,
+            overruns: 0,
+        },
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert!(r.take_requests().is_empty(), "the source is not ready");
+    r.data().ready = true;
+    r.data().overruns = 1;
+    r.data_ready().unwrap();
+    assert!(
+        r.take_requests().is_empty(),
+        "its member is over its budget"
+    );
+    r
+}
+
+#[test]
+fn a_list_members_launch_ask_over_its_budget_stays_unforced_at_its_reask() {
+    let mut r = launch_list();
+    let due = r.reask_due_ms().expect("a held re-ask");
+    r.advance(due).unwrap();
+    assert!(!one_request(&mut r).forced, "the launch's re-ask");
+}
+
+#[test]
+fn refreshing_a_list_refreshes_a_member_whose_launch_ask_waits() {
+    let mut r = launch_list();
+    r.act("again", vec![]).unwrap();
+    assert!(one_request(&mut r).forced, "the app's refresh");
+}
+
+const SENDS: &str = r##"component App
+  resource feed = feed() as shape string
+  mutation saved as shape string
+  action save
+    send saved = save("draft")
+  view
+    text feed
+"##;
+
+#[test]
+fn the_ask_made_with_sends_waiting_for_the_source_is_not_a_refresh() {
+    let mut r = Runner::boot(
+        contract::compile(SENDS).unwrap(),
+        Feed {
+            ready: false,
+            overruns: 0,
+        },
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    r.act("save", vec![]).unwrap();
+    assert!(r.take_requests().is_empty(), "the source is not ready");
+    r.data().ready = true;
+    r.data_ready().unwrap();
+    let requests = r.take_requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    let read = requests.iter().find(|o| o.target == "feed").unwrap();
+    assert!(!read.forced, "the launch's own ask");
 }

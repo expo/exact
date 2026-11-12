@@ -338,6 +338,54 @@ fn plan() -> Vec<u8> {
 }
 
 #[test]
+fn invalid_filled_headers_and_urls_are_named_without_sending_or_exposing_values() {
+    for (value, invalid_url) in [
+        ("ok\nX-Other: yes", false),
+        ("\rvalue", false),
+        ("nul\0byte", false),
+        (" leading", false),
+        ("trailing\t", false),
+        ("secret-value", true),
+    ] {
+        let server = Server::new(1);
+        let mut source = server.source(PreloadWhen::Start, true);
+        if invalid_url {
+            source.definitions = Box::leak(
+                vec![Baked {
+                    url: &[
+                        PreloadPart::Literal("http://["),
+                        PreloadPart::Secret("session"),
+                    ],
+                    headers: &[],
+                    ..source.definitions[0]
+                }]
+                .into_boxed_slice(),
+            );
+        }
+        let launch = fixture();
+        *launch.0.reader.lock().unwrap() = Some(Arc::new(move |_, _, _| {
+            BTreeMap::from([("session".into(), value.into())])
+        }));
+        launch.begin(false, factory(&source));
+        launch.0.set.get().unwrap().control.wait_definitions();
+        let facts = launch.journal();
+        assert_eq!(facts.len(), 1, "{facts:?}");
+        assert_eq!(facts[0].name, "feed");
+        assert_eq!(
+            format!("{:?}", facts[0].outcome),
+            if invalid_url {
+                "InvalidUrl"
+            } else {
+                "InvalidHeader"
+            }
+        );
+        assert!(!format!("{facts:?}").contains(value));
+        assert_eq!(server.count.load(Ordering::Acquire), 0);
+        assert_eq!(launch.mark(0).unwrap().1.handed, 0.);
+    }
+}
+
+#[test]
 fn begin_fetches_without_a_runner_and_ready_content_is_in_the_first_batch() {
     for candidate in [false, true] {
         let server = Server::new(1);

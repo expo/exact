@@ -145,6 +145,35 @@ fn fetch_and_preloads_use_the_same_forbidden_headers() {
 }
 
 #[test]
+fn header_values_must_be_field_values_before_they_are_normalized() {
+    for value in [
+        "ok\nX-Other: yes",
+        "bad\rvalue",
+        "nul\0byte",
+        "\nvalue",
+        "value\r",
+        " leading",
+        "trailing ",
+        "\tleading",
+        "trailing\t",
+        "wide\u{100}",
+        "Bearer {secret:session}\n",
+    ] {
+        let error =
+            entry(json!({"url":"https://api.example", "headers":{"X-Note":value}})).unwrap_err();
+        assert!(error.starts_with("preload.feed.headers.X-Note:"), "{error}");
+    }
+    for value in [
+        "",
+        "has space\tinside",
+        "Bearer {secret:session}",
+        "byte\u{ff}",
+    ] {
+        assert!(entry(json!({"url":"https://api.example", "headers":{"X-Note":value}})).is_ok());
+    }
+}
+
+#[test]
 fn repeated_header_names_are_refused_before_json_can_collapse_them() {
     for headers in [
         r#""Accept":"one","Accept":"two""#,

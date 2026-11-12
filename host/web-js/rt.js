@@ -542,9 +542,9 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
   Object.assign(r, {
     save: () => [r.value, r.settled, r.ticket, r.ticket?.args, r.store, r.failed, r.baked, r.error, r.ticket?.again, r.code, r.origin, r.forced, r.reconciling, r.rev, r.reason, r.inspection && { ...r.inspection }, r.ticket?.generation, r.marks, r.placeholder, pend.n.v, r.asleep, r.slept, r.launch],
     restore: x => { [r.value, r.settled, r.ticket] = x; if (r.ticket) { r.ticket.args = x[3]; r.ticket.again = x[8]; r.ticket.generation = x[16]; } r.store = x[4]; r.failed = x[5]; r.baked = x[6]; r.error = x[7]; r.code = x[9]; r.origin = x[10]; r.forced = x[11]; r.reconciling = x[12]; r.rev = x[13]; r.reason = x[14]; r.inspection = x[15]; r.marks = x[17]; r.placeholder = x[18]; r.asleep = x[20]; r.slept = x[21]; r.launch = x[22]; write(pend.n, x[19]); write(ver.n, ver.n.v + 1); }, // and what it shows is read again, from what was put back
-    force: undo => { r.forced = true; flag(ver, ver.n.v + 1, undo); },
+    force: undo => { r.forced = true; r.launch = false; flag(ver, ver.n.v + 1, undo); },
     touch: undo => flag(ver, ver.n.v + 1, undo), // its writes changed: what it shows is laid over again
-    reconcile: undo => { r.forced = r.reconciling = true; flag(ver, ver.n.v + 1, undo); },
+    reconcile: undo => { r.forced = r.reconciling = true; r.launch = false; flag(ver, ver.n.v + 1, undo); },
     revise: undo => { r.rev = true; flag(ver, ver.n.v + 1, undo); }, giveUp: why => { r.baked = r.forced = r.reconciling = r.launch = false; fails(r.asked ?? [], why, "error"); }, // owed by a refused commit (`commit`)
   });
   onEnd(() => { r.gone = true; }); // its region ended: an open stream closes (`Open`)

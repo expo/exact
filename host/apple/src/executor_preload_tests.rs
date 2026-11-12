@@ -91,6 +91,108 @@ fn launch_reaches_the_server_before_an_executor_and_both_cores_take_it() {
 }
 
 #[test]
+fn a_tool_read_queued_before_its_preload_starts_is_sent_after_the_send() {
+    for asynchronous in [false, true] {
+        for named in [false, true] {
+            let server = Server::new();
+            let sender = Server::new();
+            let grants = format!(
+                "net.fetch http://{}\nnet.fetch http://{}",
+                server.address, sender.address
+            );
+            let (set, _clock) = fresh_clock(&server, Vec::new());
+            let control = set.control();
+            let (core, woke) = server.core_grants(asynchronous, true, &grants);
+            adopt(&core, set);
+            let release = held_plan(&sender, "/send", b"send");
+            let mut send = job(1, sender.request("/send"));
+            send.class = RequestClass::Ordered;
+            send.request.method = "POST".into();
+            core.run(send, None).unwrap();
+            sender.seen(1);
+            let mut tool = job(2, server.request("/foreground"));
+            if named {
+                tool.request = tool.request.preload("foreground").unwrap();
+            }
+            tool.request.reach = exact_runner::local_network::Reach {
+                origin: exact_runner::CallOrigin::Tool,
+                substitute: Some(exact_runner::local_network::State::Unknown),
+            };
+            core.run(tool, None).unwrap();
+            {
+                let state = core.shared.state.lock().unwrap();
+                assert!(state.cache.as_ref().unwrap().preloads.is_empty());
+                assert!(state.jobs[0].iter().any(|j| j.ticket == 2));
+            }
+            server.plan("/foreground", Plan::new(200, &[], b"preload"));
+            control.extend(
+                vec![definition(&server, "/foreground")],
+                &grants,
+                Arc::new(|_, _| {}),
+            );
+            ready(&core, 1);
+            assert_eq!(server.count(), 1);
+            server.plan("/foreground", Plan::new(200, &[], b"sent"));
+            release.send(()).unwrap();
+            assert_eq!(collect(&core, &woke).0, 1);
+            let (ticket, outcome, timing) = collect(&core, &woke);
+            assert_eq!(ticket, 2);
+            assert!(!timing.cached);
+            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"sent"));
+            assert_eq!(server.count(), 2);
+            let (reply, cached) = read(&core, &woke, &server, 3, "/foreground");
+            assert!(cached);
+            assert_eq!(reply.body, b"preload");
+            assert_eq!(server.count(), 2);
+        }
+    }
+}
+
+#[test]
+fn tool_reads_bypass_complete_and_inflight_preloads_without_waiting() {
+    for asynchronous in [false, true] {
+        for named in [false, true] {
+            for pending in [false, true] {
+                let server = Server::new();
+                let release = held_plan(&server, "/held", b"preload");
+                let (set, _clock) = fresh_clock(&server, vec![definition(&server, "/held")]);
+                server.seen(1);
+                let (core, woke) = server.core(asynchronous, true);
+                adopt(&core, set);
+                if !pending {
+                    release.send(()).unwrap();
+                    ready(&core, 1);
+                }
+                server.plan("/held", Plan::new(200, &[], b"sent"));
+                let mut tool = job(1, server.request("/held"));
+                if named {
+                    tool.request = tool.request.preload("held").unwrap();
+                }
+                tool.request.reach.origin = exact_runner::CallOrigin::Tool;
+                let (reply, cached) = ask(&core, &woke, tool);
+                assert!(!cached);
+                assert_eq!(reply.body, b"sent");
+                assert_eq!(server.count(), 2);
+                core.run(job(2, server.request("/held")), None).unwrap();
+                if pending {
+                    {
+                        let state = core.shared.state.lock().unwrap();
+                        assert!(state.jobs[0].iter().any(|j| j.ticket == 2));
+                        assert!(state.running.is_empty());
+                    }
+                    release.send(()).unwrap();
+                }
+                let (ticket, outcome, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 2);
+                assert!(timing.cached);
+                assert!(matches!(outcome, Outcome::Response(r) if r.body == b"preload"));
+                assert_eq!(server.count(), 2);
+            }
+        }
+    }
+}
+
+#[test]
 fn equality_folds_header_names_and_compares_every_body_byte_and_url_for_any_method() {
     for asynchronous in [false, true] {
         for method in ["GET", "POST"] {
@@ -186,15 +288,23 @@ fn a_network_failure_or_a_held_clock_deadline_sends_the_waiting_read() {
 #[test]
 fn sends_forced_asks_streams_and_independent_requests_do_not_take_a_preload() {
     for asynchronous in [false, true] {
-        let server = Server::new();
-        server.plan("/held", Plan::new(200, &[], b"held"));
-        let set = launch(&server, vec![definition(&server, "/held")]);
-        let (core, woke) = server.core(asynchronous, true);
-        adopt(&core, set);
-        ready(&core, 1);
-        for kind in 0..5 {
+        // Each kind meets its own complete reply: a forced ask drops the one it equals.
+        for kind in 0..6 {
+            let server = Server::new();
+            server.plan("/held", Plan::new(200, &[], b"held"));
+            let mut def = definition(&server, "/held");
+            let mut request = server.request("/held");
+            if kind == 5 {
+                // A file-bodied request is no GET; its preload is the equal POST.
+                def.request.method = "POST".into();
+                request.method = "POST".into();
+            }
+            let set = launch(&server, vec![def]);
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            ready(&core, 1);
             server.plan("/held", Plan::new(200, &[], b"sent"));
-            let mut r = job(1, server.request("/held"));
+            let mut r = job(1, request);
             match kind {
                 0 => r.class = RequestClass::Ordered,
                 1 => r.class = RequestClass::Parallel(1),
@@ -204,18 +314,27 @@ fn sends_forced_asks_streams_and_independent_requests_do_not_take_a_preload() {
                         max_response_bytes: 1024,
                     }
                 }
-                _ => {
+                4 => {
                     r.request.stream = true;
                     r.request.http = HttpScheduling::Independent {
                         max_response_bytes: 1024,
                     };
                 }
+                // Its file is missing, so it ends before contact: still not the held reply.
+                _ => r.request = r.request.body_from("app:/data/missing"),
             }
-            core.run(r, None).unwrap();
-            let (_, _, timing) = collect(&core, &woke);
-            assert!(!timing.cached);
+            if core.run(r, None).is_ok() {
+                let (_, outcome, timing) = collect(&core, &woke);
+                assert!(!timing.cached, "kind {kind}");
+                assert!(
+                    !matches!(&outcome, Outcome::Response(r) if r.body == b"held"),
+                    "kind {kind}"
+                );
+            } else {
+                assert_eq!(kind, 5);
+            }
+            assert_eq!(server.count(), if kind == 5 { 1 } else { 2 }, "kind {kind}");
         }
-        assert_eq!(server.count(), 6);
     }
 }
 
@@ -355,7 +474,7 @@ fn only_the_first_eight_definitions_start_and_bodies_and_replies_have_bounds() {
     );
     drop(set);
 
-    for body in [false, true] {
+    for (asynchronous, body) in [(false, false), (false, true), (true, false), (true, true)] {
         let mut def = definition(&server, "/large");
         if body {
             def.request.body = vec![0; MAX_BODY_BYTES + 1];
@@ -367,14 +486,14 @@ fn only_the_first_eight_definitions_start_and_bodies_and_replies_have_bounds() {
         }
         let set = launch(&server, vec![def]);
         complete_set(&set);
-        let (core, woke) = server.core(false, true);
+        let (core, woke) = server.core(asynchronous, true);
         adopt(&core, set);
         server.plan("/large", Plan::new(200, &[], b"sent"));
         let (reply, cached) = read(&core, &woke, &server, 1, "/large");
         assert!(!cached);
         assert_eq!(reply.body, b"sent");
     }
-    assert_eq!(server.count(), 11);
+    assert_eq!(server.count(), 14);
 }
 
 #[test]
@@ -457,14 +576,14 @@ fn exited(location: &Location) {
 }
 #[test]
 fn dropping_a_set_or_its_adopting_executor_retires_every_launch_thread() {
-    for adopted in [false, true] {
+    for adopted in [None, Some(false), Some(true)] {
         let server = Server::new();
         let release = held_plan(&server, "/pending", b"cancelled");
         let set = launch(&server, vec![definition(&server, "/pending")]);
         server.seen(1);
         let location = set.destination.clone();
-        if adopted {
-            let (core, _) = server.core(true, true);
+        if let Some(asynchronous) = adopted {
+            let (core, _) = server.core(asynchronous, true);
             adopt(&core, set);
             let shared = core.shared.clone();
             drop(core);
@@ -682,58 +801,63 @@ fn a_waiting_preload_read_keeps_room_for_its_reply_or_its_network_fallback() {
 #[test]
 fn a_redirected_reply_checks_every_hops_scope_before_boot_and_queued_adoption() {
     for asynchronous in [false, true] {
-        for pending in [false, true] {
-            let first = Server::new();
-            let middle = Server::new();
-            let grants = format!(
-                "net.fetch http://{}\nnet.fetch http://{}",
-                first.address, middle.address
-            );
-            let target = middle.request("/middle").url;
-            for _ in 0..2 {
-                first.plan("/start", Plan::new(302, &[("Location", &target)], b""));
-            }
-            let target = first.request("/final").url;
-            middle.plan("/middle", Plan::new(302, &[("Location", &target)], b""));
-            let release = held_plan(&first, "/final", b"visited middle");
-            let set = Preloads::start(
-                vec![definition(&first, "/start")],
-                &grants,
-                ibex2::host::Host::new,
-            );
-            first.seen(2);
-            let mut scoped = first.request("/start");
-            scoped.grants = Some(format!("net.fetch http://{}", first.address));
-            let restricted = job(1, scoped);
-            if !pending {
-                release.send(()).unwrap();
-                complete_set(&set);
-                assert!(set.control().settle(&restricted).is_none());
-            }
-            let (core, woke) = first.core_grants(asynchronous, true, &grants);
-            adopt(&core, set);
-            if !pending {
-                assert!(core.settle_preload(&restricted).is_none());
-            }
-            core.run(restricted, None).unwrap();
-            if pending {
-                release.send(()).unwrap();
-            }
-            let (_, outcome, timing) = collect(&core, &woke);
-            assert!(!timing.cached);
-            assert!(matches!(
-                outcome,
-                Outcome::Failed {
-                    kind: FailureKind::Refused,
-                    ..
+        for named in [false, true] {
+            for pending in [false, true] {
+                let first = Server::new();
+                let middle = Server::new();
+                let grants = format!(
+                    "net.fetch http://{}\nnet.fetch http://{}",
+                    first.address, middle.address
+                );
+                let target = middle.request("/middle").url;
+                for _ in 0..2 {
+                    first.plan("/start", Plan::new(302, &[("Location", &target)], b""));
                 }
-            ));
-            assert_eq!(first.count(), 3);
-            assert_eq!(middle.count(), 1);
-            let (reply, cached) = read(&core, &woke, &first, 2, "/start");
-            assert!(cached);
-            assert_eq!(reply.body, b"visited middle");
-            assert_eq!(first.count(), 3);
+                let target = first.request("/final").url;
+                middle.plan("/middle", Plan::new(302, &[("Location", &target)], b""));
+                let release = held_plan(&first, "/final", b"visited middle");
+                let set = Preloads::start(
+                    vec![definition(&first, "/start")],
+                    &grants,
+                    ibex2::host::Host::new,
+                );
+                first.seen(2);
+                let mut scoped = first.request("/start");
+                scoped.grants = Some(format!("net.fetch http://{}", first.address));
+                if named {
+                    scoped = scoped.header("X-Trace", "new").preload("start").unwrap();
+                }
+                let restricted = job(1, scoped);
+                if !pending {
+                    release.send(()).unwrap();
+                    complete_set(&set);
+                    assert!(set.control().settle(&restricted).is_none());
+                }
+                let (core, woke) = first.core_grants(asynchronous, true, &grants);
+                adopt(&core, set);
+                if !pending {
+                    assert!(core.settle_preload(&restricted).is_none());
+                }
+                core.run(restricted, None).unwrap();
+                if pending {
+                    release.send(()).unwrap();
+                }
+                let (_, outcome, timing) = collect(&core, &woke);
+                assert!(!timing.cached);
+                assert!(matches!(
+                    outcome,
+                    Outcome::Failed {
+                        kind: FailureKind::Refused,
+                        ..
+                    }
+                ));
+                assert_eq!(first.count(), 3);
+                assert_eq!(middle.count(), 1);
+                let (reply, cached) = read(&core, &woke, &first, 2, "/start");
+                assert!(cached);
+                assert_eq!(reply.body, b"visited middle");
+                assert_eq!(first.count(), 3);
+            }
         }
     }
 }
@@ -1048,6 +1172,106 @@ fn definitions_arriving_after_the_wait_bound_still_hold_their_replies() {
 }
 
 #[test]
+fn held_request_allocations_are_charged_and_released_when_the_hold_ends() {
+    for asynchronous in [false, true] {
+        for expired in [false, true] {
+            let server = Server::new();
+            server.plan(
+                "/retained",
+                Plan::new(200, &[("Cache-Control", "max-age=60")], b"held"),
+            );
+            let mut def = definition(&server, "/retained");
+            let mut value = String::with_capacity(3 << 20);
+            value.push('x');
+            def.request.headers.push(("X-Note".into(), value));
+            def.secrets.push("session".into());
+            let request = def.request.clone();
+            let (set, clock) = fresh_clock(&server, vec![def]);
+            complete_set(&set);
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            let (bytes, ready) = {
+                let state = core.shared.state.lock().unwrap();
+                let cache = state.cache.as_ref().unwrap();
+                (cache.bytes, cache.preloads[0].used().is_some())
+            };
+            assert!(ready);
+            assert!(
+                bytes >= 3 << 20,
+                "request header capacity was not charged: {bytes}"
+            );
+            if expired {
+                *clock.lock().unwrap() += HOLD;
+                let mut state = core.shared.state.lock().unwrap();
+                expire(state.cache.as_mut().unwrap());
+            } else {
+                core.drop_preload_secret("session");
+            }
+            let (gone, request_dropped, answered, headers, url, bytes) = {
+                let state = core.shared.state.lock().unwrap();
+                let cache = state.cache.as_ref().unwrap();
+                let held = &cache.preloads[0];
+                (
+                    matches!(held.reply, ReplyState::Gone),
+                    held.request.is_none(),
+                    held.answered_at.is_none(),
+                    held.key.headers.capacity(),
+                    held.key.url.capacity(),
+                    cache.bytes,
+                )
+            };
+            assert!(gone && request_dropped && answered);
+            assert_eq!((headers, url), (0, 0));
+            assert!(bytes < 4096, "ended hold retained its charge");
+            if expired {
+                assert!(
+                    ask(&core, &woke, job(1, request.clone())).1,
+                    "HTTP freshness survives the hold"
+                );
+                core.drop_preload_secret("session");
+            }
+            server.plan("/retained", Plan::new(200, &[], b"sent"));
+            assert!(
+                !ask(&core, &woke, job(2, request)).1,
+                "secret writes still invalidate the HTTP copy"
+            );
+            let facts = core.take_preload_journal();
+            assert!(facts
+                .iter()
+                .all(|f| f.name == "retained" && f.origin == format!("http://{}", server.address)));
+        }
+    }
+}
+
+#[test]
+fn equal_preloads_keep_every_secrets_invalidation_after_their_holds_expire() {
+    for asynchronous in [false, true] {
+        for secret in ["first", "second"] {
+            let server = Server::new();
+            let definitions = ["first", "second"].map(|name| {
+                server.plan(
+                    "/equal",
+                    Plan::new(200, &[("Cache-Control", "max-age=60")], b"held"),
+                );
+                let mut def = definition(&server, "/equal");
+                def.name = name.into();
+                def.secrets.push(name.into());
+                def
+            });
+            let (set, clock) = fresh_clock(&server, definitions.into());
+            complete_set(&set);
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            *clock.lock().unwrap() += HOLD;
+            assert!(read(&core, &woke, &server, 1, "/equal").1);
+            core.drop_preload_secret(secret);
+            server.plan("/equal", Plan::new(200, &[], b"sent"));
+            assert!(!read(&core, &woke, &server, 2, "/equal").1);
+        }
+    }
+}
+
+#[test]
 fn a_read_keeps_its_definition_wait_when_rust_launch_begins() {
     for asynchronous in [false, true] {
         let server = Server::new();
@@ -1163,134 +1387,5 @@ fn preloads_are_speculative_on_every_hop_and_a_context_fetch_is_not() {
     assert!(seen.try_recv().is_err());
 }
 
-#[test]
-fn a_named_read_takes_different_headers_and_body_ready_or_inflight() {
-    for asynchronous in [false, true] {
-        for pending in [false, true] {
-            let server = Server::new();
-            let release = held_plan(&server, "/feed", b"preloaded");
-            let mut def = definition(&server, "/feed");
-            def.request = Request::post_json(&def.request.url, "old").header("X-Trace", "old");
-            let request = Request::post_json(&def.request.url, "new")
-                .header("X-Trace", "new")
-                .preload("feed")
-                .unwrap();
-            let set = launch(&server, vec![def]);
-            server.seen(1);
-            if !pending {
-                release.send(()).unwrap();
-                complete_set(&set);
-            }
-            let (core, woke) = server.core(asynchronous, true);
-            adopt(&core, set);
-            core.run(job(1, request), None).unwrap();
-            if pending {
-                let state = core.shared.state.lock().unwrap();
-                assert!(state.running.is_empty());
-                assert!(state.completed[0].is_empty());
-                drop(state);
-                release.send(()).unwrap();
-            }
-            let (_, outcome, timing) = collect(&core, &woke);
-            assert!(timing.cached);
-            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"preloaded"));
-            assert_eq!(server.count(), 1);
-        }
-    }
-}
-
-#[test]
-fn a_name_does_not_override_method_or_url_and_a_missing_name_uses_equality() {
-    for asynchronous in [false, true] {
-        for difference in 0..3 {
-            let server = Server::new();
-            server.plan("/feed", Plan::new(200, &[], b"preloaded"));
-            let mut def = definition(&server, "/feed");
-            def.request.method = "POST".into();
-            let mut request = def.request.clone().preload("feed").unwrap();
-            match difference {
-                0 => request.url.push_str("?other"),
-                1 => request.method = "PUT".into(),
-                _ => request.preload = Some("missing".into()),
-            }
-            let set = launch(&server, vec![def]);
-            complete_set(&set);
-            let (core, woke) = server.core(asynchronous, true);
-            adopt(&core, set);
-            if difference < 2 {
-                server.plan(
-                    if difference == 0 {
-                        "/feed?other"
-                    } else {
-                        "/feed"
-                    },
-                    Plan::new(200, &[], b"sent"),
-                );
-            }
-            let (reply, cached) = ask(&core, &woke, job(1, request));
-            assert_eq!(cached, difference == 2);
-            assert_eq!(
-                reply.body,
-                if cached {
-                    b"preloaded".as_slice()
-                } else {
-                    b"sent".as_slice()
-                }
-            );
-            assert_eq!(server.count(), if cached { 1 } else { 2 });
-        }
-    }
-}
-
-#[test]
-fn a_selected_update_disables_names_before_boot_and_after_adoption_but_keeps_equality() {
-    for asynchronous in [false, true] {
-        for pending in [false, true] {
-            let server = Server::new();
-            let release = held_plan(&server, "/feed", b"preloaded");
-            let def = definition(&server, "/feed");
-            let equal = def.request.clone().preload("feed").unwrap();
-            let different = equal.clone().header("X-Trace", "new");
-            let set = launch(&server, vec![def]);
-            let control = set.control();
-            control.select_update();
-            server.seen(1);
-            if !pending {
-                release.send(()).unwrap();
-                complete_set(&set);
-                assert!(control.settle(&job(1, different.clone())).is_none());
-                assert!(control.settle(&job(1, equal.clone())).unwrap().1.cached);
-            }
-            let (core, woke) = server.core(asynchronous, true);
-            adopt(&core, set);
-            assert!(core.settle_preload(&job(1, different.clone())).is_none());
-            server.plan("/feed", Plan::new(200, &[], b"sent"));
-            let (reply, cached) = ask(&core, &woke, job(1, different));
-            assert!(!cached);
-            assert_eq!(reply.body, b"sent");
-            core.run(job(2, equal), None).unwrap();
-            if pending {
-                release.send(()).unwrap();
-            }
-            let (_, outcome, timing) = collect(&core, &woke);
-            assert!(timing.cached);
-            assert!(matches!(outcome, Outcome::Response(r) if r.body == b"preloaded"));
-            assert_eq!(server.count(), 2);
-        }
-    }
-}
-
-#[test]
-fn an_invalid_rust_preload_name_is_refused_before_contact() {
-    for asynchronous in [false, true] {
-        let server = Server::new();
-        let (core, _) = server.core(asynchronous, true);
-        let mut request = server.request("/never");
-        request.preload = Some("Bad".into());
-        assert_eq!(
-            core.run(job(1, request), None),
-            Err("exactPreload must match ^[a-z][a-z0-9-]*$")
-        );
-        assert_eq!(server.count(), 0);
-    }
-}
+#[path = "executor_preload_named_tests.rs"]
+mod named;
