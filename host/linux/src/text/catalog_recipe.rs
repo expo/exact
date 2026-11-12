@@ -53,7 +53,7 @@ impl CatalogSnapshot {
     }
     pub(super) fn prepare(mut self) -> Result<Arc<Recipe>, TransferError> {
         let label = NEXT_CATALOG
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| TransferError::CatalogExhausted)?;
         let names = super::fonts::family_names(&mut self.collection);
         let faces = names

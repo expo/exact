@@ -524,7 +524,7 @@ impl ChildCtl {
     /// The child took `bytes` of its stdin queue.
     pub(crate) fn consumed(&self, bytes: u64) {
         if bytes > 0 {
-            let _ = (self.queued).fetch_update(Ordering::AcqRel, Ordering::Acquire, |q| {
+            let _ = (self.queued).try_update(Ordering::AcqRel, Ordering::Acquire, |q| {
                 Some(q.saturating_sub(bytes))
             });
         }

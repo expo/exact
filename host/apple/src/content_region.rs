@@ -29,7 +29,7 @@ pub struct ContentRegionRegistration {
 static SERIAL: AtomicU64 = AtomicU64::new(0);
 pub(crate) fn serial() -> Result<u64, String> {
     SERIAL
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
         .map(|n| n + 1)
         .map_err(|_| "region serial exhausted".into())
 }

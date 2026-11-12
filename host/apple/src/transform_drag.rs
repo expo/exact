@@ -64,7 +64,7 @@ impl TransformDrags {
     }
     pub fn new() -> Result<Self, HostError> {
         let runtime = NEXT_RUNTIME
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| HostError::RuntimeIdExhausted)?;
         Ok(Self {
             runtime,

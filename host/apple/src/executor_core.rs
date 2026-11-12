@@ -343,7 +343,7 @@ impl Core {
         };
         let reserve = || {
             LIVE_WORKERS
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                     (n + count <= MAX_WORKERS).then_some(n + count)
                 })
                 .is_ok()

@@ -32,7 +32,7 @@ struct Signals {
 #[allow(unsafe_code)]
 extern "C" fn received(signal: libc::c_int) {
     if SIGNAL
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |pending| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |pending| {
             // Termination takes precedence over a pending suspend.
             (pending == 0 || pending == libc::SIGTSTP).then_some(signal)
         })

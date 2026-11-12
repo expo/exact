@@ -186,8 +186,7 @@ pub fn prepare(
             (prefix[utf16[range.end]] - prefix[utf16[range.start]]) as f32
         },
     );
-    let Ok(id) = NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
-    else {
+    let Ok(id) = NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1)) else {
         return 0;
     };
     with_sources(|sources| {
