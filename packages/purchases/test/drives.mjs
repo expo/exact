@@ -8,7 +8,7 @@
 //   Build first: `bun host/apple/build.mjs weatherlight-apple` (macOS), `--ios --sim <name>` (iOS), or
 //   `bun host/web/build.mjs weatherlight` (web).
 import { resolve } from 'node:path';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { answer as weatherAnswer } from '../../../host/web-js/conformance/net.mjs';
 import { bakeTool } from '../../../scripts/linked-plan.mjs';
 import { checker } from '../../camera/test/fixture.mjs';
@@ -62,9 +62,11 @@ async function forecastFixture() {
     }
     writeFileSync(resolve(source, 'app.ts'), readFileSync(resolve(root, 'apps/weatherlight/app.ts'), 'utf8') + '\n' + fetch);
     const baked = resolve(scratch, 'baked');
-    // An Apple build bakes with appleBakeTool, so nothing else keeps this binary built.
-    const tool = Bun.spawnSync([bakeTool.command, ...bakeTool.args], { ...bakeTool.options(), stdout: 'inherit', stderr: 'inherit' });
-    if (tool.exitCode !== 0) throw new Error(`the bake tool did not build (${bakeTool.command} ${bakeTool.args.join(' ')})`);
+    // An Apple build bakes with appleBakeTool and no longer builds this binary: build it when it is missing.
+    if (!existsSync(bakeTool.built)) {
+      const tool = Bun.spawnSync([bakeTool.command, ...bakeTool.args], { ...bakeTool.options(), stdout: 'inherit', stderr: 'inherit' });
+      if (tool.exitCode !== 0) throw new Error(`the bake tool did not build (${bakeTool.command} ${bakeTool.args.join(' ')})`);
+    }
     const child = Bun.spawn([bakeTool.built, source, '--out', baked],
       { cwd: root, stdout: 'ignore', stderr: 'pipe' });
     const error = await new Response(child.stderr).text();
