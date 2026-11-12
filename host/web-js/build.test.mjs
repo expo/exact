@@ -285,15 +285,15 @@ test.each([
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 1024, bytes = [];
   const u32 = n => bytes.push(n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255);
   const string = s => { const b = new TextEncoder().encode(s); u32(b.length); bytes.push(...b); };
-  u32(9); bytes.push(0); string('test.grants'); string(grants);
+  u32(10); bytes.push(0); string('test.grants'); string(grants);
   new Uint8Array(memory.buffer, out, bytes.length).set(bytes);
   const output = mock(() => out);
-  let abi = 9;
+  let abi = 10;
   const instantiate = spyOn(WebAssembly, 'instantiate').mockResolvedValue({ instance: { exports: {
     memory, exact_logic_abi: () => abi, exact_logic_create: () => 1, exact_logic_alloc: () => 0,
     exact_logic_call(_session, pointer, length) {
       const request = new DataView(memory.buffer, pointer, length);
-      return length === 5 && request.getUint32(0, true) === 9 && request.getUint8(4) === 0 ? 0 : 1;
+      return length === 5 && request.getUint32(0, true) === 10 && request.getUint8(4) === 0 ? 0 : 1;
     },
     exact_logic_output: output, exact_logic_output_len: () => bytes.length,
   } } });
@@ -302,7 +302,7 @@ test.each([
     expect(output).toHaveBeenCalledTimes(1);
     expect(actual).toBe(grants);
     abi = 8;
-    await expect(moduleGrants(path)).rejects.toThrow('Rust module ABI 8 is not 9');
+    await expect(moduleGrants(path)).rejects.toThrow('Rust module ABI 8 is not 10');
   } finally {
     instantiate.mockRestore();
     rmSync(dir, { recursive: true, force: true });

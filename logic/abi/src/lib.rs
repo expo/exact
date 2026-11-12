@@ -14,7 +14,7 @@ use exact_runner::{
 pub mod draw;
 
 /// Seam version, independent of the plan format version.
-pub const ABI: u32 = 9;
+pub const ABI: u32 = 10;
 /// Maximum request or response bytes, enforced on both sides.
 pub const MAX_MESSAGE: usize = exact_runner::MAX_HOST_WORK_BYTES;
 
@@ -416,6 +416,10 @@ fn read_outcome(r: &mut Reader<'_>) -> Result<Outcome, String> {
 }
 fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
     match result {
+        Ok(Answer::Later(r)) if r.prefetch_refusal().is_some() => encode_result(
+            w,
+            Err(DataError::Unavailable(r.prefetch_refusal().unwrap().into())),
+        ),
         Ok(Answer::Later(r)) if r.preload_refusal().is_some() => encode_result(
             w,
             Err(DataError::Unavailable(r.preload_refusal().unwrap().into())),
@@ -551,6 +555,10 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
             // A stream (tag 9) is always independent (LLP 1016.000); a long
             // poll (tag 10, D8) is a stream with its terms after the body; a
             // two-way socket (tag 11, LLP 1016.003) is a stream.
+            // Prefetch wraps the HTTP result and its other markers (LLP 1162.000 D5).
+            if r.prefetch {
+                w.u8(14);
+            }
             if let Some(name) = &r.preload {
                 w.u8(13);
                 w.string(name);
@@ -622,6 +630,13 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
 }
 fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> {
     let mut tag = r.u8().map_err(error)?;
+    let prefetch = tag == 14;
+    if prefetch {
+        tag = r.u8().map_err(error)?;
+        if !matches!(tag, 1 | 12 | 13) {
+            return Err("invalid prefetch HTTP result tag".into());
+        }
+    }
     let preload = if tag == 13 {
         let name = r.string().map_err(error)?;
         tag = r.u8().map_err(error)?;
@@ -688,6 +703,15 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
             return Err(why.into());
         }
     }
+    if prefetch {
+        let Ok(Answer::Later(request)) = &mut answer else {
+            return Err("invalid prefetch HTTP result".into());
+        };
+        request.prefetch = true;
+        if let Some(why) = request.prefetch_refusal() {
+            return Err(why.into());
+        }
+    }
     Ok(answer)
 }
 
@@ -708,6 +732,7 @@ fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
         redirect: Redirect::Follow,
         cache: Default::default(),
         preload: None,
+        prefetch: false,
         held: false,
         reach: Default::default(),
         listen: None,

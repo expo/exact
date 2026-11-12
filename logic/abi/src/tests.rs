@@ -776,9 +776,9 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
 
 #[test]
 fn cache_modes_cross_the_rust_module_seam() {
-    assert_eq!(ABI, 9);
+    assert_eq!(ABI, 10);
     let mut old = header(0).into_vec();
-    old[..4].copy_from_slice(&8u32.to_le_bytes());
+    old[..4].copy_from_slice(&9u32.to_le_bytes());
     assert!(matches!(reader(&old), Err(e) if e == "logic ABI version differs"));
     for word in [
         "unspecified",
@@ -902,5 +902,42 @@ fn preload_names_cross_the_rust_module_seam_with_or_without_cache() {
             encoded.u32(0);
         }
         assert!(read_result(&mut Reader::new(&encoded.into_vec())).is_err());
+    }
+}
+
+#[test]
+fn prefetch_crosses_the_rust_module_seam_beside_cache_and_preload() {
+    for cached in [false, true] {
+        for named in [false, true] {
+            let mut request = Request::post_json("https://example.test/feed", "query").prefetch();
+            if cached {
+                request.cache = CacheMode::ForceCache;
+            }
+            if named {
+                request = request.preload("feed").unwrap();
+            }
+            let mut encoded = Writer::default();
+            encode_result(&mut encoded, Ok(Answer::Later(request.clone())));
+            let bytes = encoded.into_vec();
+            assert_eq!(bytes[0], 14);
+            let mut reader = Reader::new(&bytes);
+            assert_eq!(
+                read_result(&mut reader).unwrap(),
+                Ok(Answer::Later(request))
+            );
+            end(&reader).unwrap();
+        }
+    }
+    let mut request = Request::get("https://example.test").prefetch();
+    request.stream = true;
+    let mut encoded = Writer::default();
+    encode_result(&mut encoded, Ok(Answer::Later(request)));
+    assert!(
+        matches!(read_result(&mut Reader::new(&encoded.into_vec())).unwrap(),
+        Err(DataError::Unavailable(why)) if why.contains("exactPrefetch"))
+    );
+    for tag in [0, 5, 6, 9, 10, 11, 14] {
+        let bytes = [14, tag];
+        assert!(read_result(&mut Reader::new(&bytes)).is_err());
     }
 }

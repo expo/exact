@@ -200,3 +200,17 @@ fn preload_names_follow_the_manifest_grammar() {
         assert!(Request::get("https://example.test").preload(name).is_err());
     }
 }
+
+#[test]
+fn prefetch_is_part_of_equality_and_only_plain_http_takes_it() {
+    let request = Request::get("https://example.test");
+    assert_ne!(request, request.clone().prefetch());
+    assert!(request.clone().prefetch().prefetch_refusal().is_none());
+    for request in [
+        request.clone().body_to("app:/data/a"),
+        Request::post_json("https://example.test", "").body_from("app:/data/a"),
+        request.independent_http(1024),
+    ] {
+        assert!(request.prefetch().prefetch_refusal().is_some());
+    }
+}

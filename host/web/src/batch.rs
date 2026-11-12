@@ -38,7 +38,9 @@ pub(crate) fn request_refusal(request: &exact_runner::Request) -> Option<&'stati
     if request.idle_timeout_ms.is_some() {
         return Some("an idle timeout is unavailable on the web's wasm host");
     }
-    (request.preload_refusal())
+    request
+        .prefetch_refusal()
+        .or(request.preload_refusal())
         .or(request.ceiling_refusal())
         .or(request.timeout_refusal())
         .or(request.protocols_refusal())
@@ -576,7 +578,10 @@ impl Batch {
             self.refuse(r.ticket, &message);
             return;
         }
-        if let Some(message) = request_refusal(&r.request) {
+        if let Some(message) = (r.request.prefetch && r.class != exact_runner::RequestClass::Read)
+            .then_some("exactPrefetch requires a plain HTTP read")
+            .or(request_refusal(&r.request))
+        {
             self.refuse(r.ticket, message);
             return;
         } else if let Some(work) = r.request.surface.as_deref() {

@@ -95,6 +95,8 @@ pub(super) struct Cache {
     retired: Vec<Arc<Entry>>,
     pub(super) bytes: usize,
     pub(super) preloads: Vec<super::preload::Held>,
+    pub(super) prefetches: Vec<super::preload::Held>,
+    pub(super) prefetch_aborts: Vec<AbortController>,
     pub(super) journal: Vec<super::preload::Fact>,
     pub(super) clock: Arc<dyn Fn() -> Instant + Send + Sync>,
     tick: usize,
@@ -110,6 +112,8 @@ impl Cache {
             retired: Vec::new(),
             bytes: 0,
             preloads: Vec::new(),
+            prefetches: Vec::new(),
+            prefetch_aborts: Vec::new(),
             journal: Vec::new(),
             clock: Arc::new(Instant::now),
             tick: 0,
@@ -165,8 +169,7 @@ impl Cache {
         self.collect();
         while bytes > CAPACITY.saturating_sub(self.bytes) {
             let held = self
-                .preloads
-                .iter()
+                .holds()
                 .enumerate()
                 .filter_map(|(i, p)| p.used().map(|used| (i, used)))
                 .min_by_key(|(_, used)| *used);
@@ -253,6 +256,7 @@ pub(super) fn granted_url(grants: &str, request: &Request, url: &str) -> Result<
 
 /// Hits settle without a worker, behind earlier non-reads (LLP 1162 D1, D4).
 pub(super) fn serve_ready(state: &mut State) {
+    super::preload::prefetch::dispose(state);
     super::preload::serve_ready(state);
     if !super::preload::reserve_front(state) {
         return;
@@ -336,7 +340,15 @@ pub(super) fn serve_ready(state: &mut State) {
         if cached {
             cache.find(&key);
         }
-        let job = state.jobs[0].remove(index).expect("cache job");
+        let mut job = state.jobs[0].remove(index).expect("cache job");
+        super::preload::prefetch::start(state, &mut job, &AbortController::new());
+        super::preload::prefetch::completed(state, job.ticket);
+        super::preload::prefetch::finish(state, job.ticket, &outcome);
+        if job.forgotten {
+            state.counts[0] -= 1;
+            state.bytes[0] -= job.charge;
+            continue;
+        }
         state.bytes[0] = state.bytes[0] - job.charge + bytes;
         state.light += 1;
         state.completed[0].push_back(Completed {
@@ -722,7 +734,8 @@ pub(super) fn identity(value: &str) -> String {
 }
 
 pub(super) fn invalidates(request: &Request, synthetic: bool) -> Option<(String, bool)> {
-    unsafe_method(&request.method).then(|| (identity(&request.url), synthetic))
+    (!request.prefetch && unsafe_method(&request.method))
+        .then(|| (identity(&request.url), synthetic))
 }
 fn unsafe_method(method: &str) -> bool {
     !["GET", "HEAD", "OPTIONS", "TRACE"]
@@ -797,12 +810,10 @@ pub(super) fn observe(shared: &Arc<Shared>, request: &mut ibex2::stdlib::fetch::
         move |method, url, status, headers| {
             if unsafe_method(method) {
                 if let Some(shared) = shared.upgrade() {
-                    invalidate_head(
-                        &mut shared.state.lock().unwrap(),
-                        url,
-                        status,
-                        headers.entries(),
-                    );
+                    let mut state = shared.state.lock().unwrap();
+                    invalidate_head(&mut state, url, status, headers.entries());
+                    super::preload::prefetch::dispose(&mut state);
+                    rouse(&shared, &state);
                     #[cfg(test)]
                     shared.ready.notify_all();
                 }

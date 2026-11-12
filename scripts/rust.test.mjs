@@ -33,7 +33,7 @@ test('one produced Rust pair becomes exact platform assets and requirements', ()
   const app={id:'com.exact.test'}, plan=Buffer.from('plan'), bytes=Buffer.from('module');
   const compat={target:'aarch64-apple-ios',inputs:{rustMode:'wasm',grantCeiling:'fs:notes',rustGrants:'fs:notes'}};
   const receipt=rustReceipt(app,compat,plan,bytes,'wasm32-unknown-unknown','wasm');
-  assert.equal(receipt.abi,9);
+  assert.equal(receipt.abi,10);
   const produced={plan,variants:{wasm:{receipt,bytes}}};
   const cards=rustCards(rustFiles(produced));
   assert.equal(cards.wasm.module.sha256,receipt.module.sha256);
@@ -43,7 +43,7 @@ test('one produced Rust pair becomes exact platform assets and requirements', ()
   base.platforms.ios=result.bundle;
   assert.doesNotThrow(()=>JSON.stringify(base));
   assert.deepEqual(result.bundle.assets.map(a=>a.name),['rust/app.module.json','rust/app.module.wasm']);
-  assert.deepEqual(result.build.graph.artifacts[0].requires,{plan:1,rustMode:'wasm',rustAbi:9,rustTarget:'wasm32-unknown-unknown',grantCeiling:'fs:notes',rustGrants:'fs:notes'});
+  assert.deepEqual(result.build.graph.artifacts[0].requires,{plan:1,rustMode:'wasm',rustAbi:10,rustTarget:'wasm32-unknown-unknown',grantCeiling:'fs:notes',rustGrants:'fs:notes'});
   assert.equal(result.build.graph.artifacts[2].sha256,receipt.module.sha256);
   const off=rustBundle(app,base,{...build,compat:{...compat,inputs:{rustMode:'off'}}},produced);
   assert.deepEqual(off.bundle.assets,[]);

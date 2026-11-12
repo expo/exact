@@ -817,6 +817,8 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
     };
     let run = state.running.swap_remove(at);
     let outcome = bounded_outcome(outcome, run.limit);
+    preload::prefetch::completed(&mut state, ticket);
+    preload::prefetch::finish(&mut state, ticket, &outcome);
     cache::invalidate(&mut state, run.invalidates.as_ref(), &outcome);
     let lane = run.lane;
     // A completion frees ordered bytes a waiting job may need.
@@ -1247,8 +1249,13 @@ fn execute(
     {
         return outcome;
     }
+    let prefetch = request.prefetch;
     let mut req = fetch_request(request, forced);
-    cache::observe(cache_job.0, &mut req);
+    if prefetch {
+        preload::prefetch::observe(cache_job.0, cache_job.1, &mut req);
+    } else {
+        cache::observe(cache_job.0, &mut req);
+    }
     req.max_body = Some(limit);
     // The platform's idle timeout (URLSession's, 60 s by default) follows
     // the deadline a second later: it never ends a request before the

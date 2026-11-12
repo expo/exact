@@ -1,13 +1,13 @@
 import { admitsSecret, createRequestExecutor, fetchHostAsset, sameGrantDeclaration, setAppGrantSet } from './admission.js';
 import { rustGrantSet, tsGrantSet } from './admission-data.js';
 import { boundedHttpBody, longPollRefusal, streamed } from './http-body.js';
-// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 9,
+// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 10,
 // `logic/abi/src/lib.rs`): the app's importless module wasm and its plan's
 // declarations (`app.bind.plan`, the plan without the bake's answers),
 // fetched after first pixel; once bound and activated, every answer is a
 // synchronous call, as the runner's `DataSource::answer` is. Until then the
 // runtime keeps each resource's compiled value and asks again at `ready`.
-const ABI = 9, utf8 = new TextEncoder(), text = new TextDecoder();
+const ABI = 10, utf8 = new TextEncoder(), text = new TextDecoder();
 
 function writer() {
   let buf = new Uint8Array(256), at = 0;
@@ -90,6 +90,8 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   // A result (`read_result`): now, or an HTTP request for the host to run.
   const result = r => {
     let tag = r.u8(), cache;
+    const prefetch = tag === 14;
+    if (prefetch) { tag = r.u8(); if (![1, 12, 13].includes(tag)) throw new Error('invalid prefetch HTTP result'); }
     if (tag === 13) {
       const name = r.str(); tag = r.u8();
       if (!/^[a-z][a-z0-9-]*$/.test(name) || ![1, 6, 9, 10, 11, 12].includes(tag)) throw new Error('invalid preload HTTP result');
@@ -107,6 +109,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     // A two-way socket (tag 11, LLP 1016.003): the web carries no Rust socket yet.
     if (tag === 11) throw new Error("a Rust source's two-way socket is not carried on the web yet");
     if (tag === 1 || tag === 6 || tag === 9 || tag === 10) {
+      if (prefetch && tag !== 1) throw new Error('exactPrefetch requires a plain HTTP read');
       const http = tag === 1 ? 'ordered' : `independent:${r.u32()}`;
       const scoped = r.u8() === 1, scope = r.str();
       const method = r.str(), url = r.str(), headers = [];
@@ -119,7 +122,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       // (refused as the native seam refuses it: before the turn's writes apply)
       const pollRefusal = longPoll && longPollRefusal({ url, longPoll, stream: true }, method, n ? 'x' : '');
       if (pollRefusal) throw new Error(pollRefusal);
-      return { req: { method, url, headers, cache, body: text.decode(body), raw: body, http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, protocols, longPoll } };
+      return { req: { method, url, headers, cache, ...(prefetch ? { prefetch: true } : {}), body: text.decode(body), raw: body, http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, protocols, longPoll } };
     }
     // Storage work (LLP 1027.001 D2): a portable request the host runs
     // through the web host's own `storage-request.js`, under its scope.

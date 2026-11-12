@@ -123,3 +123,79 @@ fn fetch_carries_a_preload_name_and_refuses_invalid_names_before_the_door() {
         Value::str("Error: preload getter")
     );
 }
+
+#[test]
+fn fetch_carries_prefetch_and_refuses_non_reads_and_invalid_values() {
+    let mut module = module();
+    module.bind(&contract::compile("component App\n  resource result = prefetched(\"true\") as shape string\n  view\n    text result\n").unwrap());
+    let mut store = store();
+    for word in ["absent", "false", "true"] {
+        let request = later(
+            module
+                .answer_for(
+                    exact_runner::Target::Resource(0),
+                    &mut store,
+                    "prefetched",
+                    &[Value::str(word)],
+                )
+                .unwrap(),
+        );
+        assert_eq!(request.prefetch, word == "true");
+        assert_eq!(
+            now(module
+                .parse_for(
+                    exact_runner::Target::Resource(0),
+                    &mut store,
+                    "prefetched",
+                    &[Value::str(word)],
+                    Outcome::Response(Response {
+                        status: 503,
+                        headers: vec![],
+                        body: b"reply".to_vec()
+                    })
+                )
+                .unwrap()),
+            Value::str("reply")
+        );
+    }
+    for word in ["number", "null", "stream", "file", "independent"] {
+        let answer = now(module
+            .answer_for(
+                exact_runner::Target::Resource(0),
+                &mut store,
+                "prefetched",
+                &[Value::str(word)],
+            )
+            .unwrap());
+        assert!(
+            answer
+                .as_str()
+                .unwrap()
+                .starts_with("TypeError: exactPrefetch"),
+            "{answer:?}"
+        );
+        assert_eq!(module.in_flight(), 0);
+    }
+    assert_eq!(
+        now(module
+            .answer_for(
+                exact_runner::Target::Mutation(0),
+                &mut store,
+                "prefetched",
+                &[Value::str("true")]
+            )
+            .unwrap()),
+        Value::str("TypeError: exactPrefetch requires a plain HTTP read")
+    );
+    assert_eq!(
+        now(module
+            .answer_for(
+                exact_runner::Target::Resource(0),
+                &mut store,
+                "prefetched",
+                &[Value::str("throws")]
+            )
+            .unwrap()),
+        Value::str("Error: prefetch getter")
+    );
+}

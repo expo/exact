@@ -190,6 +190,7 @@ impl Core {
             let mut guard = self.shared.state.lock().unwrap();
             let state = &mut *guard;
             let busy = state.counts[0] > 0;
+            preload::prefetch::cancel(state, explicit);
             for lane in 0..2 {
                 let (counts, bytes) = (&mut state.counts[lane], &mut state.bytes[lane]);
                 let (streams, light) = (&mut state.streams, &mut state.light);
@@ -271,6 +272,7 @@ impl Core {
                 if let Fenced::Held(r, work, _, forgotten) = &mut place {
                     if !explicit.contains(&r.ticket)
                         && (reads::effect_read(r, work.is_some())
+                            || r.request.prefetch
                             || matches!(r.class, RequestClass::Parallel(_)))
                     {
                         *forgotten = true;

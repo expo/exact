@@ -82,6 +82,18 @@ impl CacheMode {
 }
 
 impl super::Request {
+    /// Fetch ahead for the next screen's read (LLP 1162.000 D5).
+    pub fn prefetch(mut self) -> Self {
+        self.prefetch = true;
+        self
+    }
+
+    /// The executor also checks the request's read class at admission.
+    pub fn prefetch_refusal(&self) -> Option<&'static str> {
+        (self.prefetch && !self.is_plain_http())
+            .then_some("exactPrefetch requires a plain HTTP read")
+    }
+
     /// Name a preload; on the web it is accepted and ignored (LLP 1162.000 D1).
     pub fn preload(mut self, name: &str) -> Result<Self, String> {
         self.preload = Some(name.into());

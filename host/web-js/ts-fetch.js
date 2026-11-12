@@ -33,6 +33,9 @@ export function fetch(input, options) {
   }
   let protocols;
   try {
+    const prefetch = options?.exactPrefetch;
+    if (prefetch !== undefined && prefetch !== true && prefetch !== false) throw new TypeError('exactPrefetch is true or false');
+    if (prefetch && (activeCall()?.mutation || options.exactStream !== undefined || options.exactIndependentHttp !== undefined || options.exactBodyFrom !== undefined || options.exactBodyTo !== undefined || !/^https?:/i.test(input instanceof Request ? input.url : String(input)))) throw new TypeError('exactPrefetch requires a plain HTTP read');
     const name = options?.exactPreload;
     if (name !== undefined && (typeof name !== 'string' || !/^[a-z][a-z0-9-]*$/.test(name))) throw new TypeError('exactPreload must match ^[a-z][a-z0-9-]*$');
     const offered = options?.exactProtocols;
@@ -116,7 +119,7 @@ function fetchOf(input, options, call, protocols) {
     let init, ms, signal;
     try {
       // Keep inherited validation fields inherited, but take their values now.
-      const own = ownWithout(options, ['redirect', 'exactPreload']);
+      const own = ownWithout(options, ['redirect', 'exactPreload', 'exactPrefetch']);
       const inherited = {};
       for (const key of ['exactBodyFrom', 'exactBodyTo', 'exactIndependentHttp', 'method', 'body', 'exactStream', 'signal', 'exactTimeout', 'cache'])
         if (!Object.hasOwn(own, key)) inherited[key] = options[key];

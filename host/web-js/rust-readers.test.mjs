@@ -51,12 +51,12 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
   for (const name of ['http-body.js', 'grant-admission.js', 'faults.js', 'navigation.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
   writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const rustGrantSet=createGrantSet(${JSON.stringify(set)}),tsGrantSet=createGrantSet(${JSON.stringify(normalized(''))});\n`);
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 32768;
-  let output = new Uint8Array(), read = false, fails = false, unknown = false, socket = false, writes = false, cache, preload, abi = 9;
+  let output = new Uint8Array(), read = false, fails = false, unknown = false, socket = false, writes = false, cache, preload, prefetch = false, abi = 10;
   const scopes = [];
   const response = fill => {
     const bytes = [], u8 = value => bytes.push(value), u32 = value => bytes.push(value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255);
     const string = value => { const encoded = new TextEncoder().encode(value); u32(encoded.length); bytes.push(...encoded); };
-    u32(9); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    u32(10); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
   };
   const exports = {
     memory, exact_logic_abi: () => abi, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
@@ -78,6 +78,7 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
           w.u8(2); w.u8(read ? 1 : 0); w.u32(writes ? 1 : 0);
           if (writes) { w.string('k'); w.u8(1); w.string('private'); }
           w.u32(0); w.u8(0); w.string('');
+          if (prefetch) w.u8(14);
           if (preload !== undefined) { w.u8(13); w.string(preload); }
           if (socket) { if (cache !== undefined) { w.u8(12); w.string(cache); } w.u8(11); w.u32(1 << 20); w.u8(0); w.string(''); w.string('GET'); w.string('wss://api.example/book'); w.u32(0); w.u32(0); } else if (unknown) { w.u8(2); w.string('reader'); } else if (fails) { w.u8(3); w.string('nothing kept'); } else { if (cache !== undefined) { w.u8(12); w.string(cache); } w.u8(1); w.u8(0); w.string(''); w.string('GET'); w.string('https://api.example/me'); w.u32(0); w.u32(0); }
         });
@@ -93,8 +94,8 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
     const module = await import(`${pathToFileURL(resolve(dir, 'rust-data.js')).href}?readers=${Date.now()}`);
     const kept = [], data = { q: [] }, store = { map: new Map(), set(...write) { kept.push(write); } }, failed = { failed: 3, message: 'refused' };
     abi = 8;
-    await expect(module.install(data, { reader: '' }, async () => new ArrayBuffer(0))).rejects.toThrow('Rust module ABI 8 is not 9');
-    abi = 9;
+    await expect(module.install(data, { reader: '' }, async () => new ArrayBuffer(0))).rejects.toThrow('Rust module ABI 8 is not 10');
+    abi = 10;
     await module.install(data, { reader: '' }, async () => new ArrayBuffer(0));
     for (const mode of ['default', 'no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached']) {
       cache = mode;
@@ -105,6 +106,15 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
       const req = data.answer('reader', [], store).req;
       expect([req.url, req.cache, req.preload]).toEqual(['https://api.example/me', mode, undefined]);
     }
+    prefetch = true;
+    for (const mode of [undefined, 'force-cache']) {
+      for (const name of [undefined, 'feed-2']) {
+        preload = name; cache = mode;
+        const req = data.answer('reader', [], store).req;
+        expect([req.url, req.cache, req.prefetch]).toEqual(['https://api.example/me', mode, true]);
+      }
+    }
+    prefetch = false;
     preload = 'Bad';
     expect(() => data.answer('reader', [], store)).toThrow('invalid preload HTTP result');
     preload = undefined;
@@ -219,4 +229,21 @@ test('a forced Rust resource keeps forcing parser-created requests and tickets a
       expect(JSON.parse(result)).toEqual([{ url: '/first', forced: true }, { url: '/next', forced: true }]);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('web dispatch refuses a Rust prefetch on a send and sends a resource prefetch normally', async () => {
+  const { sendRequest } = await import('./request-send.js');
+  for (const resource of [false, true]) {
+    const out = [], inflight = { n: 0 }, requests = [];
+    let land;
+    const landed = new Promise(resolve => { land = resolve; });
+    const ticket = { id: 1, req: { method: 'GET', url: 'https://api.example/me', prefetch: true }, r: resource ? {} : undefined, held: () => true };
+    const data = { fetch: async req => { requests.push(req); return { status: 200, headers: [], body: new Uint8Array() }; } };
+    sendRequest(ticket, land, out, data, inflight, () => {});
+    out[0]();
+    const outcome = await landed;
+    expect(requests.length).toBe(resource ? 1 : 0);
+    expect(resource ? outcome.status : outcome.failed).toBe(resource ? 200 : 2);
+    expect(inflight.n).toBe(0);
+  }
 });

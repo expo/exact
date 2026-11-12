@@ -171,6 +171,8 @@ pub struct Request {
     pub cache: CacheMode,
     /// A preload to take by name when method and URL agree (LLP 1162.000 D1).
     pub preload: Option<Box<str>>,
+    /// Hold this read's reply for a later equal read (LLP 1162.000 D5).
+    pub prefetch: bool,
     /// The server may hold the reply until something changes (a long poll;
     /// LLP 1016.000 D9): pending as any request, but no clock waits on it,
     /// neither a jump nor `clock settle` nor `clock data`, and each reply
@@ -316,6 +318,7 @@ impl Request {
             redirect: Redirect::Follow,
             cache: CacheMode::Unspecified,
             preload: None,
+            prefetch: false,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -424,6 +427,7 @@ impl Request {
             redirect: Redirect::Follow,
             cache: CacheMode::Unspecified,
             preload: None,
+            prefetch: false,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -471,6 +475,7 @@ impl Request {
             redirect: Redirect::Follow,
             cache: CacheMode::Unspecified,
             preload: None,
+            prefetch: false,
             held: false,
             reach: Default::default(),
             listen: None,

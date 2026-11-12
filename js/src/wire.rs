@@ -116,6 +116,7 @@ pub(crate) fn request_from_json(text: &str) -> Result<Request, String> {
         redirect: Redirect::parse(j.get("redirect").and_then(Json::as_str))?,
         cache: CacheMode::parse(j.get("cache").and_then(Json::as_str))?,
         preload: field("preload").map(String::into_boxed_str),
+        prefetch: j.get("prefetch").and_then(Json::as_bool).unwrap_or(false),
         held: j.get("held").and_then(Json::as_bool).unwrap_or(false),
         reach: Default::default(),
         // `exactListen`'s options (LLP 1133.005 D1); the defaults where unsaid.
@@ -143,7 +144,7 @@ pub(crate) fn request_from_json(text: &str) -> Result<Request, String> {
         fetch: None,
     };
     request.check_protocols()?;
-    if let Some(why) = request.preload_refusal() {
+    if let Some(why) = request.prefetch_refusal().or(request.preload_refusal()) {
         return Err(why.into());
     }
     // A long poll's terms, checked as every host checks them (LLP 1016.000 D8), and an upload's.

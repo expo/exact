@@ -225,6 +225,7 @@ fn request_json(request: &Request) -> Json {
         "redirect": (request.redirect != Redirect::Follow).then(|| request.redirect.name()),
         "cache": (request.cache != CacheMode::Unspecified).then(|| request.cache.name()),
         "preload": request.preload,
+        "prefetch": request.prefetch,
         "held": request.held.then_some(true),
         "due_ms": request.due_ms,
         "wake_ms": request.wake_ms,
@@ -347,13 +348,14 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         cache: CacheMode::parse(json["cache"].as_str())
             .map_err(|_| unavailable("turn reply: an invalid cache mode"))?,
         preload: json["preload"].as_str().map(Box::from),
+        prefetch: json["prefetch"].as_bool().unwrap_or(false),
         held: json["held"].as_bool().unwrap_or(false),
         due_ms: json["due_ms"].as_u64(),
         wake_ms: json["wake_ms"].as_u64(),
         fetch: json["fetch"].as_u64(),
     };
     request.check_protocols().map_err(unavailable)?;
-    if let Some(why) = request.preload_refusal() {
+    if let Some(why) = request.prefetch_refusal().or(request.preload_refusal()) {
         return Err(unavailable(why));
     }
     // A long poll's terms, checked as every host checks them (LLP 1016.000 D8), and an upload's.
@@ -393,6 +395,19 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("exactPreload"));
+    }
+
+    #[test]
+    fn prefetch_crosses_a_module_turn_and_non_http_is_refused() {
+        let request = Request::get("https://example.test").prefetch();
+        let mut wire = request_json(&request);
+        assert_eq!(wire["prefetch"], true);
+        assert_eq!(request_from(&wire).unwrap(), request);
+        wire["stream"] = Json::Bool(true);
+        assert!(request_from(&wire)
+            .unwrap_err()
+            .to_string()
+            .contains("exactPrefetch"));
     }
 
     #[test]

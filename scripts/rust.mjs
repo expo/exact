@@ -204,7 +204,7 @@ function rustGrants(compat) {
 }
 export function rustReceipt(app, compat, plan, module, target, executor) {
   const extension = executor === 'tiered' ? 'bin' : executor === 'wasm' ? 'wasm' : target.includes('apple') ? 'dylib' : target.includes('windows') ? 'dll' : 'so';
-  return { version: 1, kind: 'rust', abi: 9, appId: app.id, grants: rustGrants(compat), target, executor,
+  return { version: 1, kind: 'rust', abi: 10, appId: app.id, grants: rustGrants(compat), target, executor,
     source: nativeSource(app), plan: rustCard('app.plan', plan), module: rustCard(`app.module.${extension}`, module) };
 }
 

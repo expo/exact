@@ -1016,7 +1016,10 @@ impl<D: DataSource> Host<D> {
         batch: &mut Batch,
         immediate: &mut Vec<(u64, Outcome)>,
     ) {
-        if let Some(message) = crate::batch::request_refusal(&r.request) {
+        if let Some(message) = (r.request.prefetch && r.class != exact_runner::RequestClass::Read)
+            .then_some("exactPrefetch requires a plain HTTP read")
+            .or(crate::batch::request_refusal(&r.request))
+        {
             batch.refuse(r.ticket, message);
             return;
         }

@@ -118,7 +118,7 @@ test('an aborted fetch rejects with its signal\'s reason; an exactTimeout is sti
   }
 }, 60_000);
 
-test('exactPreload validates names and leaves the web request as written', async () => {
+test('preload and prefetch validate options and leave web requests as written', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-preload-option-'));
   const sent = [], before = globalThis.fetch;
   globalThis.fetch = async (url, init) => { sent.push([url, init]); return new Response('reply'); };
@@ -145,6 +145,24 @@ test('exactPreload validates names and leaves the web request as written', async
       await expect(appFetch('https://api.example/feed', { exactPreload: name })).rejects.toThrow('exactPreload must match');
     }
     expect(sent).toHaveLength(3);
+    for (const prefetch of [true, false]) {
+      let reads = 0;
+      for (let i = 0; i < 2; i++) {
+        expect(await (await appFetch('https://api.example/feed', { get exactPrefetch() { reads++; return prefetch; } })).text()).toBe('reply');
+        expect(sent.at(-1)[1].exactPrefetch).toBeUndefined();
+      }
+      expect(reads).toBe(2);
+    }
+    const count = sent.length;
+    for (const value of [null, 7, 'true']) await expect(appFetch('https://api.example/feed', { exactPrefetch: value })).rejects.toThrow('exactPrefetch is true or false');
+    for (const option of [{ exactStream() {} }, { exactBodyFrom: 'app:/data/a', method: 'POST' }, { exactBodyTo: 'app:/data/a' }, { exactIndependentHttp: { maxResponseBytes: 1024 } }])
+      await expect(appFetch('https://api.example/feed', { exactPrefetch: true, ...option })).rejects.toThrow('exactPrefetch requires a plain HTTP read');
+    const { answering } = await import(pathToFileURL(resolve(dir, 'ts-fetch.js')).href);
+    answering.call = { mutation: true };
+    await expect(appFetch('https://api.example/feed', { exactPrefetch: true })).rejects.toThrow('exactPrefetch requires a plain HTTP read');
+    answering.call = null;
+    await expect(appFetch('https://api.example/feed', { get exactPrefetch() { throw new Error('prefetch getter'); } })).rejects.toThrow('prefetch getter');
+    expect(sent).toHaveLength(count);
     await expect(appFetch('https://api.example/feed', { get exactPreload() { throw new Error('preload getter'); } })).rejects.toThrow('preload getter');
   } finally { globalThis.fetch = before; rmSync(dir, { recursive: true, force: true }); }
 });

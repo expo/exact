@@ -626,7 +626,7 @@
     var idle = init ? init.exactIdleTimeout : undefined, idleWhy = idleRefusal(idle, !!stream && !upload && !listen && !own && init.exactLongPoll === undefined && /^wss?:/i.test(url)); // a quiet WebSocket ends as a Timeout (LLP 1016.000 D11)
     if (idleWhy) return optionRefused(new TypeError(idleWhy));
     if ((held !== undefined && held !== true && held !== false) || (held && stream)) return optionRefused(new TypeError(held === true ? "exactHeld: a stream is never held; it stops counting at its first message" : "exactHeld is true or false")); var poll = longPollOf(init, stream, method, url); if (typeof poll === "string") return optionRefused(new TypeError(poll)); // `exactHeld`: the server may hold the reply, and no clock waits on it (LLP 1016.000 D9); `exactLongPoll` (D8): the host asks again with each reply's cursor (binary.js `longPollOf`)
-    var cache, preload; try { cache = binary.cacheMode(init); preload = binary.preload(init); } catch (e) { return optionRefused(e); }
+    var cache, preload, prefetch; try { cache = binary.cacheMode(init); preload = binary.preload(init); prefetch = binary.prefetch(init, !call.mutation && !call.tool && !stream && !listen && !own && !child && bodyFrom === undefined && bodyTo === undefined && ceiling === undefined && /^https?:/i.test(url)); } catch (e) { return optionRefused(e); }
     // `redirect` (Fetch §5.4, the Request constructor): read and checked once,
     // before the signal, and a throw rejects. Rust follows redirects, checking
     // each hop's grant, so "manual" answers with the 3xx and its Location.
@@ -652,7 +652,7 @@
     // A WebSocket stream owns a two-way socket (LLP 1016.000 D7); an HTTP one's body that is not events is bytes.
     var socket = stream && (!!listen || !!own || /^wss?:/i.test(String(url)));
     var protocols; try { protocols = binary.socketProtocols(init ? init.exactProtocols : undefined, !!stream && /^wss?:/i.test(url)); } catch (e) { return optionRefused(e); }
-    var wire = JSON.stringify({ protocols: protocols, method: method, url: String(url), headers: Array.from(headers.entries()), body: body, body_base64: bytes ? toBase64(bytes) : undefined, max_response_bytes: ceiling, stream: stream ? true : undefined, socket: socket ? true : undefined, bytes: stream && !socket && !poll && !upload ? true : undefined, upload_progress: upload ? true : undefined, long_poll: poll, timeout_ms: timeout, idle_timeout_ms: idle, body_from: bodyFrom, body_to: bodyTo, redirect: redirect, cache: cache, preload: preload, held: held ? true : undefined, listen: listen });
+    var wire = JSON.stringify({ protocols: protocols, method: method, url: String(url), headers: Array.from(headers.entries()), body: body, body_base64: bytes ? toBase64(bytes) : undefined, max_response_bytes: ceiling, stream: stream ? true : undefined, socket: socket ? true : undefined, bytes: stream && !socket && !poll && !upload ? true : undefined, upload_progress: upload ? true : undefined, long_poll: poll, timeout_ms: timeout, idle_timeout_ms: idle, body_from: bodyFrom, body_to: bodyTo, redirect: redirect, cache: cache, preload: preload, prefetch: prefetch, held: held ? true : undefined, listen: listen });
     var error; try { error = host(1, String(ticket), wire); } catch (e) { throw mark(e); } // only the door's own refusal, never what building the request threw
     if (error !== undefined) return optionRefused(new Error(error));
     call.tickets.push(ticket);
@@ -1178,7 +1178,7 @@
     if (typeof f !== "function") { e = new Error("the data module's `tools` has no `" + name + "`"); e.kind = "UnknownSource"; throw e; } r = f(args, store, storage); return r && typeof r.then === "function" ? r.then(text) : text(r); }
   global.__exact_call = function (source, argsJson, mutation) {
     initializing = false;
-    var call = { id: nextCall++, status: "pending", value: undefined, error: undefined, tickets: [], storage: 0, replied: false, mutation: mutation === "mutation", answer: mutation === "resource", set: mutation === "resource", sync: false, socketOps: null, epoch: gcEpoch() };
+    var call = { id: nextCall++, status: "pending", value: undefined, error: undefined, tickets: [], storage: 0, replied: false, mutation: mutation === "mutation", tool: mutation === "tool", answer: mutation === "resource", set: mutation === "resource", sync: false, socketOps: null, epoch: gcEpoch() };
     var result;
     currentCall = call; work.setTurn(call);
     calls.set(call.id, call);

@@ -605,6 +605,7 @@ impl Machine {
         let blocking = lane == 0;
         state.book.blocking |= blocking && transport_lane == 0;
         let abort = AbortController::new();
+        super::preload::prefetch::start(state, &mut job, &abort);
         state.running.push(Running {
             started: Instant::now(),
             ticket: job.ticket,
@@ -777,7 +778,10 @@ impl Machine {
                     return None;
                 }
                 let outcome = match done {
-                    Done::Now(outcome) => outcome,
+                    Done::Now(outcome) => {
+                        super::preload::prefetch::completed(state, run.0);
+                        outcome
+                    }
                     Done::Timeout(ms) => failed(
                         FailureKind::Timeout,
                         format!("the request timed out after {ms} ms"),
@@ -1122,6 +1126,7 @@ fn settle(state: &mut State, run: Run, outcome: Outcome) {
         state.book.blocking = false;
     }
     let outcome = bounded_outcome(outcome, limit);
+    super::preload::prefetch::finish(state, run.0, &outcome);
     super::cache::invalidate(state, invalidates.as_ref(), &outcome);
     if forgotten {
         state.book.trash.push(Box::new(outcome));
