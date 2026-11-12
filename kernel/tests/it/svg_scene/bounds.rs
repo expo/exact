@@ -128,6 +128,50 @@ fn a_collapsed_calibrated_path_keeps_its_svg_scene() {
 }
 
 #[test]
+fn calibrated_dash_underflow_still_exceeds_the_scene_limit() {
+    for (path, path_length, dashes, over) in [
+        ("M0 0H100", 1e48, "1 1", Some(Limit::Dashes)),
+        ("M0 0H100", 1e32, "1e-30 1e-30", Some(Limit::Dashes)),
+        ("M0 0H100H0", 1e48, "1 1", Some(Limit::Dashes)),
+        ("M0 0H1e-30", 1e30, "1 1", Some(Limit::Dashes)),
+        ("M0 0H100", 1e48, "0 0", None),
+    ] {
+        let mut d = Doc::new();
+        let line = d.node(
+            NodeType::SvgPath,
+            &[
+                (StyleId::Stroke, "#000000"),
+                (StyleId::StrokeDasharray, dashes),
+            ],
+            &[(PropId::D, path)],
+        );
+        d.ops.push(Op::SetProp {
+            id: line,
+            prop: PropId::PathLength,
+            value: PropValue::Float(path_length),
+        });
+        let sibling = d.node(
+            NodeType::SvgRect,
+            &[(StyleId::Width, "10"), (StyleId::Height, "10")],
+            &[],
+        );
+        let svg = svg(&mut d, &[line, sibling]);
+        let k = d.kernel(&[svg], 100.0);
+        let scene = resolve(&k, svg);
+        assert_eq!(scene.over, over, "{path}, {path_length}, {dashes}");
+        if over.is_some() {
+            assert!(scene.items.is_empty(), "an over-budget scene draws nothing");
+        } else {
+            assert!(find(&scene.items, sibling).is_some());
+            let Kind::Shape(shape) = &find(&scene.items, line).unwrap().kind else {
+                panic!("expected a path");
+            };
+            assert!(shape.dash.is_empty(), "authored all-zero dashes stay solid");
+        }
+    }
+}
+
+#[test]
 fn dashes_and_surfaces_have_limits_and_an_ordinary_svg_passes() {
     use NodeType::*;
     let dashed = |dasharray: &str| {

@@ -421,16 +421,12 @@ impl DashArray {
 
     /// The pattern a painter draws: the list repeated to even length, each
     /// entry multiplied by `scale` (the path's length over `pathLength`).
-    /// Empty when there is no dashing: `none`, or a pattern that sums to 0.
+    /// Empty for `none` or an authored pattern that sums to 0.
     pub fn pattern(&self, scale: f32) -> Vec<f32> {
         if self.0.iter().sum::<f32>() <= 0.0 {
             return Vec::new();
         }
         let mut out: Vec<f32> = self.0.iter().map(|v| v * scale).collect();
-        // pathLength calibration can collapse or underflow the whole pattern.
-        if out.iter().all(|v| *v == 0.0) {
-            return Vec::new();
-        }
         if out.len() % 2 == 1 {
             out.extend_from_within(..);
         }
