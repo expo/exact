@@ -109,7 +109,8 @@ const refuseMixedTargets = (cmd, args, output) => {
  * `repeated` is a step the build runs again in the foreground, which then
  * says its own failure. A build that ends early stops it. `authored` restores paths in the log (`snapshotSources`). */
 /** A build service's progress (EXACT_BUILD_STEPS=1): one `exact-step <phase>` line as each phase of an iOS/Mac build
- * starts, which its worker turns into steps; nothing otherwise. */
+ * reaches the point where it waits on that phase, which its worker turns into steps; nothing otherwise. Some work
+ * starts earlier, beside the build (the Swift host and the app's modules compile while Cargo runs). */
 const buildStep = (name) => { if (process.env.EXACT_BUILD_STEPS === '1') console.log(`exact-step ${name}`); };
 function startApple(cmd, args, log, { authored, ...opts } = {}) {
   const out = openSync(log, 'w');

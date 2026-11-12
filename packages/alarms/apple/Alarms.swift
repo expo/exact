@@ -35,9 +35,13 @@ public final class AlarmsModule: ExactPackage {
         self.context = context
     }
 
+    /// AlarmKit draws an alarm's countdown with the host's extension, which a build without alarms
+    /// (`--extensions` leaving them out) does not package: the module is then unavailable, and refuses.
+    private static let packaged = Bundle.main.object(forInfoDictionaryKey: "ExactAlarmCountdown") as? Bool == true
+
     public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
         #if os(iOS)
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, *), Self.packaged {
             let origin = context.origin
             Task { @MainActor in reply(await self.answer(name, args, origin: origin)) }
             return
@@ -48,7 +52,7 @@ public final class AlarmsModule: ExactPackage {
 
     public func call(_ name: String, _ args: [String: Any]) throws -> [String: Any] {
         #if os(iOS)
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, *), Self.packaged {
             switch name {
             case "alarmStatusSync": watch(); return status()
             case "alarmsSync": watch(); return ["exact:answer": alarms()]
