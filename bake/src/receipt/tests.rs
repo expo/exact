@@ -583,7 +583,7 @@ fn supplemental_rust_is_real_paired_bytes_with_executor_requirements() {
     }
     let graph = artifact_graph(&plan, &inputs, &cards, false, "aarch64-apple-ios").unwrap();
     for row in graph["artifacts"].as_array().unwrap() {
-        assert_eq!(row["requires"]["rustAbi"], 8);
+        assert_eq!(row["requires"]["rustAbi"], 9);
         assert_eq!(row["requires"]["rustMode"], "wasm");
         assert_eq!(row["requires"]["rustTarget"], "wasm32-unknown-unknown");
     }

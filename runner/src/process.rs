@@ -104,6 +104,7 @@ impl Request {
             body_to: None,
             redirect: Redirect::Follow,
             cache: Default::default(),
+            preload: None,
             held: false,
             listen: None,
             reach: Default::default(),

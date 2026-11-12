@@ -445,6 +445,9 @@ impl<D: DataSource> Bridge<D> {
         };
         let selected = (delivery.selected_plan)();
         if let Some((entry, bytes)) = selected {
+            if let Some(preloads) = self.links.io.and_then(|io| (io.preloads)()) {
+                preloads.select_update();
+            }
             // Selection already verified the stored bytes. Count this attempt
             // even when decoding or booting that verified plan refuses it.
             (delivery.boot_started)();

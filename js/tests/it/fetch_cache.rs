@@ -61,3 +61,65 @@ fn fetch_carries_every_cache_mode_and_rejects_invalid_values_as_type_errors() {
         Value::str("Error: cache getter")
     );
 }
+
+#[test]
+fn fetch_carries_a_preload_name_and_refuses_invalid_names_before_the_door() {
+    let mut module = module();
+    module.bind(&contract::compile("component App\n  resource result = preloaded(\"absent\") as shape string\n  view\n    text result\n").unwrap());
+    let mut store = store();
+    for name in ["absent", "feed", "a", "feed-2"] {
+        let request = later(
+            module
+                .answer(&mut store, "preloaded", &[Value::str(name)])
+                .unwrap(),
+        );
+        assert_eq!(
+            request.preload.as_deref(),
+            (name != "absent").then_some(name)
+        );
+        assert_eq!(
+            now(module
+                .parse(
+                    &mut store,
+                    "preloaded",
+                    &[Value::str(name)],
+                    Outcome::Response(Response {
+                        status: 200,
+                        headers: vec![],
+                        body: b"reply".to_vec()
+                    })
+                )
+                .unwrap()),
+            Value::str("reply")
+        );
+    }
+    for name in [
+        "",
+        "Feed",
+        "2feed",
+        "feed_name",
+        "feed.name",
+        "feed\n",
+        "fée",
+        "number",
+        "null",
+    ] {
+        let answer = now(module
+            .answer(&mut store, "preloaded", &[Value::str(name)])
+            .unwrap());
+        assert!(
+            answer
+                .as_str()
+                .unwrap()
+                .starts_with("TypeError: exactPreload must match"),
+            "{answer:?}"
+        );
+        assert_eq!(module.in_flight(), 0);
+    }
+    assert_eq!(
+        now(module
+            .answer(&mut store, "preloaded", &[Value::str("throws")])
+            .unwrap()),
+        Value::str("Error: preload getter")
+    );
+}

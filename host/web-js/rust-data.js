@@ -1,13 +1,13 @@
 import { admitsSecret, createRequestExecutor, fetchHostAsset, sameGrantDeclaration, setAppGrantSet } from './admission.js';
 import { rustGrantSet, tsGrantSet } from './admission-data.js';
 import { boundedHttpBody, longPollRefusal, streamed } from './http-body.js';
-// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 8,
+// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 9,
 // `logic/abi/src/lib.rs`): the app's importless module wasm and its plan's
 // declarations (`app.bind.plan`, the plan without the bake's answers),
 // fetched after first pixel; once bound and activated, every answer is a
 // synchronous call, as the runner's `DataSource::answer` is. Until then the
 // runtime keeps each resource's compiled value and asks again at `ready`.
-const ABI = 8, utf8 = new TextEncoder(), text = new TextDecoder();
+const ABI = 9, utf8 = new TextEncoder(), text = new TextDecoder();
 
 function writer() {
   let buf = new Uint8Array(256), at = 0;
@@ -90,6 +90,10 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   // A result (`read_result`): now, or an HTTP request for the host to run.
   const result = r => {
     let tag = r.u8(), cache;
+    if (tag === 13) {
+      const name = r.str(); tag = r.u8();
+      if (!/^[a-z][a-z0-9-]*$/.test(name) || ![1, 6, 9, 10, 11, 12].includes(tag)) throw new Error('invalid preload HTTP result');
+    }
     if (tag === 12) {
       cache = r.str(); tag = r.u8();
       if (!['default', 'no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached'].includes(cache) || ![1, 6, 9, 10].includes(tag)) throw new Error('invalid cached HTTP result');

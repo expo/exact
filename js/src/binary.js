@@ -856,6 +856,11 @@ function socketProtocols(value, socket) {
     timers: timers,
     fileRefusal: fileRefusal,
     cacheMode: cacheMode,
+    preload: function(init) {
+      var name = init ? init.exactPreload : undefined;
+      if (name !== undefined && (typeof name !== "string" || !/^[a-z][a-z0-9-]*$/.test(name))) throw new TypeError("exactPreload must match ^[a-z][a-z0-9-]*$");
+      return name;
+    },
     FetchError: FetchError,
     imageOptions: imageOptions,
     toBase64: toBase64,

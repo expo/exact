@@ -937,6 +937,7 @@ fn reservation(request: &Request) -> Result<(usize, usize, usize), &'static str>
         request.grants.as_ref().map_or(0, String::capacity),
         request.body_from.as_ref().map_or(0, String::capacity),
         request.body_to.as_ref().map_or(0, String::capacity),
+        request.preload.as_ref().map_or(0, |name| name.len()),
         request.storage.as_ref().map_or(0, Vec::capacity),
         request
             .headers

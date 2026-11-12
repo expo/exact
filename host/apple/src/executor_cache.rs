@@ -84,6 +84,7 @@ pub(super) struct Exchange {
 }
 
 pub(super) struct Cache {
+    pub(super) preload_names: bool,
     pub(super) preload_definitions_due: Option<Instant>,
     pub(super) preload_launch_due: Option<Instant>,
     pub(super) grants: String,
@@ -99,6 +100,7 @@ pub(super) struct Cache {
 impl Cache {
     pub(super) fn new(grants: String) -> Self {
         Self {
+            preload_names: true,
             preload_definitions_due: None,
             preload_launch_due: None,
             grants,

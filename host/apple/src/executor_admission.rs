@@ -33,7 +33,8 @@ impl Core {
         // long poll that is no stream's HTTP GET (LLP 1016.000 D8), is refused here, before any path.
         let checked = r
             .request
-            .long_poll_refusal()
+            .preload_refusal()
+            .or(r.request.long_poll_refusal())
             .or(r.request.timeout_refusal())
             .or(r.request.protocols_refusal())
             .or(r.request.body_from_refusal())

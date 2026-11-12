@@ -381,6 +381,14 @@ its definitions proceed and its late requests are discarded.
 A panic in it yields no requests where the build unwinds (a development build);
 a release build aborts on a panic there as anywhere in the crate.
 
+A read may name its preload: `fetch(url, { exactPreload: "feed" })`, or
+`Request::get(url).preload("feed")?` in Rust. Names must match `^[a-z][a-z0-9-]*$`.
+The held reply must have the same method and URL; headers and body may differ.
+With an update selected, including a plan-only update, only full request equality
+can take a preload. A missing or mismatched name also falls back to equality.
+On the web the option is accepted and ignored. A TypeScript bundle naming it needs
+runtime 13; the Rust module seam is ABI 9 (LLP 1162.000 D1, D2).
+
 A one-window Mac app ends when its window closes. An app with work the person
 expects to go on without the window (a server, a sync), as Mail and Messages
 have, sets `"keepRunning": true` in `app.json`'s `host.macos.window`. ⌘W,
@@ -2055,8 +2063,8 @@ every host take it, and Rust sources with `Request::long_poll(cursor, from)` on
 a stream's request. An older prelude would ignore it and open an event stream,
 so it moves `typescriptRuntime` to 3: a native app with a TypeScript data module
 needs a new binary once more. A Rust source's long poll is a new kind on the
-module seam. The Rust module ABI is 7: long polls, two-way sockets
-(LLP 1016.003), cache modes (LLP 1162 D4) and admitted secret names
+module seam. The Rust module ABI is 9: preload names (LLP 1162.000 D1), long polls,
+two-way sockets (LLP 1016.003), cache modes (LLP 1162 D4) and admitted secret names
 (LLP 1048.000 D9) require a matching binary.
 
 On the **web JS target and on macOS, iOS, Linux and Windows, TypeScript sources**

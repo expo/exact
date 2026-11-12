@@ -3,6 +3,7 @@ import { test, expect } from 'bun:test';
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { webCompiler } from './module.mjs';
 
@@ -116,3 +117,34 @@ test('an aborted fetch rejects with its signal\'s reason; an exactTimeout is sti
     rmSync(dir, { recursive: true, force: true });
   }
 }, 60_000);
+
+test('exactPreload validates names and leaves the web request as written', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-preload-option-'));
+  const sent = [], before = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { sent.push([url, init]); return new Response('reply'); };
+  try {
+    writeFileSync(resolve(dir, 'admission.js'), readFileSync(resolve(ROOT, 'host/web-js/admission.js'), 'utf8').replace(/'\.\.\/web\/([a-z-]+\.js)'/g, "'./$1'"));
+    for (const name of ['grant-admission.js', 'faults.js', 'navigation.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
+    cpSync(resolve(ROOT, 'host/web-js/ts-fetch.js'), resolve(dir, 'ts-fetch.js'));
+    const { cmd, pre } = webCompiler(), grants = resolve(dir, 'grants.txt');
+    if (cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+    writeFileSync(grants, 'net.fetch https://api.example');
+    const normalized = spawnSync(cmd, [...pre, 'normalize-grants', grants], { cwd: ROOT, encoding: 'utf8' });
+    expect(normalized.status).toBe(0);
+    writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const tsGrantSet=createGrantSet(${normalized.stdout});`);
+    const { fetch: appFetch } = await import(pathToFileURL(resolve(dir, 'ts-fetch.js')).href);
+    for (const name of ['feed', 'a', 'feed-2']) {
+      let reads = 0;
+      const options = { method: 'POST', headers: { 'X-Trace': 'new' }, body: 'new', get exactPreload() { reads++; return name; } };
+      expect(await (await appFetch('https://api.example/feed', options)).text()).toBe('reply');
+      expect(reads).toBe(1);
+      const [url, init] = sent.at(-1);
+      expect([url, init.method, init.headers, init.body, init.exactPreload]).toEqual(['https://api.example/feed', 'POST', { 'X-Trace': 'new' }, 'new', undefined]);
+    }
+    for (const name of ['', 'Feed', '2feed', 'feed_name', 'feed.name', 'feed\n', 'fée', 7, null]) {
+      await expect(appFetch('https://api.example/feed', { exactPreload: name })).rejects.toThrow('exactPreload must match');
+    }
+    expect(sent).toHaveLength(3);
+    await expect(appFetch('https://api.example/feed', { get exactPreload() { throw new Error('preload getter'); } })).rejects.toThrow('preload getter');
+  } finally { globalThis.fetch = before; rmSync(dir, { recursive: true, force: true }); }
+});

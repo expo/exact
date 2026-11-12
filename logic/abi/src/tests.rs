@@ -776,9 +776,9 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
 
 #[test]
 fn cache_modes_cross_the_rust_module_seam() {
-    assert_eq!(ABI, 8);
+    assert_eq!(ABI, 9);
     let mut old = header(0).into_vec();
-    old[..4].copy_from_slice(&7u32.to_le_bytes());
+    old[..4].copy_from_slice(&8u32.to_le_bytes());
     assert!(matches!(reader(&old), Err(e) if e == "logic ABI version differs"));
     for word in [
         "unspecified",
@@ -857,4 +857,50 @@ fn socket_protocols_and_selection_cross_the_module_seam() {
         read_outcome(&mut Reader::new(&encoded.into_vec())).unwrap(),
         message
     );
+}
+
+#[test]
+fn preload_names_cross_the_rust_module_seam_with_or_without_cache() {
+    for cache in [CacheMode::Unspecified, CacheMode::ForceCache] {
+        let request = Request::post_json("https://example.test/feed", "query")
+            .cache(cache)
+            .preload("feed-2")
+            .unwrap();
+        let mut encoded = Writer::default();
+        encode_result(&mut encoded, Ok(Answer::Later(request.clone())));
+        let bytes = encoded.into_vec();
+        assert_eq!(bytes[0], 13);
+        let mut reader = Reader::new(&bytes);
+        assert_eq!(
+            read_result(&mut reader).unwrap(),
+            Ok(Answer::Later(request))
+        );
+        end(&reader).unwrap();
+    }
+    let mut request = Request::get("https://example.test");
+    request.preload = Some("Bad".into());
+    let mut encoded = Writer::default();
+    encode_result(&mut encoded, Ok(Answer::Later(request)));
+    assert!(
+        matches!(read_result(&mut Reader::new(&encoded.into_vec())).unwrap(), Err(DataError::Unavailable(why)) if why.contains("exactPreload"))
+    );
+    for tag in [0, 1, 5, 12, 13] {
+        let mut encoded = Writer::default();
+        encoded.u8(13);
+        encoded.string("Bad");
+        encoded.u8(tag);
+        if tag == 12 {
+            encoded.string("default");
+            encoded.u8(1);
+        }
+        if matches!(tag, 1 | 12) {
+            encoded.u8(0);
+            encoded.string("");
+            encoded.string("GET");
+            encoded.string("https://example.test");
+            encoded.u32(0);
+            encoded.u32(0);
+        }
+        assert!(read_result(&mut Reader::new(&encoded.into_vec())).is_err());
+    }
 }

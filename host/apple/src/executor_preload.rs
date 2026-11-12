@@ -311,6 +311,10 @@ impl Preloads {
     }
 }
 impl Control {
+    /// Selected updates may use only full equality (LLP 1162.000 D1, D2).
+    pub fn select_update(&self) {
+        update(&self.destination, |cache| cache.preload_names = false);
+    }
     /// Wait only on the launch thread until earlier definitions have reached the client.
     pub(crate) fn handed(&self) {
         if self.startup.lock().unwrap().is_some() {
@@ -618,6 +622,7 @@ fn settle(cache: &mut cache::Cache, r: &RequestOut) -> Option<(Outcome, Completi
 fn eligible(request: &Request, class: RequestClass, forced: bool, work: bool) -> bool {
     class == RequestClass::Read
         && request.is_plain_http()
+        && request.preload_refusal().is_none()
         && !forced
         && !work
         && !matches!(
@@ -626,6 +631,20 @@ fn eligible(request: &Request, class: RequestClass, forced: bool, work: bool) ->
         )
 }
 fn find(cache: &cache::Cache, request: &Request) -> Option<usize> {
+    if cache.preload_names {
+        if let Some(name) = &request.preload {
+            let url = cache::identity(&request.url);
+            let now = (cache.clock)();
+            if let Some(i) = cache.preloads.iter().position(|p| {
+                p.definition.name == name.as_ref()
+                    && p.key.method == request.method
+                    && p.key.url == url
+                    && live_at(p, now)
+            }) {
+                return Some(i);
+            }
+        }
+    }
     matching(cache, request, true)
 }
 // A preload's HTTP-cache copy cannot erase D1's body comparison.
@@ -639,14 +658,15 @@ fn matching(cache: &cache::Cache, request: &Request, equal_body: bool) -> Option
     let key = Equal::of(request);
     let now = (cache.clock)();
     cache.preloads.iter().position(|p| {
-        p.key == key
-            && (p.definition.request.body == request.body) == equal_body
-            && match &p.reply {
-                ReplyState::Pending { due, .. } => now < *due,
-                ReplyState::Ready(r) => now.saturating_duration_since(r.completed) < HOLD,
-                ReplyState::Gone => false,
-            }
+        p.key == key && (p.definition.request.body == request.body) == equal_body && live_at(p, now)
     })
+}
+fn live_at(held: &Held, now: Instant) -> bool {
+    match &held.reply {
+        ReplyState::Pending { due, .. } => now < *due,
+        ReplyState::Ready(r) => now.saturating_duration_since(r.completed) < HOLD,
+        ReplyState::Gone => false,
+    }
 }
 // A read must be allowed every hop its preload followed (LLP 1162.000 D1).
 fn can_take(cache: &cache::Cache, request: &Request, i: usize) -> bool {
@@ -1101,6 +1121,7 @@ pub(crate) fn valid_request(request: &Request) -> bool {
         || request.body.len() > MAX_BODY_BYTES
         || (matches!(request.method.to_ascii_uppercase().as_str(), "GET" | "HEAD")
             && !request.body.is_empty())
+        || request.preload_refusal().is_some()
         || request.timeout_refusal().is_some()
     {
         return false;

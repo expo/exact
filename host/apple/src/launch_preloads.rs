@@ -2,7 +2,7 @@
 use crate::executor::{Io, Preload, PreloadControl, PreloadFact, PreloadObservation, Preloads};
 use exact_runner::{request::PreloadWhen, DataSource, Runner};
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 #[path = "launch_rust.rs"]
 mod rust;
@@ -29,6 +29,7 @@ pub struct LaunchPreloads(Arc<Launch>);
 #[derive(Default)]
 struct Launch {
     phase: AtomicU8,
+    selected_update: AtomicBool,
     set: OnceLock<Set>,
     invalidated: Mutex<BTreeMap<String, u64>>,
     rust: OnceLock<Arc<rust::Running>>,
@@ -146,6 +147,9 @@ impl LaunchPreloads {
         let Some(receive) = new_receiver else {
             return;
         };
+        if self.0.selected_update.load(Ordering::Acquire) {
+            self.0.set.get().unwrap().control.select_update();
+        }
         let launch = self.clone();
         let spawned = std::thread::Builder::new()
             .name("exact-launch".into())
@@ -323,6 +327,12 @@ impl LaunchPreloads {
         pending.sort_by_key(|request| request.ticket);
         pending.retain(|request| runner.holds(request.ticket));
         Ok((pending, fulfilled))
+    }
+    pub(crate) fn select_update(&self) {
+        self.0.selected_update.store(true, Ordering::Release);
+        if let Some(set) = self.0.set.get() {
+            set.control.select_update();
+        }
     }
     pub(crate) fn adopt(&self, executor: &dyn Io) {
         if let Some(set) = self.0.set.get() {

@@ -166,6 +166,16 @@ impl DataSource for Source {
                 "{url}/first"
             ))));
         }
+        if source == "named" {
+            return Ok(Answer::Later(
+                self.definitions[0]
+                    .fill(|_| None)
+                    .unwrap()
+                    .header("X-Trace", "new")
+                    .preload("feed")
+                    .unwrap(),
+            ));
+        }
         Ok(Answer::Later(
             self.definitions[usize::from(source == "after")]
                 .fill(|_| Some("present-secret".into()))
@@ -931,3 +941,61 @@ fn a_timeline_leaves_launch_preloads_for_the_app_boot() {
 
 #[path = "launch_rust_tests.rs"]
 mod rust_launch;
+
+#[test]
+fn a_plan_only_selection_disables_named_taking_before_the_first_batch_and_dispatch() {
+    static SELECTED: crate::delivery::Hooks = crate::delivery::Hooks {
+        selected_plan: || Some(("plan-only".into(), named_plan())),
+        selected_module: || Ok(None),
+        candidate_delivery: |_, _| None,
+        boot_started: || {},
+        entry_refused: |_, why| panic!("{why}"),
+        status_into: |_| {},
+        take_note: || None,
+        last_line: || None,
+    };
+    fn named_plan() -> Vec<u8> {
+        contract::compile("shape Reply\n  value: string\ncomponent App\n  resource feed = named() as shape Reply\n  view\n    text feed.value\n").unwrap().encode()
+    }
+    for asynchronous in [false, true] {
+        ASYNCHRONOUS.with(|v| v.set(asynchronous));
+        for selected in [false, true] {
+            let server = Server::new(if selected { 2 } else { 1 });
+            let source = server.source(PreloadWhen::Start, false);
+            let launch = fixture();
+            launch.begin(false, factory(&source));
+            server.request();
+            server.release(0);
+            ready(&launch);
+            let mut bridge = Bridge::with_links(Links {
+                io: Some(IoLinks {
+                    preloads: local,
+                    endow: memory_endow,
+                    start: start_io,
+                    ..IoLinks::LINKED
+                }),
+                ..Links::ALL
+            });
+            if selected {
+                bridge.set_delivery(Some(&SELECTED));
+            }
+            let len = bridge.boot_selected(
+                named_plan().leak(),
+                || source.clone(),
+                Hooks::none(),
+                100.,
+                100.,
+            );
+            let batch = String::from_utf8_lossy(bridge.output_bytes(len as usize));
+            assert_eq!(batch.contains("\"text\":\"content\""), !selected, "{batch}");
+            if selected {
+                assert!(server.request().contains("x-trace: new"));
+                server.release(1);
+            }
+            assert_eq!(
+                server.count.load(Ordering::Acquire),
+                if selected { 2 } else { 1 }
+            );
+        }
+    }
+}

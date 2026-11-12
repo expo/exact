@@ -14,7 +14,7 @@ use exact_runner::{
 pub mod draw;
 
 /// Seam version, independent of the plan format version.
-pub const ABI: u32 = 8;
+pub const ABI: u32 = 9;
 /// Maximum request or response bytes, enforced on both sides.
 pub const MAX_MESSAGE: usize = exact_runner::MAX_HOST_WORK_BYTES;
 
@@ -416,6 +416,10 @@ fn read_outcome(r: &mut Reader<'_>) -> Result<Outcome, String> {
 }
 fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
     match result {
+        Ok(Answer::Later(r)) if r.preload_refusal().is_some() => encode_result(
+            w,
+            Err(DataError::Unavailable(r.preload_refusal().unwrap().into())),
+        ),
         // A long poll that is no stream's independent GET, or with bad terms (LLP
         // 1016.000 D8), is refused before it crosses, ahead of every other kind.
         Ok(Answer::Later(r))
@@ -547,6 +551,10 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
             // A stream (tag 9) is always independent (LLP 1016.000); a long
             // poll (tag 10, D8) is a stream with its terms after the body; a
             // two-way socket (tag 11, LLP 1016.003) is a stream.
+            if let Some(name) = &r.preload {
+                w.u8(13);
+                w.string(name);
+            }
             if !r.socket && r.cache != CacheMode::Unspecified {
                 w.u8(12);
                 w.string(r.cache.name());
@@ -613,8 +621,18 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
     }
 }
 fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> {
-    let tag = r.u8().map_err(error)?;
-    Ok(match tag {
+    let mut tag = r.u8().map_err(error)?;
+    let preload = if tag == 13 {
+        let name = r.string().map_err(error)?;
+        tag = r.u8().map_err(error)?;
+        if !matches!(tag, 1 | 6 | 9..=12) {
+            return Err("invalid preload HTTP result tag".into());
+        }
+        Some(name)
+    } else {
+        None
+    };
+    let mut answer = match tag {
         0 => Ok(Answer::Now(Value::decode(r).map_err(error)?)),
         1 | 6 | 9..=11 => Ok(Answer::Later(read_http(r, tag)?)),
         12 => {
@@ -663,7 +681,14 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
         3 => Err(DataError::BadArguments(r.string().map_err(error)?)),
         4 => Err(DataError::Unavailable(r.string().map_err(error)?)),
         _ => return Err("invalid result tag".into()),
-    })
+    };
+    if let (Some(name), Ok(Answer::Later(request))) = (preload, &mut answer) {
+        request.preload = Some(name.into_boxed_str());
+        if let Some(why) = request.preload_refusal() {
+            return Err(why.into());
+        }
+    }
+    Ok(answer)
 }
 
 /// An HTTP result's request (tags 1, 6 and 9–11): a stream's, a long poll's
@@ -682,6 +707,7 @@ fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
         body_to: None,
         redirect: Redirect::Follow,
         cache: Default::default(),
+        preload: None,
         held: false,
         reach: Default::default(),
         listen: None,
