@@ -13,12 +13,12 @@ component Tabs
     prefix: string
   view
     nav aria-label="Sections" flex=1 min-width=0
-      column gap=2 padding="4px 12px 12px"
+      column gap=2 padding="0 12px 10px"
         for t in nav.tabs key=t.id
-          link href=t.href id=`${prefix}tab-${t.id}` testId=`${prefix}tab-${t.id}` aria-current=(t.id == tab ? "true" : "false") class=Item padding-left=12 background-color=(t.id == tab ? "var(--color-background-selected)" : "transparent")
-            row align-items="center" gap=10
-              image t.icon aria-hidden=true font-size="var(--text-sm)" color=(t.id == tab ? "var(--color-text-default)" : "var(--color-icon-tertiary)")
-              text t.title font-size="var(--text-sm)" font-weight=(t.id == tab ? 500 : 400) color=(t.id == tab ? "var(--color-text-default)" : "var(--color-text-secondary)")
+          link href=t.href id=`${prefix}tab-${t.id}` testId=`${prefix}tab-${t.id}` aria-current=(t.id == tab ? "true" : "false") padding="8px 12px" border-radius="var(--radius-lg)" background-color=(t.id == tab ? "var(--color-background-selected)" : "transparent")
+            row align-items="center" gap=8
+              image t.icon aria-hidden=true width="1rem" height="1rem" color="var(--color-icon-default)"
+              text t.title font-size="var(--text-sm)" font-weight=500 line-height=1.4 color="var(--color-text-default)"
 
 component NavLink
   props
