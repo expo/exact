@@ -78,8 +78,8 @@ public struct Batch {
     public var journal: [String] = []
     package var frameWorkTiming: FrameWorkTiming?
     /// It may change the screen when it applies: it has ops, a control's
-    /// viewless contents, page facts or the orientation lock. An error is only logged.
-    package var changesScreen: Bool { !ops.isEmpty || controls || facts || orientation != nil }
+    /// viewless contents or page facts. The presenter resolves an orientation request separately.
+    package var changesScreen: Bool { !ops.isEmpty || controls || facts }
     package init(ops: [BatchOp], timers: Bool, motion: Bool, clock: Double?, error: String?, timerDueMs: Double? = nil, pending: Bool = false, busy: Bool = false) {
         self.ops = ops; self.timers = timers; self.motion = motion; self.clock = clock
         self.error = error; self.timerDueMs = timerDueMs; self.pending = pending

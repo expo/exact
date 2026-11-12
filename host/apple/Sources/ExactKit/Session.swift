@@ -1035,14 +1035,14 @@ public final class ExactSession {
         apply(runtime.surfaceRecord(name, json))
     }
 
-    /// A batch that changes nothing: it shows nothing new (`showsNothing`), has no error to log and moves no hold, the
+    /// A batch that changes nothing: it shows nothing new (`showsNothing`), has no orientation readback or error to log and moves no hold, the
     /// wake lock (LLP 1125 D11) or word on work the app must finish (`Holds.swift`). Its timer deadline is the caller's to compare.
-    func changesNothing(_ batch: Batch) -> Bool { showsNothing(batch) && batch.error == nil && batch.wakelock == nil && batch.mustFinish == nil }
+    func changesNothing(_ batch: Batch) -> Bool { showsNothing(batch) && batch.orientation == nil && batch.error == nil && batch.wakelock == nil && batch.mustFinish == nil }
     /// A batch that changes nothing the presenter shows: it leaves the screen as it is (no ops, control's
     /// viewless contents, LLP 1069.011 §9, page facts or orientation lock), asks for no canvas image, and
     /// leaves the motion, spatial, frame-task, canvas and owed-draw state as they stand.
     func showsNothing(_ batch: Batch) -> Bool {
-        !batch.changesScreen && batch.canvasImages.isEmpty && batch.motion == frames.motion && batch.spatial == frames.spatial
+        !batch.changesScreen && !presenter.orientationChangesScreen(batch) && batch.canvasImages.isEmpty && batch.motion == frames.motion && batch.spatial == frames.spatial
             && batch.canvasOwed == canvasOwed && batch.canvas == frames.canvas2d && batch.frames == frames.tasks
     }
 
@@ -1156,6 +1156,7 @@ public final class ExactSession {
         }
         // Each presenter takes its boot's table, a second one with the same too.
         ThemeRoles.apply(batch, root: presenter.root); if batch.ops.contains(where: { $0.op == .roles }) { presenter.applyThemeTint() }
+        let orientationChanged = presenter.orientationChangesScreen(batch)
         ThemeRoles.within(presenter.root) { presenter.apply(batch) }; Tambers.moved(self) // bindings' places (LLP 1121 D12)
         if !batch.canvasImages.isEmpty { presenter.canvas2d.load(batch.canvasImages) }
         AnimatedRasters.shared.poke()
@@ -1182,7 +1183,7 @@ public final class ExactSession {
             transformInputHold?.cancelIfInputIneligible()
             presenter.transformGeometry.changed()
             applying = false
-            ExactLaunch.shared.applied(self, batch)
+            ExactLaunch.shared.applied(self, batch, orientationChanged: orientationChanged)
             workEnded()
             #if os(macOS)
             regions.flush()
