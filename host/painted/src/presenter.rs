@@ -930,11 +930,19 @@ impl<D: DataSource> Presenter<D> {
                 self.surfaces.enqueue(r, &admitted);
                 continue;
             }
-            // No system browser here (LLP 1069.006 D5): 501, delivered by the next pump as an
-            // admission answer; under the agent it is held, as on every host (LLP 1146 D4).
+            // Android's reader opens the browser. The headless hosts keep D5's 501;
+            // the agent holds the request before either path (LLP 1146 D4).
             if r.request.is_auth() {
-                let (agent, none) = (self.agent, exact_runner::auth::Browser::None);
-                exact_runner::auth::arm(self.host.runner_mut(), &r, agent, none, None);
+                let browser = if cfg!(target_os = "android") && self.has_shell() {
+                    exact_runner::auth::Browser::Android
+                } else {
+                    exact_runner::auth::Browser::None
+                };
+                if let exact_runner::auth::Arm::Present(session) =
+                    exact_runner::auth::arm(self.host.runner_mut(), &r, self.agent, browser, None)
+                {
+                    self.open_auth(r.ticket, session);
+                }
                 self.executor.notify();
                 continue;
             }

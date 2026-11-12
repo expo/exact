@@ -610,6 +610,8 @@ pub enum Arm {
 pub enum Browser {
     /// An authentication session (Apple).
     Native,
+    /// A Custom Tab or the default browser, returning by a custom-scheme intent.
+    Android,
     /// A popup to the app's callback page, on this origin (the web).
     Web,
     /// None (Linux, D5).
@@ -661,6 +663,60 @@ pub fn complete<D: DataSource>(
         },
         Err((status, message)) => settle(runner, ticket, status, message),
     }
+}
+
+/// Consume a declared Android callback endpoint before navigation, including
+/// stale and cold callbacks. Only a matching state selects a live session;
+/// its remaining checks can settle 502 without ending another sign-in.
+pub fn receive_callback<D: DataSource>(runner: &mut Runner<D>, url: &str) -> bool {
+    // A malformed response query still belongs to this endpoint, never to navigation.
+    let endpoint = url.split(['?', '#']).next().unwrap_or(url);
+    let Some(got) = Url::parse(endpoint) else {
+        return false;
+    };
+    // Recognize the endpoint even with userinfo, then reject it in `complete`.
+    let endpoint_matches = |callback: &str| {
+        Url::parse(callback).is_some_and(|want| {
+            !matches!(want.scheme.as_str(), "http" | "https")
+                && want.scheme == got.scheme
+                && want.authority.map(str::to_ascii_lowercase)
+                    == got
+                        .authority
+                        .map(|a| a.rsplit('@').next().unwrap_or(a).to_ascii_lowercase())
+                && want.path == got.path
+        })
+    };
+    if !callbacks(runner.data().grants())
+        .iter()
+        .any(|callback| endpoint_matches(callback))
+    {
+        return false;
+    }
+    // Read state even if another part of the response is malformed: `complete`
+    // must reject that response rather than leave the matching sign-in waiting.
+    let query = url
+        .split('#')
+        .next()
+        .unwrap_or(url)
+        .split_once('?')
+        .map_or("", |(_, q)| q);
+    let states: Vec<_> = query_pairs(query)
+        .filter_map(|(name, value)| (name == "state").then_some(value))
+        .collect();
+    let tickets: Vec<_> = runner
+        .auth_mut()
+        .live
+        .iter()
+        .filter(|live| {
+            endpoint_matches(&live.session.callback)
+                && states.iter().any(|state| same(state, &live.session.state))
+        })
+        .map(|live| live.ticket)
+        .collect();
+    if let Some(ticket) = tickets.into_iter().find(|t| runner.holds(*t)) {
+        complete(runner, ticket, Ok(url));
+    }
+    true
 }
 
 impl Sessions {
@@ -765,6 +821,13 @@ pub fn arm<D: DataSource>(
     if agent {
         runner.hold_request(ticket, "auth", &out.target, &session.summary());
         return Arm::Held;
+    }
+    if browser == Browser::Android
+        && Url::parse(&session.callback)
+            .is_some_and(|u| matches!(u.scheme.as_str(), "http" | "https"))
+    {
+        settle(runner, ticket, 501, "Android auth requires a custom-scheme callback; App Links and loopback callbacks are not supported");
+        return Arm::Settled;
     }
     if browser == Browser::None {
         runner.auth_mut().live.retain(|l| l.ticket != ticket);

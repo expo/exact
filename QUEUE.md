@@ -1812,3 +1812,5 @@ and the Linux headless CPU renderer without claiming display frame timing.
 - Game audio: after a large upward pitch change on a one-shot, the web output can be stopped about 168.5 ms of source before its end (1→16, 10.53 ms of playback), and a downward change leaves silence until the simulation ends the voice.
 
 - Changing an in-flight upload's finite `with` context makes a worker source's reply miss its original argument key (`data/src/placed.rs`, `parse_with`); the main-thread source takes the new context.
+
+- The web JS auth hold outlives a superseded mutation when its replacement does not call `openAuthSession` (`host/web-js/auth.js`). Replacing a sign-in mutation with a synchronous cancellation leaves its auth ticket in `state.pending`; a late callback can resume the old source and write its session. A browser regression test reproduced both effects. The supersession cleanup runs only when another auth session opens. Match the runner's let-go behavior.

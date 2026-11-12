@@ -2385,6 +2385,23 @@ saves the whole database file. Database files share the filesystem namespace,
 so closed databases can be copied or exported through `storage.fs`. SQLite integer results
 are `bigint`: convert them to a Contract-compatible value before returning.
 
+### Sign in through the system browser (`openAuthSession`)
+
+`openAuthSession` answers 501 on the headless Linux host and Windows, and on Android
+when no system browser resolves or `ephemeral: true` is requested (this build has no
+ephemeral browser API). Android supports custom-scheme callbacks from
+`auth.callback` grants; HTTPS App Links and loopback callbacks answer 501. Returning
+to the activity after it stopped, without a callback, cancels with 499, whether by
+Back or another link that brings the activity forward. A pause without a stop,
+such as a permission dialog or a multi-window focus change, keeps the wait. Callbacks
+are routed by endpoint and state: a stale, wrong-state or missing-state callback is
+consumed without completing the live sign-in or cancelling it on that resume.
+A matching state with invalid callback data, such as repeated state or userinfo,
+settles with 502. Callbacks without a live session are discarded. Reload retires the old wait. A browser wait survives activity
+recreation and expires after ten minutes, including device sleep, with 499. A launch
+delivered while no activity is attached cancels with 499. A sign-in
+interrupted by process death must be started again.
+
 ### Notifications
 
 `@exact/notifications` (LLP 1133.004) posts local notifications, hears their

@@ -204,6 +204,7 @@ impl<D: DataSource> Presenter<D> {
         self.read_ranges();
         self.give_clock();
         self.modules_replaced();
+        self.auth_replaced();
         self.brush.replaced();
         self.brush.lift = Default::default();
         // A picker's answer or a GPU surface is not the new tree's.
