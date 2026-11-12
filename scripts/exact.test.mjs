@@ -1126,6 +1126,7 @@ test('docs prints the section on its words first, matching whole words', () => {
     [['push'], 'docs/recipes/navigation-stack.md', /^routes nav$/m],
     [['deploy'], 'docs/recipes/porting-and-release.md', /Name the port when you make it/],
     [['haptics'], 'docs/start-here.md', /haptic\("selection"\)/],
+    [['platform', 'checks'], 'docs/start-here.md', /agent macos --chrome platform "clock data" "screenshot \.exact\/mac\.png window"/],
     [['glass'], 'docs/contract-for-agents.md', /glass/],
     [['detent'], 'docs/contract-for-agents.md', /detent/],
     [['tab', 'bar'], 'docs/recipes/tabs.md', /iOS's bar/],

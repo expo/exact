@@ -259,3 +259,15 @@ for (const mode of ['default', '--loopback', '--lan']) {
     }
   }, 120000);
 }
+
+for (const [from, label, path, title] of [
+  ['/recipes/permissions', 'error alert', '/recipes/error-alert', 'Recipe: tell the person something failed'],
+  ['/recipes/app-json', 'porting and release', '/recipes/porting-and-release', 'Recipe: porting an app, a release build, splitting the work'],
+]) {
+  test(`the short recipe label ${label} opens its titled page`, () => withPage({}, async page => {
+    await visit(page, from);
+    await page.getByRole('link', { name: label, exact: true }).click();
+    await page.getByRole('heading', { name: title, level: 1, exact: true }).waitFor();
+    expect(new URL(page.url()).pathname).toBe(path);
+  }));
+}
