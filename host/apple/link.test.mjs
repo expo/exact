@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { assertActivityRefusals } from './activities.mjs';
 import { resolveApp } from '../../scripts/app.mjs';
-import { appleComposition, assertCapabilityFrameworks, assertLinkedSdk, iosSimulatorTarget, loadedDylibs } from './link.mjs';
+import { appleComposition, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, loadedDylibs } from './link.mjs';
 import { systemFrameworks } from './compose.mjs';
 
 test('a live watch entry in an app with TypeScript reaches the bake', async () => {
@@ -451,4 +451,12 @@ test.skipIf(!process.env.EXACT_ACTIVITY_APP)('the assembled app and extension re
       writeFileSync(binary, bytes);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('outside production trust the SDK compiles for iOS 17.0, and the app keeps its minimumOS', () => {
+  const app = { manifest: { host: { ios: { minimumOS: '18.0' }, macos: { minimumOS: '15.0' } } } };
+  assert.deepEqual(deploymentTargets(app), { ios: '18.0', macos: '15.0' });
+  assert.deepEqual(compiledTargets(app, 'development'), { ios: '17.0', macos: '15.0' });
+  assert.deepEqual(compiledTargets(app, 'production'), { ios: '18.0', macos: '15.0' });
+  assert.deepEqual(compiledTargets({ manifest: {} }, 'development'), deploymentTargets({ manifest: {} }));
 });

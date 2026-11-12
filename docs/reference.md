@@ -865,7 +865,11 @@ canonical source directory, manifest id, destination, composition and trust
 policy. The Swift host is compiled once per destination for every app, in
 `<target>/apple-swift/<destination>-<minimum OS>`; each app only links there,
 one at a time, and its executable is copied to its own products before the next
-app links. A development build compiles it file by file and incrementally, and
+app links. Outside production trust, the iOS minimum in that name is always
+17.0: the SDK's Rust, C and Swift compile for it whatever `host.ios.minimumOS`
+says, and the app's minimum goes only to its Info.plist, its executable's link
+and its own Swift modules and packages, which Swift checks for availability as
+it compiles. A development build compiles it file by file and incrementally, and
 beside the app's Rust; the host's two Rust modules build in
 `<target>/apple-modules`, and a checkout that has not built one takes it from
 `~/.cache/exact/apple-modules` when another checkout of this machine compiled

@@ -1,5 +1,6 @@
-// What an Apple app links: the capabilities its composition names, and the
-// SDK its executable records, with the device launch link of LLP 1047.001.001.
+// What an Apple app links: the capabilities its composition names, the deployment
+// targets it compiles and links for, and the SDK its executable records, with the
+// device launch link of LLP 1047.001.001.
 import { spawnSync } from './toolchain.mjs';
 import { readFileSync, mkdirSync, rmSync, cpSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
@@ -45,6 +46,29 @@ export function iosSimulatorTarget(arch = process.env.EXACT_IOS_SIM_ARCH ?? (pro
   if (!cpu) throw new Error(`host/apple: unsupported iOS simulator architecture ${arch}; EXACT_IOS_SIM_ARCH is arm64 or x86_64`);
   return { target: cpu === 'arm64' ? 'aarch64-apple-ios-sim' : 'x86_64-apple-ios', triple: `${cpu}-apple-ios17.0-simulator` };
 }
+
+const newer = (a, b) => (a.split('.').map(Number).reduce((x, n, i) => x || n - (b.split('.').map(Number)[i] ?? 0), 0) > 0 ? a : b);
+/** The deployment targets an app builds for: its manifest's `minimumOS`, never
+ * below the host's own floor (Package.swift's). They are what its Info.plist
+ * declares, what its executable links for, and what its own Swift modules and
+ * packages compile for (Swift refuses an API newer than the target at compile
+ * time); `compiledTargets` is what the rest compiles for. */
+export function deploymentTargets(app) {
+  return {
+    ios: newer(String(app.manifest.host?.ios?.minimumOS ?? '17.0'), '17.0'),
+    macos: newer(String(app.manifest.host?.macos?.minimumOS ?? '14.0'), '14.0'),
+  };
+}
+/** The deployment targets the SDK's units compile for: its Rust and C (the
+ * app's crate with them, in one Cargo build), the Swift host, its arms and
+ * extensions, and the filter kernels. Outside production trust they compile
+ * for iOS's floor whatever the app's `minimumOS`, so every app shares one
+ * compile of each, which a minimum of its own compiled cold (about 440 s).
+ * Code built for 17.0 runs on every later iOS, and the app installs only where
+ * its Info.plist says. Rust and C check no availability as they compile, so the
+ * app's crate loses nothing at the floor. */
+export const compiledTargets = (app, trust = process.env.EXACT_UPDATE_TRUST ?? 'development') =>
+  trust === 'production' ? deploymentTargets(app) : { ...deploymentTargets(app), ios: '17.0' };
 
 /** The capabilities with a Swift half, by name, and the product of
  * `Package.swift` (its `capabilities` table) each is. */
