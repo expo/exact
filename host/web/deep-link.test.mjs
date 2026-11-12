@@ -181,6 +181,9 @@ test('a build tree answers a miss with 404 and its 404.html, or a page with the 
     for (const path of ['/nope.png', '/no/such/route']) expect(await get(path, 'application/json'), path).toEqual([404, '']);
     // Without a 404 page, a request for a page that does not ask for HTML (curl's) is told how to ask.
     expect(await get('/profile/alice')).toEqual([404, "/profile/alice is a page: ask for it as a browser does, with Accept: text/html (curl -H 'Accept: text/html' …).\n"]);
+    writeFileSync(resolve(dist, '404.md'), '# Not found\n');
+    expect(await get('/profile/alice', 'text/markdown')).toEqual([404, "/profile/alice is a page: ask for it as a browser does, with Accept: text/html (curl -H 'Accept: text/html' …).\n"]);
+    expect(await get('/no/such/route', 'text/markdown')).toEqual([404, '# Not found\n']);
     // Asked without `miss`, a miss is nothing, as before: the dev gallery and the tool serve only what is there.
     expect(buildTreeFile(dist, '/no/such/route', 'text/html')).toBe(null);
     expect(buildTreeFile(dist, '/no/such/route', 'text/html', {miss: true})).toMatchObject({route: '/shell.html', status: 404});

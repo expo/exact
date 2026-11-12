@@ -248,24 +248,26 @@ test('what a build keeps beside its directory is its own, or the directory is re
 });
 
 
-test('Markdown home pages negotiate within current and retained generations', async () => {
+test('Markdown home pages and the missing page negotiate within current and retained generations', async () => {
   const { root, dist, stage } = workspace();
   const server = createServer((req, res) => serveBuildTree(dist, req, res));
   try {
-    const first = stage(1); writeFileSync(join(first, 'index.md'), '# First\n');
+    const first = stage(1); writeFileSync(join(first, 'index.md'), '# First\n'); writeFileSync(join(first, '404.md'), '# First missing\n');
     replaceBuild(first, dist);
     const before = generationOf(dist);
-    const second = stage(2); writeFileSync(join(second, 'index.md'), '# Second\n');
+    const second = stage(2); writeFileSync(join(second, 'index.md'), '# Second\n'); writeFileSync(join(second, '404.md'), '# Second missing\n');
     replaceBuild(second, dist);
     await new Promise(ok => server.listen(0, '127.0.0.1', ok));
     const seen = [];
-    for (const id of [generationOf(dist), before]) {
-      const r = await fetch(`http://127.0.0.1:${server.address().port}/.exact/gen/${id}/`, { headers: { accept: 'text/markdown' } });
+    for (const id of [generationOf(dist), before]) for (const path of ['', 'no/such/route']) {
+      const r = await fetch(`http://127.0.0.1:${server.address().port}/.exact/gen/${id}/${path}`, { headers: { accept: 'text/markdown' } });
       seen.push([r.status, r.headers.get('content-type'), r.headers.get('vary'), await r.text()]);
     }
     expect(seen).toEqual([
       [200, 'text/markdown; charset=utf-8', 'Accept', '# Second\n'],
+      [404, 'text/markdown; charset=utf-8', 'Accept', '# Second missing\n'],
       [200, 'text/markdown; charset=utf-8', 'Accept', '# First\n'],
+      [404, 'text/markdown; charset=utf-8', 'Accept', '# First missing\n'],
     ]);
   } finally {
     server.closeAllConnections(); await new Promise(ok => server.close(ok));
