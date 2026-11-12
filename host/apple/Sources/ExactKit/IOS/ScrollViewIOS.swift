@@ -449,7 +449,10 @@ extension NodeView {
             }
             return
         }
-        if let saved = hiddenScroll {
+        // Restore a saved position once the port has a size to hold it, or with an authored position, which replaces it.
+        // A pane its arrangement hid stays covered whole, laid out as `display: none`, until the covers that follow the
+        // arrangement's retirement are delivered, and a write before then would clamp to the top.
+        if let saved = hiddenScroll, !sv.bounds.isEmpty || pendingScrollTop != nil || pendingScrollLeft != nil {
             hiddenScroll = nil
             writeScrollPosition(in: sv, left: Double(saved.x), top: Double(saved.y), animated: false, titleSlack: false)
         }
