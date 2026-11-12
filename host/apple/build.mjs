@@ -727,6 +727,9 @@ async function main(args, lockHeld = false) {
     // Compiled for the floor (`compiledTargets`), the executable still links for the app's `minimumOS`, which this
     // later `-platform_version` records. Only the products' links take it, so the compiles stay every app's.
     else if (compiled.ios !== targets.ios) executableLink.push('-Xlinker', '-platform_version', '-Xlinker', destination, '-Xlinker', targets.ios, '-Xlinker', read('xcrun', ['--sdk', sdkName, '--show-sdk-version']).stdout.trim());
+    // A development device archive ships no dSYM. Its debug map names the object files it was linked from, under the
+    // app's build directory, whose path holds the app's id; relative to that directory, the executable names no app.
+    if (device && args.includes('--development')) executableLink.push('-Xlinker', '-oso_prefix', '-Xlinker', `${appleArtifacts(app, { destination }).owner}/`);
   } else {
     // The same `--sysroot` on macOS: clang reads no SDK version from it, so the link recorded
     // the deployment target as the SDK (`sdk 14.0`), and AppKit, which keys its macOS 26 design
