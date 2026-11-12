@@ -12,6 +12,8 @@ pub trait LaunchContext {
     fn set_secret(&mut self, name: &str, value: &str) -> Result<(), String>;
     /// Durably forget a granted kept secret before returning.
     fn forget_secret(&mut self, name: &str) -> Result<(), String>;
+    /// Start a named preload, or return its refusal reason (LLP 1162.000 D1–D3).
+    fn preload(&mut self, request: LaunchRequest) -> Result<(), String>;
     /// Fetch synchronously, under the binary's grants, without the HTTP cache.
     fn fetch(&mut self, request: Request) -> Result<Response, String>;
 }
@@ -25,12 +27,12 @@ pub struct Launch {
     pub run: Arc<LaunchFunction>,
 }
 /// The engine-free entry point's signature.
-pub type LaunchFunction = dyn Fn(&mut dyn LaunchContext) -> Vec<LaunchRequest> + Send + Sync;
+pub type LaunchFunction = dyn Fn(&mut dyn LaunchContext) + Send + Sync;
 impl Launch {
     /// Register a function with `env!("CARGO_PKG_NAME")` as its name.
     pub fn new(
         name: &'static str,
-        run: impl Fn(&mut dyn LaunchContext) -> Vec<LaunchRequest> + Send + Sync + 'static,
+        run: impl Fn(&mut dyn LaunchContext) + Send + Sync + 'static,
     ) -> Self {
         Self {
             name,
@@ -39,7 +41,7 @@ impl Launch {
     }
 }
 
-/// One named request returned by a crate's launch function.
+/// One named request handed to a crate's launch context.
 pub struct LaunchRequest {
     /// Unique among this crate's and the manifest's names.
     pub name: String,

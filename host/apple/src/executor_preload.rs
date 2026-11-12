@@ -29,11 +29,11 @@ pub struct Definition {
 pub enum Event {
     /// Handed to the repository fetch client.
     Sent,
-    /// The crate returned its process-start definitions.
+    /// The crate finished its process-start function.
     LaunchRan {
         /// Time spent in the entry point, in milliseconds.
         elapsed_ms: u64,
-        /// Number of requests returned, before validation.
+        /// Number of requests handed over, before validation.
         requests: usize,
     },
     /// The crate panicked; no payload is retained.
@@ -480,6 +480,17 @@ impl Control {
         update(&self.destination, |cache| drop_secret(cache, name));
         let _ = self.send.send(Message::Tick);
     }
+    pub(crate) fn cancel_names(&self, names: &[String]) {
+        update(&self.destination, |cache| {
+            for i in 0..cache.preloads.len() {
+                if names.contains(&cache.preloads[i].name) {
+                    drop_held(cache, i, Event::Cancelled);
+                    cache::drop_preload_copy(cache, i);
+                }
+            }
+        });
+        let _ = self.send.send(Message::Tick);
+    }
     /// Drain facts before or after adoption.
     pub fn take_journal(&self) -> Vec<Fact> {
         update(&self.destination, |cache| {
@@ -767,7 +778,7 @@ pub(super) fn serve_ready(state: &mut State) {
             break;
         }
         let job = &state.jobs[0][index];
-        if job.forgotten && waiting(state, job) {
+        if job.forgotten && !job.request.prefetch && waiting(state, job) {
             let job = state.jobs[0].remove(index).expect("forgotten preload read");
             state.counts[0] -= 1;
             state.bytes[0] -= job.charge;
@@ -940,14 +951,22 @@ pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
     }
     let key = Equal::of(&r.request);
     for i in 0..cache.held_len() {
-        if cache.held(i).key == key
-            && cache
-                .held(i)
+        let held = cache.held(i);
+        let named = cache.preload_names
+            && held.prefetch.is_none()
+            && r.request.preload.as_deref() == Some(held.name.as_str())
+            && held.key.method == key.method
+            && held.key.url == key.url;
+        let equal = held.key == key
+            && held
                 .request
                 .as_ref()
-                .is_some_and(|request| request.body == r.request.body)
-        {
+                .is_some_and(|request| request.body == r.request.body);
+        if named || equal {
             drop_held(cache, i, Event::DroppedByRefresh);
+            if i < cache.preloads.len() {
+                cache::drop_preload_copy(cache, i);
+            }
         }
     }
 }

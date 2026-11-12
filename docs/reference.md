@@ -340,29 +340,37 @@ Hosts that support preloads send them at process start; the app's own reads take
 a preload's reply, and a read made for a tool is sent. A Rust data source may
 implement `launch() -> Option<exact_runner::request::Launch>` and register its
 `launch` function with `Launch::new(env!("CARGO_PKG_NAME"), launch)`. The function
-takes `&mut dyn LaunchContext` and returns `Vec<LaunchRequest>`: named requests,
-with `when` defaulting to `Start` and the request's `timeout_ms` as its deadline.
+takes `&mut dyn LaunchContext` and returns nothing. Hand each named `LaunchRequest`
+to `context.preload(request)`: it returns `Result<(), String>` with a refusal reason,
+else starts it immediately (`Foreground` waits for Opened). `when` defaults to
+`Start`; the request's `timeout_ms` is its exchange deadline.
 The context offers `secret`, durable `set_secret` and `forget_secret`, and blocking
 `fetch` under the binary's grants, without the cache. It exposes no app storage.
 On hosts that start preloads, it runs before the app's module, after the manifest's
-start requests reach the client. Its requests share the eight-entry bound; writes
-of any secret it read invalidate them. After five seconds, boot reads waiting for
-its definitions proceed and its late requests are discarded.
-A panic in it yields no requests where the build unwinds (a development build);
-a release build aborts on a panic there as anywhere in the crate.
+start requests reach the client. Its requests share the eight-entry bound.
+A handoff checks the version last read or written of every secret the function
+has used; an intervening app write refuses it. Each accepted request depends on
+all those secrets: a later write by either writer cancels it and drops its reply.
+After five seconds, boot reads waiting for definitions proceed. Requests handed
+over before that deadline stand; later handoffs are refused.
+A panic cancels the function's requests where the build unwinds (a development
+build); a release build aborts on a panic there as anywhere in the crate.
 
 A read may name its preload: `fetch(url, { exactPreload: "feed" })`, or
 `Request::get(url).preload("feed")?` in Rust. Names must match `^[a-z][a-z0-9-]*$`.
 The held reply must have the same method and URL; headers and body may differ.
 With an update selected, including a plan-only update, only full request equality
 can take a preload. A missing or mismatched name also falls back to equality.
+A refresh drops both the preload it names at an equal method and URL and any
+fully equal hold; under an update selection only equality applies.
 On the web the option is accepted and ignored. A TypeScript bundle naming it needs
 runtime 13 (LLP 1162.000 D1, D2).
 
 For a read the next screen will make, use `fetch(url, { exactPrefetch: true })`
 or `Request::get(url).prefetch()` in Rust. It returns the reply and holds it for
 an equal read for ten seconds from completion, even if its resource is let go.
-The caller's abort cancels it. Sends, streams and file-bodied requests refuse it.
+The caller's abort cancels it. Only the app's own reads may prefetch; a tool's,
+wake's or device's request, a send, a stream or a file-bodied request refuses it.
 Eight completed prefetches share the cache's byte bounds with launch preloads;
 a ninth drops the oldest. On the web only the browser's cache may keep it.
 A TypeScript bundle naming it needs runtime 13; the Rust module seam is ABI 9

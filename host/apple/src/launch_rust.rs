@@ -66,7 +66,7 @@ impl Running {
 
 pub(super) struct Prepared {
     pub preload: Preload,
-    pub when: PreloadWhen,
+    pub grants: String,
     pub versions: BTreeMap<String, u64>,
 }
 
@@ -82,7 +82,7 @@ pub(super) fn run(
     app: &str,
     grants: &str,
     definitions: &[exact_runner::request::Preload],
-) -> Vec<Prepared> {
+) {
     let running = Arc::new(Running {
         started: Instant::now(),
         done: Mutex::new(false),
@@ -133,94 +133,44 @@ pub(super) fn run(
         .is_err()
     {
         running.expire(running.started + LAUNCH_DEADLINE);
-        return Vec::new();
+        return;
     }
-    let mut context = Context::new(launch, app, grants, running.clone());
+    let mut context = Context::new(launch, app, grants, running.clone(), definitions);
     let result =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (entry.run)(&mut context)));
     running.expire(Instant::now());
     let mut done = running.done.lock().unwrap();
+    if result.is_err() {
+        launch
+            .0
+            .foreground
+            .lock()
+            .unwrap()
+            .retain(|d| !context.accepted.contains(&d.preload.name));
+        launch
+            .0
+            .set
+            .get()
+            .unwrap()
+            .control
+            .cancel_names(&context.accepted);
+    }
     if *done {
-        return Vec::new();
+        return;
     }
     *done = true;
     running.changed.notify_all();
     let elapsed_ms = running.started.elapsed().as_millis() as u64;
-    let returned = match result {
-        Ok(requests) => {
-            running.record(
-                launch,
-                PreloadEvent::LaunchRan {
-                    elapsed_ms,
-                    requests: requests.len(),
-                },
-            );
-            requests
-        }
-        Err(_) => {
-            running.record(launch, PreloadEvent::LaunchPanicked { elapsed_ms });
-            return Vec::new();
-        }
-    };
-    let mut names: std::collections::BTreeSet<String> =
-        definitions.iter().map(|d| d.name.into()).collect();
-    let mut accepted = Vec::new();
-    for LaunchRequest {
-        name,
-        request,
-        when,
-    } in returned
-    {
-        let valid_name = name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
-            && name
-                .bytes()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-');
-        let outcome = if !valid_name
-            || !names.insert(name.clone())
-            || definitions.len() + accepted.len() >= 8
-        {
-            Some(PreloadEvent::Refused)
-        } else if url::Url::parse(&request.url).is_err() {
-            Some(PreloadEvent::InvalidUrl)
-        } else if request.headers.iter().any(|(_, value)| {
-            !ibex2::stdlib::fetch::is_valid_value(value)
-                || ibex2::stdlib::fetch::normalize_value(value) != value
-        }) {
-            Some(PreloadEvent::InvalidHeader)
-        } else if !crate::executor::valid_request(&request) {
-            Some(PreloadEvent::Refused)
-        } else if exact_runner::grants::admitting_request(grants, &request).is_none() {
-            Some(PreloadEvent::RefusedGrant)
-        } else {
-            None
-        };
-        if let Some(outcome) = outcome {
-            launch.0.journal.lock().unwrap().push(PreloadFact {
-                name,
-                origin: origin(&request),
-                outcome,
-            });
-            continue;
-        }
-        launch
-            .0
-            .marks
-            .lock()
-            .unwrap()
-            .entries
-            .push((name.clone(), LaunchMark::default()));
-        accepted.push(Prepared {
-            preload: Preload {
-                name,
-                deadline_ms: request.timeout_ms,
-                request,
-                secrets: context.used.keys().cloned().collect(),
+    running.record(
+        launch,
+        match result {
+            Ok(()) => PreloadEvent::LaunchRan {
+                elapsed_ms,
+                requests: context.requests,
             },
-            when,
-            versions: context.used.clone(),
-        });
-    }
-    accepted
+            Err(_) => PreloadEvent::LaunchPanicked { elapsed_ms },
+        },
+    );
 }
 
 struct Context<'a> {
@@ -233,9 +183,19 @@ struct Context<'a> {
     guarded: std::collections::BTreeSet<String>,
     used: BTreeMap<String, u64>,
     running: Arc<Running>,
+    names: std::collections::BTreeSet<String>,
+    accepted: Vec<String>,
+    requests: usize,
+    manifest_count: usize,
 }
 impl<'a> Context<'a> {
-    fn new(launch: &'a LaunchPreloads, app: &str, grants: &'a str, running: Arc<Running>) -> Self {
+    fn new(
+        launch: &'a LaunchPreloads,
+        app: &str,
+        grants: &'a str,
+        running: Arc<Running>,
+        definitions: &[exact_runner::request::Preload],
+    ) -> Self {
         let backend = || {
             crate::store::launch_backend(grants, app)
                 .ok()
@@ -276,6 +236,10 @@ impl<'a> Context<'a> {
             guarded,
             used: BTreeMap::new(),
             running,
+            names: definitions.iter().map(|d| d.name.into()).collect(),
+            accepted: Vec::new(),
+            requests: 0,
+            manifest_count: definitions.len(),
         }
     }
     fn write(&mut self, name: &str, value: Option<&str>) -> Result<(), String> {
@@ -285,24 +249,21 @@ impl<'a> Context<'a> {
         if *self.running.done.lock().unwrap() {
             return Err("launch deadline".into());
         }
-        let backend = self.backend.as_ref().ok_or("launch secrets unavailable")?;
-        self.launch.invalidate(name);
-        let result = backend.write(name, value);
-        let version = self.launch.invalidate(name);
-        result?;
-        self.versions.insert(name.into(), version);
-        if self.used.contains_key(name) {
+        let backend = self.backend.clone().ok_or("launch secrets unavailable")?;
+        self.launch.with_secret_version(name, |version| {
+            backend.write(name, value)?;
+            self.versions.insert(name.into(), version);
             self.used.insert(name.into(), version);
-        }
-        match value {
-            Some(value) => {
-                self.snapshot.insert(name.into(), value.into());
+            match value {
+                Some(value) => {
+                    self.snapshot.insert(name.into(), value.into());
+                }
+                None => {
+                    self.snapshot.remove(name);
+                }
             }
-            None => {
-                self.snapshot.remove(name);
-            }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 }
 impl LaunchContext for Context<'_> {
@@ -319,6 +280,87 @@ impl LaunchContext for Context<'_> {
     }
     fn forget_secret(&mut self, name: &str) -> Result<(), String> {
         self.write(name, None)
+    }
+    fn preload(
+        &mut self,
+        LaunchRequest {
+            name,
+            request,
+            when,
+        }: LaunchRequest,
+    ) -> Result<(), String> {
+        self.requests += 1;
+        self.running.expire(Instant::now());
+        let done = self.running.done.lock().unwrap();
+        let versions = self.launch.0.invalidated.lock().unwrap();
+        let valid_name = name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+            && name
+                .bytes()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-');
+        let refusal = if *done {
+            Some((PreloadEvent::Refused, "launch deadline"))
+        } else if !valid_name
+            || !self.names.insert(name.clone())
+            || self.manifest_count + self.accepted.len() >= 8
+        {
+            Some((PreloadEvent::Refused, "launch preload name or limit"))
+        } else if url::Url::parse(&request.url).is_err() {
+            Some((PreloadEvent::InvalidUrl, "invalid launch preload URL"))
+        } else if request.headers.iter().any(|(_, value)| {
+            !ibex2::stdlib::fetch::is_valid_value(value)
+                || ibex2::stdlib::fetch::normalize_value(value) != value
+        }) {
+            Some((PreloadEvent::InvalidHeader, "invalid launch preload header"))
+        } else if !crate::executor::valid_request(&request) {
+            Some((PreloadEvent::Refused, "invalid launch preload request"))
+        } else if exact_runner::grants::admitting_request(self.grants, &request).is_none() {
+            Some((PreloadEvent::RefusedGrant, "launch preload grant refused"))
+        } else if self
+            .used
+            .iter()
+            .any(|(name, version)| versions.get(name).copied().unwrap_or(0) != *version)
+        {
+            Some((
+                PreloadEvent::DroppedBySecret,
+                "launch preload secret changed",
+            ))
+        } else {
+            None
+        };
+        if let Some((outcome, reason)) = refusal {
+            self.launch.0.journal.lock().unwrap().push(PreloadFact {
+                name,
+                origin: origin(&request),
+                outcome,
+            });
+            return Err(reason.into());
+        }
+        self.launch
+            .0
+            .marks
+            .lock()
+            .unwrap()
+            .entries
+            .push((name.clone(), LaunchMark::default()));
+        self.accepted.push(name.clone());
+        let preload = Preload {
+            name,
+            deadline_ms: request.timeout_ms,
+            request,
+            secrets: self.used.keys().cloned().collect(),
+        };
+        if when == PreloadWhen::Foreground
+            && self.launch.0.phase.load(Ordering::Acquire) & OPENED == 0
+        {
+            self.launch.0.foreground.lock().unwrap().push(Prepared {
+                preload,
+                grants: self.grants.into(),
+                versions: self.used.clone(),
+            });
+        } else {
+            self.launch.extend_rust(preload, self.grants);
+        }
+        Ok(())
     }
     fn fetch(&mut self, request: Request) -> Result<Response, String> {
         if *self.running.done.lock().unwrap() {

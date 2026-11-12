@@ -208,7 +208,11 @@ fn prefetch_refuses_sends_streams_files_and_independent_requests() {
             }
             assert_eq!(
                 core.run(r, None),
-                Err("exactPrefetch requires a plain HTTP read")
+                Err(if kind == 0 {
+                    "exactPrefetch requires the app's own plain HTTP read"
+                } else {
+                    "exactPrefetch requires a plain HTTP read"
+                })
             );
         }
         assert_eq!(server.count(), 0);
@@ -395,5 +399,127 @@ fn a_driver_failure_answers_a_prefetch_before_the_held_reply_or_transport() {
         );
         assert!(read(&core, &woke, &server, 3, "/next").1);
         assert_eq!(server.count(), 1);
+    }
+}
+
+#[test]
+fn prefetch_refuses_tool_wake_and_device_reaches_without_holding_a_reply() {
+    for asynchronous in [false, true] {
+        for origin in [
+            exact_runner::CallOrigin::Tool,
+            exact_runner::CallOrigin::Wake,
+            exact_runner::CallOrigin::Device,
+        ] {
+            let server = Server::new();
+            let (core, woke) = server.core(asynchronous, true);
+            let mut request = server.request("/next").prefetch();
+            request.reach.origin = origin;
+            let result = core.run(job(1, request), None);
+            assert_eq!(
+                result,
+                Err("exactPrefetch requires the app's own plain HTTP read")
+            );
+            assert!(core
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .cache
+                .as_ref()
+                .unwrap()
+                .prefetches
+                .is_empty());
+            server.plan("/next", Plan::new(200, &[], b"sent"));
+            assert!(core.resume_ordered().is_empty());
+            assert!(!read(&core, &woke, &server, 2, "/next").1);
+            assert_eq!(server.count(), 1);
+        }
+    }
+}
+
+#[test]
+fn a_forgotten_prefetch_survives_pending_definitions_but_its_abort_removes_it() {
+    for asynchronous in [false, true] {
+        for function in [false, true] {
+            for aborted in [false, true] {
+                let server = Server::new();
+                let set = Preloads::start(Vec::new(), "", ibex2::host::Host::new);
+                let control = set.control();
+                let now = Instant::now();
+                control.test_clock(Arc::new(move || now));
+                if function {
+                    control.launch_pending(Some(Duration::from_secs(5)));
+                } else {
+                    control.definitions_pending(true);
+                }
+                let (core, woke) = server.core(asynchronous, true);
+                assert!(core.adopt_preloads(set).is_ok());
+                let release = held_plan(&server, "/next");
+                core.run(job(1, server.request("/next").prefetch()), None)
+                    .unwrap();
+                core.forget(|_| false);
+                let (queued, running) = {
+                    let state = core.shared.state.lock().unwrap();
+                    (state.jobs[0].len(), state.running.len())
+                };
+                assert_eq!(queued, 1);
+                assert_eq!(running, 0);
+                if aborted {
+                    core.cancel(&[1]);
+                }
+                control.launch_pending(None);
+                control.definitions_pending(false);
+                if !aborted {
+                    server.seen(1);
+                }
+                core.run(job(2, server.request("/next")), None).unwrap();
+                release.send(()).unwrap();
+                let (ticket, reply, timing) = collect(&core, &woke);
+                assert_eq!(ticket, 2);
+                assert_eq!(timing.cached, !aborted);
+                assert!(matches!(reply, Outcome::Response(r) if r.body == b"prefetched"));
+                assert_eq!(server.count(), 1);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_refresh_drops_an_equal_prefetch_ready_or_inflight() {
+    for asynchronous in [false, true] {
+        for pending in [false, true] {
+            for mode in 0..3 {
+                let server = Server::new();
+                let release = held_plan(&server, "/next");
+                let (core, woke) = server.core(asynchronous, true);
+                core.run(job(1, server.request("/next").prefetch()), None)
+                    .unwrap();
+                server.seen(1);
+                if !pending {
+                    release.send(()).unwrap();
+                    collect(&core, &woke);
+                }
+                server.plan("/next", Plan::new(200, &[], b"new"));
+                let mut refresh = job(2, server.request("/next").preload("feed").unwrap());
+                match mode {
+                    0 => refresh.forced = true,
+                    1 => refresh.request.cache = exact_runner::CacheMode::Reload,
+                    _ => refresh.request.cache = exact_runner::CacheMode::NoCache,
+                }
+                core.run(refresh, None).unwrap();
+                if pending {
+                    release.send(()).unwrap();
+                    collect(&core, &woke);
+                }
+                assert!(
+                    matches!(collect(&core, &woke).1, Outcome::Response(r) if r.body == b"new")
+                );
+                server.plan("/next", Plan::new(200, &[], b"sent"));
+                let (reply, cached) = read(&core, &woke, &server, 3, "/next");
+                assert!(!cached);
+                assert_eq!(reply.body, b"sent");
+                assert_eq!(server.count(), 3);
+            }
+        }
     }
 }

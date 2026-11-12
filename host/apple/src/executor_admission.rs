@@ -17,8 +17,10 @@ impl Core {
         state.dispatched = true;
         // A deadline on work that cannot take one (a stream but an upload, a continuation, native work), or a
         // long poll that is no stream's HTTP GET (LLP 1016.000 D8), is refused here, before any path.
-        let checked = (r.request.prefetch && r.class != RequestClass::Read)
-            .then_some("exactPrefetch requires a plain HTTP read")
+        let checked = (r.request.prefetch
+            && (r.class != RequestClass::Read
+                || r.request.reach.origin != exact_runner::CallOrigin::App))
+            .then_some("exactPrefetch requires the app's own plain HTTP read")
             .or(r.request.prefetch_refusal())
             .or(r.request.preload_refusal())
             .or(r.request.long_poll_refusal())

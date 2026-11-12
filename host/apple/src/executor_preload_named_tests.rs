@@ -193,3 +193,72 @@ fn held_names_and_request_names_are_each_charged_once() {
     assert_eq!(charges[1] - charges[0], (1 << 20) - 16);
     assert_eq!(charges[2] - charges[0], 1 << 20);
 }
+
+#[test]
+fn a_named_refresh_drops_the_hold_it_would_take_unless_an_update_disables_names() {
+    for asynchronous in [false, true] {
+        for pending in [false, true] {
+            for selected in [false, true] {
+                for mode in 0..3 {
+                    let server = Server::new();
+                    let (release, held) = channel();
+                    let mut plan = Plan::new(200, &[("Cache-Control", "max-age=3600")], b"old");
+                    plan.held = Some(held);
+                    server.plan("/feed", plan);
+                    let def = definition(&server, "/feed");
+                    let request = def
+                        .request
+                        .clone()
+                        .header("X-Trace", "new")
+                        .preload("feed")
+                        .unwrap();
+                    let set = launch(&server, vec![def]);
+                    if selected {
+                        set.control().select_update();
+                    }
+                    server.seen(1);
+                    if !pending {
+                        release.send(()).unwrap();
+                        complete_set(&set);
+                    }
+                    let (core, woke) = server.core(asynchronous, true);
+                    adopt(&core, set);
+                    server.plan("/feed", Plan::new(200, &[], b"new"));
+                    let mut refresh = job(1, request.clone());
+                    match mode {
+                        0 => refresh.forced = true,
+                        1 => refresh.request.cache = exact_runner::CacheMode::Reload,
+                        _ => refresh.request.cache = exact_runner::CacheMode::NoCache,
+                    }
+                    let (reply, cached) = ask(&core, &woke, refresh);
+                    assert!(!cached);
+                    assert_eq!(reply.body, b"new");
+                    if pending {
+                        release.send(()).unwrap();
+                    }
+                    server.plan("/feed", Plan::new(200, &[], b"new"));
+                    let (reply, cached) = ask(&core, &woke, job(2, request));
+                    assert!(!cached);
+                    assert_eq!(reply.body, b"new");
+                    if selected {
+                        ready(&core, 1);
+                        assert!(read(&core, &woke, &server, 3, "/feed").1);
+                    } else {
+                        server.plan("/feed", Plan::new(200, &[], b"new"));
+                        let (reply, cached) = ask(
+                            &core,
+                            &woke,
+                            job(3, server.request("/feed").preload("feed").unwrap()),
+                        );
+                        assert!(!cached);
+                        assert_eq!(reply.body, b"new");
+                        assert!(core
+                            .take_preload_journal()
+                            .iter()
+                            .any(|f| f.outcome == Event::DroppedByRefresh));
+                    }
+                }
+            }
+        }
+    }
+}

@@ -4,7 +4,11 @@ use super::*;
 pub(in super::super) const MAX_PREFETCHES: usize = 8;
 
 pub(in super::super) fn start(state: &mut State, job: &mut Job, abort: &AbortController) {
-    if !job.request.prefetch || job.work.is_some() {
+    if !job.request.prefetch
+        || job.work.is_some()
+        || job.class != RequestClass::Read
+        || job.request.reach.origin != exact_runner::CallOrigin::App
+    {
         return;
     }
     let Some(cache) = state.cache.as_mut() else {

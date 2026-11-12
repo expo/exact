@@ -33,6 +33,7 @@ struct Launch {
     set: OnceLock<Set>,
     invalidated: Mutex<BTreeMap<String, u64>>,
     rust: OnceLock<Arc<rust::Running>>,
+    foreground: Mutex<Vec<rust::Prepared>>,
     #[cfg(test)]
     backend: Mutex<Option<Arc<dyn exact_data::secrets::Backend>>>,
     journal: Mutex<Vec<PreloadFact>>,
@@ -121,6 +122,7 @@ impl LaunchPreloads {
         if opened && previous & OPENED == 0 {
             if let Some(set) = self.0.set.get() {
                 let _ = set.opened.send(());
+                self.start_rust_foreground();
             }
         }
     }
@@ -178,19 +180,15 @@ impl LaunchPreloads {
                 );
                 drop(marks);
                 launch.start_definitions(&definitions, &secrets, &grants, PreloadWhen::Start);
-                let returned = if let Some(entry) = entry {
+                if let Some(entry) = entry {
                     launch.0.set.get().unwrap().control.handed();
-                    rust::run(&launch, entry, &app, &grants, &definitions)
-                } else {
-                    Vec::new()
-                };
-                launch.start_rust(&returned, &grants, PreloadWhen::Start);
+                    rust::run(&launch, entry, &app, &grants, &definitions);
+                }
                 launch.0.set.get().unwrap().control.launch_pending(None);
                 drop(pending);
-                if returned.iter().all(|d| d.when != PreloadWhen::Foreground)
-                    && !definitions
-                        .iter()
-                        .any(|d| d.when == PreloadWhen::Foreground)
+                if !definitions
+                    .iter()
+                    .any(|d| d.when == PreloadWhen::Foreground)
                 {
                     return;
                 }
@@ -207,7 +205,6 @@ impl LaunchPreloads {
                         &grants,
                         PreloadWhen::Foreground,
                     );
-                    launch.start_rust(&returned, &grants, PreloadWhen::Foreground);
                 }
             });
         if spawned.is_err() {
@@ -373,20 +370,23 @@ impl LaunchPreloads {
         }
         *version
     }
-    fn with_secret_write<T>(&self, name: &str, write: impl FnOnce() -> T) -> T {
-        // A snapshot read during backend I/O must not publish after it (LLP 1162.000 D3).
-        self.invalidate(name);
-        let result = write();
-        self.invalidate(name);
-        result
-    }
-    fn start_rust(&self, definitions: &[rust::Prepared], grants: &str, when: PreloadWhen) {
-        if definitions.is_empty() {
-            return;
+    fn with_secret_version<T>(&self, name: &str, write: impl FnOnce(u64) -> T) -> T {
+        // Persistence, invalidation and publication share the writers' order (LLP 1162.000 D3).
+        let mut versions = self.0.invalidated.lock().unwrap();
+        let version = versions.entry(name.into()).or_default();
+        *version += 1;
+        if let Some(set) = self.0.set.get() {
+            set.control.drop_secret(name);
         }
+        write(*version)
+    }
+    fn with_secret_write<T>(&self, name: &str, write: impl FnOnce() -> T) -> T {
+        self.with_secret_version(name, |_| write())
+    }
+    fn start_rust_foreground(&self) {
         let versions = self.0.invalidated.lock().unwrap();
-        let mut ready = Vec::new();
-        for definition in definitions.iter().filter(|d| d.when == when) {
+        let mut foreground = self.0.foreground.lock().unwrap();
+        for definition in foreground.drain(..) {
             if definition
                 .versions
                 .iter()
@@ -398,9 +398,11 @@ impl LaunchPreloads {
                     outcome: crate::executor::PreloadEvent::DroppedBySecret,
                 });
             } else {
-                ready.push(definition.preload.clone());
+                self.extend_rust(definition.preload, &definition.grants);
             }
         }
+    }
+    fn extend_rust(&self, preload: Preload, grants: &str) {
         let weak = Arc::downgrade(&self.0);
         let observer = Arc::new(move |name: &str, observation| {
             if let Some(launch) = weak.upgrade().map(LaunchPreloads) {
@@ -412,7 +414,7 @@ impl LaunchPreloads {
             .get()
             .unwrap()
             .control
-            .extend(ready, grants, observer);
+            .extend(vec![preload], grants, observer);
     }
     pub(crate) fn journal(&self) -> Vec<PreloadFact> {
         let mut facts = std::mem::take(&mut *self.0.journal.lock().unwrap());
