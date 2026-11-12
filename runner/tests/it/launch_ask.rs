@@ -180,3 +180,61 @@ fn a_launch_ask_ending_now_or_failed_does_not_mark_a_later_store_refresh() {
         "unforced store refreshes after launch (failed): {unforced:?}"
     );
 }
+
+#[test]
+fn a_refresh_replaces_a_launch_ask_that_waits_over_its_budget() {
+    let mut r = launch();
+    r.data().ready = true;
+    r.data().overruns = 1;
+    r.data_ready().unwrap();
+    assert!(r.take_requests().is_empty());
+    r.act("again", vec![]).unwrap();
+    assert!(one_request(&mut r).forced, "the app's refresh");
+}
+
+const LIST: &str = r##"component App
+  state names: string[] = ["a"]
+  resource feeds = feed(n) for n in names as shape string
+  action again
+    refresh feeds
+  view
+    text feeds.join(",")
+"##;
+
+fn launch_list() -> Runner<Feed> {
+    let mut r = Runner::boot(
+        contract::compile(LIST).unwrap(),
+        Feed {
+            ready: false,
+            overruns: 0,
+        },
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert!(r.take_requests().is_empty(), "the source is not ready");
+    r.data().ready = true;
+    r.data().overruns = 1;
+    r.data_ready().unwrap();
+    assert!(
+        r.take_requests().is_empty(),
+        "its member is over its budget"
+    );
+    r
+}
+
+#[test]
+fn a_list_members_launch_ask_over_its_budget_stays_unforced_at_its_reask() {
+    let mut r = launch_list();
+    let due = r.reask_due_ms().expect("a held re-ask");
+    r.advance(due).unwrap();
+    assert!(!one_request(&mut r).forced, "the launch's re-ask");
+}
+
+#[test]
+fn refreshing_a_list_refreshes_a_member_whose_launch_ask_waits() {
+    let mut r = launch_list();
+    r.act("again", vec![]).unwrap();
+    assert!(one_request(&mut r).forced, "the app's refresh");
+}

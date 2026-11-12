@@ -807,7 +807,7 @@ impl<D: DataSource> Runner<D> {
 
     /// Ask resource `r` again, forced, at the next settlement that can.
     pub(super) fn force_refresh(&mut self, r: usize) {
-        self.resources[r].launch_ask = false;
+        self.launch.retain(|i| *i != r);
         if !self.refresh_next.contains(&r) {
             self.refresh_next.push(r);
         }
@@ -818,7 +818,7 @@ impl<D: DataSource> Runner<D> {
     /// a refresh does, and is sent as an ordinary one (LLP 1162.000 D1).
     pub(super) fn ask_at_launch(&mut self, r: usize) {
         if !self.refresh_next.contains(&r) {
-            self.resources[r].launch_ask = true;
+            self.launch.push(r);
             self.refresh_next.push(r);
         }
     }
@@ -893,8 +893,7 @@ impl<D: DataSource> Runner<D> {
         let reasks = self.overrun_reasks(target, &args, forced);
         self.forget_ticket(target);
         let first = self.pending.len();
-        let launch = matches!(target, Target::Resource(i)
-            if std::mem::take(&mut self.resources[i].launch_ask));
+        let launch = matches!(target, Target::Resource(i) if self.launch.contains(&i));
         let refresh = forced && !launch;
         for request in requests {
             self.append_request(target, source.clone(), args.clone(), request, refresh);
@@ -970,6 +969,7 @@ impl<D: DataSource> Runner<D> {
             long_poll: request.stream && request.long_poll.is_some(),
             replied: false,
             reask_at: None,
+            launch: false,
             reasks: 0,
         });
         self.note_child(ticket, &request);
