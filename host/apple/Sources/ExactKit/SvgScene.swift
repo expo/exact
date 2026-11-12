@@ -222,7 +222,8 @@ final class SvgScene {
     /// Each filtered element's picture, by the digest of what drew it.
     private var pictures: [Int: (key: Int, layer: CALayer)] = [:]
     private var specs: [Int: [CssAnimation]] = [:]
-    /// The view's pixels per point, for gradients drawn as pixels.
+    /// The view's device pixels per unit, for the parts drawn as pixels
+    /// (`SvgHost.pixels`).
     var scale: CGFloat = 2
     /// The presenter's fonts, for SVG text (LLP 1055.000 D11).
     var fonts: SvgText.Fonts?
@@ -653,7 +654,7 @@ final class SvgHost {
         let scene = scenes[id] ?? { let s = SvgScene(); scenes[id] = s; return s }()
         scene.root.name = Self.rootName
         if scene.root.superlayer !== layer { layer.addSublayer(scene.root) }
-        scene.scale = max(1, layer.contentsScale)
+        scene.scale = Self.pixels(layer)
         scene.fonts = fonts
         scene.tint = tint
         let spec = payload["scene"] as? [String: Any] ?? [:]
@@ -680,6 +681,29 @@ final class SvgHost {
         guard let scene = scenes[id], let spec = payloads[id] else { return }
         scene.tint = tint
         scene.apply(spec, dark: dark, clock: clock)
+    }
+
+    /// Device pixels per unit of the view `layer` backs. On the Mac a page
+    /// zoom magnifies the view without raising its layer's `contentsScale`,
+    /// so the scale is the view's `pixelScale` (LLP 1021 §5.3.1).
+    private static func pixels(_ layer: CALayer) -> CGFloat {
+        #if os(macOS)
+        if let scale = (layer.delegate as? NodeView)?.pixelScale { return max(1, scale) }
+        #endif
+        return max(1, layer.contentsScale)
+    }
+
+    /// The page zoom or the display's scale changed: each scene whose view
+    /// has another scale is applied again at it, which redraws only its
+    /// pixel-drawn parts (their keys hash the scale).
+    func rescale(clock: Double?) {
+        for (id, scene) in scenes {
+            guard let layer = scene.root.superlayer, let spec = payloads[id] else { continue }
+            let scale = Self.pixels(layer)
+            guard scale != scene.scale else { continue }
+            scene.scale = scale
+            scene.apply(spec, dark: (layer.delegate as? NodeView)?.drawsDark ?? false, clock: clock)
+        }
     }
 
     func animations(_ id: UInt32, _ payload: [String: Any], layer: CALayer?, clock: Double?) {

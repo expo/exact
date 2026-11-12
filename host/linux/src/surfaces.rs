@@ -45,7 +45,8 @@ type Read = unsafe extern "C" fn(u32) -> u32;
 type Text = unsafe extern "C" fn(u32, *const u8, usize) -> u32;
 
 struct Abi {
-    // Symbols never outlive this library; unload TLS before dlclose.
+    // Symbols never outlive this library; gpu_unload joins acquisition workers
+    // and drops thread-local state before dlclose.
     library: Library,
     output_error: std::cell::RefCell<Option<String>>,
     rendered: bool,

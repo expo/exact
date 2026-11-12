@@ -39,6 +39,8 @@ let Readers = {}, Owner = null, Last = null, Raw = [], Play = null, Segments = [
 // Issued: where the last fill stopped, by beat (a tempo edit moves its time): the hits before it, and the first [1] at it,
 // were issued.
 let IssuedTo = 0, Skip = 0, Issued = [-Infinity, 0], RefillDue = Infinity, PhaseDue = Infinity, EndedDue = Infinity, Pending = null, UnsentTold = false;
+let Cut = null; // a tempo edit's time and the segment before it, for the fill that follows
+const order = (a, b) => a.at - b.at || a.track - b.track || a.step - b.step;
 // Clock in (D9): the follower while the owner follows an input; the last arming followed one, so `exactTransport` answers
 // `Pub`; where its hits are issued to, past the last delivery.
 let Follow = null, Clocked = false, Pub = { state: 'stopped', reason: '', bpm: 0, at: 0, beat: 0 }, ClockTo = 0;
@@ -108,7 +110,7 @@ function hits(p, seg, from, to) {
     if (t.loops > 0) last = Math.min(last, t.loops - 1);
     for (; k <= last; k++) t.steps.forEach((s, j) => { const beat = k * t.length + s.beat, at = time(seg, beat); if (from <= at && at < to) out.push({ at, beat, track: i + 1, step: j }); });
   });
-  return out.sort((a, b) => a.at - b.at || a.track - b.track || a.step - b.step);
+  return out.sort(order);
 }
 const stepOf = (p, h) => h.track === 0 ? p.countIn[h.step] : p.tracks[h.track - 1].steps[h.step];
 const trackOf = (p, h) => h.track === 0 ? [0, ''] : [p.tracks[h.track - 1].offset, p.tracks[h.track - 1].output];
@@ -127,6 +129,8 @@ function timing(t) {
 // past is skipped and said once. `how` places an output before `at`: played now at the arming, skipped at an edit
 // (it was played already), late at a wake (the runner's `Fill`).
 function fill(at, how) {
+  const cut = Cut;
+  Cut = null;
   if (!Play || Owner == null) return;
   // A track that loops forever (or as many times) whose loop index would pass 2^52 (a beat kept across an edit can reach
   // it) is dropped: past 2^53 an index no longer steps by 1. What is left may now end.
@@ -144,7 +148,15 @@ function fill(at, how) {
   // Following a clock, to past the last delivery, under its one segment (clock.rs).
   const from = IssuedTo, following = Follow != null, to = following ? Math.max(ClockTo, from) : at + LOOKAHEAD, live = !clock.agent, g = seg();
   Midi.ticks(b => time(g, b), to, endBeat(Play), live ? at : -Infinity, at);
-  const list = following ? hits(Play, g, from, to) : hitsAcross(Play, from, to);
+  let list = following ? hits(Play, g, from, to) : hitsAcross(Play, from, to);
+  // A tempo edit at `t` took back the steps whose time under the segment before it is at or after `t`. The new segment
+  // rounds differently: it can time one of those just before `t` (lost) or a step that stayed at `t` (played twice). So
+  // what is issued again is what was taken back, none before `t`; a millisecond is far wider than the rounding (the
+  // runner's `fill`).
+  if (cut) {
+    const [t, old] = cut, taken = hits(Play, g, t - 1, t).filter(h => time(old, h.beat) >= t).map(h => ({ ...h, at: t }));
+    list = list.filter(h => h.at < t || time(old, h.beat) >= t).concat(taken).sort(order);
+  }
   let skipped = 0; while (skipped < Skip && skipped < list.length && list[skipped].at === from) skipped++;
   // The hits an earlier fill issued (an edit fills from its time again): a run of the first, as hits are in time order.
   let issued = 0, tied = 0;
@@ -236,7 +248,7 @@ function edit(t, args) {
   const following = Follow != null;
   if (Follow) { Follow.prior = p.bpm; Follow.from = p.from; if (State === 'waiting') { say(`sequence ${name} edited`); Play = p; return; } }
   const g = seg();
-  if (!following && !Object.is(p.bpm, g.bpm)) { say(`sequence ${name} edited: bpm ${num(p.bpm)}`); segment({ at: t, beat: beatAt(g, t), bpm: p.bpm }); }
+  if (!following && !Object.is(p.bpm, g.bpm)) { say(`sequence ${name} edited: bpm ${num(p.bpm)}`); segment({ at: t, beat: beatAt(g, t), bpm: p.bpm }); Cut = [t, g]; }
   else say(`sequence ${name} edited`);
   T().batch(() => T().retract(t));
   Midi.retractSeq(t); ClockHits = ClockHits.filter(e => e[3] < t);

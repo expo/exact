@@ -622,7 +622,7 @@ export function h(p, tag, cls, attrs, text, ns) {
   if (Adopt) { const e = adopt(p, tag, cls, attrs); if (tag === "video" || tag === "audio") Media.media(e, attrs); if (tag === "iframe") frame(e, attrs?.["data-app-src"]); if (tag === "button") oneActivation(e); return e; }
   const e = ns ? document.createElementNS(ns, tag) : document.createElement(tag), owner = listOwner(p); e.$exactTree = true; e.authoredInert = attrs?.inert !== undefined;
   if (cls !== 0) e.setAttribute("class", "c" + cls); // `bits`, below: the paint facts the compiler wrote, kept as paint.js `facts` reads them rather than read back from the attribute names; a bound fact's `P` clears them (LLP 1071.001 A6)
-  let bits = 0; if (attrs) { for (const k in attrs) if (NOT_DOM.test(k)) e["$" + k] = attrs[k]; else { e.setAttribute(k, rel(k, attrs[k])); if (k === "data-exact-f" || k.startsWith("data-exact-f-")) bits |= Number(attrs[k]); } if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); } if (Paint) e.$paintFacts = bits;
+  let bits = 0; if (attrs) { for (const k in attrs) if (NOT_DOM.test(k)) e["$" + k] = attrs[k]; else { e.setAttribute(k, rel(k, attrs[k])); if (k === "data-exact-f" || k.startsWith("data-exact-f-")) bits |= Number(attrs[k]); } if (tag === "a") linkAttrs(e, attrs); if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); } if (Paint) e.$paintFacts = bits;
   if (text !== 0) e.textContent = text;
   if (tag === "iframe") frame(e, attrs?.["data-app-src"]);
   if (tag === "button") oneActivation(e);
@@ -658,7 +658,7 @@ function adopt(p, tag, cls, attrs) {
   if (e.hasAttribute("data-view")) e.removeAttribute("data-view");
   if (attrs?.["data-exact-own-isolation"] === undefined && !e.hasAttribute("data-exact-own-isolation") && !e.hasAttribute("data-exact-policy") && e.style.isolation) e.style.removeProperty("isolation");
   if (cls !== 0 && e.getAttribute("class") !== "c" + cls) e.setAttribute("class", "c" + cls);
-  if (attrs) { for (const k in attrs) { const v = rel(k, attrs[k]); if (NOT_DOM.test(k)) e["$" + k] = v; else if (e.getAttribute(k) !== v) e.setAttribute(k, v); } if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); }
+  if (attrs) { const rendered = tag === "a" ? e.getAttribute("rel") : null; for (const k in attrs) { const v = rel(k, attrs[k]); if (NOT_DOM.test(k)) e["$" + k] = v; else if (e.getAttribute(k) !== v) e.setAttribute(k, v); } if (tag === "a") linkAttrs(e, attrs, rendered); if ("data-scrolldocument" in attrs) Docs.add(e); if (tag === "img" && ("data-symbol-source" in attrs || "data-app-src" in attrs)) Hooks.image?.(e); }
   Paint?.list(e); return e;
 }
 function mark(p) { const c = document.createComment(""); p.insertBefore(c, at(p)); return c; }
@@ -714,10 +714,29 @@ export function P(e, name, f) {
     else if (v == null) { if (e.hasAttribute(name) || suppressedInvocation(e, name)) { e.removeAttribute(name); if (name.startsWith("data-exact-")) Paint?.facts(e); } }
     else if (e.getAttribute(name) !== v) { e.setAttribute(name, v); if (name.startsWith("data-exact-")) Paint?.facts(e); }
     if (name === "role") syncListItemRoles(e); else if (name === "popover" && e.parentElement?.hasAttribute("data-exact-list-item")) listItem(e);
-    if (e.localName === "a" && (name === "target" || name === "href" && (!e.hasAttribute("target") || e.rel === "external noopener"))) { const out = name === "href" && v != null && /^\s*(https?:)?\/\//i.test(v), t = name === "target" ? v : out ? "_blank" : null; if (t) e.setAttribute("target", t); else e.removeAttribute("target"); if (t === "_blank") e.rel = out ? "external noopener" : "noopener"; else e.removeAttribute("rel"); } // a link to an absolute URL leaves the app in a new browsing context unless its `target` is authored (element.rs `leaves_app`, `props_of`; chat F11)
+    if (e.localName === "a" && (name === "rel" || name === "target" || name === "href")) { // a link to an absolute URL leaves the app in a new browsing context unless its `target` is authored (element.rs `leaves_app`, `props_of`; chat F11)
+      if (name === "rel") e.$rel = v; else if (name === "target") { e.$target = v != null; e.$external = false; }
+      else if (!e.$target) { const out = v != null && /^\s*(https?:)?\/\//i.test(v); if (out) e.setAttribute("target", "_blank"); else e.removeAttribute("target"); e.$external = out; }
+      linkRel(e);
+    }
     if (name === "sandbox" && e.localName === "iframe" && !e.exactAppFrame) { const source = e.$src ?? e.getAttribute("src"); if (source != null) { const s = navigable(source, e) ? source : "about:blank"; if (sandboxChanged || e.getAttribute("src") !== s) e.setAttribute("src", s); } } // a new sandbox takes effect on navigation, even to the same source; a literal source stays in src, a refused `data:` source in $src
     if ((name === 'src' || name === 'sandbox') && e.localName === 'iframe') commitGuestOrigin(e);
   });
+}
+const relTokens = v => (v ?? "").split(/[ \t\n\f\r]+/).filter(Boolean);
+/** A link made or adopted from its template: its literal `rel` and `target` are the author's; `external` stays as the
+ * page was rendered until a bound `href` says again. */
+function linkAttrs(e, attrs, rendered) {
+  e.$rel = relTokens(attrs.rel).filter(t => !/^(external|noopener)$/i.test(t)).join(" "); e.$target = "target" in attrs && !relTokens(attrs.rel).includes("external");
+  e.$external ??= relTokens(rendered ?? attrs.rel).includes("external"); linkRel(e);
+}
+/** A link's `rel` (element.rs `link_rel`): the author's tokens, then those its target needs that they lack, compared
+ * ASCII case-insensitively: `noopener` for a new browsing context, and `external` before it for the one an absolute
+ * URL opens by default. The author's are what `rel` last wrote, and the template's (`linkAttrs`) before that. */
+function linkRel(e) {
+  const own = relTokens(e.$rel), need = e.getAttribute("target") !== "_blank" ? [] : e.$external ? ["external", "noopener"] : ["noopener"];
+  const all = own.concat(need.filter(t => !own.some(o => o.toLowerCase() === t))).join(" ");
+  if (all) { if (e.getAttribute("rel") !== all) e.setAttribute("rel", all); } else e.removeAttribute("rel");
 }
 /** A reader uses built pieces; new text loads the parser on demand. */
 export function md(e, f, prepared) { markdownText(e, f, prepared, { effect, inflight, adopting, renderMarkup }); }

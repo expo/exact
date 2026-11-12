@@ -11,7 +11,7 @@ import { verifyBakeFiles } from '../../scripts/app.mjs';
 import { webRefusal, browserEntitlements } from './documents.mjs';
 import { memoryEntitlements } from './plist.mjs';
 import { listAssets } from '../web/serve.mjs';
-import { appIcon, buildInfo, iosAssets, appleAssets, copyNativeResources, IOS_RESOURCE_ROOT, iosBundleGrants, iosExecutableRefusal, shareIosResources, signingOrder, helperEntitlements, wrapFramework, assertArchiveFrameworks } from './assets.mjs';
+import { appIcon, buildInfo, iosAssets, appleAssets, copyNativeResources, IOS_RESOURCE_ROOT, iosBundleGrants, iosExecutableRefusal, shareIosResources, iconFiles, signingOrder, helperEntitlements, wrapFramework, assertArchiveFrameworks } from './assets.mjs';
 import { allows, profile, identity, embeddedProfile } from './devices.mjs';
 import { grantEntitlements } from './presence.mjs';
 import { stripForDistribution, stripProductionExecutable } from './link.mjs';
@@ -213,6 +213,8 @@ export function assembleIOS({intents, shared, library, serviceDylibs, triple, ap
   if (clip) {
     const clipBundle = resolve(bundle, 'AppClips', `${clip.executable}.app`);
     sibling(clipBundle, [device ? bin : clipBin, clip.executable], infoPlist(app, device, { distributed: distribution, executable: clip.executable, id: clip.id, name: clip.name, clip: true, reach: appleReach, icon: assetKeys, distribution: stamp }));
+    // The clip's plist names the app's icon files, so it holds them too, not only Assets.car (expo/exact-build#7).
+    for (const file of iconFiles(assetKeys, bundle)) copyFileSync(resolve(bundle, file), resolve(clipBundle, file));
     bundles.unshift([clipBundle, 'clip']);
   }
   if (args.includes('--host')) {

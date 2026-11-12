@@ -47,3 +47,16 @@ test('every script the repository tasks run exists, and each matcher is one VS C
     for (const d of t.dependsOn ?? []) assert.ok(tasks.some(other => other.label === d), `${t.label}: no task ${d}`);
   }
 });
+
+test('a view repeats with `for`, which is a control keyword and indents; the retired `each` is neither', () => {
+  const grammar = readFileSync(resolve(import.meta.dir, 'syntaxes/exact-contract.tmLanguage.json'), 'utf8');
+  const keywords = [...grammar.matchAll(/"match": ("[^\n]*"),\n\s*"name": "keyword\.control\.exact-contract"/g)]
+    .map(([, source]) => new RegExp(JSON.parse(source)));
+  const { indentationRules } = JSON.parse(readFileSync(resolve(import.meta.dir, 'language-configuration.json'), 'utf8'));
+  const indents = new RegExp(indentationRules.increaseIndentPattern);
+  const line = (word) => `      ${word} item in items key=item.id`;
+  assert.ok(keywords.some(k => k.exec(line('for'))?.[0] === 'for'));
+  assert.ok(!keywords.some(k => k.exec(line('each'))?.[0] === 'each'));
+  assert.ok(indents.test(line('for')));
+  assert.ok(!indents.test(line('each')));
+});

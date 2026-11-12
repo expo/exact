@@ -190,3 +190,26 @@ for (const displayName of ['Plain', 'Caf\u00e9', 'Cafe\u0301', '東京', '', '..
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 }
+
+test('module settings keep their keys escaped, and a value a property list cannot hold is refused by its path', async () => {
+  const { appleRefusals, plistFile } = await import('./assets.mjs');
+  const { spawnSync } = await import('node:child_process');
+  const moduleConfig = { analytics: { 'q&a': 'on', 'a<b': [1, 2.5] } };
+  const app = { name: 'plist', id: 'com.example.plist', displayName: 'Plist', dir: tmpdir(), manifest: { host: {}, moduleConfig } };
+  for (const plist of [infoPlist(app), macInfoPlist(app)]) {
+    assert.match(flat(plist), /<key>q&amp;a<\/key><string>on<\/string><key>a&lt;b<\/key><array><integer>1<\/integer><real>2.5<\/real><\/array>/);
+    if (process.platform !== 'darwin') continue;
+    const read = spawnSync('plutil', ['-convert', 'json', '-o', '-', '-'], { input: plist, encoding: 'utf8' });
+    assert.equal(read.status, 0, read.stderr);
+    assert.deepEqual(JSON.parse(read.stdout).ExactModuleConfig, moduleConfig);
+  }
+  assert.deepEqual(appleRefusals(app, 'macos').filter((r) => r.includes('app.json')), []);
+  const refused = (dsn, path, what) => {
+    assert.throws(() => plistFile({ ExactModuleConfig: { sentry: { dsn } } }),
+      { message: `plist: ExactModuleConfig.sentry.${path} is ${what}, which a property list cannot hold` });
+    assert.ok(appleRefusals({ ...app, manifest: { host: {}, moduleConfig: { sentry: { dsn } } } }, 'macos')
+      .includes(`plist: app.json's moduleConfig.sentry.${path} is ${what}, which a property list cannot hold`));
+  };
+  for (const [value, what] of [[null, 'null'], [NaN, 'NaN'], [Infinity, 'Infinity'], [1e21, '1e+21']]) refused(value, 'dsn', what);
+  refused(['a', null], 'dsn[1]', 'null');
+});

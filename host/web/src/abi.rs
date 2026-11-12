@@ -1217,11 +1217,12 @@ macro_rules! host {
         /// The viewport or the page's facts (bit 0 reduced motion, bit 1
         /// reduced transparency, bit 2 contrast more, bit 3 contrast less,
         /// bit 4 a dark system; bit 8 folded, bits 9–16 and 17–24 the
-        /// viewport segment columns and rows, LLP 1078 D6) changed; returns
-        /// the batch length.
+        /// viewport segment columns and rows, LLP 1078 D6) changed, with the
+        /// page's geometry in `geometry` bytes of the input buffer (none for
+        /// 0, LLP 1039 D9); returns the batch length.
         #[no_mangle]
-        pub extern "C" fn exact_resize(width: f64, height: f64, now_ms: f64, preferences: u32) -> u32 {
-            EXACT_BRIDGE.with(|b| b.borrow_mut().resize(width, height, preferences, now_ms))
+        pub extern "C" fn exact_resize(width: f64, height: f64, now_ms: f64, preferences: u32, geometry: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().resize_with(width, height, preferences, now_ms, geometry as usize))
         }
 
         /// The date: Unix ms at clock zero and minutes east of UTC.

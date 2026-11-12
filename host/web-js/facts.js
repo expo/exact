@@ -13,7 +13,7 @@
 // - `exactSurface` (LLP 1047 D3; runner/src/surface_record.rs): a GPU
 //   surface's published record, decoded against each reader's shape.
 import { data, Resources, commit, R, Refusal, Kept, say } from "./rt.js";
-import { environment, displayMode, preferences, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold } from "./navigation.js";
+import { environment, keyboardInset, onKeyboard, displayMode, preferences, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold } from "./navigation.js";
 
 const again = (source, why) => () => commit(() => { for (const r of Resources) if (r.source === source) R(r); }, why);
 // `readers`: resource name → [its fields, in its shape's order, …].
@@ -35,6 +35,7 @@ export function viewportFacts(geometry = false) {
     colorGamut: GAMUT[(p >>> 26) & 3], dynamicRange: p & (1 << 28) ? "high" : "standard", // @ref LLP 1100 D9
     pointer: p & 64 ? "none" : p & 32 ? "coarse" : "fine", hover: p & 128 ? "none" : "hover",
     accessibilityTextSize: false, // a browser has no accessibility text sizes (runner/src/runner/root_font.rs)
+    keyboardHeight: keyboardInset(), // @ref LLP 1039 D9: `env(keyboard-inset-height)`
     gpuTier: reporter()?.read()["gpu-tier"] ?? "high" }; // @ref LLP 1139.003 D2: the page facts' tier; this target has no GPU module, so the screen's class, or the agent's
 }
 export function viewport(readers) {
@@ -47,6 +48,7 @@ export function viewport(readers) {
   const changed = again("exactViewport", "viewport");
   addEventListener("resize", changed);
   globalThis.visualViewport?.addEventListener("resize", changed);
+  onKeyboard(changed); // LLP 1039 D9
   onPreferences(changed);
   onFold(changed);
   viewportChanged = changed;

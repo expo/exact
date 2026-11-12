@@ -40,14 +40,14 @@ final class TabStacksIOSTests: XCTestCase {
         XCTAssertGreaterThan(root.view.safeAreaInsets.bottom, 0, "the route's safe area clears the tab bar")
         XCTAssertEqual(navigation.observation()["stack"] as? [String], [root.key])
         XCTAssertTrue(navigation.tabStacks.values.allSatisfy { $0 is UINavigationController }, "both panels draw their stack")
-        let titled = try XCTUnwrap(tabs.viewControllers?[1] as? UINavigationController, "a tab not built yet is its navigation controller")
+        let titled = try XCTUnwrap(tabs.tabControllers?[1] as? UINavigationController, "a tab not built yet is its navigation controller")
         XCTAssertTrue(titled.viewControllers.isEmpty, "with no routes")
         try press(session, "tab-titled")
         waitFor("Titled is selected") { tabs.selectedIndex == 1 && titled.viewControllers.count == 1 }
-        XCTAssertTrue(tabs.viewControllers?[1] === titled, "the tab keeps its controller")
+        XCTAssertTrue(tabs.tabControllers?[1] === titled, "the tab keeps its controller")
         XCTAssertFalse(titled.isNavigationBarHidden, "its root's bar")
         XCTAssertTrue(navigation.primaryNavigation === titled)
-        XCTAssertTrue(tabs.viewControllers?[0] === nav)
+        XCTAssertTrue(tabs.tabControllers?[0] === nav)
     }
 
     func testABarlessTabsFirstPushAnimatesInItsOwnController() throws {
@@ -61,7 +61,7 @@ final class TabStacksIOSTests: XCTestCase {
         XCTAssertEqual(nav.viewControllers.count, 2)
         XCTAssertNotNil(nav.transitionCoordinator, "the push animates")
         XCTAssertTrue(nav.viewControllers.first === root)
-        XCTAssertTrue(tabs.viewControllers?.first === nav, "the tab keeps its controller")
+        XCTAssertTrue(tabs.tabControllers?.first === nav, "the tab keeps its controller")
         waitFor("the push is over") { nav.transitionCoordinator == nil && !navigation.changing }
         XCTAssertEqual(navigation.observation()["stack"] as? [String], nav.viewControllers.compactMap { ($0 as? RouteController)?.key })
         XCTAssertEqual(navigation.agentBack(), "", "the platform's Back goes")
@@ -99,7 +99,7 @@ final class TabStacksIOSTests: XCTestCase {
         waitFor("the bar shows") { !nav.isNavigationBarHidden }
         XCTAssertEqual(root.navigationItem.title, "barless")
         XCTAssertTrue(nav.viewControllers == [root])
-        XCTAssertTrue(tabs.viewControllers?.first === nav)
+        XCTAssertTrue(tabs.tabControllers?.first === nav)
         XCTAssertTrue(navigation.primaryNavigation === nav)
     }
 
@@ -149,7 +149,7 @@ final class TabStacksIOSTests: XCTestCase {
     /// The Barless tab's navigation controller and its root, as installed.
     private func barless(_ session: ExactSession) throws -> (tabs: UITabBarController, nav: UINavigationController, root: RouteController) {
         let tabs = try XCTUnwrap(session.presenter.navigation.tabController)
-        let nav = try XCTUnwrap(tabs.viewControllers?.first as? UINavigationController, "Barless's panel draws its stack")
+        let nav = try XCTUnwrap(tabs.tabControllers?.first as? UINavigationController, "Barless's panel draws its stack")
         let root = try XCTUnwrap(nav.viewControllers.first as? RouteController)
         return (tabs, nav, root)
     }

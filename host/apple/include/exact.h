@@ -929,13 +929,15 @@ uint32_t exact_screen(ExactRuntime rt, float width, float height);
 /* What changed of the view at once, from the input buffer's first len bytes,
  * little-endian 32-bit words: a mask of what is given (1 the window's size,
  * 2 the safe-area insets, 4 the layout regions, 8 the viewport, 16 the
- * segments' rects), the window's width and height (nonpositive clears it),
- * the insets top, right, bottom, left, the viewport's width and height, the
- * regions' count (20 or 0) and their insets, then, with 16, the rects' count
- * and each rect's x y w h, on the grid exact_segments set: exact_screen,
- * exact_insets, exact_regions, exact_resize and a keyboard's segment extents
- * in one batch under one layout. Rects off the grid, or not finite, are
- * refused and change nothing. */
+ * segments' rects, 32 the keyboard), the window's width and height
+ * (nonpositive clears it), the insets top, right, bottom, left, the
+ * viewport's width and height, the regions' count (20 or 0) and their insets,
+ * then, with 16, the rects' count and each rect's x y w h, on the grid
+ * exact_segments set, then, with 32, the software keyboard's overlap with the
+ * viewport (exactViewport().keyboardHeight): exact_screen, exact_insets,
+ * exact_regions, exact_resize and a keyboard's segment extents in one batch
+ * under one layout. Rects off the grid, or not finite, are refused and change
+ * nothing. */
 uint32_t exact_view(ExactRuntime rt, size_t len);
 /* @ref LLP 1078 D4: the device's posture (0 continuous, 1 folded) and the
  * viewport segments a fold makes — cols × rows rects, row-major, each

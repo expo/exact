@@ -30,6 +30,7 @@ mod mode;
 mod scale;
 pub(crate) use fonts::{decode_plan, plan_font_catalog};
 use fonts::{font_catalog, font_faces, font_names, font_names_for_runner};
+pub use scale::PageGeometry;
 #[path = "document.rs"]
 pub mod document;
 #[path = "element.rs"]
@@ -751,14 +752,41 @@ impl<D: DataSource> Host<D> {
     /// The size, the display preferences and the fold, in one batch.
     /// @ref LLP 1039 D2; LLP 1061 D4; LLP 1078 D6
     pub fn resize(&mut self, viewport: exact_runner::Viewport, now_ms: f64) -> String {
+        self.resize_with(viewport, now_ms, None)
+    }
+
+    /// [`Host::resize`] with the page's geometry, answered in the size's
+    /// commit (LLP 1039 D9).
+    pub fn resize_with(
+        &mut self,
+        viewport: exact_runner::Viewport,
+        now_ms: f64,
+        geometry: Option<PageGeometry>,
+    ) -> String {
         let a = self.runner.advance_timed(now_ms);
         self.now_ms = a.now_ms.max(self.now_ms);
         let mut receipts = a.receipts;
         let mut error = a.error.map(|e| format!("{e:?}"));
+        let size = Some((viewport.width, viewport.height));
+        // The geometry is checked whole before anything of the report
+        // changes: a refused part refuses it all (LLP 1039 D9).
+        let checked = match geometry.map(|g| (self.checked_view(size, &g, viewport.fold), g.2)) {
+            Some((Err(refused), _)) => {
+                let error = error.map_or(refused.clone(), |e| format!("{e}; {refused}"));
+                return self.batch_for(&receipts, Some(&error));
+            }
+            Some((Ok(env), keyboard)) => Some((env, keyboard)),
+            None => None,
+        };
+        let viewport_error = |e| format!("viewport: {e:?}");
         let answers = [
-            self.runner.set_viewport(viewport.width, viewport.height),
-            self.runner.set_preferences(viewport.preferences),
-            self.runner.set_fold(viewport.fold), // the fold rides the same report (LLP 1078 D6)
+            match checked {
+                Some((env, keyboard)) => self.put_view(env, size, keyboard),
+                None => self.runner.set_view(size, None).map_err(viewport_error),
+            },
+            (self.runner.set_preferences(viewport.preferences)).map_err(viewport_error),
+            // the fold rides the same report (LLP 1078 D6)
+            (self.runner.set_fold(viewport.fold)).map_err(viewport_error),
         ];
         for answer in answers {
             match answer {
@@ -767,8 +795,7 @@ impl<D: DataSource> Host<D> {
                     receipt,
                 }),
                 Ok(None) => {}
-                Err(e) => {
-                    let viewport_error = format!("viewport: {e:?}");
+                Err(viewport_error) => {
                     error = Some(match error {
                         Some(timer_error) => format!("{timer_error}; {viewport_error}"),
                         None => viewport_error,

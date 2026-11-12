@@ -239,8 +239,10 @@ const ICON_REFUSALS = { ios: iconRefusal, tvos: tvIconRefusal, macos: macIconRef
 export function appleRefusals(app, platform, { archive = false } = {}) {
   let catalogs;
   try { catalogs = appleAssetCatalogInventory(app, platform); } catch (e) { return [e.message]; }
-  const refused = ICON_REFUSALS[platform]?.(app, catalogs, archive);
-  return refused ? [refused] : [];
+  const refused = [ICON_REFUSALS[platform]?.(app, catalogs, archive)];
+  // Info.plist's ExactModuleConfig is `moduleConfig` as written: refused before anything compiles.
+  try { plist({ moduleConfig: app.manifest.moduleConfig ?? {} }); } catch (e) { refused.push(`${app.name}: app.json's ${e.message.slice('plist: '.length)}`); }
+  return refused.filter(Boolean);
 }
 
 /** One actool pass includes the app's catalogs, selected or generated icon and launch
@@ -268,7 +270,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
       // What the compile itself writes: a cache from before `--accent-color` named no accent,
       // one from before `ExactLaunchImageSource` no launch image's source or digest,
       // one from before `digest` launch assets under fixed names
-      'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets'])).digest('hex').slice(0, 16);
+      'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets', 'launch-color-components'])).digest('hex').slice(0, 16);
     const made = resolve(kept.dir, `assets-${platform}-${key}`);
     if (!existsSync(resolve(made, 'keys.json'))) {
       const making = `${made}.${process.pid}.tmp`;
@@ -357,7 +359,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
  * the bake's `launchBackground`, LLP 1116.011 D2.3), `systemGroupedBackground`,
  * which the system shows as #F2F2F7 and black. That is a colour set of its own
  * (a reference to the system colour compiles to its light value alone), so the
- * window under the first frame (`ExactLaunch-…`, read by the presenter) is the
+ * window under the first frame (`ExactLaunchColor`, the same components) is the
  * same grey and nothing lighter shows between the launch screen and the first
  * frame (stopwatch, round 13: "blank white screen for ~1 s").
  * `UILaunchScreen` names colours and images only from an asset catalog, so
@@ -398,7 +400,10 @@ function launchScreen(app, catalog, launch = 'system', picture = null) {
   const name = `ExactLaunch-${digest(colors)}`;
   mkdirSync(resolve(catalog, `${name}.colorset`), { recursive: true });
   writeFileSync(resolve(catalog, `${name}.colorset`, 'Contents.json'), JSON.stringify({ colors, info: { author: 'exact', version: 1 } }));
-  return { UILaunchScreen: { UIColorName: name, ...keys }, ...source };
+  // The host uses the same sRGB components as the catalogue, including its
+  // rounded alpha, without loading Assets.car before UIApplicationMain.
+  const rgba = ({ color: { components: c } }) => [parseInt(c.red, 16) / 255, parseInt(c.green, 16) / 255, parseInt(c.blue, 16) / 255, Number(c.alpha)];
+  return { UILaunchScreen: { UIColorName: name, ...keys }, ExactLaunchColor: { light: rgba(colors[0]), ...(dark ? { dark: rgba(colors[1]) } : {}) }, ...source };
 }
 
 /** A launch asset's name ends in a digest of what it draws: iOS keeps the launch
@@ -715,6 +720,15 @@ export function shareIosResources(manifest, from, to) {
     cpSync(root, resolve(to, IOS_RESOURCE_ROOT), { recursive: true });
 }
 
+/** The fallback PNGs actool writes beside Assets.car for the `CFBundleIconFiles` of the icon keys it returned
+ *  (`AppIcon60x60@2x.png`, `AppIcon76x76@2x~ipad.png`, an alternate's), by name in `dir`: a bundle that takes
+ *  those keys (the App Clip's) takes these files too, since iOS looks for them in the bundle that names them. */
+export function iconFiles(keys, dir) {
+  const names = [keys.CFBundleIcons, keys['CFBundleIcons~ipad']].flatMap(icons => icons ? [icons.CFBundlePrimaryIcon, ...Object.values(icons.CFBundleAlternateIcons ?? {})] : [])
+    .flatMap(icon => icon?.CFBundleIconFiles ?? []);
+  return readdirSync(dir).filter(file => names.some(name => file.startsWith(name) && /^(@[0-9]x)?(~ipad)?\.png$/.test(file.slice(name.length))));
+}
+
 /** Validate links before copying. Relative links stay inside their declared
  * tree, so a copied helper cannot accidentally depend on the producer machine.
  * An iOS tree holds neither links, which `bundle:` follows none of, nor
@@ -785,13 +799,21 @@ export function copyNativeResources(app, contents, expected = null, platform = '
   return inventory;
 }
 
-/** A plist from a plain object: strings, booleans, numbers, arrays, and objects, the four spellings Apple's DTD has. */
-const plist = (value, indent = '  ') => {
-  if (typeof value === 'string') return `<string>${value.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</string>`;
+const xml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+/** A plist from a plain object: strings, booleans, numbers, arrays, and objects, the four spellings Apple's DTD has.
+ *  A value a property list cannot hold (null, a number that is not finite, an integer JavaScript does not hold
+ *  exactly) is refused by its key path, `path`. */
+const plist = (value, indent = '  ', path = '') => {
+  const refuse = (what) => { throw new Error(`plist: ${path || 'the root'} is ${what}, which a property list cannot hold`); };
+  if (typeof value === 'string') return `<string>${xml(value)}</string>`;
   if (typeof value === 'boolean') return value ? '<true/>' : '<false/>';
-  if (typeof value === 'number') return Number.isInteger(value) ? `<integer>${value}</integer>` : `<real>${value}</real>`;
-  if (Array.isArray(value)) return `<array>${value.map((v) => plist(v, indent)).join('')}</array>`;
-  return `<dict>\n${Object.entries(value).map(([k, v]) => `${indent}<key>${k}</key>${plist(v, indent + '  ')}`).join('\n')}\n${indent.slice(2)}</dict>`;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) refuse(String(value));
+    return Number.isInteger(value) ? `<integer>${value}</integer>` : `<real>${value}</real>`;
+  }
+  if (Array.isArray(value)) return `<array>${value.map((v, i) => plist(v, indent, `${path}[${i}]`)).join('')}</array>`;
+  if (value === null || typeof value !== 'object') refuse(value === null ? 'null' : typeof value);
+  return `<dict>\n${Object.entries(value).map(([k, v]) => `${indent}<key>${xml(k)}</key>${plist(v, indent + '  ', path ? `${path}.${k}` : k)}`).join('\n')}\n${indent.slice(2)}</dict>`;
 };
 export const plistFile = (dict) => `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">${plist(dict)}</plist>\n`;
 

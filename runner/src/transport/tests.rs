@@ -390,6 +390,42 @@ fn an_edit_retracts_what_has_not_started_and_expands_from_its_commit() {
         .any(|h| h.at == 2000.0 && h.state(3000.0) == "played"));
 }
 
+/// A tempo edit committed at a hit's time: the old segment and the new one
+/// round that time to either side of the edit, and the hit still plays
+/// once (LLP 1125 D3).
+#[test]
+fn a_tempo_edit_on_a_hit_plays_it_once() {
+    let shapes = SOURCE.split("component Seq").next().unwrap();
+    for (from, bpm, beat, faster, t) in [
+        (0, 100, "13 / 6", 110, 1300.0),
+        (-4, 60, "7 / 5", 50, 5400.0),
+        (-4, 80, "2 / 3", 70, 3500.0),
+        (0, 120, "2", 150, 1000.0),
+    ] {
+        let mut r = boot_with(&format!(
+            "{shapes}component Seq
+  state bpm = {bpm}
+  action edit
+    bpm = {faster}
+  sequence s when true
+    play([Track(beats=16, loops=0, offset=0, output=\"\", steps=[hit({beat}, \"assets/click.wav\")])], bpm=bpm, from={from})
+  view
+    text \"click\"
+"
+        ));
+        r.advance(t).unwrap();
+        r.act("edit", vec![]).unwrap();
+        r.advance(t + 1000.0).unwrap();
+        let clicks = at(&r, "assets/click.wav");
+        assert_eq!(
+            clicks.len(),
+            1,
+            "beat {beat}, bpm {faster} at {t}: {clicks:?}"
+        );
+        assert!((clicks[0] - t).abs() < 1e-6, "{clicks:?}");
+    }
+}
+
 fn grouped_sequence() -> Runner<NoData> {
     boot_with(&grouped_sequence_source())
 }

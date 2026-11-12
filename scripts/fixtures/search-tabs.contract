@@ -1,0 +1,66 @@
+// LLP 1141.002 D1–D3, LLP 1116.004 D1.1 (TabsIOSTests): three root tabs whose
+// placement is the tabs recipe's, unsaid, so an iPad shows them as UIKit's
+// sidebar-adaptable bar. The last says `rel="search"`, so iOS 18 and later
+// make it a `UISearchTab`; its root's header field says `autofocus`, so
+// iOS 26 activates the field when the tab is selected. Home pushes Detail;
+// Strip takes away the search tab's symbol, label and field.
+routes nav
+  tab home "/"
+    detail "/detail"
+  tab saved "/saved"
+  tab find "/find"
+
+component SearchTabs
+  state query = ""
+  state bare = false
+  action pick(name: string)
+    nav = select(nav, name)
+  action follow(url: string)
+    nav = go(nav, url)
+  action open
+    nav = push(nav, "/detail")
+  action back
+    nav = back(nav)
+  action edit(v: string)
+    query = v
+  action strip
+    bare = true
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%"
+      display="flex" flex-direction="column"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              column navigationKey=`${e.id}` testId=`route-${e.name}` position="absolute" inset=0
+                display="flex" flex-direction="column"
+                header display="flex" align-items="center" padding="8px 16px"
+                  if e.name == "detail"
+                    button id="back" press=back testId="back-detail" aria-label="Back"
+                      text "Back"
+                  text (e.name == "home" ? "Home" : e.name == "saved" ? "Saved" : e.name == "find" ? "Speakers" : "Detail")
+                    role="heading" aria-level=(e.name == "detail" ? 2 : 1)
+                  if e.name == "find" and not bare
+                    input type="search" autofocus value=query input=edit placeholder="Search speakers"
+                      testId="speaker-search"
+                scroll flex=1 min-height=0 testId=`content-${e.name}`
+                  if e.name == "home"
+                    button press=open testId="open-detail"
+                      text "Open"
+                    button press=strip testId="strip"
+                      text "Strip"
+                  text `${e.name} ${query}` testId=`text-${e.name}`
+      row role="tablist" testId="tabs"
+        button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=pick("home")
+          testId="tab-home" flex=1
+          image "symbol:home"
+          text "Home"
+        button role="tab" aria-controls="panel-saved" aria-selected=(nav.tab == "saved") press=pick("saved")
+          testId="tab-saved" flex=1
+          image "symbol:bookmark"
+          text "Saved"
+        button role="tab" rel="search" aria-controls="panel-find" aria-selected=(nav.tab == "find") press=pick("find")
+          testId="tab-find" flex=1
+          if not bare
+            image "symbol:people"
+            text "Speakers"

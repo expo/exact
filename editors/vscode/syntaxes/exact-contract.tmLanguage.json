@@ -302,7 +302,7 @@
           "name": "constant.language.exact-contract"
         },
         {
-          "match": "(?<![A-Za-z0-9_\\-])(?:when|if|else|each|in|key|match|case|as|shape|mount|from|to|then|refreshes|with|children)(?![A-Za-z0-9_]|-[A-Za-z])",
+          "match": "(?<![A-Za-z0-9_\\-])(?:when|if|else|for|in|key|match|case|as|shape|mount|from|to|then|refreshes|with|children)(?![A-Za-z0-9_]|-[A-Za-z])",
           "name": "keyword.control.exact-contract"
         },
         {

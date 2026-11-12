@@ -1,6 +1,9 @@
 use super::*;
 use exact_runner::Request;
 
+#[cfg(target_os = "linux")]
+mod lifetime;
+
 pub(super) fn compile_fixture(source: &std::path::Path, path: &std::path::Path) {
     #[cfg(not(windows))]
     let mut command = {

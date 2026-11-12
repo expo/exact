@@ -331,12 +331,15 @@ fn a_textfield_appearance_is_native_and_marked_for_the_page() {
 /// its `target` is authored; a path stays (chat F11, hn-reader F3).
 #[test]
 fn a_link_out_of_the_app_opens_a_new_browsing_context() {
-    let link = |href: &str, target: Option<&str>| {
+    let link_rel = |href: &str, target: Option<&str>, rel: Option<&str>| {
         let style = StyleProps::default();
         let mut props = PropList::new();
         props.set(PropId::Href, PropValue::Str(href.into()));
         if let Some(t) = target {
             props.set(PropId::Target, PropValue::Str(t.into()));
+        }
+        if let Some(r) = rel {
+            props.set(PropId::Rel, PropValue::Str(r.into()));
         }
         let out = super::props_of(&NodeFacts {
             id: 1,
@@ -351,6 +354,7 @@ fn a_link_out_of_the_app_opens_a_new_browsing_context() {
         let get = |k: &str| out.get(k).cloned();
         (get("target"), get("rel"))
     };
+    let link = |href: &str, target: Option<&str>| link_rel(href, target, None);
     let out = (Some("_blank".into()), Some("external noopener".into()));
     assert_eq!(link("https://example.com/a", None), out);
     assert_eq!(link("//example.com/a", None), out);
@@ -361,6 +365,18 @@ fn a_link_out_of_the_app_opens_a_new_browsing_context() {
     );
     let blank = (Some("_blank".into()), Some("noopener".into()));
     assert_eq!(link("/c/42", Some("_blank")), blank);
+    // An authored `rel` keeps its tokens; the ones a new context needs join
+    // it once, whatever their case (LLP 1141.002 D1).
+    let kept = |rel: &str| (Some("_blank".into()), Some(rel.into()));
+    assert_eq!(
+        link_rel("https://example.com/", None, Some("noreferrer")),
+        kept("noreferrer external noopener")
+    );
+    assert_eq!(
+        link_rel("/c/42", Some("_blank"), Some("NoOpener help")),
+        kept("NoOpener help")
+    );
+    assert_eq!(link_rel("/c/42", None, Some("help")).1, Some("help".into()));
     let app = |t: &str| {
         format!("component A\n  view\n    link href=\"/x\" target=\"{t}\"\n      text \"x\"\n")
     };

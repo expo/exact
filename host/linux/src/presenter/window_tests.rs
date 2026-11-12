@@ -406,3 +406,79 @@ fn status_bar_style_reaches_chrome_independently_of_the_scheme() {
     assert!(p.chrome().status_light_icons);
     assert!(!p.chrome().dark);
 }
+
+/// `exactViewport()` as the app last read it, and how many commits asked
+/// its readers again since journal line `since`.
+fn viewport(p: &Presenter<()>, since: usize) -> (serde_json::Value, usize) {
+    let runner = p.host().runner();
+    let state: serde_json::Value =
+        serde_json::from_str(&exact_runner::agent::state(runner)).unwrap();
+    let logs = exact_runner::agent::logs(runner, since);
+    (
+        state["resources"]["v"].clone(),
+        logs.matches("asked again)").count(),
+    )
+}
+
+fn journal_end(p: &Presenter<()>) -> usize {
+    let logs: serde_json::Value =
+        serde_json::from_str(&exact_runner::agent::logs(p.host().runner(), 0)).unwrap();
+    logs["next"].as_u64().unwrap() as usize
+}
+
+/// LLP 1039 D9: the keyboard's overlap and the viewport it shrinks reach
+/// the app in one commit, so a branch on `height + keyboardHeight`, which
+/// the keys leave as it was, never flips while they rise or fall, and the
+/// field it holds is never made again.
+#[test]
+fn the_keyboard_and_the_viewport_it_shrinks_are_one_commit() {
+    let mut p = boot(
+        "shape V\n  height: number\n  keyboardHeight: number\ncomponent App\n  resource v = exactViewport() as shape V\n  view\n    main width=\"100%\" height=\"100%\"\n      if v.height + v.keyboardHeight == 754\n        input aria-label=\"Name\" testId=\"name\"\n",
+    );
+    assert!(p.set_window(phone()).is_none());
+    let field = |p: &Presenter<()>| p.host().kernel().find_by_test_id("name");
+    let before = field(&p);
+    assert_eq!(before.len(), 1);
+    let typing = Window {
+        keyboard: [0., 0., 300., 0.],
+        ..phone()
+    };
+    let since = journal_end(&p);
+    assert!(p.set_window(typing).is_none());
+    let (v, commits) = viewport(&p, since);
+    assert_eq!(v, serde_json::json!({"height": 470, "keyboardHeight": 284}));
+    assert_eq!(commits, 1);
+    assert_eq!(field(&p), before, "the field was never made again");
+    let since = journal_end(&p);
+    assert!(p.set_window(phone()).is_none());
+    let (v, commits) = viewport(&p, since);
+    assert_eq!(v, serde_json::json!({"height": 754, "keyboardHeight": 0}));
+    assert_eq!(commits, 1);
+    assert_eq!(field(&p), before);
+}
+
+/// LLP 1039 D9: a rotation's size and insets reach the app in one commit,
+/// so a branch both decide, which holds before and after, is never torn
+/// down between them.
+#[test]
+fn a_rotation_is_one_commit() {
+    let mut p = boot(
+        "shape V\n  width: number\n  safeAreaLeft: number\ncomponent App\n  resource v = exactViewport() as shape V\n  view\n    main viewport-fit=\"cover\" width=\"100%\" height=\"100%\"\n      if (v.width > 600) == (v.safeAreaLeft > 0)\n        input aria-label=\"Name\" testId=\"name\"\n",
+    );
+    assert!(p.set_window(phone()).is_none());
+    let field = |p: &Presenter<()>| p.host().kernel().find_by_test_id("name");
+    let before = field(&p);
+    assert_eq!(before.len(), 1);
+    let turned = Window {
+        size: (800., 400.),
+        bars: [24., 0., 0., 0.],
+        cutout: [0., 0., 0., 30.],
+        ..phone()
+    };
+    let since = journal_end(&p);
+    assert!(p.set_window(turned).is_none());
+    let (v, commits) = viewport(&p, since);
+    assert_eq!(v, serde_json::json!({"width": 800, "safeAreaLeft": 30}));
+    assert_eq!(commits, 1);
+    assert_eq!(field(&p), before, "the field was never made again");
+}

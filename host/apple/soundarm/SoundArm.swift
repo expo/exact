@@ -177,7 +177,8 @@ private final class SoundArm {
     /// keeps it for the next render (SoundOutput's backlog).
     func push(_ kind: UInt32, _ id: UInt64, _ sound: UInt32, _ at: Double, _ gain: Float, _ rate: Float, _ pan: Float) -> Bool {
         guard exact_sound_room(mixer) > 0, exact_sound_push(mixer, kind, id, sound, at, gain, rate, pan) else { return false }
-        if kind == 1 { started[id] = at }
+        // Only the device check reads a voice's start, so none is kept otherwise.
+        if kind == 1 && checking { started[id] = at }
         return true
     }
 
@@ -213,7 +214,10 @@ private final class SoundArm {
 
     func report(_ onset: Double) {
         guard let (id, aimed) = started.filter({ $0.value <= onset + 0.1 }).max(by: { $0.value < $1.value }) else { return }
-        started[id] = nil
+        // A later onset follows a silence after this one, so it is never a
+        // voice aimed at or before this voice: those went unheard, or sounded
+        // without a silence before them.
+        started = started.filter { $0.value > aimed }
         say(String(format: "sound check: voice %llu reached the speaker %+.3f ms from its time", id, (onset - aimed) * 1000))
     }
 }

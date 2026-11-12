@@ -14,9 +14,22 @@ export function environment() {
     "safe-area-inset-right": r2(parseFloat(cs.paddingRight) || 0),
     "safe-area-inset-bottom": r2(parseFloat(cs.paddingBottom) || 0),
     "safe-area-inset-left": r2(parseFloat(cs.paddingLeft) || 0),
-    "keyboard-inset-height": r2(Math.max(0, innerHeight - (visualViewport?.height ?? innerHeight))),
+    "keyboard-inset-height": keyboardInset(),
     ...foldEnv()
   };
+}
+/** `env(keyboard-inset-height)` (LLP 1039 D9), as the browser reports it: the VirtualKeyboard API's rect where the page overlays the keyboard, else how far the visual viewport falls short of the layout viewport's bottom. Under `interactive-widget=resizes-content` without the VirtualKeyboard API the keys shrink the page itself, which then has nothing over it: 0. */
+export function keyboardInset(platform = globalThis) {
+  const rect = platform.navigator?.virtualKeyboard?.boundingRect;
+  if (rect?.height > 0) {
+    return r2(rect.height);
+  }
+  const vv = platform.visualViewport;
+  return vv ? r2(Math.max(0, platform.innerHeight - vv.height - vv.offsetTop)) : 0;
+}
+/** `changed` when the keyboard moves without a resize: the VirtualKeyboard API's `geometrychange`. */
+export function onKeyboard(changed, platform = globalThis) {
+  platform.navigator?.virtualKeyboard?.addEventListener?.("geometrychange", changed);
 }
 // Read CSS when the JS fold interfaces are absent (LLP 1078 D6). Share agent substitutes with agent-navigation.js; they change facts, not CSS env() resolution (D7).
 const r2 = (x) => Math.round(x * 100) / 100;

@@ -421,6 +421,22 @@ pub(super) fn in_button(kernel: &Kernel, node: &NodeRef<'_>) -> bool {
     false
 }
 
+/// A link's `rel`: the author's tokens, then each of `need` it lacks,
+/// compared ASCII case-insensitively as HTML's link types are (rt.js
+/// `linkRel` writes the same as a bound `href`, `target` or `rel` changes).
+pub(super) fn link_rel(authored: Option<&str>, need: &[&str]) -> String {
+    let mut tokens: Vec<&str> = authored
+        .unwrap_or_default()
+        .split_ascii_whitespace()
+        .collect();
+    for want in need {
+        if !tokens.iter().any(|t| t.eq_ignore_ascii_case(want)) {
+            tokens.push(want);
+        }
+    }
+    tokens.join(" ")
+}
+
 /// The element for a node wherever it is: its type, refined by `semanticTag`.
 /// A URL that leaves the app: an absolute `http(s)` one, or scheme-relative.
 /// A path, or a relative URL, stays in it (the native hosts' rule).
@@ -930,6 +946,10 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::NavigationPresentation => "navigationPresentation",
             PropId::NavigationSource => "navigationSource",
             PropId::NavigationSplit => "navigationSplit",
+            // @ref LLP 1141.002 D1 — HTML's `rel` on a link or form; a tab's
+            // button has none (a search tab is the platform's to present).
+            PropId::Rel if node.props.str(PropId::AccessibilityRole) == Some("tab") => continue,
+            PropId::Rel => "rel",
             PropId::EstimatedItemWidth => "data-exact-estimated-item-width",
             // LLP 1013.000 D7: the shared-element name the JS target's view
             // transitions pair by.
@@ -1360,15 +1380,21 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
     // browser): a new browsing context, unless the author named a `target`
     // (chat F11, hn-reader F3). `external` marks the default, which the JS
     // target's runtime recomputes as a bound `href` changes (rt.js `P`).
+    // The tokens a new browsing context needs join the author's `rel`
+    // (`noreferrer`, say), which keeps its own (LLP 1141.002 D1).
     if element(node) == "a" {
-        match out.get("target").map(String::as_str) {
-            Some("_blank") => _ = out.insert("rel".into(), "noopener".into()),
-            Some(_) => {}
+        let need: &[&str] = match out.get("target").map(String::as_str) {
+            Some("_blank") => &["noopener"],
+            Some(_) => &[],
             None if out.get("href").is_some_and(|h| leaves_app(h)) => {
                 out.insert("target".into(), "_blank".into());
-                out.insert("rel".into(), "external noopener".into());
+                &["external", "noopener"]
             }
-            None => {}
+            None => &[],
+        };
+        if !need.is_empty() {
+            let rel = link_rel(out.get("rel").map(String::as_str), need);
+            out.insert("rel".into(), rel);
         }
     }
     // A role the element already has natively is left off (ARIA in HTML:

@@ -18,6 +18,7 @@ pub const FIELDS: &[&str] = &[
     "safeAreaBottom",
     "safeAreaLeft",
     "segments",
+    "keyboardHeight",
     "prefersReducedMotion",
     "prefersReducedTransparency",
     "prefersContrast",
@@ -43,6 +44,10 @@ pub struct Viewport {
     pub height: f64,
     /// Display pixels per logical point; absent until a host reports its scale.
     pub device_pixel_ratio: Option<f64>,
+    /// How much of the layout viewport the software keyboard covers, before
+    /// the page avoids it, in CSS pixels: `env(keyboard-inset-height)`, 0
+    /// with no keyboard (LLP 1039 D9).
+    pub keyboard_height: f64,
     /// The user's display preferences; a host that cannot read them says
     /// `no-preference`, as a browser does.
     pub preferences: Preferences,
@@ -455,6 +460,7 @@ impl Viewport {
             width,
             height,
             device_pixel_ratio: None,
+            keyboard_height: 0.0,
             preferences: Preferences::default(),
             fold: Fold::default(),
         }
@@ -469,6 +475,8 @@ impl Viewport {
             && self
                 .device_pixel_ratio
                 .is_none_or(|s| s.is_finite() && s > 0.0)
+            && self.keyboard_height.is_finite()
+            && self.keyboard_height >= 0.0
         {
             Ok(())
         } else {
@@ -485,6 +493,7 @@ impl Viewport {
                 self.device_pixel_ratio
                     .map_or(Value::NONE, |s| Value::some(Value::Number(s))),
             ),
+            "keyboardHeight" => Some(Value::Number(self.keyboard_height)),
             "prefersReducedMotion" => Some(Value::Bool(self.preferences.reduced_motion)),
             "prefersReducedTransparency" => {
                 Some(Value::Bool(self.preferences.reduced_transparency))

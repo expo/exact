@@ -1,0 +1,42 @@
+// KeyboardSheetIOSTests (LLP 1039 D9; LLP 1008 §9.1): a sheet route under
+// the root's default `resizes-content`, its field and a keyboard toolbar at
+// its bottom, a dialog sheet's field, and the software keyboard's overlap as
+// a value.
+routes nav
+  home "/"
+    players "/players"
+
+shape Viewport
+  keyboardHeight: number
+  devicePixelRatio: option<number>
+
+component App
+  resource viewport = exactViewport() as shape Viewport
+  state name = ""
+  action follow(url: string)
+    nav = go(nav, url)
+  action back
+    nav = back(nav)
+  action edit(v: string)
+    name = v
+  action openNote
+    showModal("note")
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        if e.name == "home"
+          column navigationKey=`${e.id}` position="absolute" inset=0 padding=16
+            text `${viewport.keyboardHeight}` testId="keyboard"
+            link href="/players" testId="open"
+              text "Players"
+            button press=openNote testId="open-note"
+              text "Note"
+            dialog id="note" width=300 height=200
+              input value=name input=edit placeholder="Note" aria-label="Note" testId="note"
+        if e.name == "players"
+          column navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="large" position="absolute" inset=0
+            column padding=16 flex=1 min-height=0
+              input value=name input=edit placeholder="Name" aria-label="Name" testId="name"
+            row role="toolbar" toolbarPlacement="keyboard" aria-label="Keys" padding="8px 16px" testId="keys"
+              button press=back testId="done"
+                text "Done"

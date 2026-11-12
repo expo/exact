@@ -223,10 +223,12 @@ pub fn create_headless(name: &str) -> u32 {
     with(|m| m.create_headless(name)).flatten().unwrap_or(0)
 }
 
-/// Drop the device and every canvas; [`load`] may run again. A thread that
-/// loaded a module must not leave it for thread-local teardown: wgpu's own
-/// thread-locals may already be gone by then, and dropping a device without
-/// them aborts the process (found by the first test to load one off the main thread).
+/// Join acquisition workers and drop the device and every canvas; [`load`] may
+/// run again. The host must keep the library loaded until this returns.
+///
+/// A thread that loaded a module must not leave it for thread-local teardown:
+/// wgpu's own thread-locals may already be gone by then, and dropping a device
+/// without them aborts the process.
 pub fn unload() {
     let module = MODULE.with(|m| m.borrow_mut().take());
     drop(module);
@@ -787,7 +789,7 @@ macro_rules! module {
             len
         }
 
-        /// Release all instances and module TLS before unloading the library.
+        /// Join acquisition workers and release instances and TLS before unloading the library.
         #[no_mangle]
         pub extern "C" fn gpu_unload() { $crate::native::unload(); }
 

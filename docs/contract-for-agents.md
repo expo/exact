@@ -3012,6 +3012,35 @@ main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow displa
   paints (on iOS only when `scripts/agent.mjs` runs alone: `exact.mjs` shows UIKit's
   bars); `--chrome platform` on `macos` shows the sidebar, and a tap naming a tab
   presses its row (`native: "sidebar-row"`).
+- On an iPad (iPadOS 18 and later) the same root tablist, placed as above, is UIKit's
+  sidebar-adaptable tab bar (`UITabBarController.mode = .tabSidebar`): a sidebar of the
+  tabs where the window is regular-width and wide enough (an iPad in landscape), the
+  floating tab bar with its sidebar button otherwise, and the bottom tab bar in a compact
+  width. UIKit switches between them as the window changes; the routes clear the
+  sidebar as they clear any bar, so their content is laid out beside it. A tablist the
+  author places elsewhere, or draws (`appearance="none"`), stays a tab bar, and so,
+  for now, does a bar of six or more tabs.
+- **The search tab**: the root tab that says `rel="search"` (HTML's link type for "an
+  interface for searching"; keep `role="tab"`) is the app's search tab, and is written
+  last. On iOS 18 and later, in a bar of five tabs or fewer, it is a `UISearchTab` with
+  the tab's own symbol and label (none: UIKit's magnifying glass and "Search"); the first `input type="search"` in its
+  root route's header is its field, which UIKit moves into the bar when the tab is
+  selected. `autofocus` on that field is `automaticallyActivatesSearch`: iOS 26 sets the
+  tab apart at the trailing end of the bar and opens the field on every selection;
+  without it the tab is one among the others. The web, the Mac's sidebar, Android and
+  the other hosts keep it where it is written. A header field on a list is that list's
+  filter; a search tab searches the app. `contract vocab search` has the details;
+  Expo's `role="search"` trigger and SwiftUI's `Tab(role: .search)` are `rel="search"`.
+- A tab bar that minimizes as content scrolls (`tabBarMinimizeBehavior`) and an accessory
+  view above it (`bottomAccessory`, iOS 26) are not Contract words: unsaid, the bar is
+  UIKit's default, and an app that wants them sets them from the `tabs` hatch, which
+  hands it the `UITabBarController` (docs/reference.md, "Access hatches"). The routes
+  follow the safe area a minimizing bar changes.
+- A box written beside the routes in the navigation root (a column the routes are offset
+  past) shows on iOS as on the web: the native container that stands for the routes
+  paints under a child no route's box meets, and UIKit lays the navigation bar's title
+  and buttons out past such a column. For a sidebar of sections beside the content,
+  prefer the root tablist above, which an iPad shows as its sidebar.
 - On the Mac a route's `header` is the window's title bar and toolbar: its heading the
   window's title (under a `head title`, over the app's name; there is no large title),
   the first text after the heading the window's subtitle, its buttons toolbar items, a
@@ -3767,7 +3796,27 @@ logical points with the same document-inset meaning as `env(safe-area-inset-*)`.
 fields in the layout viewport's coordinates, ordered by row then column. With
 no fold it contains the whole viewport. Declare the fields your app uses in a
 segment shape and `segments: Segment[]` in its viewport shape. Insets and
-rectangles update when the host's document geometry changes.
+rectangles update when the host's document geometry changes, in the same commit
+as the size a rotation brings.
+`keyboardHeight` is how much of the layout viewport the software keyboard covers,
+in logical points, before the page avoids it, whatever `interactive-widget` says:
+CSS's `env(keyboard-inset-height)`. It is the keyboard's layout guide on iOS (a
+dialog sheet's field included, though the page under the sheet is not avoided and
+the agent's `layout.env` then says 0), the IME's inset on Android, and on the web
+`navigator.virtualKeyboard.boundingRect` where the page overlays the keys, else how
+far the visual viewport falls short of the layout viewport's bottom
+(`innerHeight - visualViewport.height - visualViewport.offsetTop`). Under
+`resizes-content` without the VirtualKeyboard API the keys shrink the page itself
+(its `height` is the shorter one) and nothing covers it: 0. It is 0 with no
+keyboard, and on macOS, desktop Linux and Windows. It changes in the commit
+that shrinks the viewport, so `height + keyboardHeight` holds still while the keys
+move. With a hardware keyboard iOS still shows a short bar of its own, and this is
+its height: a row of the app's own on the keys that suits only a software keyboard
+tests a height (`when viewport.keyboardHeight >= 120`). A `row role="toolbar"
+toolbarPlacement="keyboard"` at the bottom of the page or of a sheet route sits on
+the keys under every `interactive-widget`: a sheet's layout ends at the keys while
+its field has the focus, whatever the root says; on the page, `overlays-content`
+lifts the toolbar onto them and `resizes-content` ends the page there.
 
 `exactViewport().pointer` and `.hover` are CSS's `pointer` (`fine`, `coarse`,
 `none`) and `hover` (`hover`, `none`) for the primary input: the web's media

@@ -182,10 +182,12 @@ ${build}`,
 
 ${includes(true)}
 ${module(false)}include!(concat!(env!("OUT_DIR"), "/logic.rs"));
-// The packages' Linux implementations the build composes (exact_packages()).
+// The packages' Linux implementations the build composes (exact_packages()), and the app's Rust hatches
+// (exact_hatches(), from modules/linux).
 include!(concat!(env!("OUT_DIR"), "/packages.rs"));
+include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 fn main() {
-    let composed = exact_linux::Composed { packages: exact_packages(), ..Default::default() };
+    let composed = exact_linux::Composed { hatches: exact_hatches(), packages: exact_packages() };
     std::process::exit(exact_linux::run_composed::<AppData>(PLAN, COMPAT, composed));
 }
 `,
@@ -243,10 +245,12 @@ ${build}`,
 
 ${includes(true)}
 ${module(false)}include!(concat!(env!("OUT_DIR"), "/logic.rs"));
-// The packages' Windows implementations the build composes (exact_packages()).
+// The packages' Windows implementations the build composes (exact_packages()), and the app's Rust hatches
+// (exact_hatches(), from modules/windows or else modules/linux).
 include!(concat!(env!("OUT_DIR"), "/packages.rs"));
+include!(concat!(env!("OUT_DIR"), "/hatches.rs"));
 fn main() {
-    let composed = exact_linux::Composed { packages: exact_packages(), ..Default::default() };
+    let composed = exact_linux::Composed { hatches: exact_hatches(), packages: exact_packages() };
     std::process::exit(exact_windows::run_composed::<AppData>(${JSON.stringify(title)}, window(), PLAN, COMPAT, composed));
 }
 `,

@@ -81,7 +81,7 @@ impl Inner {
             return;
         }
         if let Some(m) = max_width {
-            if m.is_nan() || m <= 0.0 {
+            if !m.is_finite() || m <= 0.0 {
                 return;
             }
         }

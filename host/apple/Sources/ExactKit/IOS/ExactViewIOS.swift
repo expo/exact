@@ -11,11 +11,24 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 
-/// The launch screen's colour, by the name `UILaunchScreen` gives it, which
-/// host/apple/assets.mjs makes from the colour itself; nil where the build
-/// declares none.
-public let launchScreenColor = ((Bundle.main.object(forInfoDictionaryKey: "UILaunchScreen") as? [String: Any])?["UIColorName"] as? String)
-    .flatMap { UIColor(named: $0) }
+/// The catalogue's sRGB components, emitted by host/apple/assets.mjs so the
+/// host need not load Assets.car before UIApplicationMain.
+public let launchScreenColor = LaunchScreenColor.make(Bundle.main.object(forInfoDictionaryKey: "ExactLaunchColor"))
+
+enum LaunchScreenColor {
+    static func make(_ value: Any?) -> UIColor? {
+        let components = value as? [String: [NSNumber]]
+        func color(_ rgba: [NSNumber]?) -> UIColor? {
+            guard let rgba, rgba.count == 4,
+                  let space = CGColorSpace(name: CGColorSpace.sRGB),
+                  let color = CGColor(colorSpace: space, components: rgba.map { CGFloat($0.doubleValue) }) else { return nil }
+            return UIColor(cgColor: color)
+        }
+        guard let light = color(components?["light"]) else { return nil }
+        guard let dark = color(components?["dark"]) else { return light }
+        return UIColor { $0.userInterfaceStyle == .dark ? dark : light }
+    }
+}
 
 public final class ExactView: UIView {
     public let session: ExactSession
@@ -30,6 +43,11 @@ public final class ExactView: UIView {
     private var lastRegions: [CGFloat]?
     private var lastFold = ViewportFold.flat
     private var lastScreen: CGSize?
+    /// The keyboard's overlap last told (`exactViewport().keyboardHeight`).
+    private var lastKeyboard: CGFloat = 0
+    /// What the keys cover of the page, whatever is presented over it
+    /// (`fitKeyboard`); `presenter.keyboardInset` is what avoidance takes.
+    package private(set) var keyboardCovers: CGFloat = 0
     /// The bounds' size the last fit read (`fitAheadOfLayout`).
     private var fittedSize = CGSize.zero
     /// The hinge's last status from `UIHingeInteraction` (1 closed, 2
@@ -80,7 +98,7 @@ public final class ExactView: UIView {
     public init(session: ExactSession) {
         self.session = session
         super.init(frame: .zero)
-        // The launch screen's colour (the manifest's `launch`) until the first
+        // The launch screen's colour (the manifest's `background_color`) until the first
         // frame names the canvas; unset, the platform's (LLP 1115 D2).
         backgroundColor = launchScreenColor ?? .platformBackground(in: nil)
         canvas = backgroundColor
@@ -321,8 +339,12 @@ public final class ExactView: UIView {
         #endif
         let top = presenter.keyboardGuideTop(in: self)
         presenter.keyboardTop = top.map { convert(CGPoint(x: 0, y: $0), to: window).y }
-        let overlap = presenter.menus.sheets.top == nil
-            ? top.map { min(max(0, frame.maxY - max($0, frame.minY)), frame.height) } ?? 0 : 0
+        // What the keys cover of the page, whatever is presented over it: the
+        // fact (`exactViewport().keyboardHeight`, LLP 1039 D9). Avoidance leaves
+        // the page alone while a dialog sheet, which ends at the keys itself, is up.
+        let covered = top.map { min(max(0, frame.maxY - max($0, frame.minY)), frame.height) } ?? 0
+        keyboardCovers = covered
+        let overlap = presenter.menus.sheets.top == nil ? covered : 0
         presenter.setKeyboardInset(overlap)
         presenter.keyboardToolbars.ride(overlap: overlap)
         if top == nil { presenter.pinnedRoom.release() }
@@ -515,6 +537,11 @@ public final class ExactView: UIView {
         }
         let resized = size != lastSize
         if resized { lastSize = size; change.size = size }
+        // LLP 1039 D9: what the keys cover, a dialog sheet's editor's too.
+        if keyboardCovers != lastKeyboard {
+            lastKeyboard = keyboardCovers
+            change.keyboard = lastKeyboard
+        }
         // Rects that change on the same grid (a keyboard ending the
         // segments, a resize) are told with the viewport, in its one layout;
         // a new posture or grid goes through `segments`. The kernel refuses
@@ -589,6 +616,7 @@ public final class ExactView: UIView {
         if let screen = lastScreen { session.view(Runtime.ViewChange(screen: .some(screen))) }
         if lastInsets != .zero { session.insets(top: lastInsets.top, right: lastInsets.right, bottom: lastInsets.bottom, left: lastInsets.left) }
         lastRegions = nil  // the next fit tells the new runner
+        lastKeyboard = 0  // as the new runner holds
         session.segments(lastFold)
         reportScheme()
         fit()

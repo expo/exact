@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { assetCatalog, assetCatalogInfo, catalogRecords, compileCatalogCommand } from './car.mjs';
 import { appleCommand } from './toolchain.mjs';
-import { plistFile } from './assets.mjs';
+import { iconFiles, plistFile } from './assets.mjs';
 import { encodePng } from '../../scripts/png.mjs';
 import { pngPixels, pngBytes } from './image.mjs';
 
@@ -146,6 +146,8 @@ test('primary and alternate icons retain phone and tablet renditions beside ordi
   expect(keys.CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName).toBe('Primary');
   expect(keys.CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconFiles).toEqual(['Primary60x60']);
   expect(readFileSync(resolve(bundle, 'Primary60x60@2x.png')).subarray(1, 4).toString()).toBe('PNG');
+  // The files an App Clip, which takes these keys, copies from the app (expo/exact-build#7).
+  expect(iconFiles(keys, bundle).sort()).toEqual(['Primary60x60@2x.png', 'Primary76x76@2x~ipad.png']);
   expect(keys['CFBundleIcons~ipad'].CFBundleAlternateIcons).toEqual({ Alternate: { CFBundleIconName: 'Alternate' } });
   const file = resolve(bundle, 'Assets.car'), rows = assetCatalogInfo(readFileSync(file));
   expect(rows.filter(row => row.AssetType === 'Icon Image')).toHaveLength(4);
@@ -215,3 +217,17 @@ test('Icon Composer retains live SVG stacks and explicit legacy artwork beside o
     expect(inspected.some(row => row.Name === 'DuoLab')).toBe(true);
   }
 }));
+
+test("the icon files named by actool's keys, as Xcode's actool writes them, and nothing else", () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-icon-files-'));
+  try {
+    const files = ['AppIcon60x60@2x.png', 'AppIcon60x60@3x.png', 'AppIcon76x76@2x~ipad.png', 'AppIcon83.5x83.5@2x~ipad.png', 'Dusk60x60@2x.png'];
+    for (const file of [...files, 'Assets.car', 'Info.plist', 'AppIconography.png', 'launch@2x.png']) writeFileSync(resolve(dir, file), '');
+    const keys = {
+      CFBundleIcons: { CFBundlePrimaryIcon: { CFBundleIconFiles: ['AppIcon60x60'], CFBundleIconName: 'AppIcon' }, CFBundleAlternateIcons: { Dusk: { CFBundleIconFiles: ['Dusk60x60'], CFBundleIconName: 'Dusk' } } },
+      'CFBundleIcons~ipad': { CFBundlePrimaryIcon: { CFBundleIconFiles: ['AppIcon60x60', 'AppIcon76x76', 'AppIcon83.5x83.5'], CFBundleIconName: 'AppIcon' } },
+    };
+    expect(iconFiles(keys, dir).sort()).toEqual(files);
+    expect(iconFiles({}, dir)).toEqual([]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

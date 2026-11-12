@@ -51,6 +51,7 @@ import { holderOf, takePort } from './port-lock.mjs';
 import { backendOriginSelection, privateNetwork } from '../js/bake/src/typescript.mjs';
 import { contractVerify, semanticsSummary } from './verify-semantics.mjs';
 import { byRule, groups, ruleOf } from './verify-findings.mjs';
+import { cargoDiagnosticFilter } from './cargo-check.mjs';
 export { byRule, groups, ruleOf };
 
 import { inlineSettings } from '../js/bake/src/__exact_env.mjs';
@@ -415,11 +416,10 @@ async function webBuild(app) {
 /** A build's warning lines, less Cargo's that a crates.io patch every outside workspace must carry (`patchLines`, LLP
  * 1036.001 D2) is unused in this app's graph. An unused patch of the author's own, or at another path, still counts. */
 export function buildWarnings(output) {
-  const real = (path) => { try { return realpathSync(path); } catch { return resolve(path); } };
-  const required = new Set(Object.entries(Bun.TOML.parse(readFileSync(resolve(ROOT, 'Cargo.toml'), 'utf8')).patch?.['crates-io'] ?? {})
-    .map(([name, spec]) => `${name} ${real(resolve(ROOT, spec.path))}`));
-  const unused = (line) => /^warning: patch `(\S+) v\S+ \((.+)\)` was not used in the crate graph$/.exec(line);
-  return output.split('\n').filter((line) => { const m = unused(line); return /^warning: /.test(line) && !(m && required.has(`${m[1]} ${real(m[2])}`)); });
+  let kept = '';
+  const filter = cargoDiagnosticFilter(text => { kept += text; });
+  filter.write(output); filter.end();
+  return kept.split('\n').filter(line => /^warning: /.test(line));
 }
 
 /** The iOS build a drive needs, or its plan alone (agent-build.mjs): null when fresh, else what it said. */

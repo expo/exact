@@ -772,7 +772,10 @@ impl Engine {
         property: Property,
     ) -> Option<SpringDescriptor> {
         let running = self.slots.get(&(node, property))?.running()?;
-        let Curve::Spring { config, velocity } = &running.curve else {
+        let Curve::Spring {
+            config, velocity, ..
+        } = &running.curve
+        else {
             return None;
         };
         Some(SpringDescriptor {

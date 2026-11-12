@@ -1,12 +1,12 @@
 # Recipe: tabs
 
 `bun exact.mjs pattern tabs` (docs/patterns/tabs/app.contract) gives native tabs with separate stacks: iOS's bar,
-a sidebar on wide Mac/web windows.
+a sidebar on iPad and wide Mac/web windows.
 
 For an **app-drawn bar**, use `appearance="none"`: iOS lays routes full-height.
 Overlay the bar and pad **every route** by its height plus the bottom safe inset.
 Root `viewport-fit="cover"` exposes the insets. Label the badge for VoiceOver;
-`testId` is iOS's `accessibilityIdentifier` for XCUITest.
+`testId` is iOS's `accessibilityIdentifier`.
 
 ```contract
 routes nav

@@ -2593,13 +2593,15 @@ never Now Playing; an iOS media-session claimant requires `"playback"` itself.
 Under either playback value the session is held
 only while something has sound: the sound arm and a canvas's audio once they
 start, a `video` or `audio` while it has a source and is not muted, and a
-media-session claimant (`metadata=`, which Now Playing needs). With no capture,
-speech or call claim, muting or removing the last of those returns the session
-to ambient, which mixes with other apps' audio, as Bluesky's player does on
+media-session claimant (`metadata=`, which Now Playing needs). With no capture
+or speech claim and no call owning the session, muting or removing the last of
+those returns the session to ambient, which mixes with other apps' audio, as
+Bluesky's player does on
 re-mute; it is given up, so a paused podcast resumes, once no player is left.
 A call keeps its category, mode and options when a sound or player ends, and
-leaves activation to the system. Either playback value can
-continue in the background with `"audio"` in `host.ios.backgroundModes`.
+leaves activation to the system until its last claim ends and the system
+deactivates it. Either playback value can continue in the background with
+`"audio"` in `host.ios.backgroundModes`.
 Before a GPU module makes a surface, the host sets a session that nothing
 holds to ambient, without activating it: a module's output that opens before
 its `exact:audio` request is handled mixes and obeys the switch until the

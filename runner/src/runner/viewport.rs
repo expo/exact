@@ -19,14 +19,42 @@ impl<D: DataSource> Runner<D> {
         width: f64,
         height: f64,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.set_view(Some((width, height)), None)
+    }
+
+    /// The software keyboard's overlap with the layout viewport, CSS's
+    /// `env(keyboard-inset-height)` (LLP 1039 D9): every viewport reader in
+    /// one commit; the same overlap commits nothing.
+    pub fn set_keyboard_height(
+        &mut self,
+        height: f64,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.set_view(None, Some(height))
+    }
+
+    /// The size, the keyboard's overlap, or both, with the kernel's insets
+    /// and segments as the host has just set them: what changes of a window
+    /// at once, one commit, so no reader sees the keys without the viewport
+    /// they shrank or a rotation's insets without its size (LLP 1039 D9).
+    /// Anything invalid is journaled and refused, changing nothing.
+    pub fn set_view(
+        &mut self,
+        size: Option<(f64, f64)>,
+        keyboard: Option<f64>,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let (width, height) = size.unwrap_or((self.viewport.width, self.viewport.height));
         let viewport = Viewport {
             width,
             height,
+            keyboard_height: keyboard.unwrap_or(self.viewport.keyboard_height),
             ..self.viewport
         };
         if let Err(error) = viewport.validate() {
             let (width, height) = (exact_num::Shortest(width), exact_num::Shortest(height));
-            self.log(format!("viewport {width} × {height} refused: {error:?}"));
+            let keyboard = exact_num::Shortest(viewport.keyboard_height);
+            self.log(format!(
+                "viewport {width} × {height}, keyboard {keyboard} refused: {error:?}"
+            ));
             return Err(error);
         }
         self.replace_viewport(viewport, "viewport")

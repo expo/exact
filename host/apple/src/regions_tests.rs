@@ -110,6 +110,7 @@ fn the_view_told_at_once_is_laid_out_as_told_one_by_one() {
         Some(regions),
         Some((402., 874.)),
         None,
+        None,
     );
     assert!(!batch.contains("\"error\":\""), "{batch}");
     assert_eq!(frames(&together), frames(&apart));
@@ -119,7 +120,7 @@ fn the_view_told_at_once_is_laid_out_as_told_one_by_one() {
     );
     assert_eq!(padding_left(&together, "margins"), 20.);
     // Only what is given changes: the insets alone.
-    together.set_view(None, Some([0., 0., 0., 0.]), None, None, None);
+    together.set_view(None, Some([0., 0., 0., 0.]), None, None, None, None);
     apart.set_insets(0., 0., 0., 0.);
     assert_eq!(frames(&together), frames(&apart));
     // A keyboard folded like a laptop: the viewport and the lower segment's
@@ -135,14 +136,28 @@ fn the_view_told_at_once_is_laid_out_as_told_one_by_one() {
     together.set_segments(1, 1, 2, stacked(434.));
     apart.resize(402., 455.);
     apart.set_segments(1, 1, 2, stacked(15.));
-    let batch = together.set_view(None, None, None, Some((402., 455.)), Some(stacked(15.)));
+    let batch = together.set_view(
+        None,
+        None,
+        None,
+        Some((402., 455.)),
+        Some(stacked(15.)),
+        None,
+    );
     assert!(!batch.contains("\"error\":\""), "{batch}");
     assert_eq!(frames(&together), frames(&apart));
     assert_eq!(
         together.runner().kernel().env(),
         apart.runner().kernel().env()
     );
-    let refused = together.set_view(None, None, None, None, Some(stacked(15.)[..1].to_vec()));
+    let refused = together.set_view(
+        None,
+        None,
+        None,
+        None,
+        Some(stacked(15.)[..1].to_vec()),
+        None,
+    );
     assert!(refused.contains("segments off the grid"), "{refused}");
     assert_eq!(
         together.runner().kernel().env(),
@@ -193,6 +208,7 @@ component App
         None,
         Some((500., 900.)),
         None,
+        None,
     );
     assert!(refused.contains("viewport:"), "{refused}");
     assert_eq!(padding_left(&h, "margins"), 12.);
@@ -203,12 +219,45 @@ component App
         (Some([0., 0., 0., 18.]), Some((f32::NAN, 900.))),
         (Some([f32::NAN, 0., 0., 18.]), Some((500., 900.))),
     ] {
-        let refused = h.set_view(None, insets, None, size, None);
+        let refused = h.set_view(None, insets, None, size, None, None);
         assert!(refused.contains("error"), "{refused}");
         assert_eq!(h.runner().kernel().env(), before);
         assert_eq!(h.runner().viewport(), viewport);
     }
-    h.set_view(None, Some([0., 0., 0., 16.]), None, None, None);
+    h.set_view(None, Some([0., 0., 0., 16.]), None, None, None, None);
     assert_eq!(padding_left(&h, "margins"), 16.);
     assert_eq!(width(&h), 16.);
+}
+
+/// LLP 1039 D9: the keyboard's overlap rides the view's change: with the
+/// viewport it shrinks in one commit, or alone; every reader sees it, and
+/// a negative one is refused, changing nothing.
+#[test]
+fn the_keyboard_rides_the_view() {
+    let source = "shape V\n  height: number\n  keyboardHeight: number\ncomponent App\n  resource v = exactViewport() as shape V\n  view\n    column width=\"100%\" height=100\n";
+    let plan = contract::compile(source).unwrap().encode();
+    let measurer = Box::new(MonospaceMeasurer::default());
+    let (mut h, _) = Host::boot(&plan, NoData, measurer, 402., 874.).unwrap();
+    let read = |h: &Host<NoData>| {
+        let state: serde_json::Value =
+            serde_json::from_str(&exact_runner::agent::state(h.runner())).unwrap();
+        state["resources"]["v"].clone()
+    };
+    let batch = h.set_view(None, None, None, Some((402., 538.)), None, Some(336.));
+    assert!(!batch.contains("\"error\":\""), "{batch}");
+    assert_eq!(
+        read(&h),
+        serde_json::json!({"height": 538, "keyboardHeight": 336})
+    );
+    let logs = exact_runner::agent::logs(h.runner(), 0);
+    assert_eq!(
+        logs.matches("viewport (1 asked again)").count(),
+        1,
+        "{logs}"
+    );
+    h.set_view(None, None, None, None, None, Some(0.));
+    assert_eq!(read(&h)["keyboardHeight"], 0);
+    let refused = h.set_view(None, None, None, None, None, Some(-1.));
+    assert!(refused.contains("viewport:"), "{refused}");
+    assert_eq!(read(&h)["keyboardHeight"], 0);
 }

@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
 import { moduleGraph, notBuildInput, receiptChanges, refuseBinaryBackend } from './agent-launch.mjs';
+import { directoryInputSnapshot } from './cargo-dep-info.mjs';
 import { buildArgs, buildFirst, buildReason, childFailure, failureSummary, linuxRebuild, lockHolder, logged, nativeBuild, overrideDir, planOverride, planSource, planSources, ownVerb, prebuild, rebuildCommand, refuseBuild } from './agent-build.mjs';
 import { openStdio } from './agent-stdio.mjs';
 import { bakeOutput, hermesBundle, hermesTarget, linuxBinary, resolveApp, windowsFile, PINNED_RUST } from './app.mjs';
@@ -677,6 +678,26 @@ test('a product the build wrote and then read is judged by its recorded bytes; a
     assert.deepEqual(changed(), [dylib]);
     writeFileSync(dylib, 'signed v2'); stamp(dylib, -10); stamp(generated, -5);
     assert.deepEqual(changed(), [generated]);
+    stamp(generated, -110);
+    // Assets watched through a directory need no individual dep-info entry.
+    const model = resolve(dir, 'assets/crate.model');
+    write('assets/crate.model', 'baked model'); stamp(model, -10);
+    const record = JSON.parse(readFileSync(receipt, 'utf8'));
+    record.build.products.push({path:model, bytes:11, sha256:sha256('baked model'), input:true});
+    record.build.watchedDirectories = [directoryInputSnapshot(dirname(model))];
+    writeFileSync(info, readFileSync(info, 'utf8').trimEnd() + ` ${dirname(model)}\n`);
+    writeFileSync(receipt, JSON.stringify(record)); stamp(receipt, 10);
+    assert.deepEqual(changed(), []);
+    writeFileSync(model, 'other model'); stamp(model, -110);
+    assert.deepEqual(changed(), [model]);
+    rmSync(model);
+    assert.deepEqual(changed(), [model]);
+    write('assets/crate.model', 'baked model');
+    assert.deepEqual(changed(), []);
+    write('assets/authored.model', 'authored'); stamp(resolve(dir, 'assets/authored.model'), -110);
+    assert.deepEqual(changed(), [dirname(model)]);
+    rmSync(resolve(dir, 'assets/authored.model'));
+    assert.deepEqual(changed(), []);
   } finally {
     process.chdir(cwd);
     if (previous === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = previous;
@@ -686,13 +707,14 @@ test('a product the build wrote and then read is judged by its recorded bytes; a
   }
 });
 
-test('a cold game build owns its generated shell outputs, while authored inputs and binary hashes stay checked', () => {
+test('generated shell outputs a cold game build records are judged by their bytes; authored inputs keep their mtime', () => {
   const { dir, write } = scratchApp('shell-output');
   try {
-    const workspace = resolve(dir, '.shells'), target = resolve(dir, 'target');
-    const app = { dir, workspace, target, manifest: { game: {} }, crate: () => 'shell-output-apple' };
+    const target = resolve(dir, 'target');
+    const app = { dir, workspace: resolve(dir, '.shells'), target, manifest: { game: {} }, crate: () => 'shell-output-apple' };
     const before = new Date(Date.now() - 60_000), started = new Date(+before + 20_000), generated = new Date(+started + 10_000);
     const stamp = (path, at) => utimesSync(resolve(dir, path), at, at);
+    const digest = path => createHash('sha256').update(readFileSync(resolve(dir, path))).digest('hex');
     const outputs = ['app.json', 'keys.json', 'surfaces.json', 'apple/build.rs', 'apple/src/lib.rs'].map(path => `.shells/${path}`);
     write('.shells/Cargo.toml', '[workspace]');
     write('logic/src/lib.rs', 'pub struct Game;');
@@ -702,33 +724,29 @@ test('a cold game build owns its generated shell outputs, while authored inputs 
     for (const path of outputs) stamp(path, generated);
     const sources = [...outputs, 'app.contract', 'logic/src/lib.rs', '.shells/apple/src/extra.rs'];
     write('target/aarch64-apple-ios-sim/host-dev/libshell_output_apple.d', `archive: ${sources.map(path => resolve(dir, path)).join(' ')}\n`);
-    const inputs = ['.shells/apple/build.rs', '.shells/apple/src/lib.rs', 'logic/src/lib.rs'].map(path => ({
-      path: resolve(dir, path), name: resolve(dir, path), sha256: createHash('sha256').update(readFileSync(resolve(dir, path))).digest('hex'),
-    }));
+    const inputs = ['logic/src/lib.rs'].map(path => ({ path: resolve(dir, path), name: resolve(dir, path), sha256: digest(path) }));
+    const products = outputs.map(path => ({ path: resolve(dir, path), bytes: readFileSync(resolve(dir, path)).length, sha256: digest(path), input: true }));
     const receipt = resolve(target, 'receipt.json');
-    write('target/receipt.json', JSON.stringify({ target: 'aarch64-apple-ios-sim', started: started.toISOString(), build: {
-      binary: { inputs, missing: [], directories: [] }, products: [],
+    const record = products => write('target/receipt.json', JSON.stringify({ target: 'aarch64-apple-ios-sim', started: started.toISOString(), build: {
+      binary: { inputs, missing: [], directories: [] }, products,
     } }));
-    const changed = (candidate = app) => receiptChanges(receipt, candidate).map(path => resolve(path)).sort();
+    record(products);
+    const changed = () => receiptChanges(receipt, app).map(path => resolve(path)).sort();
     assert.deepEqual(changed(), [], 'files produced during the cold build are not later source edits');
     for (const path of ['app.json', 'app.contract', 'logic/src/lib.rs', '.shells/apple/src/extra.rs']) {
       stamp(path, generated);
       assert.ok(changed().includes(resolve(dir, path)), `mtime still checks ${path}`);
       stamp(path, before);
     }
-    for (const path of ['.shells/apple/build.rs', '.shells/apple/src/lib.rs', 'logic/src/lib.rs']) {
+    for (const path of [...outputs, 'logic/src/lib.rs']) {
       const previous = readFileSync(resolve(dir, path));
       write(path, 'changed bytes'); stamp(path, before);
-      assert.ok(changed().includes(resolve(dir, path)), `the binary digest still checks ${path}`);
-      write(path, previous); stamp(path, before);
+      assert.ok(changed().includes(resolve(dir, path)), `the recorded digest still checks ${path}`);
+      write(path, previous); stamp(path, path.startsWith('.shells/') ? generated : before);
     }
-    for (const path of outputs) stamp(path, generated);
-    assert.deepEqual(changed({ ...app, manifest: {} }), outputs.map(path => resolve(dir, path)).sort(), 'a non-game does not own these outputs');
-    assert.deepEqual(changed({ ...app, workspace: dir }), outputs.map(path => resolve(dir, path)).sort(), 'only the game generated workspace owns them');
-    const unrecorded = JSON.parse(readFileSync(receipt, 'utf8'));
-    unrecorded.build.binary.inputs = inputs.filter(input => !input.path.startsWith(workspace + '/'));
-    writeFileSync(receipt, JSON.stringify(unrecorded));
-    assert.deepEqual(changed(), outputs.filter(path => path.endsWith('.rs')).map(path => resolve(dir, path)).sort(), 'generated Rust needs its recorded digest');
+    record([]);
+    assert.deepEqual(changed(), outputs.map(path => resolve(dir, path)).sort(), 'outputs the receipt did not record keep the mtime bound');
+    record(products);
     rmSync(resolve(dir, '.shells/surfaces.json'));
     assert.ok(changed().includes(resolve(dir, '.shells/surfaces.json')), 'a missing declaration still needs a build');
   } finally { rmSync(dir, { recursive: true, force: true }); }

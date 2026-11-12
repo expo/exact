@@ -104,27 +104,73 @@ pub fn rust_hatch_entry(
     manifest: &Manifest,
     target: &str,
 ) -> Result<(String, &'static str), String> {
-    let platform = if target.contains("android") {
+    let hatches = watched_rust_hatches(app_root, manifest, hatch_platform(target))?;
+    Ok(match hatches {
+        Some(text) => (
+            text,
+            "run_with_hatches::<AppData, hatches::ExactHatches>(PLAN, COMPAT, HatchKey::WORDS)",
+        ),
+        None => (String::new(), "run::<AppData>(PLAN, COMPAT)"),
+    })
+}
+
+/// What the Linux and Windows crates `exact new` generates include beside
+/// their plan (`scripts/app-shells.mjs`): `hatches.rs`, which defines
+/// `exact_hatches()`, the app's Rust hatches for the host's `Composed`, as
+/// [`rust_hatch_entry`] gives an authored crate's; `None` when the app has
+/// no hatch files.
+pub fn write_desktop_hatches(
+    platform: &str,
+    app_root: &Path,
+    target: &str,
+    out: &Path,
+) -> Result<(), String> {
+    if !matches!(platform, "linux" | "windows") {
+        return Ok(());
+    }
+    // Absolute, since `include!` resolves a relative path against OUT_DIR.
+    let app_root =
+        std::fs::canonicalize(app_root).map_err(|e| format!("{}: {e}", app_root.display()))?;
+    let manifest = Manifest::read(&app_root)?;
+    let install = "Option<::exact_linux::hatches::Install>";
+    let text = match watched_rust_hatches(&app_root, &manifest, hatch_platform(target))? {
+        Some(rust) => format!(
+            "{rust}fn exact_hatches() -> {install} {{\n    Some(::exact_linux::hatches::install::<hatches::ExactHatches>(HatchKey::WORDS))\n}}\n"
+        ),
+        None => format!("fn exact_hatches() -> {install} {{\n    None\n}}\n"),
+    };
+    let path = out.join("hatches.rs");
+    if std::fs::read(&path).ok().as_deref() == Some(text.as_bytes()) {
+        return Ok(());
+    }
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The platform whose hatch words a painting host's build for `target`
+/// handles.
+fn hatch_platform(target: &str) -> &'static str {
+    if target.contains("android") {
         "android"
     } else if target.contains("windows") {
         "windows"
     } else {
         "linux"
-    };
-    Ok(match rust_hatches(app_root, manifest, platform)? {
-        Some(text) => (
-            text,
-            "run_with_hatches::<AppData, hatches::ExactHatches>(PLAN, COMPAT, HatchKey::WORDS)",
-        ),
-        None => {
-            // A first hatch file is a new one under `modules`: build again then.
-            let modules = app_root.join("modules");
-            if modules.is_dir() {
-                println!("cargo:rerun-if-changed={}", modules.display());
-            }
-            (String::new(), "run::<AppData>(PLAN, COMPAT)")
-        }
-    })
+    }
+}
+
+/// [`rust_hatches`], and when the app has none, a watch on `modules`, so
+/// that a first hatch file builds again.
+fn watched_rust_hatches(
+    app_root: &Path,
+    manifest: &Manifest,
+    platform: &str,
+) -> Result<Option<String>, String> {
+    let text = rust_hatches(app_root, manifest, platform)?;
+    let modules = app_root.join("modules");
+    if text.is_none() && modules.is_dir() {
+        println!("cargo:rerun-if-changed={}", modules.display());
+    }
+    Ok(text)
 }
 
 /// What an app's Android crate (the Canvas host's library) writes beside
@@ -141,15 +187,11 @@ pub fn android_entry(
     out_dir: &Path,
 ) -> Result<(), String> {
     let install = "Option<::exact_linux::hatches::Install>";
-    let text = match rust_hatches(app_root, manifest, "android")? {
+    let text = match watched_rust_hatches(app_root, manifest, "android")? {
         Some(rust) => format!(
             "{rust}fn exact_hatches() -> {install} {{\n    Some(::exact_linux::hatches::install_with_reader::<hatches::ExactHatches>(HatchKey::WORDS))\n}}\n"
         ),
         None => {
-            let modules = app_root.join("modules");
-            if modules.is_dir() {
-                println!("cargo:rerun-if-changed={}", modules.display());
-            }
             let words = hatches_on(manifest, "android")?;
             if words.is_empty() {
                 format!("fn exact_hatches() -> {install} {{\n    None\n}}\n")

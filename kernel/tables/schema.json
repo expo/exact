@@ -1817,6 +1817,12 @@
       "name": "glassInteractive",
       "kind": "bool",
       "_comment": "On a box with `backgroundMaterial` glass or glass-clear: whether its glass reacts to a touch (`UIGlassEffect.isInteractive`). Unset, it does when the box has a `press` and is not disabled. Only iOS and tvOS 26 have interactive glass; other hosts ignore it."
+    },
+    {
+      "id": 304,
+      "name": "rel",
+      "kind": "str",
+      "_comment": "@ref LLP 1141.002 D1: HTML's rel, a set of space-separated tokens read ASCII case-insensitively. On a `link` or `form`, HTML's meaning, written into the web DOM. On a root tab, the token `search` names the app's search tab (`Kernel::root_tabs`), which iOS 18 and later show as a `UISearchTab`; the web's tab button carries no rel."
     }
   ],
   "_enums": "Wire discriminant is the 0-based index. An unknown discriminant is a typed decode rejection, never a fallback. refused: keywords the wire carries and the compiler refuses an author, because no presenter builds them (LLP 1043.000 §3 D1); `contract vocab` lists the others. No wire reads it, so it is outside the digest.",

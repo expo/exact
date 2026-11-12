@@ -132,3 +132,33 @@ fn a_header_button_that_presses_nothing_is_named() {
     result.unwrap();
     assert_eq!(warnings.len(), 1, "{warnings:?}");
 }
+
+/// A symbol image in the heading's own flex row is drawn in the iOS title,
+/// before or after its text (`HeaderTitle`): no warning names it. One in a
+/// column, a picture, or one beside a text the title does not take is.
+#[test]
+fn a_symbol_beside_the_heading_in_its_row_is_the_titles() {
+    let header = |row: &str, image: &str, extra: &str| {
+        format!("header display=\"flex\" align-items=\"center\"\n            {row}\n              image \"{image}\"\n              text \"Detail\" role=\"heading\" aria-level=2{extra}")
+    };
+    let unplaced = |header: String| {
+        let src = stack("", "", "").replace("column \n", &format!("{header}\n          column\n"));
+        let (result, warnings) = contract::compile_warned(&src);
+        result.unwrap();
+        warnings
+            .iter()
+            .filter(|w| w.id == "lower-header-unplaced")
+            .map(|w| w.span.line)
+            .collect::<Vec<_>>()
+    };
+    assert!(unplaced(header("row align-items=\"center\" gap=6", "symbol:add", "")).is_empty());
+    assert!(unplaced(header("box display=\"flex\"", "symbol:add", "")).is_empty());
+    assert_eq!(unplaced(header("column", "symbol:add", "")), [11]);
+    assert_eq!(unplaced(header("row", "photo.png", "")), [11]);
+    let beside = "\n              text \"draft\"";
+    assert_eq!(
+        unplaced(header("row", "symbol:add", beside)),
+        [11],
+        "a text in the row is the subtitle"
+    );
+}

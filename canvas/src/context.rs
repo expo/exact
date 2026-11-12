@@ -877,7 +877,9 @@ impl Context2d {
     /// `clip(rule)`.
     pub fn clip_with_canvas_winding_rule(&self, rule: CanvasWindingRule) {
         let mut g = self.g();
-        g.op(Op::Clip, &[rule.code()]);
+        if g.paints() {
+            g.op(Op::Clip, &[rule.code()]);
+        }
     }
 
     fn rect_op(&self, op: Op, x: f64, y: f64, w: f64, h: f64) {

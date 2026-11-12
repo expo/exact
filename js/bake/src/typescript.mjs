@@ -1071,6 +1071,24 @@ function appText(app) {
   return [join(app,'app.ts'),...contracts(app)].map(f=>{ try { return readFileSync(f,'utf8'); } catch { return ''; } }).join('\n');
 }
 
+/** The specifiers a TypeScript or JavaScript file imports and re-exports from, read from its syntax tree, so a string or
+ * comment that spells an import is none: `import … from "x"` and `export … from "x"` (not `import type` or `export
+ * type`), `import "x"` and `import("x")`. The compiler reads the same set by tokens (`contract/cli/src/sources/data.rs`). */
+function moduleSpecifiers(file, text) {
+  const { parseSync } = createRequire(import.meta.url)('rolldown/utils');
+  const { program } = parseSync(file, text, { sourceType: 'module' });
+  const out = [];
+  const visit = (node) => {
+    if (Array.isArray(node)) { for (const n of node) visit(n); return; }
+    if (!node || typeof node !== 'object') return;
+    if (/^(Import|ExportNamed|ExportAll)Declaration$/.test(node.type) && node.source && (node.importKind ?? node.exportKind) !== 'type') out.push(node.source.value);
+    if (node.type === 'ImportExpression' && typeof node.source?.value === 'string') out.push(node.source.value);
+    for (const key in node) visit(node[key]);
+  };
+  visit(program);
+  return out;
+}
+
 /** The packages the app imports, wherever it imports them (LLP 1133.004
  * stage 0, LLP 1133 D6 rule 6): every Contract file `app.contract` reaches
  * through relative `use … from "./…"`, and every TypeScript file `app.ts`
@@ -1088,12 +1106,10 @@ export function usedPackages(app) {
     let text='';
     try { text=readFileSync(file,'utf8'); } catch { return; }
     texts.push(text);
-    // Comments name nothing, and a type-only import links nothing.
-    const code=text.replace(/\/\*[\s\S]*?\*\//g,'').replace(/(^|[^:'"\\])\/\/.*$/gm,'$1');
+    // A Contract file's `use` lines, its comments left out.
     const specs=contract
-      ? [...code.matchAll(/^\s*use\b[^\n]*?\bfrom\s+"([^"]+)"/gm)].map(m=>m[1])
-      : [...code.matchAll(/\b(import|export)(\s+type\b)?[^'";]*?\bfrom\s*(['"])([^'"\n]+)\3|\bimport\s*\(?\s*(['"])([^'"\n]+)\5/g)]
-          .filter(m=>!m[2]).map(m=>m[4] ?? m[6]);
+      ? [...text.replace(/\/\*[\s\S]*?\*\//g,'').replace(/(^|[^:'"\\])\/\/.*$/gm,'$1').matchAll(/^\s*use\b[^\n]*?\bfrom\s+"([^"]+)"/gm)].map(m=>m[1])
+      : moduleSpecifiers(file, text);
     for (const spec of specs) {
       if (spec.startsWith('.')) visit(contract ? resolve(dirname(file),spec) : tsFile(resolve(dirname(file),spec)), contract);
       else if (!spec.startsWith('exact:') && !spec.startsWith('node:')) names.add(packageName(spec));

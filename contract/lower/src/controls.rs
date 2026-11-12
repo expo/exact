@@ -51,6 +51,41 @@ fn canonical_type_expr(value: &Expr) -> Option<Expr> {
     }
 }
 
+/// @ref LLP 1141.002 D1 — `rel` has HTML's meaning on a `link` or `form`,
+/// and on a tab, where `search` names the app's search tab; anywhere else it
+/// is refused. `role="search"` on a tab (a control that names a panel) is
+/// refused with the reason, so the tab keeps its role.
+fn search_tab_words(tag: &str, attrs: &[contract_syntax::Attr]) -> Result<(), LowerError> {
+    let role = attrs
+        .iter()
+        .find(|a| a.name == "role")
+        .and_then(|a| match &a.value {
+            Expr::Str(s, _) => Some(s.as_str()),
+            _ => None,
+        });
+    if role == Some("search") && attrs.iter().any(|a| a.name == "aria-controls") {
+        let a = attrs
+            .iter()
+            .find(|a| a.name == "role")
+            .expect("found above");
+        return err(
+            "lower-attr-value",
+            "a tablist owns only tabs (WAI-ARIA), so keep `role=\"tab\"`; write `rel=\"search\"` to make this the app's search tab",
+            a.span,
+        );
+    }
+    if let Some(a) = attrs.iter().find(|a| a.name == "rel") {
+        if !matches!(tag, "link" | "form") && role != Some("tab") {
+            return err(
+                "lower-attr-tag",
+                "`rel` belongs to `link` and `form` (HTML's link types), or to a `role=\"tab\"` of the root tablist, where `rel=\"search\"` makes it the app's search tab",
+                a.span,
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The form control an element is (LLP 1069.001 D1), refusing a bound
 /// `type` that could name a control: the node type is chosen when the view
 /// compiles, from the literal. A choice between text fields' types stays a
@@ -60,6 +95,7 @@ pub(crate) fn control(
     attrs: &[contract_syntax::Attr],
     native_button: bool,
 ) -> Result<Option<&'static str>, LowerError> {
+    search_tab_words(tag, attrs)?;
     if tag != "textarea" {
         if let Some(a) = attrs.iter().find(|a| a.name == "rows") {
             return err("lower-attr-tag", "HTML rows belongs to textarea", a.span);
