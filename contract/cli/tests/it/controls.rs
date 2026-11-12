@@ -1157,7 +1157,10 @@ fn a_range_and_a_determinate_progress_are_full_width_by_an_implied_row() {
     let row = |r: &Runner<NoData>, id: &str| {
         let style = r.kernel().node(view_of(r, id)).unwrap().style;
         (
-            style.mask.has(StyleId::Width).then_some(style.width),
+            style
+                .mask
+                .has(StyleId::Width)
+                .then_some(style.width.clone()),
             style.written.has(StyleId::Width),
         )
     };

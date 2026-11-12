@@ -42,13 +42,18 @@ static ENTERED: AtomicBool = AtomicBool::new(false);
 const HANG: Duration = Duration::from_secs(30);
 static WOKE: Mutex<Option<Sender<()>>> = Mutex::new(None);
 
-struct Scripted;
+/// `outlive.test` is scripted; anything else (the write server on
+/// 127.0.0.1) goes to the platform's transport.
+struct Scripted(Box<dyn Transport>);
 impl Transport for Scripted {
     fn open(
         &self,
         request: &ibex2::stdlib::fetch::Request,
         signal: &AbortSignal,
     ) -> Result<StreamingResponse, HostError> {
+        if !request.url.starts_with("https://outlive.test") {
+            return self.0.open(request, signal);
+        }
         let path = request
             .url
             .trim_start_matches("https://outlive.test")
@@ -96,9 +101,12 @@ fn start(
     grants: &str,
     wake: Option<(WakeFn, *mut c_void)>,
 ) -> Box<dyn Io> {
-    let bindings = ibex2::host::Host::with_transport(Box::new(Scripted))
-        .endow(ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants)).unwrap());
-    Box::new(Executor::start(Some(bindings), grants, wake))
+    let host = || {
+        ibex2::host::Host::with_transport(Box::new(Scripted(ibex2::transport::default_transport())))
+    };
+    let bindings =
+        host().endow(ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants)).unwrap());
+    Box::new(Executor::start_on(Some(bindings), grants, wake, host))
 }
 
 extern "C" fn woke(_: *mut c_void) {

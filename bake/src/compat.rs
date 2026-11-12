@@ -30,11 +30,10 @@ const ABI_HEADER: &str = include_str!(concat!(
 ));
 /// The GPU module's C ABI (LLP 1009 D2): unnumbered in the module today.
 pub const GPU_MODULE_ABI: u32 = 1;
-/// The separately linked Rust data-source request/outcome wire ABI. 4: a
-/// long poll's result tag 10 (LLP 1016.000 D8; theme2's Q-RUSTABI ruling: the
-/// plan can't say which Rust sources poll, so every Rust app's id moves once,
-/// and an older binary is never offered a module that may send one).
-pub(crate) const RUST_ABI: u32 = 4;
+/// The separately linked Rust data-source wire ABI: admitted secret names
+/// before the store snapshot (LLP 1048.000 D9), two-way sockets (LLP 1016.003),
+/// and cache-mode tag 12 (LLP 1162 D4).
+pub(crate) const RUST_ABI: u32 = 7;
 /// The data-module runtime a TypeScript bundle may rely on in the binary's
 /// own prelude (`js/src/prelude.js`, compiled into the host): moved when the
 /// prelude learns something a bundle cannot do without and an older prelude
@@ -73,7 +72,8 @@ pub(crate) const RUST_ABI: u32 = 4;
 /// commits. The options can come from data (a migration read from JSON) and
 /// the method through an alias, so no text in the bundle shows the call: a
 /// module whose grants admit `sqlite.open` needs 10 ([`typescript_runtime_of`]).
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 10;
+/// 11: Fetch's `cache` (LLP 1162 D4), which an older prelude ignores.
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 11;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -84,7 +84,8 @@ pub(crate) const TYPESCRIPT_RUNTIME: u32 = 10;
 /// `Response` now needs 8, as do constructors whose readable side can become
 /// a request body. `structuredClone` names none of them. 10 is read from the
 /// grants, not the bundle.
-const RUNTIME_OPTIONS: [(u32, &str); 23] = [
+const RUNTIME_OPTIONS: [(u32, &str); 24] = [
+    (11, "cache"),
     (9, "exactIdleTimeout"),
     (8, "Response"),
     (8, "ReadableStream"),

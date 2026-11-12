@@ -6,7 +6,7 @@
 // over the built shell as the Rust render host composes them
 // (`host/render/src/page.rs` `page_js`), so the page adopts the same way.
 //
-//   bun host/web-js/render.mjs <dist> --build                      pages for render=build routes
+//   bun host/web-js/render.mjs <dist> --build                      pages for render=build routes, robots.txt, sitemap.xml
 //   bun host/web-js/render.mjs <dist> <location>…                  print pages
 //   bun host/web-js/render.mjs <dist> --serve [--port 8830]        a page per request
 import { createHash } from 'node:crypto';
@@ -18,8 +18,27 @@ import { createDocument } from './dom.js';
 import { cachingFetch, FRESH } from './http-cache.mjs';
 import { canonical, matchPattern } from './route-pattern.js';
 import { select, tokens } from './page-style.mjs';
+import { writeCrawlerFiles } from '../web/crawl.mjs';
 
 const DEADLINE = 3000;
+// Promise reactions and async functions run outside the host's callback wrapper. Their promise's realm owns the
+// rejection; an Error's realm also identifies a callback chained from a host promise, such as a response body read.
+const rejectionOwners = new WeakMap();
+const rejectionOwner = value => {
+  while (value && (typeof value === 'object' || typeof value === 'function')) {
+    const owner = rejectionOwners.get(value);
+    if (owner) return owner;
+    value = Object.getPrototypeOf(value);
+  }
+};
+const unhandledRejection = (error, promise) => {
+  const report = rejectionOwner(promise) ?? rejectionOwner(error);
+  if (report) report(error);
+  // Installing a listener disables Bun's default fatal handling. Keep that handling for rejections outside a render
+  // when no other listener handles them. Disposed realms still own theirs, so they cannot affect another request.
+  else if (process.listenerCount('unhandledRejection') === 1) throw error;
+};
+const realmPrototypes = new vm.Script('[Promise.prototype, Error.prototype]');
 // `html` with each script element's text blanked, the same length, so the shell's places (its root, entry and
 // preloads) are found only in its own markup: a script's text, an `--inline` bundle's or a `host.web.head` entry's, may
 // spell any of them. A script element starts where HTML's tokenizer starts one (HTML, 13.2.5 "Tokenization"): a
@@ -194,12 +213,20 @@ export function renderer(dist, { closed = false } = {}) {
     const read = { fresh: Infinity, random: false }, prefers = new Set();
     const noted = response => { read.fresh = Math.min(read.fresh, response?.[FRESH] ?? 0); return response; };
     const drew = f => (...args) => { read.random = true; return f(...args); };
-    const owner = new AbortController(), timers = new Set();
+    const owner = new AbortController(), timers = new Set(), errors = [];
     let disposed = false;
     const dispose = () => { disposed = true; owner.abort(); for (const timer of timers) clearTimeout(timer); timers.clear(); };
+    const failedCallback = error => { if (!disposed) errors.push(`callback: ${error?.message ?? error}`); };
+    const callback = (fn, ...args) => {
+      if (disposed) return;
+      try {
+        const result = fn(...args);
+        if (result?.then) Promise.resolve(result).catch(failedCallback);
+      } catch (error) { failedCallback(error); }
+    };
     const later = (fn, ms, ...args) => {
       if (disposed) return 0;
-      const id = setTimeout(() => { timers.delete(id); if (!disposed) fn(...args); }, ms);
+      const id = setTimeout(() => { timers.delete(id); callback(fn, ...args); }, ms);
       timers.add(id); return id;
     };
     const stopTimer = id => { timers.delete(id); clearTimeout(id); };
@@ -224,7 +251,7 @@ export function renderer(dist, { closed = false } = {}) {
       // The reader's viewport as its request tells it (`viewportOf`), set by `begin`; else runner/src/viewport.rs's default.
       innerWidth: 390, innerHeight: 844,
       matchMedia: media => ({ media, matches: prefers.has(media.replace(/\s+/g, '')), addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }),
-      setTimeout: later, clearTimeout: stopTimer, queueMicrotask: fn => queueMicrotask(() => { if (!disposed) fn(); }),
+      setTimeout: later, clearTimeout: stopTimer, queueMicrotask: fn => queueMicrotask(() => callback(fn)),
       performance, console, Request, Response, Headers, URL, URLSearchParams, TextEncoder, TextDecoder, AbortController, AbortSignal,
       ReadableStream, WritableStream, TransformStream, CountQueuingStrategy, ByteLengthQueuingStrategy, CompressionStream, DecompressionStream,
       fetch: fetchOwned,
@@ -234,11 +261,13 @@ export function renderer(dist, { closed = false } = {}) {
       __exactMarkdownBuilt: JSON.parse(builtMarkdown(shell, seen)),
     }, { codeGeneration: { strings: false } });
     ctx.globalThis = ctx; ctx.self = ctx;
+    if (!process.listeners('unhandledRejection').includes(unhandledRejection)) process.on('unhandledRejection', unhandledRejection);
+    for (const prototype of realmPrototypes.runInContext(ctx)) rejectionOwners.set(prototype, failedCallback);
     utcIntl.runInContext(ctx);
     try { script.runInContext(ctx); } catch (error) { dispose(); throw error; }
     // What loading the bundle read is every render's alike.
     Object.assign(read, { fresh: Infinity, random: false });
-    return { ctx, location, read, prefers, dispose };
+    return { ctx, location, read, prefers, dispose, errors };
   };
   // The next render's realm, made once the last render is done and nothing waits (`render.ahead` false turns it off).
   let ahead = null, making = false;
@@ -266,6 +295,7 @@ export function renderer(dist, { closed = false } = {}) {
     return { ...info, location, head, dispose: made.dispose, async finish(deadline = DEADLINE) {
       try {
         const out = await ctx.__render(deadline, info.canSetStatus !== false);
+        out.failed = [...(out.failed ?? []), ...made.errors];
         const hero = heroImage(out);
         const activate = info.activate === 'inferred' ? infer(out) : info.activate;
         const late = info.activate === 'inferred' && activate !== 'interaction' ? preloads : '';
@@ -302,7 +332,7 @@ export function renderer(dist, { closed = false } = {}) {
         // another render would make until the first of those answers goes stale: it may be given again until then, for
         // at most 60 s (LLP 1048.007 D8).
         const keep = status === 200 && settled && !out.failed?.length && out.activation?.kept === false && !out.rust && !read.random && read.fresh > 0 && read.fresh < Infinity ? Math.min(read.fresh, 60000) : 0;
-        return { html: markedHead + body(''), rest: marked + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep };
+        return { html: markedHead + body(''), rest: marked + body(late), status, settled, failed: out.failed ?? [], refused, render: out.render, location, policy: info.policy, activate, keep, robots: out.robots, origin: out.origin };
       } finally { made.dispose(); }
     } };
   }
@@ -344,7 +374,7 @@ const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input'
 
 const refusedLine = ([name, api]) => `resource ${name} is pending: a page rendered on the server has no storage (${api}); the reader's page asks it`;
 
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.css': 'text/css', '.mp4': 'video/mp4', '.plan': 'application/octet-stream' };
+const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.css': 'text/css', '.mp4': 'video/mp4', '.plan': 'application/octet-stream', '.txt': 'text/plain; charset=utf-8', '.xml': 'application/xml' };
 
 /** A page per request for one built dist, as the Rust render server sends it (host/render/src/serve.rs, stream.rs):
  * `page(location, header)`, where `header(name)` reads a request header, answers `{ status, headers, body }`, the body
@@ -458,9 +488,13 @@ if (import.meta.main) {
     } });
     console.log(`serving ${dist} with pages rendered by the JavaScript runtime on ${port}`);
   } else if (args.includes('--build')) {
-    const pages = JSON.parse(readFileSync(resolve(dist, '.gen/pages.json'), 'utf8'));
+    const pages = JSON.parse(readFileSync(resolve(dist, '.gen/pages.json'), 'utf8')), docs = [];
+    const routes = JSON.parse(readFileSync(resolve(dist, 'routes.json'), 'utf8')).routes;
+    let origin = null;
     for (const p of pages) {
       const page = await render(p.location);
+      docs.push({ location: canonical(p.location), notfound: p.notfound, status: page.status, robots: page.robots });
+      origin ??= page.origin;
       const file = p.notfound ? '404.html' : `${p.location.replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
       mkdirSync(dirname(resolve(dist, file)), { recursive: true });
       writeFileSync(resolve(dist, file), page.html);
@@ -468,6 +502,7 @@ if (import.meta.main) {
       for (const failure of page.failed) console.log(`  ${p.location}: resource ${failure}`);
       for (const refused of page.refused) console.log(`  ${p.location}: ${refusedLine(refused)}`);
     }
+    writeCrawlerFiles(dist, docs, origin, routes);
   } else for (const location of args.slice(1)) {
     const page = await render(location);
     for (const failure of page.failed) console.error(`${location}: resource ${failure}`);

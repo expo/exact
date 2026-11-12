@@ -353,10 +353,8 @@ fn kept_refresh<D: DataSource>(mut m: D, disk: Backend) {
     begin(&mut m, &mut s, 0);
     begin(&mut m, &mut s, 1);
     let a = land(&mut m, &mut s, 0, response(401, "expired"));
-    assert_eq!(
-        request(&acquire(&mut m, &mut s, 0, &a, None)).method,
-        "POST"
-    );
+    let sent = acquire(&mut m, &mut s, 0, &a, None);
+    assert_eq!(request(&sent).method, "POST");
     let b = land(&mut m, &mut s, 1, response(401, "expired"));
     let bt = request(&b).continuation.unwrap();
     assert!(matches!(m.dispatch(bt, &s), Dispatch::Held));
@@ -368,6 +366,7 @@ fn kept_refresh<D: DataSource>(mut m: D, disk: Backend) {
             target: Target::Mutation(1),
             source: "secret",
             args: &b_args,
+            fetch: None,
             continuation: Some(bt),
         }],
     );
@@ -377,6 +376,7 @@ fn kept_refresh<D: DataSource>(mut m: D, disk: Backend) {
             target: Target::Mutation(0),
             source: "secret",
             args: &a_args,
+            fetch: request(&sent).fetch,
             continuation: None,
         }],
         false,
@@ -414,6 +414,101 @@ fn kept_refresh<D: DataSource>(mut m: D, disk: Backend) {
         .iter()
         .any(|(_, v)| v == "Bearer fresh"));
     assert!(s.take_writes().iter().all(|w| w.durable));
+}
+
+#[test]
+fn concurrent_protected_posts_keep_their_own_replies_after_let_go() {
+    use exact_runner::InFlight;
+    fn check(mut m: impl DataSource, disk: Backend, order: [usize; 2]) {
+        let (wake, woke) = std::sync::mpsc::channel();
+        m.abort_wake(Arc::new(move || {
+            let _ = wake.send(());
+        }));
+        let mut s = store();
+        let target = Target::Resource(0);
+        let args = [Value::str("protected")];
+        let mut answer = m.answer_for(target, &mut s, "secret", &args).unwrap();
+        for _ in 0..10 {
+            let r = request(&answer);
+            let Some(token) = r.continuation else {
+                break;
+            };
+            let fetch = r.fetch;
+            let outcome = run(m.dispatch(token, &s));
+            answer = m
+                .parse_fetch_for(target, fetch, &mut s, "secret", &args, outcome)
+                .unwrap()
+                .unwrap();
+        }
+        let mut posts = vec![request(&answer).clone()];
+        posts.extend(m.more_for(target));
+        assert_eq!(posts.len(), 2);
+        for (i, post) in posts.iter().enumerate() {
+            assert_eq!(post.method, "POST");
+            assert_eq!(
+                post.url,
+                format!("https://context.test/protected/{}", ["a", "b"][i])
+            );
+        }
+        m.forgotten(&s, &[]);
+        let view: Vec<_> = order
+            .iter()
+            .map(|&i| InFlight {
+                target,
+                source: "secret",
+                args: &args,
+                fetch: posts[i].fetch,
+                continuation: None,
+            })
+            .collect();
+        let kept = m.keep_sent(&s, &view, false);
+        assert!(
+            kept.iter().all(Option::is_some),
+            "both protected requests keep their replies"
+        );
+        assert_ne!(kept[0], kept[1]);
+        let mut expected = OLD.to_string();
+        for (step, i) in order.into_iter().enumerate() {
+            let mut outcome = response(200, ["A", "B"][i]);
+            let token = kept[step].unwrap();
+            let mut landed = false;
+            for _ in 0..10 {
+                let Some(request) = m.module_delivery(&mut s, token, outcome).unwrap() else {
+                    landed = true;
+                    break;
+                };
+                let next = request.continuation.unwrap();
+                let mut dispatch = m.dispatch(next, &s);
+                while matches!(dispatch, Dispatch::Held) {
+                    woke.recv_timeout(Duration::from_secs(20))
+                        .expect("the owner completed its turn");
+                    if let Some((_, ready)) = m.release(&s).into_iter().find(|(t, _)| *t == next) {
+                        dispatch = ready;
+                    }
+                }
+                outcome = run(dispatch);
+            }
+            assert!(landed, "the kept reply completed its module turn");
+            expected.push_str(["/a:A", "/b:B"][i]);
+            assert_eq!(s.get("token"), Some(expected.as_str()));
+            let disk = disk.0.lock().unwrap();
+            assert_eq!(disk.value.as_deref(), Some(expected.as_str()));
+            assert_eq!(disk.writes, step + 1);
+            assert_eq!(disk.held, step == 0, "the lease covers both replies");
+        }
+    }
+    for placement in [Placement::Main, Placement::Worker] {
+        for order in [[0, 1], [1, 0]] {
+            let disk = backend();
+            check(module(placement, &disk), disk, order);
+            let disk = backend();
+            let js = module(placement, &disk);
+            let rust = Placed::new(Other, Placement::Worker);
+            let mut mixed = exact_data::Mixed::new(js, rust, &["secret"], &["unused"]).unwrap();
+            mixed.activate().unwrap();
+            check(exact_data_host::Storage::new(mixed), disk, order);
+        }
+    }
 }
 
 #[test]
@@ -516,6 +611,7 @@ fn retiring_a_queued_acquire_leaves_the_holder_and_next_caller_live() {
                 target: Target::Mutation(0),
                 source: "secret",
                 args: &a_args,
+                fetch: None,
                 continuation: None,
             }],
         );

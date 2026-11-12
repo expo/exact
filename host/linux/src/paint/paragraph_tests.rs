@@ -375,6 +375,480 @@ fn the_nearest_box_line_shows_and_hidden_text_draws_none() {
     );
 }
 
+fn decoration_frame(text: &str) -> std::sync::Arc<Pixmap> {
+    fixture(text).frame().clone()
+}
+
+#[test]
+fn a_strike_paints_over_the_glyphs_it_crosses() {
+    let draw = |color| {
+        decoration_frame(&format!(
+            "      text color=\"#ff0000\" font-size=40 text-decoration-line=\"line-through\"\n        text \"HHHHHH\" color=\"{color}\"\n"
+        ))
+    };
+    let line = draw("transparent");
+    let text = draw("#000000");
+    let red = [255, 0, 0, 255];
+    let mut covered = 0;
+    let mut cut = 0;
+    for (expected, actual) in line.data().chunks_exact(4).zip(text.data().chunks_exact(4)) {
+        if expected == red {
+            covered += 1;
+            cut += usize::from(actual != red);
+        }
+    }
+    assert!(covered > 100, "the reference strike must paint");
+    assert_eq!(cut, 0, "glyphs must not cut the red strike");
+}
+
+#[test]
+fn an_underline_covers_the_text_shadow_and_casts_its_own() {
+    let line = decoration_frame(
+        "      text color=\"#000000\" font-size=40 text-decoration-line=\"underline\"\n        text \"HHHHHH\" color=\"transparent\"\n",
+    );
+    let text = decoration_frame(
+        "      text \"HHHHHH\" color=\"#000000\" font-size=40 text-decoration-line=\"underline\" text-shadow=\"0px 6px 0px #ff0000\"\n",
+    );
+    let black = [0, 0, 0, 255];
+    let red = [255, 0, 0, 255];
+    let mut covered = 0;
+    let mut cut = 0;
+    let mut missing = 0;
+    for (i, expected) in line.data().chunks_exact(4).enumerate() {
+        if expected == black {
+            covered += 1;
+            cut += usize::from(text.data()[i * 4..i * 4 + 4] != black);
+            let shadow = (i + 6 * text.width() as usize) * 4;
+            missing += usize::from(text.data()[shadow..shadow + 4] != red);
+        }
+    }
+    assert!(covered > 100, "the reference underline must paint");
+    assert_eq!(
+        (cut, missing),
+        (0, 0),
+        "the line is whole and casts a red copy"
+    );
+}
+
+#[test]
+fn decorations_and_glyphs_cast_one_translucent_shadow_beyond_the_line_box() {
+    for height in ["", "line-height=0.5"] {
+        let draw = |color, shadow| {
+            decoration_frame(&format!(
+                "      text color=\"#000000\" font-size=40 {height} text-decoration-line=\"underline line-through\" text-shadow=\"{shadow}\"\n        text \"HHHHHH\" color=\"{color}\"\n"
+            ))
+        };
+        let line = draw("transparent", "none");
+        let text = draw("#000000", "0px 70px 0px #ff000080");
+        let mut covered = 0;
+        for (i, expected) in line.data().chunks_exact(4).enumerate() {
+            if expected == [0, 0, 0, 255] {
+                covered += 1;
+                let shadow = (i + 70 * text.width() as usize) * 4;
+                assert_eq!(
+                    &text.data()[shadow..shadow + 4],
+                    [255, 127, 127, 255],
+                    "the composited lines and glyphs cast one shadow: {height}, pixel {i}"
+                );
+            }
+        }
+        assert!(covered > 100, "the reference lines must paint");
+    }
+}
+
+#[test]
+fn a_runs_shadow_does_not_shadow_an_ancestors_decoration() {
+    let line = decoration_frame(
+        "      text color=\"#000000\" font-size=40 text-decoration-line=\"underline\"\n        text \"HHHHHH\" color=\"transparent\"\n",
+    );
+    let text = decoration_frame(concat!(
+        "      text color=\"#000000\" font-size=40 text-decoration-line=\"underline\"\n",
+        "        text \"HH\" text-shadow=\"0px 60px 0px #ff0000\"\n",
+        "        text \"HH\" text-shadow=\"none\"\n",
+        "        text \"HH\" text-shadow=\"0px 70px 0px #0000ff\"\n",
+    ));
+    assert!(
+        has_color(&text, [255, 0, 0, 255]),
+        "the first run casts a red glyph shadow"
+    );
+    assert!(
+        has_color(&text, [0, 0, 255, 255]),
+        "the last run casts a blue glyph shadow"
+    );
+    let points: Vec<_> = line
+        .data()
+        .chunks_exact(4)
+        .enumerate()
+        .filter_map(|(i, p)| (p == [0, 0, 0, 255]).then_some(i))
+        .collect();
+    assert!(points.len() > 100, "the reference underline must paint");
+    let width = text.width() as usize;
+    let left = points.iter().map(|i| i % width).min().unwrap();
+    let right = points.iter().map(|i| i % width).max().unwrap();
+    let third = (right - left + 1) as f32 / 3.0;
+    for i in points {
+        let x = (i % width - left) as f32;
+        // Keep the probes inside each two-letter run, clear of raster edges.
+        let run = (x / third) as usize;
+        let within = x % third;
+        if within < 3.0 || within > third - 3.0 {
+            continue;
+        }
+        let dy = match run {
+            0 => 60,
+            _ => 70,
+        };
+        let shadow = (i + dy * width) * 4;
+        assert_eq!(
+            &text.data()[shadow..shadow + 4],
+            [255; 4],
+            "run {run}, offset {dy}"
+        );
+    }
+}
+
+#[test]
+fn a_decoration_keeps_its_declaring_boxs_shadow_when_a_child_disables_it() {
+    let draw = |shadow| {
+        decoration_frame(&format!(
+            "      text color=\"#000000\" font-size=40 text-decoration-line=\"underline\" text-shadow=\"{shadow}\"\n        text \"HHHHHH\" color=\"transparent\" text-shadow=\"none\"\n"
+        ))
+    };
+    let line = draw("none");
+    let text = draw("0px 6px 0px #ff0000");
+    let mut covered = 0;
+    for (i, expected) in line.data().chunks_exact(4).enumerate() {
+        if expected == [0, 0, 0, 255] {
+            covered += 1;
+            assert_eq!(&text.data()[i * 4..i * 4 + 4], expected);
+            let shadow = (i + 6 * text.width() as usize) * 4;
+            assert_eq!(&text.data()[shadow..shadow + 4], [255, 0, 0, 255]);
+        }
+    }
+    assert!(covered > 100, "the reference underline must paint");
+    let red = text
+        .data()
+        .chunks_exact(4)
+        .filter(|p| *p == [255, 0, 0, 255])
+        .count();
+    assert_eq!(red, covered, "only the underline casts a shadow");
+}
+
+#[test]
+fn a_nearer_decoration_does_not_remove_an_ancestors_shadow() {
+    for line in ["underline", "line-through"] {
+        let reference = decoration_frame(&format!(
+            "      text color=\"#000000\" font-size=40 text-decoration-line=\"{line}\"\n        text \"HHHH\" color=\"transparent\"\n"
+        ));
+        let text = decoration_frame(&format!(
+            "      text color=\"#000000\" font-size=40 text-decoration-line=\"{line}\" text-shadow=\"0px 60px 0px #ff0000\"\n        text \"HHHH\" text-decoration-line=\"{line}\" text-shadow=\"none\"\n"
+        ));
+        let mut covered = 0;
+        for (i, expected) in reference.data().chunks_exact(4).enumerate() {
+            if expected == [0, 0, 0, 255] {
+                covered += 1;
+                let shadow = (i + 60 * text.width() as usize) * 4;
+                assert_eq!(
+                    &text.data()[shadow..shadow + 4],
+                    [255, 0, 0, 255],
+                    "the ancestor's {line} keeps its shadow beneath the child's line"
+                );
+            }
+        }
+        assert!(covered > 100, "the reference {line} must paint");
+    }
+}
+
+#[test]
+fn nested_decoration_shadows_paint_in_declaring_box_order() {
+    for (ancestor, child, offset) in [
+        ("line-through", "underline", "45.5px"),
+        ("underline", "line-through", "74.5px"),
+    ] {
+        let draw = |ancestor_shadow, child_shadow| {
+            decoration_frame(&format!(
+                "      text color=\"transparent\" font-size=40 text-decoration-line=\"{ancestor}\" text-shadow=\"{ancestor_shadow}\"\n        text text-decoration-line=\"{child}\" text-shadow=\"{child_shadow}\"\n          text \"HHHH\" text-shadow=\"none\"\n"
+            ))
+        };
+        let red = "0px 60px 0px #ff0000";
+        let green = format!("0px {offset} 0px #00ff00");
+        let earlier = draw(red, "none");
+        let later = draw("none", &green);
+        let combined = draw(red, &green);
+        let mut overlap = 0;
+        for ((earlier, later), actual) in earlier
+            .data()
+            .chunks_exact(4)
+            .zip(later.data().chunks_exact(4))
+            .zip(combined.data().chunks_exact(4))
+        {
+            if earlier == [255, 0, 0, 255] && later == [0, 255, 0, 255] {
+                overlap += 1;
+                assert_eq!(actual, later, "the child's {child} shadow paints last");
+            }
+        }
+        assert!(overlap > 100, "the {ancestor} and {child} shadows overlap");
+    }
+}
+
+#[test]
+fn a_leaf_restoring_an_ancestors_shadow_keeps_decoration_shadow_order() {
+    let line = decoration_frame(
+        "      text color=\"#000000\" font-size=40 text-decoration-line=\"underline\"\n        text \"HHHH\" color=\"transparent\"\n",
+    );
+    let text = decoration_frame(concat!(
+        "      text color=\"transparent\" font-size=40 text-decoration-line=\"underline\" text-shadow=\"0px 60px 0px #ff0000\"\n",
+        "        text text-decoration-line=\"underline\" text-shadow=\"0px 60px 0px #00ff00\"\n",
+        "          text \"HHHH\" text-shadow=\"0px 60px 0px #ff0000\"\n",
+    ));
+    let mut covered = 0;
+    for (i, expected) in line.data().chunks_exact(4).enumerate() {
+        if expected == [0, 0, 0, 255] {
+            covered += 1;
+            let shadow = (i + 60 * text.width() as usize) * 4;
+            assert_eq!(
+                &text.data()[shadow..shadow + 4],
+                [0, 255, 0, 255],
+                "the child's underline shadow covers the ancestor's"
+            );
+        }
+    }
+    assert!(covered > 100, "the reference underline must paint");
+}
+
+#[test]
+fn a_partial_shadow_override_does_not_split_a_blurred_decoration() {
+    // Spaces keep glyph shadows away from the join, where they could hide a seam.
+    let draw = |first_shadow| {
+        decoration_frame(&format!(
+            "      text color=\"transparent\" font-size=40 white-space=\"pre\" text-decoration-line=\"underline\" text-shadow=\"0px 60px 8px #ff0000\"\n        text \"HHH   \" text-shadow=\"{first_shadow}\"\n        text \"HHH\" text-shadow=\"none\"\n"
+        ))
+    };
+    let line = draw("none");
+    let text = draw("0px 60px 8px #ff0000");
+    let mut covered = 0;
+    for (i, (expected, actual)) in line
+        .data()
+        .chunks_exact(4)
+        .zip(text.data().chunks_exact(4))
+        .enumerate()
+    {
+        if expected[1] < 250 {
+            covered += 1;
+            assert!(
+                actual[1] <= expected[1] + 1,
+                "adding glyph coverage must not lighten the continuous shadow at pixel {i}: {expected:?} -> {actual:?}"
+            );
+        }
+    }
+    assert!(
+        covered > 100,
+        "the reference underline casts a blurred shadow"
+    );
+}
+
+#[test]
+fn a_strike_paints_over_a_later_runs_overlapping_shadow() {
+    let draw = |color, shadow| {
+        decoration_frame(&format!(
+            "      text color=\"#ff0000\" font-size=40 text-decoration-line=\"line-through\"\n        text \"HHHH\" color=\"{color}\" text-shadow=\"none\"\n        text \"HHHH\" color=\"{color}\" text-shadow=\"{shadow}\"\n"
+        ))
+    };
+    let line = draw("transparent", "none");
+    let text = draw("#000000", "-24px 0px 0px #00ff00");
+    assert!(
+        has_color(&text, [0, 255, 0, 255]),
+        "the later run casts a shadow"
+    );
+    let mut covered = 0;
+    let mut cut = 0;
+    for (expected, actual) in line.data().chunks_exact(4).zip(text.data().chunks_exact(4)) {
+        if expected == [255, 0, 0, 255] {
+            covered += 1;
+            cut += usize::from(actual != expected);
+        }
+    }
+    assert!(covered > 100, "the reference strike must paint");
+    assert_eq!(
+        cut, 0,
+        "a later run's shadow must not cut the ancestor's strike"
+    );
+}
+
+#[test]
+fn hidden_markdown_casts_no_decoration_shadow() {
+    for text in ["~~HHHH~~", "[HHHH](https://example.com)"] {
+        let draw = |visibility| {
+            decoration_frame(&format!(
+                "      text \"{text}\" markup=\"markdown\" visibility=\"{visibility}\" font-size=40 text-shadow=\"0px 6px 0px #ff0000\"\n"
+            ))
+        };
+        assert!(has_color(&draw("visible"), [255, 0, 0, 255]));
+        assert!(
+            draw("hidden").data().chunks_exact(4).all(|p| p == [255; 4]),
+            "hidden Markdown paints neither glyphs nor decoration shadows: {text}"
+        );
+    }
+}
+
+#[test]
+fn an_inherited_currentcolor_shadow_uses_the_childs_color() {
+    let draw = |shadow| {
+        decoration_frame(&format!(
+            "      text color=\"#ff0000\" font-size=40 text-shadow=\"{shadow}\"\n        text \"HHHH\" color=\"#000000\"\n"
+        ))
+    };
+    let inherited = draw("0px 60px 0px");
+    let explicit = draw("0px 60px 0px #000000");
+    assert_eq!(inherited.data(), explicit.data());
+    assert!(has_color(&inherited, [0, 0, 0, 255]));
+    assert_ne!(inherited.data(), draw("none").data());
+}
+
+#[test]
+fn a_later_siblings_shadow_paints_over_an_earlier_siblings_strike() {
+    for nested in [false, true] {
+        let draw = |line, color, shadow| {
+            let first = if nested {
+                format!(
+                    "        text color=\"#ff0000\" text-decoration-line=\"{line}\"\n          text \"HH\" color=\"transparent\"\n          text \"HH\" color=\"transparent\"\n"
+                )
+            } else {
+                format!("        text \"HHHH\" color=\"#ff0000\" text-decoration-line=\"{line}\"\n")
+            };
+            decoration_frame(&format!(
+                "      text font-size=40\n{first}        text \"HHHH\" color=\"{color}\" text-shadow=\"{shadow}\"\n"
+            ))
+        };
+        let line = draw("line-through", "transparent", "none");
+        let shadow = draw("none", "#000000", "-24px 0px 0px #00ff00");
+        let combined = draw("line-through", "#000000", "-24px 0px 0px #00ff00");
+        let mut overlap = 0;
+        for ((line, shadow), actual) in line
+            .data()
+            .chunks_exact(4)
+            .zip(shadow.data().chunks_exact(4))
+            .zip(combined.data().chunks_exact(4))
+        {
+            if line == [255, 0, 0, 255] && shadow == [0, 255, 0, 255] {
+                overlap += 1;
+                assert_eq!(actual, shadow, "the later sibling covers the strike");
+            }
+        }
+        assert!(overlap > 0, "the shadow must cross the strike: {nested}");
+    }
+}
+
+#[test]
+fn a_later_siblings_decoration_shadow_follows_earlier_content() {
+    for first_line in ["none", "line-through"] {
+        for (line, offset) in [("line-through", "0px"), ("underline", "-14px")] {
+            let draw = |first_color, first_line, shadow| {
+                decoration_frame(&format!(
+                    "      text font-size=40\n        text \"HHHH\" color=\"{first_color}\" text-decoration-line=\"{first_line}\"\n        text color=\"#000000\" text-decoration-line=\"{line}\" text-shadow=\"{shadow}\"\n          text \"HH\" text-shadow=\"none\"\n          text \"HH\" text-shadow=\"none\"\n"
+                ))
+            };
+            let shadow = format!("-24px {offset} 0px #00ff00");
+            let earlier = draw("#ff0000", first_line, "none");
+            let later = draw("transparent", "none", &shadow);
+            let combined = draw("#ff0000", first_line, &shadow);
+            let mut overlap = 0;
+            for ((earlier, later), actual) in earlier
+                .data()
+                .chunks_exact(4)
+                .zip(later.data().chunks_exact(4))
+                .zip(combined.data().chunks_exact(4))
+            {
+                if earlier == [255, 0, 0, 255] && later == [0, 255, 0, 255] {
+                    overlap += 1;
+                    assert_eq!(
+                        actual, later,
+                        "the later {line} shadow must cover the earlier sibling's {first_line}"
+                    );
+                }
+            }
+            assert!(overlap > 0, "the {line} shadow must cross earlier content");
+        }
+    }
+}
+
+/// Where `earlier` is red and `later` green, `combined` must be green: the
+/// later paint covers the earlier. Returns how many pixels were compared.
+fn later_covers(earlier: &Pixmap, later: &Pixmap, combined: &Pixmap, what: &str) -> usize {
+    let mut overlap = 0;
+    for ((earlier, later), actual) in earlier
+        .data()
+        .chunks_exact(4)
+        .zip(later.data().chunks_exact(4))
+        .zip(combined.data().chunks_exact(4))
+    {
+        if earlier == [255, 0, 0, 255] && later == [0, 255, 0, 255] {
+            overlap += 1;
+            assert_eq!(actual, later, "{what}");
+        }
+    }
+    overlap
+}
+
+#[test]
+fn a_later_runs_shared_shadow_paints_over_an_earlier_siblings_line() {
+    for nested in [false, true] {
+        for line in ["underline", "line-through"] {
+            // The two runs inherit one shadow, so only the line's box ends between them.
+            let draw = |line: &str, color: &str, shared: &str, own: &str| {
+                let first = if nested {
+                    format!(
+                        "        text color=\"#ff0000\" text-decoration-line=\"{line}\"\n          text \"HH\" color=\"{color}\"\n          text \"HH\" color=\"{color}\"\n"
+                    )
+                } else {
+                    format!(
+                        "        text \"HHHH\" color=\"{color}\" text-decoration-line=\"{line}\"\n"
+                    )
+                };
+                decoration_frame(&format!(
+                    "      text font-size=40 text-shadow=\"{shared}\"\n{first}        text \"HHHH\" color=\"#000000\"{own}\n"
+                ))
+            };
+            let green = "-24px 6px 0px #00ff00";
+            let earlier = draw(line, "#ff0000", "none", "");
+            let later = draw(
+                "none",
+                "transparent",
+                "none",
+                &format!(" text-shadow=\"{green}\""),
+            );
+            let combined = draw(line, "#ff0000", green, "");
+            let overlap = later_covers(
+                &earlier,
+                &later,
+                &combined,
+                &format!("the later run's shadow covers the earlier {line}: {nested}"),
+            );
+            assert!(overlap > 0, "the shadow must cross the {line}: {nested}");
+        }
+    }
+}
+
+#[test]
+fn a_later_runs_glyph_shadow_is_not_painted_with_an_ancestors_decoration_shadow() {
+    let draw = |first_color, shadow| {
+        decoration_frame(&format!(
+            "      text font-size=40 text-decoration-line=\"underline\" text-shadow=\"{shadow}\"\n        text \"HHHH\" color=\"{first_color}\" text-shadow=\"none\"\n        text \"HHHH\" color=\"#000000\"\n"
+        ))
+    };
+    let green = "-24px 0px 0px #00ff00";
+    let earlier = draw("#ff0000", "none");
+    let later = draw("transparent", green);
+    let combined = draw("#ff0000", green);
+    let overlap = later_covers(
+        &earlier,
+        &later,
+        &combined,
+        "the later run's glyph shadow covers the earlier run's glyphs",
+    );
+    assert!(overlap > 0, "the shadow must cross the earlier glyphs");
+}
+
 #[test]
 fn html_maxlength_is_enforced_by_linux_typing() {
     let plan = contract::compile("component App\n  state draft = \"\"\n  action edit(value: string)\n    draft = value\n  view\n    input value=draft input=edit maxlength=3 testId=\"limited\"\n").unwrap();
@@ -493,11 +967,11 @@ fn nested_visible_inline_backgrounds_keep_both_boxes_square() {
     assert_eq!(values[0].color, [255, 0, 0, 255]);
     assert_eq!(values[1].color, [0, 0, 255, 255]);
     for value in &values[..3] {
-        assert_eq!(value.radii, [Dimension::Points(0.0); 4]);
+        assert_eq!(value.radii, [const { Dimension::Points(0.0) }; 4]);
     }
     assert_eq!(
         values[3].radii,
-        [Dimension::Points(3.0); 4],
+        [const { Dimension::Points(3.0) }; 4],
         "a transparent descendant keeps its ancestor's rounding"
     );
     for inner in [
@@ -513,8 +987,8 @@ fn nested_visible_inline_backgrounds_keep_both_boxes_square() {
             .unwrap();
         let backgrounds = text_backgrounds(kernel, &node, false, None);
         assert_eq!(
-            backgrounds[0].unwrap().radii,
-            [Dimension::Points(6.0); 4],
+            backgrounds[0].as_ref().unwrap().radii,
+            [const { Dimension::Points(6.0) }; 4],
             "{inner}"
         );
     }

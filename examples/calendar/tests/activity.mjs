@@ -9,12 +9,25 @@
 //   host/apple/build.mjs [--ios] calendar-ios|calendar-macos, or host/web/build.mjs calendar-web)
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { brotliCompressSync, constants } from 'node:zlib';
+import { webDist } from '../../../scripts/app.mjs';
 import { checker } from '../../../packages/pedometer/test/fixture.mjs';
 
 const root = resolve(import.meta.dir, '../../..'), app = resolve(root, 'examples/calendar');
 const host = process.argv[2] ?? 'ios', extra = process.argv.slice(3);
 const { check, failed } = checker();
 const run = Date.now().toString(36);
+
+if (host === 'web') {
+  const module = readFileSync(resolve(webDist(), 'rust/wasm/app.module.wasm'));
+  const brotli = brotliCompressSync(module, { params: {
+    [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: module.length,
+  } });
+  check(host, 'the data module fits without the native stores\' zone database',
+    module.length <= 400 * 1024 && brotli.length <= 130 * 1024,
+    `${module.length} bytes raw, ${brotli.length} bytes brotli-11`);
+}
 
 /** One launch on 12 October 2026, 15:00 UTC: each op's JSON reply. */
 function drive(storage, permissions, ops, { reset = false } = {}) {

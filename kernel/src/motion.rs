@@ -372,7 +372,8 @@ impl Kernel {
         let mut out = vec![(Property::StrokeDashoffset, Value::scalar(offset as f64))];
         // `r` animates as a length in user units; a percentage radius
         // resolves against its viewport at paint time and is not a target.
-        if let (NodeType::SvgCircle, Dimension::Points(r)) = (node.node_type, node.style.r) {
+        if let (NodeType::SvgCircle, Dimension::Points(r)) = (node.node_type, node.style.r.clone())
+        {
             out.push((Property::R, Value::scalar(r as f64)));
         }
         // @ref LLP 1055.000 D15 — the geometry rows a shape draws from,
@@ -380,18 +381,18 @@ impl Kernel {
         // paint time and is not a target.
         let s = node.style;
         let rows: &[(Property, Dimension)] = match node.node_type {
-            NodeType::SvgCircle => &[(Property::Cx, s.cx), (Property::Cy, s.cy)],
+            NodeType::SvgCircle => &[(Property::Cx, s.cx.clone()), (Property::Cy, s.cy.clone())],
             NodeType::SvgEllipse => &[
-                (Property::Cx, s.cx),
-                (Property::Cy, s.cy),
-                (Property::Rx, s.rx),
-                (Property::Ry, s.ry),
+                (Property::Cx, s.cx.clone()),
+                (Property::Cy, s.cy.clone()),
+                (Property::Rx, s.rx.clone()),
+                (Property::Ry, s.ry.clone()),
             ],
             NodeType::SvgRect => &[
-                (Property::X, s.x),
-                (Property::Y, s.y),
-                (Property::Rx, s.rx),
-                (Property::Ry, s.ry),
+                (Property::X, s.x.clone()),
+                (Property::Y, s.y.clone()),
+                (Property::Rx, s.rx.clone()),
+                (Property::Ry, s.ry.clone()),
             ],
             _ => &[],
         };
@@ -608,7 +609,7 @@ impl Kernel {
         {
             return None;
         }
-        let height = node.style.height;
+        let height = node.style.height.clone();
         match height {
             Dimension::Points(px) if px.is_finite() && px >= 0.0 => {}
             Dimension::Auto if node.style.box_sizing == BoxSizing::BorderBox => {}

@@ -353,6 +353,7 @@ impl<D: DataSource> Runner<D> {
                 match self.process_refusal(&request) {
                     Some(why) => self.refuse_tool(ticket, why, false),
                     None => self.requests.push(RequestOut {
+                        class: crate::RequestClass::Ordered,
                         ticket,
                         target: NAME.into(),
                         request,

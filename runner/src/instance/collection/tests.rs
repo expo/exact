@@ -14,6 +14,8 @@ mod position;
 mod rekey;
 #[path = "smooth_tests.rs"]
 mod smooth;
+#[path = "snap_tests.rs"]
+mod snap;
 #[path = "text_tests.rs"]
 mod text;
 
@@ -152,18 +154,18 @@ fn env_with<'a>(plan: &'a Plan, slots: &'a [Value], strings: &'a crate::vm::Stri
         format: None,
         geometry: None,
         derives: &[],
-        resources: &[],
+        resources: (&[]).into(),
         params: &[],
         frames: &[],
         now_ms: 0.0,
-        pending_resources: &[],
-        current_resources: &[],
-        failed_resources: &[],
-        failed_why: &[],
+        pending_resources: (&[]).into(),
+        current_resources: (&[]).into(),
+        failed_resources: (&[]).into(),
+        failed_why: (&[]).into(),
         pending_mutations: &[],
         failed_mutations: &[],
         store_dependent_derives: &[],
-        store_dependent_resources: &[],
+        store_dependent_resources: (&[]).into(),
     }
 }
 fn values(n: usize) -> Value {

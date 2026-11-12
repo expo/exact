@@ -127,6 +127,7 @@ async function bootNow(bytes, assets = host.devAssets, current = () => true, mod
   // canvas text names the declared family (LLP 1056 D8)
   const preparedFonts = await prepareFonts(faces, assets);
   const shaderCommit = assets !== null && globalThis.exact.gpu ? await globalThis.exact.gpu.prepareShaders(assets) : null;
+  if (!bytes && !module && host.page?.answers) await host.page.answers;
   // A retiring optional instance cannot delay boot; its generation guard disposes it.
   if (!current() || request !== host.bootAttempt) {
     return null;

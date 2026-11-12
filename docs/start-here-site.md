@@ -129,6 +129,9 @@ storage. A source still waiting there on a `storage` call is left pending: its p
 shows with `pending(x)` true, and the reader's page asks it once it loads. A `storage` call
 the source does not wait for does not run there, and nothing it chains runs either. If the
 source answers anyway, the page keeps that answer and asks the source again on the reader's device.
+The render's `store` stays empty and refuses writes, including deletions. A source can handle
+the error. An uncaught TypeScript store error fails its resource and keeps its placeholder;
+a Rust source that returns a refusal refuses the render.
 
 ## CSS that is not here
 

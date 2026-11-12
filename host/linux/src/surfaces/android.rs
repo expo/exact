@@ -489,6 +489,13 @@ impl<D: DataSource> Presenter<D> {
             {
                 continue;
             }
+            // Under its frame-rate cap (`Surface::max_fps`), a canvas skips
+            // the frames before its deadline and asks for the next.
+            let due = unsafe { abi.symbol::<unsafe extern "C" fn(u32, f64) -> u32>(b"gpu_due") };
+            if !retry && unsafe { due(c.id, now) } == 0 {
+                wants = true;
+                continue;
+            }
             let render = unsafe {
                 abi.symbol::<unsafe extern "C" fn(u32, f32, f32, f32, f64) -> u32>(b"gpu_render")
             };

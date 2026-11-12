@@ -46,9 +46,11 @@ const platform = host === 'ios' ? ['--touch', 'platform'] : [];
 
 // 1: a marker selected on the map is the app's `change`.
 {
-  const r = drive(['clock settle', 'tap map/ferry', 'clock settle', 'tree', 'state extensions', 'logs'], platform);
-  const tree = r[3];
-  check('1: tap map/ferry selects it', text(tree, 'selected') === 'Selected: ferry', text(tree, 'selected') || String(JSON.stringify(r[1] ?? r)).slice(0, 400));
+  const r = drive(['clock settle', 'tree', 'tap map/ferry', 'clock settle', 'tree', 'state extensions', 'logs'], platform);
+  const tree = r[4];
+  const parts = r[1]?.nodes?.find(n => n.props?.testId === 'map')?.parts ?? [];
+  check('1: tree lists the declared marker parts', ['ferry', 'coit', 'union', 'chinatown'].every(id => parts.some(p => p.id === id)), JSON.stringify(parts));
+  check('1: tap map/ferry selects it', text(tree, 'selected') === 'Selected: ferry', text(tree, 'selected') || String(JSON.stringify(r[2] ?? r)).slice(0, 400));
   check('1: one pick from the map', text(tree, 'picks').endsWith(': 1'), text(tree, 'picks'));
   const m = maps(r);
   if (host === 'web') check("1: state.extensions shows the marker selected", m?.[0]?.selected === 'ferry', JSON.stringify(m));

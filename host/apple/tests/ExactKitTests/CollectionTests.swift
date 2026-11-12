@@ -1,8 +1,30 @@
 import Foundation
 import XCTest
 @testable import ExactKit
+#if canImport(AppKit)
+import AppKit
+#endif
 
 final class CollectionTests: XCTestCase {
+    func testSnapQueryReadsUnmountedRowsWithoutChangingTheWindow() throws {
+        #if canImport(AppKit)
+        _ = NSApplication.shared
+        #endif
+        let session = ExactApp.shared.makeSession(label: "snap-query")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: CGSize(width: 300, height: 100)).error)
+        let p = session.presenter
+        let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "strip" })
+        let before = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
+        XCTAssertEqual(session.runtime.collectionSnap(node.id, proposed: 30020, port: 300, maximum: 149700), 30000)
+        XCTAssertNil(session.runtime.collectionSnap(node.id, proposed: 30020, port: 300, maximum: 149700, distance: 19))
+        XCTAssertEqual(session.runtime.collectionSnap(node.id, proposed: 30020, port: 300, maximum: 149700, distance: 20), 30000)
+        XCTAssertNil(session.runtime.collectionSnap(node.id, proposed: 30000, port: 300, maximum: 149700, distance: 0))
+        XCTAssertNil(session.runtime.collectionSnap(UInt32.max, proposed: 30020, port: 300, maximum: 149700))
+        XCTAssertEqual(p.collections.entries[node.id]?.snapshot.rows.map(\.view), before.rows.map(\.view))
+        XCTAssertEqual(p.collections.entries[node.id]?.snapshot.revision, before.revision)
+    }
+
     func testWireIsVersionFourLittleEndianAndPreservesLargeEpochs() {
         let facts = CollectionFacts(offset: 12, portMain: 480, portCross: 320, cross: 300,
             measurements: [.init(view: 23, epoch: 0xfedcba9876543210, size: 72)], focus: 31, interaction: nil,

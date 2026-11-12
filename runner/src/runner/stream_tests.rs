@@ -565,7 +565,7 @@ fn an_upload_that_failed_is_not_asked_again_at_its_arguments() {
     r.changed("clock").unwrap();
     r.act("refresh", vec![]).unwrap();
     // As if its answer had read the store, and another reply's turn wrote it.
-    r.store_readers[0] = true;
+    r.resources[0].store_reader = true;
     r.ask_failed_readers(None);
     r.act("wave", vec![Value::Number(1.)]).unwrap();
     assert!(r.take_requests().is_empty(), "nothing asks it again");
@@ -618,7 +618,11 @@ fn one(r: &mut Runner<Scripted>) -> u64 {
 
 /// Why `progress` failed: its failure's reason, else its message.
 fn failure(r: &Runner<Scripted>) -> Option<String> {
-    let f = crate::failure::state(&r.failed_args, &r.failed_why, 0)?;
+    let f = crate::failure::state(
+        crate::vm::Column::rows(&r.resources, |row| &row.failed_args),
+        crate::vm::Column::rows(&r.resources, |row| &row.failed_why),
+        0,
+    )?;
     Some(if f.reason.is_empty() {
         f.message
     } else {
@@ -650,7 +654,7 @@ fn an_uploads_arguments_answer_as_it_ended_when_they_come_back() {
         assert_eq!(failure(&r), None);
     }
     // A store write it read, a topic, a refresh: nothing goes out.
-    assert!(r.store_readers[0]);
+    assert!(r.resources[0].store_reader);
     r.store_changed(vec![("token".into(), b"new".to_vec())])
         .unwrap();
     r.changed("clock").unwrap();
@@ -770,7 +774,7 @@ fn a_refused_commit_puts_the_marks_back() {
     let a = one(&mut r);
     uploaded(&mut r, a, 201);
     let before = r.uploads.clone();
-    let checkpoint = r.checkpoint(true);
+    let checkpoint = r.checkpoint();
     r.act("wave", vec![Value::Number(2.)]).unwrap();
     assert_ne!(r.uploads, before, "wave 2 was asked");
     r.conclude(checkpoint, &Err::<(), _>(RunnerError::Cycle), false);
@@ -977,7 +981,12 @@ fn an_update_during_a_burst_asks_again_the_uploads_that_never_left() {
         "tickets past the old ones"
     );
     for i in 0..3 {
-        let f = crate::failure::state(&new.failed_args, &new.failed_why, i).expect("cut off");
+        let f = crate::failure::state(
+            crate::vm::Column::rows(&new.resources, |row| &row.failed_args),
+            crate::vm::Column::rows(&new.resources, |row| &row.failed_why),
+            i,
+        )
+        .expect("cut off");
         assert_eq!(f.reason, "interrupted", "photo{}", i + 1);
     }
 }

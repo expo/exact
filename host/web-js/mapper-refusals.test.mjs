@@ -37,6 +37,7 @@ export const fetchWith = (set, input) => { globalThis.fixture.fetched.push(Strin
   // Each kind's transport: one message (an upload's progress; a socket's `open` and a message), then its end.
   writeFileSync(resolve(dir, 'http-body.js'), `const m = (data, event = '') => ({ event, id: '', data, coalesced: 0 });
 export function streamed(req, grantSet, message, controller, bodyFile, protocol) {
+  if (req.url.endsWith('/rejected')) return Promise.reject(Object.assign(new Error('upload transport failed'), { reason: 'upload-failed' }));
   if (protocol.socket) {
     protocol.socket(Object.freeze({ readyState: 1, bufferedAmount: 0, check() {}, send(data) { globalThis.fixture.sent.push(data); }, close() {} }));
     message(m('', 'open')); message(m('frame'));
@@ -57,6 +58,7 @@ const STREAMS = {
   bytes: ['https://example.test/bytes', {}],
   longPoll: ['https://example.test/poll', { exactLongPoll: { cursor: 'since', from: 'seq' } }],
   upload: ['https://example.test/upload', { method: 'POST', body: 'x', exactUploadProgress: true }],
+  rejected: ['https://example.test/rejected', { method: 'POST', body: 'x', exactUploadProgress: true }],
   socket: ['wss://example.test/socket', {}],
 };
 const tried = run => { try { return Promise.resolve(run()).then(() => 'ran', e => e.message); } catch (e) { return Promise.resolve(e.message); } };
@@ -101,6 +103,12 @@ async function mapped(kind) {
   const end = await r.stream(o => calls.push(o), controller);
   return [...calls, end].map(o => o.error ? { error: o.error } : JSON.parse(o.v));
 }
+test('a TypeScript upload transport rejection answers with a failure outcome', async () => {
+  const answer = data.answer('feed', ['rejected'], new Map());
+  expect(await answer.stream(() => {}, new AbortController()))
+    .toEqual({ error: 'upload transport failed', code: 'error', reason: 'upload-failed' });
+});
+
 const STREAM = "fetch() is unavailable in a stream's mapper: fetch in the answer that opens the stream";
 const SOCKET = "fetch() is unavailable in a socket's mapper: it answers each frame now";
 const STORAGE = "storage.writeFile() called in a stream's mapper: it was never run. Start storage inside an answer";

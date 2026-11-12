@@ -657,6 +657,22 @@ test('ordinary web reloads keep the launch seed', async () => {
   expect(draws).toBe(1);
 });
 
+test('a document boot waits for named answers before passing its checkpoint to wasm', async () => {
+  for (const available of [true, false]) {
+    const f = fixture(false), entered = deferred(), answers = deferred(), calls = [];
+    f.page = { holding: true, get answers() { entered.resolve(); return answers.promise; }, checkpoint: '' };
+    f.wasm.exact_checkpoint = wire => calls.push(['checkpoint', wire]);
+    f.wasm.exact_boot = () => { calls.push(['boot']); return '{"ops":[]}'; };
+    const boot = f.boot(null);
+    await entered.promise;
+    expect(calls).toEqual([]);
+    f.page.checkpoint = available ? 'digest\n{}' : '';
+    answers.resolve();
+    await boot;
+    expect(calls).toEqual([...(available ? [['checkpoint', 'digest\n{}']] : []), ['boot']]);
+  }
+});
+
 test('ordinary boot and restart do not yield between DOM commit and ticker startup', async () => {
   for (const bytes of [null, new Uint8Array([1])]) {
     const f = fixture(false), el = f.views.get(1);

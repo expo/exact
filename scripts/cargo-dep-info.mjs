@@ -2,6 +2,7 @@
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { existsSync, lstatSync, mkdirSync, statSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
+import { beside } from '../host/web/beside.mjs';
 const under = (root, file) => {
   const child = relative(root, file);
   return child === '' || (!isAbsolute(child) && child !== '..' && !child.startsWith('..' + sep));
@@ -17,11 +18,11 @@ function outputPath(path) {
 
 // Cargo follows directory links. Track their contents without reading outputs
 // through an alias or opening special files the baker may never use.
-function watchedDigest(paths, outputs) {
+function watchedDigest(paths, outputs, { inventory = false } = {}) {
   const hash = createHash('sha256');
   const excluded = outputs.map(outputPath), ancestors = new Set();
   const row = (...values) => hash.update(JSON.stringify(values) + '\n');
-  const visit = path => {
+  const visit = (path, top = false, atRoot = false) => {
     let info;
     try {
       info = lstatSync(path);
@@ -29,14 +30,26 @@ function watchedDigest(paths, outputs) {
         row(path, 'link', readlinkSync(path));
         info = statSync(path);
       }
+      if (inventory && atRoot && basename(path).startsWith('.') && info.isDirectory()) return;
       const real = realpathSync(path);
-      if (excluded.some(root => under(root, real))) { row(path, 'output'); return; }
+      if (excluded.some(root => under(root, real))) { if (!inventory) row(path, 'output'); return; }
       if (info.isDirectory()) {
         if (ancestors.has(real)) { row(path, 'cycle'); return; }
-        const names = readdirSync(path).sort(); row(path, 'directory', names);
+        const names = readdirSync(path).sort();
+        if (!inventory) row(path, 'directory', names);
         ancestors.add(real);
-        try { for (const name of names) visit(resolve(path, name)); }
+        try {
+          for (const name of names) {
+            // Native producer sources (js/bake/src/lib.rs `sources`) and Cargo's Rust targets.
+            if (inventory && (['.git', 'node_modules', 'target', 'dist'].includes(name)
+              || name.startsWith('.exact-js-bake-') || name.endsWith('.test.contract')
+              || (top && (name === 'dist-windows' || beside(name) || name === 'app.contract.d.ts')))) continue;
+            visit(resolve(path, name), false, top);
+          }
+        }
         finally { ancestors.delete(real); }
+      } else if (inventory) {
+        if (/\.(rs|ts|[cm]?js|json|contract|ttf|otf)$/.test(path)) row(path, 'source');
       } else if (info.isFile()) row(path, 'file', createHash('sha256').update(readFileSync(path)).digest('hex'));
       else row(path, info.isSocket() ? 'socket' : info.isFIFO() ? 'fifo'
         : info.isBlockDevice() ? 'block-device' : info.isCharacterDevice() ? 'character-device' : 'other');
@@ -49,16 +62,42 @@ function watchedDigest(paths, outputs) {
       else throw error;
     }
   };
-  for (const path of paths) visit(path);
+  for (const path of paths) visit(path, true);
   return hash.digest('hex');
+}
+
+function sourceInventory(app, outputs) {
+  const inventory = {
+    paths: [app.dir, ...Object.values(app.manifest.typescript?.sources ?? {}).map(path => resolve(app.dir, path))],
+    outputs: [...outputs, ...['macos', 'ios'].flatMap(platform => (app.manifest.host?.[platform]?.resources ?? []).map(({from}) => resolve(app.dir, from)))],
+  };
+  inventory.sha256 = watchedDigest(inventory.paths, inventory.outputs, {inventory:true});
+  return inventory;
+}
+
+/** Sources checked for a packaged drive, outside the binary fingerprint.
+ * Guarded watches share Cargo's bake revision; the inventory detects new
+ * imports and Cargo targets. Include optional asset roots even when Cargo
+ * omits their missing-file watches. */
+export function bakeSourceInputs(app, paths, outputs) {
+  outputs = [...new Set(outputs.filter(Boolean).map(path => resolve(path)))];
+  const inventory = sourceInventory(app, outputs);
+  return {inputs:[...new Set(paths)].sort().map(path => ({path, sha256:watchedDigest([path], outputs)})), outputs, inventory};
+}
+
+export function pendingSourceInputs(record) {
+  const changed = record.inputs.filter(({path, sha256}) => watchedDigest([path], record.outputs) !== sha256).map(({path}) => path);
+  const inventory = record.inventory;
+  if (watchedDigest(inventory.paths, inventory.outputs, {inventory:true}) !== inventory.sha256) changed.push('app source inventory');
+  return changed;
 }
 
 /** A development receipt names four thousand inputs by SHA-256, on every build,
  * and nearly all of them are the files they were at the last one: reading them
  * again was 0.3 s of a 2.5 s build with nothing changed. Each hash is kept in
- * the target directory with the size and time its file had, which is what
- * Cargo goes by to say the unit built from it is fresh. A production receipt
- * reads every byte. */
+ * the target directory with its size, modification and change times, and file
+ * identity. Restoring a modification time must not reuse an old digest.
+ * A production receipt reads every byte. */
 export function inputHashes(app, env) {
   const kept = resolve(app.target, 'bake-input-hashes.json'), production = env.EXACT_UPDATE_TRUST === 'production';
   let known = {}, grew = false;
@@ -67,7 +106,8 @@ export function inputHashes(app, env) {
   return {
     of(path, info) {
       const was = known[path];
-      const now = was && was[0] === info.mtimeMs && was[1] === info.size ? was : [info.mtimeMs, info.size, createHash('sha256').update(readFileSync(path)).digest('hex')];
+      const now = was && was[0] === info.mtimeMs && was[1] === info.size && was[3] === info.ctimeMs && was[4] === info.ino && was[5] === info.dev
+        ? was : [info.mtimeMs, info.size, createHash('sha256').update(readFileSync(path)).digest('hex'), info.ctimeMs, info.ino, info.dev];
       if (now !== was) grew = true;
       used[path] = now;
       return now[2];
@@ -82,7 +122,7 @@ export function inputHashes(app, env) {
 }
 /** Supply Cargo with a content revision for the selected bake, then retain
  * its actual watches after success. File watches still serve direct Cargo. */
-export function cargoBakeInputs(pkg, target, profile, env) {
+export function cargoBakeInputs(pkg, target, profile, env, app = null) {
   if (!pkg.targets.some(t => t.kind.includes('custom-build')) || env.EXACT_BAKED) return () => {};
   const key = createHash('sha256').update(JSON.stringify([pkg.manifest_path, target, profile])).digest('hex');
   const file = resolve(env.CARGO_TARGET_DIR, 'bake-inputs', key + '.json');
@@ -92,10 +132,11 @@ export function cargoBakeInputs(pkg, target, profile, env) {
   if (previous?.version !== 2) previous = null;
   const outputs = [env.CARGO_TARGET_DIR, env.CARGO_BUILD_BUILD_DIR, env.EXACT_BAKE_OUTPUT, env.OUT_DIR].filter(Boolean).map(path => resolve(path));
   const digest = previous ? watchedDigest(previous.paths, [...outputs, ...previous.outputs]) : null;
+  const inventory = app ? sourceInventory(app, [...outputs, ...(previous?.outputs ?? [])]).sha256 : null;
   // Keep the revision Cargo consumed when the bake discovers new watches.
   // A new revision must not be a content digest: inputs can change during Cargo,
   // then be restored to the pre-build bytes after Cargo consumed that revision.
-  const revision = digest !== null && digest === previous.digest ? previous.revision : randomUUID();
+  const revision = digest !== null && digest === previous.digest && inventory === previous.inventory ? previous.revision : randomUUID();
   env.EXACT_BAKE_INPUTS = revision;
   return messages => {
     const script = messages.find(m => m.reason === 'build-script-executed' && m.package_id === pkg.id);
@@ -106,7 +147,8 @@ export function cargoBakeInputs(pkg, target, profile, env) {
       return path === undefined ? [] : [resolve(dirname(pkg.manifest_path), path)];
     }))].sort();
     const outDirs = [...new Set(messages.filter(m => m.reason === 'build-script-executed').map(m => m.out_dir))].sort();
-    const record = {version:2, paths, outputs:outDirs, digest:watchedDigest(paths, [...outputs, ...outDirs]), revision};
+    const record = {version:2, paths, outputs:outDirs, digest:watchedDigest(paths, [...outputs, ...outDirs]),
+      inventory:app ? sourceInventory(app, [...outputs, ...outDirs]).sha256 : null, revision};
     mkdirSync(dirname(file), {recursive:true});
     writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(record));
     renameSync(`${file}.${process.pid}.tmp`, file);
@@ -179,12 +221,13 @@ export function unitDepInfo(message, workspace, metadata) {
       if (names(readFileSync(candidate, 'utf8'), candidate) && sameBytes(resolve(dirname(candidate), basename(file)), file)) return candidate;
     }
   }
-  // Cargo copies libraries and executables out of deps without reporting their
-  // hashed unit filenames. Match the copied bytes; refuse ambiguous evidence.
-  for (const file of message.filenames.filter(path => /\.(rlib|a)$/.test(path) || path === message.executable)) {
-    const directory = resolve(dirname(intermediate(file)), 'deps');
+  // Cargo copies libraries and executables out of deps, and aliases build scripts
+  // in their build directory. Match the copied bytes; refuse ambiguous evidence.
+  const custom = message.target.kind?.includes('custom-build');
+  for (const file of message.filenames.filter(path => /\.(rlib|a)$/.test(path) || path === message.executable || custom)) {
+    const directory = custom ? dirname(intermediate(file)) : resolve(dirname(intermediate(file)), 'deps');
     if (!existsSync(directory)) continue;
-    const executable = file === message.executable;
+    const executable = custom || file === message.executable;
     const extension = executable ? (file.endsWith('.exe') ? '.exe' : '') : file.slice(file.lastIndexOf('.'));
     const stem = executable ? message.target.name.replaceAll('-', '_') : basename(file, extension);
     const bytes = readFileSync(file), matches = [];

@@ -511,6 +511,52 @@ final class ContentOwnersIOSTests: XCTestCase {
         }
     }
 
+    func testOwnershipChecksUseTheInsetsAppliedToArrangedPeers() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("arrangements require iOS 27.1") }
+        guard let scene = hostedWindowScene() else { throw missing("scene", "arranged inset ownership needs a route in a window") }
+        let (session, root, first, second, route, _) = try arrangedPeers(in: scene)
+        let p = session.presenter, navigation = p.navigation
+        session.natives.hatchesConnected = true
+        route.hatched = true
+        route.ownedScroll = second
+        for pane in [first, second] {
+            pane.props["hatch"] = "arranged-pane"
+            p.elements.created(pane)
+        }
+        let scroll = try XCTUnwrap(second.scrollView)
+        let log = { session.agent(#"{"op":"logs","since":0}"#) }
+        let routeViolation = "route \(route.key): contentInsetAdjustmentBehavior changed outside Exact"
+        let elementViolation = "element arranged-pane #\(second.id): contentInsetAdjustmentBehavior changed outside Exact"
+        XCTAssertEqual(scroll.contentInsetAdjustmentBehavior, .automatic)
+        navigation.checkOwned()
+        p.elements.checkOwned()
+        XCTAssertFalse(log().contains(routeViolation), log())
+        XCTAssertFalse(log().contains(elementViolation), log())
+
+        // Authored geometry can change before the next arrangement sync applies its inset policy.
+        let box = root.kernelContentBox, padding = root.kernelPadding
+        root.applyKernelContentBox(root.bounds.insetBy(dx: 0, dy: 16), padding: [16, nil, 16, nil])
+        XCTAssertTrue(navigation.arrangementPeers(in: route).isEmpty)
+        navigation.checkOwned()
+        p.elements.checkOwned()
+        XCTAssertFalse(log().contains(routeViolation), "the last Exact write still owns this inset policy: \(log())")
+        XCTAssertFalse(log().contains(elementViolation), log())
+        root.applyKernelContentBox(box, padding: padding)
+        p.arrangements.sync()
+
+        scroll.contentInsetAdjustmentBehavior = .never
+        navigation.checkOwned()
+        p.elements.checkOwned()
+        XCTAssertTrue(log().contains(routeViolation), "a real external mutation is still reported")
+        XCTAssertTrue(log().contains(elementViolation), "element and route checks agree")
+        scroll.contentInsetAdjustmentBehavior = .automatic
+        XCTAssertTrue(p.arrangements.set(root.id, controller: nil))
+        until("the retired peer returns its inset policy") { scroll.contentInsetAdjustmentBehavior == .never }
+        XCTAssertTrue(NavigationHost.ownedChanges(scroll, of: second, insetByUIKit: navigation.insetByUIKit(second)).isEmpty)
+        scroll.contentInsetAdjustmentBehavior = .automatic
+        XCTAssertEqual(NavigationHost.ownedChanges(scroll, of: second, insetByUIKit: navigation.insetByUIKit(second)), ["contentInsetAdjustmentBehavior"])
+    }
+
     /// The edge-effect fixture's Panes tab, its two peers arranged side by side beneath the route's bars.
     @available(iOS 27.1, *)
     private func arrangedPeers(in scene: UIWindowScene) throws -> (ExactSession, NodeView, NodeView, NodeView, RouteController, UIArrangementViewController) {

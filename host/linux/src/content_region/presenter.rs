@@ -144,7 +144,8 @@ impl<D: DataSource> Presenter<D> {
             self.focus,
         );
         let model_scroll = deferred.then(|| self.collection_paint_scroll()).flatten();
-        let menu = self.menu_paint();
+        // Display submission temporarily takes the boxes that place the menu.
+        let menu = self.menu_paint().or_else(|| self.display.menu.clone());
         let selection = self.focus.map(|id| self.field_selection(id));
         let host = &self.host;
         let presented = |id: ViewId| host.presented(id);

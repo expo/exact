@@ -37,6 +37,37 @@ and optionally `EXACT_AGENT_WINDOW_TAP` to a launch button's test ID.
 `EXACT_AGENT_WINDOW_UNPACED=1` removes pacing to measure rendering capacity.
 These switches require a bounded development run and are stripped in production.
 
+## Frame pacing and timing
+
+A surface that rests returns `false` from `render`; the host then asks for no
+frame until the canvas is dirty (an input, a bind, an asset), its box or scale
+changes, or the agent's clock moves. `Surface::max_fps` caps its drawn frames (0
+for none). Each display frame a pacing host asks `gpu_due(id, now_ms)` before it
+would render a canvas, and skips a canvas that is not due while still asking for
+the next frame: the deadline sits on the lattice of the cap's interval, so a cap
+of 30 on a 120 Hz display draws every fourth frame, a missed slot is skipped
+rather than caught up, and the first frame after a rest draws at once. Under the
+agent's clock (`gpu_seekable(true)`) every canvas is due. A cap below 5 draws
+5: a longer gap than the live clock carries in one frame (250 ms) would slow a
+world's ticks. `gpu_max_fps(id)`
+(native) reports the cap, which the Apple host uses to lower its `CADisplayLink`'s
+preferred rate while nothing else on screen asks for more.
+
+Before each frame `Surface::timing` receives a `FrameTiming`: the interval since
+the canvas's previous drawn frame (0 after a rest), the display period
+(`gpu_period`), the host's callback (`gpu_host_frame(raw_ms, callback_ms,
+fastest_period_ms, thermal)`: its own timestamp and when it began to run, on the
+frame clock, and the display's fastest period) and a `ThermalState` (0 unknown,
+1 nominal, 2 fair, 3 serious, 4 critical). Apple reports `ProcessInfo.thermalState`;
+the web, Android, Linux and Windows report unknown.
+
+| host | rests | caps | timing |
+|---|---|---|---|
+| web | yes | `gpu_due` in the `requestAnimationFrame` loop | callback times; thermal unknown |
+| iOS, tvOS, macOS | yes | capped `CADisplayLink` range and `gpu_due` per canvas | callback times, fastest period, thermal state |
+| Android | yes | `gpu_due` per canvas | none |
+| Linux, Windows (readback and window frame) | no: a rendered canvas repaints every display frame | no | none |
+
 ## A module's own audio output
 
 A surface posts the string `"exact:audio"` through `Surface::messages` to ask

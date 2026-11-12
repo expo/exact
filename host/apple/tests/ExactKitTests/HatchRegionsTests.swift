@@ -6,11 +6,86 @@ import AppKit
 import UIKit
 #endif
 
+private final class PackagePartsView: PlatformView {
+    var ids = ["ferry", "offscreen"]
+    let marker = PlatformView(frame: CGRect(x: 30, y: 40, width: 20, height: 24))
+
+    @objc func exactPartIds() -> [String] { ids }
+    @objc func exactPart(_ name: String) -> AnyObject? { name == "ferry" ? marker : nil }
+}
+
 /// Regions and parts (LLP 1075.003.000.001 §3.4, §3.5): each bound refuses a
 /// registration whole and counts it; a region whose object is not in a window
 /// is retired to a tombstone that every read sees alike; a view's interior is
 /// its innermost bound ancestor's; a node's end takes what it registered.
 final class HatchRegionsTests: XCTestCase {
+    @MainActor func testPackagePartsAppearUnderTheirNodeAndUseTheTapViewsGeometry() throws {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let session = ExactApp.shared.makeSession(label: "package-parts")
+        defer { session.destroy() }
+        let p = session.presenter
+        let bounds = CGRect(x: 0, y: 0, width: 300, height: 240)
+        #if os(macOS)
+        let window = NSWindow(contentRect: bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = ExactView(session: session)
+        defer { window.close() }
+        #else
+        let window = UIWindow(frame: bounds)
+        window.addSubview(p.viewport)
+        p.viewport.frame = bounds
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        #endif
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "view", "handlers": ["press"]],
+            ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 300, "h": 240],
+            ["op": "frame", "id": 2, "x": 20, "y": 30, "w": 200, "h": 160],
+        ]))
+        let node = try XCTUnwrap(p.views[2])
+        let package = PackagePartsView(frame: node.bounds)
+        node.addSubview(package)
+        package.addSubview(package.marker)
+        let agent = Agent(session: session)
+        let tree: [String: Any] = ["nodes": [
+            ["id": 1, "type": "View"],
+            ["id": 2, "type": "NativeView", "parts": [["id": "hatch", "live": false]]],
+        ]]
+        func rows() throws -> [[String: Any]] {
+            try XCTUnwrap(agent.decorateTree(tree)["nodes"] as? [[String: Any]])
+        }
+        let nodes = try rows()
+        XCTAssertNil(nodes[0]["parts"], "a parent's walk cannot claim the package's parts")
+        let parts = try XCTUnwrap(nodes[1]["parts"] as? [[String: Any]])
+        XCTAssertEqual(parts.compactMap { $0["id"] as? String }, ["hatch", "ferry", "offscreen"])
+        let ferry = try XCTUnwrap(parts.first { $0["id"] as? String == "ferry" })
+        let offscreen = try XCTUnwrap(parts.first { $0["id"] as? String == "offscreen" })
+        XCTAssertEqual(ferry["live"] as? Bool, true)
+        XCTAssertEqual(offscreen["live"] as? Bool, false)
+        XCTAssertNil(offscreen["frame"])
+        let expected = package.marker.convert(package.marker.bounds, to: nil)
+        let frame = try XCTUnwrap(ferry["frame"] as? [String: Double])
+        XCTAssertEqual(frame["x"], Double(expected.minX))
+        XCTAssertEqual(frame["y"], Double(expected.minY))
+        XCTAssertEqual(frame["w"], Double(expected.width))
+        XCTAssertEqual(frame["h"], Double(expected.height))
+        XCTAssertTrue(Agent.packagePart("ferry", in: node) === package.marker)
+        let aim = try XCTUnwrap(agent.partTap(["id": 2, "part": "ferry", "aim": true])["aimed"] as? [String: Any])
+        let middle = package.marker.convert(CGPoint(x: package.marker.bounds.midX, y: package.marker.bounds.midY), to: node)
+        XCTAssertEqual(aim["at"] as? [Double], [Double(middle.x), Double(middle.y)])
+        package.marker.removeFromSuperview()
+        let detached = try XCTUnwrap(try rows()[1]["parts"] as? [[String: Any]])
+        XCTAssertEqual(detached[1]["live"] as? Bool, false)
+        XCTAssertNil(detached[1]["frame"])
+        package.ids = []
+        let removed = try XCTUnwrap(try rows()[1]["parts"] as? [[String: Any]])
+        XCTAssertEqual(removed.compactMap { $0["id"] as? String }, ["hatch"])
+    }
+
     func testBoundsOwnershipAndTombstones() throws {
         let session = ExactApp.shared.makeSession(label: "regions")
         defer { session.destroy() }

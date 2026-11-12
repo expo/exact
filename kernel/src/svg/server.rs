@@ -173,12 +173,12 @@ pub fn resolve(
             y2: coord(prop(PropId::Y2), 0.0, h),
         }
     } else {
-        let cx = dim(row(StyleId::Cx).map(|n| n.style.cx), 0.5, w);
-        let cy = dim(row(StyleId::Cy).map(|n| n.style.cy), 0.5, h);
+        let cx = dim(row(StyleId::Cx).map(|n| n.style.cx.clone()), 0.5, w);
+        let cy = dim(row(StyleId::Cy).map(|n| n.style.cy.clone()), 0.5, h);
         ServerKind::Radial {
             cx,
             cy,
-            r: dim(row(StyleId::R).map(|n| n.style.r), 0.5, diag),
+            r: dim(row(StyleId::R).map(|n| n.style.r.clone()), 0.5, diag),
             fx: prop(PropId::Fx).map_or(cx, |t| coord(Some(t), 0.0, w)),
             fy: prop(PropId::Fy).map_or(cy, |t| coord(Some(t), 0.0, h)),
             fr: coord(prop(PropId::Fr), 0.0, diag),

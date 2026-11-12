@@ -67,7 +67,7 @@ test('market chrome follows the scheme and coin labels remain readable', async (
             { scheme, coin: i, name, expected: `contrast >= ${minimum}`, paint: coin[name] });
         }
       }
-      const launch = scheme === 'light' ? manifest.background_color : manifest.background_color_dark;
+      const launch = scheme === 'light' ? manifest.background_color : manifest.color_scheme_dark?.background_color;
       const surface = '#' + paint.page.fill.map(n => n.toString(16).padStart(2, '0')).join('');
       require(launch === surface, { scheme, expected: 'launch matches page', launch, surface });
       const checked = await checkOp(session, [scheme]);

@@ -508,7 +508,9 @@ impl<D: DataSource> Presenter<D> {
                 }
                 // And its date fields are the kernel's size for one, the
                 // browser's own control's, which the value drawn here fits.
+                let bare = node.style.appearance == exact_kernel::Appearance::None;
                 if neutral
+                    && !bare
                     && matches!(
                         kind,
                         exact_kernel::ControlKind::Date
@@ -516,6 +518,7 @@ impl<D: DataSource> Presenter<D> {
                             | exact_kernel::ControlKind::DateTimeLocal
                     )
                 {
+                    forgotten.push(id);
                     continue;
                 }
                 // Native buttons measure synchronously through TextMeasurer before layout.
@@ -543,6 +546,20 @@ impl<D: DataSource> Presenter<D> {
                     let p = text.paragraph(&crate::paint::text_spec(&style, label), None);
                     w = w.max(p.width);
                     h = h.max(p.height);
+                }
+                if bare {
+                    // Only the value is painted; padding and border belong to the author's box.
+                    let height = if h == 0.0 {
+                        style
+                            .line_height
+                            .resolve(style.font_size)
+                            .unwrap_or(style.font_size * 1.2)
+                    } else {
+                        h
+                    };
+                    // The intrinsic-size API requires positive dimensions, even with no options.
+                    sizes.push((id, (w.ceil().max(1.0), height.ceil().max(1.0))));
+                    continue;
                 }
                 if neutral {
                     // The look's select, as the page's sheet sizes it (LLP

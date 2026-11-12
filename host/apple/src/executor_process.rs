@@ -873,6 +873,8 @@ pub(crate) fn deliver(shared: &Shared, ticket: u64, message: Message, wait: bool
             continue;
         }
         state.completed[lane].push_back(Completed {
+            cached: false,
+            finished_at: std::time::Instant::now(),
             elapsed_ms,
             ticket,
             outcome: Outcome::Message(message),

@@ -287,8 +287,10 @@ change the native state inside that pair, then wait for the runner to apply it
   `newContext` each make a browser context that belongs to the suite; `close`
   closes those, not the browser. A test that speaks CDP itself takes
   `cdpBrowser()` on the same terms: `page(url)` opens a target in the suite's
-  context. A test about the browser process (it kills the browser, or needs a
-  kept profile, a headed window or flags of its own) launches its own.
+  context. Its browser quits after the test file, or before normal process
+  exit outside Bun's test runner. A test about the browser process (it kills
+  the browser, or needs a kept profile, a headed window or flags of its own)
+  launches its own.
 - **Wait for the event, not for its first sign.** The shell is faster than the
   full build, so a test that reads a state while the browser still changes it
   fails there first. `document.fullscreenElement` is set before the

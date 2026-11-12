@@ -1273,59 +1273,61 @@ fn pipeline_entry(
     } else {
         (mode == 2).then_some(wgpu::BlendState::ALPHA_BLENDING)
     };
-    d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("game quad"),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("quad_vs"),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: 80,
-                step_mode: wgpu::VertexStepMode::Instance,
-                attributes: &attrs,
-            })],
-            compilation_options: Default::default(),
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: direct.unwrap_or(wgpu::TextureFormat::Rgba16Float),
-                blend,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &[
-                    ("DIRECT", if direct.is_some() { 1. } else { 0. }),
-                    (
-                        "ENCODE_SRGB",
-                        if direct.is_some_and(|f| !f.is_srgb()) {
-                            1.
-                        } else {
-                            0.
-                        },
-                    ),
-                ],
+    crate::perf::pipeline(|| {
+        d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("game quad"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("quad_vs"),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: 80,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &attrs,
+                })],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(fragment),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: direct.unwrap_or(wgpu::TextureFormat::Rgba16Float),
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[
+                        ("DIRECT", if direct.is_some() { 1. } else { 0. }),
+                        (
+                            "ENCODE_SRGB",
+                            if direct.is_some_and(|f| !f.is_srgb()) {
+                                1.
+                            } else {
+                                0.
+                            },
+                        ),
+                    ],
+                    ..Default::default()
+                },
+            }),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },
-        }),
-        primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Back),
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(mode < 2),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
-            stencil: Default::default(),
-            bias: Default::default(),
-        }),
-        multisample: wgpu::MultisampleState {
-            count: samples,
-            ..Default::default()
-        },
-        multiview_mask: None,
-        cache,
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(mode < 2),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache,
+        })
     })
 }
 

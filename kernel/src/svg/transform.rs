@@ -255,7 +255,7 @@ fn angle(text: &str) -> Option<f32> {
 /// CSS `transform-origin`: two positions (a third, `z`, must be zero).
 /// Its CSS initial value is `50% 50%`; an SVG element without the row
 /// takes the UA stylesheet's `0 0` ([`TransformOrigin::SVG`]).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TransformOrigin {
     /// Horizontal: user units, or a percentage of the reference box.
     pub x: Dimension,
@@ -339,7 +339,7 @@ impl TransformOrigin {
             Dimension::Points(v) => format!("{}px", exact_num::Shortest(v as f64)),
             _ => "0px".into(),
         };
-        format!("{} {}", d(self.x), d(self.y))
+        format!("{} {}", d(self.x.clone()), d(self.y.clone()))
     }
 
     /// Whether both numbers are finite.
@@ -351,8 +351,8 @@ impl TransformOrigin {
     /// (a box's origin, LLP 1061 D6).
     pub fn resolve(&self, width: f32, height: f32) -> (f32, f32) {
         (
-            resolve_length(self.x, width),
-            resolve_length(self.y, height),
+            resolve_length(self.x.clone(), width),
+            resolve_length(self.y.clone(), height),
         )
     }
 
@@ -364,8 +364,8 @@ impl TransformOrigin {
     /// The origin in user units, against a reference box `(x, y, w, h)`.
     pub fn point(&self, reference: (f32, f32, f32, f32)) -> (f32, f32) {
         (
-            reference.0 + resolve_length(self.x, reference.2),
-            reference.1 + resolve_length(self.y, reference.3),
+            reference.0 + resolve_length(self.x.clone(), reference.2),
+            reference.1 + resolve_length(self.y.clone(), reference.3),
         )
     }
 }

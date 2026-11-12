@@ -55,14 +55,83 @@ fn bake(value: serde_json::Value) -> Result<exact_game::asset::Model, String> {
 #[test]
 fn unsupported_features_refuse_by_name() {
     let mut v = source();
-    v["extensionsUsed"] = json!(["KHR_materials_unlit"]);
-    assert!(bake(v).unwrap_err().contains("KHR_materials_unlit"));
+    v["extensionsUsed"] = json!(["KHR_materials_transmission"]);
+    assert!(bake(v).unwrap_err().contains("KHR_materials_transmission"));
     let mut v = source();
     v["meshes"][0]["primitives"][0]["targets"] = json!([{"POSITION":0}]);
     assert!(bake(v).unwrap_err().contains("morph targets"));
     let mut v = source();
     v["accessors"][0]["sparse"] = json!({"count":1,"indices":{"bufferView":3,"componentType":5123},"values":{"bufferView":0}});
     assert!(bake(v).unwrap_err().contains("sparse accessor"));
+}
+/// KHR_materials_unlit keeps the base colour, its texture and alpha, and
+/// ignores every other property: no emission, and no other texture is baked.
+#[test]
+fn an_unlit_material_bakes_its_base_colour_alone() {
+    let mut v = source();
+    v["extensionsUsed"] = json!(["KHR_materials_unlit"]);
+    v["materials"][0]["emissiveFactor"] = json!([0.2, 0.3, 0.4]);
+    v["materials"][0]["emissiveTexture"] =
+        v["materials"][0]["pbrMetallicRoughness"]["baseColorTexture"].clone();
+    v["materials"][0]["alphaMode"] = json!("BLEND");
+    let lit = bake(v.clone()).unwrap();
+    assert!(!lit.materials[0].unlit && lit.materials[0].emissive_texture.is_some());
+    v["materials"][0]["extensions"] = json!({"KHR_materials_unlit":{}});
+    let m = bake(v).unwrap();
+    let material = &m.materials[0];
+    assert!(material.unlit);
+    assert_eq!(material.emissive, [0.; 3]);
+    assert_eq!(material.alpha_mode, exact_game::asset::AlphaMode::Blend);
+    assert_eq!(material.base_color_texture, Some(0));
+    assert_eq!(material.emissive_texture, None);
+    assert_eq!(m.textures.len(), 1);
+}
+/// KHR_materials_clearcoat and KHR_materials_sheen bake their factors; a
+/// layer's texture is refused by name, never dropped.
+#[test]
+fn clearcoat_and_sheen_bake_their_factors_and_refuse_their_textures() {
+    let mut v = source();
+    v["extensionsUsed"] = json!(["KHR_materials_clearcoat", "KHR_materials_sheen"]);
+    v["materials"][0]["extensions"] = json!({
+        "KHR_materials_clearcoat": {"clearcoatFactor": 1.0, "clearcoatRoughnessFactor": 0.05},
+        "KHR_materials_sheen": {"sheenColorFactor": [0.5, 0.25, 0.125], "sheenRoughnessFactor": 0.75}
+    });
+    let m = bake(v.clone()).unwrap();
+    let material = &m.materials[0];
+    assert_eq!(
+        (material.clearcoat, material.clearcoat_roughness),
+        (1.0, 0.05)
+    );
+    assert_eq!(material.sheen_color, [0.5, 0.25, 0.125]);
+    assert_eq!(material.sheen_roughness, 0.75);
+    // Present without factors: the extensions' defaults, which are no layer.
+    let mut bare = v.clone();
+    bare["materials"][0]["extensions"] =
+        json!({"KHR_materials_clearcoat": {}, "KHR_materials_sheen": {}});
+    let material = &bake(bare).unwrap().materials[0];
+    assert_eq!((material.clearcoat, material.sheen_color), (0.0, [0.0; 3]));
+    let texture = json!({"index": 0});
+    for (extension, key) in [
+        ("KHR_materials_clearcoat", "clearcoatTexture"),
+        ("KHR_materials_clearcoat", "clearcoatRoughnessTexture"),
+        ("KHR_materials_clearcoat", "clearcoatNormalTexture"),
+        ("KHR_materials_sheen", "sheenColorTexture"),
+        ("KHR_materials_sheen", "sheenRoughnessTexture"),
+    ] {
+        let mut textured = v.clone();
+        textured["materials"][0]["extensions"][extension][key] = texture.clone();
+        let error = bake(textured).unwrap_err();
+        assert!(
+            error.contains("fixture.gltf") && error.contains(extension) && error.contains(key),
+            "{error}"
+        );
+    }
+    for extension in ["KHR_materials_clearcoat", "KHR_materials_sheen"] {
+        let mut required = v.clone();
+        required["extensionsRequired"] = json!([extension]);
+        let error = bake(required).unwrap_err();
+        assert!(error.contains(extension), "{error}");
+    }
 }
 #[test]
 fn permitted_extensions_are_baked_per_texture() {

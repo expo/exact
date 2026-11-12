@@ -42,6 +42,56 @@ fn outer(b: &mut dyn Backend, n: usize) {
 }
 
 #[test]
+fn retained_coverage_matches_a_fresh_walk_at_the_viewport_origin() {
+    let mut ink = Ink::new().unwrap();
+    let mut differences = Vec::new();
+    for scale in [1., 2.] {
+        for origin in [
+            (0., 0.),
+            (-1., -1.),
+            (-0.25, -0.75),
+            (0.25, -0.25),
+            (13., 9.),
+        ] {
+            for picture in [false, true] {
+                for recorded in [origin, (origin.0 + 13., origin.1 + 9.)] {
+                    ink.begin(90., 85., scale);
+                    ink.row_begin(1, recorded, None);
+                    scene(&mut ink, recorded, picture);
+                    ink.row_end((-6., -5., 58., 49.));
+                    ink.begin(90., 85., scale);
+                    assert!(ink.reusable(1, origin));
+                    ink.row_draw(1, origin, (origin.0 - 6., origin.1 - 5., 58., 49.));
+                    let kept = ink.finish().unwrap();
+                    if origin == (13., 9.) {
+                        assert_eq!(ink.paths.stats().misses, 0, "visible coverage is reused");
+                    }
+                    ink.begin(90., 85., scale);
+                    scene(&mut ink, origin, picture);
+                    let fresh = ink.finish().unwrap();
+                    let maximum = kept
+                        .data()
+                        .iter()
+                        .zip(fresh.data())
+                        .map(|(a, b)| a.abs_diff(*b))
+                        .max()
+                        .unwrap();
+                    if maximum > 1 {
+                        differences.push((scale, recorded, origin, picture, maximum));
+                    }
+                    ink.row_free(1);
+                }
+            }
+        }
+    }
+    assert!(
+        differences.is_empty(),
+        "{}: retained/fresh maximum channel errors: {differences:?}",
+        ink.info().api
+    );
+}
+
+#[test]
 fn kept_rows_move_reclip_and_replace_a_slot_without_recording_the_row() {
     let mut backends: Vec<Box<dyn Backend>> =
         vec![Box::new(Ink::new().unwrap()), Box::new(Gpu::new().unwrap())];

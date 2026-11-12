@@ -10,8 +10,6 @@ import { webCompiler } from './module.mjs';
 test('an aborted fetch is cancelled on the wire, on the JS target', async () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   const root = resolve(import.meta.dir, '../..');
-  // runTests names the app in EXACT_APP_DIR (scripts/app.mjs resolveApp); the next test file reads its own.
-  const appDir = process.env.EXACT_APP_DIR;
   let server, dir, page;
   try {
     server = abortServer();
@@ -37,7 +35,5 @@ test('an aborted fetch is cancelled on the wire, on the JS target', async () => 
     page?.stop(true);
     server?.stop();
     if (dir) rmSync(dir, { recursive: true, force: true });
-    if (appDir === undefined) delete process.env.EXACT_APP_DIR;
-    else process.env.EXACT_APP_DIR = appDir;
   }
 }, 300_000);

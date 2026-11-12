@@ -22,19 +22,10 @@ component Toolbar
         text "Tomorrow"
 ```
 
-The roles: `add`, `close`, `back`, `forward-chevron`, `chooser`, `compose`, `pencil`, `delete`,
-`search`, `filter` (narrowing a list: Apple's decreasing lines), `adjust` (sliders), `sort`,
-`more`, `ellipsis`, `menu` (a drawer or sidebar), `share`, `copy`, `link`, `pin`, `refresh`,
-`download`, `download-pending`, `install`, `open-app`, `package`, `mail`, `emoji`, `translate`,
-`bookmark`, `heart`, `star` (each with `-fill`), `checkmark`, `select`,
-`circle`, `minus`, `minus-circle`, `alert`, `info` (each with `-fill`), `lock`, `settings`, `home`,
-`person`, `people`, `follow`, `sign-out`, `messages`, `reply`, `send`, `quote`, `at`,
-`hashtag`, `notifications`, `calendar`, `chart`, `activity`, `book`, `document`,
-`list`, `cart`, `layers`, `photo`, `camera`, `microphone`, `waveform`, `speaker`,
-`speaker-mute`, `play`, `pause`, `stop`, `skip-back-15`, `skip-forward-15`, `repeat`,
-`reorder` (a drag handle), `sparkles`, `moon` and more `-fill`s (`home-fill`, `play-fill`…). Unknown literals fail the build; computed ones are checked at runtime.
-`contract vocab symbol` lists roles. A role also takes SF Symbols names and aliases (`gearshape`, `gear`, `trash`, `chevron-right`, `checkmark.circle.fill`): it builds as
-the role, with a warning that names it (`lower-symbol-alias`).
+Roles include `add`, `close`, `back`, `search`, `share`, `calendar`, `heart` and `star`.
+`contract vocab symbol` lists every role. Unknown literals fail the build; computed
+ones are checked at runtime. Role aliases (`gearshape`, `trash`, `chevron-right`)
+build with a `lower-symbol-alias` warning naming the role.
 
 - A role draws everywhere; `sf/<name>` on Apple only. Else add an icon token to
   `app.tamber`'s `icons`, `icon.rain = icon(sf "cloud.rain", svg "icons/rain.svg")` (a
@@ -46,5 +37,16 @@ the role, with a warning that names it (`lower-symbol-alias`).
   A `color` written on the symbol is its colour, as `currentcolor` paints an icon on the
   web; a row's `forward-chevron` is already grey.
   Emoji and characters (▦ ☏) aren't icons: they ignore the tint and differ by browser.
-- A symbol takes its text's size. Use `font="-exact-title1"` to follow the reader's
-  text size; `width` does not size its glyph.
+- A symbol's font sets its natural size. Use `font="-exact-title1"` to follow the
+  reader's text size. On a page or inside `button appearance="none"`, `width` and
+  `height` size its box, and the glyph scales to fit it, keeping its aspect under
+  both the default `object-fit="fill"` and `object-fit="contain"`. For a 24-point
+  icon box, write `image "symbol:calendar" width=24 height=24`.
+  `object-fit="cover"` fills and clips; `"none"` keeps the natural size;
+  `"scale-down"` shrinks it only when it does not fit. A fixed box can therefore
+  keep the glyph the same size when `font-size` changes.
+- On iOS, a titled native button's symbol follows its title's font; a symbol-only
+  button uses the platform's size. An image's own `font-size` overrides either
+  (for example, `font-size="-exact-title1"`). Native button images take no `width`,
+  `height` or `object-fit`; to fit a symbol into an authored box, use
+  `button appearance="none"`. Native bars, tabs and menus use platform symbol sizes.

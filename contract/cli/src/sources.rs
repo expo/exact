@@ -412,7 +412,10 @@ fn design(
     sources.texts.push(text.as_str().into());
     let home = root
         .parent()
-        .and_then(|dir| path.strip_prefix(dir).ok())
+        .and_then(|dir| {
+            let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+            key.strip_prefix(dir).ok()
+        })
         .map_or_else(
             || {
                 path.file_name()

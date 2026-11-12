@@ -320,6 +320,10 @@
           "codec": "str"
         },
         {
+          "name": "package",
+          "codec": "str"
+        },
+        {
           "name": "declared",
           "codec": "str"
         },
@@ -351,6 +355,10 @@
       "fields": [
         {
           "name": "extension",
+          "codec": "str"
+        },
+        {
+          "name": "package",
           "codec": "str"
         },
         {
@@ -966,6 +974,10 @@
         },
         {
           "name": "extension",
+          "codec": "str"
+        },
+        {
+          "name": "package",
           "codec": "str"
         },
         {

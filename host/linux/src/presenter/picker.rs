@@ -3,11 +3,13 @@
 //! held for `tap @t cancel` or `type @t <path>…`, whose files are copied
 //! into `app:/tmp/picked/` before `change` fires. `saveFile` likewise
 //! (LLP 1069.010 D3): refused with `cancel`, or held as `export` for
-//! `type @t <path>`, which the `app:/` file is copied to. Notifications have
-//! no centre here either: refused, or listed for the agent. On a host with
-//! a shell (Android) the platform has every one of these, and the channel
-//! to it (`requests.rs`, LLP 1115.001 D5) carries none of them yet: the
-//! refusal then says that, beside the runner's own line.
+//! `type @t <path>`, which the `app:/` file is copied to. The three
+//! document pickers (LLP 1069.010 D2) ask the desktop portal's file chooser
+//! on Linux (`portal.rs`), and are held for the agent as the others are.
+//! Notifications have no centre here either: refused, or listed for the
+//! agent. On a host with a shell (Android) the platform has every one of
+//! these, and the channel to it (`requests.rs`, LLP 1115.001 D5) carries
+//! none of them yet: the refusal then says that, beside the runner's own line.
 use super::*;
 use exact_runner::picker_support as support;
 use exact_runner::ControlValue;
@@ -149,7 +151,8 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// `showOpenFilePicker`, `showDirectoryPicker`, `showSaveFilePicker`
-    /// (LLP 1069.010 D2): the runner's rule, with no picker.
+    /// (LLP 1069.010 D2): the runner's rule, then the desktop portal's
+    /// chooser on Linux; refused elsewhere.
     pub(crate) fn document_picker(&mut self, name: &str, args: &[exact_plan::Value]) {
         use exact_runner::file_pickers::{arm, Arm, Kind, Picker};
         let Some(kind) = Kind::of(name) else {
@@ -157,14 +160,71 @@ impl<D: DataSource> Presenter<D> {
         };
         let request = Picker::from_args(kind, args);
         let agent = crate::picker::agent();
-        if let Arm::Refused(reason, view) = arm(self.host.runner_mut(), kind, request, agent, false)
-        {
-            self.not_carried(name, &reason);
-            if let Some(view) = view {
-                self.deliver_picker(view, Event::Cancel);
+        let portal = cfg!(target_os = "linux") && !self.has_shell();
+        match arm(self.host.runner_mut(), kind, request, agent, portal) {
+            Arm::Refused(reason, view) => {
+                self.not_carried(name, &reason);
+                if let Some(view) = view {
+                    self.deliver_picker(view, Event::Cancel);
+                }
             }
+            #[cfg(unix)]
+            Arm::Present(request, view) => {
+                let address = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok();
+                self.ask_portal(request, view, address, crate::portal::TIMEOUT);
+            }
+            _ => {}
         }
         self.dirty = true;
+    }
+
+    /// Ask the portal on the session bus at `address` on a thread of its
+    /// own; its outcome reaches the element at the next pump.
+    #[cfg(unix)]
+    pub(crate) fn ask_portal(
+        &mut self,
+        request: exact_runner::file_pickers::Picker,
+        view: ViewId,
+        address: Option<String>,
+        timeout: std::time::Duration,
+    ) {
+        let (inbox, wake) = (self.portal.clone(), self.executor.waker());
+        let kind = request.kind;
+        let asked = std::thread::Builder::new()
+            .name("exact-portal".into())
+            .spawn(move || {
+                let outcome = crate::portal::choose(&request, address.as_deref(), timeout);
+                inbox
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push((view, kind, outcome));
+                wake();
+            });
+        if let Err(e) = asked {
+            self.host.log(format!("{}: refused: {e}", kind.command()));
+            self.deliver_picker(view, Event::Cancel);
+        }
+    }
+
+    /// The outcomes the portal has answered since the last turn.
+    pub(super) fn finish_portal_picks(&mut self) {
+        let done = std::mem::take(&mut *self.portal.lock().unwrap_or_else(|e| e.into_inner()));
+        for (view, kind, outcome) in done {
+            let name = kind.command();
+            match outcome {
+                crate::portal::Outcome::Chosen(paths) => {
+                    self.documents_chosen(view, name, paths.iter().map(|p| p.as_path()))
+                }
+                crate::portal::Outcome::Cancelled => {
+                    self.host.log(format!("{name}: cancelled"));
+                    self.deliver_picker(view, Event::Cancel);
+                }
+                crate::portal::Outcome::Refused(reason) => {
+                    self.host.log(format!("{name}: refused: {reason}"));
+                    self.deliver_picker(view, Event::Cancel);
+                }
+            }
+        }
     }
 
     /// The agent's answer to a held picker: each path minted as a handle
@@ -186,15 +246,25 @@ impl<D: DataSource> Presenter<D> {
             return;
         }
         let q: serde_json::Value = serde_json::from_str(request).unwrap_or_default();
-        let docs: Vec<String> =
-            exact_runner::file_pickers::answer_paths(q["text"].as_str().unwrap_or(""))
-                .into_iter()
-                .filter_map(|p| {
-                    // Kept across launches where the app keeps documents (LLP 1069.010.000 D3).
-                    let p = std::path::Path::new(p);
-                    crate::kept::chosen(0, p).or_else(|| exact_data::documents::mint(p, 0))
-                })
-                .collect();
+        let paths = exact_runner::file_pickers::answer_paths(q["text"].as_str().unwrap_or(""));
+        self.documents_chosen(view, name, paths.into_iter().map(std::path::Path::new));
+    }
+
+    /// What the person chose for the picker `name` at `view`: each path
+    /// minted as a handle (D1), one per line in `change`, or `cancel` when
+    /// none mints.
+    fn documents_chosen<'p>(
+        &mut self,
+        view: ViewId,
+        name: &str,
+        paths: impl Iterator<Item = &'p std::path::Path>,
+    ) {
+        let docs: Vec<String> = paths
+            .filter_map(|p| {
+                // Kept across launches where the app keeps documents (LLP 1069.010.000 D3).
+                crate::kept::chosen(0, p).or_else(|| exact_data::documents::mint(p, 0))
+            })
+            .collect();
         if docs.is_empty() {
             self.host.log(format!("{name}: refused: nothing to open"));
             self.deliver_picker(view, Event::Cancel);

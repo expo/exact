@@ -678,10 +678,7 @@ impl<'a> Replay<'a> {
                             .into_iter()
                             .chain(n.paint.widths)
                             .all(f32::is_finite)
-                        && n.paint
-                            .radii
-                            .into_iter()
-                            .all(exact_kernel::Dimension::is_finite);
+                        && n.paint.radii.iter().all(|d| d.is_finite());
                     n.paint.emit(&geometry, |shape, _| {
                         finite &= finite_rect(shape.rect)
                             && shape

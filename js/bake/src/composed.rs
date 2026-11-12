@@ -49,6 +49,21 @@ impl exact_runner::DataSourceWrapper for Composed {
     ) -> Result<Answer, DataError> {
         self.0.parse(store, source, args, outcome)
     }
+    fn more_for(&mut self, target: Target) -> Vec<exact_runner::Request> {
+        self.0.more_for(target)
+    }
+    fn parse_fetch_for(
+        &mut self,
+        target: Target,
+        fetch: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        self.0
+            .parse_fetch_for(target, fetch, store, source, args, outcome)
+    }
     fn parse_for(
         &mut self,
         target: Target,
@@ -158,8 +173,9 @@ impl exact_runner::DataSourceWrapper for Composed {
         &mut self,
         store: &Store,
         in_flight: InFlight<'_>,
+        fetch: Option<u64>,
     ) -> Option<(u64, exact_runner::Request)> {
-        self.0.timer_before_reply(store, in_flight)
+        self.0.timer_before_reply(store, in_flight, fetch)
     }
     fn module_landed(
         &mut self,

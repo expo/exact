@@ -579,7 +579,7 @@ pub fn run(args: &[String]) -> ExitCode {
             // Its params and its packages' tokens laid in, as the build lays them.
             let checked = exact_tamber::parse(&src).and_then(|design| {
                 exact_tamber::check_design(
-                    contract::tamber_params::laid(&design, &params),
+                    contract::tamber_params::laid(&design, &params, None),
                     &contract_lower::tamber_vocab(),
                 )
             });

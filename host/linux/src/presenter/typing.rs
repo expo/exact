@@ -516,10 +516,10 @@ impl<D: DataSource> Presenter<D> {
     /// Tab's default action, HTML's sequential focus navigation (LLP 1088
     /// D7.3): the Tab stops in tree order, positive `tabindex` values first
     /// in ascending order; from the focus to the next (Shift: the previous),
-    /// wrapping, and from no focus, or one out of the order, to the first
-    /// (Shift: the last), or from the starting point a fragment set, to the
-    /// next stop in tree order (Shift: the one before it; LLP 1153 D5). A
-    /// `key` handler's `preventDefault()` keeps Tab. The new focus is
+    /// wrapping, and from no focus to the first (Shift: the last). A focused
+    /// non-stop or a fragment's starting point chooses the next stop in
+    /// tree order within its scope (Shift: the one before it; LLP 1153 D5).
+    /// A `key` handler's `preventDefault()` keeps Tab. The new focus is
     /// scrolled into view, as the browser's is and WinUI's
     /// `BringIntoViewOnFocusChange` has it.
     pub(crate) fn move_focus(&mut self, backward: bool, now_ms: f64) -> Option<String> {
@@ -553,14 +553,24 @@ impl<D: DataSource> Presenter<D> {
     ) -> Option<String> {
         let mut order: Vec<(i64, usize, ViewId)> = Vec::new();
         let mut start = None;
+        let scope = self.alert_tab_scope();
+        // A focused candidate that is no stop is the starting point: a box
+        // among `boxed`, or an inline node whose paragraph is. One outside
+        // them (the page's focus, when a dialog popover opens) is not: that
+        // search starts from the first stop.
+        let focused = (self.focus).filter(|f| {
+            let candidate = boxed.contains(f)
+                || self.inline_box(*f).is_some()
+                    && self.inline_block(*f).is_some_and(|b| boxed.contains(&b));
+            candidate && !self.tabbable(*f, boxed)
+        });
+        // An empty popover scope still needs a position in the flattened order.
+        let placed = focused.filter(|f| scope.is_some() && self.in_popover(*f));
         for (at, id) in self.host.preorder().into_iter().enumerate() {
-            if Some(id) == self.focus_start {
-                start = Some(at);
+            if Some(id) == self.focus_start || Some(id) == focused {
+                start = Some((at, id));
             }
-            // A focused node inside an open popover that is no stop goes on
-            // from its place in tree order, within the popover's scope
-            // (HTML's sequential navigation starting point).
-            if Some(id) == self.focus && !self.tabbable(id, boxed) && self.in_popover(id) {
+            if Some(id) == placed {
                 order.push((i64::MAX, at, id));
                 continue;
             }
@@ -578,29 +588,58 @@ impl<D: DataSource> Presenter<D> {
         order.sort_unstable();
         let order = self.alert_tab_order(order);
         let n = order.len();
-        let placed = self
-            .focus
-            .filter(|f| !self.tabbable(*f, boxed) && self.in_popover(*f));
         // From a starting point out of the order, the stop nearest it in tree
         // order, whatever its tabindex, as browsers search (HTML's
         // "sequential navigation search algorithm").
-        let after = |s: usize| {
-            (0..n)
-                .filter(|&i| order[i].1 > s)
-                .min_by_key(|&i| order[i].1)
+        let nearest = |(at, id): (usize, ViewId)| {
+            let inside = scope.is_some() && self.in_popover(id);
+            let position = |i: usize| {
+                // From the page, the scope follows its invoker's tree slot;
+                // its own tabindex order determines which end is entered.
+                if !inside && self.alert_holds(order[i].2) {
+                    if let Some((_, slot)) = scope {
+                        return (slot, true, i);
+                    }
+                }
+                (order[i].1, false, 0)
+            };
+            let candidates = (0..n)
+                .filter(|&i| Some(order[i].2) != placed)
+                .filter(|&i| !inside || self.alert_holds(order[i].2))
+                .map(|i| (position(i), i));
+            let start = (at, false, 0);
+            if backward {
+                candidates.filter(|&(p, _)| p < start).max()
+            } else {
+                candidates.filter(|&(p, _)| p > start).min()
+            }
+            .map(|(_, i)| i)
         };
-        let before = |s: usize| {
-            (0..n)
-                .filter(|&i| order[i].1 < s)
-                .max_by_key(|&i| order[i].1)
+        let advance = |i: usize| (i + if backward { n - 1 } else { 1 }) % n;
+        // A popover's stops are one run of the flattened order, empty at its
+        // invoker's slot when it holds none. A search from inside that finds
+        // no stop in the scope leaves through the run's edge.
+        let leave = || {
+            let slot = scope.map_or(0, |s| order.partition_point(|o| (o.0, o.1) <= s));
+            if backward {
+                let first = order.iter().position(|o| self.alert_holds(o.2));
+                (first.unwrap_or(slot) + n - 1) % n
+            } else {
+                let last = order.iter().rposition(|o| self.alert_holds(o.2));
+                last.map_or(slot, |i| i + 1) % n
+            }
         };
-        let next = match self.focus.and_then(|f| order.iter().position(|o| o.2 == f)) {
+        let from = |s: (usize, ViewId)| {
+            nearest(s).or_else(|| (scope.is_some() && self.in_popover(s.1)).then(leave))
+        };
+        let mut next = match self.focus.and_then(|f| order.iter().position(|o| o.2 == f)) {
             _ if n == 0 || n == 1 && placed.is_some() => return None,
-            Some(i) if backward => (i + n - 1) % n,
-            Some(i) => (i + 1) % n,
-            None if backward => start.and_then(before).unwrap_or(n - 1),
-            None => start.and_then(after).unwrap_or(0),
+            Some(i) if placed.is_none() => advance(i),
+            _ => (start.and_then(from)).unwrap_or(if backward { n - 1 } else { 0 }),
         };
+        if Some(order[next].2) == placed {
+            next = advance(next);
+        }
         self.set_focus(Some(order[next].2), now_ms)
     }
 

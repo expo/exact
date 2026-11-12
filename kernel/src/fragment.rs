@@ -235,10 +235,10 @@ fn decorated(s: &StyleProps) -> bool {
     };
     let borders = s.border_widths().into_iter().any(|w| w > 0.0);
     let radius = [
-        s.border_radius_top_left,
-        s.border_radius_top_right,
-        s.border_radius_bottom_right,
-        s.border_radius_bottom_left,
+        s.border_radius_top_left.clone(),
+        s.border_radius_top_right.clone(),
+        s.border_radius_bottom_right.clone(),
+        s.border_radius_bottom_left.clone(),
     ]
     .iter()
     .any(|r| !matches!(r, Dimension::Points(p) if *p == 0.0));
@@ -259,7 +259,8 @@ pub(crate) fn kind(arena: &NodeArena, slot: u32) -> Kind {
     let floor = |d: Dimension| {
         !matches!(d, Dimension::Auto) && !matches!(d, Dimension::Points(v) if v <= 0.0)
     };
-    let sized = sized(s.height) || floor(s.min_height) || sized(s.max_height);
+    let sized =
+        sized(s.height.clone()) || floor(s.min_height.clone()) || sized(s.max_height.clone());
     match arena.node_type(slot) {
         NodeType::Text if sized => Kind::Monolithic(Some(FragmentRefusal::Height)),
         NodeType::Text

@@ -55,6 +55,7 @@ pub fn pages<D: DataSource>(
         }
         ticket += 1;
         let out = RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket,
             target: format!("{route} pages"),
             request,
@@ -75,6 +76,7 @@ pub fn pages<D: DataSource>(
         }
         .map_err(|e| fail(e.into()))?;
         let outcome = loop {
+            executor.begin_pump();
             if let Some((_, outcome, _)) = executor.drain().pop() {
                 break outcome;
             }

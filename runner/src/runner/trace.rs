@@ -40,9 +40,7 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn trace_configuration(&self) -> Option<String> {
         self.clock.trace.as_ref()?;
         let resources: Vec<_> = self
-            .plan
-            .resources
-            .iter()
+            .resource_rows()
             .map(|r| self.resource(self.plan.str(r.name)))
             .collect();
         let mut views = Vec::new();

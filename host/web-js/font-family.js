@@ -10,7 +10,7 @@ export function fontFamily(value) {
   if (wide === 'revert' || wide === 'revert-layer') return 'unset';
   const generic = { 'ui-monospace': 'ui-monospace,monospace', 'ui-serif': 'ui-serif,serif', 'ui-sans-serif': 'ui-sans-serif,system-ui,sans-serif', 'ui-rounded': 'ui-rounded,system-ui,sans-serif', '-apple-system': 'system-ui' };
   let quote = '', escaped = false, start = 0, parts = [];
-  const push = end => { const part = value.slice(start, end), name = part.trim().toLowerCase(); parts.push(generic[name] ?? part); start = end + 1; };
+  const push = end => { const part = value.slice(start, end), name = part.trim().toLowerCase(); parts.push(Object.hasOwn(generic, name) ? generic[name] : part); start = end + 1; };
   for (let i = 0; i < value.length; i++) {
     const c = value[i];
     if (escaped) { escaped = false; continue; }

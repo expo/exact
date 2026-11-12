@@ -77,14 +77,14 @@ fn shadow_reach(node: &exact_kernel::NodeRef<'_>) -> (f32, f32, f32, f32) {
 /// outer shadows' reach whole and, unless it clips, its descendants' painted
 /// boxes — each moved by its presented translate, grown to its diagonal
 /// when turned, scaled or in a plane of its own, and by its own shadows —
-/// bounded by `cap`.
+/// bounded by `cap`, and whether that cap cut a descendant.
 pub(super) fn reach(
     walk: &Walk<'_, '_>,
     node: &exact_kernel::NodeRef<'_>,
     (x, y, w, h): Rect4,
     offset: (f32, f32),
     cap: f32,
-) -> (f32, f32, f32, f32) {
+) -> (Rect4, bool) {
     let mut out = (0.0f32, 0.0f32, 0.0f32, 0.0f32);
     let (ox, oy) = effective_overflow(node);
     if ox == Overflow::Visible && oy == Overflow::Visible {
@@ -125,10 +125,13 @@ pub(super) fn reach(
     // the box's own shadow is never cut.
     let own = shadow_reach(node);
     (
-        out.0.min(cap).max(own.0),
-        out.1.min(cap).max(own.1),
-        out.2.min(cap).max(own.2),
-        out.3.min(cap).max(own.3),
+        (
+            out.0.min(cap).max(own.0),
+            out.1.min(cap).max(own.1),
+            out.2.min(cap).max(own.2),
+            out.3.min(cap).max(own.3),
+        ),
+        out.0 > cap || out.1 > cap || out.2 > cap || out.3 > cap,
     )
 }
 
@@ -225,6 +228,50 @@ fn plane(m: &M4) -> [f32; 9] {
 }
 
 impl Painter {
+    /// Admit only draws the recorder reproduces in a projective plane. CPU
+    /// effects need the software island's viewport, SVG has unsupported inks
+    /// and blends, and a nested plane may itself need a software fallback.
+    fn native_plane(
+        &self,
+        walk: &Walk<'_, '_>,
+        root: ViewId,
+        matrix: [f32; 9],
+        rect: Rect4,
+        clamped: bool,
+    ) -> Option<[f32; 9]> {
+        if clamped || !matrix.iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        mapped_bounds(&matrix, rect)?;
+        let inverse = crate::placement::inverse(matrix)?;
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            let node = walk.scene.kernel.node(id)?;
+            let s = node.style;
+            // Start with boxes and ordinary text. Other content keeps its
+            // existing software rendering until all of its draws are supported.
+            if !matches!(
+                node.node_type,
+                NodeType::View | NodeType::Text | NodeType::ScrollView
+            ) || !s.filter.is_none()
+                || !s.backdrop_filter.is_none()
+                || node.props.str(PropId::BackgroundMaterial).is_some()
+                || s.rare.mask_image.gradient().is_some()
+                || !s.rare.corner_shape.is_round()
+                || s.background_clip == exact_kernel::BackgroundClip::Text
+                || node.computed_row(StyleId::TextShadow, |s| s.text_shadow.shadow().is_some())
+                || node.computed_row(StyleId::TextStrokeWidth, |s| s.text_stroke_width) > 0.0
+                || s.content_transition != exact_kernel::ContentTransition::None
+                || self.placements.contains_key(&id)
+                || (id != root && (s.rotate_axis.is_3d() || s.translate_z != 0.0))
+            {
+                return None;
+            }
+            stack.extend(node.children());
+        }
+        Some(inverse)
+    }
+
     /// Paint `node` through its plane's homography when it is turned or
     /// moved in space; `false` when it is not, and the caller paints it.
     #[allow(clippy::too_many_arguments)]
@@ -247,10 +294,11 @@ impl Painter {
         }
         let parent = self.split_parent(walk.scene.kernel, node);
         let m = spatial_matrix(parent, node, p, (x, y, w, h), offset);
+        let own = crate::placement::compose(plane(&m), ts, 0.0, 0.0);
         // The island covers what the box paints past itself: its outer
         // shadows and any overflowing descendant (nothing past a clip).
         let cap = (2.0 * w.max(h).max(64.0)).max(self.viewport.0.max(self.viewport.1));
-        let (left, top, right, bottom) = reach(walk, node, (x, y, w, h), offset, cap);
+        let ((left, top, right, bottom), clamped) = reach(walk, node, (x, y, w, h), offset, cap);
         let (iw, ih) = (w + left + right, h + top + bottom);
         // The plane z = 0 of the box, from its island (-left..w+right, …).
         let m = mul(&m, &translate(x - left, y - top, 0.0));
@@ -261,6 +309,40 @@ impl Painter {
         let turned = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) * m[3][3] < 0.0 || facing < 0.0;
         if turned && s.backface_visibility == exact_kernel::BackfaceVisibility::Hidden {
             return true;
+        }
+        let island = (x - left, y - top, iw, ih);
+        if let Some(inv) = self.native_plane(walk, node.id, own, island, clamped) {
+            if self.backend.plane_begin(own) {
+                // The software pixmap clips even glyph overhang and affine
+                // descendants whose combined transforms escape `reach`.
+                self.backend
+                    .push_clip(&Shape::rect(island), Transform::identity());
+                let flatten = self.flatten.replace(node.id);
+                let mut child_walk = Walk {
+                    scene: walk.scene,
+                    boxes: Vec::new(),
+                    text: BTreeMap::new(),
+                    fields: HashMap::new(),
+                    inline: HashMap::new(),
+                    skip: None,
+                    replay: None,
+                    ranks: Rc::clone(&walk.ranks),
+                    reveal: walk.reveal,
+                    dialog: walk.dialog,
+                };
+                self.node_at(
+                    &mut child_walk,
+                    node.id,
+                    Transform::identity(),
+                    offset,
+                    None,
+                );
+                self.flatten = flatten;
+                self.backend.pop_clip();
+                self.backend.plane_end();
+                project(walk, child_walk, inv, clip);
+                return true;
+            }
         }
         let device = crate::placement::compose(plane, ts, 0.0, 0.0);
         let Some(inv) = crate::placement::inverse(device) else {
@@ -299,8 +381,6 @@ impl Painter {
             (f.x - left, f.y - top),
             None,
         );
-        walk.text.extend(child_walk.text);
-        walk.fields.extend(child_walk.fields);
         let planes = [[0., 0., 1.]; 2];
         if let Ok(source) = painter.backend.finish() {
             if let Some((pixels, rect)) =
@@ -309,30 +389,39 @@ impl Painter {
                 self.backend.surface_image(Arc::new(pixels), rect);
             }
         }
-        for mut b in child_walk.boxes {
-            // A box already in its own plane (a 3D child) maps through both:
-            // this island's inverse, then its own (LLP 1077 D8).
-            // A clip between the two planes (an overflow inside this
-            // island) goes into the inner plane too, as its corners' bounds.
-            let (local, local_clip, inv, planes) = match b.projective {
-                Some((inner, r, c, p)) => {
-                    let mid = b.clip.and_then(|m| mapped_bounds(&inner, m));
-                    let c = match (c, mid) {
-                        (Some(c), Some(m)) => Some(intersect(c, m)),
-                        (c, m) => c.or(m),
-                    };
-                    (r, c, mul3(&inner, &inv), p)
-                }
-                None => (b.rect, b.clip, inv, planes),
-            };
-            if let Some(map) = crate::placement::inverse(inv) {
-                b.rect = crate::placement::clipped_bounds(&map, planes, local);
-            }
-            b.projective = Some((inv, local, local_clip, planes));
-            b.clip = clip;
-            walk.boxes.push(b);
-        }
+        project(walk, child_walk, inv, clip);
         true
+    }
+}
+
+/// Move the plane's painted boxes and hit maps into its parent's coordinates.
+fn project(walk: &mut Walk<'_, '_>, child_walk: Walk<'_, '_>, inv: [f32; 9], clip: Option<Rect4>) {
+    walk.text.extend(child_walk.text);
+    walk.fields.extend(child_walk.fields);
+    walk.inline.extend(child_walk.inline);
+    let planes = [[0., 0., 1.]; 2];
+    for mut b in child_walk.boxes {
+        // A box already in its own plane (a 3D child) maps through both:
+        // this island's inverse, then its own (LLP 1077 D8).
+        // A clip between the two planes (an overflow inside this
+        // island) goes into the inner plane too, as its corners' bounds.
+        let (local, local_clip, inv, planes) = match b.projective {
+            Some((inner, r, c, p)) => {
+                let mid = b.clip.and_then(|m| mapped_bounds(&inner, m));
+                let c = match (c, mid) {
+                    (Some(c), Some(m)) => Some(intersect(c, m)),
+                    (c, m) => c.or(m),
+                };
+                (r, c, mul3(&inner, &inv), p)
+            }
+            None => (b.rect, b.clip, inv, planes),
+        };
+        if let Some(map) = crate::placement::inverse(inv) {
+            b.rect = crate::placement::clipped_bounds(&map, planes, local);
+        }
+        b.projective = Some((inv, local, local_clip, planes));
+        b.clip = clip;
+        walk.boxes.push(b);
     }
 }
 

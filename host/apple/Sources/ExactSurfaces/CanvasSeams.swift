@@ -510,6 +510,39 @@ extension CanvasesHost.Entry {
     func needsFrame(dirty: Bool, editing: Bool = false) -> Bool {
         id != 0 && presentable && (wants || dirty || editing)
     }
+    /// The canvas's box (points and scale) is not the one it last drew at:
+    /// a canvas at rest draws again for a layout.
+    func resized(_ box: SIMD3<Float>?) -> Bool { drawnBox != nil && box != nil && box != drawnBox }
+}
+
+extension CanvasesHost {
+    /// The display callback this tick runs in, and the device's thermal state,
+    /// for each module's surfaces (`FrameView.time` of a world's hooks).
+    func hostFrame(raw: Double, callback: Double, fastest: Double) {
+        let thermal = Thermal.code
+        for m in modules.values { m.hostFrame?(raw, callback, fastest, thermal) }
+    }
+    /// The highest cap of the canvases that want frames; 0 when one is uncapped.
+    var frameCap: Int {
+        var cap = 0
+        for e in entries.values where e.wants && e.id != 0 {
+            guard let fps = e.module?.maxFps?(e.id), fps > 0 else { return 0 }
+            cap = max(cap, Int(fps))
+        }
+        return cap
+    }
+}
+
+/// `ProcessInfo.thermalState` as the module's code (0 unknown, 1 nominal …
+/// 4 critical), kept current by its notification rather than read each frame.
+private enum Thermal {
+    nonisolated(unsafe) static var code: UInt32 = {
+        NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { _ in
+            Thermal.code = Thermal.read()
+        }
+        return Thermal.read()
+    }()
+    static func read() -> UInt32 { UInt32(ProcessInfo.processInfo.thermalState.rawValue) + 1 }
 }
 
 // A live surface asks for the session once per process; its category is the

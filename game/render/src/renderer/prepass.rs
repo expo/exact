@@ -87,10 +87,7 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
                 let opaque = material.alpha == exact_game::asset::AlphaMode::Opaque && !fading;
                 bound.group(pass, 2, self.depth_material(material, opaque));
                 bound.group(pass, 3, self.models.bind.as_ref().unwrap());
-                let key = 4 * usize::from(material.double_sided)
-                    + 16 * usize::from(group.mirrored)
-                    + 32 * usize::from(opaque)
-                    + crate::pipeline::MODEL_DIRECT * usize::from(direct);
+                let key = crate::models::depth(material, group.mirrored, opaque, direct);
                 bound.pipeline(pass, self.pipelines.model_camera_depth(&self.device, key));
             } else {
                 bound.pipeline(

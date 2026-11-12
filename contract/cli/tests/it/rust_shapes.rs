@@ -138,7 +138,16 @@ fn both_rust_printers_refuse_type_names_that_collide_in_one_scope() {
                     .unwrap() as u32,
             );
             let source = b.source(name, &[], ty);
-            b.module(source, extension, name, false, false, "never", "", "{}");
+            b.module(
+                source,
+                (extension, extension),
+                name,
+                false,
+                false,
+                "never",
+                "",
+                "{}",
+            );
         }
         let binding = contract::module_rust(&b.finish().unwrap());
         if separate {
@@ -164,7 +173,14 @@ fn both_rust_printers_use_camel_case_for_scoped_shape_names() {
     );
     let source = b.source("bounds", &[], ty);
     b.module(
-        source, "geometry", "bounds", false, false, "never", "", "{}",
+        source,
+        ("geometry", "@fixture/geometry"),
+        "bounds",
+        false,
+        false,
+        "never",
+        "",
+        "{}",
     );
     for rust in [
         contract::rust(&plan, &Default::default()).unwrap(),

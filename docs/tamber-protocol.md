@@ -886,7 +886,12 @@ design (a `set-state` or `unset-state`: the Contract source that declares its `s
   the first `set-param` restores absence. A param's value is `live` where the plan folds it, as a
   token's is, `rebuild` for a duration or easing param (a motion param is written into its rows at
   build, wherever its component is used), and a live one can be scrubbed. A token's rename renames
-  the `params` values naming it.
+  the `params` values, their `pair=` references and `.tamber` component defaults naming it,
+  keeping kind annotations. A rename that changes a folded value is refused, including a
+  component default that an override hides or that belongs to a standalone design
+  (for example, a literal font family or icon source selector that shares a token's name).
+  A default in a `.contract` file is not rewritten; if it still names the old token,
+  the rename is refused with the checker's diagnostic at that default.
 - **`set-row`'s places** (*1.12*): several in one file are spliced together into the file as the
   tool saw it, from the last up, before the transaction's other writes to it, then laid out once.
   Every refusal says why and where to edit instead (the source, the node, a param's or token's

@@ -25,6 +25,10 @@ export function refuseCodeFromStrings(realm) {
   Object.defineProperty(realm, 'eval', { value: noEval, writable: true, configurable: true });
 }
 export const now = Date.now.bind(Date);
+// File versions must distinguish writes across tabs and workers, even when
+// their clocks agree. Capture the host's randomness before a module replaces it.
+const fillRandom = crypto.getRandomValues.bind(crypto);
+export const fileVersion = () => fillRandom(new Uint32Array(4)).join('-');
 // The URL the page was opened at, which names a drive and its scratch store:
 // an app's router rewrites `location` as it navigates (the drive's `?agent&…`
 // goes with it), the document's navigation entry keeps it. A page that opens

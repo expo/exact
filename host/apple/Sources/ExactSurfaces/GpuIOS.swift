@@ -41,11 +41,19 @@ final class MetalCanvasView: UIView {
     deinit { MetalLayerPool.give(metalLayer) }
     override func layoutSubviews() {
         super.layoutSubviews()
-        if metalLayer.frame != bounds { metalLayer.frame = bounds }
+        guard metalLayer.frame != bounds else { return }
+        let resized = metalLayer.frame.size != .zero && metalLayer.frame.size != bounds.size
+        metalLayer.frame = bounds
+        // A canvas at rest draws again at its new size; after a layout nothing else asks for a frame.
+        if resized { (superview as? NodeView)?.canvases?.session?.frames.requestCanvas() }
     }
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        metalLayer.contentsScale = window?.screen.scale ?? traitCollection.displayScale
+        let scale = window?.screen.scale ?? traitCollection.displayScale
+        guard metalLayer.contentsScale != scale else { return }
+        metalLayer.contentsScale = scale
+        // A resting canvas draws again at its new scale.
+        (superview as? NodeView)?.canvases?.session?.frames.requestCanvas()
     }
     /// The canvas's first frame is with the compositor: the layer shows it.
     func reveal() {
@@ -140,6 +148,8 @@ final class CanvasesHost {
         var id: UInt32 = 0
         var presentable = true
         var wants = false
+        /// The box (points and scale) its last render drew at.
+        var drawnBox: SIMD3<Float>?
         /// The tick that last judged this canvas on screen and rendered it
         /// (`CanvasesHost.ticks`): a starved render draws that tick's frame.
         var shownTick = 0
@@ -584,7 +594,7 @@ final class CanvasesHost {
     var wantsFrames: Bool {
         guard !modules.isEmpty, visible else { return false }
         return entries.values.contains { e in
-            e.needsFrame(dirty:(e.module?.dirty(e.id) ?? 0) != 0, editing:e.through && e.view.overlay.map { editing(under: $0) } == true)
+            e.needsFrame(dirty:(e.module?.dirty(e.id) ?? 0) != 0 || e.resized(e.view.canvasMetal.map(box)), editing:e.through && e.view.overlay.map { editing(under: $0) } == true)
         }
     }
 
@@ -662,12 +672,14 @@ final class CanvasesHost {
             // twice on the turn a batch already captured.
             if e.through, !e.view.paintedThisTurn, let overlay = e.view.overlay, editing(under: overlay) { capture(m, e) }
             m.syncDynamicRange(e.id, view: e.view, layer: e.view.canvasMetal?.metalLayer)
-            guard live(e.view.id) === e, e.wants || m.dirty(e.id) != 0, let metal = e.view.canvasMetal else { continue }
+            guard live(e.view.id) === e, let metal = e.view.canvasMetal, e.wants || m.dirty(e.id) != 0 || e.resized(box(metal)) else { continue }
             // D4: a canvas renders when the host judges it on screen. A
             // virtualized list keeps rows mounted past the viewport; their
             // canvases keep what they want (and their dirty inputs) and render
             // the first frame they are seen.
             guard shown(e, metal) else { more = true; continue }
+            // Under its frame-rate cap (`Surface::max_fps`), a canvas skips the frames before its deadline.
+            if let due = m.due, due(e.id, now) == 0 { more = true; continue }
             e.shownTick = ticks
             // Waiting for the drawable it asked for as its last frame was
             // presented (gpu/src/acquire.rs): a render now would draw
@@ -695,8 +707,13 @@ final class CanvasesHost {
     /// Ticks so far: which tick judged a canvas on screen (`Entry.shownTick`).
     private var ticks = 1
 
+    private func box(_ metal: MetalCanvasView) -> SIMD3<Float> {
+        SIMD3(Float(metal.bounds.width), Float(metal.bounds.height), Float(metal.metalLayer.contentsScale))
+    }
+
     private func renderNow(_ m: GpuModule, _ e: Entry, _ metal: MetalCanvasView, _ now: Double, tick: Int) {
         let scale = Float(metal.metalLayer.contentsScale)
+        e.drawnBox = box(metal)
         let r = m.render(e.id, Float(metal.bounds.width), Float(metal.bounds.height), scale, now)
         e.picture = nil
         // A render that went without a drawable recorded nothing: no frame

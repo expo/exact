@@ -398,11 +398,11 @@ extension NodeView {
                 // view that does, and AppKit its first responder.
                 let children = subviews.filter {
                     #if os(iOS)
-                    $0 is NodeView || $0 === glassGroupView || $0 === textArea || $0 === symbolView || $0 === field || $0 === searchChrome
+                    $0 is NodeView || $0 === glassGroupView || $0 === textArea || $0 === symbolView || $0 === field || $0 === searchChrome || $0 === stepper
                     #elseif os(tvOS)
                     $0 is NodeView || $0 === glassGroupView || $0 === textArea || $0 === symbolView || $0 === field
                     #else
-                    $0 is NodeView || $0 === glassGroupView || $0 === textAreaScroll || $0 === symbolClip
+                    $0 is NodeView || $0 === glassGroupView || $0 === textAreaScroll || $0 === symbolClip || $0 === field || $0 === stepper
                     #endif
                 }
                 addSubview(box)

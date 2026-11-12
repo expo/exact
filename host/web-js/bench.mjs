@@ -14,16 +14,16 @@
 // a `--config` file overrides them per name, for the React builds:
 //   { "react-ssr": { "content": ".article-preview", "tag": "a.tag-pill", "tagDone": "…", "press": "…", "pressDone": "…", "runtime": "…" } }
 import { spawn } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Cdp, chromium, quitBrowser } from '../../scripts/agent-launch.mjs';
 
 const args = process.argv.slice(2);
 const opt = (n, d) => { const i = args.indexOf(n); return i < 0 ? d : args[i + 1]; };
 const runs = Number(opt('--runs', 5)), profile = opt('--profile', 'mobile');
 const config = opt('--config') ? JSON.parse(readFileSync(opt('--config'), 'utf8')) : {};
 const targets = args.filter((a, i) => a.includes('=') && !args[i - 1]?.startsWith('--')).map(a => { const [name, ...u] = a.split('='); return { name, url: u.join('=') }; });
-const CHROME = process.env.CHROME ?? '/Users/admin/.cache/chrome-for-testing/chrome/mac_arm-154.0.8037.57/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing';
 const EXACT = {
   content: '[data-testid^="preview-"]',
   tag: '[data-testid="tags"] a[href^="/tag/"], a[data-testid^="tag-"]',
@@ -39,75 +39,89 @@ const EXACT = {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function browser() {
+  const { executable, unavailable } = chromium({ needs: ['perf'] });
+  if (unavailable) throw new Error(unavailable);
   const profileDir = mkdtempSync(join(tmpdir(), 'e3-bench-'));
-  const child = spawn(CHROME, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profileDir}`, '--no-first-run', '--no-default-browser-check', '--disable-extensions',
-    '--disable-background-networking', '--disable-component-update', '--use-mock-keychain', '--password-store=basic', '--window-size=412,915', 'about:blank'], { stdio: 'ignore', detached: true });
-  let port;
-  for (let i = 0; i < 400 && !port; i++) { await sleep(25); const f = join(profileDir, 'DevToolsActivePort'); if (existsSync(f)) port = readFileSync(f, 'utf8').split('\n')[0]; }
-  let list = [];
-  for (let i = 0; i < 80 && !list.some(t => t.type === 'page'); i++) { await sleep(50); list = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); }
-  const ws = new WebSocket(list.find(t => t.type === 'page').webSocketDebuggerUrl);
-  await new Promise(r => ws.onopen = r);
-  let id = 0; const wait = new Map(), events = [];
-  ws.onmessage = m => { const d = JSON.parse(m.data); if (d.id && wait.has(d.id)) { wait.get(d.id)(d); wait.delete(d.id); } else if (d.method) events.push(d); };
-  const send = (method, params = {}) => new Promise(r => { const i = ++id; wait.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
-  const close = async () => { ws.close(); try { process.kill(-child.pid, 'SIGKILL'); } catch {} await sleep(150); rmSync(profileDir, { recursive: true, force: true }); };
-  return { send, events, close };
+  const child = spawn(executable, ['--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profileDir}`, '--no-first-run', '--no-default-browser-check', '--disable-extensions',
+    '--disable-background-networking', '--disable-component-update', '--use-mock-keychain', '--password-store=basic', '--window-size=412,915', 'about:blank'],
+  { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], detached: true });
+  let cdp;
+  const exited = new Promise(resolve => {
+    child.once('exit', () => { cdp?.fail('bench Chrome exited'); resolve(); });
+    child.on('error', error => { if (!child.pid) { cdp?.fail(error.message); resolve(); } });
+  });
+  const close = async () => { await quitBrowser(child, cdp, exited); rmSync(profileDir, { recursive: true, force: true }); };
+  try {
+    cdp = new Cdp(child.stdio[3], child.stdio[4]);
+    const events = [];
+    cdp.listeners.push(msg => events.push(msg));
+    const { targetInfos } = await cdp.send('Target.getTargets');
+    const targetId = targetInfos.find(t => t.type === 'page')?.targetId ?? (await cdp.send('Target.createTarget', { url: 'about:blank' })).targetId;
+    const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
+    return { send: (method, params) => cdp.send(method, params, sessionId), events, close };
+  } catch (error) { await close(); throw error; }
 }
 
 /** One cold run of `url`, pressing `click` at `load` (or nothing), until `done`. */
 async function run(t, sel, click, done, path = '') {
   const b = await browser();
   const { send, events } = b;
-  await send('Network.enable'); await send('Page.enable'); await send('Runtime.enable');
-  // The profile is fresh (a cold cache); disabling the cache would send
-  // `Cache-Control: no-cache`, which makes a render server render again.
-  await send('Emulation.setDeviceMetricsOverride', { width: 412, height: 915, deviceScaleFactor: 1, mobile: true });
-  if (profile === 'mobile') {
-    await send('Emulation.setCPUThrottlingRate', { rate: 4 });
-    await send('Network.emulateNetworkConditions', { offline: false, latency: 150, downloadThroughput: 1.6e6 / 8, uploadThroughput: 750e3 / 8 });
-  }
-  // On the first document only: content painted (the frame after the first
-  // preview exists), and the press at `load`.
-  await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
-    if (sessionStorage.getItem('e3-bench')) return; sessionStorage.setItem('e3-bench', '1');
-    const content = ${JSON.stringify(sel.content)}, click = ${JSON.stringify(click ?? null)};
-    const seen = () => { if (window.__e3content == null && document.querySelector(content)) { window.__e3content = -1; requestAnimationFrame(() => { window.__e3content = performance.now(); }); } };
-    new MutationObserver(seen).observe(document, { childList: true, subtree: true });
-    if (click) addEventListener('load', () => { window.__e3loaded = performance.now(); document.querySelector(click)?.click(); }, { once: true });
-  })();` });
-  const origin = new URL(t.url).origin;
-  await send('Page.navigate', { url: new URL(path || '/', t.url).href });
-  let t0 = null, first = null, doneAt = null, runtimeAt = null;
-  const deadline = Date.now() + 30000;
-  while (Date.now() < deadline) {
-    await sleep(20);
-    const r = (await send('Runtime.evaluate', { expression: `JSON.stringify({ origin: performance.timeOrigin, done: !!(${done}), runtime: !!(${sel.runtime}), content: window.__e3content ?? null, fcp: performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? null, loaded: window.__e3loaded ?? null })`, returnByValue: true })).result?.result?.value;
-    if (!r) continue;
-    const v = JSON.parse(r), now = Date.now();
-    if (t0 == null) { t0 = v.origin; first = v; }
-    if (v.origin === t0) first = v;
-    if (v.runtime && runtimeAt == null) runtimeAt = now - t0;
-    if (v.done && doneAt == null) doneAt = now - t0;
-    if (doneAt != null && (runtimeAt != null || !click) && (click || (first.content > 0 && first.fcp != null))) break;
-  }
-  // Bytes from the page's origin (the app), finished before `done`, and in all.
-  const reqs = new Map();
-  for (const e of events) {
-    if (e.method === 'Network.requestWillBeSent') reqs.set(e.params.requestId, { url: e.params.request.url, wall: e.params.wallTime * 1000, ts: e.params.timestamp });
-    if (e.method === 'Network.loadingFinished' && reqs.has(e.params.requestId)) Object.assign(reqs.get(e.params.requestId), { end: e.params.timestamp, bytes: e.params.encodedDataLength });
-  }
-  let before = 0, all = 0; const files = [];
-  for (const q of reqs.values()) {
-    if (q.bytes == null || !q.url.startsWith(origin) || /\.(mp4|png|jpe?g|svg|ico)(\?|$)/.test(q.url)) continue;
-    all += q.bytes;
-    const endMs = q.wall + (q.end - q.ts) * 1000 - t0;
-    if (doneAt == null || endMs <= doneAt) { before += q.bytes; files.push(`${q.url.slice(origin.length)} ${q.bytes}`); }
-  }
-  await b.close();
-  // Content can't be painted before the first paint: the later of the two.
-  const content = first?.content > 0 ? Math.max(first.content, first.fcp ?? 0) : null;
-  return { done: doneAt, runtime: runtimeAt, content, fcp: first?.fcp ?? null, before, all, files };
+  try {
+    await send('Network.enable'); await send('Page.enable'); await send('Runtime.enable');
+    // The profile is fresh (a cold cache); disabling the cache would send
+    // `Cache-Control: no-cache`, which makes a render server render again.
+    await send('Emulation.setDeviceMetricsOverride', { width: 412, height: 915, deviceScaleFactor: 1, mobile: true });
+    if (profile === 'mobile') {
+      await send('Emulation.setCPUThrottlingRate', { rate: 4 });
+      await send('Network.emulateNetworkConditions', { offline: false, latency: 150, downloadThroughput: 1.6e6 / 8, uploadThroughput: 750e3 / 8 });
+    }
+    // On the first document only: content painted (the frame after the first
+    // preview exists), and the press at `load`.
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+      if (sessionStorage.getItem('e3-bench')) return; sessionStorage.setItem('e3-bench', '1');
+      const content = ${JSON.stringify(sel.content)}, click = ${JSON.stringify(click ?? null)};
+      const seen = () => { if (window.__e3content == null && document.querySelector(content)) { window.__e3content = -1; requestAnimationFrame(() => { window.__e3content = performance.now(); }); } };
+      new MutationObserver(seen).observe(document, { childList: true, subtree: true });
+      if (click) addEventListener('load', () => { window.__e3loaded = performance.now(); document.querySelector(click)?.click(); }, { once: true });
+    })();` });
+    const origin = new URL(t.url).origin;
+    await send('Page.navigate', { url: new URL(path || '/', t.url).href });
+    let t0 = null, first = null, doneAt = null, runtimeAt = null;
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      await sleep(20);
+      let r;
+      try {
+        r = (await send('Runtime.evaluate', { expression: `JSON.stringify({ origin: performance.timeOrigin, done: !!(${done}), runtime: !!(${sel.runtime}), content: window.__e3content ?? null, fcp: performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? null, loaded: window.__e3loaded ?? null })`, returnByValue: true })).result?.value;
+      } catch (error) {
+        if (/Execution context was destroyed|Cannot find context with specified id|Inspected target navigated/.test(error.message)) continue;
+        throw error;
+      }
+      if (!r) continue;
+      const v = JSON.parse(r), now = Date.now();
+      if (t0 == null) { t0 = v.origin; first = v; }
+      if (v.origin === t0) first = v;
+      if (v.runtime && runtimeAt == null) runtimeAt = now - t0;
+      if (v.done && doneAt == null) doneAt = now - t0;
+      if (doneAt != null && (runtimeAt != null || !click) && (click || (first.content > 0 && first.fcp != null))) break;
+    }
+    // Bytes from the page's origin (the app), finished before `done`, and in all.
+    const reqs = new Map();
+    for (const e of events) {
+      if (e.method === 'Network.requestWillBeSent') reqs.set(e.params.requestId, { url: e.params.request.url, wall: e.params.wallTime * 1000, ts: e.params.timestamp });
+      if (e.method === 'Network.loadingFinished' && reqs.has(e.params.requestId)) Object.assign(reqs.get(e.params.requestId), { end: e.params.timestamp, bytes: e.params.encodedDataLength });
+    }
+    let before = 0, all = 0; const files = [];
+    for (const q of reqs.values()) {
+      if (q.bytes == null || !q.url.startsWith(origin) || /\.(mp4|png|jpe?g|svg|ico)(\?|$)/.test(q.url)) continue;
+      all += q.bytes;
+      const endMs = q.wall + (q.end - q.ts) * 1000 - t0;
+      if (doneAt == null || endMs <= doneAt) { before += q.bytes; files.push(`${q.url.slice(origin.length)} ${q.bytes}`); }
+    }
+    // Content can't be painted before the first paint: the later of the two.
+    const content = first?.content > 0 ? Math.max(first.content, first.fcp ?? 0) : null;
+    return { done: doneAt, runtime: runtimeAt, content, fcp: first?.fcp ?? null, before, all, files };
+  } finally { await b.close(); }
 }
 
 const median = xs => { const v = xs.filter(x => x != null).sort((a, b) => a - b); return v.length ? Math.round(v[Math.floor(v.length / 2)]) : null; };

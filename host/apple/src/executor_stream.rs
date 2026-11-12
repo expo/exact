@@ -76,6 +76,9 @@ fn opened(
     abort: AbortController,
     mut held: Option<upload::Held>,
 ) {
+    if let Some(outcome) = super::cache::missing(&request, forced) {
+        return complete(shared, ticket, outcome);
+    }
     // Retirement aborts every stream, as it does every job.
     let _retiring = {
         let abort = abort.clone();
@@ -141,7 +144,7 @@ fn opened(
                     if let Some(held) = held.as_mut() {
                         held.keep(request.body.len().saturating_mul(COPIES));
                     }
-                    open(Ok(&b), request, forced, &abort, sent)
+                    open(Ok(&b), request, forced, &abort, sent, shared)
                 })
                 .map(|opened| (opened, b))
             }
@@ -292,10 +295,12 @@ fn deliver(shared: &Shared, ticket: u64, mut message: Message, reply: bool) -> b
     match waiting {
         Some(done) if reply => {
             done.elapsed_ms = elapsed_ms;
+            done.finished_at = std::time::Instant::now();
         }
         Some(done) if done.reply => {
             done.outcome = Outcome::Message(message);
             done.elapsed_ms = elapsed_ms;
+            done.finished_at = std::time::Instant::now();
             done.reply = false;
         }
         Some(done) => {
@@ -307,8 +312,11 @@ fn deliver(shared: &Shared, ticket: u64, mut message: Message, reply: bool) -> b
             }
             done.outcome = Outcome::Message(message);
             done.elapsed_ms = elapsed_ms;
+            done.finished_at = std::time::Instant::now();
         }
         None => state.completed[lane].push_back(Completed {
+            cached: false,
+            finished_at: std::time::Instant::now(),
             elapsed_ms,
             ticket,
             outcome: Outcome::Message(message),
@@ -349,6 +357,7 @@ fn open(
     forced: bool,
     abort: &AbortController,
     sent: Option<Sent>,
+    shared: &Arc<Shared>,
 ) -> Result<Opened, Outcome> {
     if abort.signal().aborted() {
         return Err(failed(FailureKind::Aborted, "native request aborted"));
@@ -364,6 +373,7 @@ fn open(
     let upload = request.upload_progress;
     let timeout = request.timeout_ms.filter(|_| upload);
     let mut req = fetch_request(request, forced);
+    super::cache::observe(shared, &mut req);
     if !upload && !req.headers.has("accept") {
         req.headers.set("accept", "text/event-stream");
     }
@@ -579,3 +589,7 @@ mod upload;
 #[cfg(test)]
 #[path = "executor_stream_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "executor_stream_timeout_tests.rs"]
+mod timeout_tests;

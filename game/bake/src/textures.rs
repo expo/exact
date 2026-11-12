@@ -30,14 +30,23 @@ pub fn materials(
             continue;
         }
         let pbr = material.pbr_metallic_roughness();
+        // KHR_materials_unlit: the base colour, alpha and sidedness apply, and
+        // every other property, related to light or colour, is ignored
+        // (KHR_materials_unlit's README, Khronos glTF extensions registry).
+        let unlit = material.unlit();
         let mut m = MaterialData {
             name,
             base_color: pbr.base_color_factor(),
             metallic: pbr.metallic_factor(),
             roughness: pbr.roughness_factor(),
-            emissive: material
-                .emissive_factor()
-                .map(|v| v * material.emissive_strength().unwrap_or(1.0)),
+            emissive: if unlit {
+                [0.0; 3]
+            } else {
+                material
+                    .emissive_factor()
+                    .map(|v| v * material.emissive_strength().unwrap_or(1.0))
+            },
+            unlit,
             alpha_mode: match material.alpha_mode() {
                 gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
                 gltf::material::AlphaMode::Mask => AlphaMode::Mask,
@@ -50,6 +59,9 @@ pub fn materials(
             occlusion_strength: material.occlusion_texture().map_or(1.0, |t| t.strength()),
             ..Default::default()
         };
+        if !unlit {
+            layers(&material, &mut m)?;
+        }
         let textures = [
             pbr.base_color_texture().map(|i| i.texture()),
             material.normal_texture().map(|i| i.texture()),
@@ -66,7 +78,9 @@ pub fn materials(
             &raw["occlusionTexture"],
         ];
         for (slot, texture) in textures.into_iter().enumerate() {
-            let Some(texture) = texture else { continue };
+            let Some(texture) = texture.filter(|_| slot == 0 || !unlit) else {
+                continue;
+            };
             let ext = &infos[slot]["extensions"]["KHR_texture_transform"];
             let coord = ext["texCoord"]
                 .as_u64()
@@ -194,6 +208,46 @@ pub fn materials(
     }
     out.materials.push(MaterialData::default());
     Ok(payloads)
+}
+/// The factors of `KHR_materials_clearcoat` and `KHR_materials_sheen`, at
+/// their defaults (zero, no layer) where absent. Their textures are refused
+/// by name: a model never bakes with an authored layer map dropped.
+fn layers(material: &gltf::Material<'_>, m: &mut MaterialData) -> Result<(), String> {
+    let index = material.index().unwrap();
+    let factor = |value: &serde_json::Value, key: &str| value[key].as_f64().unwrap_or(0.) as f32;
+    let refuse = |extension: &str, value: &serde_json::Value, keys: &[&str]| match keys
+        .iter()
+        .find(|key| !value[**key].is_null())
+    {
+        Some(key) => Err(format!(
+            "material {index}: {extension} {key} is unsupported (factors only)"
+        )),
+        None => Ok(()),
+    };
+    if let Some(coat) = material.extension_value("KHR_materials_clearcoat") {
+        refuse(
+            "KHR_materials_clearcoat",
+            coat,
+            &[
+                "clearcoatTexture",
+                "clearcoatRoughnessTexture",
+                "clearcoatNormalTexture",
+            ],
+        )?;
+        m.clearcoat = factor(coat, "clearcoatFactor");
+        m.clearcoat_roughness = factor(coat, "clearcoatRoughnessFactor");
+    }
+    if let Some(sheen) = material.extension_value("KHR_materials_sheen") {
+        refuse(
+            "KHR_materials_sheen",
+            sheen,
+            &["sheenColorTexture", "sheenRoughnessTexture"],
+        )?;
+        m.sheen_color =
+            [0, 1, 2].map(|i| sheen["sheenColorFactor"][i].as_f64().unwrap_or(0.) as f32);
+        m.sheen_roughness = factor(sheen, "sheenRoughnessFactor");
+    }
+    Ok(())
 }
 /// A glTF image whose URI names a PNG under `art/textures/` (colour) or
 /// `art/data/` (linear) samples that standalone texture, baked once for every

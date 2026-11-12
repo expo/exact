@@ -4,8 +4,10 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(not(target_arch = "wasm32"))]
 mod activity;
 mod dates;
+#[cfg(not(target_arch = "wasm32"))]
 mod device;
 mod drag;
 mod guests;
@@ -49,7 +51,9 @@ pub struct Calendar {
     ready: bool,
     load: Option<storage::Load>,
     mutation: Option<storage::PendingMutation>,
+    #[cfg(not(target_arch = "wasm32"))]
     walks: device::Walks,
+    #[cfg(not(target_arch = "wasm32"))]
     activity: activity::Walks,
 }
 
@@ -358,11 +362,10 @@ impl Calendar {
             "calendarTheme" => Ok(Value::Number(f64::from(self.theme))),
             "calendarExport" => Ok(guests::export(self, text(args, 0).map_err(invalid)?)),
             // What the build and a first frame show: nothing read yet.
-            "calendarDeviceDays" | "calendarDeviceAgenda" => Ok(Value::record(vec![
-                Value::str("unread"),
-                Value::list(Vec::new()),
-            ])),
-            "calendarActivityDays" | "calendarActivityAgenda" => Ok(activity::unread(source)),
+            "calendarDeviceDays"
+            | "calendarDeviceAgenda"
+            | "calendarActivityDays"
+            | "calendarActivityAgenda" => Ok(empty_store_answer(source, "unread")),
             "calendarGuests" => Ok(Value::record(vec![Value::list(Vec::new())])),
             "addGuests" => Ok(Value::record(vec![Value::Number(0.0), Value::str("")])),
             "calendarGuestPhones" => Ok(Value::record(vec![Value::list(Vec::new())])),
@@ -423,11 +426,26 @@ impl DataSource for Calendar {
                 // pending read as well instead of waiting for it.
                 Ok(self.start_load(source, storage::AfterLoad::Library, today, true))
             }
+            #[cfg(not(target_arch = "wasm32"))]
             "calendarDeviceDays" | "calendarDeviceAgenda" => {
                 Ok(device::answer(&mut self.walks, source, args))
             }
+            #[cfg(not(target_arch = "wasm32"))]
             "calendarActivityDays" | "calendarActivityAgenda" => {
                 Ok(activity::answer(&mut self.activity, source, args))
+            }
+            // Neither store exists on the web (LLP 1133.018 D15, 1133.026 D21).
+            #[cfg(target_arch = "wasm32")]
+            "calendarDeviceDays"
+            | "calendarDeviceAgenda"
+            | "calendarActivityDays"
+            | "calendarActivityAgenda" => {
+                let code = if matches!(args.get(1), Some(Value::Bool(true))) {
+                    "NotSupportedError"
+                } else {
+                    "unread"
+                };
+                Ok(Answer::Now(empty_store_answer(source, code)))
             }
             "calendarGuests" => {
                 store.observe_external_read();
@@ -477,9 +495,11 @@ impl DataSource for Calendar {
             return Ok(self.parse_load(outcome));
         }
         match source {
+            #[cfg(not(target_arch = "wasm32"))]
             "calendarDeviceDays" | "calendarDeviceAgenda" => {
                 Ok(device::parse(&mut self.walks, source, args, outcome))
             }
+            #[cfg(not(target_arch = "wasm32"))]
             "calendarActivityDays" | "calendarActivityAgenda" => {
                 Ok(activity::parse(&mut self.activity, source, args, outcome))
             }
@@ -517,6 +537,16 @@ impl DataSource for Calendar {
             _ => Err(DataError::UnknownSource(source.into())),
         }
     }
+}
+
+fn empty_store_answer(source: &str, code: &str) -> Value {
+    let mut fields = vec![Value::str(code), Value::list(Vec::new())];
+    if source == "calendarActivityDays" {
+        fields.extend([Value::Number(0.0), Value::str(""), Value::Bool(false)]);
+    } else if source == "calendarActivityAgenda" {
+        fields.push(Value::Bool(false));
+    }
+    Value::record(fields)
 }
 
 fn number(args: &[Value], i: usize) -> Result<f64, String> {

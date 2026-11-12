@@ -33,6 +33,14 @@ impl HopGate for Gate {
     }
 }
 
+pub(super) fn admit_cached(request: &exact_runner::Request) -> Result<(), HostError> {
+    if request.reach.origin == CallOrigin::App {
+        return Ok(());
+    }
+    let url = url::Url::parse(&request.url).map_err(|e| HostError::Failed(e.to_string()))?;
+    Gate(request.reach).admit(&url)
+}
+
 /// `fetch`, checked at every hop for `reach`: unchanged for a person's or
 /// the app's own reach, which the rule never refuses.
 pub(super) fn gate_fetch(fetch: ibex2::host::Fetch, reach: Reach) -> ibex2::host::Fetch {

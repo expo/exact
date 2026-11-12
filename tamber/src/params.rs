@@ -21,6 +21,9 @@ pub struct Param {
     pub kind: String,
     /// Its default.
     pub default: String,
+    /// Declared in the file being folded: read its current default from
+    /// that design's component block instead of the loaded default.
+    pub from_design: bool,
 }
 
 impl Param {
@@ -168,10 +171,46 @@ pub fn named<'a>(params: &'a Params, name: &str) -> Result<&'a Param, Unnamed> {
     }
 }
 
+fn scoped(value: &str, prefix: &str) -> String {
+    crate::lex::rewrite_names(value, |name| {
+        name.strip_prefix("param.")
+            .filter(|name| crate::lex::is_ident(name))
+            .map(|name| format!("{prefix}.{name}"))
+    })
+}
+
+/// Add authored component defaults as tokens, independently of overrides.
+/// These token names need only distinguish components within this file.
+pub(crate) fn defaults(mut design: Design) -> Design {
+    for c in &design.components {
+        let prefix = format!("param.{}", c.name.value);
+        for p in &c.params {
+            let mut name = p.name.clone();
+            name.value = format!("{prefix}.{}", p.name.value);
+            let mut value = p.value.clone();
+            value.value = scoped(&value.value, &prefix);
+            let icon = p.kind == "icon";
+            let token = Token {
+                name,
+                kind: (!icon).then(|| p.kind.clone()),
+                value,
+                whens: Vec::new(),
+                meta: Vec::new(),
+            };
+            match icon {
+                true => design.icons.push(token),
+                false => design.tokens.push(token),
+            }
+        }
+    }
+    design
+}
+
 /// `design` with each param a token of its kind (an icon param among the
 /// icons) on line [`LINE`] + its index, and the first line of its `params`
 /// block that names it in place of its default and `when` lines (at that
-/// line, its name too); then each icon whose value names another icon (a
+/// line, its name too). A param declared in the app's design reads its
+/// current default there. Then each icon whose value names another icon (a
 /// param's or the design's) takes that one's sources, the icons block
 /// folding only literals. A line naming none, ambiguously, or a param
 /// another line already named, is left out: the compiler says why. The
@@ -201,6 +240,15 @@ pub fn laid(design: &Design, params: &Params) -> Design {
     );
     // Each param's first `params` line, by its token, found in one pass.
     let index = Index::new(params);
+    let defaults: HashMap<String, &At<String>> = design
+        .components
+        .iter()
+        .flat_map(|c| {
+            c.params
+                .iter()
+                .map(|p| (format!("{}.{}", c.name.value, p.name.value), &p.value))
+        })
+        .collect();
     let mut first: HashMap<&str, &Token> = HashMap::new();
     for e in &design.params {
         if let Ok(q) = index.named(params, &e.name.value) {
@@ -221,6 +269,10 @@ pub fn laid(design: &Design, params: &Params) -> Design {
             whens: Vec::new(),
             meta: Vec::new(),
         };
+        if let Some(default) = p.from_design.then(|| defaults.get(p.short())).flatten() {
+            let prefix = p.token.rsplit_once('.').unwrap().0;
+            token.value.value = scoped(&default.value, prefix);
+        }
         if let Some(entry) = first.get(p.token.as_str()) {
             token.name.line = entry.name.line;
             token.name.col = entry.name.col;
@@ -249,6 +301,7 @@ mod tests {
             full: full.into(),
             kind: "length".into(),
             default: default.into(),
+            from_design: false,
         }
     }
 
@@ -290,5 +343,30 @@ mod tests {
             "an ambiguous line sets nothing"
         );
         assert!(crate::check_design(laid, &crate::Vocab::default()).is_ok());
+    }
+
+    #[test]
+    fn current_design_defaults_keep_their_scope_and_other_owners_defaults() {
+        let mut inset = param("app.tamber#Card.inset", "1px");
+        inset.from_design = true;
+        let mut edge = param("app.tamber#Card.edge", "2px");
+        edge.from_design = true;
+        let params = Params {
+            list: vec![
+                inset,
+                edge,
+                param("card.contract#Card.inset", "3px"),
+                param("pkg/theme.tamber#Card.inset", "4px"),
+            ],
+            ..Default::default()
+        };
+        let design = crate::parse(
+            "tamber t\n\ncomponent Card\n  params\n    inset: length = 8px\n    edge: length = calc(param.inset * 2)\n",
+        )
+        .unwrap();
+        let laid = laid(&design, &params);
+        let folded = crate::check_design(laid, &crate::Vocab::default()).unwrap();
+        let values: Vec<_> = folded.tokens.iter().map(|t| t.values[0].css()).collect();
+        assert_eq!(values, ["8px", "16px", "3px", "4px"]);
     }
 }

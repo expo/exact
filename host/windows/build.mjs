@@ -6,12 +6,14 @@
 // `--run` opens it. From SSH, which has no display a window can show on (docs/testing.md, "Windows: the
 // NucBox"), it opens on the desktop of the user signed in at the console, through a one-off scheduled task, as
 // host/windows/reference/draw.mjs opens WinUI's, and returns once the window is up.
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { bakeTarget, buildBake, copyShaders, developmentBuildEnv, resolveApp, windowsFile } from '../../scripts/app.mjs';
 import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
+import { pickIcon, readPng, WINDOWS_ICON_SIZES, windowsIconRes } from '../../scripts/app-icons.mjs';
 import { syncStaticTree } from '../web/serve.mjs';
 
 const quote = (s) => `'${String(s).replaceAll("'", "''")}'`;
@@ -120,7 +122,21 @@ if (import.meta.main) {
   prepareShaders(app.manifest);
   const target = bakeTarget('windows');
   const profile = args.includes('--release') ? 'release' : 'gpu-dev';
-  const build = buildBake(app, 'windows', target, { profile, env: developmentBuildEnv(app) });
+  // The executable's icon (LLP 1163 D6), which the app crate's build script links (`exact_js_bake`). Made again only
+  // when the picked file changes, since a new file relinks the executable; its source's digest is kept beside it.
+  let icon;
+  try { icon = pickIcon(app.manifest, app.dir, { purposes: ['any', 'maskable'], px: 256, formats: ['png'], native: true, name: 'the Windows icon' }); }
+  catch (error) { console.error(`${app.name}: ${error.message}`); process.exit(1); }
+  const iconRes = icon ? resolve(app.target, 'windows-icon.res') : '';
+  if (icon) {
+    const source = createHash('sha256').update(JSON.stringify(['res-v1', WINDOWS_ICON_SIZES])).update(readFileSync(icon.path)).digest('hex'), made = `${iconRes}.sha256`;
+    if (!existsSync(iconRes) || !existsSync(made) || readFileSync(made, 'utf8') !== source) {
+      mkdirSync(app.target, { recursive: true });
+      writeFileSync(iconRes, windowsIconRes(readPng(icon.path)));
+      writeFileSync(made, source);
+    }
+  }
+  const build = buildBake(app, 'windows', target, { profile, env: { ...developmentBuildEnv(app), EXACT_WINDOWS_ICON_RES: iconRes } });
   // A running copy holds its executable and DLL open, so another directory lets
   // a second copy be packaged beside it.
   const output = outAt >= 0 ? resolve(args[outAt + 1]) : resolve(app.dir, 'dist-windows');

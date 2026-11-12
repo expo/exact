@@ -298,6 +298,10 @@ fn refresh_failure_keeps_only_the_same_locations_last_good_forecast() {
 fn malformed_null_and_incomplete_weather_never_become_zero_degree_forecasts() {
     let mut null_temperature = fixture();
     null_temperature["current"]["temperature_2m"] = Json::Null;
+    let mut null_next_hour = fixture();
+    null_next_hour["hourly"]["temperature_2m"][24] = Json::Null;
+    let mut null_daily_temperature = fixture();
+    null_daily_temperature["daily"]["temperature_2m_max"][6] = Json::Null;
     let mut short_hours = fixture();
     short_hours["hourly"]["temperature_2m"] = json!([20]);
     let mut short_week = fixture();
@@ -307,6 +311,8 @@ fn malformed_null_and_incomplete_weather_never_become_zero_degree_forecasts() {
         "null".to_owned(),
         "{}".to_owned(),
         null_temperature.to_string(),
+        null_next_hour.to_string(),
+        null_daily_temperature.to_string(),
         short_hours.to_string(),
         short_week.to_string(),
     ] {
@@ -326,6 +332,53 @@ fn malformed_null_and_incomplete_weather_never_become_zero_degree_forecasts() {
         app.local("forecast", &location(91., 0., 0.))["ready"],
         false
     );
+}
+
+#[test]
+fn unavailable_later_hours_do_not_discard_the_current_forecast() {
+    let mut body = fixture();
+    body["hourly"]["temperature_2m"][71] = Json::Null;
+    let mut app = Weather::new();
+    let forecast = app.forecast(
+        &location(35.6762, 139.6503, 0.),
+        response(200, &body.to_string()),
+    );
+    let outlook = app.outlook(&forecast, "C", "now");
+    assert_eq!(outlook["ready"], true);
+    assert_eq!(outlook["temp"], "20°");
+    assert_eq!(outlook["hours"].as_array().unwrap().len(), 24);
+}
+
+#[test]
+fn sixteen_days_survive_unavailable_daily_probability_and_uv() {
+    let mut body = fixture();
+    for (_, values) in body["daily"].as_object_mut().unwrap() {
+        let values = values.as_array_mut().unwrap();
+        let week = values.clone();
+        while values.len() < 16 {
+            values.extend(week.clone());
+        }
+        values.truncate(16);
+    }
+    body["daily"]["time"] = json!((8..24)
+        .map(|d| format!("2026-09-{d:02}"))
+        .collect::<Vec<_>>());
+    body["daily"]["precipitation_probability_max"][15] = Json::Null;
+    body["daily"]["uv_index_max"][15] = Json::Null;
+    let mut args = location(35.6762, 139.6503, 0.);
+    args[4] = Value::Bool(true);
+    let mut app = Weather::new();
+    let request = app.request("forecast", &args);
+    assert!(request.url.contains("forecast_days=16"));
+    let forecast = app.reply("forecast", &args, response(200, &body.to_string()));
+    let outlook = app.outlook(&forecast, "C", "now");
+    assert_eq!(outlook["ready"], true);
+    assert_eq!(outlook["days"].as_array().unwrap().len(), 16);
+    assert_eq!(outlook["days"][15]["chance"], "—");
+    assert_eq!(outlook["temp"], "20°");
+    body["daily"]["uv_index_max"][0] = Json::Null;
+    let forecast = app.forecast(&args, response(200, &body.to_string()));
+    assert_eq!(app.outlook(&forecast, "C", "now")["uv"], "—");
 }
 
 #[test]

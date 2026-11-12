@@ -251,13 +251,8 @@ impl Lowerer<'_> {
             }
             return Ok(folded);
         }
-        let mut out = folded;
-        self.replace_arms(&mut out)?;
-        // Beside an empty family's `none`, each stack is `some`, one type.
-        if has_none(&out) && !matches!(out, Expr::None(_)) {
-            some_arms(&mut out);
-        }
-        Ok(out)
+        self.replace_arms(&mut folded)?;
+        Ok(folded)
     }
 
     pub(super) fn literal_arms(e: &Expr) -> bool {
@@ -285,9 +280,8 @@ impl Lowerer<'_> {
 
     fn replace_arms(&mut self, e: &mut Expr) -> Result<(), LowerError> {
         match e {
-            // An empty family declares nothing: the row is unset (the
-            // kernel's `StyleValue::text_unsets`), as `none` clears it.
-            Expr::Str(name, span) if name.trim().is_empty() => *e = Expr::None(*span),
+            // A clear stays a string so the runner retains its written bit.
+            Expr::Str(name, _) if name.trim().is_empty() || family_clear(name) => {}
             Expr::Str(name, span) => {
                 // A quoted comma belongs to one family, not a cached list.
                 let cache_key = format!("\0{name}");
@@ -340,17 +334,6 @@ impl Lowerer<'_> {
             _ => unreachable!("family_arms admitted only these"),
         }
         Ok(())
-    }
-}
-
-/// Whether a replaced literal choice has an empty family's `none` arm.
-fn has_none(e: &Expr) -> bool {
-    match e {
-        Expr::None(_) => true,
-        Expr::Ternary(_, yes, no, _) => has_none(yes) || has_none(no),
-        Expr::Match { some, none, .. } => has_none(some) || has_none(none),
-        Expr::Let { body, .. } => has_none(body),
-        _ => false,
     }
 }
 
@@ -437,26 +420,6 @@ fn family_arms(e: &Expr, visit: &mut dyn FnMut(&str, Span)) -> Result<(), LowerE
         }
         Expr::Let { body, .. } => family_arms(body, visit),
         _ => Ok(()),
-    }
-}
-
-/// Each stack number of a replaced literal choice as `some(n)`.
-fn some_arms(e: &mut Expr) {
-    match e {
-        Expr::Number(_, span) => {
-            let span = *span;
-            *e = Expr::Some(Box::new(e.clone()), span);
-        }
-        Expr::Ternary(_, yes, no, _) => {
-            some_arms(yes);
-            some_arms(no);
-        }
-        Expr::Match { some, none, .. } => {
-            some_arms(some);
-            some_arms(none);
-        }
-        Expr::Let { body, .. } => some_arms(body),
-        _ => {}
     }
 }
 

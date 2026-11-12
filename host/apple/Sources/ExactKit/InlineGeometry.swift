@@ -192,33 +192,39 @@ extension NodeView {
         let scale = pixelScale ?? 1
         #endif
         var placedEmpty = false
-        return paragraph.lines.indices.compactMap { index in
+        return paragraph.lines.indices.flatMap { index -> [CGRect] in
             let line = paragraph.lines[index], range = CTLineGetStringRange(line)
             let lo = max(start, range.location), hi = min(end, range.location + range.length)
             if empty {
-                guard !placedEmpty, start >= range.location, start <= range.location + range.length else { return nil }
+                guard !placedEmpty, start >= range.location, start <= range.location + range.length else { return [] }
                 placedEmpty = true
-            } else if hi <= lo { return nil }
+            } else if hi <= lo { return [] }
             let x = box.minX + paragraph.origin(index, align: spec.align, width: box.width)
-            let x0 = CTLineGetOffsetForStringIndex(line, lo, nil), x1 = CTLineGetOffsetForStringIndex(line, hi, nil)
-            var rect = CGRect(x: x + min(x0, x1), y: TextEngine.paintedLine(paragraph.baselines[index], top: box.minY, scale: scale, lineScale: paragraph.lineScale) - above,
-                              width: abs(x1 - x0), height: above + below)
-            // An empty inline box keeps its insertion point and font height.
-            // A nonempty run covering only hanging wrap space has no fragment.
-            if !empty && spec.whiteSpace != 1 && spec.whiteSpace != 4 {
-                let trailing = CGFloat(CTLineGetTrailingWhitespaceWidth(line))
-                let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) - trailing
-                let left = spec.direction == 1 ? x + trailing : x
-                let right = left + width
-                let start = max(rect.minX, left), end = min(rect.maxX, right)
-                guard end > start else { return nil }
-                rect.origin.x = start; rect.size.width = end - start
+            let y = TextEngine.paintedLine(paragraph.baselines[index], top: box.minY, scale: scale, lineScale: paragraph.lineScale) - above
+            let spans: [ClosedRange<CGFloat>]
+            if empty {
+                let caret = CTLineGetOffsetForStringIndex(line, lo, nil)
+                spans = [caret...caret]
+            } else { spans = TextEngine.selectionSpans(line, range: NSRange(location: lo, length: hi - lo)) }
+            return spans.compactMap { span in
+                var rect = CGRect(x: x + span.lowerBound, y: y, width: span.upperBound - span.lowerBound, height: above + below)
+                // An empty inline box keeps its insertion point and font height.
+                // A nonempty run covering only hanging wrap space has no fragment.
+                if !empty && spec.whiteSpace != 1 && spec.whiteSpace != 4 {
+                    let trailing = CGFloat(CTLineGetTrailingWhitespaceWidth(line))
+                    let width = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) - trailing
+                    let left = spec.direction == 1 ? x + trailing : x
+                    let right = left + width
+                    let start = max(rect.minX, left), end = min(rect.maxX, right)
+                    guard end > start else { return nil }
+                    rect.origin.x = start; rect.size.width = end - start
+                }
+                if let fragments = columnRecord?.fragments, !fragments.isEmpty {
+                    guard let fragment = fragments.first(where: { $0.lines.contains(index) }) else { return nil }
+                    rect = rect.offsetBy(dx: fragment.dx, dy: fragment.dy)
+                }
+                return rect
             }
-            if let fragments = columnRecord?.fragments, !fragments.isEmpty {
-                guard let fragment = fragments.first(where: { $0.lines.contains(index) }) else { return nil }
-                rect = rect.offsetBy(dx: fragment.dx, dy: fragment.dy)
-            }
-            return rect
         }
     }
 }

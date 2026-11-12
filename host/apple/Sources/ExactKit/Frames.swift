@@ -60,6 +60,10 @@ package final class Frames: NSObject {
         // can remain the nominal base interval. The target interval is actual;
         // canvases quantizes it and republishes this session’s stable class before rendering.
         s.canvases.period((link.targetTimestamp - link.timestamp) * 1000)
+        if s.clock == nil {
+            s.canvases.hostFrame(raw: (link.timestamp - ExactEnv.t0) * 1000, callback: (CACurrentMediaTime() - ExactEnv.t0) * 1000,
+                fastest: 1000 / Double(max(1, maximumFramesPerSecond)))
+        }
         let previous = s.canvases.frameNow
         s.canvases.frameNow = frameNow
         defer { s.canvases.frameNow = previous }
@@ -150,6 +154,25 @@ package final class Frames: NSObject {
         return .applied
     }
 
+    /// The display's fastest rate, 60 while unknown.
+    private var maximumFramesPerSecond: Int {
+        #if canImport(UIKit)
+        session?.presenter.viewport.window?.screen.maximumFramesPerSecond ?? 60
+        #else
+        session?.presenter.viewport.window?.screen?.maximumFramesPerSecond ?? 60
+        #endif
+    }
+
+    /// The rate the link asks for: the fastest when canvases or spatial motion
+    /// run, capped at the canvases' `frameCap` when no motion or 2D canvas
+    /// runs (each canvas's own deadline holds its cap at any rate).
+    private func rate() -> CAFrameRateRange {
+        let canvases = session?.canvases.wantsFrames == true, others = motion || canvas2d
+        let cap = canvases && !others ? session?.canvases.frameCap ?? 0 : 0
+        let maximum = maximumFramesPerSecond
+        return Self.requestedRange(maximum: cap > 0 ? min(cap, maximum) : maximum, full: (motion && spatial) || canvas2d || canvases, paint: motion)
+    }
+
     static func requestedRange(maximum: Int, full: Bool, paint: Bool) -> CAFrameRateRange {
         let maximum = Float(maximum > 0 ? maximum : 60)
         if full { return CAFrameRateRange(minimum: min(80, maximum), maximum: maximum, preferred: maximum) }
@@ -173,9 +196,7 @@ package final class Frames: NSObject {
         // that runs for minutes — asks no more. The app's clock runs
         // only while something wants frames, so an idle app gets no
         // callbacks at all (LLP 1061 D4).
-        let fullRate = (motion && spatial) || canvas2d || session?.canvases.wantsFrames == true
-        let range = Self.requestedRange(maximum: session?.presenter.viewport.window?.screen.maximumFramesPerSecond ?? 60,
-            full: fullRate, paint: motion)
+        let range = rate()
         FrameClock.shared.want(self, .session, rate: range) { [weak self] in self?.tick($0) }
         // Inside `tick`, the request that governed this callback stands until it is recorded
         if !ticking { session?.frameHealth.requestedRate(range.preferred ?? range.maximum) }
@@ -190,8 +211,7 @@ package final class Frames: NSObject {
             link = nil
         }
         if on, let link {
-            let range = Self.requestedRange(maximum: session?.presenter.viewport.window?.screen?.maximumFramesPerSecond ?? 60,
-                full: (motion && spatial) || canvas2d || session?.canvases.wantsFrames == true, paint: motion)
+            let range = rate()
             if link.preferredFrameRateRange != range { link.preferredFrameRateRange = range }
             if !ticking { session?.frameHealth.requestedRate(range.preferred ?? range.maximum) }
         }

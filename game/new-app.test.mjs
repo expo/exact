@@ -181,7 +181,7 @@ test('a new outside app passes the checks every run makes, and a drifted one is 
       const said = helped(...command);
       assert.equal(said.status, 0, said.stderr);
       assert.match(said.stdout, new RegExp(`^bun exact\\.mjs ${command[0]}(?: |\\n)`));
-      assert.ok(!said.stdout.includes('{'), `${command[0]} --help ran its script`);
+      assert.ok(!/^\{/m.test(said.stdout), `${command[0]} --help ran its script`);
     }
     assert.match(helped('--help').stdout, /^bun exact\.mjs <verb>[^]*  test +/ );
     // chat F19, calendar F13: the files named, from the current directory (a glob too), each run in turn.
@@ -234,7 +234,7 @@ test('a new outside app passes the checks every run makes, and a drifted one is 
     // An app from before the diary joined the generated block loses its old diary block, keeps its own text, and ignores .exact/.
     writeFileSync(resolve(dir, 'AGENTS.md'), '# Mine\n\n<!-- exact diary: old -->\nstale\n<!-- /exact diary -->\n\nAfter.\n');
     writeFileSync(resolve(dir, '.gitignore'), '/target/');
-    assert.match(createApp(dir, { update: true }), /\.gitignore, AGENTS\.md, exact2 paths in web\/Cargo\.toml/);
+    assert.match(createApp(dir, { update: true }), /\.gitignore, AGENTS\.md, exact2 paths in Cargo\.toml, web\/Cargo\.toml/);
     assert.match(agents(), /^# Mine\n\nAfter\.\n\n<!-- exact:begin[^]*feedback status[^]*<!-- exact:end -->\n$/);
     assert.ok(!agents().includes('stale'));
     assert.equal(readFileSync(resolve(dir, '.gitignore'), 'utf8'), '/target/\n/.exact/\n/.env.local\n');

@@ -44,7 +44,12 @@ It needs the Android SDK (`ANDROID_HOME`, else `~/Library/Android/sdk` or `~/And
 NDK (`ANDROID_NDK_HOME`, else the newest under the SDK), a JDK (17 or newer) and the Rust target
 (`exact setup` adds it to the pinned toolchain). It:
 
-1. builds the app's `android/` crate for `aarch64-linux-android` at `host-dev` (`--release`: at `release` with fat
+1. writes the app's launcher icon and TV banner, from its manifest's `icons` (LLP 1163 D6), as resources under
+   `app/build/<app>/icons/res/`: from a square `maskable` PNG an adaptive icon, with a `monochrome` glyph as its
+   themed layer; without one, a legacy icon from a square `any` PNG; and a banner from a 16:9 `any` PNG. A file its
+   slot refuses (smaller than the slot, or a glyph with no transparent pixels) fails the build here, before anything
+   compiles;
+2. builds the app's `android/` crate for `aarch64-linux-android` at `host-dev` (`--release`: at `release` with fat
    LTO, as a production build links, for measuring). The crate is a cdylib whose source is `exact_linux::canvas_jni!(<the data source>, hatches =
    crate::exact_hatches())`, with a build script that bakes the plan and calls `contract::native::android_entry`,
    which writes the app's hatches' install (`hatches.rs`) and the plan's uses (`uses.txt`) beside it; `apps/caltrain/android` is the one to copy for an app whose data is Rust and
@@ -55,12 +60,13 @@ NDK (`ANDROID_NDK_HOME`, else the newest under the SDK), a JDK (17 or newer) and
    macOS, signed 64-bit Mach-O code omits the signature and normalizes its three size fields, matching
    the definition in `update/src/gpu.rs` through a parity-tested host copy; other files hash whole. Completed development receipts always
    bind the whole file. Both the process cache and Android's persistent cache distinguish these digests;
-2. copies the library to `app/build/<app>/rust/jniLibs/arm64-v8a/libexactcanvas.so`, the GPU module beside it under
+3. copies the library to `app/build/<app>/rust/jniLibs/arm64-v8a/libexactcanvas.so`, the GPU module beside it under
    its own name, the app's `assets/` to `app/build/<app>/rust/assets/app/assets/`, and a GPU module's shaders
    (`gpu/shaders/*.wgsl`, as a Linux bake packs them) to `app/build/<app>/rust/assets/app/shaders/`, where the host
    registers them from before a canvas is made;
-3. runs `./gradlew :app:assembleRelease -Papp=<app> -PappDir=<the app's directory>` here (a game's `.shells/`, whose
-   `app.json` is resolved), with `-PgpuModule=<file>` for a module: the APK then extracts its libraries and leaves
+4. runs `./gradlew :app:assembleRelease -Papp=<app> -PappDir=<the app's directory>` here (a game's `.shells/`, whose
+   `app.json` is resolved), with `-PappIcon` and `-PappBanner` naming the icon and banner it wrote, with
+   `-PgpuModule=<file>` for a module: the APK then extracts its libraries and leaves
    the module unstripped, since the host opens it by path and checks its digest; with `-Pcompose=1` when the plan's
    uses name `dates` (a date or time control), which links Compose Material 3 for its pickers; and with the Kotlin
    in the app's `modules/android`, its hatches and module roster, compiled in,
@@ -100,7 +106,9 @@ one with its state carried, and the build channel brings the design server's liv
 registers the build, so the design tool sees it. A generation whose Rust pair changed is refused with the URL loop's
 message and the running app kept: the APK's Rust is baked in its library, so a Rust edit needs a new APK. A drive
 takes the same URL as `--url` (`agent.mjs android --reader --url http://127.0.0.1:<port>/ …`), which reverses the
-port itself. A production bake opens no build channel.
+port itself. Drives on the same adb server and device share mappings they create until the last drive releases
+them. Mappings set up outside a drive are kept; a conflicting destination refuses the drive. A production bake
+opens no build channel.
 
 It builds on a Mac as on the Linux build box (tried 2026-10-12 with an SDK under `~/android`: platform-tools, NDK
 27.1.12297006, a JDK, and `ANDROID_HOME`, `ANDROID_NDK_HOME` and `JAVA_HOME` naming them). Gradle fetches what the
@@ -842,13 +850,20 @@ committed about 35 ms after the touch lifts (alert 30 to 41, menu 29 to 37, five
 until the next collection and is then gone (one root again); resident memory after the first use stays about 8 MB
 above what it was before any, which has not been attributed.
 
+**A select's menu** is painted in the page by the shared presenter, for both default appearance and
+`appearance="none"`. Its rows show the selected option, skip disabled options and commit a choice on a tap.
+A tap outside, Back or Escape dismisses it. Keyboard navigation and a mouse wheel can reach a long list,
+but there is no touch scrolling. The menu is clipped to the page's viewport and stays below hosted views
+such as `EditText` and WebView and below the system bars. Its rows are not exposed as a separate accessible
+menu, and it has no popup-window enter or exit transition. D10's anchored native popup remains unbuilt.
+
 Not built of D10:
 
 - **Accessibility.** `uiautomator dump` shows an open alert as a window of its own holding one focused
   `android.view.View` with no text, description or children: TalkBack lands on it and has nothing to read (D13).
 - **A text field inside a dialog.** The shape rule admits text and buttons only, so a dialog with an `input` is no
   alert and is refused; nothing hosts a field in a surface's window.
-- A bottom sheet (a chooser, a `modal` route), a `select`'s menu, submenus as cascades (a row that opens another
+- A bottom sheet (a chooser, a `modal` route), a `select`'s anchored native popup, submenus as cascades (a row that opens another
   menu replaces the first), a menu or a dialog taller than the window (it is not scrolled), a raster image in a
   menu row, right-to-left placement.
 - The ripple, Material's own type scaling above 100% (sizes are sp taken linearly), and the device's own face.
@@ -1173,8 +1188,9 @@ Not tried: Android 11 (no device), and a TypeScript data module: the Android Her
 
 ## Android TV (LLP 1115.001.003)
 
-The phone's APK also runs on an Android TV, and its manifest puts the app in the TV launcher with a plain banner
-(`app/src/main/res/drawable/banner.xml`). Build it as for a phone, then install it on a TV emulator:
+The phone's APK also runs on an Android TV, and its manifest puts the app in the TV launcher with the app's banner: a
+16:9 `any` PNG of its manifest's `icons` (LLP 1163 D6), else a plain one (`app/src/main/res/drawable/banner.xml`).
+Build it as for a phone, then install it on a TV emulator:
 
 ```sh
 bun scripts/agent-android.mjs build caltrain --apk
@@ -1200,8 +1216,7 @@ On a TV:
 
 A drive with `--reader` restarts the app, and its `type … key ArrowDown` reaches the presenter, not Android's input.
 To test the real keys, send them with `adb shell input keyevent KEYCODE_DPAD_DOWN` while the drive waits on real time
-(`"clock +15000 real"`). `focusGuide`, the media keys, text entry with the TV's keyboard and a banner per app are not
-built.
+(`"clock +15000 real"`). `focusGuide`, the media keys and text entry with the TV's keyboard are not built.
 
 ## Still the benchmark's
 
@@ -1293,7 +1308,7 @@ The cut was the smallest one. Left in the reader:
 - **Only the async lane's second tier builds it** (LLP 1133.002 stage 4): Weatherlight's APK, hourly, which
   compiles `exact-linux` for the Android target and the reader's Kotlin with a module's. Gradle is in none of the
   six checks.
-- **The shell is a development build**: signed with the debug key, with no icon. Its one activity turns keys on for
+- **The shell is a development build**: signed with the debug key. Its one activity turns keys on for
   every app, and gives none an app's own native module (LLP 1024) or a video player, which the benchmark's apps
   passed from an activity of their own. A package's implementation of a module is the exception (below, "Module
   implementations").

@@ -454,8 +454,12 @@ fn region_coordinates_keep_initial_values_for_undefined_environment_lengths() {
         "clamp(1px, env(viewport-segment-width 1 0), 100px)",
     ] {
         let d = Some(Dimension::parse_env(text).unwrap());
-        assert_eq!(vp.coord(d, -0.1, vp.width), -20.0, "mask x: {text}");
-        assert_eq!(vp.coord(d, 0.5, vp.width), 100.0, "gradient cx: {text}");
+        assert_eq!(vp.coord(d.clone(), -0.1, vp.width), -20.0, "mask x: {text}");
+        assert_eq!(
+            vp.coord(d.clone(), 0.5, vp.width),
+            100.0,
+            "gradient cx: {text}"
+        );
         assert_eq!(
             vp.coord(d, 1.2, 1.0),
             1.2,
@@ -469,7 +473,7 @@ fn region_coordinates_keep_initial_values_for_undefined_environment_lengths() {
             &crate::StyleValue::Text("env(viewport-segment-width 1 0, 25%)".into()),
         )
         .unwrap();
-    let fallback = style.cx;
+    let fallback = style.cx.clone();
     assert_eq!(vp.coord(Some(fallback), 0.5, vp.width), 50.0);
     assert_eq!(vp.coord(Some(Dimension::Points(0.0)), 0.5, vp.width), 0.0);
 }

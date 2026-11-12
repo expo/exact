@@ -9,7 +9,7 @@
   "name": "Euxy",
   "modules": ["waveform-view"],
   "audio_session": "playback",
-  "icons": [{ "src": "assets/icon-1024.png", "sizes": "1024x1024", "type": "image/png" }],
+  "icons": [{ "src": "assets/icon-1024.png", "purpose": "any maskable" }],
   "protocol_handlers": [{ "protocol": "euxy", "url": "/p/%s" }]
 }
 ```
@@ -40,7 +40,7 @@ component App
   [porting-and-release](porting-and-release.md)); `app.ts` takes the id from here.
 - **`host.ios.launchImage`** `{ "src": "assets/splash.png", "width": 276 }`: the launch
   screen's PNG, `width` points wide, on `background_color`.
-- **`host.ios.icon`** `"art/App.icon"`: an Icon Composer `.icon`; the web keeps `icons`.
+- **`host.ios.icon`** `"art/App.icon"`: an Icon Composer `.icon`; dark icons are `color_scheme_dark.icons`.
 - **`protocol_handlers`**: `euxy://p/abc` is `/p/euxy%3A%2F%2Fp%2Fabc` (whole at `%s`).
   A cold launch opens it in its route's tab: declare it (`p "/p/:d"`). Running, `go`
   pushes it on the selected tab; `open` uses its route's (`vocab navigate`).

@@ -647,6 +647,15 @@ pub struct MaterialOverride {
     /// instance's named textures can draw, it keeps the textures it drew before
     /// (the model's own the first time), so it never draws blank.
     pub textures: TextureSlots,
+    /// Added to the material's base colour and emission texture coordinates
+    /// on this instance, after the material's own UV transform (glTF
+    /// `KHR_texture_transform`), in the transformed space: a ribbon's tail
+    /// scrolled each frame, flowing water, a shield's pattern. The sampler's
+    /// wrap mode applies past the edge. Normal, metallic-roughness and
+    /// occlusion maps stay put; a `CustomMaterial` ignores it. Changing it
+    /// patches the instance in place; its first appearance rebatches once.
+    /// `None` draws as before.
+    pub uv_offset: Option<[f32; 2]>,
 }
 /// Texture names replacing a model material's own, by slot; `None` keeps the
 /// material's. A slot the material samples no texture in stays untextured,

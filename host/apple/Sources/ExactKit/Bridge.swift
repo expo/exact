@@ -3,6 +3,13 @@ import CExact
 import Foundation
 
 extension Runtime {
+    func collectionSnap(_ view: UInt32, proposed: Double, port: Double, maximum: Double, distance: Double = .infinity) -> Double? {
+        on(busy: nil) {
+            let value = exact_collection_snap(rt, view, proposed, port, maximum, distance)
+            return value.isFinite ? value : nil
+        }
+    }
+
     convenience init() {
         self.init(hooks: RuntimeHooks(
             decodeBatch: { Batch.decode($0, resolver: $1) },

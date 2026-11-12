@@ -198,8 +198,13 @@ pub fn collisions(params: &[ParamToken]) -> Vec<LowerError> {
 pub const LINE: u32 = 1 << 29;
 
 /// `params`, and the identity of every component of the app
-/// (`components`), as the design's folds take them.
-pub fn folds(params: &[ParamToken], components: &[String]) -> exact_tamber::params::Params {
+/// (`components`), as the design's folds take them. `file` names the
+/// design being edited, whose current defaults replace the loaded ones.
+pub fn folds(
+    params: &[ParamToken],
+    components: &[String],
+    file: Option<&str>,
+) -> exact_tamber::params::Params {
     exact_tamber::params::Params {
         list: params
             .iter()
@@ -208,6 +213,10 @@ pub fn folds(params: &[ParamToken], components: &[String]) -> exact_tamber::para
                 full: p.full.clone(),
                 kind: p.param.kind.clone(),
                 default: p.param.default.clone(),
+                from_design: p.package.is_none()
+                    && p.identity.rsplit_once('#').is_some_and(|(owner, _)| {
+                        Some(owner) == file && owner.ends_with(".tamber")
+                    }),
             })
             .collect(),
         components: components.to_vec(),
@@ -221,7 +230,7 @@ pub fn folds(params: &[ParamToken], components: &[String]) -> exact_tamber::para
 /// lines in their places, icon aliases resolved. `components`: every
 /// component's identity, for what a short name names.
 pub fn add_to(design: &mut exact_tamber::Design, params: &[ParamToken], components: &[String]) {
-    *design = exact_tamber::params::laid(design, &folds(params, components));
+    *design = exact_tamber::params::laid(design, &folds(params, components, None));
 }
 
 /// `message` with each param's token name written as its full name: what
@@ -572,13 +581,16 @@ pub fn folded_in(
 /// and column: each is folded on its own in its param's place, so a `when`
 /// value no tuple picks is checked too, as written, a token's or a `calc()`
 /// as well as a literal. A value that does not fold is the fold's to say.
+/// `file` names the design being edited, as in [`folds`].
 pub fn written_ranges(
     design: &exact_tamber::Design,
     params: &[ParamToken],
     identities: &[String],
     vocab: &exact_tamber::Vocab,
+    file: Option<&str>,
 ) -> Vec<(u32, u32, LowerError)> {
     let resolver = Resolver::new(params, identities);
+    let folds = folds(params, identities, file);
     // Each ranged line: its index, its param, and its values.
     let ranged: Vec<(usize, &ParamToken, Vec<&exact_tamber::At<String>>)> = design
         .params
@@ -640,7 +652,7 @@ pub fn written_ranges(
                 });
             }
         }
-        add_to(&mut probe, params, identities);
+        probe = exact_tamber::params::laid(&probe, &folds);
         crate::theme::stand_in_profiles(&mut probe);
         exact_tamber::check_design(probe, vocab).ok()
     };
@@ -856,7 +868,7 @@ impl<'a> Resolver<'a> {
         for q in params {
             by_token.entry(q.token.as_str()).or_insert(q);
         }
-        let folds = folds(params, identities);
+        let folds = folds(params, identities, None);
         Resolver {
             index: exact_tamber::params::Index::new(&folds),
             folds,

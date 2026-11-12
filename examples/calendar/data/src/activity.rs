@@ -8,6 +8,7 @@
 //! not share (D2, D5).
 
 use crate::dates::{self, local_day};
+use crate::empty_store_answer as failed;
 use crate::modules::health;
 use chrono_tz::Tz;
 use exact_plan::Value;
@@ -61,18 +62,6 @@ fn agenda(error: &str, workouts: Vec<Value>, complete: bool) -> Value {
     ])
 }
 
-fn failed(source: &str, code: &str) -> Value {
-    match source {
-        "calendarActivityDays" => days(code, Vec::new(), None, Tz::UTC, false),
-        _ => agenda(code, Vec::new(), false),
-    }
-}
-
-/// What the build and a first frame show: nothing read yet.
-pub(crate) fn unread(source: &str) -> Value {
-    failed(source, "unread")
-}
-
 fn page(walk: &Walk, after: Option<String>) -> Result<Answer, String> {
     let options = health::HealthWorkoutsOptions {
         start: walk.start,
@@ -93,7 +82,7 @@ fn page(walk: &Walk, after: Option<String>) -> Result<Answer, String> {
 pub(crate) fn answer(walks: &mut Walks, source: &str, args: &[Value]) -> Answer {
     if !matches!(args.get(1), Some(Value::Bool(true))) {
         walks.remove(&key(source, args));
-        return Answer::Now(unread(source));
+        return Answer::Now(failed(source, "unread"));
     }
     let number = |i: usize| args.get(i).and_then(Value::as_number).unwrap_or(0.0) as i32;
     let zone = zone(args);

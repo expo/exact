@@ -36,6 +36,7 @@ impl std::fmt::Display for Roots {
 struct Current {
     generation: u64,
     signal: Option<AbortSignal>,
+    event_stream: bool,
     /// The lease's request went out on a pooled connection and none of its
     /// response has arrived: cleared when it starts to open a connection of
     /// its own (`CancellableConnector`, a proxy's hop's too) or some of the
@@ -106,6 +107,7 @@ impl RustlsHttpTransport {
             let mut current = slot.context.lock().unwrap();
             current.generation = current.generation.wrapping_add(1);
             current.signal = Some(signal.clone());
+            current.event_stream = false;
             current.resendable = true;
         }
         Lease {
@@ -147,8 +149,8 @@ fn needs_tls(target_https: bool, proxy: Option<&ureq::Proxy>) -> bool {
     target_https || proxy.is_some_and(|proxy| proxy.protocol() == ureq::ProxyProtocol::Https)
 }
 
-/// The longest a request without a timeout of its own takes, its resend's
-/// included.
+/// The longest an ordinary request without a timeout of its own takes,
+/// its resend included. Event streams keep this limit only until their headers.
 const GLOBAL_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn agent_config(tls: bool, proxy: Option<ureq::Proxy>) -> ureq::config::Config {
@@ -409,7 +411,12 @@ impl<T: WireTransport> WireTransport for Observed<T> {
     fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
         self.inner.transmit_output(amount, timeout)
     }
-    fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+    fn await_input(&mut self, mut timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        // ureq retains the request's deadlines in its body reader. An event
+        // stream without an explicit timeout must also outlive its global limit.
+        if self.response && self.context.lock().unwrap().event_stream {
+            timeout.after = ureq::unversioned::transport::time::Duration::NotHappening;
+        }
         let progress = self.inner.await_input(timeout)?;
         if progress && self.response {
             self.context.lock().unwrap().resendable = false;
@@ -569,8 +576,8 @@ fn failed(error: impl std::fmt::Display) -> HostError {
 /// `req` on the lease's agent, its body a slice or a counted reader (Exact
 /// patch 23), within `left` of the request's time. A request's own `timeout`
 /// replaces every agent default: no shorter internal phase limit may win before
-/// it (LLP 0068.000 §4). Without one, the agent's phase limits stand, within
-/// `left` of its global limit.
+/// it (LLP 0068.000 §4). Without one, the agent's phase and global limits
+/// stand until the response identifies an event stream.
 fn run<S: ureq::AsSendBody>(
     lease: &Lease,
     req: ureq::http::Request<S>,
@@ -745,6 +752,15 @@ impl Transport for RustlsHttpTransport {
         for (name, value) in response.headers() {
             headers.set_response(name.as_str(), value.to_str().map_err(failed)?);
         }
+        let context = &lease.slot.as_ref().unwrap().context;
+        context.lock().unwrap().event_stream = request.timeout.is_none()
+            && status.is_success()
+            && headers.get("content-type").is_some_and(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"))
+            });
         let limit = request.body_limit();
         if request.method != "HEAD"
             && !matches!(status.as_u16(), 204 | 304)
@@ -753,6 +769,9 @@ impl Transport for RustlsHttpTransport {
                 .content_length()
                 .is_some_and(|n| n > limit as u64)
         {
+            if let Some(received) = &request.received {
+                (received.0)(&request.method, &request.url, status.as_u16(), &headers);
+            }
             return Err(over_limit(limit));
         }
         let reader = response.into_body().into_reader();
@@ -1454,6 +1473,10 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "rustls_timeout_tests.rs"]
+mod timeout_tests;
 
 #[cfg(test)]
 mod tls_selection_tests {

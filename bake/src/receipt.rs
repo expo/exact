@@ -103,7 +103,13 @@ pub(crate) fn emit(
     };
     assets.extend(rust_assets);
     assets.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
-    let graph = artifact_graph(&plan, &compat.inputs, &assets, pictures, target)?;
+    let mut graph = artifact_graph(&plan, &compat.inputs, &assets, pictures, target)?;
+    graph["contractSources"] = json!(contract::source_graph(&app.join("app.contract"))
+        .sources
+        .into_iter()
+        .map(|s| s.path)
+        .filter(|p| p.is_absolute() && p.extension().is_some_and(|ext| ext == "contract"))
+        .collect::<Vec<_>>());
     std::fs::write(out.join("artifacts.json"), graph.to_string()).map_err(|e| e.to_string())?;
     compat.target = target.into();
     compat.embedded = json!({"seq":0,"plan":plan_card,"assets":assets,"entryDigest":null,
@@ -671,8 +677,26 @@ fn artifact_graph(
         .iter()
         .map(|c| c.name())
         .collect();
+    let mut extensions = std::collections::BTreeMap::new();
+    for (extension, package) in plan
+        .modules
+        .iter()
+        .map(|m| (m.extension, m.package))
+        .chain(plan.views.iter().map(|v| (v.extension, v.package)))
+        .chain(plan.module_events.iter().map(|e| (e.extension, e.package)))
+    {
+        let (extension, package) = (plan.str(extension), plan.str(package));
+        if let Some(previous) = extensions
+            .insert(extension, package)
+            .filter(|previous| *previous != package)
+        {
+            return Err(format!(
+                "bake-extension-ambiguous: extension '{extension}' names both '{previous}' and '{package}'; host rosters require one package per extension"
+            ));
+        }
+    }
     Ok(
-        json!({"version":1,"sources":sources,"surfaceCalls":calls,"loads":loads,"uses":uses,"mediaSession":media_session,"launchBackground":launch_background(plan),"artifacts":artifacts}),
+        json!({"version":1,"sources":sources,"extensions":extensions,"surfaceCalls":calls,"loads":loads,"uses":uses,"mediaSession":media_session,"launchBackground":launch_background(plan),"artifacts":artifacts}),
     )
 }
 

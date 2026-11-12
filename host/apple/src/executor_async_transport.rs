@@ -96,6 +96,9 @@ impl Sink for TrackedSink {
     fn metrics(&mut self, metrics: HopMetrics) {
         self.inner.metrics(metrics);
     }
+    fn observed(&mut self, status: u16, headers: &ibex2::stdlib::fetch::Headers) {
+        self.inner.observed(status, headers);
+    }
 }
 
 impl TrackedSink {

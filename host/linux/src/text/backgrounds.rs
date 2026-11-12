@@ -8,7 +8,7 @@ use exact_kernel::{Dimension, Direction, Env, ViewId};
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct InlineBackground {
     pub color: [u8; 4],
     pub id: ViewId,
@@ -63,7 +63,7 @@ impl Paragraph {
                 .run_backgrounds(
                     &backgrounds
                         .iter()
-                        .map(|b| b.map(|b| b.color))
+                        .map(|b| b.as_ref().map(|b| b.color))
                         .collect::<Vec<_>>(),
                 )
                 .into_iter()
@@ -77,7 +77,7 @@ impl Paragraph {
         let hard_ranges = &ownership.hard;
         let mut boxes: BTreeMap<ViewId, Range<usize>> = BTreeMap::new();
         let mut add = |range: Range<usize>, run: usize| {
-            if let Some(background) = backgrounds.get(run).copied().flatten() {
+            if let Some(background) = backgrounds.get(run).and_then(Option::as_ref) {
                 boxes
                     .entry(background.id)
                     .and_modify(|b| {
@@ -145,7 +145,7 @@ impl Paragraph {
                 let local = g.range();
                 if local.is_empty() {
                     // An ellipsis carries its run's background, but no endpoint.
-                    if backgrounds.get(g.run()).copied().flatten().is_some() && g.w > 0.0 {
+                    if backgrounds.get(g.run()).and_then(Option::as_ref).is_some() && g.w > 0.0 {
                         spans.push(Piece {
                             lo: g.x,
                             hi: g.x + g.w,
@@ -161,20 +161,20 @@ impl Paragraph {
                 if g.w <= 0.0 || local.start >= trim {
                     continue;
                 }
-                spans.extend(
-                    ownership
-                        .pieces(g, range)
-                        .into_iter()
-                        .filter(|piece| backgrounds.get(piece.run).copied().flatten().is_some()),
-                );
+                spans.extend(ownership.pieces(g, range).into_iter().filter(|piece| {
+                    backgrounds
+                        .get(piece.run)
+                        .and_then(Option::as_ref)
+                        .is_some()
+                }));
             }
             spans.sort_by(|a, b| a.lo.total_cmp(&b.lo));
             let mut merged: Vec<Piece> = Vec::new();
             for span in spans {
                 match merged.last_mut() {
                     Some(last)
-                        if backgrounds[last.run].unwrap().id
-                            == backgrounds[span.run].unwrap().id
+                        if backgrounds[last.run].clone().unwrap().id
+                            == backgrounds[span.run].clone().unwrap().id
                             && metrics[last.run] == metrics[span.run]
                             && span.lo <= last.hi + 0.01 =>
                     {
@@ -184,12 +184,14 @@ impl Paragraph {
                 }
             }
             for (i, piece) in merged.iter().enumerate() {
-                let edge = edges.entry(backgrounds[piece.run].unwrap().id).or_default();
+                let edge = edges
+                    .entry(backgrounds[piece.run].clone().unwrap().id)
+                    .or_default();
                 edge.left.get_or_insert(i);
                 edge.right = i;
             }
             for (i, piece) in merged.into_iter().enumerate() {
-                let background = backgrounds[piece.run].expect("background span");
+                let background = backgrounds[piece.run].clone().expect("background span");
                 let edge = &edges[&background.id];
                 let left = edge.left == Some(i) && if rtl { edge.end } else { edge.start };
                 let right = edge.right == i && if rtl { edge.start } else { edge.end };
@@ -203,7 +205,7 @@ impl Paragraph {
                 );
                 let radii = std::array::from_fn(|i| {
                     if kept[i] {
-                        background.radii[i]
+                        background.radii[i].clone()
                     } else {
                         Dimension::Points(0.0)
                     }

@@ -500,22 +500,26 @@ fn a_bound_zero_is_a_length_and_a_bound_list_is_refused_by_every_row() {
     );
 }
 
-/// An empty `font-family`, literal, a choice's arm or a component's prop,
-/// declares nothing, as an empty colour does.
+/// An empty family clears its own value and keeps the author's declaration.
 #[test]
-fn an_empty_font_family_declares_nothing() {
+fn an_empty_font_family_keeps_its_written_bit() {
     let mut r = boot(
         "component A\n  state plain = false\n  action flip\n    plain = not plain\n  view\n    column\n      button testId=\"flip\" press=flip width=10 height=10\n      text \"a\" testId=\"empty\" font-family=\"\"\n      text \"b\" testId=\"choice\" font-family=(plain ? \"\" : \"Georgia\")\n      Fam(f=\"\")\n\ncomponent Fam\n  props\n    f: string\n  view\n    text \"c\" testId=\"prop\" font-family=f\n",
     );
-    assert!(!style_of(&r, "empty").mask.has(StyleId::FontFamily));
-    assert!(!style_of(&r, "prop").mask.has(StyleId::FontFamily));
+    for id in ["empty", "prop"] {
+        let style = style_of(&r, id);
+        assert!(!style.mask.has(StyleId::FontFamily));
+        assert!(style.written.has(StyleId::FontFamily), "{id}");
+    }
     assert!(style_of(&r, "choice").mask.has(StyleId::FontFamily));
     let flip = {
         let k = r.kernel();
         k.node_by_key(k.find_by_test_id("flip")[0]).unwrap().id
     };
     r.dispatch(flip, Event::Press).unwrap();
-    assert!(!style_of(&r, "choice").mask.has(StyleId::FontFamily));
+    let style = style_of(&r, "choice");
+    assert!(!style.mask.has(StyleId::FontFamily));
+    assert!(style.written.has(StyleId::FontFamily));
 }
 
 /// A longhand bound to a list is not split: two lengths on a corner are

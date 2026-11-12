@@ -255,6 +255,103 @@ fn a_model_of_another_record_is_refused_by_name() {
     );
 }
 
+/// The shading fields are written as one optional field, only when one
+/// differs from its default: a material without them keeps its bytes (the
+/// record keeps its number, and the baked fixture
+/// `bake/tests/fixtures/crate.model` and the generated identity above still
+/// match), and one with them round-trips and hashes apart.
+#[test]
+fn the_material_record_writes_its_shading_only_when_it_is_not_the_default() {
+    use exact_game::asset::MaterialData;
+    use exact_game::{bin, hash};
+    let lit = MaterialData::default();
+    let unlit = MaterialData {
+        unlit: true,
+        ..Default::default()
+    };
+    let bytes = bin::to_vec(&lit);
+    assert!(!bytes.windows(7).any(|w| w == b"shading"));
+    let back: MaterialData = bin::from_slice(&bin::to_vec(&unlit)).unwrap();
+    assert!(back.unlit);
+    assert_ne!(hash::of(&lit), hash::of(&unlit));
+    // A stale value never survives a read of a record without shading.
+    let mut dirty = MaterialData {
+        clearcoat: 1.0,
+        sheen_color: [0.5; 3],
+        ..unlit.clone()
+    };
+    bin::read_into(&bytes, &mut dirty).unwrap();
+    assert!(!dirty.unlit && dirty.clearcoat == 0.0 && dirty.sheen_color == [0.0; 3]);
+    // Every shading field is written together: two materials that differ in
+    // which field holds a value hash apart, and a negative zero survives.
+    let coat = MaterialData {
+        clearcoat: 0.5,
+        ..Default::default()
+    };
+    let rough = MaterialData {
+        clearcoat_roughness: 0.5,
+        ..Default::default()
+    };
+    assert_ne!(hash::of(&coat), hash::of(&rough));
+    let layered = MaterialData {
+        clearcoat: 1.0,
+        clearcoat_roughness: 0.05,
+        sheen_color: [0.2, 0.3, 0.4],
+        sheen_roughness: -0.0,
+        ..Default::default()
+    };
+    let back: MaterialData = bin::from_slice(&bin::to_vec(&layered)).unwrap();
+    assert_eq!(
+        (back.clearcoat, back.clearcoat_roughness, back.sheen_color),
+        (1.0, 0.05, [0.2, 0.3, 0.4])
+    );
+    assert_eq!(back.sheen_roughness.to_bits(), (-0.0f32).to_bits());
+    let negative = MaterialData {
+        clearcoat: -0.0,
+        ..Default::default()
+    };
+    let back: MaterialData = bin::from_slice(&bin::to_vec(&negative)).unwrap();
+    assert_eq!(back.clearcoat.to_bits(), (-0.0f32).to_bits());
+}
+
+#[test]
+fn each_shading_field_changes_a_generated_models_identity() {
+    let mut original = World::new(60, 0);
+    original.generated("rock.model", triangle()).unwrap();
+    let model = original.model("rock.model").unwrap().clone();
+    let saved = original.save();
+    for field in [
+        "unlit",
+        "clearcoat",
+        "clearcoat_roughness",
+        "sheen_color",
+        "sheen_roughness",
+    ] {
+        let mut changed = model.clone();
+        let material = &mut changed.materials[0];
+        match field {
+            "unlit" => material.unlit = true,
+            "clearcoat" => material.clearcoat = 0.5,
+            "clearcoat_roughness" => material.clearcoat_roughness = 0.5,
+            "sheen_color" => material.sheen_color = [0.5; 3],
+            "sheen_roughness" => material.sheen_roughness = 0.5,
+            _ => unreachable!(),
+        }
+        assert_ne!(
+            exact_game::hash::of(&model),
+            exact_game::hash::of(&changed),
+            "{field}"
+        );
+        let mut world = World::new(60, 0);
+        world.generated_model("rock.model", changed).unwrap();
+        let error = world.load(&saved).unwrap_err().to_string();
+        assert!(
+            error.contains("rock.model") && error.contains("identity differs"),
+            "{field}: {error}"
+        );
+    }
+}
+
 /// A complete record (a tuning table's JSON) names every material field, as the
 /// derive's records must; only the name may be absent. A short record and
 /// trailing input are refused.

@@ -611,7 +611,7 @@ fn conditional_style_checks_preserve_computation_and_match_bindings() {
     let top = |runner: &exact_runner::Runner<NoData>| {
         let kernel = runner.kernel();
         let key = kernel.find_by_test_id("branch")[0];
-        kernel.node_by_key(key).unwrap().style.top
+        kernel.node_by_key(key).unwrap().style.top.clone()
     };
     assert_eq!(top(&runner), exact_kernel::Dimension::Points(20.0));
     runner.act("toggle", vec![]).unwrap();

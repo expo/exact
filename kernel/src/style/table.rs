@@ -191,7 +191,10 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
                 Dimension::Points(v) if padded => v.max(0.0) + spacing,
                 _ => spacing,
             };
-            let (left, right) = (inset(t.padding_left), inset(t.padding_right));
+            let (left, right) = (
+                inset(t.padding_left.clone()),
+                inset(t.padding_right.clone()),
+            );
             // A margin as a percentage and points. CSS takes the percentage
             // of the table's width, the engine of the grid area, `left +
             // right` narrower, so `from` adds the difference and takes off
@@ -207,9 +210,9 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
             let from = |(p, v): (f32, f32), at: f32| {
                 Dimension::Calc(p, v + p / 100.0 * (left + right) - at).to_lpa(env)
             };
-            let start = said(StyleId::MarginLeft, style.margin_left);
-            let end = said(StyleId::MarginRight, style.margin_right);
-            let above = said(StyleId::MarginTop, style.margin_top);
+            let start = said(StyleId::MarginLeft, style.margin_left.clone());
+            let end = said(StyleId::MarginRight, style.margin_right.clone());
+            let above = said(StyleId::MarginTop, style.margin_top.clone());
             if let Some(m) = start {
                 s.margin.left = from(m, left);
             }
@@ -217,7 +220,7 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
                 s.margin.right = from(m, right);
             }
             if let Some(m) = above {
-                s.margin.top = from(m, inset(t.padding_top));
+                s.margin.top = from(m, inset(t.padding_top.clone()));
             }
             // Unsized, it is as wide as that box less its margins and asks the
             // columns for none of its width, so a long caption wraps where
@@ -295,10 +298,10 @@ fn floor(
     least: StyleId,
 ) -> Option<taffy::style::LengthPercentageAuto> {
     let dimension = |id| match id {
-        StyleId::Width => style.width,
-        StyleId::Height => style.height,
-        StyleId::MinWidth => style.min_width,
-        _ => style.min_height,
+        StyleId::Width => style.width.clone(),
+        StyleId::Height => style.height.clone(),
+        StyleId::MinWidth => style.min_width.clone(),
+        _ => style.min_height.clone(),
     };
     let (said, least_said) = (dimension(size), dimension(least));
     let greater = match (said.resolve(env), least_said.resolve(env)) {

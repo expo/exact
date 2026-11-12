@@ -208,9 +208,12 @@ impl<D: DataSource> Runner<D> {
             target: p.target,
             source: &p.source,
             args: &p.args,
+            fetch: p.fetch,
             continuation: None,
         };
-        let Some((token, mut request)) = self.data.timer_before_reply(&self.store, in_flight)
+        let Some((token, mut request)) =
+            self.data
+                .timer_before_reply(&self.store, in_flight, p.fetch)
         else {
             return false;
         };
@@ -234,6 +237,7 @@ impl<D: DataSource> Runner<D> {
         ));
         self.clock.data.landing.push(next);
         self.requests.push(RequestOut {
+            class: crate::RequestClass::Ordered,
             ticket: next,
             target: name,
             request,

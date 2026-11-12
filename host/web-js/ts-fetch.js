@@ -100,7 +100,7 @@ function captured(options) {
 export const activeCall = () => answering.call ?? [...answering.untraced].find(c => !c.settled);
 export const fetchOrigin = () => activeCall()?.origin ?? 'app';
 function fetchOf(input, options, call) {
-  if (options?.exactStream === undefined && options?.exactBodyFrom === undefined && options?.exactBodyTo === undefined) return fetchWith(tsGrantSet, input, options, null, undefined, undefined, fetchOrigin());
+  if (options?.exactStream === undefined && options?.exactBodyFrom === undefined && options?.exactBodyTo === undefined) return fetchWith(tsGrantSet, input, options, null, undefined, undefined, fetchOrigin(), false, !!activeCall()?.forced);
   if (options.exactStream !== undefined && options.exactBodyTo !== undefined) return Promise.reject(new TypeError("exactBodyTo: a stream's body is its messages, not a file"));
   let redirect;
   try { redirect = redirectOf(input, options); } catch (e) { return Promise.reject(e); }
@@ -110,7 +110,7 @@ function fetchOf(input, options, call) {
       // Keep inherited validation fields inherited, but take their values now.
       const own = ownWithout(options, ['redirect']);
       const inherited = {};
-      for (const key of ['exactBodyFrom', 'exactBodyTo', 'exactIndependentHttp', 'method', 'body', 'exactStream', 'signal', 'exactTimeout'])
+      for (const key of ['exactBodyFrom', 'exactBodyTo', 'exactIndependentHttp', 'method', 'body', 'exactStream', 'signal', 'exactTimeout', 'cache'])
         if (!Object.hasOwn(own, key)) inherited[key] = options[key];
       init = Object.assign(Object.create(inherited), own);
       ms = init.exactTimeout;
@@ -135,10 +135,10 @@ function fetchOf(input, options, call) {
       deadline?.addEventListener('abort', timedOut, { once: true });
       stop = () => { heard?.removeEventListener?.('abort', aborted); deadline?.removeEventListener('abort', timedOut); };
     });
-    const origin = fetchOrigin();
+    const origin = fetchOrigin(), forced = !!activeCall()?.forced;
     return Promise.race([import('./ts-body-from.js'), ended]).finally(stop).then(m => {
       if (call?.socketConflict) throw new Error(SOCKET_AND_FETCH);
-      return m.fromFile(input, init, redirect, started, origin, armed);
+      return m.fromFile(input, init, redirect, started, origin, armed, forced);
     }).finally(() => armed?.cancel());
   }
   return options.exactTimeout !== undefined && options.exactUploadProgress !== true ? Promise.reject(new TypeError('exactTimeout: a stream has no timeout')) : stream(input, options, redirect);

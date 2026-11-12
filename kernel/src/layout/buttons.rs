@@ -26,14 +26,14 @@ impl ButtonOffer {
         Self {
             width: request.width,
             geometry: [
-                s.padding_top,
-                s.padding_right,
-                s.padding_bottom,
-                s.padding_left,
-                s.border_radius_top_left,
-                s.border_radius_top_right,
-                s.border_radius_bottom_right,
-                s.border_radius_bottom_left,
+                s.padding_top.clone(),
+                s.padding_right.clone(),
+                s.padding_bottom.clone(),
+                s.padding_left.clone(),
+                s.border_radius_top_left.clone(),
+                s.border_radius_top_right.clone(),
+                s.border_radius_bottom_right.clone(),
+                s.border_radius_bottom_left.clone(),
             ]
             .map(|d| match d {
                 crate::Dimension::Points(n) => n,

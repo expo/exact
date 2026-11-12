@@ -360,6 +360,12 @@ function answer(source: string, args: unknown[], store: Store): unknown {
     case "held": return fetch("https://api.castle.xyz/changes", (args[0] === "stream" || args[0] === "yes-stream"
       ? { exactHeld: args[0] === "stream" ? true : "yes", exactStream: (event: unknown) => event }
       : { exactHeld: args[0] === "true" ? true : args[0] === "false" ? false : args[0] }) as RequestInit).then(r => r.text(), (e: Error) => `refused: ${e.message}`);
+    case "cached": return fetch("https://api.castle.xyz/cache", args[0] === "absent" ? {} : {
+      get cache() {
+        if (args[0] === "throws") throw new Error("cache getter");
+        return args[0] === "number" ? 7 : args[0] === "null" ? null : args[0];
+      },
+    } as RequestInit).then(r => r.text(), (e: Error) => `${e instanceof TypeError ? "TypeError" : "Error"}: ${e.message}`);
     case "redirected": return fetch("https://api.castle.xyz/moved", {
       ...(args[0] === "" ? {} : { redirect: args[0] }),
     }).then(r => r.status + " " + (r.headers.get("location") ?? ""));

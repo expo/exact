@@ -284,20 +284,30 @@ pub(super) fn face_layout(
         0.0
     };
     let padding = [
-        (StyleId::PaddingTop, rows.button.padding_top, 7.0, block),
+        (
+            StyleId::PaddingTop,
+            rows.button.padding_top.clone(),
+            7.0,
+            block,
+        ),
         (
             StyleId::PaddingRight,
-            rows.button.padding_right,
+            rows.button.padding_right.clone(),
             9.0,
             inline,
         ),
         (
             StyleId::PaddingBottom,
-            rows.button.padding_bottom,
+            rows.button.padding_bottom.clone(),
             7.0,
             block,
         ),
-        (StyleId::PaddingLeft, rows.button.padding_left, 9.0, inline),
+        (
+            StyleId::PaddingLeft,
+            rows.button.padding_left.clone(),
+            9.0,
+            inline,
+        ),
     ]
     .map(|(id, d, default, look)| {
         let edge = if !bordered
@@ -685,19 +695,19 @@ impl Painter {
         let radii = [
             (
                 StyleId::BorderRadiusTopLeft,
-                rows.button.border_radius_top_left,
+                rows.button.border_radius_top_left.clone(),
             ),
             (
                 StyleId::BorderRadiusTopRight,
-                rows.button.border_radius_top_right,
+                rows.button.border_radius_top_right.clone(),
             ),
             (
                 StyleId::BorderRadiusBottomRight,
-                rows.button.border_radius_bottom_right,
+                rows.button.border_radius_bottom_right.clone(),
             ),
             (
                 StyleId::BorderRadiusBottomLeft,
-                rows.button.border_radius_bottom_left,
+                rows.button.border_radius_bottom_left.clone(),
             ),
         ]
         .map(|(id, radius)| {

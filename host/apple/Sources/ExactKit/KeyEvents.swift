@@ -398,6 +398,16 @@ extension NodeView {
         return KeyCodes.typed(option: event.modifierFlags.contains(.option), characters: event.characters,
                               ignoringModifiers: event.charactersIgnoringModifiers ?? "")
     }
+    /// The key a Command chord names, lowercased. A layout can change while
+    /// Command is held (Dvorak - QWERTY ⌘): `characters` keeps that change
+    /// and `charactersIgnoringModifiers` loses it. Option and Control change
+    /// `characters` too, so with either the layout is asked for Command's
+    /// character alone.
+    static func commandKey(_ event: NSEvent) -> String? {
+        let typed = event.modifierFlags.isDisjoint(with: [.control, .option])
+            ? event.characters : event.characters(byApplyingModifiers: .command)
+        return (typed ?? event.charactersIgnoringModifiers)?.lowercased()
+    }
 }
 #else
 extension KeyCodes {

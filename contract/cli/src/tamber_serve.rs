@@ -856,7 +856,7 @@ impl Server {
             .find(|(f, _, _)| *f == file)
             .ok_or_else(|| json!({"message": format!("`{file}` is no file of this design")}))?
             .1;
-        let (folding, design) = contract::tamber_params::fold_with(text, app, &self.vocab)
+        let (folding, design) = contract::tamber_params::fold_with(text, app, &self.vocab, Some(&file))
             .map_err(|all| {
                 json!({"message": "the design is refused", "diagnostics": all.iter().map(|d| located(&file, d, app)).collect::<Vec<_>>()})
             })?;
@@ -1144,7 +1144,7 @@ impl Server {
         // (a plain app's token no view names) leaves the plan as it is.
         let retention = self.synthetic.as_ref().and_then(|(_, _, r)| r.clone());
         let app = self.app_params();
-        let params = crate::tamber_ops::params(&app);
+        let params = crate::tamber_ops::params(&app, &self.design);
         let synthetic = exact_tamber::Synthetic {
             file: &self.design,
             exprs: &exprs,

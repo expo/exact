@@ -132,11 +132,11 @@ fn serve(app: &Path) -> ExitCode {
             baked.write_new(Path::new(destination))?;
             let receipt = serde_json::from_str::<serde_json::Value>(&baked.receipt)
                 .map_err(|e| e.to_string())?;
-            Ok((receipt, design(&baked.plan)?))
+            Ok((receipt, design(&baked.plan)?, baked.warnings))
         });
         let reply = match result {
-            Ok((receipt, design)) => {
-                serde_json::json!({"id":id,"ok":true,"receipt":receipt,"design":design})
+            Ok((receipt, design, warnings)) => {
+                serde_json::json!({"id":id,"ok":true,"receipt":receipt,"design":design,"warnings":warnings})
             }
             Err(error) => {
                 serde_json::json!({"id":id,"ok":false,"error":error.chars().take(65536).collect::<String>()})

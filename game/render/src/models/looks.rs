@@ -25,12 +25,17 @@ impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
             m.words[at..at + 4].copy_from_slice(&record.tint.map(f32::to_bits));
             m.words[at + 4..at + 7].copy_from_slice(&record.glow.map(f32::to_bits));
         }
-        // Part starts stay the resident absolute ones; only the looks change.
+        // Part starts stay the resident absolute ones; only the looks change:
+        // tint and glow, and the UV offset in `local`'s third column.
         for (k, look) in looks.iter().enumerate() {
             let entry = &mut m.part_looks.1[part_first + k];
             entry[..7].copy_from_slice(&look[..7]);
-            let at = (total + part_first + k) * INSTANCE_WORDS + 36;
-            for (word, value) in m.words[at..at + 7].iter_mut().zip(&entry[..7]) {
+            entry[16..].copy_from_slice(&look[16..]);
+            let at = (total + part_first + k) * INSTANCE_WORDS;
+            for (word, value) in m.words[at + 36..at + 43].iter_mut().zip(&entry[..7]) {
+                *word = value.to_bits();
+            }
+            for (word, value) in m.words[at + 12..at + 14].iter_mut().zip(&entry[16..]) {
                 *word = value.to_bits();
             }
         }

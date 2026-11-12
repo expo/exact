@@ -57,6 +57,43 @@ function scratchApp(name) {
   return { dir, write };
 }
 
+test('Apple rebuilds carry a path-selected app into the child without changing the parent environment', () => {
+  const { dir } = scratchApp('field-log');
+  const script = `
+    import assert from 'node:assert/strict';
+    import { mock } from 'bun:test';
+    import * as processes from 'node:child_process';
+    import { resolveApp } from './scripts/app.mjs';
+    const spawn = processes.spawn;
+    const dir = ${JSON.stringify(dir)}, builds = [];
+    mock.module('node:child_process', () => ({ ...processes, spawn(command, args, options) {
+      assert.ok(args[0].endsWith('/host/apple/build.mjs'));
+      builds.push(args.slice(1));
+      const probe = 'import { resolveApp } from "./scripts/app.mjs"; '
+        + 'console.log(resolveApp(' + JSON.stringify(args.find(arg => arg.endsWith('-apple'))) + ').dir)';
+      return spawn(command, ['-e', probe], options);
+    } }));
+    const { buildFirst } = await import('./scripts/agent-build.mjs');
+    delete process.env.EXACT_MAC_BIN;
+    for (const inherited of [undefined, ${JSON.stringify(resolve(import.meta.dir, '../apps/theme-fixture'))}]) {
+      if (inherited === undefined) delete process.env.EXACT_APP_DIR;
+      else process.env.EXACT_APP_DIR = inherited;
+      const app = resolveApp(dir);
+      for (const host of ['ios', 'macos']) {
+        assert.equal(await buildFirst(host, app, { say: line => console.error(line), wait: () => {} }), 0);
+        const log = await Bun.file(dir + '/.exact/' + host + '-build.log').text();
+        assert.equal(log.trim(), dir);
+        assert.equal(process.env.EXACT_APP_DIR, inherited);
+      }
+    }
+    assert.equal(builds.length, 4);
+  `;
+  try {
+    const r = spawnSync(process.execPath, ['-e', script], { cwd: resolve(import.meta.dir, '..'), encoding: 'utf8', timeout: 20_000 });
+    assert.equal(r.status, 0, r.stdout + r.stderr + (r.error ?? ''));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('macOS freshness checks the full product receipt when the bundle carries a reduced receipt', () => {
   const previous = process.env.EXACT_APP_DIR, { dir, write } = scratchApp('ats-drive');
   try {

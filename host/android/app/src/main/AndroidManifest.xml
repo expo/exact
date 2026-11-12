@@ -2,7 +2,7 @@
     <!-- An app, not the benchmark's harness (LLP 1115.001 §3): it does not show over the keyguard, turn the screen on
          or run before the phone's first unlock. Only a package's own receivers and services, which a manifest fragment
          declares under its allow-list, may run before first unlock, and they read only that package's device-protected
-         records: no session or plan starts (LLP 1133.030 D9). It still signs with the debug key and has no icon. -->
+         records: no session or plan starts (LLP 1133.030 D9). It still signs with the debug key. -->
     <!-- The shell packages any app, so it asks for the network for every one: without it a data module's `fetch` and a
          remote picture fail at the name lookup. What an app may reach is still its own grants' to say (`net.fetch`),
          which exact2 enforces; this is only the platform's door. A normal permission: nothing is asked of the person. -->
@@ -21,8 +21,10 @@
          Android 16 the platform calls it only when the app opts in; without this, Back on Android 13 to 15 finished
          the activity from any screen. -->
     <!-- Locked secrets' files stay out of backups and transfers (res/xml/exact_backup.xml, LLP 1133.010 D6). -->
+    <!-- The launcher icon and the TV banner are the app manifest's `icons` (app/build.gradle.kts, LLP 1163 D6). -->
     <application android:label="${appName}" android:theme="@style/ExactLaunch" android:hardwareAccelerated="true"
-        android:banner="@drawable/banner" android:enableOnBackInvokedCallback="true"
+        android:icon="${appIcon}" android:roundIcon="${appIcon}" android:banner="${appBanner}"
+        android:enableOnBackInvokedCallback="true"
         android:fullBackupContent="@xml/exact_backup" android:dataExtractionRules="@xml/exact_data_extraction">
         <profileable android:shell="true" />
         <meta-data android:name="dev.exact.development" android:value="${exactDevelopment}" />

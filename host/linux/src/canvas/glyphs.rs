@@ -1,7 +1,7 @@
 //! A paragraph's glyph runs (`GLYPHS`, op 9), each from one face at one
 //! size, and the blur a numeric roll draws them through (`BLUR`, op 44:
 //! `[44, sigma]` in local units, before the GLYPHS it blurs; LLP 1077 D15).
-use super::{clip, Recorder, FONT, FONT_AXES, GLYPHS};
+use super::{Recorder, FONT, FONT_AXES, GLYPHS};
 use crate::text::{Paragraph, RunPaint, TextEngine};
 use std::sync::Arc;
 use tiny_skia::Transform;
@@ -26,7 +26,7 @@ impl Recorder {
             paragraph.width + 2.0 * reach,
             paragraph.height + 2.0 * reach,
         );
-        let bounds = clip::map(bounds, ts);
+        let bounds = self.on_page(bounds, ts);
         if self.culled(bounds) {
             return;
         }
@@ -46,7 +46,7 @@ impl Recorder {
                 let size = run.size;
                 glyphs.retain(|&(_, x, y)| {
                     let near = (origin.0 + x - size * 0.5, origin.1 + y - size * 1.2);
-                    !self.culled(clip::map((near.0, near.1, size * 2.0, size * 1.6), ts))
+                    !self.culled(self.on_page((near.0, near.1, size * 2.0, size * 1.6), ts))
                 });
                 if glyphs.is_empty() {
                     continue;

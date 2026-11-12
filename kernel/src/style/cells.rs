@@ -56,7 +56,7 @@ impl Dimension {
     /// A space (padding, margin, gap) under `env`'s terminal space rule: a
     /// length that resolves to points is whole cells of `cell` on its axis
     /// ([`space`]); a percentage or a `calc()` with one is as it is.
-    pub(crate) fn spaced(self, env: &Env, cell: f32) -> Dimension {
+    pub(crate) fn spaced(&self, env: &Env, cell: f32) -> Dimension {
         match (env.cell_spaces, self.resolve(env)) {
             // (A calc() whose percentage is 0 is points on every basis.)
             (true, Dimension::Points(v)) => Dimension::Points(space(v, cell)),
@@ -66,10 +66,10 @@ impl Dimension {
             (true, Dimension::Compare(c)) => {
                 match (c.value(env, Some(0.0)), c.value(env, Some(1e4))) {
                     (Some(a), Some(b)) if a == b => Dimension::Points(space(a, cell)),
-                    _ => self,
+                    _ => self.clone(),
                 }
             }
-            _ => self,
+            _ => self.clone(),
         }
     }
 }

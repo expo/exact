@@ -18,11 +18,8 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             })
     }
     /// The device's tier changed (`prefer gpu-tier`): the rung is resolved
-    /// again, and a renderer made at another rung is released, as on a lost
-    /// device, to be made again under the same world; a look frame's own
-    /// renderer and a readback in flight go with it. The placed children's
-    /// textures are the host's on the same device and stay. True when a live
-    /// renderer was released.
+    /// again, and a renderer made at another rung is released. True when a
+    /// live renderer was released.
     pub(super) fn retier_rung(&mut self) -> bool {
         let Some(sim) = &self.sim else { return false };
         let next = crate::quality::Rung::resolve(G::quality(sim.args()), exact_gpu::tier());
@@ -30,6 +27,13 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             return false;
         }
         self.rung = Some(next);
+        self.release_renderer()
+    }
+    /// Release the renderer, as on a lost device, to be made again under the
+    /// same world; a look frame's own renderer and a readback in flight go
+    /// with it. The placed children's textures are the host's on the same
+    /// device and stay. True when a live renderer was released.
+    fn release_renderer(&mut self) -> bool {
         self.look.retiered();
         if self.render.is_none() {
             return false;
@@ -40,7 +44,12 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             .iter()
             .map(|c| c.texture.clone())
             .collect();
+        // The device stays: its assets are prepared again for the new
+        // renderer, as often as it is released, and a later loss of the
+        // device invalidates them again.
+        self.device_assets_invalidated = false;
         exact_gpu::Surface::device_lost(self);
+        self.device_assets_invalidated = false;
         for (child, texture) in self.placed.children.iter_mut().zip(children) {
             child.texture = texture;
         }
@@ -64,9 +73,15 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         if let Some(e) = &self.error {
             return Err(e.clone());
         }
+        let mut resample = false;
         if let Some(sim) = &mut self.sim {
             let generation = sim.generation();
             let models = sim.world().model_revision();
+            // A live bind while at rest: the idle time runs no ticks.
+            let woke = at_ms.filter(|_| self.resting && !self.seekable);
+            if let Some(at) = woke {
+                sim.wake(at);
+            }
             sim.bind_with(
                 values,
                 at_ms,
@@ -87,7 +102,15 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                 ),
             )
             .map_err(SurfaceError)?;
+            // An accepted bind: the next frame advances from it, not from the rest.
+            if woke.is_some() {
+                self.idle_tick = None;
+                self.resting = false;
+            }
             self.assets_dirty |= models != sim.world().model_revision();
+            // New scene samples (`Game::samples`) make the renderer again.
+            let samples = crate::quality::samples(self.rung, G::samples(sim.args()));
+            resample = self.samples.is_some_and(|made| made != samples);
             if generation != sim.generation() {
                 self.hook_clock.reset();
                 if let Some((_, feed)) = &mut self.render {
@@ -109,6 +132,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                 crate::quality::Rung::resolve(G::quality(sim.args()), exact_gpu::tier())
             });
             self.sim = Some(sim);
+        }
+        if resample {
+            self.release_renderer();
         }
         if let Err(error) = self.check_primitive_assets() {
             self.sim = None;

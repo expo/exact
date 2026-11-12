@@ -13,6 +13,8 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
     /// Seconds a glimpse took per row it built, per list.
     private var glimpseCosts: [UInt32: TimeInterval] = [:]
     private var textPending = false
+    private var refreshingText = false
+    private var textQueued = false
     private var refreshInterval = 1.0 / 60
     private var lastScroll = -Double.infinity
     private var lastSlice = -Double.infinity
@@ -39,7 +41,7 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         RasterWorkers.shared.travelling(self, false)
         if let turnObserver { CFRunLoopRemoveObserver(CFRunLoopGetMain(), turnObserver, .commonModes) }
     }
-    /// A pass is queued or frames are asked of the app's clock.
+    /// A scroll pass is queued or frames are asked of the app's clock.
     var asksForFrames: Bool { queued || FrameClock.shared.wants(self) }
     var sliceBudget: TimeInterval { min(0.004, max(0.001, refreshInterval * 0.24)) }
     /// Seconds a list must be still before what it cached for travel is
@@ -233,6 +235,30 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         start()
     }
     func requestText() { textPending = true; start() }
+    /// A completion already has a main-queue turn; only work left for lack
+    /// of time needs a frame. Collection slices keep their frame throttle.
+    func textSlotFreed() {
+        textPending = true
+        resumeText()
+    }
+    private func resumeText() {
+        guard textPending, let p = presenter, !p.applying else { return }
+        // Publication can also happen inside an urgent paint or a refresh.
+        // Let that walk finish before another one takes its clip geometry.
+        guard !refreshingText, !inScroll, p.textClips == nil else {
+            guard !textQueued else { return }
+            textQueued = true
+            let generation = epoch
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.epoch == generation else { return }
+                self.textQueued = false
+                self.resumeText()
+            }
+            return
+        }
+        refreshText(deadline: CACurrentMediaTime() + sliceBudget)
+        if textPending && p.textRasters.hasRoom { start() }
+    }
     /// A collection owes a report (LLP 1050.000): the next slice builds it.
     func requestFill() { scheduleAfterScroll(); start() }
     /// Build each owed collection's rows for this slice: as many as its
@@ -330,13 +356,7 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
             let rows = HostPhases.shared.measure(.rows) { fillCollections(deadline: deadline) }
             Presenter.signposts.endInterval("pump-collection", post, "rows=\(rows)")
         }
-        if textPending {
-            let post = Presenter.signposts.beginInterval("pump-text")
-            // Lead the fastest list's travel.
-            let fastest = p.listViews.keys.map { velocity($0) }.max { abs($0) < abs($1) } ?? 0
-            textPending = HostPhases.shared.measure(.text) { p.refreshVisibleText(deadline: deadline, velocity: CGFloat(fastest), interval: refreshInterval) }
-            Presenter.signposts.endInterval("pump-text", post)
-        }
+        refreshText(deadline: deadline)
         // One image decode at a time while a list travels fast.
         RasterWorkers.shared.travelling(self, p.listViews.keys.contains { abs(velocity($0)) > Self.fastTravel })
         // Frames stay asked for until the scroll has been still for two of
@@ -345,6 +365,16 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         // that frees asks for the next pass (`TextRasterizer.slotFreed`).
         let textNeedsFrames = textPending && p.textRasters.hasRoom
         if !textNeedsFrames && p.collections.fillPending.isEmpty && now - lastScroll >= refreshInterval * 2 { stop() }
+    }
+    private func refreshText(deadline: TimeInterval) {
+        guard textPending, let p = presenter, !refreshingText else { return }
+        refreshingText = true
+        defer { refreshingText = false }
+        let post = Presenter.signposts.beginInterval("pump-text")
+        // Lead the fastest list's travel.
+        let fastest = p.listViews.keys.map { velocity($0) }.max { abs($0) < abs($1) } ?? 0
+        textPending = HostPhases.shared.measure(.text) { p.refreshVisibleText(deadline: deadline, velocity: CGFloat(fastest), interval: refreshInterval) }
+        Presenter.signposts.endInterval("pump-text", post)
     }
     /// Agent reads keep their settled contract, outside the scroll callback.
     func settle() {
@@ -362,7 +392,7 @@ final class ScrollPump: NSObject, UIScrollViewDelegate {
         stop(); epoch += 1; queued = false
         restTimer?.invalidate(); restTimer = nil
         travel.removeAll(); costs.removeAll(); glimpseCosts.removeAll()
-        textPending = false
+        textPending = false; textQueued = false
         lastScroll = -.infinity; lastSlice = -.infinity
     }
     func forget(_ id: UInt32) {

@@ -240,9 +240,14 @@ fn a_resource_that_comes_to_read_the_store_shows_a_placeholder_not_the_compiled_
             .iter()
             .position(|row| r.plan.str(row.name) == "consume")
             .unwrap();
-        assert!(r.resources[consume].as_ref().unwrap().value.is_compiled());
+        assert!(r.resources[consume]
+            .state
+            .as_ref()
+            .unwrap()
+            .value
+            .is_compiled());
         r.act("use", vec![Value::Bool(true)]).unwrap();
-        let state = r.resources[consume].as_ref().unwrap();
+        let state = r.resources[consume].state.as_ref().unwrap();
         assert!(
             state.placeholder && !state.value.is_compiled(),
             "{account:?}"
@@ -269,8 +274,8 @@ fn a_failed_compiled_answer_is_passed_over_too() {
         .iter()
         .position(|row| r.plan.str(row.name) == "consume")
         .unwrap();
-    r.failed_args[consume] = Some(vec![Value::str("")]);
+    r.resources[consume].failed_args = Some(vec![Value::str("")]);
     r.act("use", vec![Value::Bool(true)]).unwrap();
-    let state = r.resources[consume].as_ref().unwrap();
+    let state = r.resources[consume].state.as_ref().unwrap();
     assert!(state.placeholder && !state.value.is_compiled());
 }

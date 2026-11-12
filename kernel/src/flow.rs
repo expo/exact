@@ -90,11 +90,11 @@ fn placed(arena: &NodeArena, exclusion: u32) -> bool {
     let s = arena.style(exclusion);
     let env = arena.env();
     let bounded = |d: Dimension| matches!(d, Dimension::Auto) || own_length(d, env);
-    own_length(s.top, env)
-        && (own_length(s.height, env)
+    own_length(s.top.clone(), env)
+        && (own_length(s.height.clone(), env)
             || (s.height == Dimension::Auto && s.bottom == Dimension::Auto))
-        && bounded(s.min_height)
-        && bounded(s.max_height)
+        && bounded(s.min_height.clone())
+        && bounded(s.max_height.clone())
 }
 
 // A block places children in order: a child's offset depends on what precedes
@@ -112,7 +112,7 @@ fn in_flow(arena: &NodeArena, slot: u32) -> bool {
     // must not depend on the context's height. A popover is out of flow.
     match crate::style::top_layer::layout_position(arena, slot) {
         PositionType::Static | PositionType::Sticky => true,
-        PositionType::Relative => offset(s.top) && offset(s.bottom),
+        PositionType::Relative => offset(s.top.clone()) && offset(s.bottom.clone()),
         PositionType::Absolute => false,
     }
 }

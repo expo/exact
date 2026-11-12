@@ -857,3 +857,42 @@ fn optional_popover_preserves_the_node_and_clears_without_a_journal_refusal() {
         assert!(contract::compile(&source).is_ok(), "{source}");
     }
 }
+
+/// `menuOrder` on a menu's trigger is the author's word over the platform's
+/// order (LLP 1115 §2): one of three words, kept as a prop for the host, bound
+/// too; any other literal is refused.
+#[test]
+fn a_menu_order_is_one_of_three_words_on_its_trigger() {
+    let menu = "column id=\"m\" popover=\"auto\" role=\"menu\"\n  button press=go popovertarget=\"m\" popovertargetaction=\"hide\"\n    text \"One\"";
+    for word in ["fixed", "priority", "automatic"] {
+        let r = boot(&app(&format!(
+            "button popovertarget=\"m\" menuOrder=\"{word}\" testId=\"t\"\n  text \"Open\"\n{menu}"
+        )));
+        assert_eq!(node(&r, "t").props.str(PropId::MenuOrder), Some(word));
+    }
+    let r = boot(&app(&format!("button popovertarget=\"m\" menuOrder=(busy ? \"fixed\" : \"automatic\") testId=\"t\"\n  text \"Open\"\n{menu}")));
+    assert_eq!(
+        node(&r, "t").props.str(PropId::MenuOrder),
+        Some("automatic")
+    );
+    let r = boot(&app(&format!(
+        "button popovertarget=\"m\" testId=\"t\"\n  text \"Open\"\n{menu}"
+    )));
+    assert_eq!(
+        node(&r, "t").props.str(PropId::MenuOrder),
+        None,
+        "unsaid, the platform's"
+    );
+    for word in ["", "reversed", "Fixed"] {
+        let (id, message) = refused(&format!(
+            "button popovertarget=\"m\" menuOrder=\"{word}\"\n  text \"Open\"\n{menu}"
+        ));
+        assert_eq!(id, "lower-attr-value", "{word}: {message}");
+        assert!(message.contains("`menuOrder` takes"), "{word}: {message}");
+    }
+    // UIKit's name points at Exact's.
+    let (_, message) = refused(&format!(
+        "button popovertarget=\"m\" preferredMenuElementOrder=\"fixed\"\n  text \"Open\"\n{menu}"
+    ));
+    assert!(message.contains("menuOrder"), "{message}");
+}

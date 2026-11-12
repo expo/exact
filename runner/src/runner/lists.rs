@@ -22,6 +22,42 @@ pub struct ListTextPosition<'a> {
 }
 
 impl<D: DataSource> Runner<D> {
+    /// Nearest unmounted row snap area in a horizontal collection, using its
+    /// measured sizes or current estimates. At most 64 local rows are evaluated;
+    /// no row is mounted. `distance` bounds the search by the nearest mounted
+    /// target, or infinity when there is none.
+    pub fn collection_snap(
+        &self,
+        view: ViewId,
+        proposed: f64,
+        port: f64,
+        maximum: f64,
+        distance: f64,
+    ) -> Option<f64> {
+        if self.poisoned
+            || ![proposed, port, maximum].into_iter().all(f64::is_finite)
+            || port <= 0.0
+            || maximum < 0.0
+            || distance.is_nan()
+            || distance <= 0.0
+        {
+            return None;
+        }
+        let mut ids = Ids::default();
+        let mut u = Update::new(self.env(&[], &[]), &self.sites, &mut ids);
+        u.fonts = Some(self.fonts.clone());
+        self.tree
+            .as_ref()?
+            .collection_snap(
+                &mut u,
+                &self.kernel,
+                view,
+                [proposed, port, maximum, distance],
+            )
+            .ok()
+            .flatten()
+    }
+
     /// Resolve an opaque row key without materializing that row.
     pub fn list_index(&self, view: ViewId, key: &str) -> Option<usize> {
         self.tree.as_ref()?.list_index(view, key)

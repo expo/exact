@@ -126,15 +126,17 @@ impl Painter {
                 shape.rect.1 += origin.1;
                 painter.backend.fill(&shape, *color, ts);
             }
-            painter.text_decorations(kernel, &shown, &palette, origin, ts, reveal);
-            match &roll {
-                Some(roll) => {
-                    painter.roll_glyphs(node, kernel, roll, &palette, origin, rect, ts, reveal)
-                }
-                None => {
-                    painter.text_paint(node, kernel, &shown, &palette, origin, rect, ts, reveal)
-                }
-            }
+            painter.text_paint(
+                node,
+                kernel,
+                &shown,
+                &palette,
+                origin,
+                rect,
+                ts,
+                reveal,
+                roll.as_ref(),
+            );
             if let Some((fragments, accent)) = &focus {
                 for shape in fragments {
                     let mut shape = *shape;

@@ -8,6 +8,96 @@ use exact_tamber::{apply, format, parse, undo, Op};
 const BASE: &str =
     "tamber app\n\naxes\n  density = regular | compact\n\ntheme\n  radius.md = 12px\n";
 
+#[test]
+fn a_rename_updates_param_pairs() {
+    let src = "tamber t\n\ntheme\n  surface.page = #ffffff\n\nparams\n  Card.fg = #222222  pair=surface.page,Canvas  label=surface.page // surface.page\n";
+    let renamed = apply(
+        src,
+        &Op::RenameToken {
+            from: "surface.page".into(),
+            to: "surface.ground".into(),
+        },
+        &vocab(),
+    )
+    .unwrap();
+    assert_eq!(
+        renamed.text,
+        src.replace("surface.page =", "surface.ground =")
+            .replace("pair=surface.page,", "pair=surface.ground,")
+    );
+    assert_eq!(
+        undo(&renamed.text, &renamed.inverse, &vocab())
+            .unwrap()
+            .text,
+        src
+    );
+}
+
+#[test]
+fn a_rename_preserves_literal_component_defaults() {
+    let src = "tamber t\n\ntheme\n  serif = 1px\n\ncomponent Card\n  params\n    face: family = serif, sans-serif\n";
+    let rename = Op::RenameToken {
+        from: "serif".into(),
+        to: "mono".into(),
+    };
+    let errors = apply(src, &rename, &vocab()).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.message.contains("change what a value folds to")),
+        "{errors:?}"
+    );
+    let quoted = src.replace("= serif,", "= \"serif\",");
+    let renamed = apply(&quoted, &rename, &vocab()).unwrap();
+    assert_eq!(renamed.text, quoted.replace("serif = 1px", "mono = 1px"));
+}
+
+#[test]
+fn a_rename_preserves_component_icon_sources() {
+    let src = "tamber t\n\ntheme\n  sf = #111111\n\ncomponent Card\n  params\n    glyph: icon = icon(sf \"star\", svg \"icons/star.svg\")\n";
+    exact_tamber::check(src, &vocab()).unwrap();
+    let errors = apply(
+        src,
+        &Op::RenameToken {
+            from: "sf".into(),
+            to: "material".into(),
+        },
+        &vocab(),
+    )
+    .unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|d| d.message.contains("change what a value folds to")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_rename_updates_component_defaults() {
+    let src = "tamber t\n\ntheme\n  accent.fill = #1083fe\n  card = accent.fill\n\ncomponent MapCard\n  params\n    pin: color = accent.fill  label=\"accent.fill\" // accent.fill\n    halo: color = color-mix(in oklab, param.pin 40%, white)\n\ncomponent OtherCard\n  params\n    pin: length = 8px\n    inset: length = calc(param.pin * 2)\n    glyph: icon = icon(sf \"mappin\")\n    alias: icon = param.glyph\n";
+    exact_tamber::check(src, &vocab()).unwrap();
+    let renamed = apply(
+        src,
+        &Op::RenameToken {
+            from: "accent.fill".into(),
+            to: "accent.main".into(),
+        },
+        &vocab(),
+    )
+    .unwrap();
+    assert_eq!(
+        renamed.text,
+        "tamber t\n\ntheme\n  accent.main = #1083fe\n  card = accent.main\n\ncomponent MapCard\n  params\n    pin: color = accent.main  label=\"accent.fill\" // accent.fill\n    halo: color = color-mix(in oklab, param.pin 40%, white)\n\ncomponent OtherCard\n  params\n    pin: length = 8px\n    inset: length = calc(param.pin * 2)\n    glyph: icon = icon(sf \"mappin\")\n    alias: icon = param.glyph\n"
+    );
+    assert_eq!(
+        undo(&renamed.text, &renamed.inverse, &vocab())
+            .unwrap()
+            .text,
+        src
+    );
+}
+
 fn set(name: &str, when: &[(&str, &str)], value: &str) -> Op {
     Op::SetParam {
         name: name.into(),
@@ -192,6 +282,7 @@ fn a_rename_is_proved_with_the_params_and_an_emptied_block_goes_whole() {
         full: full.into(),
         kind: kind.into(),
         default: default.into(),
+        from_design: false,
     };
     // A literal family that is also a token's name: renaming the token
     // would change the param's stack, so it is refused.

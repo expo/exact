@@ -14,6 +14,7 @@ import { plain } from './format.js';
 const LIVE = 32, WAITING = 256, RECORD = 1024, HAPTICS = 1024, SHOWN = 64, OWN = new Set(['playSound', 'playSounds', 'stopSounds']);
 const say = line => journal.push(`t=${clock.now} ${line}`);
 let Table = [], Voices = [], Next = 0, Evicted = 0, EvictedThrough = 0, Ops = [], Glue = null, Output = null, Haptics = [], NextHaptic = 0;
+let RestoreAt = null;
 const sounds = by => by !== 'cut' && by !== 'cancelled' && by !== 'edit' && by !== 'clock';
 const live = (v, t) => sounds(v.by) && v.ends > t;
 const sounding = (v, t) => sounds(v.by) && v.at <= t && v.ends > t;
@@ -66,24 +67,24 @@ function play(t, [src, asked0, gain0, group0, rate0, pan0], seq = false) {
   say(`sound ${id} ${src} at ${num(at)} gain ${num(voice.gain)}${group ? ` group ${group}` : ''}${playbackRate !== 1 ? ` playbackRate ${num(playbackRate)}` : ''}${pan !== 0 ? ` pan ${num(pan)}` : ''}${asked < t ? ` (asked ${num(asked)})` : ''}`);
   Voices.push(voice);
   for (const [cut, ends] of cuts.sort((a, b) => a[0] - b[0])) say(`sound ${cut} ends at ${num(ends)} (group ${group})`);
-  // Keep the last RECORD voices, the oldest no longer live first.
+  // A group cut at t can still be retracted later in this commit.
   while (Voices.length > RECORD) {
-    const i = Voices.findIndex(v => !live(v, t));
+    const i = Voices.findIndex(v => !live(v, t) && !(v.by === 'group' && v.ends === t));
     if (i < 0) break;
     const [gone] = Voices.splice(i, 1); Evicted++; EvictedThrough = Math.max(EvictedThrough, gone.at);
   }
 }
-// Every voice live at `t` (in `group`) ends: sounding stops at `t`, waiting is cancelled at its start — a sequence's
-// waiting one kept when `seqWaits` (`stopSounds`: its next steps play, LLP 1125 D4).
+// Live voices and group cuts at `t` (in `group`) end: sounding stops at `t`, waiting is cancelled at its start — a sequence's
+// waiting one kept when `seqWaits` (`stopSounds`: its next steps play, LLP 1125 D4). A cut at `t` must not be restored by that stop.
 function endLive(t, group, seqWaits) {
   let n = 0;
-  for (const v of Voices) if (live(v, t) && !(seqWaits && v.seq && v.at >= t) && (group == null || v.group === group)) { n++; if (v.at < t) { v.ends = t; v.by = 'stop'; } else { v.ends = v.at; v.by = 'cancelled'; } }
+  for (const v of Voices) if ((live(v, t) || v.by === 'group' && v.ends === t) && !(seqWaits && v.seq && v.at >= t) && (group == null || v.group === group)) { n++; if (v.at < t) { v.ends = t; v.by = 'stop'; } else { v.ends = v.at; v.by = 'cancelled'; } }
   return n;
 }
 function queue(before, firstNew) {
   for (const v of Voices) {
     if (v.id >= firstNew) { Ops.push({ op: 'play', id: v.id, sound: v.sound, at: v.at, gain: v.gain, playbackRate: v.playbackRate, pan: v.pan }); if (v.ends < v.natural) Ops.push({ op: 'end', id: v.id, at: v.ends }); }
-    else if (before.has(v.id) && v.ends < before.get(v.id)) Ops.push({ op: 'end', id: v.id, at: v.ends });
+    else if (before.has(v.id) && v.ends !== before.get(v.id)) Ops.push({ op: 'end', id: v.id, at: v.ends });
   }
 }
 /** Changes made by `f`, their ops queued once at the end (a commit's, or a sequence's at one instant). */
@@ -96,6 +97,29 @@ function batch(f) {
 // Whether a retraction takes a step at `stepAt`: at or after `from`, or (`strict`, a clock's re-anchor) only after it, the
 // hold's edge where a note is handed already (the runner's `Cut`).
 const after = (stepAt, from, strict) => strict ? stepAt > from : stepAt >= from;
+function restoreGroups(t) {
+  let changed = false;
+  // A group cut at or after t can be undone; past ends, stops and tied losers stay ended.
+  for (const v of Voices) if (v.by === 'group' && v.ends >= t) {
+    const next = Voices.filter(w => w.group === v.group && sounds(w.by) && w.at > v.at).reduce((m, w) => Math.min(m, w.at), Infinity);
+    const ends = Math.min(v.natural, next), by = next < v.natural ? 'group' : 'end';
+    if (ends !== v.ends) { say(`sound ${v.id} ends at ${num(ends)} (${by})`); changed = true; }
+    v.ends = ends; v.by = by;
+  }
+  return changed;
+}
+// Keep sounding voices; at each future start, the last admitted voices lose first.
+function restore(t) {
+  if (!restoreGroups(t)) return;
+  const waiting = Voices.filter(v => sounds(v.by) && v.at >= t).sort((a, b) => a.at - b.at || b.id - a.id);
+  for (const v of waiting) {
+    if (!sounding(v, v.at) || Voices.filter(w => sounding(w, v.at)).length <= LIVE) continue;
+    say(`sound dropped: ${LIVE} voices sound at its start (${v.src} at ${num(v.at)})`);
+    v.ends = v.at; v.by = 'cancelled';
+    // A cancelled group cut can extend its predecessor only from this start onward.
+    restoreGroups(t);
+  }
+}
 // Haptics waiting at `t` (`at >= t`) for a step at or after `from`, retracted with why; one line when any was.
 function retractHaptics(t, from, by, strict = false) {
   let n = 0;
@@ -111,17 +135,22 @@ function apply(commands) {
       if (!OWN.has(name)) continue;
       if (name === 'playSound') play(t, args);
       else if (name === 'playSounds') { if (Array.isArray(args[0])) for (const hit of args[0]) Array.isArray(hit) ? play(t, hit) : say('sound dropped: a hit is not a record'); else say('sound dropped: playSounds takes a list'); }
-      else { const g = given(args[0]); const n = endLive(t, g || null, true); say(g ? `sounds stopped: ${n} (group ${g})` : `sounds stopped: ${n}`); }
+      else { const g = given(args[0]); const n = endLive(t, g || null, true); if (n) RestoreAt = t; say(g ? `sounds stopped: ${n} (group ${g})` : `sounds stopped: ${n}`); }
     }
     if (Table.length && commands.some(([name]) => name === 'reload')) say(`sounds stopped: ${endLive(t, null, false)} (reload)`);
   });
   if (Table.length && commands.some(([name]) => name === 'reload')) retractHaptics(t, -Infinity, 'cancelled');
-  flush();
+  if (!Sounds.stood) Seq.flush(); else flush();
 }
 // A sequence's side of the table (LLP 1125 D3), as the runner's `Sounds::issue`, `issue_haptic`, `retract_seq` and
 // `stop_seq`; transport.js calls each inside `batch`, then `flush`.
 const Seq = {
-  batch, flush: () => flush(), waiting, declared: src => Table.some(r => r[0] === src),
+  batch, waiting, declared: src => Table.some(r => r[0] === src),
+  flush() {
+    // Reconcile after the commit's commands and sequence expansion, using the final schedule.
+    if (RestoreAt != null) { const t = RestoreAt; RestoreAt = null; batch(() => restore(t)); }
+    flush();
+  },
   nextStart: t => Voices.filter(v => waits(v, t)).reduce((m, v) => Math.min(m, v.at), Infinity),
   issue: (t, args, stepAt) => play(t, args, stepAt),
   haptic(kind, at, stepAt, t) {
@@ -136,12 +165,14 @@ const Seq = {
   retract(t, from = t, by = 'edit', strict = false) {
     let n = 0;
     for (const v of Voices) if (v.seq && sounds(v.by) && v.at >= t && after(v.stepAt, from, strict)) { v.ends = v.at; v.by = by; n++; }
+    if (n) RestoreAt = t;
     say(`sounds retracted: ${n} (${by})`);
     retractHaptics(t, from, by, strict);
   },
   stop(t, name) {
     let n = 0;
-    for (const v of Voices) if (v.seq && live(v, t)) { n++; if (v.at < t) { v.ends = t; v.by = 'stop'; } else { v.ends = v.at; v.by = 'cancelled'; } }
+    for (const v of Voices) if (v.seq && (live(v, t) || v.by === 'group' && v.ends === t)) { n++; if (v.at < t) { v.ends = t; v.by = 'stop'; } else { v.ends = v.at; v.by = 'cancelled'; } }
+    if (n) RestoreAt = t;
     say(`sounds stopped: ${n} (sequence ${name})`);
     retractHaptics(t, -Infinity, 'cancelled');
   },

@@ -55,6 +55,10 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Default
             interrupted: false,
             look: Default::default(),
             rung: None,
+            resting: false,
+            idle_tick: None,
+            samples: None,
+            timing: Default::default(),
         }
     }
 }
@@ -67,6 +71,114 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
     /// Read presentation diagnostics owned by this canvas's render hooks.
     pub fn render_hooks(&self) -> &H {
         &self.hooks
+    }
+    /// `Surface::prepare_assets` under whatever pipeline timing is on.
+    pub(super) fn prepare_now(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+    ) {
+        if !self.storage_fits(device) {
+            return;
+        }
+        if !ASSETS {
+            return;
+        }
+        let models = self.sim.as_ref().map(|s| s.world().model_revision());
+        if models.is_some_and(|m| m != self.models_seen) {
+            self.models_seen = models.unwrap();
+            self.assets_dirty = true;
+        }
+        if !self.assets_dirty && self.format == Some(format) {
+            return;
+        }
+        let Some(sim) = &mut self.sim else { return };
+        let textures = sim.take_textures();
+        if self.render.is_none()
+            && sim.presentation_models().next().is_none()
+            && textures.is_empty()
+        {
+            self.assets_dirty = false;
+            return;
+        }
+        if self.format != Some(format) {
+            self.gpu_timing = None;
+            self.hook_clock.reset();
+            self.hooks.device_lost();
+            self.ready_work = None;
+            self.perf.pipeline_ready = crate::perf::timing().then_some(0.);
+            self.render = Some((
+                crate::renderer::RendererWithAssets::<ASSETS>::configured(
+                    device,
+                    queue,
+                    format,
+                    *self
+                        .samples
+                        .insert(crate::quality::samples(self.rung, G::samples(sim.args()))),
+                    G::DEPTH_PREPASS,
+                )
+                .with_matte_models(G::MATTE_MODELS),
+                {
+                    let mut feed = Feed::default();
+                    feed.share_attachment_diagnostics(self.placed.attachments.diagnostics.clone());
+                    feed
+                },
+            ));
+            self.format = Some(format);
+        }
+        let (renderer, _feed) = self.render.as_mut().unwrap();
+        let live = sim.presentation_assets().map(str::to_owned).collect();
+        // Accept deliveries before the sole compaction: live identical residents
+        // may still be marked retired until preparation reactivates them.
+        let prepared: Vec<_> = sim
+            .presentation_models()
+            .map(|(name, model)| {
+                let digest = *self
+                    .placed
+                    .attachments
+                    .model_digests
+                    .entry(name.to_owned())
+                    .or_insert_with(|| crate::models::model_digest(model));
+                (
+                    name.to_owned(),
+                    renderer
+                        .prepare_model_digest(name, model, digest)
+                        .map_err(|e| e.to_string()),
+                )
+            })
+            .collect();
+        // Resident geometry is independent of draw readiness: a texture still in
+        // flight hides the model but must not evict this pass's accepted bytes.
+        let touched = prepared
+            .iter()
+            .filter(|(_, result)| result.is_ok())
+            .map(|(name, _)| name.clone())
+            .collect();
+        for (name, result) in prepared {
+            sim.asset_prepared(&name, result);
+        }
+        for (name, texture) in textures {
+            let result = renderer
+                .add_texture(&name, &texture)
+                .map_err(|e| e.to_string());
+            sim.asset_prepared(&name, result);
+        }
+        // Closure acceptance can reactivate an identical resident model without
+        // uploading it. Publish that activity before compaction considers it.
+        for (name, model) in &mut renderer.models.loaded {
+            let active = sim.model_prepared(name);
+            if model.active != active {
+                model.active = active;
+                renderer.models.revision += 1;
+            }
+        }
+        if renderer.retired_bytes(&live) > RETIRED_BUDGET {
+            renderer.compact_assets(&live, &touched);
+        }
+        self.finish_restore();
+        self.assets_dirty = false;
+        self.dirty = true;
     }
     pub(super) fn render_frame(
         &mut self,
@@ -105,6 +217,12 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         }
         // The host's display period: the live scheduler looks ahead by it.
         sim.frame_period(frame.period_ms);
+        // The first frame after a rest: the idle time runs no ticks.
+        if std::mem::take(&mut self.resting) && !frame.seekable {
+            sim.wake(frame.now_ms);
+            // What woke it may change the pose: rest again only after it draws.
+            self.idle_tick = None;
+        }
         if !drawable {
             if frame.seekable {
                 sim.advance_with(
@@ -158,7 +276,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                     device,
                     queue,
                     format,
-                    crate::quality::samples(self.rung, G::SAMPLES),
+                    *self
+                        .samples
+                        .insert(crate::quality::samples(self.rung, G::samples(sim.args()))),
                     G::DEPTH_PREPASS,
                 )
                 .with_matte_models(G::MATTE_MODELS),
@@ -170,6 +290,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             ));
             self.format = Some(format);
             self.dirty = true;
+            self.perf.pipeline_ready = crate::perf::timing().then_some(0.);
         }
         if ASSETS {
             if let Some((renderer, _)) = &mut self.render {
@@ -180,6 +301,15 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                         renderer.models.revision += 1;
                         self.dirty = true;
                     }
+                }
+            }
+        }
+        // Buffers sized for `Game::PREPARE` before the instances that need them.
+        if ASSETS && !G::PREPARE.is_empty() {
+            if let Some((renderer, _)) = &mut self.render {
+                if renderer.reserve_prepared(G::PREPARE) {
+                    renderer.models.revision += 1;
+                    self.dirty = true;
                 }
             }
         }
@@ -242,6 +372,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         let hook_time = if H::ENABLED {
             self.hook_clock.frame(
                 frame,
+                &self.timing,
                 sim.world().presentation_generation(),
                 G::paused(sim.args()),
             )
@@ -315,12 +446,29 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             }
         };
         self.hook_poses.track(self.hooks.entities(), sim.world());
+        // Pipeline time, timed on live frames only, since the renderer was made.
+        // A seekable frame times nothing and leaves earlier live time pending.
+        let mut pipeline = crate::perf::pipeline_ms();
+        if start.is_some() {
+            pipeline += std::mem::take(&mut self.perf.pipeline_pending);
+            self.perf.pipeline.push(pipeline);
+        }
+        if let Some(ms) = &mut self.perf.pipeline_ready {
+            *ms += pipeline;
+        }
+        if frame.seekable {
+            self.perf.pipeline_ready = None;
+        }
         if !self.hooks.needs().contains(crate::Needs::PENDING)
             && self.hooks.error().is_none()
             && self.ready_work.is_none()
         {
+            let pipeline_ms = self
+                .perf
+                .pipeline_ready
+                .map_or("untimed".into(), |ms| format!("{ms:.1}"));
             eprintln!(
-                "game renderer first frame encoded: {}x{} pipelines={} direct={} f16={}",
+                "game renderer first frame encoded: {}x{} pipelines={} pipeline_ms={pipeline_ms} direct={} f16={}",
                 frame.pixels().0,
                 frame.pixels().1,
                 renderer.residency_work().pipeline_creations,
@@ -362,9 +510,18 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         let wants = !G::paused(sim.args()) || ticks != 0;
         retain_primes(&mut self.render, &mut self.placed, false);
         self.dirty = false;
-        wants
-            || self.hooks.needs().contains(crate::Needs::ANIMATE)
-            || self.hooks.needs().contains(crate::Needs::PENDING)
+        // At rest once idle at two ticks: this frame drew between idle poses.
+        let rests = if !frame.seekable && sim.render_idle() {
+            let tick = sim.world().tick();
+            tick > *self.idle_tick.get_or_insert(tick)
+        } else {
+            self.idle_tick = None;
+            false
+        };
+        let hooks = self.hooks.needs().contains(crate::Needs::ANIMATE)
+            || self.hooks.needs().contains(crate::Needs::PENDING);
+        self.resting = rests && !hooks;
+        (wants && !rests) || hooks
     }
 
     /// A display frame the module does not render: run the ticks due by
@@ -425,6 +582,13 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             return;
         };
         renderer.submitted();
+        // `Game::PREPARE`'s pipelines, after the frame that sets their keys is
+        // on its way: their time counts in the next frame's `pipelineMs`.
+        if ASSETS && !G::PREPARE.is_empty() && self.ready_work.is_some() {
+            let _timing = crate::perf::PipelineTiming::start(self.perf.live);
+            renderer.warm_prepared(G::PREPARE);
+            self.perf.pipeline_pending += crate::perf::pipeline_ms();
+        }
         let frame = self.sim.as_mut().map_or(0, Sim::trace_frame);
         if let Some(timing) = &mut self.gpu_timing {
             timing.submitted(&renderer.queue, timed, frame);

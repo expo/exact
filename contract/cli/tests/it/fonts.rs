@@ -306,7 +306,7 @@ fn refusal(source: &str, id: &str) {
 
 #[test]
 fn family_identity_and_sources_fail_closed() {
-    // An empty family declares nothing (borders.rs); an empty member is refused.
+    // An empty family clears the row (borders.rs); an empty member is refused.
     refusal(
         "component App\n  view\n    text \"x\" font-family=\"serif,, sans-serif\"\n",
         "lower-font-family-list",

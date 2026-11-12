@@ -905,7 +905,7 @@ along the gradient line. `background-attachment` takes `scroll` or `fixed`;
 hatch on separate rows does not establish one pattern across the list.
 
 ## menu: a pull-down menu of actions, and a long-press one
-names: menus, popover, dropdown, pulldown, pull-down, popupmenu, menu at the click, popup at point, contextPopover, UIMenu, context menu, context-menu, contextMenu, UIContextMenuInteraction, menuitemradio, menuitemcheckbox, checkmark
+names: menus, popover, dropdown, pulldown, pull-down, popupmenu, menu at the click, popup at point, contextPopover, UIMenu, context menu, context-menu, contextMenu, UIContextMenuInteraction, menuitemradio, menuitemcheckbox, checkmark, menuOrder, preferredMenuElementOrder, menu order, reversed menu
 
 A menu is HTML's: a `column popover="auto" role="menu"` of `button`s, opened by a button's
 `popovertarget` (on iOS a `UIMenu`; in a `header`, the bar item's pull-down). A long-press
@@ -945,6 +945,9 @@ component App
 - A row's second `text`, under the first (a block `button`, or `flex-direction="column"`), is
   its grey subtitle: `text "Name"` then `text "A to Z"`. Side by side they stay one title.
 - An `hr` between rows starts a section; `destructive=true` paints a row red.
+- iOS puts the first row nearest the finger, so a menu opening upward from near the bottom
+  of the screen shows its rows last first. `menuOrder="fixed"` on the trigger keeps them as
+  written; `"priority"` always puts the first row nearest the finger.
 - At the click, as Electron's `Menu.popup({x, y})`: the button's `press` action takes
   `e: MouseEvent`, keeps `e.clientX`, `e.clientY` (both 0 from a key; then leave the insets
   `auto`), and calls `showPopover("menu", source="button")`; the popover writes them as `left`
@@ -1119,7 +1122,7 @@ component App
   a child (a `text`, an `image`).
 
 ## glass: Liquid Glass, a material or a blur behind a box
-names: Liquid Glass, liquid-glass, liquidGlass, material, materials, vibrancy, blur, frosted, UIVisualEffectView, UIGlassEffect, BlurView, GlassView, expo-blur, expo-glass-effect
+names: Liquid Glass, liquid-glass, liquidGlass, material, materials, vibrancy, blur, frosted, UIVisualEffectView, UIGlassEffect, BlurView, GlassView, expo-blur, expo-glass-effect, tintColor, glass tint, tinted glass, isInteractive
 
 Bars, tab bars, sheets and menus are the platform's, glass included: leave them unsaid. A
 surface of your own takes `backgroundMaterial`: `"glass"` or `"glass-clear"` is
@@ -1145,6 +1148,9 @@ component App
   `backgroundMaterial`, which wins when both are written.
 - A navigation bar's buttons share one glass capsule on iOS 26; `buttonStyle="glass"` on
   each gives it a capsule of its own (`contract vocab bar-buttons`).
+- `-exact-glass-tint="rgba(10,12,16,0.55)"` tints the glass itself (`UIGlassEffect.tintColor`);
+  a `background-color` is painted behind it. Glass reacts to a finger on a box with a `press`;
+  `glassInteractive=false` keeps it still, `true` makes it react without one.
 
 ## bar-buttons: the navigation bar's buttons, grouped or each in its own capsule
 names: bar button, bar-button, barbuttons, UIBarButtonItem, sharesBackground, headerRight, headerLeft, toolbarItem, ToolbarItem, ToolbarItemGroup

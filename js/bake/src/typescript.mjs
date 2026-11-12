@@ -7,6 +7,7 @@
 // It reads only captured configuration; the producer owns the stage.
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, rmdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { execFile } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
 import { builtinModules, createRequire } from 'node:module';
 import { resolve, relative, dirname, basename, join, sep, isAbsolute, toNamespacedPath } from 'node:path';
@@ -15,7 +16,7 @@ import { moduleBinding } from './__exact_binding.mjs';
 // And the settings' reader beside it (resident.rs `ENV`).
 import { envReads, inlineSettings } from './__exact_env.mjs';
 // And the check of what package code may use (resident.rs `PORTABLE`).
-import { bare, lineColumn, packageRefusals, propertyName } from './__exact_portable.mjs';
+import { bare, lineColumn, packageRefusals, propertyName, walkRuntime } from './__exact_portable.mjs';
 
 export { moduleBinding };
 
@@ -759,55 +760,8 @@ function refusal(node,local) {
   if (node.type==='NewExpression' && ambientGlobal(node.callee,'Date',local) && !node.arguments.length) return ambient('new Date()');
   return null;
 }
-const VALUES=['FunctionDeclaration','VariableDeclaration','ClassDeclaration','ExpressionStatement','TSEnumDeclaration','TSImportEqualsDeclaration'];
-function instantiated(ns) {
-  const body=ns.body;
-  if (!body) return false;
-  if (body.type==='TSModuleDeclaration') return instantiated(body);
-  return (body.body ?? []).some(statement=>{
-    const s=['ExportNamedDeclaration','ExportDefaultDeclaration'].includes(statement.type) ? statement.declaration : statement;
-    if (!s || s.declare || (s.type==='TSEnumDeclaration' && s.const)) return false;
-    return VALUES.includes(s.type) || (s.type==='TSModuleDeclaration' && instantiated(s));
-  });
-}
-// The names the module binds itself, anywhere (a parameter, a variable, a
-// function, class or import): such a `Date` is not the guarded global, so
-// it is left alone; the runtime's refusal still guards the global behind it.
-function bound(ast) {
-  const names=new Set();
-  const pattern=(p)=>{
-    p=bare(p);
-    if (!p) return;
-    if (p.type==='Identifier') names.add(p.name);
-    else if (p.type==='ObjectPattern') p.properties.forEach(q=>pattern(q.type==='RestElement' ? q.argument : q.value));
-    else if (p.type==='ArrayPattern') p.elements.forEach(pattern);
-    else if (p.type==='AssignmentPattern') pattern(p.left);
-    else if (p.type==='RestElement') pattern(p.argument);
-    else if (p.type==='TSParameterProperty') pattern(p.parameter);
-  };
-  // Only bindings that exist at run time: a `declare` or type-only one is
-  // erased, and the global is what runs.
-  const walk=(node,typeOnly)=>{
-    if (!node || typeof node!=='object') return;
-    if (Array.isArray(node)) { node.forEach(n=>walk(n,typeOnly)); return; }
-    if (node.declare) return;
-    if (node.type==='VariableDeclarator') pattern(node.id);
-    if (['FunctionDeclaration','FunctionExpression','ClassDeclaration','ClassExpression'].includes(node.type) && node.id) names.add(node.id.name);
-    if (['FunctionDeclaration','FunctionExpression','ArrowFunctionExpression'].includes(node.type)) node.params?.forEach(pattern);
-    if (node.type==='CatchClause') pattern(node.param);
-    // A namespace emits a value only when it holds one (an empty or
-    // type-only one is erased, and the global runs).
-    if (node.type==='TSModuleDeclaration' && node.id?.type==='Identifier' && instantiated(node)) names.add(node.id.name);
-    if (node.type==='TSImportEqualsDeclaration' && node.importKind!=='type') names.add(node.id.name);
-    if (node.type==='ImportDeclaration') typeOnly=node.importKind==='type';
-    if (['ImportSpecifier','ImportDefaultSpecifier','ImportNamespaceSpecifier'].includes(node.type) && !typeOnly && node.importKind!=='type') names.add(node.local.name);
-    for (const key in node) if (key!=='parent') walk(node[key],typeOnly);
-  };
-  walk(ast,false);
-  return names;
-}
-/** The direct uses of the clock, randomness and timers in the captured
- * module `file`, as `path:line:col: why` with its path in the app: `parse`
+/** The direct uses of the global clock, randomness and timers where no enclosing
+ * scope binds them at run time, as `path:line:col: why` with `file`'s path in the app: `parse`
  * is Rolldown's (a plugin's `this.parse`, or `parseAst`), given TypeScript.
  * An early warning a Bun test cannot give, not the guard: an alias still
  * reaches the runtime's refusal. */
@@ -815,14 +769,9 @@ export function ambientRefusals(stage, file, code, parse) {
   if (!isAbsolute(file) || /\.d\.[cm]?ts$/.test(file) || !/\.[cm]?[jt]sx?$/.test(file)) return [];
   const lang=/\.[cm]?tsx?$/.test(file) ? (file.endsWith('x') ? 'tsx' : 'ts') : 'js';
   const label=relative(stage,file).split(sep).join('/'), found=[], at=lineColumn(code);
-  const ast=parse(code,{lang}), local=bound(ast);
-  const walk=(node)=>{
-    if (!node || typeof node!=='object') return;
-    if (Array.isArray(node)) { node.forEach(walk); return; }
+  walkRuntime(parse(code,{lang}),(node,local)=>{
     if (typeof node.type==='string') { const why=refusal(node,local); if (why) found.push(label+':'+at(node.start)+': '+why); }
-    for (const key in node) if (key!=='parent') walk(node[key]);
-  };
-  walk(ast);
+  });
   return found;
 }
 
@@ -1145,14 +1094,14 @@ export function usedPackages(app) {
 }
 
 /** The Swift implementations the app's interfaces carry for `target` (`ios`,
- * `macos`, `tvos`), of the interfaces the app names in `app.contract` or
- * `app.ts` (LLP 1133.001 D4): each extension, its own Swift module's name,
+ * `macos`, `tvos`), of the `extensions` in the compiled plan (LLP 1133.001
+ * D4): each extension, its own Swift module's name,
  * its class, its source files, what it adds to Info.plist (`plist`,
  * `plistKeys`), and the system frameworks it needs from an OS version
  * (`frameworks`, LLP 1133.016 D15). */
-export function appleImplementations(app, target) {
-  const { names: used, text } = usedPackages(app), named = `${text}\n${appText(app)}`;
-  return moduleInterfaces(app).filter(i=>used.has(i.name) || usesInterface(i,named)).flatMap(i=>{
+export function appleImplementations(app, target, extensions, contractSources = []) {
+  const { text } = usedPackages(app), named = `${text}\n${appText(app)}\n${contractSources.map(path => readFileSync(path, 'utf8')).join('\n')}`;
+  return moduleInterfaces(app).filter(i=>extensions[i.name.split('/').at(-1)] === i.name).flatMap(i=>{
     const impl=implementationFor(app,i,target);
     const files=impl?.json.platform==='apple' && impl.json.sources?.swift;
     if (!impl || !files?.length || !impl.json.class) return [];
@@ -1184,18 +1133,11 @@ function packageViewTags(iface, impl) {
   return [...new Set([...tags(iface.declaration.views), ...tags(impl?.json.views)])].sort();
 }
 
-/** Whether `app` uses interface `i`: names it in a `use` or an import, or places a view it declares. */
-function usesInterface(i, named) {
-  if (named.includes(`"${i.name}"`) || named.includes(`'${i.name}'`)) return true;
-  return packageViewTags(i, null).some(tag => new RegExp(`(^|[^\\w-])${tag}([^\\w-]|$)`).test(named));
-}
-
-/** The Kotlin implementations bound for Android (LLP 1133.001 D4) of the interfaces the app names: each extension,
+/** The Kotlin implementations bound for Android (LLP 1133.001 D4) of the compiled plan's `extensions`: each extension,
  * its class, its source directories, which join the APK's Kotlin, and the Maven coordinates it names, which join the
  * one locked Gradle graph (LLP 1133.008 D8 item 5). */
-export function androidImplementations(app) {
-  const { names: used, text } = usedPackages(app), named = `${text}\n${appText(app)}`;
-  return moduleInterfaces(app).filter(i=>used.has(i.name) || usesInterface(i,named)).flatMap(i=>{
+export function androidImplementations(app, extensions) {
+  return moduleInterfaces(app).filter(i=>extensions[i.name.split('/').at(-1)] === i.name).flatMap(i=>{
     const impl=implementationFor(app,i,'android'), dirs=impl?.json.platform==='android' && impl.json.sources?.kotlin;
     if (!impl || !dirs?.length || !impl.json.class) return [];
     return [{extension:i.name.split('/').at(-1),className:impl.json.class,dirs:dirs.map(d=>resolve(impl.dir,d)),views:packageViewTags(i,impl),maven:Array.isArray(impl.json.maven) ? impl.json.maven : [],manifest:impl.json.manifest ?? null,start:i.declaration?.start==='load'}];
@@ -1206,12 +1148,11 @@ export function androidImplementations(app) {
  * values `app.json` gives under `packages.<interface>.<target>`, for the keys the interface's `config` declares. A
  * key typed `env` names a variable (`{"env": "NAME"}`) whose value is read here and never written to the repo. A
  * required key that is absent throws its declared code; one required only at `release` throws only for a release. */
-export function packageConfig(app, target, { release = false } = {}) {
-  const { names: used, text } = usedPackages(app), named = `${text}\n${appText(app)}`;
+export function packageConfig(app, target, { extensions, release = false }) {
   let manifest = {};
   try { manifest = JSON.parse(readFileSync(resolve(app, 'app.json'), 'utf8')); } catch { /* a plain Contract directory */ }
   const out = new Map();
-  for (const i of moduleInterfaces(app).filter(i => used.has(i.name) || usesInterface(i, named))) {
+  for (const i of moduleInterfaces(app).filter(i => extensions[i.name.split('/').at(-1)] === i.name)) {
     const declared = i.declaration?.config?.[target];
     if (!declared) continue;
     const given = manifest.packages?.[i.name]?.[target] ?? {}, config = {};
@@ -1232,9 +1173,9 @@ export function packageConfig(app, target, { release = false } = {}) {
 
 /** Each extension's web implementation, as bound (LLP 1133.001 D4):
  * extension name to the implementation's JavaScript entry. */
-export function webImplementations(app) {
+export function webImplementations(app, extensions) {
   const out=new Map();
-  for (const iface of moduleInterfaces(app)) {
+  for (const iface of moduleInterfaces(app).filter(i => extensions[i.name.split('/').at(-1)] === i.name)) {
     const web=implementationFor(app,iface,'web'), file=web?.json.sources?.javascript?.[0];
     if (file) out.set(iface.name.split('/').at(-1),resolve(web.dir,file));
   }
@@ -1284,6 +1225,53 @@ function sourceNames(stage,diagnostics) {
 // (not an RSS cap); explicit user settings always win.
 const checkEnv={GOGC:'300',GOMEMLIMIT:'128MiB',GOMAXPROCS:'4',...process.env};
 
+/** Value exports of the configured module namespace, including CommonJS re-exports. */
+export async function valueExports(stage, libraries) {
+  const module = resolve(stage, 'app.ts');
+  const compiler = createRequire(resolve(libraries, 'tsc')).resolve('typescript/unstable/async');
+  const { API } = await import(pathToFileURL(compiler).href);
+  const api = new API({ cwd: stage });
+  try {
+    const config = resolve(stage, '__exact_tsconfig.json');
+    const snapshot = await api.updateSnapshot({ openProjects: [config] });
+    try {
+      const { program, checker } = snapshot.getProject(config);
+      checkFiles(stage, libraries, await program.getSourceFileNames());
+      const file = await program.getSourceFile(module);
+      const type = await checker.getTypeAtLocation(file);
+      return (await checker.getPropertiesOfType(type)).map(symbol => symbol.name);
+    } finally { await snapshot.dispose(); }
+  } finally { await api.close(); }
+}
+
+/** Select the native canvas seam before checking or bundling, so CommonJS namespaces cannot retain an unused recorder. */
+export async function prepareCanvas(stage, libraries) {
+  const path = resolve(stage, '__exact_entry.ts'), before = readFileSync(path, 'utf8');
+  const marker = '// __exact_canvas_entry\n';
+  if (!before.includes(marker)) return;
+  const exported = await valueExports(stage, libraries);
+  const draws = exported.includes('draw');
+  if (draws !== exported.includes('surfaces'))
+    throw new Error('app.ts exports `draw` and `surfaces` together, or neither (LLP 1056 D1)');
+  const entry = draws ? `import { canvasSeam } from './__exact_canvas.js';
+export const abi = 2;
+export const surfacesJson = JSON.stringify(app.surfaces);
+const seam = canvasSeam(app.draw);
+export const drawCanvas = (request: string, host?: unknown): string => seam.draw(JSON.parse(request), host);
+export const retireCanvases = (retired: string): void => seam.retire(JSON.parse(retired));
+` : 'export const abi = 1;\n';
+  writeFileSync(path, before.replace(marker, entry));
+}
+
+function checkFiles(stage, libraries, files) {
+  stage = realpathSync.native(stage);
+  libraries = realpathSync.native(libraries);
+  const allowed = path => within(path, stage) || (within(path, libraries) && configuredLibrary(relative(libraries, path)));
+  for (const path of files) {
+    if (path && !allowed(realpathSync.native(path))) throw new Error('module outside captured app: ' + path);
+  }
+}
+
 /** Type-check a configured stage with the native compiler `tsc` (whose
  * standard libraries are in `libraries`): its diagnostics, or the compiler's
  * actual resolved graph, type-only imports included, must stay inside the
@@ -1294,8 +1282,6 @@ export function check(stage, tsc, libraries) {
   // TypeScript expands Windows short paths; compare the same physical names
   // for the capture, libraries and files, including directory junctions.
   stage=realpathSync.native(stage);
-  libraries=realpathSync.native(libraries);
-  const allowed = path => within(path,stage) || (within(path,libraries) && configuredLibrary(relative(libraries,path)));
   // A package's JavaScript entry (`typescript/bin/tsc`, an `EXACT_TSC`
   // override) keeps its Node shebang: run it through Bun, as the one-shot
   // producer runs its tools (js/bake/src/lib.rs `run`).
@@ -1314,9 +1300,8 @@ export function check(stage, tsc, libraries) {
         const refusal=mutationFailure ? "\nnote: a Snapback mutation returning {ok:false} leaves failure(slot) empty; throw refused({code: 'YOUR_CODE', message: 'Explain the refusal'}) instead. Annotate successful helpers with Result<'source'>, or keep ok:true literal with `as const`.\n" : '';
         return fail(new Error(diagnostics+sourceNames(stage,diagnostics)+refusal+String(stderr??'') || String(error.message)));
       }
-      for(const path of stdout.trim().split(/\r?\n/)) {
-        if(path && !allowed(realpathSync.native(path)))return fail(new Error('module outside captured app: '+path));
-      }
+      try { checkFiles(stage, libraries, stdout.trim().split(/\r?\n/)); }
+      catch (error) { return fail(error); }
       done();
     }));
 }

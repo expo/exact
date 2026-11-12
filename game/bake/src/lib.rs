@@ -53,7 +53,11 @@ fn sources(path: &Path) -> Result<(Model, ModelSources), String> {
     {
         if !matches!(
             extension,
-            "KHR_materials_emissive_strength" | "KHR_texture_transform"
+            "KHR_materials_clearcoat"
+                | "KHR_materials_emissive_strength"
+                | "KHR_materials_sheen"
+                | "KHR_materials_unlit"
+                | "KHR_texture_transform"
         ) {
             return Err(format!("unsupported extension {extension}"));
         }

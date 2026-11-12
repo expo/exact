@@ -128,9 +128,12 @@ pub(crate) fn resolve(
             let rows = StyleMask::of(StyleId::FontSize);
             let slots: Vec<u32> = arena.iter_live().collect();
             for slot in slots {
-                // Tab metrics use rem even when an authored local font stops
-                // inheritance. Refresh their minimum and cached host offers.
-                if arena.neutral_tab_root(slot).is_some() || arena.neutral_alert(slot) {
+                // Top-layer and tab metrics use rem even when an authored local
+                // font stops inheritance. Refresh their layout and host offers.
+                if arena.neutral_tab_root(slot).is_some()
+                    || arena.neutral_alert(slot)
+                    || arena.neutral_content_popover(slot)
+                {
                     control_env_changed(arena, layout, slot);
                     receipt.layout_invalidated = true;
                     touched.push(arena.key(slot));

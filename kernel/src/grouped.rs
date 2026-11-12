@@ -752,14 +752,14 @@ fn authored_space(list: &mut GroupedList, shown: &[NodeRef<'_>], env: &Env, basi
     let mut below: Option<(f32, bool)> = None;
     for (section, node) in list.sections.iter_mut().zip(shown) {
         let points = |d: Dimension| d.at_basis(env, basis);
-        let top = points(node.style.margin_top);
+        let top = points(node.style.margin_top.clone());
         let authored = node.style.written.has(StyleId::MarginTop);
         section.space_above = match below {
             Some((bottom, mine)) if mine || authored => Some(collapse(top, bottom)),
             None if authored => Some(top),
             _ => None,
         };
-        let bottom = points(node.style.margin_bottom);
+        let bottom = points(node.style.margin_bottom.clone());
         below = Some((bottom, node.style.written.has(StyleId::MarginBottom)));
     }
     list.space_below = below.and_then(|(bottom, mine)| mine.then_some(bottom));

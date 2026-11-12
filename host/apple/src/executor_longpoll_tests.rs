@@ -117,6 +117,7 @@ fn poll(ticket: u64, same_cursor_event: bool, ceiling: u32) -> RequestOut {
         p.same_cursor_event = same_cursor_event;
     }
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "live".into(),
         request,
@@ -436,6 +437,7 @@ fn a_long_poll_that_is_not_a_bodiless_http_get_is_refused() {
         // Refused at admission, before any path (the host settles it as an admission refusal).
         let refused = core.run_owned(
             RequestOut {
+                class: exact_runner::RequestClass::Ordered,
                 ticket: 1,
                 target: "live".into(),
                 request,
@@ -614,6 +616,7 @@ fn a_long_poll_on_other_work_is_refused_at_admission_and_fences_ordered_work() {
         let (core, script, _woke) = setup(vec![Reply::Is(200, vec![JSON], r#"{"other":1}"#)]);
         let ordered = request.is_ordered();
         let first = RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket: 1,
             target: "live".into(),
             request,
@@ -629,6 +632,7 @@ fn a_long_poll_on_other_work_is_refused_at_admission_and_fences_ordered_work() {
         let next = Request::get("https://example.test/changes?since=0")
             .header("accept", "application/json");
         let second = RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket: 2,
             target: "read".into(),
             request: next,

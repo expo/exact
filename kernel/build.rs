@@ -1347,7 +1347,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
         let f = &at(row);
         let expr = match parse_codec(&row.codec) {
             Codec::LineHeight => format!("RowValue::LineHeight(self.{f})"),
-            Codec::Dimension => format!("RowValue::Dimension(self.{f})"),
+            Codec::Dimension => format!("RowValue::Dimension(self.{f}.clone())"),
             Codec::F32 | Codec::U8 | Codec::U16 | Codec::U32 | Codec::I32 => {
                 format!("RowValue::Number(self.{f} as f64)")
             }

@@ -1,5 +1,17 @@
 # Vendored Ibex split crates — Exact integration ledger
 
+## Portable event-stream timeouts
+
+`transport/rustls_http.rs` removes implicit read deadlines after a successful
+`text/event-stream` response identifies an event stream without an explicit
+request timeout. Connection and header limits and explicit timeouts still apply.
+Cancellation interrupts blocked reads; ordinary requests keep their limits.
+Classification uses the headers returned to callers, including the last
+`Content-Type` when it is repeated. `transport/rustls_timeout_tests.rs` probes
+both default deadlines and expired deadlines, explicit-timeout policy and
+agent reuse. `transport/stream_tests.rs` exercises later events, explicit
+timeout expiry, cancellation and release against loopback peers.
+
 ## Windows WebSocket readiness
 
 `crates/ibex2/src/transport/websocket.rs` subscribes to writable readiness only
@@ -738,3 +750,28 @@ development and unknown compositions keep it.
 An absent provider in `sqlite_abi` (JavaScript) or `host::Sqlite` (Rust)
 refuses an admitted open with `Unlinked("sqlite")`, matching Exact's portable
 storage executor and bake. Replay these refusals on a refresh.
+
+## Local patch 31, a fetch reports each hop's response head
+
+`stdlib::fetch::Request` carries an optional `received` callback. The blocking
+fetch (`stdlib/fetch.rs`), the asynchronous one (`stdlib/fetch_async.rs`) and
+the portable transport (`transport/rustls_http.rs`) call it with a hop's
+method, URL, status and headers when that hop's response head arrives, before
+a redirect is followed or a body is read. Exact's executor uses it to drop
+cached replies a write may have changed (RFC 9111 §4.4; LLP 1162 D4): a write
+that a redirect follows, or whose body then fails, has still been answered.
+Unset, nothing changes.
+
+The Darwin transport's wait for a head (`ibex2_darwin_http_headers`,
+`transport/darwin_http.mm`) hands back a head that arrived together with a
+failure: one refused for its declared length, or one whose exchange failed
+before the wait returned. `DarwinTransport::open` tells it and returns the
+failure as before. URLSession tells a head only once some of its body, or
+the connection's end, has come.
+
+The asynchronous fetch's blocking adapter (`run_blocking`) passes a head the
+transport told with a failure to `Sink::observed`, which `HopSink` reports as
+it reports `head`. Both call the embedder outside the task's lock, since what
+it calls may abort the fetch.
+
+Replay all of it on a refresh.

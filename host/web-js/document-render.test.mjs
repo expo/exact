@@ -1,5 +1,5 @@
 import { beforeAll, test, expect } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { webCompiler } from './module.mjs';
 import { open } from '../../scripts/agent.mjs';
@@ -539,23 +539,27 @@ component SequenceRender
   }, { 'assets/kick.wav': readFileSync(new URL('./conformance/transport/assets/kick.wav', import.meta.url)) });
 }, 30000);
 
-// Both renderers write the head a crawler reads, its URLs absolute against the manifest's origin, after the viewport
-// meta (page.rs `page_head`).
 test('both document renderers write the same crawler head', async () => {
   const source = `routes nav
   home "/" render=build
     art "/art" render=build
+    cafe "/café" render=build
 
 component Crawled
   view
     column
       if top(nav).name == "art"
         head title="Pikachu & co" description="An electric \\"mouse\\"" image="/art/25.png" canonical="/pokemon/25" robots="noindex"
+      if top(nav).name == "cafe"
+        head canonical="/café" robots="max-image-preview:none"
       text "page"
 `;
   const crawled = page => [...page.matchAll(/<meta (?:name|property)="(?:viewport|description|robots|og:[a-z_]+|twitter:[a-z]+)" content="[^"]*">|<link rel="canonical"[^>]*>/g)].map(m => m[0]);
-  const heads = {};
-  for (const renderer of ['rust', 'js']) await renderedPages(source, (_, html) => { heads[renderer] = ['', 'art'].map(path => crawled(html(path))); },
+  const heads = {}, files = {};
+  for (const renderer of ['rust', 'js']) await renderedPages(source, (_, html, dist) => {
+    heads[renderer] = ['', 'art', 'café'].map(path => crawled(html(path)));
+    files[renderer] = ['robots.txt', 'sitemap.xml'].map(f => readFileSync(resolve(dist, f), 'utf8'));
+  },
     {}, { name: 'Caltrain', app: { id: 'test.heads', name: 'Caltrain', origin: 'https://caltrain.exact.invalid' } }, renderer);
   expect(heads.js).toEqual(heads.rust);
   expect(heads.js[1]).toEqual([
@@ -569,6 +573,18 @@ component Crawled
     '<meta name="twitter:image" content="https://caltrain.exact.invalid/art/25.png">',
   ]);
   expect(heads.js[0]).toContain('<meta property="og:url" content="https://caltrain.exact.invalid/">');
+  expect(heads.js[2]).toContain('<link rel="canonical" href="https://caltrain.exact.invalid/café">');
+  expect(heads.js[2]).toContain('<meta name="robots" content="max-image-preview:none">');
+  expect(files.js).toEqual(files.rust);
+  expect(files.js).toEqual(['User-agent: *\nAllow: /\nSitemap: https://caltrain.exact.invalid/sitemap.xml\n',
+    '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n  <url><loc>https://caltrain.exact.invalid/</loc></url>\n  <url><loc>https://caltrain.exact.invalid/caf%C3%A9</loc></url>\n</urlset>\n']);
+}, 1_800_000);
+
+test('both document renderers leave declared crawler paths to request routes', async () => {
+  const source = 'routes nav\n  home "/" render=build\n  robots "/robots.txt" render=request\n  sitemap "/sitemap.xml" render=request\n\ncomponent Crawled\n  view\n    text "page"\n';
+  for (const renderer of ['rust', 'js']) await renderedPages(source, (_, _html, dist) =>
+    expect(['robots.txt', 'sitemap.xml'].map(f => existsSync(resolve(dist, f)))).toEqual([false, false]),
+  {}, { name: 'Caltrain', app: { id: 'test.heads', name: 'Caltrain', origin: 'https://caltrain.exact.invalid' } }, renderer);
 }, 1_800_000);
 
 test('JavaScript-rendered pages exclude a covered route’s deeper head', async () => {

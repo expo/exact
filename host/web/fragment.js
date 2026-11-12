@@ -119,6 +119,7 @@ export function scroll(root, visit, fragment, log, activation) {
     // ring, as a browser's own scroll to a fragment draws none. A field the person is typing in keeps it.
     if (document.activeElement?.matches?.("input, textarea, select, [contenteditable]")) return;
     if (!target.matches("a[href], button, input, select, textarea, [tabindex], [contenteditable]")) {
+      if (target.exactAuthoredTabIndex === undefined) target.exactAuthoredTabIndex = null;
       target.setAttribute("tabindex", "-1");
       target.addEventListener("blur", () => target.removeAttribute("tabindex"), { once: true });
     }

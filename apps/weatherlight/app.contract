@@ -39,10 +39,10 @@ shape Day
   low: number
   high: number
   code: number
-  chance: number
+  chance: option<number>
   sunrise: string
   sunset: string
-  uv: number
+  uv: option<number>
 shape Forecast
   lat: number
   lon: number
@@ -152,7 +152,7 @@ component Weatherlight
   mutation bought as shape PurchaseDetails then thanked
   mutation restored as shape PurchaseDetails[]
   mutation delivered as shape Delivery refreshes tipped
-  mutation reviewed as shape Visit
+  mutation reviewed as shape Visit refreshes visit
   // A screen gates on what the person holds, never on the queue (D3).
   derive plus = owned.filter(p => p.itemId.startsWith("plus.")).length > 0
   // What the store has delivered and the app has not finished, by token.

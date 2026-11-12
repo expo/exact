@@ -100,7 +100,11 @@ public final class ComposeModule: NSObject, ExactPackage {
             (to, cc, bcc) = (list("to"), list("cc"), list("bcc"))
             subject = args["subject"] as? String ?? ""
             body = args["body"] as? String ?? ""
-            let paths = list("attachments"), files = paths.compactMap { context.file($0) }
+            let paths = list("attachments")
+            let files = paths.compactMap { path -> URL? in
+                guard let file = context.file(path), FileManager.default.fileExists(atPath: file.path) else { return nil }
+                return file
+            }
             attachments = files
             missing = files.count != paths.count
         }

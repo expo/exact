@@ -395,8 +395,7 @@ impl<D: DataSource> Runner<D> {
         if changed {
             // Unlike an explicit unprotect, boot recovery has no caller's
             // reply to tell readers that the plain value is available.
-            let readers = self
-                .store_readers
+            let readers = crate::vm::Column::rows(&self.resources, |row| &row.store_reader)
                 .iter()
                 .enumerate()
                 .filter_map(|(i, reads)| (recovered_plain && *reads).then_some(i))

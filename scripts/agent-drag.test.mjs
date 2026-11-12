@@ -79,10 +79,10 @@ function iosDrive(host, opts = { dx: 0, dy: -300 }) {
 
 // LLP 1116.003: a drag without --touch platform answered `delivery: unsupported` and exited 0 (r5 weather, mood journal).
 test('an iOS drag without real touches scrolls the scroller it starts on', async () => {
-  const d = iosDrive(() => ({ tapped: 9, at: [200, 370], scrolledBy: [0, 300], delivery: 'recognized', native: 'scroll' }));
+  const d = iosDrive(() => ({ tapped: 9, at: [200, 370], scrolledBy: [0, 300], delivery: 'recognized', native: 'scroll' }), { dx: 0, dy: -300, over: 500 });
   const r = await d.run();
   // Its contact is asked for a pan's alone (`pan`): a finger held elsewhere would drag nothing.
-  expect(d.asked).toEqual([['down', { x: 200, y: 370, pan: true }], { op: 'tap', id: 9, scrollDrag: [0, -300] }]);
+  expect(d.asked).toEqual([['down', { x: 200, y: 370, pan: true }], { op: 'tap', id: 9, scrollDrag: [0, -300], ms: 500 }]);
   expect(r.delivery).toBe('recognized');
   expect(r.scrolledBy).toEqual([0, 300]);
   expect(r.drag).toEqual(expect.objectContaining({ dx: 0, dy: -300 }));
@@ -141,12 +141,12 @@ test('a stroke that fails or lands with an error stops the drag, and too many st
   await expect(far.run({ dx: 0, dy: -1500 })).rejects.toThrow('leaves the viewport');
 });
 
-test('on iOS a scroller takes the whole drag at once, and under real touches says it was no real touch', async () => {
+test('on iOS a scroller takes the whole drag with its duration, and under real touches says it was no real touch', async () => {
   for (const touches of [null, {}]) {
     const d = strokeDrive(), asked = [];
     const carrier = { touches, async ask(req) { asked.push(req); return { tapped: 9, scrolledBy: [0, 1500], delivery: 'recognized' }; } };
-    const r = await d.run({ dx: 0, dy: -1500 }, { host: 'ios', carrier });
-    expect(asked).toEqual([{ op: 'tap', id: 9, scrollDrag: [0, -1500] }]);
+    const r = await d.run({ dx: 0, dy: -1500, over: 500 }, { host: 'ios', carrier });
+    expect(asked).toEqual([{ op: 'tap', id: 9, scrollDrag: [0, -1500], ms: 500 }]);
     expect(d.strokes).toEqual([]);
     expect(r.scrolledBy).toEqual([0, 1500]);
     expect(Boolean(r.note?.includes('not a real touch'))).toBe(!!touches);

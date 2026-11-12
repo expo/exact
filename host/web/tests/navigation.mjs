@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { Cdp, open } from '../../../scripts/agent.mjs';
-import { chromium } from '../../../scripts/agent-launch.mjs';
+import { chromium, quitBrowser } from '../../../scripts/agent-launch.mjs';
 import { serveStatic, serveBuildTree, readWebRequest } from '../serve.mjs';
 import { publishRoot } from '../../../scripts/deploy.mjs';
 import { DirectoryOrigin, appDocumentPath, sha256 } from '../../../scripts/origin.mjs';
@@ -820,8 +820,9 @@ try {
 
 } finally {
   if (process.env.EXACT_ROUTER_EVIDENCE) { mkdirSync(process.env.EXACT_ROUTER_EVIDENCE, { recursive: true }); writeFileSync(process.env.EXACT_ROUTER_EVIDENCE + '/browser.json', JSON.stringify({ rows, failures, consoleLines }, null, 2)); }
-  process.kill(-child.pid, 'SIGKILL'); await exited;
-  server.close(); server.closeAllConnections();
+  try { await quitBrowser(child, cdp, exited); }
+  finally { server.close(); server.closeAllConnections(); }
+  rmSync(dir + '/chrome', { recursive: true, force: true });
 }
 assert.deepEqual(failures, []);
 console.log(`router browser${js ? ' (the JS target)' : ''}: all session-history and serving cases passed${js ? `; ${skipped.length} not the JS target's: ${skipped.map(s => s.name).join('; ')}` : ''}`);

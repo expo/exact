@@ -259,17 +259,17 @@ package final class TextArea: NSTextView {
         // menu's responder lookup may miss its editor. Route the ordinary
         // undo chord straight to this text view's native manager.
         let modifiers = event.modifierFlags.intersection([.command, .shift, .control, .option])
-        if isEditable, !hasMarkedText(), event.charactersIgnoringModifiers?.lowercased() == "z" {
+        if isEditable, !hasMarkedText(), NodeView.commandKey(event) == "z" {
             if modifiers == .command { undo(nil); return true }
             if modifiers == [.command, .shift] { redo(nil); return true }
         }
         if markup != nil, event.modifierFlags.intersection([.command, .shift, .control, .option]) == [.command, .shift],
-           event.charactersIgnoringModifiers?.lowercased() == "c" {
+           NodeView.commandKey(event) == "c" {
             copyPlainText(nil); return true
         }
         if markup != nil, isEditable, !hasMarkedText(),
            event.modifierFlags.intersection([.command, .shift, .control, .option]) == .command {
-            switch event.charactersIgnoringModifiers?.lowercased() {
+            switch NodeView.commandKey(event) {
             case "b": return owner?.formatMarkup("bold") == true
             case "i": return owner?.formatMarkup("italic") == true
             case "k": owner?.editMarkupLink(); return true
@@ -716,7 +716,7 @@ final class FieldEditor: NSTextView {
     }
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection([.command, .shift, .control, .option])
-        if window?.firstResponder === self, event.charactersIgnoringModifiers?.lowercased() == "z" {
+        if window?.firstResponder === self, NodeView.commandKey(event) == "z" {
             if modifiers == .command { undo(nil); return true }
             if modifiers == [.command, .shift] { redo(nil); return true }
         }

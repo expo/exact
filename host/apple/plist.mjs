@@ -29,6 +29,9 @@ export const transportSecurity = (section, keys = {}, { web = true } = {}) => {
  * (`reach.localNetworking`, LLP 1133.036 D5). */
 export const localNetworking = (section, reach) => (section?.localNetworking || reach?.localNetworking ? { NSAllowsLocalNetworking: true } : {});
 
+/** The app's declared origin (`app.origin`), which a link's Copy Link and Share put a path in the app on. */
+export const declaredOrigin = ({ origin }) => (origin ? { ExactOrigin: new URL(origin).origin } : {});
+
 /** A launch no link started opens at the manifest's `start_url`, as an installed web app does (W3C App Manifest): resolved
  * against the manifest's URL, on the app's declared origin when it has one, and baked when it is a place in the app (on
  * that origin) other than the root. */
@@ -112,8 +115,8 @@ export function packageKeys(bound, target) {
  * `{ extension, key, value }`), whether or not the app grants a device: each `"plistKeys"` key, and each `"plist"`
  * dictionary, keyed by the strings keys the app passes and valued by their base text (LLP 1133.002 D10). A key two
  * packages declare is written once. */
-export const modulePlist = (app, reach, target) => {
-  const bound = appleImplementations(app.dir, target);
+export const modulePlist = (app, reach, target, extensions, contractSources = []) => {
+  const bound = appleImplementations(app.dir, target, extensions, contractSources);
   const dictionaries = bound.flatMap((p) => p.plist.map((d) => ({ ...d, extension: p.extension })));
   const packages = packageKeys(bound, target).filter((k, i, all) => all.findIndex((o) => o.key === k.key) === i);
   if (dictionaries.length) {

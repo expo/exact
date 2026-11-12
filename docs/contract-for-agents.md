@@ -336,6 +336,7 @@ what to write. Nothing runs because a value changed (no `useEffect` or watch).
 | `==` compares lists and records by value; no `===` | values have no identity |
 | A string is well-formed: a lone surrogate becomes U+FFFD (`"😀".slice(0, 1)`) | every host holds Unicode scalar values |
 | A stored number is finite: a commit that would put `NaN` or `Infinity` in a state or derive is refused, and the write that caused it does not land | every host can carry it |
+| A resource or `send` argument must contain only finite numbers, including inside lists, records and options; the runner refuses the call before asking its source and names the argument position | Rust and TypeScript sources accept the same values on every host, whether placed on the main thread or a worker |
 | `toFixed` and the format functions print `""` for a non-finite number | one rule for every format |
 | Names hold hyphens, so subtraction takes spaces (`a - b`) | CSS's names |
 | A binding's list work is bounded (65,536 steps); a row's own binding has its own bound, so a row that searches another table costs rows × items (`lower-row-lookup`), and one that walks its own `for`'s list grows with it until the binding is unset (`lower-row-own-list`) | determinism on every host |
@@ -1264,8 +1265,9 @@ A token, a password or a key the module keeps is a secret, not a file: grant
 `secret.keep <name>` (one line per name, `secret.keep signal.token`) and use
 `store.set(name, value)`, `store.get(name)` (a string, or `null`) and
 `store.forget(name)` in an answer (LLP 1018). It is the Keychain on Apple; on the
-web, the page's `localStorage`, readable by any script on that origin; a Linux
-launch keeps it only until the app exits for now. A drive keeps it, by default,
+web, the page's `localStorage`, readable by any script on that origin; on Linux,
+unencrypted files in the app's data directory, retained across launches (an app
+without an ID keeps them in memory). A drive keeps it, by default,
 only in a named `--storage` store (`EXACT_STORE=real` gives an Apple drive, on a Mac, a simulator or a phone, the Keychain a normal launch reads).
 A secret that only the person in front of the device may read (an account's token
 behind Face ID) carries a policy on its line, `secret.keep token user-presence`
@@ -2480,10 +2482,17 @@ web implementation, Kotlin `ExactExtension.view`; `id` is the node's. A view dec
 `"displayed": true` is told `displayed(id, shown, origin)` when it shows or hides, and a
 prop marked `"binds": true` `bound(id, prop, origin)` when it changes; `origin` is `app`,
 `tool` or `wake`, that of the commit that did it. A declared prop may take a known
-attribute's name where it means what CSS means by it (`exact-camera`'s `object-fit`): written
-on the tag it goes to the view and not to the box, so declare no name the box needs (`width`
-on the tag would no longer size it). A class's rows stay the box's, and a renamed spelling
-(`fontSize`) is refused whatever is declared. `packages/fixtures/swatch` is a whole one.
+non-layout attribute's name where it means what CSS means by it (`exact-camera`'s
+`object-fit`): written on the tag it goes to the view. A declaration that names a
+layout attribute (`width`, `padding`, `flex`) is refused with `bake-view-prop-layout`,
+naming the package, view and prop; give the view prop another name. A class's rows
+style only the box: `object-fit` in a class never configures the viewfinder, so write
+it on `exact-camera` for that. A renamed spelling (`fontSize`) is refused whatever is
+declared. `packages/fixtures/swatch` is a whole one.
+
+A view placed by a Contract library counts too, including through a re-export. The app
+still declares the view's package as a direct dependency. A component the app never
+instantiates does not link its views' implementations.
 
 ### A package's native module, library and web assets
 
@@ -2568,8 +2577,10 @@ element.arrange(using: arrangement)
 arrangement.updateArrangement(.overlay, animated: true)
 ```
 
-The pane wrappers do not measure authored content for UIKit's `.intrinsic`
-dimension. Use native automatic, absolute or fractional dimensions for now.
+UIKit's `.intrinsic` dimension measures each pane's authored content under the
+proposed constraints, including text wrapping and resolved pane margins.
+Content and margin changes update the measure; the allocated pane size remains
+UIKit's. Automatic, absolute and fractional dimensions use UIKit's sizing rules.
 
 Use a bounded scroller in each child for independent scrolling. The first visible
 vertical scroller is the default title and scroll-to-top target; `navigationScroll`
@@ -2666,8 +2677,13 @@ file paths stay 404, even with `notfound`.
 release build as deploy makes one (no agent mode): a page for each `render=build` route
 (rendered under Bun unless the app has a render entry of its own), `404.html` for a `notfound`
 route rendered so, `shell.html`, and `routes.json`, the route table in the plan's order with each
-route's pattern, render policy and `notfound`. Inside the app, `--out` is `dist` (or a path under
-`dist/` or `target/`), which no build reads as source; the build it replaces is kept beside it in
+route's pattern, render policy and `notfound`. An app with routes also gets `robots.txt`, which
+allows every path, and with `app.json`'s `app.origin` a `sitemap.xml` of the pages made at build,
+by the render server's rule: not the `notfound` page, a page whose status is neither 200 nor 503
+(a render at its deadline), or one whose `head` says `robots="noindex"` or `"none"`. A page rendered per request is not made at build, so the built
+sitemap does not list it. A declared route at `/robots.txt` or `/sitemap.xml` keeps that path
+instead of a generated file. Inside the app, `--out` is `dist` (or a path under `dist/` or
+`target/`), which no build reads as source; the build it replaces is kept beside it in
 `dist.gen` while a page sent from it may still ask for its files, and `--out` refuses a directory
 beside which something else holds one of those names (`dist.gen`, `dist.previous`, `dist.lock`).
 `bun exact.mjs serve dist` serves it on 127.0.0.1 (`--lan`: every interface), and any static
@@ -2968,8 +2984,36 @@ JSON-LD. A page's own title and metas stay its `head` element's.
   browser history. A page that loads no runtime (an `interaction` page with no handlers)
   follows a link as a new document, which runs them again.
 - The dev loop and `serve` send them too, so a tag there reports local visits. `serve` and a
-  static host send no Content-Security-Policy. The Rust render server (`<app>-render
-  --serve`) admits only Exact's own scripts, so these do not run there.
+  static host send no Content-Security-Policy, so the scripts run as on any page. The Rust
+  render server (`<app>-render --serve`) sends one. It admits each inline script here by its
+  hash and each script `src` by its origin; a JSON-LD block needs neither.
+- What those scripts load or contact in turn is the app's to allow there, in
+  `host.web.csp`. A list adds sources to Exact's for that directive. A string replaces
+  Exact's value, and the word `exact` in it stands for Exact's sources. `false` sends no
+  policy. `host.web.cspReportOnly` takes the same shape and is sent as
+  `Content-Security-Policy-Report-Only`. Google's tag, for example, loads its script and
+  sends its hits from other origins:
+
+  ```json
+  "host": { "web": { "csp": {
+    "script-src": ["https://www.googletagmanager.com"],
+    "connect-src": ["https://*.google-analytics.com", "https://*.analytics.google.com", "https://*.googletagmanager.com"]
+  } } }
+  ```
+
+  A directive Exact does not write starts from the one CSP falls back to (`'self'`, through
+  `default-src`), so a list never refuses what the page could load before. Directive names
+  are lower case. The build refuses a `,`, a `;`, a line break, or a list item with a space
+  in it, since each would end a source, a directive or the policy; the browser reads the rest.
+- Two keywords do not add. Exact's `script-src` holds hashes, and beside a hash the browser
+  ignores `'unsafe-inline'`; `'strict-dynamic'` makes it ignore `'self'` and every host
+  source, so Exact's own `app.js` stops loading. Either goes in a string without `exact`
+  (`"script-src": "'self' 'unsafe-inline' https://www.googletagmanager.com"`), which also
+  admits Exact's inline scripts.
+- A report-only policy reports to a `report-uri`. `report-to` needs a `Reporting-Endpoints`
+  header, which the server does not send, so its reports reach only the console.
+- A static host sends no CSP. A page that wants one there says it in `host.web.head` as
+  `{"meta": {"http-equiv": "Content-Security-Policy", "content": "…"}}`.
 
 ## Time, motion, graphics, and platform facts
 
@@ -3151,6 +3195,16 @@ painted popover anchored to the node instead. The node's own `contextmenu` actio
 serve every row of a list. A node inside an open popover opens its menu over
 that popover, which stays open, as HTML nests them. The agent opens it with `tap <node> contextmenu`
 (LLP 1021 §5.1).
+
+The order of a menu's rows is the platform's unless the menu's trigger says otherwise.
+UIKit's own order puts the first row nearest the finger, so a menu that opens upward
+from a button near the bottom of the screen shows its rows last first. `menuOrder` on
+the trigger (the `popovertarget` button, a `header` button that opens a menu, or the
+node with `contextPopover`) says it: `"fixed"` keeps the rows as written wherever the
+menu opens (a list of presets), `"priority"` always puts the first row nearest the
+finger, and `"automatic"`, the default, is the platform's. iOS and tvOS set it as
+`preferredMenuElementOrder`; the web, the Mac and the other hosts always show the rows
+as written, so they have nothing to apply.
 
 #### Swipe to reply
 
@@ -3397,8 +3451,10 @@ takes layout, box and paint rows, handlers, `testId`, `id`, `role`, ARIA, `disab
 and `inert`; any other known name (`color`, `value`, `command`, `href`) is refused,
 so give the module prop another name. A package's view is the exception: a prop its
 package declares for the view (`exact-camera`'s `object-fit`) goes to the view when
-written on the tag, even where the name is a known attribute. A class's rows stay
-the box's style, and a renamed spelling (`fontSize`) is refused whatever is declared. Do not
+written on the tag, even where the name is a known non-layout attribute. Declaring a
+layout attribute as a view prop is `bake-view-prop-layout`. A class's rows style only
+the box and set no view props; write `object-fit` on the camera tag to configure its
+viewfinder. A renamed spelling (`fontSize`) is refused whatever is declared. Do not
 turn a missing widget or canvas operation into invented Contract syntax.
 
 Apple native modules can include asset catalogs beside their Swift sources:
@@ -3742,10 +3798,11 @@ perf frames live 5000
 While the lease holds, an input's landing is allowed and takes nothing: its
 answers land on the platform's clock. Every other `clock` operation is refused,
 and `perf frames live` takes a lease of its own, so it comes after `capture
-stop`. The
-`scroll` source (`health scroll`, `report scroll`) reads native scrolling, which
-an agent's drag without real touches does not start: on iOS it moves a list's
-offset at once, whatever its `over`, and the source answers
+stop`. The `scroll` source (`health scroll`, `report scroll`) reads native
+scrolling. On iOS, an agent's drag without real touches moves a list's offset
+over the requested `over` duration, allowing intermediate frames to be observed.
+The recognized drag does not start the native-scroll observer, which relies on
+UIKit's dragging lifecycle. Without an observed native drag, the source answers
 `native-scroll-unobserved`.
 
 A capture lease lasts 1–120000 ms, default 60000. The card and the agent
@@ -4132,7 +4189,9 @@ A wheel (`tap <scroller> wheel 0 300`) and, without `--touch platform`, a drag o
 the scroll or list it starts on (`tap <scroller> drag 0 -300`, past the screen
 too) leave it as a person's scroll by that distance does, with no glide: the
 content moves that far, a large title collapses as it goes, and a scroll back to
-the top opens it again. As a person's, none stops with the content partway under
+the top opens it again. A drag moves over `over` milliseconds (250 by default),
+including one that ends past the screen; live frame capture observes the motion.
+As a person's, none stops with the content partway under
 a large title: it eases to the title's open or closed rest, whichever is nearer,
 so under one a wheel of 20 from the top moves nothing (with a search field in the
 bar it stays where it ends: not measured). Under `--touch platform` a drag whose ends
@@ -4497,6 +4556,19 @@ a clear wrapper can therefore show through sharp. Make the glass a direct
 sibling of the content it covers, including a scrolling list. iOS and tvOS
 draw the system blur approximation described in LLP 1053.000 §3.
 
+`-exact-glass-tint` tints the glass of a box with `backgroundMaterial="glass"` or
+`"glass-clear"`: `-exact-glass-tint="rgba(232,192,99,0.9)"` is a gold button,
+`"rgba(10,12,16,0.55)"` a dark panel. It is a colour resolved in the box's colour
+scheme (`light-dark()` and the platform colours work); unset, the glass is untinted. iOS and tvOS 26 set it as `UIGlassEffect`'s
+`tintColor` and macOS 26 as `NSGlassEffectView`'s, so the glass itself takes the
+colour; a `background-color` is painted behind the glass, not into it. The web and
+Linux draw it as the material's background colour in place of the table's; Android
+and Windows draw no glass and ignore it. Glass reacts to a touch (iOS's interactive
+glass) when its box has a `press` and is not disabled; `glassInteractive=false` turns
+that off on a pressable box and `glassInteractive=true` turns it on for one without
+a press. Only iOS and tvOS 26 have interactive glass; other hosts ignore it. Neither
+applies to a native button, whose glass is its `buttonStyle`'s.
+
 `flex` accepts CSS `none`, `auto`, `initial`, `unset`, a basis, or
 `<grow> [<shrink>] [<basis>]` (including `flex="0 1 auto"`). Numeric bindings
 keep the `n 1 0%` meaning. `flex="initial"`, `flex="unset"` and a conditional
@@ -4608,11 +4680,14 @@ For a plain text field on the **web, macOS, iOS and Linux**, `setRangeText(id, t
 end[, selectionMode]])` replaces its selection or a UTF-16 range. Selection
 is preserved by default (`select`, `start`, `end` are the other modes).
 Exact deliberately fires one `input` so its action can update the bound
-value, with `InputEvent.inputType="insertReplacementText"`; it adds no undo
-step. That input type also covers hatch replacements and browser spelling
+value, with `InputEvent.inputType="insertReplacementText"`. On macOS and focused
+iOS fields, a changed value is one undo step; web and Linux add none. That input
+type also covers hatch replacements and browser spelling
 corrections, so it does not uniquely identify this command. `select` follows
 input only when the selection changes. URL inputs trim surrounding ASCII
-whitespace. Markdown editors, Windows, Android and terminal do not support it yet. Field `selectionchange` reports caret moves through `InputEvent`, and
+whitespace. Markdown editors on web and Apple use source offsets and add one
+undo step. Windows, Android and terminal do not support it yet. Field
+`selectionchange` reports caret moves through `InputEvent`, and
 `beforeinput` reports the proposed edit's `inputType` and optional `data`.
 Call `preventDefault()` to reject a cancelable edit; composition events
 are noncancelable. See the [form controls](contract-grammar.md#form-controls)
@@ -4939,8 +5014,8 @@ or `font-size` written on a bar's heading replaces that one part of the
 platform's title font: on iOS in the navigation title (a level-1 heading's size
 is the large title's, any other's the inline title's), on the Mac in a modal
 route's sheet title. The Mac's window title keeps AppKit's font, which no public
-API changes, and on iOS a heading inside a pressable title group keeps the
-platform's.
+API changes. A heading inside an iOS pressable title group takes the same
+authored typography over the bar's headline font.
 On iOS, a route's level-1 heading gives a large navigation title; other levels
 give an inline title. Set UIKit's `largeTitleDisplayMode` through a native access
 hatch to change presentation while keeping the semantic rank. Check the host's

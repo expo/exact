@@ -367,16 +367,171 @@ fn a_drain_that_already_retried_does_not_retry_again() {
 }
 
 fn secret_lease(app: &str) -> std::sync::Arc<dyn exact_runner::SecretLease> {
-    let shared = super::super::system::shared_secrets(app).unwrap();
+    let shared = super::super::system::shared_secrets(app, "secret.keep token").unwrap();
+    acquire_secret(&*shared, "token")
+}
+
+fn acquire_secret(
+    shared: &dyn exact_runner::SharedSecrets,
+    name: &str,
+) -> std::sync::Arc<dyn exact_runner::SecretLease> {
     let (send, receive) = std::sync::mpsc::channel();
     let mut wait = shared.acquire(
-        "token",
+        name,
         std::sync::Arc::new(move || {
             let _ = send.send(());
         }),
     );
     receive.recv_timeout(Duration::from_secs(5)).unwrap();
-    wait.take().unwrap().unwrap()
+    let lease = wait.take().unwrap().unwrap();
+    assert!(wait.take().is_none());
+    lease
+}
+
+fn boot_secret_session(
+    app: &str,
+    grants: &'static str,
+) -> std::sync::Arc<dyn exact_runner::SharedSecrets> {
+    struct Data {
+        app: String,
+        grants: &'static str,
+        shared: Option<std::sync::Arc<dyn exact_runner::SharedSecrets>>,
+    }
+    impl exact_runner::DataSource for Data {
+        fn app_id(&self) -> &str {
+            &self.app
+        }
+        fn grants(&self) -> &'static str {
+            self.grants
+        }
+        fn query(
+            &mut self,
+            _: &str,
+            _: &[exact_plan::Value],
+        ) -> Result<exact_plan::Value, exact_runner::DataError> {
+            unreachable!()
+        }
+        fn configure_secrets(
+            &mut self,
+            shared: std::sync::Arc<dyn exact_runner::SharedSecrets>,
+        ) -> Result<(), exact_runner::DataError> {
+            self.shared = Some(shared);
+            Ok(())
+        }
+    }
+    let plan = contract::compile("component App\n  view\n    text \"ready\"\n").unwrap();
+    let (host, error) = super::super::Host::boot(
+        &plan.encode(),
+        Data {
+            app: app.into(),
+            grants,
+            shared: None,
+        },
+        Box::new(exact_kernel::MonospaceMeasurer::default()),
+        100.,
+        100.,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    host.runner().data_ref().shared.clone().unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_secret_sessions_enforce_their_own_grants_in_one_app_namespace() {
+    if !in_child("shared_secret_sessions_enforce_their_own_grants_in_one_app_namespace") {
+        return;
+    }
+    let app = "test.exact.secret-grants";
+    let first = boot_secret_session(app, "secret.keep token\nsecret.keep shared");
+    let second = boot_secret_session(app, "secret.keep other\nsecret.keep shared");
+    for (owner, restricted, name, replacement) in [
+        (&first, &second, "token", Some("x")),
+        (&second, &first, "other", None),
+    ] {
+        let lease = acquire_secret(&**owner, name);
+        assert_eq!(lease.read(), Ok(None));
+        lease.write(Some("kept")).unwrap();
+        assert_eq!(lease.read(), Ok(Some("kept".into())));
+        lease.write(None).unwrap();
+        assert_eq!(lease.read(), Ok(None));
+        lease.write(Some("kept")).unwrap();
+        lease.finish().unwrap();
+        drop(lease);
+        let lease = acquire_secret(&**owner, name);
+        assert_eq!(lease.read(), Ok(Some("kept".into())));
+        lease.finish().unwrap();
+        drop(lease);
+        let denied = acquire_secret(&**restricted, name);
+        assert_eq!(denied.read(), Err("denied: secret.keep".into()));
+        assert_eq!(denied.write(replacement), Err("denied: secret.keep".into()));
+        drop(denied);
+        let lease = acquire_secret(&**owner, name);
+        assert_eq!(lease.read(), Ok(Some("kept".into())));
+        let denied = acquire_secret(&**restricted, name);
+        assert_eq!(denied.read(), Err("denied: secret.keep".into()));
+        assert_eq!(denied.begin_effect(), Err("denied: secret.keep".into()));
+        assert_eq!(denied.write(replacement), Err("denied: secret.keep".into()));
+        assert_eq!(denied.finish(), Err("denied: secret.keep".into()));
+        drop(denied);
+        lease.finish().unwrap();
+        drop(lease);
+        assert_eq!(
+            acquire_secret(&**owner, name).read(),
+            Ok(Some("kept".into()))
+        );
+    }
+    let lease = acquire_secret(&*first, "shared");
+    lease.write(Some("first")).unwrap();
+    lease.finish().unwrap();
+    drop(lease);
+    let lease = acquire_secret(&*second, "shared");
+    assert_eq!(lease.read(), Ok(Some("first".into())));
+    lease.write(Some("second")).unwrap();
+    lease.finish().unwrap();
+    drop(lease);
+    assert_eq!(
+        acquire_secret(&*first, "shared").read(),
+        Ok(Some("second".into()))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn shared_secret_denial_preserves_pending_writes() {
+    if !in_child("shared_secret_denial_preserves_pending_writes") {
+        return;
+    }
+    let app = "test.exact.secret-denial-queue";
+    let owner = boot_secret_session(app, "secret.keep token");
+    let restricted = boot_secret_session(app, "secret.keep other");
+    allow(Some(0));
+    submit(app, vec![write("token", Some("queued"))]);
+    let denied = acquire_secret(&*restricted, "token");
+    assert_eq!(denied.read(), Err("denied: secret.keep".into()));
+    drop(denied);
+    allow(None);
+    assert!(drain(Duration::from_secs(5)));
+    assert_eq!(
+        acquire_secret(&*owner, "token").read(),
+        Ok(Some("queued".into()))
+    );
+}
+
+#[test]
+fn shared_secret_memory_session_denies_names_outside_its_grants() {
+    let shared = boot_secret_session("", "secret.keep token");
+    let allowed = acquire_secret(&*shared, "token");
+    assert_eq!(allowed.read(), Ok(None));
+    allowed.write(Some("kept")).unwrap();
+    allowed.finish().unwrap();
+    for (name, value) in [("other", Some("x")), ("absent", None)] {
+        let denied = acquire_secret(&*shared, name);
+        assert_eq!(denied.read(), Err("denied: secret.keep".into()));
+        assert_eq!(denied.write(value), Err("denied: secret.keep".into()));
+        assert_eq!(denied.begin_effect(), Err("denied: secret.keep".into()));
+        assert_eq!(denied.finish(), Err("denied: secret.keep".into()));
+    }
 }
 
 #[test]
@@ -431,7 +586,7 @@ fn shared_secret_discards_failed_retries_and_durable_envelopes() {
 
 #[test]
 fn shared_secret_memory_session_reads_ordinary_writes_and_carried_values() {
-    let session = super::super::system::SecretSession::new("").unwrap();
+    let session = super::super::system::SecretSession::new("", "secret.keep token").unwrap();
     session.seed(vec![("token".into(), b"carried".to_vec())]);
     assert!(session
         .remember(&[write("token", Some("ordinary"))])
@@ -458,7 +613,7 @@ fn windows_production_secrets_use_a_private_memory_coordinator() {
     }
     let app = "test.exact.windows-memory";
     assert!(crate::picker::secret_root(app).unwrap().is_none());
-    let session = super::super::system::SecretSession::new(app).unwrap();
+    let session = super::super::system::SecretSession::new(app, "secret.keep token").unwrap();
     assert!(session
         .remember(&[write("token", Some("ordinary"))])
         .is_empty());

@@ -187,7 +187,7 @@ fn a_comparison_keeps_its_css_and_folds_what_reads_nothing() {
         ),
     ] {
         let d = text(StyleId::PaddingBottom, value).unwrap();
-        assert_eq!(css(d), written, "{value}");
+        assert_eq!(css(d.clone()), written, "{value}");
         // The written text is the same length, by the same handle.
         assert_eq!(text(StyleId::PaddingBottom, written), Ok(d), "{written}");
     }
@@ -308,8 +308,8 @@ fn a_comparison_below_zero_is_clamped_where_it_is_used() {
         "clamp(none, 2 * env(safe-area-inset-bottom), 50%)",
     ] {
         let d = text(StyleId::MarginTop, value).unwrap();
-        assert_eq!(css(d), value);
-        assert_eq!(text(StyleId::MarginTop, &css(d)), Ok(d), "{value}");
+        assert_eq!(css(d.clone()), value);
+        assert_eq!(text(StyleId::MarginTop, &css(d.clone())), Ok(d), "{value}");
     }
     // At the limits: 32 nested comparisons and 32 values are an author's,
     // whatever the row
@@ -415,7 +415,7 @@ fn a_comparison_travels_the_wire_and_marks_its_node_as_reading_the_insets() {
     ];
     let mut other = Kernel::with_monospace();
     other.apply_frame(&wire::encode(0, 1, &ops)).unwrap();
-    let margin = other.node(7).unwrap().style.margin_bottom;
+    let margin = other.node(7).unwrap().style.margin_bottom.clone();
     assert_eq!(margin, text(StyleId::MarginBottom, value).unwrap());
     assert_eq!(
         css(margin),
@@ -565,7 +565,11 @@ fn a_scaled_sum_is_written_whole_within_the_author_s_values() {
         .join(" + ");
     let authored = format!("calc(2 * ({picks}))");
     let d = text(StyleId::MarginTop, &authored).unwrap();
-    assert_eq!(text(StyleId::MarginTop, &css(d)), Ok(d), "{authored}");
+    assert_eq!(
+        text(StyleId::MarginTop, &css(d.clone())),
+        Ok(d),
+        "{authored}"
+    );
     // One comparison takes the number as its coefficient
     let d = text(
         StyleId::MarginTop,
@@ -583,7 +587,11 @@ fn a_scaled_sum_is_written_whole_within_the_author_s_values() {
         .join(" + ");
     let authored = format!("calc(2 * ({terms}))");
     let d = text(StyleId::MarginTop, &authored).unwrap();
-    assert_eq!(text(StyleId::MarginTop, &css(d)), Ok(d), "{authored}");
+    assert_eq!(
+        text(StyleId::MarginTop, &css(d.clone())),
+        Ok(d),
+        "{authored}"
+    );
     // A negation still takes the sign into each part, writing no number
     let d = text(
         StyleId::MarginTop,
@@ -611,7 +619,7 @@ fn a_sum_keeps_its_zero_terms_and_each_env() {
         ),
     ] {
         let d = text(StyleId::MarginTop, value).unwrap();
-        assert_eq!(css(d), written, "{value}");
+        assert_eq!(css(d.clone()), written, "{value}");
         assert_eq!(text(StyleId::MarginTop, written), Ok(d), "{written}");
     }
     // A zero percentage beside pixels is the compact form that holds both
@@ -657,7 +665,11 @@ fn a_subtraction_spends_no_value() {
             .collect::<String>()
     );
     let d = text(StyleId::MarginTop, &authored).unwrap();
-    assert_eq!(text(StyleId::MarginTop, &css(d)), Ok(d), "{authored}");
+    assert_eq!(
+        text(StyleId::MarginTop, &css(d.clone())),
+        Ok(d),
+        "{authored}"
+    );
 }
 
 /// A sum of 32 values, `min(1%)` among them unwrapped to its one argument
@@ -671,7 +683,11 @@ fn a_subtraction_that_opens_a_sum_is_written_after_its_pixels() {
             .collect::<String>()
     );
     let d = text(StyleId::MarginTop, &authored).unwrap();
-    assert_eq!(text(StyleId::MarginTop, &css(d)), Ok(d), "{authored}");
+    assert_eq!(
+        text(StyleId::MarginTop, &css(d.clone())),
+        Ok(d),
+        "{authored}"
+    );
 }
 
 /// No number is past a calculation's range (CSS Values 4 §5, §9.1): an
@@ -709,8 +725,8 @@ fn infinities_and_nan_stay_inside_and_are_censored_at_the_top() {
     assert_eq!(d.at_basis(&large, 100.0), 33_554_432.0);
     // The text of a tree holding one reads back as it
     let d = text(StyleId::MarginTop, "min(infinity * 1px, 10% + NaN * 1px)").unwrap();
-    assert_eq!(css(d), "min(infinity * 1px, 10% + (NaN * 1px))");
-    assert_eq!(text(StyleId::MarginTop, &css(d)), Ok(d));
+    assert_eq!(css(d.clone()), "min(infinity * 1px, 10% + (NaN * 1px))");
+    assert_eq!(text(StyleId::MarginTop, &css(d.clone())), Ok(d));
 }
 
 /// A sum opening with a subtracted `env()` is written with a positive part
@@ -724,8 +740,12 @@ fn a_subtracted_env_term_is_written_after_a_positive_part() {
             .collect::<String>()
     );
     let d = text(StyleId::MarginTop, &authored).unwrap();
-    assert!(!css(d).contains("-1 *"), "{}", css(d));
-    assert_eq!(text(StyleId::MarginTop, &css(d)), Ok(d), "{authored}");
+    assert!(!css(d.clone()).contains("-1 *"), "{}", css(d));
+    assert_eq!(
+        text(StyleId::MarginTop, &css(d.clone())),
+        Ok(d),
+        "{authored}"
+    );
 }
 
 /// A minus goes only on a number: a subtracted function or group is never
@@ -775,11 +795,11 @@ fn every_sum_is_written_as_css_and_reads_back_as_itself() {
                     {
                         continue;
                     }
-                    let d = style.width;
+                    let d = style.width.clone();
                     if !matches!(d, Dimension::Compare(_)) {
                         continue;
                     }
-                    let written = css(d);
+                    let written = css(d.clone());
                     let bytes = written.as_bytes();
                     for (i, _) in written.match_indices('-') {
                         let after_sign = i == 0 || matches!(bytes[i - 1], b'(' | b',' | b' ');
@@ -850,8 +870,8 @@ fn a_product_keeps_its_number_and_its_bytes_decode() {
         ),
     ] {
         let d = text(StyleId::Width, value).unwrap();
-        assert_eq!(css(d), css_text, "{value}");
-        assert_eq!(text(StyleId::Width, &css(d)), Ok(d), "{value}");
+        assert_eq!(css(d.clone()), css_text, "{value}");
+        assert_eq!(text(StyleId::Width, &css(d.clone())), Ok(d), "{value}");
         let mut style = StyleProps::default();
         style
             .set_dynamic(StyleId::Width, &StyleValue::Text(value.into()))
@@ -905,7 +925,7 @@ fn simplification_and_serialization_are_css_values_4_s() {
         ),
     ] {
         let d = text(StyleId::MarginTop, value).unwrap_or_else(|e| panic!("{value}: {e:?}"));
-        assert_eq!(css(d), written, "{value}");
+        assert_eq!(css(d.clone()), written, "{value}");
         assert_eq!(text(StyleId::MarginTop, written), Ok(d), "{written}");
     }
     // Names and keywords are ASCII case-insensitive, and comments stand
@@ -947,8 +967,11 @@ fn env_s_fallback_stands_in_for_an_undefined_segment() {
     let env = Env::new(0.0, 0.0, 0.0, 0.0);
     assert_eq!(d.at_basis(&env, 200.0), 110.0);
     // Held as written: substitution reads the text, not a tree of it
-    assert_eq!(css(d), "calc(env(viewport-segment-width 1 0, 50%) + 10px)");
-    assert_eq!(text(StyleId::Width, &css(d)), Ok(d));
+    assert_eq!(
+        css(d.clone()),
+        "calc(env(viewport-segment-width 1 0, 50%) + 10px)"
+    );
+    assert_eq!(text(StyleId::Width, &css(d.clone())), Ok(d));
     let inset = text(StyleId::Width, "env(safe-area-inset-top, 9px)").unwrap();
     assert_eq!(inset.at_basis(&Env::new(20.0, 0.0, 0.0, 0.0), 0.0), 20.0);
 }
@@ -985,7 +1008,7 @@ fn specification_edges_hold() {
         "calc(env(safe-area-inset-left, auto) + 1px)",
     ] {
         let d = text(StyleId::Width, value).unwrap_or_else(|e| panic!("{value}: {e:?}"));
-        assert_eq!(text(StyleId::Width, &css(d)), Ok(d), "{value}");
+        assert_eq!(text(StyleId::Width, &css(d.clone())), Ok(d), "{value}");
     }
     exact_kernel::link_segments();
     let d = text(

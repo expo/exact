@@ -4,7 +4,8 @@
 //!
 //! Parts of different materials share a draw too when the materials differ
 //! only in factors a vertex can carry: opaque, untextured, a base colour factor
-//! of one (the colour in the vertices) and the same sidedness. The draw's
+//! of one (the colour in the vertices), lit without layers, and the same
+//! sidedness. The draw's
 //! material has factors of one, each vertex numbers its part in `uv.x` (no
 //! texture reads it), and each instance's part entries carry the part's
 //! metallic, roughness, rim and emission (model_vertex.wgsl `model_transform`).
@@ -29,6 +30,8 @@ type Key = (Option<u32>, bool, Option<[u32; 5]>);
 fn shared(m: &MaterialData) -> bool {
     m.alpha_mode == AlphaMode::Opaque
         && m.base_color == [1.; 4]
+        && !m.unlit
+        && !crate::model_pipeline::layered(m)
         && crate::model_pipeline::untextured(m)
 }
 fn key(model: &Model, mesh: u32) -> Key {

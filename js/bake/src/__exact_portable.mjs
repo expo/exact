@@ -5,12 +5,12 @@
 
 // `x!`, `(x)` and `x?.y` as written, down to the expression they wrap.
 export const bare=(node)=>{ while (node && ['TSNonNullExpression','ParenthesizedExpression','ChainExpression','TSAsExpression','TSSatisfiesExpression','TSTypeAssertion'].includes(node.type)) node=node.expression; return node; };
-// A literal bracket key names the same property as dot access. Dynamic
-// keys and aliases stay with the runtime guard; do not evaluate them here.
+// Literal bracket keys, destructuring keys and JSX members name the same properties as dot access.
+// Dynamic keys and aliases stay with the runtime guard; do not evaluate them here.
 export const propertyName=(node)=>{
-  if (node?.type!=='MemberExpression') return null;
-  const property=bare(node.property);
-  if (!node.computed) return property?.type==='Identifier' ? property.name : null;
+  if (!['MemberExpression','JSXMemberExpression','Property'].includes(node?.type)) return null;
+  const property=bare(node.type==='Property' ? node.key : node.property);
+  if (!node.computed && ['Identifier','JSXIdentifier'].includes(property?.type)) return property.name;
   if (property?.type==='Literal' && typeof property.value==='string') return property.value;
   if (property?.type==='TemplateLiteral' && !property.expressions.length) return property.quasis[0].value.cooked;
   return null;
@@ -41,7 +41,7 @@ const HOSTS=['globalThis','self','window','frames','parent','top','opener'];
 // `allowsEval`), and what a use reaches through `Function.prototype.constructor` or a function's own `constructor`
 // still runs on the web, which no reading of the syntax settles.
 const CODE=['Function','eval'];
-// TypeScript's nodes that hold code (`packageRefusals` over app TypeScript): every other `TS…` node is a type.
+// TypeScript's nodes that hold code: every other `TS…` node is a type.
 const TS_CODE=['TSAsExpression','TSSatisfiesExpression','TSNonNullExpression','TSTypeAssertion','TSInstantiationExpression','TSParameterProperty','TSExportAssignment',
   'TSModuleDeclaration','TSModuleBlock','TSEnumDeclaration','TSEnumBody','TSEnumMember'];
 const NODE=['process','Buffer','global','__dirname','__filename','require'];
@@ -54,18 +54,20 @@ const FUNCTIONS=['FunctionDeclaration','FunctionExpression','ArrowFunctionExpres
 // clause's parameter, a named function or class expression's own name. Each
 // maps to its initializer where a `const` binds it alone, else to null.
 //
-// Two models. The refusals' (`full` false) is the one they were decided by, and
-// stays so: a change to the warnings' model moves no refusal. The warnings'
-// (`full`, `runtime` in `packageRefusals`) is what binds at run time, TypeScript's
-// included: a class's static block and a namespace block are `var` scopes of
+// Two models. The package refusals' (`full` false) is the one they were decided by,
+// and stays so: a change to the runtime model moves no package refusal. The runtime
+// model (`full`, used by the warnings and the clock check) includes TypeScript:
+// a class's static block and a namespace block are `var` scopes of
 // their own (TypeScript emits a namespace as a function); a namespace block also
-// sees what every block of the same namespace exports (`merged`); a TypeScript
+// sees what every block of the same namespace exports (`model.merged`); a TypeScript
 // enum (not a `const` one), a namespace that holds a value and `import X = …`
 // bind, and what TypeScript erases binds nothing: a `declare`, an `import type`,
 // a `const` enum, a type-only namespace. Where it meets a construct it does not
-// model, it binds nothing, so the name is the global and an extra warning is the
-// worst it does.
-function declares(node, full=false, merged=null) {
+// model, it binds nothing, so the name is the global. In this model a function's
+// body (identified by `parent`) owns its declarations: parameter initializers
+// cannot see them. In a `var` scope of sloppy code (`model.sloppy`), a function
+// declared in a nested block can also bind its name there (`annexB`).
+function declares(node, full=false, model=null, parent=null) {
   const names=new Map();
   const pattern=(p)=>{
     if (!p) return;
@@ -98,22 +100,64 @@ function declares(node, full=false, merged=null) {
     if (n.type==='VariableDeclaration' && n.kind==='var' && !(full && n.declare)) n.declarations.forEach(d=>pattern(d.id));
     for (const key in n) if (key!=='parent' && n[key] && typeof n[key]==='object') vars(n[key]);
   };
-  if (node.type==='Program') { lexical(node.body); vars(node.body); }
+  if (node.type==='Program') {
+    lexical(node.body); vars(node.body);
+    if (full && model?.sloppy.has(node)) for (const name of annexB(node.body,[])) names.set(name,null);
+  }
   else if (FUNCTIONS.includes(node.type)) {
     node.params.forEach(pattern);
     if (node.type==='FunctionExpression' && node.id) names.set(node.id.name,null);
-    if (node.body?.type==='BlockStatement') { lexical(node.body.body); vars(node.body.body); }
+    if (!full && node.body?.type==='BlockStatement') { lexical(node.body.body); vars(node.body.body); }
   }
   else if (node.type==='ClassExpression' && node.id) names.set(node.id.name,null);
-  else if (full && ['StaticBlock','TSModuleBlock'].includes(node.type)) {
-    for (const name of merged?.get(node) ?? []) names.set(name,null);
+  else if (full && (['StaticBlock','TSModuleBlock'].includes(node.type)
+    || (node.type==='BlockStatement' && FUNCTIONS.includes(parent?.type)))) {
+    for (const name of model?.merged.get(node) ?? []) names.set(name,null);
     lexical(node.body); vars(node.body);
+    if (model?.sloppy.has(node)) for (const name of annexB(node.body,FUNCTIONS.includes(parent?.type) ? parent.params : [])) names.set(name,null);
   }
   else if (['BlockStatement','StaticBlock'].includes(node.type)) lexical(node.body);
   else if (node.type==='SwitchStatement') node.cases.forEach(c=>lexical(c.consequent));
   else if (['ForStatement','ForInStatement','ForOfStatement'].includes(node.type)) { const d=node.init ?? node.left; if (d?.type==='VariableDeclaration') lexical([d]); }
   else if (node.type==='CatchClause') pattern(node.param);
   return names;
+}
+// The names that sloppy code's functions declared in blocks under `body`, a `var` scope's statements, also bind in
+// that scope (ECMAScript Annex B.3.3.1 for a function, B.3.3.2 for a script; B.3.4 for an `if` branch and a catch
+// clause): each plain function (not a generator or async one) directly in a block, a case clause or an `if` branch,
+// where a `var` of its name in its place would not be an early error. Such an error is a parameter of the name
+// (`params`), or a lexical declaration of it in a scope between: a `let`, `const` or class in its own block, or any
+// lexical declaration (a block's functions included) in a block, loop head or destructuring catch parameter around
+// that.
+// A catch clause's lone parameter does not stop it (B.3.4). `body`'s own functions are `var`s, and its lexical
+// declarations stop the hoist too. A labelled function in a block is taken as hoisted, as V8 does though the text
+// says otherwise: an extra binding only leaves a name unchecked. The rule for eval code (B.3.3.3) does not arise:
+// no eval code is checked.
+function annexB(body, params) {
+  const found=new Set(), stop=declares({type:'ArrowFunctionExpression',params,body:null},true);
+  const lexical=(statements,functions)=>declares({type:'BlockStatement',body:(statements ?? []).filter(s=>functions || s.type!=='FunctionDeclaration')});
+  const hoist=(f,scopes)=>{
+    while (f?.type==='LabeledStatement') f=f.body;
+    if (f?.type!=='FunctionDeclaration' || f.generator || f.async || f.declare || !f.id) return;
+    if (!scopes.some(s=>s.has(f.id.name))) found.add(f.id.name);
+  };
+  const walk=(n,scopes)=>{
+    if (!n || typeof n!=='object') return;
+    if (Array.isArray(n)) { n.forEach(m=>walk(m,scopes)); return; }
+    if (FUNCTIONS.includes(n.type) || ['ClassDeclaration','ClassExpression','StaticBlock','TSModuleDeclaration'].includes(n.type)) return;
+    let own=null;
+    if (['BlockStatement','SwitchStatement'].includes(n.type)) {
+      const statements=n.type==='BlockStatement' ? n.body : n.cases.flatMap(c=>c.consequent), here=[...scopes,lexical(statements,false)];
+      own=lexical(statements,true);
+      statements.forEach(f=>hoist(f,here));
+    }
+    else if (n.type==='IfStatement') { hoist(n.consequent,scopes); hoist(n.alternate,scopes); }
+    else if (['ForStatement','ForInStatement','ForOfStatement'].includes(n.type) || (n.type==='CatchClause' && n.param?.type!=='Identifier')) own=declares(n);
+    const inner=own ? [...scopes,own] : scopes;
+    for (const key in n) if (key!=='parent') walk(n[key],inner);
+  };
+  walk(body,[stop,lexical(body,false)]);
+  return found;
 }
 // A namespace's own name, the first of a dotted one (`namespace A.B` binds `A`).
 const namespaceName=(s)=>{
@@ -172,6 +216,60 @@ function mergedExports(ast) {
   for (const [block,keys] of blocks) merged.set(block,keys.flatMap(key=>[...exported.get(key) ?? []]));
   return merged;
 }
+// What the runtime model reads from the whole module: each namespace block's names from the blocks it merges with
+// (`merged`), and the `var` scopes of sloppy code (`sloppy`). Code is strict in an ES module, under a "use strict"
+// directive and in a class. The parser reads a file without `import` or `export` as a script, which a CommonJS
+// module is, and the bake's IIFE output keeps it sloppy; a script the bundler takes as an ES module is strict there,
+// and taking it as sloppy only leaves a name a block function shadows unchecked.
+function runtimeModel(ast) {
+  const sloppy=new Set();
+  const directive=(body)=>{
+    for (const s of body ?? []) {
+      if (s.type!=='ExpressionStatement' || typeof s.directive!=='string') return false;
+      if (s.directive==='use strict') return true;
+    }
+    return false;
+  };
+  const walk=(node,strict)=>{
+    if (!node || typeof node!=='object') return;
+    if (Array.isArray(node)) { node.forEach(n=>walk(n,strict)); return; }
+    if (node.type==='Program') strict=node.sourceType==='module' || directive(node.body);
+    else if (['ClassDeclaration','ClassExpression'].includes(node.type)) strict=true;
+    else if (FUNCTIONS.includes(node.type) && node.body?.type==='BlockStatement') {
+      strict ||= directive(node.body.body);
+      if (!strict) sloppy.add(node.body);
+    }
+    if (!strict && ['Program','TSModuleBlock'].includes(node.type)) sloppy.add(node);
+    for (const key in node) if (key!=='parent') walk(node[key],strict);
+  };
+  walk(ast,false);
+  return {merged:mergedExports(ast),sloppy};
+}
+// The names `node` binds at run time for the code under it (`declares`' `full` model), or null where it opens no
+// scope. A switch's case bindings are in scope in its cases, not its discriminant; an enum's members are in scope in
+// its initializers.
+function runtimeScope(node, parent, model) {
+  if (node.type==='SwitchStatement') return null;
+  if (node.type==='SwitchCase') return declares(parent,true,model);
+  if (node.type==='TSEnumBody') return new Map(node.members.map(m=>[m.id.name ?? m.id.value,null]));
+  return SCOPES.includes(node.type) || FUNCTIONS.includes(node.type) ? declares(node,true,model,parent) : null;
+}
+/** Visit executable syntax with what binds each name at run time (`runtimeScope`): `local.has(name)` is whether
+ * an enclosing scope binds `name` there. */
+export function walkRuntime(ast, visit) {
+  const scopes=[], model=runtimeModel(ast), local={has:name=>scopes.some(s=>s.has(name))};
+  const walk=(node,parent)=>{
+    if (!node || typeof node!=='object') return;
+    if (Array.isArray(node)) { node.forEach(n=>walk(n,parent)); return; }
+    if (node.declare || (node.type?.startsWith('TS') && !TS_CODE.includes(node.type))) return;
+    const names=runtimeScope(node,parent,model);
+    if (names) scopes.push(names);
+    visit(node,local);
+    for (const k in node) if (k!=='parent') walk(node[k],node);
+    if (names) scopes.pop();
+  };
+  walk(ast,null);
+}
 /** The DOM and Node globals a JavaScript file uses, as `label(at)`'s
  * `…: why`: each use of a name no enclosing scope binds, not guarded by a
  * `typeof` test of it that dominates the use (`typeof x !== 'undefined' &&
@@ -192,8 +290,8 @@ function mergedExports(ast) {
 export function packageRefusals(code, label, parse, warnings=[], lang='js', where=label) {
   const ast=parse(code,{lang}), found=[], at=lineColumn(code);
   // `path`: each ancestor as [node, key, index, how many scopes enclose its child].
-  // `runtime`: the same scopes, in the warnings' model.
-  const scopes=[], runtime=[], path=[], merged=lang==='js' ? null : mergedExports(ast);
+  // `runtime`: the scopes of the warnings' model (`runtimeScope`).
+  const scopes=[], runtime=[], path=[], model=runtimeModel(ast);
   const free=(name)=>!scopes.some(s=>s.has(name)), global=(name)=>!runtime.some(s=>s.has(name));
   const binding=(name,depth=scopes.length)=>scopes.slice(0,depth).findLast(s=>s.has(name))?.get(name);
   // Whether `node` tests `typeof name` (or `typeof globalThis.name`).
@@ -282,8 +380,8 @@ export function packageRefusals(code, label, parse, warnings=[], lang='js', wher
   // Not warned: `Function.prototype`'s named members other than `constructor` (`Function.prototype.bind`), and either side
   // of `instanceof`, which build no code from a string.
   const inert=(parent,key,grand)=>(parent?.type==='BinaryExpression' && parent.operator==='instanceof')
-    || (parent?.type==='MemberExpression' && key==='object' && propertyName(parent)==='prototype'
-      && grand?.type==='MemberExpression' && grand.object===parent && ![null,'constructor'].includes(propertyName(grand)));
+    || (['MemberExpression','JSXMemberExpression'].includes(parent?.type) && key==='object' && propertyName(parent)==='prototype'
+      && ['MemberExpression','JSXMemberExpression'].includes(grand?.type) && grand.object===parent && ![null,'constructor'].includes(propertyName(grand)));
   // Whether the name at `parent`'s `key` is declared there (a binding, erased or not), not used.
   const DECLARED={VariableDeclarator:'id',FunctionDeclaration:'id',FunctionExpression:'id',ClassDeclaration:'id',ClassExpression:'id',TSDeclareFunction:'id',
     ImportSpecifier:'local',ImportDefaultSpecifier:'local',ImportNamespaceSpecifier:'local',TSImportEqualsDeclaration:'id',CatchClause:'param',RestElement:'argument',AssignmentPattern:'left'};
@@ -292,6 +390,15 @@ export function packageRefusals(code, label, parse, warnings=[], lang='js', wher
   // A use of the global `Function` or `eval`, once per site, as a diagnostic in the compiler's form
   // (`file:line:col warning [id] text`, scripts/app-cli.mjs `compilerWarnings`).
   const fromString=(name,node)=>warnings.push(`${where(':'+at(node.start))} warning [code-from-string] uses '${name}', which builds code from a string: through this name that throws on every host, so the code fails there unless it catches the throw and takes another path, as zod does; what it reaches through \`Function.prototype.constructor\` or a function's own \`constructor\` still runs on the web, not on Hermes`);
+  // Taking the property is the reference; the pattern's binding and later alias uses add no site.
+  const destructured=(pattern,value)=>{
+    const object=bare(value);
+    if (pattern?.type!=='ObjectPattern' || object?.type!=='Identifier' || !HOSTS.includes(object.name) || !global(object.name)) return;
+    for (const property of pattern.properties) {
+      const name=propertyName(property);
+      if (CODE.includes(name)) fromString(name,property.key);
+    }
+  };
   const refuse=(name,node)=>{
     const where=label(':'+at(node.start));
     if (name==='import()') found.push(where+` loads code from a string ('${name}'), which a bundle cannot capture`);
@@ -304,25 +411,33 @@ export function packageRefusals(code, label, parse, warnings=[], lang='js', wher
     if (!node || typeof node!=='object') return;
     // TypeScript's types name no value: only its expression wrappers (`x as T`) hold code, and their types are skipped.
     if (typeof node.type==='string' && node.type.startsWith('TS') && (!TS_CODE.includes(node.type) || node.declare)) return;
+    if (node.type==='JSXClosingElement') return;
     if (Array.isArray(node)) { node.forEach((n,i)=>{ path.push([parent,key,i,scopes.length]); walk(n,parent,key); path.pop(); }); return; }
     // `typeof x` and `typeof globalThis.x` answer without `x`; `typeof x.y` reads `x`, as any use does.
     const probed=bare(node.argument), host=bare(probed?.object);
     if (node.type==='UnaryExpression' && node.operator==='typeof' && (probed?.type==='Identifier'
-      || (probed?.type==='MemberExpression' && host?.type==='Identifier' && HOSTS.includes(host.name) && free(host.name) && propertyName(probed)!==null))) return;
+      || (probed?.type==='MemberExpression' && host?.type==='Identifier' && HOSTS.includes(host.name)
+        && (free(host.name) || global(host.name)) && propertyName(probed)!==null))) return;
     const pushed=SCOPES.includes(node.type) || FUNCTIONS.includes(node.type);
     if (pushed) {
       const names=declares(node);
       scopes.push(names);
       for (const [name,init] of names) if (init) names.set(name,{init,held:rooted(init)});
-      runtime.push(declares(node,true,merged));
     }
+    const own=runtimeScope(node,parent,model);
+    if (own) runtime.push(own);
     const grand=path.at(-2)?.[0];
     // `export { x } from './x.js'` names another module's export.
     const reference=!(NOT_REFERENCES[parent?.type]===key && !parent.computed) && !(parent?.type==='ExportSpecifier' && grand?.source);
     // The global `Function` or `eval`, however reached as a name, but where the name is declared (an erased binding,
-    // which the scopes leave out) and in a use that builds nothing (`inert`). A local one is left to the alias check.
-    if (node.type==='Identifier' && reference && CODE.includes(node.name) && global(node.name)
-      && !declaring(parent,key,grand) && !inert(parent,key,grand)) fromString(node.name,node);
+    // which the scopes leave out) and in a use that builds nothing (`inert`). Lowercase JSX names are tags unless
+    // they head a member expression (`eval.Component`); a closing name repeats the opening reference.
+    const jsx=node.type==='JSXIdentifier' && ((parent?.type==='JSXOpeningElement' && key==='name' && /^[A-Z]/.test(node.name))
+      || (parent?.type==='JSXMemberExpression' && key==='object'));
+    if (((node.type==='Identifier' && reference && !declaring(parent,key,grand)) || jsx)
+      && CODE.includes(node.name) && global(node.name) && !inert(parent,key,grand)) fromString(node.name,node);
+    if (node.type==='VariableDeclarator') destructured(node.id,node.init);
+    if (['AssignmentExpression','AssignmentPattern'].includes(node.type)) destructured(node.left,node.right);
     if (node.type==='Identifier' && reference && free(node.name)) {
       const name=node.name;
       const constant=name==='process' && parent?.type==='MemberExpression' && key==='object' && propertyName(parent)==='env' && grand?.type==='MemberExpression' && propertyName(grand)==='NODE_ENV';
@@ -334,10 +449,10 @@ export function packageRefusals(code, label, parse, warnings=[], lang='js', wher
       const name=binding(node.name)?.held;
       if (name && !guarded(node.name,path) && !safe()) refuse(name,node);
     }
-    if (node.type==='MemberExpression') {
+    if (['MemberExpression','JSXMemberExpression'].includes(node.type)) {
       const object=bare(node.object), name=propertyName(node);
       // Not under a `typeof` test, as an absent global is: the stand-in is a function, and the call throws.
-      if (CODE.includes(name) && object?.type==='Identifier' && HOSTS.includes(object.name) && global(object.name)
+      if (CODE.includes(name) && ['Identifier','JSXIdentifier'].includes(object?.type) && HOSTS.includes(object.name) && global(object.name)
         && !inert(parent,key,grand)) fromString(name,node);
       if (member(node) && !guarded(name,path) && !safe()) refuse(name,node);
     }
@@ -348,7 +463,8 @@ export function packageRefusals(code, label, parse, warnings=[], lang='js', wher
       walk(node[k],node,k);
       if (!Array.isArray(node[k])) path.pop();
     }
-    if (pushed) { scopes.pop(); runtime.pop(); }
+    if (pushed) scopes.pop();
+    if (own) runtime.pop();
   };
   walk(ast,null,null);
   return found;

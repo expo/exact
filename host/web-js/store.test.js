@@ -8,6 +8,37 @@ mock.module("./alert-message.js", () => ({}));
 mock.module("./menu-rows.js", () => ({}));
 mock.module("./names.js", () => ({ sourceTypes: {} }));
 const { Store } = await import("./rt.js");
+const { createSecretFacade } = await import("./admission.js");
+
+test("a render's store refuses writes before changing memory or scheduling readers", () => {
+  const saved = ['__exactRender', 'queueMicrotask', 'localStorage'].map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]);
+  const before = Store.save();
+  let queued = 0, loaded = 0;
+  globalThis.__exactRender = true;
+  globalThis.queueMicrotask = () => queued++;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: { get length() { loaded++; return 0; } } });
+  Store.map = new Map(); Store.writes = []; Store.dirty = false;
+  try {
+    for (const value of ['kept', null]) {
+      expect(() => Store.set('token', value)).toThrow("a render's store is empty and refuses writes");
+      expect(Store.get('token')).toBeUndefined();
+      expect([...Store.map]).toEqual([]);
+      expect(Store.writes).toEqual([]);
+      expect(Store.dirty).toBe(false);
+      expect(queued).toBe(0);
+    }
+    Store.load();
+    expect(loaded).toBe(0);
+    Store.map.set('token', 'private');
+    expect(Store.get('token')).toBeUndefined();
+    expect(() => Store.set('token', 'private')).toThrow("a render's store is empty and refuses writes");
+    expect([...Store.map]).toEqual([['token', 'private']]);
+    expect(queued).toBe(0);
+  } finally {
+    Store.restore(before);
+    for (const [key, descriptor] of saved) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
+  }
+});
 
 // As the runner's `Store::set`.
 test("keeping what is already kept is no write", () => {
@@ -86,5 +117,29 @@ test("a new secret owner invalidates a credential left by an interrupted update"
     expect(disk.size).toBe(0);
   } finally {
     for (const [key, descriptor] of saved) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
+  }
+});
+
+// The grant set is the Rust parser's normalized `secret.keep token`.
+test("a render's source facade reads no secret and refuses writes before calling its backing store", async () => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, '__exactRender');
+  let reads = 0, writes = 0, keys = 0;
+  const store = createSecretFacade({ get() { reads++; return 'private'; }, set() { writes++; } },
+    { version: 1, entries: [[1, "secret.keep token", ["secret-keep", "token"], null]], error: null, seal: "b22a759eedfe6bc2" }, () => { keys++; return Promise.resolve({ put() {} }); });
+  globalThis.__exactRender = true;
+  try {
+    expect(store.get('token')).toBeNull();
+    expect(store.has('token')).toBe(false);
+    expect(await store.unlock('token')).toBeNull();
+    expect(await store.key('token')).toBeNull();
+    for (const write of [() => store.set('token', 'kept'), () => store.forget('token')]) {
+      expect(write).toThrow("a render's store is empty and refuses writes");
+    }
+    for (const write of [() => store.exclusive('token', () => { throw new Error('work ran'); }), () => store.keepKey('token', {})]) {
+      expect(await write().catch(e => e.message)).toBe("a render's store is empty and refuses writes");
+    }
+    expect({ reads, writes, keys, read: store.read }).toEqual({ reads: 0, writes: 0, keys: 0, read: true });
+  } finally {
+    if (saved) Object.defineProperty(globalThis, '__exactRender', saved); else delete globalThis.__exactRender;
   }
 });

@@ -182,35 +182,37 @@ impl EnvironmentLight {
             label: Some("game environment prefilter"),
             source: wgpu::ShaderSource::Wgsl(crate::pipeline::ENVIRONMENT.into()),
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("game environment prefilter"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("game environment prefilter"),
-                    bind_group_layouts: &[Some(&layout)],
-                    immediate_size: 0,
-                }),
-            ),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs"),
-                targets: &[Some(wgpu::TextureFormat::Rgba16Float.into())],
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[("DIRECTIONS", if directions { 1.0 } else { 0.0 })],
-                    ..Default::default()
+        let pipeline = crate::perf::pipeline(|| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("game environment prefilter"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("game environment prefilter"),
+                        bind_group_layouts: &[Some(&layout)],
+                        immediate_size: 0,
+                    }),
+                ),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
                 },
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache,
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs"),
+                    targets: &[Some(wgpu::TextureFormat::Rgba16Float.into())],
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[("DIRECTIONS", if directions { 1.0 } else { 0.0 })],
+                        ..Default::default()
+                    },
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache,
+            })
         });
         Self {
             view,
@@ -396,19 +398,21 @@ fn sh_pipeline(
     layout: &wgpu::BindGroupLayout,
     module: &wgpu::ShaderModule,
 ) -> wgpu::ComputePipeline {
-    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("game environment map SH"),
-        layout: Some(
-            &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("game environment map SH"),
-                bind_group_layouts: &[Some(layout)],
-                immediate_size: 0,
-            }),
-        ),
-        module,
-        entry_point: Some("sh"),
-        compilation_options: Default::default(),
-        cache: None,
+    crate::perf::pipeline(|| {
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("game environment map SH"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("game environment map SH"),
+                    bind_group_layouts: &[Some(layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            module,
+            entry_point: Some("sh"),
+            compilation_options: Default::default(),
+            cache: None,
+        })
     })
 }
 

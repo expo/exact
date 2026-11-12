@@ -618,7 +618,7 @@ fn stage_one_geometry_transforms_and_classes() {
     let e = node("e");
     assert_eq!(e.node_type, NodeType::SvgEllipse);
     assert_eq!(
-        (e.style.cx, e.style.cy, e.style.rx),
+        (e.style.cx.clone(), e.style.cy.clone(), e.style.rx.clone()),
         (Points(50.0), Percent(50.0), Points(10.0))
     );
     assert_eq!(e.style.ry, exact_kernel::Dimension::Auto);
@@ -629,9 +629,15 @@ fn stage_one_geometry_transforms_and_classes() {
     );
     assert_eq!(e.style.transform_box, exact_kernel::TransformBox::FillBox);
     let rect = node("r");
-    assert_eq!((rect.style.x, rect.style.y), (Percent(10.0), Points(2.0)));
+    assert_eq!(
+        (rect.style.x.clone(), rect.style.y.clone()),
+        (Percent(10.0), Points(2.0))
+    );
     assert_eq!(rect.style.height, Points(96.0), "1in is 96 user units");
-    assert_eq!((rect.style.width, rect.style.rotate), (Points(40.0), 15.0));
+    assert_eq!(
+        (rect.style.width.clone(), rect.style.rotate),
+        (Points(40.0), 15.0)
+    );
     // A component's root inside a `g`; a computed number is a length's text.
     let tick = node("tick");
     assert_eq!(tick.node_type, NodeType::SvgLine);

@@ -2,6 +2,15 @@
 // whether a value or a ticket can be reused.
 import { equal } from './shape.js';
 
+let memberIds, nextMemberId = 0;
+// A member's runtime identity survives reordering; opaque ids expose no request arguments or keys.
+export function resourceKey(r) {
+  if (!r.member) return r.name;
+  memberIds ??= new WeakMap();
+  if (!memberIds.has(r)) memberIds.set(r, ++nextMemberId);
+  return `${r.name}[${memberIds.get(r)}]`;
+}
+
 export function resourceInspection(enabled, now) {
   let serial = 0;
   const since = enabled ? now() : null;

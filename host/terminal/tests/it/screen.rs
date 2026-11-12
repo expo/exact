@@ -144,6 +144,28 @@ fn native_buttons_mark_clamped_titles_on_whole_clusters() {
 }
 
 #[test]
+fn native_buttons_preserve_newlines_before_clamping_the_title() {
+    use exact_kernel::style::cells::ROW;
+
+    for (clamp, expected, height) in [(1, " abcde…", ROW), (0, " abcdef\n   x", 2. * ROW)] {
+        let source = format!(
+            "component App\n  view\n    button \"abcdefgh\\nx\" width=\"8ch\" white-space=\"pre\" line-clamp={clamp} testId=\"button\"\n"
+        );
+        let plan = contract::compile_terminal(&source).unwrap();
+        let mut host = Host::boot(plan, (), Mode::Fullscreen, 20, 6).unwrap();
+        let id = host.by_test_id("button").unwrap();
+        let mut vt = Vt::new(&mut host);
+        vt.render(&mut host);
+        assert_eq!(vt.text(false).trim_end(), expected, "{source}");
+        assert_eq!(host.kernel().node(id).unwrap().frame.height, height);
+        assert_eq!(
+            host.kernel().press_face(id).unwrap().title.as_deref(),
+            Some("abcdefgh\nx")
+        );
+    }
+}
+
+#[test]
 fn overflow_clip_leaves_the_other_axis_visible() {
     for (overflow, placement, expected) in [
         ("overflow-y=\"clip\"", "left=\"6ch\"", "      menu"),

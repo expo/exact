@@ -28,6 +28,8 @@ pub(crate) struct Material {
     pub alpha: AlphaMode,
     pub double_sided: bool,
     pub untextured: bool,
+    /// Draws in the layered pipelines (`model_pipeline::layered`).
+    pub layered: bool,
     data: MaterialData,
     names: [Option<String>; 5],
 }
@@ -38,9 +40,10 @@ pub(crate) const REPLACE: u32 = 1 << 31;
 /// A record's look word flag: its draw has parts of several materials, which
 /// its vertices number in `uv.x` (merge.rs).
 pub(crate) const NUMBERED: u32 = 1 << 30;
-/// A merged part's entry: tint, glow, its first vertex as bits; then, in a
-/// draw of several materials, its material (merge.rs `PartMaterial`).
-pub(crate) type PartLook = [f32; 16];
+/// A look-table entry: tint, glow, its part's first vertex as bits; then, in a
+/// draw of several materials, its material (merge.rs `PartMaterial`); then the
+/// record's base colour and emission UV offset (`MaterialOverride::uv_offset`).
+pub(crate) type PartLook = [f32; 18];
 pub(crate) type ModelNode = (MeshId, MaterialId, Mat4, Option<u32>);
 /// What the feed batches one loaded model from.
 pub(crate) struct Draws<'a> {
@@ -88,7 +91,9 @@ impl Uploaded {
 mod looks;
 mod merge;
 mod poses;
+mod prepare;
 pub(crate) use poses::Moved;
+pub(crate) use prepare::{caster, depth, ModelFrame};
 mod textures;
 mod variants;
 use textures::upload_texture;
@@ -124,8 +129,9 @@ pub(crate) struct Models {
     bind_buffers: Option<(wgpu::BindGroupLayout, [wgpu::Buffer; 3])>,
     words: Vec<u32>,
     normals: Vec<([u32; 16], [u32; 16])>,
-    /// Per record, 1 + the first of its merged parts' looks (0: none), and
-    /// those looks (tint, glow, then the part's first vertex as bits; a
+    /// Per record, 1 + the first of its look-table entries (0: none), and
+    /// those entries: one per merged part, or one for a whole record with a
+    /// UV offset (tint, glow, then the part's first vertex as bits; a
     /// `u32::MAX` start ends each record's run), appended after the records.
     pub(crate) part_looks: (Vec<u32>, Vec<PartLook>),
     /// Materials a game's `CustomMaterial` shades (never merged).
@@ -134,6 +140,9 @@ pub(crate) struct Models {
     pub(crate) pending_looks: (Vec<u32>, Vec<PartLook>),
     /// Materials drawn with an instance's textures (`MaterialOverride::textures`).
     pub(crate) variants: variants::Variants,
+    /// Bytes the instance, skin palette, local pose and skin job buffers grow
+    /// to at least (`Game::PREPARE`, prepare.rs).
+    pub(crate) reserve: [u64; 4],
 }
 impl Models {
     pub fn custom_data(&mut self, queue: &wgpu::Queue, data: impl Fn(u32) -> u32) {
@@ -227,6 +236,7 @@ impl Models {
     ) -> Result<(), RenderError> {
         // Four u32 header words + affine matrix + inverse-transpose normal matrix.
         let skinning = self.skinning.as_mut().unwrap();
+        skinning.reserve = [self.reserve[1], self.reserve[2], self.reserve[3]];
         skinning.set(device, queue, uniform, records)?;
         let words = &mut self.words;
         words.clear();
@@ -268,12 +278,13 @@ impl Models {
             };
             words.push(at | (look & (REPLACE | NUMBERED)));
         }
-        // A merged part's look is one record-sized entry: its tint and glow,
-        // and in `local`'s first two columns its material, when it has one.
+        // A look-table entry is one record-sized entry: its tint and glow, in
+        // `local`'s first two columns its material, when it has one, and in
+        // the third's first two words its UV offset.
         for look in &self.part_looks.1 {
             words.extend([0; 4]);
             words.extend(look[8..].iter().map(|v| v.to_bits()));
-            words.extend([0; 24]);
+            words.extend([0; 22]);
             words.extend(look[..8].iter().map(|v| v.to_bits()));
         }
         if words.len() as u64 * 4 > device.limits().max_storage_buffer_binding_size {
@@ -282,7 +293,8 @@ impl Models {
             ));
         }
         let instances = self.instances.as_mut().expect("prepared model instances");
-        self.reallocations += u64::from(instances.grow(device, queue, (words.len() * 4) as u64));
+        let needed = (words.len() as u64 * 4).max(self.reserve[0]);
+        self.reallocations += u64::from(instances.grow(device, queue, needed));
         let buffers = (
             layout.clone(),
             [
@@ -859,6 +871,7 @@ fn material_bind(
         alpha: m.alpha_mode,
         double_sided: m.double_sided,
         untextured: crate::model_pipeline::untextured(m),
+        layered: crate::model_pipeline::layered(m),
         data: m.clone(),
         names: names.clone(),
     }
@@ -887,12 +900,15 @@ fn baked(m: &MaterialData) -> Vec<f32> {
             AlphaMode::Blend => 2.,
         },
         m.rim,
-        0.,
+        f32::from(u8::from(m.unlit)),
         0.,
     ]);
     for uv in m.uv_transforms {
         values.extend([uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], 0., 0.]);
     }
+    values.extend([m.clearcoat, m.clearcoat_roughness, m.sheen_roughness, 0.]);
+    values.extend(m.sheen_color);
+    values.push(0.);
     values
 }
 

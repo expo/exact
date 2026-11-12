@@ -295,6 +295,11 @@ component NativeFixture
   state query = ""
   action setQuery(text: string)
     query = text
+  state submittedQuery = ""
+  state querySubmissions = 0
+  action submitQuery
+    submittedQuery = query
+    querySubmissions = querySubmissions + 1
   state segment = "all"
   action chooseSegment(name: string)
     segment = name
@@ -417,7 +422,7 @@ component NativeFixture
                       button popovertarget="bar-menu" aria-label="More" testId="menu-item" padding=6 background-color="#e5e7eb"
                         image "symbol:sf/ellipsis.circle" width=20 height=20
                       // A search field in the header: the item's search controller.
-                      input type="search" value=query input=setQuery placeholder="Search the fixture" testId="header-search" width=80
+                      input type="search" value=query input=setQuery submit=submitQuery placeholder="Search the fixture" testId="header-search" width=80
                       // A text tablist in the header: the item's segmented title view.
                       row role="tablist" testId="header-segments"
                         // The projected segmented control owns the chrome; its
@@ -601,6 +606,18 @@ component NativeFixture
                         hr margin-left=0 margin-right=0
                         button press=askClear destructive=true popovertarget="peek" popovertargetaction="hide" testId="peek-clear" height=44
                           text "Clear"
+                      // A link no authored menu answers gets the host's own on iOS (LLP 1021
+                      // §5.1, "A link's own menu"): the link lifted, Open Link, Copy Link
+                      // and Share. Inside a card with a menu, the card's menu answers.
+                      link href="https://example.com/fixture" testId="plain-link" padding=8 border-radius=8
+                        text "Example"
+                      text testId="link-text"
+                        text "Open "
+                        text "Detail" href="/detail" testId="run-link"
+                        text " from a run."
+                      column contextPopover="peek" testId="peek-card" padding=8
+                        link href="https://example.com/card" testId="card-link"
+                          text "A link in a card with a menu"
                       // The platform's alert (LLP 1115 D6): a title (its
                       // aria-label), a message (its text), a destructive action
                       // and Cancel, centred on iOS; opened by its button or by

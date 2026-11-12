@@ -80,7 +80,10 @@ Recent list. Left:
   with its own atomic replace (the carry is built and tested beneath it,
   from Rust and TypeScript), and a fixture where another program replaces
   it, driven on each host.
-- **A Linux file chooser** (the desktop portal's `FileChooser`): the Linux
-  host has none, so a Linux desktop session keeps nothing in practice; the
-  keeping path it would call is built (`host/linux/src/kept.rs` `chosen`).
+- **The Linux file chooser on a desktop**: `showOpenFilePicker`,
+  `showDirectoryPicker` and `showSaveFilePicker` ask the desktop portal's
+  `FileChooser` and keep what it answers (`host/linux/src/portal.rs`), tested
+  against a stand-in session bus only. Left: a pick on a real Linux desktop
+  (GNOME's and KDE's portals), and the chooser's types, since a Linux binary
+  does not carry the manifest's `file_handlers`.
 - **Exact Draw** (§7), in its own repository.

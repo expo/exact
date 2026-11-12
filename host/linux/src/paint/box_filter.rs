@@ -53,7 +53,7 @@ impl Painter {
         self.damage.unsupported = true;
         let (x, y, w, h) = rect;
         let cap = (2.0 * w.max(h).max(64.0)).max(width.max(height));
-        let (left, top, right, bottom) = space::reach(walk, node, rect, offset, cap);
+        let ((left, top, right, bottom), _) = space::reach(walk, node, rect, offset, cap);
         let mut picture: Box<dyn Backend> = Box::new(crate::raster::Raster::transparent());
         picture.begin(width, height, self.scale);
         let frame = std::mem::replace(&mut self.backend, picture);

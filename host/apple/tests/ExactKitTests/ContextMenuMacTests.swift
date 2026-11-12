@@ -1294,6 +1294,37 @@ final class ContextMenuMacTests: XCTestCase {
         XCTAssertEqual(p.selection.range(text), NSRange(location: 9, length: 8), "the selection is kept")
     }
 
+    /// In a right-to-left paragraph the key lands at the right edge of the
+    /// selection's first line, where a selection that starts in its
+    /// right-to-left text starts, not at the edge of its left-to-right word.
+    func testTheKeyInARightToLeftParagraphOpensAtTheSelectionStart() throws {
+        let p = presenter(inSession: true), window = try XCTUnwrap(windows.last)
+        p.apply(wireBatch([
+            ["op": "create", "id": 8, "kind": "text", "props": ["text": "אבג abc דהו"], "style": ["font_size": 18.0, "direction": "rtl"]],
+            ["op": "frame", "id": 8, "x": 20, "y": 80, "w": 400, "h": 28],
+            ["op": "children", "id": 9, "ids": [1, 2, 8]],
+        ]))
+        p.viewport.layoutSubtreeIfNeeded()
+        let text = try XCTUnwrap(p.views[8]), paragraph = try XCTUnwrap(text.paragraphLayout()), box = text.paragraphBox()
+        p.selection.set(text, FieldSelection(start: 1, end: 6))
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        let (_, at) = try XCTUnwrap(p.selection.keyboardMenuPoint(in: window))
+        let x = box.minX + paragraph.origin(0, align: text.paragraphSpec().align, width: box.width)
+            + CTLineGetOffsetForStringIndex(paragraph.lines[0], 1, nil)
+        XCTAssertEqual(at.x, text.drawnRect(CGRect(x: x, y: box.minY, width: 0, height: 1)).minX - 1, accuracy: 0.01)
+        // One line a column: the second shares the first's band, not its line.
+        p.apply(wireBatch([
+            ["op": "create", "id": 10, "kind": "text", "props": ["text": "אבג\nדהו\n"], "style": ["font_size": 18.0, "direction": "rtl", "white_space": "pre", "line_height": "24px"]],
+            ["op": "frame", "id": 10, "x": 20, "y": 160, "w": 400, "h": 24], ["op": "children", "id": 9, "ids": [1, 2, 8, 10]],
+            ["op": "fragments", "id": 10, "fragments": [[0, 0, 150, 24, 0, 1, 0, 0], [250, 0, 150, 24, 1, 2, 250, -24]]],
+        ]))
+        let split = try XCTUnwrap(p.views[10]), lines = try XCTUnwrap(split.paragraphLayout()), splitBox = split.paragraphBox()
+        p.selection.set(split, FieldSelection(start: 0, end: 8))
+        let (_, top) = try XCTUnwrap(p.selection.keyboardMenuPoint(in: window))
+        let edge = splitBox.minX + lines.origin(0, align: split.paragraphSpec().align, width: splitBox.width) + CTLineGetOffsetForStringIndex(lines.lines[0], 0, nil)
+        XCTAssertEqual(top.x, split.drawnRect(CGRect(x: edge, y: splitBox.minY, width: 0, height: 1)).minX - 1, accuracy: 0.01)
+    }
+
     /// A source made disabled, inert, hidden or removed is no focus: the
     /// key lands at (1,1), as Chrome's does with no focus, where nothing
     /// answers, and goes on there as a secondary click past the session's

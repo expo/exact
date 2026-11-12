@@ -121,7 +121,7 @@ function build(app, dist, keep = () => false, compiler = null, superseded = null
     // The JS target's build itself, rendering no pages (every route is the
     // shell), with the completion marker host/web/build.mjs writes.
     const child = building = spawn(process.execPath, [resolve(root, 'host/web-js/build.mjs'), app.name, '--out', stage, '--render', 'none', '--dev'],
-      { cwd: root, env: compiler ? { ...process.env, EXACT_WEB_COMPILER: compiler } : process.env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+      { cwd: root, env: { ...process.env, EXACT_APP_DIR: app.dir, ...(compiler ? { EXACT_WEB_COMPILER: compiler } : {}) }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
     let log = '';
     child.stdout.on('data', (d) => { log += d; });
     child.stderr.on('data', (d) => { log += d; });
@@ -1080,7 +1080,7 @@ es.onmessage=e=>{const m=JSON.parse(e.data);if(m.kind==='tamber-batch'||m.kind==
         mkdirSync(dirname(residentDist), { recursive: true });
         // (EXACT_DEV_RESIDENT_SCRIPT: a test's stand-in resident)
         residentChild = spawn(process.execPath, [process.env.EXACT_DEV_RESIDENT_SCRIPT || resolve(root, 'host/web/dev.mjs'), '--app', app.name, '--wasm', '--port', String(internal), '--serve-as', String(port), ...(lan ? ['--lan'] : []), ...allowHosts.flatMap((name) => ['--allow-host', name])],
-          { cwd: root, env: { ...process.env, EXACT_WEB_DIST: residentDist, EXACT_LAUNCHER_PID: String(process.pid), EXACT_MAP_FD: '3' }, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
+          { cwd: root, env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_WEB_DIST: residentDist, EXACT_LAUNCHER_PID: String(process.pid), EXACT_MAP_FD: '3' }, stdio: ['ignore', 'pipe', 'pipe', 'pipe'] });
         // Its errors as before (piped, so a slow terminal holds it back), the
         // last of them kept: what a start that fails says to the client.
         let errors = '';

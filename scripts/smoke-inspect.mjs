@@ -15,6 +15,17 @@ const byTestId = (t, id) => t.nodes.find((n) => n.props.testId === id);
 const box = (l, id) => l.nodes.find((n) => n.testId === id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+export function isDeckURL(source, base) {
+  // Native trees keep the authored path; web trees expose src under the page's base.
+  if (base === null) return source === '/deck/index.html';
+  if (typeof source !== 'string' || !source) return false;
+  try {
+    return new URL(source, base).href === new URL('deck/index.html', base).href;
+  } catch {
+    return false;
+  }
+}
+
 export async function formControlsSmoke({ host, open, check }) {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-form-controls-')), root = resolve(import.meta.dir, '..'), plan = resolve(dir, 'controls.plan');
   let s;

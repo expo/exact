@@ -88,12 +88,22 @@ impl Kernel {
             || !s.transform_origin.centred()
             || !zero_insets(s)
             || !zero_insets(p)
-            || ![s.margin_top, s.margin_right, s.margin_bottom, s.margin_left]
-                .into_iter()
-                .all(zero)
-            || ![s.top, s.right, s.bottom, s.left]
-                .into_iter()
-                .all(|v| v == Dimension::Auto || zero(v))
+            || ![
+                s.margin_top.clone(),
+                s.margin_right.clone(),
+                s.margin_bottom.clone(),
+                s.margin_left.clone(),
+            ]
+            .into_iter()
+            .all(zero)
+            || ![
+                s.top.clone(),
+                s.right.clone(),
+                s.bottom.clone(),
+                s.left.clone(),
+            ]
+            .into_iter()
+            .all(|v| v == Dimension::Auto || zero(v))
             || p.overflow_x != Overflow::Hidden
             || p.overflow_y != Overflow::Hidden
         {
@@ -114,13 +124,13 @@ fn zero(v: Dimension) -> bool {
 fn zero_insets(s: &StyleProps) -> bool {
     // A negative padding lays out as zero.
     let none = |v: Dimension| {
-        zero(v) || matches!(v, Dimension::Points(p) | Dimension::Percent(p) if p < 0.0)
+        zero(v.clone()) || matches!(v, Dimension::Points(p) | Dimension::Percent(p) if p < 0.0)
     };
     [
-        s.padding_top,
-        s.padding_right,
-        s.padding_bottom,
-        s.padding_left,
+        s.padding_top.clone(),
+        s.padding_right.clone(),
+        s.padding_bottom.clone(),
+        s.padding_left.clone(),
     ]
     .into_iter()
     .all(none)

@@ -30,8 +30,8 @@ settlement waits on its `pending` reads rather than failing with them.
 * `refused` covers the data seam (an oracle with no answer for a call, a
   source or mutation answering a value of the wrong shape), a number that
   is not finite crossing a boundary (a derive, a slot written or
-  initialized, an action's argument, a row key: `ValTy` admits NaN and the
-  infinities, `conforms` does not), the host's own input (no element with
+  initialized, a source's or action's argument, a row key: `ValTy` admits
+  NaN and the infinities, `conforms` does not), the host's own input (no element with
   that `testId`, no handler for that event, a payload that does not fit the
   action's remaining parameters), the router (a forged router value
   committed, a verb or read of a value of the shape `Router` that is not a

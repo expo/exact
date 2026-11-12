@@ -151,6 +151,10 @@ pub(crate) fn wasm_with_contract(call: &str, stateless: bool) -> Vec<u8> {
         w.string("token");
         w.u8(1);
         w.string("new");
+        // No socket operation, no overload (LLP 1016.003 D5).
+        w.u32(0);
+        w.u8(0);
+        w.string("");
         w.u8(0);
         Value::Number(42.).encode(w)
     });

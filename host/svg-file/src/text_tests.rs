@@ -20,6 +20,34 @@ fn runs(body: &str) -> Vec<TextRun> {
 }
 
 #[test]
+fn system_language_without_user_languages_selects_the_fallback() {
+    let runs = runs(
+        r#"<switch>
+            <text systemLanguage="de" y="20">Hallo</text>
+            <text systemLanguage="fr" y="20">Bonjour</text>
+            <text y="20">Hello</text>
+        </switch>"#,
+    );
+    assert_eq!(
+        runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+        "Hello"
+    );
+}
+
+#[test]
+fn system_language_without_user_languages_hides_elements_outside_switch() {
+    let runs = runs(
+        r#"<text systemLanguage="fr">Bonjour</text>
+        <g systemLanguage="de"><text>Hallo</text></g>
+        <text>Hello<tspan systemLanguage="fr"> monde</tspan></text>"#,
+    );
+    assert_eq!(
+        runs.iter().map(|run| run.text.as_str()).collect::<String>(),
+        "Hello"
+    );
+}
+
+#[test]
 fn mixed_text_keeps_spans_and_spaces_in_document_order() {
     for (body, expected, weights) in [
         (

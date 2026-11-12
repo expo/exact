@@ -292,22 +292,24 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
         let d = &self.device;
         let (pipeline, layout, written) = self.shadow_texels.get_or_insert_with(|| {
             let layout = d.create_bind_group_layout(&count::GROUP_0);
-            let pipeline = d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("game look shadow texels"),
-                layout: Some(&d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            let pipeline = crate::perf::pipeline(|| {
+                d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some("game look shadow texels"),
-                    bind_group_layouts: &[Some(&layout)],
-                    immediate_size: 0,
-                })),
-                module: &d.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("game look shadow texels"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        include_str!("../shaders/shadow_count.wgsl").into(),
-                    ),
-                }),
-                entry_point: Some(count::entry::COUNT),
-                compilation_options: Default::default(),
-                cache: None,
+                    layout: Some(&d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("game look shadow texels"),
+                        bind_group_layouts: &[Some(&layout)],
+                        immediate_size: 0,
+                    })),
+                    module: &d.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("game look shadow texels"),
+                        source: wgpu::ShaderSource::Wgsl(
+                            include_str!("../shaders/shadow_count.wgsl").into(),
+                        ),
+                    }),
+                    entry_point: Some(count::entry::COUNT),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
             });
             let written = d.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("game look shadow texels"),

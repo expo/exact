@@ -445,3 +445,207 @@ fn a_ceiling_open_streams_leave_no_room_for_is_refused_when_made() {
     );
     fixture.release();
 }
+
+#[test]
+fn a_queued_read_crowded_out_by_a_later_stream_is_refused() {
+    for class in [
+        RequestClass::Ordered,
+        RequestClass::Read,
+        RequestClass::Parallel(0),
+    ] {
+        let (core, fixture, woke) = setup();
+        core.run(
+            job(
+                1,
+                Request::get("https://example.test/hold").independent_http(40 << 20),
+            ),
+            None,
+        )
+        .unwrap();
+        fixture.wait_held(1);
+
+        let mut read = Request::get("https://example.test/read").independent_http(64 << 20);
+        read.timeout_ms = Some(30_000);
+        let mut request = job(2, read);
+        request.class = class;
+        core.run(request, None).unwrap();
+        assert_eq!(core.shared.state.lock().unwrap().jobs[1][0].ticket, 2);
+
+        let Answer::Later(stream) =
+            Answer::stream(Request::get("https://example.test/hold").independent_http(8 << 20))
+        else {
+            unreachable!()
+        };
+        core.run(job(3, stream), None).unwrap();
+        fixture.wait_held(2);
+
+        let outcomes = collect(&core, &woke, 1);
+        assert!(
+            matches!(&outcomes[0], (2, Outcome::Failed { kind: FailureKind::Refused, message })
+                if message == "native response ceiling exceeds the lane budget held by open streams"),
+            "{outcomes:?}"
+        );
+
+        // A smaller successor can run while both earlier transports stay held.
+        core.run(
+            job(
+                4,
+                Request::get("https://example.test/after").independent_http(1 << 20),
+            ),
+            None,
+        )
+        .unwrap();
+        let outcomes = collect(&core, &woke, 1);
+        assert!(matches!(&outcomes[0], (4, Outcome::Response(r)) if r.body == b"done"));
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(state.counts, [0, 2]);
+            assert_eq!(state.streams, 1);
+            assert_eq!(
+                state.bytes[1],
+                state.running.iter().map(|r| r.charge).sum::<usize>()
+            );
+            assert!(state.jobs[1].is_empty());
+            assert!(state.completed[1].is_empty());
+        }
+        assert_eq!(
+            fixture.state.lock().unwrap().2,
+            [
+                "https://example.test/hold",
+                "https://example.test/hold",
+                "https://example.test/after"
+            ]
+        );
+
+        fixture.release();
+        let mut tickets: Vec<_> = collect(&core, &woke, 2)
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect();
+        tickets.sort();
+        assert_eq!(tickets, [1, 3]);
+        until_settled(&core);
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!(state.counts, [0, 0]);
+        assert_eq!(state.bytes, [0, 0]);
+        assert_eq!(state.streams, 0);
+    }
+}
+
+#[test]
+fn an_upload_reserving_room_wakes_queued_reads_before_its_first_event() {
+    for ceiling in [32 << 20, 64 << 20] {
+        let fixture = Arc::new(Fixture::default());
+        let grants = "net.fetch https://example.test";
+        let owners = (0..WORKERS)
+            .map(|_| {
+                Some(
+                    ibex2::host::Host::with_transport(Box::new(Fake(fixture.clone())))
+                        .endow(ibex2::grant::GrantSet::parse(grants).unwrap()),
+                )
+            })
+            .collect();
+        let (wake, woke) = channel();
+        // Count notifications on workers, where no async finisher can
+        // contribute one; exercise refusal on the selected execution model.
+        let lanes = (ceiling == 64 << 20 && asynchronous()).then(asynch_lanes);
+        let core = Core::with_owners_lanes(
+            owners,
+            grants,
+            Box::new(move || {
+                let _ = wake.send(());
+            }),
+            Arc::new(ibex2::host::Host::new),
+            lanes,
+        );
+        let (opening, opened) = channel();
+        let (release, waiting) = channel::<()>();
+        let waiting = Mutex::new(waiting);
+        let stream_fixture = fixture.clone();
+        let core = core.streams_on(move || {
+            opening.send(()).unwrap();
+            let _ = waiting.lock().unwrap().recv();
+            ibex2::host::Host::with_transport(Box::new(Fake(stream_fixture.clone())))
+        });
+        core.run(
+            job(
+                1,
+                Request::get("https://example.test/hold").independent_http(40 << 20),
+            ),
+            None,
+        )
+        .unwrap();
+        fixture.wait_held(1);
+        let mut read = Request::get("https://example.test/read").independent_http(ceiling);
+        read.timeout_ms = Some(30_000);
+        core.run(job(2, read), None).unwrap();
+        assert_eq!(core.shared.state.lock().unwrap().jobs[1][0].ticket, 2);
+
+        let before = core.shared.worker_notifications.load(Ordering::Relaxed);
+        let mut upload = Request::get("https://example.test/hold")
+            .independent_http(8 << 20)
+            .upload_progress();
+        upload.method = "POST".into();
+        upload.body = vec![7];
+        let Answer::Later(upload) = Answer::stream(upload) else {
+            unreachable!()
+        };
+        core.run(job(3, upload), None).unwrap();
+        opened.recv_timeout(Duration::from_secs(5)).unwrap();
+        if ceiling == 32 << 20 {
+            // This read still fits beside the stream, so its settlement
+            // cannot mask a missing notification at upload promotion.
+            assert_eq!(
+                core.shared.worker_notifications.load(Ordering::Relaxed) - before,
+                2,
+                "upload admission and promotion must each notify the schedulers"
+            );
+            assert_eq!(core.shared.state.lock().unwrap().jobs[1][0].ticket, 2);
+        } else {
+            let outcomes = collect(&core, &woke, 1);
+            assert!(
+                matches!(&outcomes[0], (2, Outcome::Failed { kind: FailureKind::Refused, message })
+                    if message == "native response ceiling exceeds the lane budget held by open streams"),
+                "{outcomes:?}"
+            );
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(state.counts, [0, 2]);
+            assert_eq!(state.streams, 1);
+            assert_eq!(
+                state.bytes[1],
+                state.running.iter().map(|r| r.charge).sum::<usize>()
+            );
+            assert!(state.jobs[1].is_empty());
+        }
+        assert_eq!(
+            fixture.state.lock().unwrap().2,
+            ["https://example.test/hold"]
+        );
+        fixture.release();
+        release.send(()).unwrap();
+        let mut ended = Vec::new();
+        let expected = if ceiling == 32 << 20 { 3 } else { 2 };
+        while ended.len() < expected {
+            ended.extend(
+                collect(&core, &woke, 1)
+                    .into_iter()
+                    .filter(|(_, outcome)| !matches!(outcome, Outcome::Message(_)))
+                    .map(|(ticket, _)| ticket),
+            );
+        }
+        ended.sort();
+        assert_eq!(
+            ended,
+            if ceiling == 32 << 20 {
+                vec![1, 2, 3]
+            } else {
+                vec![1, 3]
+            }
+        );
+        until_settled(&core);
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!(state.counts, [0, 0]);
+        assert_eq!(state.bytes, [0, 0]);
+        assert_eq!(state.streams, 0);
+    }
+}

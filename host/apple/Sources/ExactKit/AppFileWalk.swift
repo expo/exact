@@ -5,6 +5,10 @@
 import Foundation
 
 enum AppFileWalk {
+    private static func valid(_ names: [String]) -> Bool {
+        !names.isEmpty && !names.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." || $0.contains("/") || $0.contains("\0") })
+    }
+
     /// The regular file at `names` below the directory `root`, opened as the
     /// data module's `readFile` opens one (ibex2's `app_fs_unix.rs`): every
     /// part, the root's last included, with `O_NOFOLLOW`, so a symbolic link
@@ -12,7 +16,7 @@ enum AppFileWalk {
     /// part is missing, empty, `.`, `..`, a link or not a directory, or the
     /// last is not a regular file.
     static func open(_ root: URL, _ names: [String]) -> FileHandle? {
-        guard !names.isEmpty, !names.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." || $0.contains("/") || $0.contains("\0") }) else { return nil }
+        guard valid(names) else { return nil }
         var current = Darwin.open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         for (index, name) in names.enumerated() where current >= 0 {
             let last = index == names.count - 1
@@ -28,5 +32,30 @@ enum AppFileWalk {
             return nil
         }
         return FileHandle(fileDescriptor: current, closeOnDealloc: true)
+    }
+
+    /// A package can create its file destination. Check every existing component
+    /// without following links; a missing suffix gives it nothing to follow.
+    static func destination(_ root: URL, _ names: [String]) -> URL? {
+        guard valid(names) else { return nil }
+        var current = Darwin.open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard current >= 0 else { return nil }
+        defer { Darwin.close(current) }
+        let url = names.reduce(root) { $0.appendingPathComponent($1) }
+        for (index, name) in names.enumerated() {
+            var info = stat()
+            if fstatat(current, name, &info, AT_SYMLINK_NOFOLLOW) != 0 {
+                return errno == ENOENT ? url : nil
+            }
+            let kind = info.st_mode & S_IFMT
+            if index == names.count - 1 {
+                return kind == S_IFREG ? url : nil
+            }
+            let next = openat(current, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard next >= 0 else { return nil }
+            Darwin.close(current)
+            current = next
+        }
+        return nil
     }
 }

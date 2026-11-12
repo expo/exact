@@ -98,14 +98,14 @@ fn resource_inspection_restores_generations_when_a_later_resource_refuses() {
         Data::new(records(1)),
     );
     r.measure(true, false);
-    let before = r.ids.work.resources.clone();
-    let generation = r.resources[0].as_ref().unwrap().inspection_generation;
+    let before = r.resources[0].inspection;
+    let generation = r.resources[0].state.as_ref().unwrap().inspection_generation;
     r.data().bad_guard = true;
     r.data().value = records(2);
     assert!(r.act("change", vec![Value::Number(1.)]).is_err());
-    assert_eq!(r.ids.work.resources[0].request, before[0].request);
+    assert_eq!(r.resources[0].inspection.request, before.request);
     assert_eq!(
-        r.resources[0].as_ref().unwrap().inspection_generation,
+        r.resources[0].state.as_ref().unwrap().inspection_generation,
         generation
     );
 }
@@ -425,7 +425,7 @@ fn a_source_that_cannot_answer_now_fails_the_resource() {
         .expect("the commit stands");
     assert_eq!(r.slot("revision"), Some(&Value::Number(1.)));
     assert_eq!(rows(&r), Some(records(2)), "the value it had stays");
-    assert_eq!(r.failed_args[0], Some(vec![Value::Number(1.)]));
+    assert_eq!(r.resources[0].failed_args, Some(vec![Value::Number(1.)]));
     assert!(r
         .journal()
         .any(|l| l.contains("resource rows failed: logic ABI message too large")));
@@ -436,7 +436,7 @@ fn a_source_that_cannot_answer_now_fails_the_resource() {
     r.data().value = records(3);
     r.act("change", vec![Value::Number(3.)]).unwrap();
     assert_eq!(rows(&r), Some(records(3)));
-    assert_eq!(r.failed_args[0], None);
+    assert_eq!(r.resources[0].failed_args, None);
 }
 
 #[test]
@@ -830,7 +830,7 @@ fn a_stand_in_failed_at_activation_is_not_pending_after_another_pass() {
     let mut data = Data::new(records(3));
     data.ready = false;
     let mut r = boot(plan(TypeKind::Number, None, true, true), data);
-    assert!(r.pending_res[0], "the placeholder is pending");
+    assert!(r.resources[0].pending, "the placeholder is pending");
     r.data().ready = true;
     r.data().read_store = true;
     r.data().refuse = Some(DataError::Unavailable("down".into()));
@@ -838,8 +838,8 @@ fn a_stand_in_failed_at_activation_is_not_pending_after_another_pass() {
     // repeats, and `rows` stays failed and not pending.
     r.data().guard_writes = true;
     assert!(r.data_ready().is_ok());
-    assert!(r.failed_args[0].is_some());
-    assert!(!r.pending_res[0] && !r.awaiting[0]);
+    assert!(r.resources[0].failed_args.is_some());
+    assert!(!r.resources[0].pending && !r.resources[0].awaiting);
 }
 
 /// Two sources that read the store and, as they answer, keep a value it
@@ -902,9 +902,9 @@ fn an_overrun_first_turn_leaves_the_action_standing_and_asks_again_at_250_ms() {
         .expect("the action stands");
     assert_eq!(r.slot("revision"), Some(&Value::Number(1.)));
     assert_eq!(rows(&r), Some(records(2)), "it keeps what it shows");
-    assert!(r.pending_res[0], "it reads as an ask in flight");
+    assert!(r.resources[0].pending, "it reads as an ask in flight");
     assert!(r.failed_resources().is_empty(), "no failure shows");
-    assert_eq!(r.failed_args[0], None);
+    assert_eq!(r.resources[0].failed_args, None);
     assert!(r
         .journal()
         .any(|l| l.contains("resource rows:") && l.contains("asked again in 250 ms (1 of 2)")));
@@ -916,7 +916,7 @@ fn an_overrun_first_turn_leaves_the_action_standing_and_asks_again_at_250_ms() {
     assert_eq!(r.data().queries, asked, "not before its time");
     r.advance(t0 + 250.).unwrap();
     assert_eq!(rows(&r), Some(records(3)), "asked again, and answered");
-    assert!(!r.pending_res[0]);
+    assert!(!r.resources[0].pending);
     assert_eq!(r.reask_due_ms(), None);
     assert_eq!(r.timer_due_ms(), None);
 }
@@ -937,10 +937,10 @@ fn a_third_overrun_fails_the_resource_as_today() {
     assert!(r
         .journal()
         .any(|l| l.contains("asked again in 1000 ms (2 of 2)")));
-    assert!(r.pending_res[0] && r.failed_resources().is_empty());
+    assert!(r.resources[0].pending && r.failed_resources().is_empty());
     r.advance(t0 + 1250.).unwrap();
-    assert!(!r.pending_res[0]);
-    assert_eq!(r.failed_args[0], Some(vec![Value::Number(1.)]));
+    assert!(!r.resources[0].pending);
+    assert_eq!(r.resources[0].failed_args, Some(vec![Value::Number(1.)]));
     assert!(r.failed_resources()[0].1.contains("over the 100 ms budget"));
     assert!(r.journal().any(|l| l.contains("resource rows failed:")));
     let asked = r.data().queries;
@@ -965,7 +965,7 @@ fn an_argument_change_during_the_wait_fires_no_stale_reask() {
     r.act("change", vec![Value::Number(2.)]).unwrap();
     assert_eq!(r.resource("rows").cloned(), Some(records(4)));
     assert_eq!(r.reask_due_ms(), None);
-    assert!(!r.pending_res[0]);
+    assert!(!r.resources[0].pending);
     let asked = r.data().queries;
     r.advance(t0 + 5_000.).unwrap();
     assert_eq!(r.data().queries, asked, "no stale re-ask");
@@ -991,7 +991,7 @@ fn an_overrun_reply_asks_again_with_a_new_request() {
     };
     r.fulfill(first[0].ticket, reply()).unwrap();
     assert!(!r.holds(first[0].ticket), "the request is let go");
-    assert!(r.pending_res[0], "but the resource reads as pending");
+    assert!(r.resources[0].pending, "but the resource reads as pending");
     assert!(r.failed_resources().is_empty());
     assert!(
         r.take_requests().is_empty(),
@@ -1003,7 +1003,7 @@ fn an_overrun_reply_asks_again_with_a_new_request() {
     let again = r.take_requests();
     assert_eq!(again.len(), 1, "asked again");
     r.fulfill(again[0].ticket, reply()).unwrap();
-    assert!(!r.pending_res[0]);
+    assert!(!r.resources[0].pending);
     assert_eq!(r.reask_due_ms(), None);
 }
 
@@ -1025,7 +1025,7 @@ fn an_overrun_post_reply_fails_without_replaying_the_request() {
         }
         r.data().parse_error = Some(overrun());
         r.fulfill(ticket, reply()).unwrap();
-        assert!(!r.pending_res[0], "{round}");
+        assert!(!r.resources[0].pending, "{round}");
         assert!(!r.effects_in_flight());
         assert!(!r.failed_resources().is_empty());
         r.advance(r.now_ms() + 10_000.).unwrap();
@@ -1052,7 +1052,7 @@ fn a_post_s_reply_taken_in_later_turns_must_still_finish() {
         assert!(r.must_finish(), "{turn} runs on");
         r.fulfill(next[0].ticket, reply()).unwrap();
     }
-    assert!(!r.pending_res[0], "answered");
+    assert!(!r.resources[0].pending, "answered");
     assert!(!r.must_finish());
 }
 
@@ -1118,12 +1118,12 @@ fn a_refused_reask_is_not_left_pending_forever() {
         r.advance(t0 + 250.).is_err(),
         "the re-ask's commit is refused"
     );
-    assert!(r.pending_res[0], "still waiting, as an ask in flight");
+    assert!(r.resources[0].pending, "still waiting, as an ask in flight");
     assert!(r.timer_due_ms().is_some(), "and due again");
     r.data().bad_guard = false;
     r.advance(t0 + 60_000.).unwrap();
     assert_eq!(r.resource("rows").cloned(), Some(records(3)));
-    assert!(!r.pending_res[0]);
+    assert!(!r.resources[0].pending);
 }
 
 /// Commits that don't ask the resource again (its arguments unchanged) burn
@@ -1140,7 +1140,7 @@ fn an_unrelated_commit_burns_no_try() {
     tick(&mut r);
     r.act("tick", vec![Value::Number(2.)]).unwrap();
     assert_eq!(r.data().queries, asked, "not asked in unrelated commits");
-    assert!(r.pending_res[0] && r.failed_resources().is_empty());
+    assert!(r.resources[0].pending && r.failed_resources().is_empty());
     assert_eq!(r.timer_due_ms(), Some(t0 + 250.));
     assert!(!r.journal().any(|l| l.contains("(2 of 2)")));
 }
@@ -1191,7 +1191,10 @@ fn reasks_fire_at_their_own_times_under_advance() {
     assert!(a.error.is_none());
     let at: Vec<f64> = a.receipts.iter().map(|t| t.at_ms).collect();
     assert_eq!(at, vec![t0 + 250., t0 + 1250.]);
-    assert!(!r.pending_res[0], "its streak spent within the advance");
+    assert!(
+        !r.resources[0].pending,
+        "its streak spent within the advance"
+    );
     assert!(r.failed_resources()[0].1.contains("over the 100 ms budget"));
 }
 
@@ -1214,7 +1217,7 @@ fn a_spent_streak_of_refused_reasks_hands_the_host_its_failure() {
     assert!(r.advance(t0 + 250.).is_err());
     let receipts = r.advance(t0 + 5_000.).expect("the failing commit stands");
     assert_eq!(receipts.len(), 1);
-    assert!(!r.pending_res[0]);
+    assert!(!r.resources[0].pending);
     assert!(r.failed_resources()[0].1.contains("its commit was refused"));
     assert_eq!(r.timer_due_ms(), None);
 }
@@ -1236,7 +1239,7 @@ fn a_reask_comes_due_while_timers_wait() {
     let landed = r.land_then();
     assert!(landed.error.is_none());
     assert_eq!(r.resource("rows").cloned(), Some(records(3)));
-    assert!(!r.pending_res[0]);
+    assert!(!r.resources[0].pending);
 }
 
 /// A refresh that a turn over its budget refuses again replaces the standing
@@ -1397,7 +1400,7 @@ fn new_arguments_at_the_reasks_time_start_a_new_streak() {
         r.failed_resources().is_empty(),
         "not the spent streak's failure"
     );
-    assert!(r.pending_res[0]);
+    assert!(r.resources[0].pending);
     assert_eq!(r.timer_due_ms(), Some(t0 + 1500.));
 }
 

@@ -21,8 +21,9 @@ Before exporting:
 What the bake accepts: triangles with `POSITION`, `NORMAL`, `TANGENT`,
 `TEXCOORD_0`, `COLOR_0`, `JOINTS_0`/`WEIGHTS_0` (skins), textures on `TEXCOORD_0`
 as 8-bit PNG or JPEG, skeletal animation, and the extensions
-`KHR_materials_emissive_strength` and `KHR_texture_transform`. It refuses any other
-extension (Draco or meshopt compression, `KHR_materials_specular`,
+`KHR_materials_clearcoat` and `KHR_materials_sheen` (their factors; a model
+using their textures is refused), `KHR_materials_emissive_strength`,
+`KHR_materials_unlit` and `KHR_texture_transform`. It refuses any other extension (Draco or meshopt compression, `KHR_materials_specular`,
 `KHR_materials_ior`, transmission, variants), morph targets and their animation,
 sparse accessors, points and lines, and a second UV or colour set, each naming the
 file. A model's materials keep their glTF index for `MaterialOverrides`, and their

@@ -1,9 +1,8 @@
-//! Liveness: an answer waiting on another's work, or on the background's,
-//! is asked again after each delivery (LLP 1027.003.000 §13; LLP 1097 D2);
+//! Liveness: a waiting answer is asked again when its chain moves (LLP 1162 D3);
 //! a call let go mid-turn runs its steps to the end (ledger F12).
 use super::{secrets, Key, Module, TIMER, WAITING, YIELDED};
 use exact_runner::{Dispatch, InFlight, Outcome, Request};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl Module {
     /// A waiting answer's work: nothing to run, only an answer to ask again
@@ -22,27 +21,68 @@ impl Module {
             .any(|(_, p)| p.call == token && matches!(p.ticket, YIELDED | TIMER))
     }
 
-    /// Whether anything in the module may yet settle a waiting answer: a
-    /// fetch, a storage step, a stream, a yield. The module's storage queued or in flight counts, an answer's or the
+    /// Whether anything in the module may yet settle a waiting answer.
+    /// The module's storage queued or in flight counts, an answer's or the
     /// background's (LLP 1097 D2: an answer may await background work).
     pub(crate) fn outstanding(&self) -> bool {
         !self.streams.is_empty()
             || self.host.module_outstanding > 0
             || self.background.state.queued + self.background.state.in_flight > 0
-            || self.parked.iter().any(|(_, p)| p.ticket != WAITING)
+            || self
+                .parked
+                .iter()
+                .any(|(_, p)| p.ticket != WAITING || p.ready || p.due.is_some())
     }
 
-    /// Ask a waiting answer again when something landed since it parked,
-    /// or, with nothing outstanding, for its last settle, which refuses it
-    /// as pending on nothing if it still waits.
-    pub(crate) fn wake(&mut self, token: u64) -> Option<Dispatch> {
+    pub(crate) fn refresh_waiting(&mut self) {
+        let waiting: Vec<_> = self
+            .parked
+            .iter()
+            .filter(|(_, p)| p.ticket == WAITING)
+            .map(|(_, p)| p.call)
+            .collect();
+        if waiting.is_empty() {
+            return;
+        }
+        let ids = serde_json::to_string(&waiting).expect("call ids");
+        let ready = self.engine.as_mut().and_then(|engine| {
+            let text = engine.call("__exact_ready", [&ids, "", ""]).ok()?;
+            serde_json::from_str::<HashSet<u64>>(&text).ok()
+        });
+        self.readied(ready.as_ref());
+    }
+
+    fn readied(&mut self, ready: Option<&HashSet<u64>>) {
+        for (_, p) in &mut self.parked {
+            if p.ticket == WAITING {
+                // A failed readiness query must not strand an answer (LLP 1162 D3).
+                p.ready = ready.is_none_or(|ids| ids.contains(&p.call));
+            }
+        }
+    }
+
+    pub(crate) fn release_ready(&mut self, now: f64) -> Vec<(u64, Dispatch)> {
+        let mut released = self.host.secrets.release();
+        for token in std::mem::take(&mut self.waiters) {
+            match self.wake(token, now) {
+                Some(work) => released.push((token, work)),
+                None if self.parked.iter().any(|(_, p)| p.call == token) => {
+                    self.waiters.push(token)
+                }
+                None => {}
+            }
+        }
+        released
+    }
+
+    /// With nothing outstanding, a last settle refuses an answer still pending on nothing.
+    pub(crate) fn wake(&mut self, token: u64, now: f64) -> Option<Dispatch> {
         let outstanding = self.outstanding();
-        let progress = self.progress;
         let (_, parked) = self
             .parked
             .iter_mut()
             .find(|(_, p)| p.call == token && p.ticket == WAITING)?;
-        if parked.progress < progress || !outstanding {
+        if parked.ready || parked.due.is_some_and(|due| due as f64 <= now) || !outstanding {
             parked.last = !outstanding;
             return Some(Module::ask_again());
         }
@@ -55,13 +95,19 @@ impl Module {
     /// ticket in a module turn, and the answer parks on its timer, asked
     /// again at once. On the main thread only: a worker runs one turn to its
     /// end.
-    pub(crate) fn timer_first(&mut self, f: &InFlight<'_>) -> Option<(u64, Request)> {
+    pub(crate) fn timer_first(
+        &mut self,
+        f: &InFlight<'_>,
+        fetch: Option<u64>,
+    ) -> Option<(u64, Request)> {
         if !self.main_thread {
             return None;
         }
         let key = Module::key(Some(f.target), f.source, f.args);
         let at = self.parked.iter().position(|(k, p)| {
-            *k == key && !matches!(p.ticket, 0 | WAITING | YIELDED | TIMER | secrets::TICKET)
+            *k == key
+                && fetch.is_none_or(|fetch| p.ticket == fetch)
+                && !matches!(p.ticket, 0 | WAITING | YIELDED | TIMER | secrets::TICKET)
         })?;
         let (call, ticket) = (self.parked[at].1.call, self.parked[at].1.ticket);
         let adopted = self.engine.as_mut()?.call(
@@ -74,7 +120,6 @@ impl Module {
         let parked = &mut self.parked[at].1;
         parked.ticket = TIMER;
         parked.effects = false;
-        parked.progress = self.progress;
         Some((ticket, Request::continuation(call)))
     }
 
@@ -129,11 +174,7 @@ impl Module {
                 drained = engine.drain();
             }
             self.host.between_answers = false;
-            if drained.is_ok() {
-                // A continuation another answer shared may have settled it:
-                // a waiter counts this as progress (`wake`).
-                self.progress += 1;
-            } else {
+            if drained.is_err() {
                 self.watch.take();
             }
             // Storage a continuation started is the background's: arm it.
@@ -217,8 +258,10 @@ impl Module {
         if !delivered {
             return;
         }
-        // What landed may settle an answer waiting on another's work.
-        self.progress += 1;
         self.refresh_background();
     }
 }
+
+#[cfg(all(test, exact_js_engine))]
+#[path = "turns_tests.rs"]
+mod tests;

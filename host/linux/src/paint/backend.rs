@@ -204,6 +204,13 @@ pub trait Backend {
     fn supports_island_image(&self) -> bool;
     /// An SVG island's pixels over `dst` in `ts`'s space, blended by `mode`.
     fn island_image(&mut self, pixels: Arc<Pixmap>, dst: Rect4, ts: Transform, mode: u8);
+    /// Draw through a row-major projective matrix until `plane_end`. A backend
+    /// that declines leaves the painter to rasterize and warp the subtree.
+    fn plane_begin(&mut self, _matrix: [f32; 9]) -> bool {
+        false
+    }
+    /// End the innermost accepted projective matrix.
+    fn plane_end(&mut self) {}
     /// Composite a rendered canvas child (not a decoded image asset).
     fn surface_image(&mut self, pixels: Arc<Pixmap>, dst: Rect4);
     /// Composite a 2D canvas's bitmap into `dst`, clipped (LLP 1056 D7).

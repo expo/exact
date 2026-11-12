@@ -846,8 +846,11 @@ final class NavigationBarIOSTests: XCTestCase {
     }
 
     /// LLP 1075.003 §9.6: a header's `input type="search"` is the item's
-    /// search controller; what the reader types is the field's `input`.
+    /// search controller; typing sends `input`, and Enter submits once.
     func testAHeaderSearchFieldIsTheItemsSearchControllerAndTypingIsItsInput() throws {
+        guard hostedWindowScene() != nil else {
+            throw missing("scene", "native search editing needs the hosted app responder lifecycle")
+        }
         let session = try fixture("bar-search", module: false)
         let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
         let top = try XCTUnwrap(nav.topViewController)
@@ -875,33 +878,41 @@ final class NavigationBarIOSTests: XCTestCase {
         input.style["left"] = nil
         header.applyHiding()
         XCTAssertTrue(top.navigationItem.hidesSearchBarWhenScrolling)
-        search.searchBar.text = "abc"
-        search.searchBar.delegate?.searchBar?(search.searchBar, textDidChange: "abc")
+        // UIKit owns visibility during an active search; Exact keeps an inactive query in view.
+        session.presenter.typed(input.id, "preset", input: true)
+        waitFor("a search in effect keeps its field in view") { !top.navigationItem.hidesSearchBarWhenScrolling }
+        let agent = Agent(session: session)
+        XCTAssertNil(agent.type(["id": Int(input.id), "text": "abc"])["error"])
         until("the field's input ran with the text") { state(session, "query") as? String == "abc" }
-        XCTAssertFalse(top.navigationItem.hidesSearchBarWhenScrolling, "a search in effect keeps its field in view, as UIKit keeps an active search's")
+        XCTAssertEqual(search.searchBar.text, "abc")
+        XCTAssertEqual(state(session, "querySubmissions") as? Int, 0, "typing does not submit")
         // LLP 1115.000 D9.2: the keyboard's Search key puts the keyboard
         // away, as a hand-built search bar's delegate does, and the search
         // stays as typed.
         let field = search.searchBar.searchTextField
-        XCTAssertTrue(field.becomeFirstResponder())
-        search.searchBar.delegate?.searchBarSearchButtonClicked?(search.searchBar)
+        XCTAssertTrue(field.isFirstResponder, "Agent types into UIKit's displayed search field")
+        XCTAssertNil(agent.type(["id": Int(input.id), "key": "Enter"])["error"])
+        waitFor("Enter submits the header search") { (state(session, "querySubmissions") as? Int ?? 0) > 0 }
+        XCTAssertEqual(state(session, "querySubmissions") as? Int, 1)
+        XCTAssertEqual(state(session, "submittedQuery") as? String, "abc")
         XCTAssertFalse(field.isFirstResponder, "Search puts the keyboard away")
         XCTAssertEqual(search.searchBar.text, "abc")
         XCTAssertEqual(state(session, "query") as? String, "abc")
-        search.searchBar.text = ""
+        search.searchBar.text = "projected"
         XCTAssertEqual(state(session, "query") as? String, "abc", "programmatic text projection is not user input")
-        search.searchBar.delegate?.searchBar?(search.searchBar, textDidChange: "")
+        XCTAssertNil(agent.type(["id": Int(input.id), "text": ""])["error"])
         until("clearing the search field reaches its input handler") { state(session, "query") as? String == "" }
         // The app's write shows in the field the reader is typing in, as an
         // input's does (r25's contacts: a Clear Search button emptied the
         // query and the field kept the text, the next keys added to it).
-        search.searchBar.text = "zzz"
-        search.searchBar.delegate?.searchBar?(search.searchBar, textDidChange: "zzz")
+        XCTAssertNil(agent.type(["id": Int(input.id), "text": "zzz"])["error"])
         until("the typed query reaches the app") { state(session, "query") as? String == "zzz" }
         XCTAssertTrue(field.becomeFirstResponder())
         session.presenter.typed(input.id, "", input: true)
         until("the app's empty query is in the field") { search.searchBar.text == "" }
         XCTAssertTrue(field.isFirstResponder, "the reader goes on typing")
+        XCTAssertEqual(state(session, "querySubmissions") as? Int, 1, "later input does not submit again")
+        XCTAssertEqual(state(session, "submittedQuery") as? String, "abc")
     }
 
     /// A search colour changes only the ink; clearing it restores UIKit's placeholder.

@@ -70,16 +70,30 @@ export async function removeBrowserProfile(profile) {
   }
 }
 
-/** A drive's Chrome quits as a person's does, and its process group is killed after: at once once it has exited, or
- * after `ms` when it has not (a hung one). A named store's Chrome writes `localStorage` only at shutdown, and a branded
+/** A drive's Chrome quits as a person's does; its process group is killed after a crash or the shutdown deadline.
+ * A named store's Chrome writes `localStorage` only at shutdown, and a branded
  * Chrome on macOS removes the copy of its bundle it made at launch (`…/X/com.google.Chrome.code_sign_clone/`) only on
- * a clean exit. Its exit, not its reply, is waited for: Chrome often closes the pipe before it answers. */
-export async function quitBrowser(child, cdp, exited, { ms = 3000, kill = () => process.kill(-child.pid, 'SIGKILL') } = {}) {
-  let timer;
-  cdp.send('Browser.close', {}, undefined, ms).catch(() => {});
-  try { await Promise.race([exited, new Promise((resolve) => { timer = setTimeout(resolve, ms); })]); }
+ * a clean exit. Its exit, not its reply, is waited for: Chrome often closes the pipe before it answers.
+ * Branded Chrome can take over four seconds after closing its pipe to exit. Give it ten seconds;
+ * forced termination has two more. A caller must retain the profile if termination fails. */
+export async function quitBrowser(child, cdp, exited, { ms = 10000, kill = () => process.kill(-child.pid, 'SIGKILL') } = {}) {
+  if (!child.pid) return;
+  let timer, finished;
+  try { cdp?.send('Browser.close', {}, undefined, ms).catch(() => {}); } catch {}
+  try {
+    finished = await Promise.race([exited.then(() => true), new Promise(resolve => {
+      timer = setTimeout(() => resolve(false), ms);
+    })]);
+  }
   finally { clearTimeout(timer); }
+  if (finished && child.exitCode === 0) return;
   try { kill(); } catch {}
+  try {
+    await Promise.race([exited, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Chrome ${child.pid} did not exit`)), 2000);
+    })]);
+  } finally { clearTimeout(timer); }
+  if (child.exitCode === null && child.signalCode === null) throw new Error(`Chrome ${child.pid} did not exit`);
 }
 
 /** The helper never establishes browser exit; both recorded children must exit.
@@ -414,11 +428,15 @@ export async function suiteBrowser(engine = 'chromium', { needs = [], timeout, .
 }
 
 const sharedCdpBrowsers = new Map();
+process.on('beforeExit', async () => {
+  try { await Promise.all([...sharedCdpBrowsers.values()].map(shared => shared.close())); }
+  catch (error) { console.error(error); process.exitCode = 1; }
+});
 /** A test suite's Chromium over the DevTools pipe, for a test that speaks CDP itself (`Cdp`): the process's one browser
  * for this build (`needs`, as `chromium` takes them) and these flags (`args`, after the common ones), shared by every
  * suite that asks for the same, so only the first suite to ask launches it. The suite has a browser context of its
  * own: `page(url)` opens a target in it and attaches (flatten), and `close` disposes of the context, never the
- * browser, which ends with the process (its pipe closes) or when it exits (the next suite launches another).
+ * browser, which quits after the test file or before normal process exit. If it exits earlier the next suite launches another.
  * `lines` holds the browser's stderr, past its diagnostic noise; a suite may empty it. */
 export async function cdpBrowser({ needs = [], args = [] } = {}) {
   const { executable, unavailable } = chromium({ needs });
@@ -429,21 +447,37 @@ export async function cdpBrowser({ needs = [], args = [] } = {}) {
     const child = spawn(executable, ['--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`, '--no-sandbox',
       '--no-first-run', '--no-default-browser-check', '--disable-extensions', '--disable-background-networking', '--disable-component-update', ...args,
       'about:blank'],
-    { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+    { detached: process.platform !== 'win32', stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
     const shared = { cdp: new Cdp(child.stdio[3], child.stdio[4]), lines: [] };
     child.stderr.on('data', (d) => { for (const l of String(d).split('\n')) if (l && !browserDiagnosticNoise(l)) shared.lines.push(l); });
-    child.on('exit', () => {
-      if (sharedCdpBrowsers.get(key) === shared) sharedCdpBrowsers.delete(key);
-      shared.cdp.fail('Chrome exited');
-      rmSync(profile, { recursive: true, force: true });
+    const exited = new Promise(resolve => {
+      const ended = why => {
+        if (sharedCdpBrowsers.get(key) === shared) sharedCdpBrowsers.delete(key);
+        shared.cdp.fail(why); resolve();
+        shared.close().catch(error => { console.error(error); process.exitCode = 1; });
+      };
+      child.once('exit', () => ended('Chrome exited'));
+      child.on('error', error => {
+        if (!child.pid) ended(error.message);
+        else shared.close().catch(error => { console.error(error); process.exitCode = 1; });
+      });
     });
+    let closing;
+    shared.close = () => closing ??= (async () => {
+      await quitBrowser(child, shared.cdp, exited, process.platform === 'win32' ? { kill: () => child.kill('SIGKILL') } : {});
+      await removeBrowserProfile(profile);
+      if (sharedCdpBrowsers.get(key) === shared) sharedCdpBrowsers.delete(key);
+    })();
     // Shared, it must not hold the process open: a pending call's deadline does that while one waits.
     for (const handle of [child, child.stderr, child.stdio[3], child.stdio[4]]) handle.unref?.();
-    process.once('exit', () => child.kill('SIGKILL'));
     sharedCdpBrowsers.set(key, shared);
+    // Bun's test runner exits without beforeExit; its file hook can await shutdown.
+    try { const { afterAll } = await import('bun:test'); afterAll(shared.close, 15000); } catch {}
   }
-  const { cdp, lines } = sharedCdpBrowsers.get(key);
-  const { browserContextId } = await cdp.send('Target.createBrowserContext');
+  const shared = sharedCdpBrowsers.get(key), { cdp, lines } = shared;
+  let browserContextId;
+  try { ({ browserContextId } = await cdp.send('Target.createBrowserContext')); }
+  catch (error) { await shared.close(); throw error; }
   return {
     cdp, lines, browserContextId,
     page: async (url = 'about:blank') => {
@@ -778,13 +812,13 @@ export function bakedSettingChanges(bin, app) {
   return settingChanges(record, process.env, app.dir).map(({ name }) => `import.meta.env.${name}`);
 }
 
-/** A packaged Windows game keeps compiler provenance in the private bake cache.
+/** A packaged Windows app keeps compiler provenance in the private bake cache.
  * Require both unchanged source inputs and the exact copied executable/DLLs. */
 export function packagedBuildChanges(receipt, directory, app) {
   if (!existsSync(receipt)) return ['missing compiler build receipt'];
   const build = JSON.parse(readFileSync(receipt, 'utf8'));
-  if (build.version !== 1 || !build.binary?.inputs || !build.products?.length) return ['invalid compiler build receipt'];
-  const changed = pendingBuildInputs(build);
+  if (build.version !== 1 || !build.binary?.inputs || !build.sourceInputs?.inputs || !build.sourceInputs.inventory || !build.sourceInputs.outputs || !build.products?.length) return ['invalid compiler build receipt'];
+  const changed = pendingBuildInputs(build, { includeSources: true });
   const products = build.products.filter(product => /\.(exe|dll)$/.test(product.path));
   if (!products.some(product => product.path.endsWith('.exe'))) changed.push('receipt has no executable');
   for (const product of products) {
@@ -819,7 +853,11 @@ export function bakedPlans(linuxBin, bakeDir) {
  * left — where the live driver looks. */
 export function traceLocators(appName) {
   const out = [process.env.EXACT_DEV_PLAN, resolve(webDist(), 'app.plan')].filter(Boolean);
-  try { const a = resolveApp(appName); out.push(...bakedPlans(process.env.EXACT_LINUX_BIN ?? linuxBinary(a), bakeOutput(a))); } catch {}
+  try {
+    const a = resolveApp(appName);
+    if (a.outside) out.push(resolve(webDist(a), 'app.plan'));
+    out.push(...bakedPlans(process.env.EXACT_LINUX_BIN ?? linuxBinary(a), bakeOutput(a)));
+  } catch {}
   return out;
 }
 

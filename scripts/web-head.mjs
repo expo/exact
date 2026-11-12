@@ -92,10 +92,40 @@ export function webHeadProblems(manifest) {
 export function webHead(manifest) {
   const problems = webHeadProblems(manifest);
   if (problems.length) throw new Error(`app.json:\n  ${problems.join('\n  ')}`);
-  const escape = (value) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const escape = (value) => value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return (manifest.host?.web?.head ?? []).map((entry) => {
     const [[tag, { text, ...attrs }]] = Object.entries(entry);
     const open = `<${tag}${Object.entries(attrs).map(([name, value]) => value === true ? ` ${name}` : ` ${name}="${escape(value)}"`).join('')}>`;
     return tag === 'script' ? `${open}${typeof text === 'object' ? JSON.stringify(text).replace(SCRIPT_DATA_TAG, '\\u003C') : text ?? ''}</script>\n` : `${open}\n`;
   }).join('');
+}
+
+// A directive's name and value, as CSP3 §2.3 writes them: a name of letters, digits and `-` (lower case here, so a
+// key names one directive), and a value of visible ASCII but `,` (which starts a second policy) and `;` (a second
+// directive), with spaces and tabs between its sources.
+const DIRECTIVE_NAME = /^[a-z0-9-]+$/, DIRECTIVE_VALUE = /^[\t \x21-\x2B\x2D-\x3A\x3C-\x7E]*$/, SOURCE = /^[\x21-\x2B\x2D-\x3A\x3C-\x7E]+$/;
+const CSP_KEYS = ['csp', 'cspReportOnly'];
+/** Why `host.web.csp` or `host.web.cspReportOnly` cannot be sent, naming the entry (LLP 1048.000 D11). The browser
+ * reads each value; the build refuses only what would not be one directive of one policy. */
+export function webCspProblems(manifest) {
+  return CSP_KEYS.flatMap((key) => {
+    const policy = manifest.host?.web?.[key], at = `host.web.${key}`;
+    if (policy === undefined || policy === false) return [];
+    if (!policy || typeof policy !== 'object' || Array.isArray(policy)) return [`${at}: expected false or an object of directives`];
+    return Object.entries(policy).flatMap(([name, value]) => {
+      if (!DIRECTIVE_NAME.test(name)) return [`${at}: ${JSON.stringify(name)} is not a directive name in lower case (letters, digits and "-")`];
+      if (typeof value === 'string') return DIRECTIVE_VALUE.test(value) ? [] : [`${at}.${name}: ${JSON.stringify(value)} holds a comma, a semicolon, a line break or a character outside ASCII`];
+      if (!Array.isArray(value)) return [`${at}.${name}: expected a list of sources to add, or a string that replaces Exact's`];
+      return value.flatMap((source, i) => typeof source === 'string' && SOURCE.test(source) ? []
+        : [`${at}.${name}[${i}]: ${JSON.stringify(source)} is not one source (no spaces, commas or semicolons)`]);
+    });
+  });
+}
+/** What the render server reads at start (`.gen/csp.json`): the app's part of each policy, or `null` when it says
+ * none. Throws on a policy `webCspProblems` refuses. */
+export function webCspFile(manifest) {
+  const problems = webCspProblems(manifest);
+  if (problems.length) throw new Error(`app.json:\n  ${problems.join('\n  ')}`);
+  const said = Object.fromEntries(CSP_KEYS.filter((key) => manifest.host?.web?.[key] !== undefined).map((key) => [key, manifest.host.web[key]]));
+  return Object.keys(said).length ? JSON.stringify(said) + '\n' : null;
 }

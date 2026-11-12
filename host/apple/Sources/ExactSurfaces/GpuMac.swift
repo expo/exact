@@ -34,7 +34,15 @@ final class MetalCanvasView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         layer?.contentsScale = window?.backingScaleFactor ?? 2
+        resized()
     }
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = frame.size != .zero && frame.size != newSize
+        super.setFrameSize(newSize)
+        if changed { resized() }
+    }
+    /// A canvas at rest draws again at its new size or scale; after a layout nothing else asks for a frame.
+    private func resized() { (superview as? NodeView)?.canvases?.session?.frames.requestCanvas() }
 }
 
 /// Every canvas on one session's page and its surface in the module — the
@@ -54,6 +62,8 @@ final class CanvasesHost {
         var id: UInt32 = 0
         var presentable = true
         var wants = false
+        /// The box (points and scale) its last render drew at.
+        var drawnBox: SIMD3<Float>?
         var wantsInput = false
         var logCursor = 0
         var restoreAttempted = false
@@ -437,7 +447,7 @@ final class CanvasesHost {
     var wantsFrames: Bool {
         guard !modules.isEmpty, visible else { return false }
         return entries.values.contains { e in
-            e.needsFrame(dirty:(e.module?.dirty(e.id) ?? 0) != 0, editing:e.through && e.view.overlay.map { CanvasesHost.editing(under: $0) } == true)
+            e.needsFrame(dirty:(e.module?.dirty(e.id) ?? 0) != 0 || e.resized(e.view.canvasMetal.map(box)), editing:e.through && e.view.overlay.map { CanvasesHost.editing(under: $0) } == true)
         }
     }
 
@@ -493,10 +503,13 @@ final class CanvasesHost {
             // twice on the turn a batch already captured.
             if e.through, !e.view.paintedThisTurn, let overlay = e.view.overlay, CanvasesHost.editing(under: overlay) { capture(m, e) }
             m.syncDynamicRange(e.id, view: e.view, layer: e.view.canvasMetal?.layer)
-            guard live(e.view.id) === e, e.wants || m.dirty(e.id) != 0, let metal = e.view.canvasMetal else { continue }
+            guard live(e.view.id) === e, let metal = e.view.canvasMetal, e.wants || m.dirty(e.id) != 0 || e.resized(box(metal)) else { continue }
             let wall = CACurrentMediaTime()
             if wall < e.starvedUntil { more = true; continue }
+            // Under its frame-rate cap (`Surface::max_fps`), a canvas skips the frames before its deadline.
+            if let due = m.due, due(e.id, now) == 0 { more = true; continue }
             let scale = Float(metal.layer?.contentsScale ?? 2)
+            e.drawnBox = box(metal)
             let r = m.render(e.id, Float(metal.bounds.width), Float(metal.bounds.height), scale, now)
             recorded(m)
             if CACurrentMediaTime() - wall > 0.2 {
@@ -522,6 +535,10 @@ final class CanvasesHost {
 
     /// The frame time of the last tick: a starved canvas's late render draws that frame.
     private var lastTickNow: Double?
+
+    private func box(_ metal: MetalCanvasView) -> SIMD3<Float> {
+        SIMD3(Float(metal.bounds.width), Float(metal.bounds.height), Float(metal.layer?.contentsScale ?? 2))
+    }
 
     /// A starved canvas's drawable arrived (gpu/src/acquire.rs): the canvases
     /// whose render at the tick went without one draw the tick's frame now,

@@ -323,8 +323,8 @@ pub fn sentinel(kind: Kind, k: u32, i: usize) -> Vec<String> {
     }
 }
 
-/// The name of row `id`'s bound map ([`map`]): one per mix of the kinds it
-/// takes, and an attribute row's of its own.
+/// The name of row `id`'s bound map ([`map`]): token kinds, inheritance,
+/// SVG attributes and the type and base-scale rules distinguish its contents.
 pub fn map_name(id: StyleId, attribute: bool, container: bool, bases: bool) -> String {
     use exact_kernel::style::theme::admits;
     format!(
@@ -355,7 +355,13 @@ pub fn map_name(id: StyleId, attribute: bool, container: bool, bases: bool) -> S
         } else {
             String::new()
         },
-        if attribute { "a" } else { "" },
+        if attribute {
+            "a"
+        } else if id.inherited() {
+            "i"
+        } else {
+            ""
+        },
         // A node with children: its varying type tokens stand (`map`).
         if container && admits(Kind::Type, id) {
             "c"

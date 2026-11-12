@@ -88,9 +88,9 @@ def exec : Nat → Env → Locals → List Stmt → Effects → Result Effects
 mutual
 /-- Whether a value has a type: what the runner checks at every boundary
 (a slot written, a derive settled, a source's answer, an action's
-argument). A `number` that crosses a boundary is finite: infinities and
-NaN live only inside an evaluation. A record is of the shape it names (the
-runner's records carry no name; here the name selects field indices, so a
+argument). A source's arguments are checked for finiteness too. Infinities
+and NaN live only inside an evaluation. A record is of the shape it names
+(the runner's records carry no name; here the name selects field indices, so a
 record of another name is not of this shape). -/
 def conforms (p : Program) : Value → Ty → Bool
   | _, .unknown => true
@@ -191,9 +191,20 @@ structure Oracle where
   everyTab : Bool := false
   deriving Inhabited
 
-/-- The differential oracle's keys (`difftest/src/oracle.rs`): all NaN
-signs and payloads share an answer, but signed zeros remain distinct.
-The transcript keeps the runner's bits; arithmetic may produce another NaN. -/
+mutual
+/-- Source arguments carry only finite numbers, including in containers (LLP 1027 D2). -/
+private def finiteValue : Value → Bool
+  | .num f => Number.isFinite f
+  | .some v => finiteValue v
+  | .list vs | .record _ vs => finiteValues vs
+  | _ => true
+private def finiteValues : List Value → Bool
+  | [] => true
+  | v :: vs => finiteValue v && finiteValues vs
+end
+
+/-- The differential oracle's numeric keys (`difftest/src/oracle.rs`)
+use canonical bits; signed zeros remain distinct. -/
 private partial def oracleSame : Value → Value → Bool
   | .num a, .num b => Number.canonicalBits a == Number.canonicalBits b
   | .some a, .some b => oracleSame a b
@@ -203,6 +214,7 @@ private partial def oracleSame : Value → Value → Bool
 
 def Oracle.ask (o : Oracle) (src : String) (args : List Value) (resource : String := "") :
     Result Value :=
+  if !finiteValues args then .error (.refused "a source argument contains a non-finite number") else
   match o.answers.find? (fun (s, as, _) =>
       s == src && as.length == args.length && (as.zip args).all fun (a, b) => oracleSame a b) with
   | .some (_, _, v) => .ok v

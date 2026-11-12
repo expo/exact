@@ -277,7 +277,7 @@ impl<D: DataSource> Host<D> {
                     velocity: None,
                 })
                 .map_err(|e| format!("height transition: {e:?}"))?;
-            *previous = Some(*height);
+            *previous = Some(height.clone());
         }
         self.height_transitions
             .retain(|key, _| self.runner.kernel().node_by_key(*key).is_some());

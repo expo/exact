@@ -2,9 +2,181 @@ import { test, expect } from 'bun:test';
 import { conformArgs } from './conform-args.mjs';
 import { clockOnAll, clockVerdict, parseStep } from './conform-steps.mjs';
 import { open } from '../../scripts/agent.mjs';
-import { launchFacts } from '../../scripts/agent-launch.mjs';
+import { launchFacts, suiteBrowser } from '../../scripts/agent-launch.mjs';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
+
+// Load the comparisons without starting the harness's builds and browser drives.
+const comparisonSource = readFileSync(resolve(import.meta.dir, 'conform.mjs'), 'utf8');
+const { comparisonTree, norm, diffLists, diffLayout } = new Function(comparisonSource.slice(
+  comparisonSource.indexOf('async function comparisonTree('), comparisonSource.indexOf('function diffPng('),
+) + '; return { comparisonTree, norm, diffLists, diffLayout };')();
+
+test('unopened and cached-hidden tab panels compare by their visible content', () => {
+  const home = { id: 1, type: 'Text', depth: 1, props: { testId: 'route-home', text: 'home' } };
+  const panel = { id: 2, type: 'View', depth: 0, props: { testId: 'panel-saved' }, inactive: true, hidden: true, children: [] };
+  const saved = { id: 3, type: 'Text', depth: 1, props: { testId: 'route-saved', text: 'saved' }, inactive: true, hidden: true };
+  const lazy = { nodes: [home, { ...panel, unopened: true }] };
+  const cached = { nodes: [home, { ...panel, children: [3] }, saved] };
+  const layout = tree => ({ nodes: tree.nodes.map(n => ({ id: n.id, testId: n.props.testId, x: 0, y: 0, w: 100, h: 20 })) });
+  expect(norm(lazy)).toEqual(norm(cached));
+  for (const relative of [false, true]) {
+    expect(diffLayout(layout(lazy), layout(cached), lazy, cached, relative)).toHaveLength(0);
+    expect(diffLayout(layout(cached), layout(lazy), cached, lazy, relative)).toHaveLength(0);
+  }
+  const selected = { nodes: cached.nodes.map(n => ({ ...n, inactive: false, hidden: false })) };
+  expect(norm(selected)).toHaveLength(3);
+  const moved = layout(selected);
+  moved.nodes[2].x = 10;
+  expect(diffLayout(layout(selected), moved, selected, selected).map(x => x.field)).toEqual(['layout.route-saved.x']);
+});
+
+test('visible unmatched content still fails conformance', () => {
+  const hidden = { nodes: [{ id: 1, type: 'Text', props: { testId: 'route-saved', text: 'saved' }, hidden: true, inactive: true }] };
+  const visible = { nodes: hidden.nodes.map(n => ({ ...n, hidden: false })) };
+  const layout = { nodes: [{ id: 1, testId: 'route-saved', x: 0, y: 0, w: 100, h: 20 }] };
+  const empty = { nodes: [] };
+  expect(norm(hidden)).not.toEqual(norm(visible));
+  for (const [a, b, treeA, treeB] of [
+    [empty, layout, empty, visible], [layout, empty, visible, empty],
+    [layout, layout, hidden, visible], [layout, layout, visible, hidden],
+    [empty, layout, empty, null],
+  ]) expect(diffLayout(a, b, treeA, treeB).map(x => x.field)).toEqual(['layout.route-saved.present']);
+});
+
+test('inactive content that remains visible keeps its tree and layout checks', () => {
+  const tree = { nodes: [{ id: 1, type: 'View', props: { testId: 'covered-page' }, inactive: true }] };
+  const layout = { nodes: [{ id: 1, testId: 'covered-page', x: 0, y: 0, w: 100, h: 20 }] };
+  expect(norm(tree)).toHaveLength(1);
+  expect(diffLayout(layout, { nodes: [] }, tree, { nodes: [] }).map(x => x.field)).toEqual(['layout.covered-page.present']);
+  expect(diffLayout(layout, { nodes: [{ ...layout.nodes[0], h: 30 }] }, tree, tree).map(x => x.field)).toEqual(['layout.covered-page.h']);
+});
+
+test('a cached hidden copy cannot shadow the visible box with the same testId', () => {
+  const visible = { id: 2, type: 'Text', props: { testId: 'title', text: 'Title' } };
+  const cached = { nodes: [{ ...visible, id: 1, hidden: true }, visible] };
+  const selected = { nodes: [visible] };
+  const layout = { nodes: [
+    { id: 1, testId: 'title', x: 0, y: 0, w: 0, h: 0 },
+    { id: 2, testId: 'title', x: 10, y: 20, w: 100, h: 20 },
+  ] };
+  expect(norm(cached)).toEqual(norm(selected));
+  expect(diffLayout(layout, { nodes: [layout.nodes[1]] }, cached, selected)).toHaveLength(0);
+});
+
+test('a visible descendant of a hidden cached panel still fails conformance', async () => {
+  const browser = await suiteBrowser('chromium');
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<div style="visibility:hidden">
+      <div id="cached">cached</div>
+      <div id="leak" style="visibility:visible;width:1px;height:1px;background:red"></div>
+      <div style="display:none"><div id="unrendered" style="visibility:visible">unrendered</div></div>
+    </div><div id="selected">selected</div>`);
+    const nodes = ['cached', 'leak', 'unrendered', 'selected'].map((testId, id) => ({
+      id, type: 'View', props: { testId }, hidden: testId !== 'selected', inactive: testId !== 'selected',
+    }));
+    await page.evaluate(nodes => { globalThis.exact = { views: new Map(nodes.map(n => [n.id, document.getElementById(n.props.testId)])) }; }, nodes);
+    const session = { tree: async () => ({ nodes }), carrier: { evaluate: expression => page.evaluate(expression) } };
+    const tree = await comparisonTree(session);
+    const layout = await page.evaluate(() => ({ nodes: [...exact.views].map(([id, el]) => {
+      const b = el.getBoundingClientRect();
+      return { id, testId: el.id, x: b.x, y: b.y, w: b.width, h: b.height };
+    }) }));
+    expect(await page.locator('#leak').evaluate(el => el.checkVisibility({ visibilityProperty: true }))).toBe(true);
+    const selected = { nodes: [nodes[3]] }, selectedLayout = { nodes: [layout.nodes[3]] };
+    expect(norm(tree).map(row => row.split('|')[2])).toEqual(['leak', 'selected']);
+    expect(tree.nodes.map(n => n.hidden)).toEqual([true, false, true, false]);
+    expect(nodes[1].hidden).toBe(true);
+    for (const relative of [false, true]) {
+      expect(diffLayout(selectedLayout, layout, selected, tree, relative).map(x => x.field)).toEqual(['layout.leak.present']);
+      expect(diffLayout(layout, selectedLayout, tree, selected, relative).map(x => x.field)).toEqual(['layout.leak.present']);
+    }
+  } finally { await browser.close(); }
+});
+
+test('differing visible folded text in a hidden cached panel fails conformance', async () => {
+  const browser = await suiteBrowser('chromium');
+  try {
+    // A folded text is its box's `display: contents` child, with no box of its own (host/web/src/element.rs, `folds`).
+    const panel = async word => {
+      const page = await browser.newPage();
+      await page.setContent(`<div id="panel" style="visibility:hidden">
+        <div id="box" style="visibility:visible"><span id="folded" style="display:contents">${word}</span></div>
+        <div><span id="hiddenFolded" style="display:contents">${word}</span></div>
+        <div style="display:none"><span id="unrendered" style="display:contents;visibility:visible">${word}</span></div>
+        <div style="content-visibility:hidden"><span id="skipped" style="display:contents;visibility:visible">${word}</span></div>
+      </div>`);
+      const ids = ['panel', 'box', 'folded', 'hiddenFolded', 'unrendered', 'skipped'];
+      const nodes = ids.map((id, i) => ({
+        id: i, type: id === 'panel' || id === 'box' ? 'View' : 'Text', depth: id === 'panel' ? 0 : 1,
+        props: id === 'panel' || id === 'box' ? { testId: id } : { text: word }, hidden: true, inactive: true,
+      }));
+      await page.evaluate(ids => { globalThis.exact = { views: new Map(ids.map((id, i) => [i, document.getElementById(id)])) }; }, ids);
+      return comparisonTree({ tree: async () => ({ nodes }), carrier: { evaluate: expression => page.evaluate(expression) } });
+    };
+    const [a, b] = [await panel('a'), await panel('b')];
+    expect(a.nodes.map(n => n.hidden)).toEqual([true, false, false, true, true, true]);
+    expect(norm(a)).toEqual(['1|View|box||||||', '1|Text||a|||||']);
+    expect(diffLists(norm(a), norm(b), 'tree')).toEqual(['tree #1: wasm «1|Text||a|||||» js «1|Text||b|||||»']);
+  } finally { await browser.close(); }
+});
+
+test('visible painted runs in a hidden cached panel still fail conformance', async () => {
+  const modules = new Set(['textflow-glue.js', 'timer-glue.js', 'timer-waits-glue.js', 'timer-observations.js']);
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(request) {
+    const name = new URL(request.url).pathname.slice(1);
+    return modules.has(name) ? new Response(Bun.file(resolve(import.meta.dir, '../web', name)))
+      : new Response(`<div id="context" style="visibility:hidden;position:relative;width:300px">
+          <p id="paragraph" style="font:8px/12px monospace;height:24px"><span id="cached">a</span><span id="wrapper"><span
+            id="leak" class="leak" style="visibility:visible">x</span></span></p>
+          <div id="ball" style="position:absolute;left:0;top:0;width:20px;height:20px"></div>
+        </div>`, { headers: { 'content-type': 'text/html' } });
+  } });
+  let browser;
+  try {
+    browser = await suiteBrowser('chromium');
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const nodes = await page.evaluate(async () => {
+      const { createTextFlow } = await import('/textflow-glue.js');
+      const elements = ['context', 'paragraph', 'cached', 'wrapper', 'leak', 'ball'].map(id => document.getElementById(id));
+      const views = new Map(elements.map((el, id) => [id, el]));
+      globalThis.exact = { views };
+      const request = op => op === 0 ? { ranges: [[0, 2, 0, 2]], graphemes: [[0, 1, 0, 1], [1, 2, 1, 2]] }
+        : op === 2 ? { shapes: [], complete: true, height: 12, line_height: 12,
+          fragments: [{ start: 0, end: 2, utf16_start: 0, utf16_end: 2, paint_start: 0, paint_end: 2, x: 20, y: 0, width: 10, available: 280, line: 0 }] } : {};
+      globalThis.flow = createTextFlow({ views, request, agentMode: true, advance() {} });
+      flow.afterBatch({ ops: [{ op: 'textflow', contexts: [{ id: 0, exclusions: [5], paragraphs: [{ id: 1, definite: true }] }] }] });
+      await flow.settle();
+      return elements.map((el, id) => ({ id, type: id === 0 || id === 5 ? 'View' : 'Text',
+        props: { testId: el.id, ...(id === 2 ? { text: 'a' } : id === 4 ? { text: 'x' } : {}) },
+        hidden: true, inactive: true, unopened: id === 0,
+        children: id === 0 ? [1, 5] : id === 1 ? [2, 3] : id === 3 ? [4] : [],
+      }));
+    });
+    expect(await page.evaluate(() => exact.views.get(4).isConnected)).toBe(false);
+    expect(await page.locator('[data-flow-fragment] .leak').evaluate(el => el.checkVisibility({ visibilityProperty: true }))).toBe(true);
+    const session = { tree: async () => ({ nodes }), carrier: { evaluate: expression => page.evaluate(expression) } };
+    const tree = await comparisonTree(session);
+    expect(norm(tree).map(row => row.split('|')[2])).toEqual(['leak']);
+    expect(tree.nodes.map(n => n.hidden)).toEqual([true, true, true, true, false, true]);
+    const layout = await page.evaluate(() => ({ nodes: [...exact.views].map(([id, el]) => {
+      const b = el.getBoundingClientRect();
+      return { id, testId: el.id, x: b.x, y: b.y, w: b.width, h: b.height };
+    }) }));
+    for (const relative of [false, true]) {
+      expect(diffLayout({ nodes: [] }, layout, { nodes: [] }, tree, relative).map(x => x.field)).toEqual(['layout.leak.present']);
+      expect(diffLayout(layout, { nodes: [] }, tree, { nodes: [] }, relative).map(x => x.field)).toEqual(['layout.leak.present']);
+    }
+    await page.locator('[data-flow-fragment] .leak').evaluate(el => { el.style.visibility = 'hidden'; });
+    expect(norm(await comparisonTree(session))).toEqual([]);
+    await page.locator('#context').evaluate(el => { el.style.visibility = 'visible'; });
+    const selected = { ...session, tree: async () => ({ nodes: nodes.map(n => ({ ...n, hidden: false, inactive: false, unopened: false })) }) };
+    expect(norm(await comparisonTree(selected))).toHaveLength(nodes.length);
+    await page.evaluate(() => flow.dispose());
+  } finally { await browser?.close(); await server.stop(true); }
+});
 
 test('malformed steps fail as not a step, including steps marked refused', async () => {
   const s = await open({ reuse: { host: 'web', browser: 'chrome', launchFacts: launchFacts({}), reset() {},

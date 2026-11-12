@@ -260,8 +260,8 @@ final class FieldSelections {
     /// HTML's range replacement, after the command's commit. It is not the
     /// person's edit; the admitted extra input keeps the app's binding
     /// synchronized (LLP 1069.001, issue #275). It is one undo step, on the
-    /// Markdown editor as a format is (LLP 1045 D1), and on the Mac on a
-    /// plain field with an editor (LLP 1069.001, amended 2026-11-04).
+    /// Markdown editor as a format is (LLP 1045 D1), and on a plain Apple
+    /// field with an editor (LLP 1069.001, amended 2026-11-04).
     func setRangeText(_ args: [Any]) {
         guard [2, 4, 5].contains(args.count), let name = args[0] as? String,
               let replacement = args[1] as? String else { return }
@@ -302,14 +302,13 @@ final class FieldSelections {
         selection = .clamped(Double(selection.start), Double(selection.end), nil, length: next.utf16.count)
         if Self.markdown(node) {
             guard quietly({ node.replaceMarkdownSource(next, selecting: selection.range) }) else { refuse("this editor does not edit"); return }
-            scripted[node.id] = nil
+            invalidateScriptedSelection(node)
             set(node, selection, notify: false)
             replacementInput(node, next, selection, data: replacement)
             return
         }
-        quietly { node.replaceFieldRange(next, fields: self) }
-        // Value mutation invalidates the prior scripted-selection suppression.
-        scripted[node.id] = nil
+        quietly { node.replaceFieldRange(next, selecting: selection, fields: self) }
+        invalidateScriptedSelection(node)
         set(node, selection, notify: false)
         replacementInput(node, next, selection, data: replacement)
         if old != selection {
@@ -338,7 +337,10 @@ final class FieldSelections {
         set(node, FieldSelection(start: 0, end: length))
     }
 
-    #if os(macOS)
+    func invalidateScriptedSelection(_ node: NodeView) {
+        scripted[node.id] = nil
+    }
+
     /// An editor replacement keeps the selection's direction and whether
     /// a script last set it. Restoring the range is no script command.
     func restore(_ node: NodeView, _ selection: FieldSelection) {
@@ -346,6 +348,7 @@ final class FieldSelections {
         last[node.id] = selection
     }
 
+    #if os(macOS)
     /// The event the field took the focus in, when it is a press: for that
     /// press's `pressing` (the window makes a pressed view first responder
     /// before its `mouseDown`), which alone matches its timestamp.
@@ -469,15 +472,15 @@ extension NodeView {
         manager?.groupsByEvent = byEvent
     }
 
-    /// A plain field's `setRangeText`, on the Mac: `value` goes in through
-    /// the editor's own undoable change, as one undo step that restores the
+    /// A plain Apple field's `setRangeText`: `value` goes in through
+    /// the editor and its undo manager, as one undo step that restores the
     /// text and selection before it, as the Markdown editor's does (LLP
     /// 1069.001, amended 2026-11-04). It is the script's edit: the app hears no
     /// `beforeinput` and no `input` for it (the caller sends the
-    /// replacement's), and `maxlength` does not apply. Where there is no
-    /// editor to undo in (an input not being edited) or text is being
-    /// composed, the value is written as the app's own value is.
-    func replaceFieldRange(_ value: String, fields: FieldSelections) {
+    /// replacement's), and `maxlength` does not apply. Without an editor,
+    /// without focus on iOS, or while text is being composed, the value is
+    /// written as the app's own value is.
+    func replaceFieldRange(_ value: String, selecting selection: FieldSelection, fields: FieldSelections) {
         #if os(macOS)
         guard let editor = selectionEditor, !editor.hasMarkedText(), let manager = editor.undoManager,
               let edit = minimalTextEdit(from: editor.string, to: value) else { return replaceFieldValue(value) }
@@ -499,14 +502,56 @@ extension NodeView {
         editor.isEditable = editable
         fields.replacing.remove(id)
         writingValue = false
+        #elseif os(iOS)
+        guard let editor: UIView & UITextInput = (textArea as (UIView & UITextInput)?) ?? selectionField,
+              editor.isFirstResponder, editor.markedTextRange == nil, let manager = editor.undoManager,
+              minimalTextEdit(from: fieldText, to: value) != nil else { return replaceFieldValue(value) }
+        oneUndoStep(manager) {
+            replaceUndoableField(value, selecting: selection, restoring: (fieldText, fields.current(self)),
+                                 editor: editor, manager: manager, fields: fields)
+        }
         #else
-        // UIKit's text undo takes such a step back, but its redo restores
-        // nothing (measured through `insertText` and `replace(_:withText:)`).
         replaceFieldValue(value)
         #endif
         // An editor that refused the change: the value is written all the same.
         if !fieldText.utf16.elementsEqual(value.utf16) { replaceFieldValue(value) }
     }
+
+    #if os(iOS)
+    /// UIKit's text redo restores its own caret after registered selection
+    /// actions. Keep the value and the script's selection in the same action.
+    /// Both snapshots survive selection moves made before undo or redo.
+    private func replaceUndoableField(_ value: String, selecting selection: FieldSelection, restoring previous: (value: String, selection: FieldSelection),
+                                      editor: UIView & UITextInput, manager: UndoManager, fields: FieldSelections) {
+        guard let edit = minimalTextEdit(from: fieldText, to: value),
+              let start = editor.position(from: editor.beginningOfDocument, offset: edit.range.location),
+              let end = editor.position(from: start, offset: edit.range.length),
+              let range = editor.textRange(from: start, to: end) else { return }
+        let oldValue = fieldText
+        manager.registerUndo(withTarget: self) { [weak editor, weak manager, weak fields] node in
+            guard let editor, let manager, let fields else { return }
+            node.replaceUndoableField(previous.value, selecting: previous.selection, restoring: (value, selection),
+                                      editor: editor, manager: manager, fields: fields)
+        }
+        pendingValue = nil
+        toldText = value
+        fields.replacing.insert(id)
+        manager.disableUndoRegistration()
+        fields.quietly {
+            editor.selectedTextRange = range
+            editor.replace(range, withText: edit.text)
+            fields.restore(self, selection)
+        }
+        manager.enableUndoRegistration()
+        fields.replacing.remove(id)
+        if manager.isUndoing || manager.isRedoing {
+            fields.invalidateScriptedSelection(self)
+            fields.inputDetails[id] = FieldInput(inputType: manager.isUndoing ? "historyUndo" : "historyRedo", cancelable: false)
+            toldText = oldValue
+            typedText(value)
+        }
+    }
+    #endif
 
     /// The Markdown editor's `setRangeText`: the source becomes `value`
     /// through the editor's own input, as an undo step of its own that

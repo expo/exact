@@ -126,6 +126,21 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
     ) -> Result<Answer, DataError> {
         self.inner.answer_for(target, store, source, args)
     }
+    fn more_for(&mut self, target: Target) -> Vec<exact_runner::Request> {
+        self.inner.more_for(target)
+    }
+    fn parse_fetch_for(
+        &mut self,
+        target: Target,
+        fetch: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        self.inner
+            .parse_fetch_for(target, fetch, store, source, args, outcome)
+    }
     fn parse_for(
         &mut self,
         target: Target,
@@ -259,8 +274,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
         &mut self,
         store: &Store,
         in_flight: InFlight<'_>,
+        fetch: Option<u64>,
     ) -> Option<(u64, exact_runner::Request)> {
-        self.inner.timer_before_reply(store, in_flight)
+        self.inner.timer_before_reply(store, in_flight, fetch)
     }
     fn module_landed(
         &mut self,

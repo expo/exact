@@ -911,7 +911,8 @@ if (import.meta.main) {
     let status = 0;
     for (const command of commands([{ suite }])) {
       console.error(`audit ${suite.id}: ${denied.length} units unreadable; ${command.map(quote).join(' ')}`);
-      status ||= spawnSync('sandbox-exec', ['-f', file, ...command], { cwd: repo.root, stdio: 'inherit' }).status ?? 1;
+      const result = spawnSync('sandbox-exec', ['-f', file, ...command], { cwd: repo.root, stdio: 'inherit' });
+      status ||= result.status ?? 1;
     }
     process.exit(status);
   }
@@ -943,7 +944,8 @@ if (import.meta.main) {
   let status = 0;
   for (const c of run.filter(c => (c[0] === 'cargo' && c[1] === 'test') || (c[0] === 'bun' && c[1] === 'test'))) {
     console.log(`\n$ ${c.map(quote).join(' ')}`);
-    status ||= spawnSync(c[0], c.slice(1), { cwd: repo.root, stdio: 'inherit' }).status ?? 1;
+    const result = spawnSync(c[0], c.slice(1), { cwd: repo.root, stdio: 'inherit' });
+    status ||= result.status ?? 1;
   }
   process.exit(status);
 }

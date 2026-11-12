@@ -82,7 +82,7 @@ export const signalDeadline = { arm: null };
 // `origin`: who asked it (LLP 1133.036 D6); a tool's, a wake's or the device's reach to a less public space is checked.
 // `decided`: `fetchOf` has already armed the signal's deadline before the file work, or found the request has none
 // (ts-fetch.js), so it is not weighed again.
-export async function fetchWith(set, input, init = {}, expires = null, redirect = redirectOf(input, init), read = within, origin = 'app', decided = false) {
+export async function fetchWith(set, input, init = {}, expires = null, redirect = redirectOf(input, init), read = within, origin = 'app', decided = false, forced) {
   let value, asset, deadline, signal, own, armed;
   init ??= {};
   deadline = deadlineOf(init);
@@ -104,6 +104,11 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
   redirect = redirectFor(origin, redirect);
   try {
     const rest = ownWithout(init, ['exactTimeout', 'exactIndependentHttp', 'redirect', 'signal']);
+    // A forced ask reloads unless the request stores nothing; Fetch allows only-if-cached same-origin (LLP 1162 D4).
+    const cache = init.cache ?? input?.cache, sent = forced && cache !== 'no-store' ? 'reload' : cache;
+    const mode = init.mode ?? (sent === 'only-if-cached' && 'same-origin');
+    if (sent) rest.cache = sent;
+    if (mode) rest.mode = mode;
     // The caller's signal, read once by name, as `fetch` reads its init's members (an inherited one too), else the
     // input `Request`'s (`null` clears the Request's, `undefined` keeps it, as `fetch` has them).
     const given = init.signal;
@@ -167,12 +172,13 @@ export function createRequestExecutor(appId, sourceSet, readBody = response => r
     const why = grantError(admitted);
     if (why) return { failed: 2, message: why };
     if (req.storage != null) {
+      if (globalThis.__exactRender) return { refused: 'storage request' };
       storage ??= import(new URL('./storage-request.js', import.meta.url).href).then(m => m.createStorageRequests(appId, sourceSet));
       return { storage: await (await storage).run(req.storage, admitted) };
     }
     try {
       // Its ceiling bounds the read inside `fetchWith` too, so an oversized body that never ends is refused, not awaited.
-      const response = await fetchWith(admitted, req.url, { method: req.method, headers: req.headers, body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.raw,
+      const response = await fetchWith(admitted, req.url, { method: req.method, headers: req.headers, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.raw,
         ...(req.maxResponseBytes != null ? { exactIndependentHttp: { maxResponseBytes: req.maxResponseBytes } } : {}) });
       return { status: response.status, headers: [...response.headers], body: new Uint8Array(await readBody(response, req.maxResponseBytes)) };
     } catch (error) {
@@ -211,6 +217,7 @@ export function createSecretFacade(store, admitted, keys) {
     return `secret ${name} is not granted${parse ? ': ' + parse : ''}`;
   };
   const allowed = name => {
+    if (globalThis.__exactRender) throw new Error("a render's store is empty and refuses writes"); // LLP 1048.000 D9
     if (!admitsSecret(admitted, name)) throw Object.assign(new Error(refused(name)), { refuse: true });
   };
   const seen = {
@@ -219,9 +226,9 @@ export function createSecretFacade(store, admitted, keys) {
       effect('store.get()');
       if (String(name).startsWith('exact.kept.')) return null;
       seen.read = true;
-      return admitsSecret(admitted, name) && !mustLock(admitted, name) ? store.get(name) ?? null : null;
+      return !globalThis.__exactRender && admitsSecret(admitted, name) && !mustLock(admitted, name) ? store.get(name) ?? null : null;
     },
-    exclusive(name, work) {
+    async exclusive(name, work) {
       effect('store.exclusive()'); allowed(name);
       if (mustLock(admitted, name)) return Promise.reject(unsupported(name));
       const context = globalThis.__exact_async_context, owner = context?.current();
@@ -237,7 +244,13 @@ export function createSecretFacade(store, admitted, keys) {
     unprotect() { return overlaying.on ? Promise.reject(inOverlay('store.unprotect()')) : Promise.resolve(); },
     set(name, value) { effect('store.set()'); allowed(name); if (mustLock(admitted, name)) throw unsupported(name); store.set(name, String(value)); },
     forget(name) { effect('store.forget()'); allowed(name); store.set(name, null); },
-    keepKey(name, pair) { if (overlaying.on) return Promise.reject(inOverlay('store.keepKey()')); allowed(name); const handle = 'exact.key:' + crypto.randomUUID(); store.set(name, handle); return keys().then(service => service.put(handle, pair)); },
+    async keepKey(name, pair) {
+      if (overlaying.on) throw inOverlay('store.keepKey()');
+      allowed(name);
+      const handle = 'exact.key:' + crypto.randomUUID();
+      store.set(name, handle);
+      return keys().then(service => service.put(handle, pair));
+    },
     key(name) { if (overlaying.on) return Promise.reject(inOverlay('store.key()')); const handle = seen.get(name); return handle == null ? Promise.resolve(null) : keys().then(service => service.get(handle) ?? null); },
   };
   return seen;

@@ -19,6 +19,7 @@ function numeric(v: unknown): number {
   if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error('Incomplete forecast');
   return v;
 }
+const optionalNumeric = (v: unknown): number | null => v === null ? null : numeric(v);
 function string(v: unknown): string {
   if (typeof v !== 'string') throw new Error('Incomplete forecast');
   return v;
@@ -84,11 +85,17 @@ async function forecast(lat: number, lon: number, plus = false): Promise<Forecas
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&timezone=auto&forecast_days=${span}&current=${common}&hourly=${common},precipitation_probability&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max`;
     const data = await json(url), c = object(data.current), h = object(data.hourly), d = object(data.daily);
     const currentTime = string(c.time);
-    const all = times(h).map((time,i): Hour => ({id:time,time,temp:numeric(at(h,'temperature_2m',i)),feels:numeric(at(h,'apparent_temperature',i)),humidity:numeric(at(h,'relative_humidity_2m',i)),cloud:numeric(at(h,'cloud_cover',i)),rain:numeric(at(h,'precipitation',i)),chance:numeric(at(h,'precipitation_probability',i)),wind:numeric(at(h,'wind_speed_10m',i)),code:numeric(at(h,'weather_code',i)),day:numeric(at(h,'is_day',i)),hour:hourOf(time)}));
+    const hourTimes = times(h), start = hourTimes.findIndex(time=>time.slice(0,13)===currentTime.slice(0,13));
+    if (start < 0) throw new Error('Current hour missing');
+    // Validate the observation's hour and the 24 hours shown, not unused model horizons.
+    const all = hourTimes.slice(start,start+25).map((time,offset): Hour => {
+      const i = start + offset;
+      return {id:time,time,temp:numeric(at(h,'temperature_2m',i)),feels:numeric(at(h,'apparent_temperature',i)),humidity:numeric(at(h,'relative_humidity_2m',i)),cloud:numeric(at(h,'cloud_cover',i)),rain:numeric(at(h,'precipitation',i)),chance:numeric(at(h,'precipitation_probability',i)),wind:numeric(at(h,'wind_speed_10m',i)),code:numeric(at(h,'weather_code',i)),day:numeric(at(h,'is_day',i)),hour:hourOf(time)};
+    });
     const thisHour = all.find(hour=>hour.time.slice(0,13)===currentTime.slice(0,13));
     if (!thisHour) throw new Error('Current hour missing');
     const current: Hour = {id:'now',time:currentTime,temp:numeric(c.temperature_2m),feels:numeric(c.apparent_temperature),humidity:numeric(c.relative_humidity_2m),cloud:numeric(c.cloud_cover),rain:numeric(c.precipitation),chance:thisHour.chance,wind:numeric(c.wind_speed_10m),code:numeric(c.weather_code),day:numeric(c.is_day),hour:hourOf(currentTime)};
-    const days = times(d).slice(0,span).map((id,i)=>({id,low:numeric(at(d,'temperature_2m_min',i)),high:numeric(at(d,'temperature_2m_max',i)),code:numeric(at(d,'weather_code',i)),chance:numeric(at(d,'precipitation_probability_max',i)),sunrise:string(at(d,'sunrise',i)),sunset:string(at(d,'sunset',i)),uv:numeric(at(d,'uv_index_max',i))}));
+    const days = times(d).slice(0,span).map((id,i)=>({id,low:numeric(at(d,'temperature_2m_min',i)),high:numeric(at(d,'temperature_2m_max',i)),code:numeric(at(d,'weather_code',i)),chance:optionalNumeric(at(d,'precipitation_probability_max',i)),sunrise:string(at(d,'sunrise',i)),sunset:string(at(d,'sunset',i)),uv:optionalNumeric(at(d,'uv_index_max',i))}));
     if(days.length!==span) throw new Error('Incomplete daily forecast');
     const result: Forecast = {lat,lon,ready:true,stale:false,message:'',updated:currentTime.replace('T',' · '),current,hours:all.filter(hour=>hour.time>currentTime).slice(0,24),days};
     if(result.hours.length!==24) throw new Error('Incomplete hourly forecast');
@@ -114,7 +121,7 @@ function outlook(f: Forecast, units: string, selected: string, lat: number, lon:
   const min = Math.min(...f.days.map(d=>d.low)), max = Math.max(...f.days.map(d=>d.high)), spread = Math.max(1,max-min);
   const wind = `${Math.round(units==='F' ? h.wind/1.609344 : h.wind)} ${units==='F' ? 'mph' : 'km/h'}`;
   const summary = h.code>=95 ? 'Thunderstorms in the forecast. Keep an eye on local alerts.' : h.rain>0 ? 'A little weather moving through. Bring a layer and an umbrella.' : h.chance>=50 ? 'Rain may be on the way. An umbrella could come in handy.' : h.wind>30 ? 'A breezy stretch ahead. Take a layer for the wind.' : !h.day ? 'The day gives way to a quieter sky.' : h.cloud>70 ? 'A soft blanket of cloud over the city.' : 'Some room for sunshine. A good moment to step outside.';
-  return {ready:true,temp:temp(h.temp),condition:condition(h.code,h.day),feels:temp(h.feels),wind,humidity:`${Math.round(h.humidity)}%`,chance:`${Math.round(h.chance)}%`,range:`H ${temp(day.high)}   L ${temp(day.low)}  ·  Feels like ${temp(h.feels)}`,sunrise:clock(day.sunrise),sunset:clock(day.sunset),uv:`${Math.round(day.uv)} · ${day.uv<3 ? 'Low' : day.uv<6 ? 'Moderate' : day.uv<8 ? 'High' : 'Very high'}`,summary,selectedLabel:h.id==='now' ? 'RIGHT NOW' : `${h.time.slice(5,10)} · ${clock(h.time)} FORECAST`,cloud:clamp(h.cloud,0,100),rain:clamp(h.rain,0,20),day:h.day,hour:h.hour,speed:clamp(h.wind,0,150),hours:f.hours.map(hour=>({id:hour.id,label:hourLabel(hour.time),temp:temp(hour.temp),icon:icon(hour.code,hour.day),chance:`${Math.round(hour.chance)}%`})),days:f.days.map((d,i)=>({id:d.id,label:i===0?'Today':['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d.id+'T12:00:00Z').getUTCDay()],condition:condition(d.code),icon:icon(d.code),chance:`${Math.round(d.chance)}%`,low:temp(d.low),high:temp(d.high),left:`${(d.low-min)/spread*100}%`,span:`${Math.max(3,(d.high-d.low)/spread*100)}%`}))};
+  return {ready:true,temp:temp(h.temp),condition:condition(h.code,h.day),feels:temp(h.feels),wind,humidity:`${Math.round(h.humidity)}%`,chance:`${Math.round(h.chance)}%`,range:`H ${temp(day.high)}   L ${temp(day.low)}  ·  Feels like ${temp(h.feels)}`,sunrise:clock(day.sunrise),sunset:clock(day.sunset),uv:day.uv===null ? "—" : `${Math.round(day.uv)} · ${day.uv<3 ? 'Low' : day.uv<6 ? 'Moderate' : day.uv<8 ? 'High' : 'Very high'}`,summary,selectedLabel:h.id==='now' ? 'RIGHT NOW' : `${h.time.slice(5,10)} · ${clock(h.time)} FORECAST`,cloud:clamp(h.cloud,0,100),rain:clamp(h.rain,0,20),day:h.day,hour:h.hour,speed:clamp(h.wind,0,150),hours:f.hours.map(hour=>({id:hour.id,label:hourLabel(hour.time),temp:temp(hour.temp),icon:icon(hour.code,hour.day),chance:`${Math.round(hour.chance)}%`})),days:f.days.map((d,i)=>({id:d.id,label:i===0?'Today':['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][new Date(d.id+'T12:00:00Z').getUTCDay()],condition:condition(d.code),icon:icon(d.code),chance:d.chance===null ? "—" : `${Math.round(d.chance)}%`,low:temp(d.low),high:temp(d.high),left:`${(d.low-min)/spread*100}%`,span:`${Math.max(3,(d.high-d.low)/spread*100)}%`}))};
 }
 async function places(query: string): Promise<Result<'places'>> {
   const term = query.trim();

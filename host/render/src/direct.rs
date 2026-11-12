@@ -48,6 +48,7 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
     js: &Js,
     late: impl Fn(ActivatePolicy) -> bool,
     limit: usize,
+    checkpoints: Option<&crate::serve::deferred::Checkpoints>,
     send: &mut dyn FnMut(&[u8]),
 ) -> Result<Option<Streamed>, String> {
     if !direct_for(plan, Ids::Any, Projection::Auto)? {
@@ -128,9 +129,17 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
                 Projection::Kernel,
             )?;
             let late = late(rendered.activate);
-            let body = crate::page::body_js(shell, js, &rendered, late, false);
+            let body = crate::page::body_js(shell, js, &rendered, late, false, checkpoints);
             let after_boot = boot.as_ref().map(|boot| {
-                crate::page::body_after_boot_js(shell, js, &rendered, late, false, Some(boot))
+                crate::page::body_after_boot_js(
+                    shell,
+                    js,
+                    &rendered,
+                    late,
+                    false,
+                    Some(boot),
+                    checkpoints,
+                )
             });
             let sent = after_boot.as_deref().unwrap_or(&body);
             let size = boot.as_ref().map_or(0, |boot| boot.sent) + sent.len();
@@ -217,7 +226,15 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
     hand(rest.as_bytes());
     let checkpoint = page.checkpoint.clone();
     let digest = digest(&encoded(plan), location, &checkpoint, &document.root);
-    let close = body_close_js(shell, js, &digest, activate, &wake, &checkpoint);
+    let close = body_close_js(
+        shell,
+        js,
+        &digest,
+        activate,
+        &wake,
+        &checkpoint,
+        checkpoints,
+    );
     hand(close_after_boot(close.clone(), boot.is_some()).as_bytes());
     let settled = page.settled;
     retire(page, data);
@@ -392,6 +409,7 @@ component Cards
             &Js::of(SHELL).unwrap(),
             |_| false,
             usize::MAX,
+            None,
             &mut |bytes| {
                 sent.push_str(std::str::from_utf8(bytes).unwrap());
                 if sent.contains("Loading cards</div></div></div>") {

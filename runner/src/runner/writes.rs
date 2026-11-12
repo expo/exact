@@ -64,16 +64,16 @@ impl<D: DataSource> Runner<D> {
     /// What a resource shows, by name: its answer with the writes that
     /// affect it laid over it, as derives and views read it.
     pub fn shown_resource(&self, name: &str) -> Option<&Value> {
-        self.plan
-            .resources
-            .iter()
+        self.resource_rows()
             .position(|r| self.plan.str(r.name) == name)
             .and_then(|i| self.shown_resource_at(i))
     }
 
     /// What the plan's `i`th resource shows ([`Runner::shown_resource`]).
     pub(crate) fn shown_resource_at(&self, i: usize) -> Option<&Value> {
-        let held = self.resource_values.get(i)?.as_ref()?;
+        let held = crate::vm::Column::rows(&self.resources, |row| &row.value)
+            .get(i)?
+            .as_ref()?;
         Some(held.get(&self.plan))
     }
 
@@ -168,9 +168,9 @@ impl<D: DataSource> Runner<D> {
             .into_iter()
             .flat_map(|r| {
                 if self.is_family(r) {
-                    self.members
-                        .rows
+                    self.resources
                         .iter()
+                        .map(|row| &row.member)
                         .enumerate()
                         .filter(|(_, row)| row.as_ref().is_some_and(|m| m.family == r && !m.gone))
                         .map(|(i, _)| i)
@@ -180,7 +180,7 @@ impl<D: DataSource> Runner<D> {
                 }
             })
             .filter(|r| {
-                !exact_plan::runner_owned_source(self.plan.str(self.plan.resources[*r].source))
+                !exact_plan::runner_owned_source(self.plan.str(self.resource_row(*r).source))
             })
             .collect();
         // Shown nowhere, it has nothing to wait for
@@ -270,7 +270,8 @@ impl<D: DataSource> Runner<D> {
             if let Some(l) = &mut w.landed {
                 if !l.showing.contains(&member)
                     && l.showing.iter().any(|&i| {
-                        self.members.rows[i]
+                        self.resources[i]
+                            .member
                             .as_ref()
                             .is_some_and(|m| m.family == family)
                     })
@@ -313,7 +314,7 @@ impl<D: DataSource> Runner<D> {
         answer: &crate::held::Held,
         origin: u64,
     ) -> crate::held::Held {
-        let row = &self.plan.resources[i];
+        let row = self.resource_row(i);
         let source = self.plan.str(row.source).to_string();
         let resource = self.plan.str(row.name).to_string();
         let writes: Vec<WriteRecord> = if exact_plan::runner_owned_source(&source) {
@@ -322,7 +323,7 @@ impl<D: DataSource> Runner<D> {
             self.writes_for(i).into_iter().cloned().collect()
         };
         if writes.is_empty() {
-            self.overlays[i] = None;
+            self.resources[i].overlay = None;
             return answer.clone();
         }
         let answered = |w: &WriteRecord| w.landed.as_ref().is_some_and(|l| l.at < origin);
@@ -330,7 +331,7 @@ impl<D: DataSource> Runner<D> {
             .iter()
             .map(|w| (w.id, w.landed.is_some(), answered(w)))
             .collect();
-        if let Some(o) = &self.overlays[i] {
+        if let Some(o) = &self.resources[i].overlay {
             if crate::held::Held::same(&o.answer, answer) && o.args == args && o.writes == key {
                 return o.shown.clone();
             }
@@ -368,7 +369,7 @@ impl<D: DataSource> Runner<D> {
                 self.log(format!("overlay {resource} ({} writes)", writes.len()));
                 // An equal value keeps its object, so readers are not asked again.
                 let value = crate::held::Held::new(o.value);
-                let value = match &self.overlays[i] {
+                let value = match &self.resources[i].overlay {
                     Some(last) if crate::held::Held::equivalent(&last.shown, &value) => {
                         last.shown.clone()
                     }
@@ -412,7 +413,7 @@ impl<D: DataSource> Runner<D> {
             .into_iter()
             .filter(|(id, ..)| !retire.contains(id))
             .collect();
-        self.overlays[i] = Some(OverlayCache {
+        self.resources[i].overlay = Some(OverlayCache {
             answer: answer.clone(),
             args: args.to_vec(),
             writes: remaining,

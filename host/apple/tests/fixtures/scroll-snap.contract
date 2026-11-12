@@ -1,0 +1,20 @@
+component App
+  view
+    column
+      list testId="strip" virtualized=true display="flex" width=300 height=100 overflow-x="scroll" overflow-y="hidden" estimated-item-width=150 scroll-snap-type="x mandatory"
+        for n in range(1000) key=n
+          view width=150 height=100 flex-shrink=0 scroll-snap-align="start"
+            text `Card ${n}`
+      list testId="relative" virtualized=true display="flex" width=300 height=100 overflow-x="scroll" overflow-y="hidden" estimated-item-width=150 scroll-snap-type="x mandatory"
+        for n in range(1000) key=n
+          view width=150 height=100 flex-shrink=0 position="relative" left=30 scroll-snap-align="start"
+      list testId="percent" virtualized=true display="flex" width=300 height=100 overflow-x="scroll" overflow-y="hidden" estimated-item-width=150 scroll-snap-type="x mandatory"
+        for n in range(1000) key=n
+          view width=150 height=100 flex-shrink=0 position="relative" left="10%" scroll-snap-align="start"
+      list testId="transform" virtualized=true display="flex" width=300 height=100 overflow-x="scroll" overflow-y="hidden" estimated-item-width=150 scroll-snap-type="x mandatory"
+        for n in range(1000) key=n
+          view width=150 height=100 flex-shrink=0 transform="translateX(30px)" scroll-snap-align="start"
+      list testId="descendant" virtualized=true display="flex" width=300 height=100 overflow-x="scroll" overflow-y="hidden" estimated-item-width=150 scroll-snap-type="x mandatory"
+        for n in range(1000) key=n
+          view width=150 height=100 flex-shrink=0 scroll-snap-align="none"
+            view width=150 height=100 scroll-snap-align="start"

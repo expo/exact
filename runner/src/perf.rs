@@ -73,8 +73,8 @@ pub struct Work {
     /// Asks of the app's data source by resource index since measuring
     /// began: `perf`'s `resources` (LLP 1146 D3). Never rolled back.
     pub asked: Vec<u64>,
-    /// Current request and last successful request, only while measuring (LLP 1142 D9).
-    pub resources: Vec<ResourceWork>,
+    /// Whether resource request provenance is being measured (LLP 1142 D9).
+    pub resource_inspection: bool,
     /// Next observation identifier; refusals never reuse one.
     pub resource_serial: u64,
     /// Runner clock when resource observation began.

@@ -1101,9 +1101,12 @@ extension NavigationHost {
     /// The physical backend owned by a content node.
     func shownScroll(_ node: NodeView?) -> UIScrollView? { node?.scrollView }
 
-    /// UIKit insets the route's collapse scroller, bottom-edge scroller and arranged peers
+    /// Exact's inset policy, including arranged peers whose geometry awaits the next sync.
     func insetByUIKit(_ node: NodeView) -> Bool {
-        controllers.values.contains { $0.collapseScroll === node || $0.edgeScroll === node || arrangementPeers(in: $0).contains { $0 === node } }
+        #if os(iOS)
+        if #available(iOS 27.1, *), presenter.arrangements.insets(node) { return true }
+        #endif
+        return controllers.values.contains { $0.collapseScroll === node || $0.edgeScroll === node }
     }
 
     /// UIKit's zero-width fixed space splits shared glass without authored metrics.
@@ -1212,6 +1215,7 @@ extension NavigationHost {
         item.accessibilityLabel = i.label ?? (i.title.isEmpty ? nil : i.title)
         item.accessibilityIdentifier = i.testId
         item.isEnabled = !i.disabled
+        if i.menu { item.preferredMenuElementOrder = MenuHost.order(i.menuOrder) }
         if i.disabled || i.accessibilityDisabled { item.accessibilityTraits.insert(.notEnabled) }
         else { item.accessibilityTraits.remove(.notEnabled) }
         // The authored `color` of a plain item's face; a prominent item's

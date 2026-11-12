@@ -1196,7 +1196,7 @@ impl<D: DataSource> Runner<D> {
         what: &str,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
         let was_poisoned = self.poisoned;
-        let checkpoint = self.checkpoint(false);
+        let checkpoint = self.checkpoint();
         let result = if self.poisoned {
             Err(RunnerError::Poisoned)
         } else {
@@ -1217,21 +1217,17 @@ impl<D: DataSource> Runner<D> {
     /// @ref LLP 1038 D5 — written beside `resources.initial`.
     pub fn resource_args(&self, name: &str) -> Option<&[Value]> {
         let i = self
-            .plan
-            .resources
-            .iter()
+            .resource_rows()
             .position(|r| self.plan.str(r.name) == name)?;
-        self.resources[i].as_ref().map(|r| r.args.as_slice())
+        self.resources[i].state.as_ref().map(|r| r.args.as_slice())
     }
 
     /// Whether resource `name` shows a placeholder, not an answer (LLP
     /// 1054.000.002 D4): the bake compiles no value for it.
     pub fn resource_is_placeholder(&self, name: &str) -> bool {
-        self.plan
-            .resources
-            .iter()
+        self.resource_rows()
             .position(|r| self.plan.str(r.name) == name)
-            .and_then(|i| self.resources[i].as_ref())
+            .and_then(|i| self.resources[i].state.as_ref())
             .is_some_and(|r| r.placeholder)
     }
 }

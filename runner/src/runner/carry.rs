@@ -57,16 +57,16 @@ impl<D: super::DataSource> super::Runner<D> {
                 .collect(),
             panels: self.carry_panels(),
             resources: self
-                .plan
-                .resources
-                .iter()
-                .zip(&self.resources)
+                .resource_rows()
+                .zip(self.resources.iter().map(|row| &row.state))
                 .take(self.declared_resources().len())
                 .enumerate()
                 // A request in flight or a placeholder shown until the
                 // source is ready is not an answer to carry, nor one a
                 // write affects: the replacement runner asks it.
-                .filter(|(i, _)| !self.pending_res[*i] && !self.stale[*i] && !self.written(*i))
+                .filter(|(i, _)| {
+                    !self.resources[*i].pending && !self.resources[*i].stale && !self.written(*i)
+                })
                 .filter(|(_, (_, s))| s.as_ref().is_none_or(|s| !s.placeholder))
                 .filter_map(|(_, (r, s))| {
                     s.as_ref().map(|s| {
@@ -80,12 +80,10 @@ impl<D: super::DataSource> super::Runner<D> {
                 })
                 .collect(),
             store_readers: self
-                .plan
-                .resources
-                .iter()
+                .resource_rows()
                 .take(self.declared_resources().len())
                 .enumerate()
-                .filter(|(i, _)| self.store_readers[*i])
+                .filter(|(i, _)| self.resources[*i].store_reader)
                 .map(|(_, resource)| {
                     (
                         self.plan.str(resource.name).to_string(),

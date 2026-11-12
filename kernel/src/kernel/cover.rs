@@ -504,7 +504,7 @@ pub(crate) fn header_inset(arena: &NodeArena, slot: u32, top: f32) -> f32 {
     match (
         top > 0.0,
         arena.cover(first),
-        arena.style(first).padding_top,
+        arena.style(first).padding_top.clone(),
     ) {
         (true, Some(HostCover::Whole), Dimension::Env(Edge::Top, _))
         | (

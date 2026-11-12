@@ -104,6 +104,15 @@ impl PaintedInline {
     }
 
     pub(crate) fn frame(&self, view: ViewId) -> Option<Rect4> {
+        self.bounds(view, self.transform)
+    }
+
+    /// The paragraph's scroll coordinates, before its affine or projective mapping.
+    pub(crate) fn local_frame(&self, view: ViewId) -> Option<Rect4> {
+        self.bounds(view, Transform::identity())
+    }
+
+    fn bounds(&self, view: ViewId, transform: Transform) -> Option<Rect4> {
         let run = self.captured.runs.get(&view)?;
         let fragments = self
             .captured
@@ -117,7 +126,7 @@ impl PaintedInline {
                 .iter()
                 .find(|(lines, _)| lines.contains(&line))?;
             let r = bbox(
-                self.transform,
+                transform,
                 (rect.0 + origin.0, rect.1 + origin.1, rect.2, rect.3),
             );
             first.get_or_insert(r);

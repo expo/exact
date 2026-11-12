@@ -48,9 +48,7 @@ impl<D: DataSource> Runner<D> {
             return Ok(None);
         }
         let which: Vec<_> = self
-            .plan
-            .resources
-            .iter()
+            .resource_rows()
             .enumerate()
             .filter_map(|(i, row)| {
                 (self.plan.str(row.source) == SOURCE && surface_name(&self.plan, row) == Some(name))
@@ -69,23 +67,20 @@ impl<D: DataSource> Runner<D> {
                 error: DataError::Unavailable(why),
             });
         }
-        let previous = match json {
-            Some(text) => self
-                .surface_records
-                .insert(name.to_owned(), text.to_owned()),
-            None => self.surface_records.remove(name),
-        };
-        let result = self.recommit(which, &format!("surface {name}"));
-        if result.is_err() {
-            match previous {
-                Some(text) => {
-                    self.surface_records.insert(name.to_owned(), text);
-                }
-                None => {
-                    self.surface_records.remove(name);
-                }
+        let mut records = self.surface_records.clone();
+        match json {
+            Some(text) => {
+                records.insert(name.to_owned(), text.to_owned());
+            }
+            None => {
+                records.remove(name);
             }
         }
-        result
+        self.replace_fact(
+            |r| &mut r.surface_records,
+            records,
+            SOURCE,
+            |r, _, _| r.recommit(which, &format!("surface {name}")),
+        )
     }
 }

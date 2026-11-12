@@ -1,7 +1,7 @@
 //! A secret lease survives JavaScript awaits; acquisition never occupies an
 //! ordered host completion or a worker owner's turn.
 use exact_runner::{Dispatch, SecretLease, SecretWait, SharedSecrets, Store};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 pub(crate) const TICKET: u64 = u64::MAX - 4;
@@ -24,7 +24,7 @@ struct Entry {
     dispatched: bool,
     requested: bool,
     started: bool,
-    fetch: Option<u64>,
+    fetches: HashSet<u64>,
 }
 
 impl Shared {
@@ -72,7 +72,7 @@ impl Shared {
 
     pub(crate) fn sent(&self, call: u64, fetch: Option<u64>) {
         if let Some(entry) = self.0.lock().unwrap().calls.get_mut(&call) {
-            entry.fetch = fetch;
+            entry.fetches.extend(fetch);
         }
     }
 
@@ -82,7 +82,13 @@ impl Shared {
             .unwrap()
             .calls
             .values()
-            .any(|e| e.started && e.fetch == Some(fetch))
+            .any(|e| e.started && e.fetches.contains(&fetch))
+    }
+
+    pub(crate) fn landed(&self, fetch: u64) {
+        for entry in self.0.lock().unwrap().calls.values_mut() {
+            entry.fetches.remove(&fetch);
+        }
     }
 
     pub(crate) fn retire(&self, call: u64) {
@@ -94,12 +100,17 @@ impl Shared {
         let call = state
             .calls
             .iter()
-            .find(|(_, entry)| entry.fetch == Some(fetch))
+            .find(|(_, entry)| entry.fetches.contains(&fetch))
             .map(|(call, _)| *call);
         if let Some(call) = call {
-            state.calls.remove(&call);
+            let entry = state.calls.get_mut(&call).unwrap();
+            entry.fetches.remove(&fetch);
+            if entry.fetches.is_empty() {
+                state.calls.remove(&call);
+                return true;
+            }
         }
-        call.is_some()
+        false
     }
 
     pub(crate) fn unparked(&self, live: &[u64]) -> Vec<u64> {
@@ -238,7 +249,7 @@ impl Shared {
                     dispatched: false,
                     requested: false,
                     started: false,
-                    fetch: None,
+                    fetches: HashSet::new(),
                 },
             );
         } else {

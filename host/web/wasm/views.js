@@ -341,6 +341,7 @@ export function applyProps(el, set, clear) {
   }
   let sandboxChanged = false;
   for (const name of clear || []) {
+    if (name === "tabindex") el.exactAuthoredTabIndex = null;
     if (el instanceof HTMLIFrameElement && name === "src") {
       appFrameSource(el, null);
       iframeLoading.set(el, true);
@@ -384,6 +385,7 @@ export function applyProps(el, set, clear) {
     }
   }
   for (const [name, value] of Object.entries(set || {})) {
+    if (name === "tabindex") el.exactAuthoredTabIndex = value;
     if (el instanceof HTMLIFrameElement && name === "sandbox" && el.getAttribute("sandbox") !== value) {
       sandboxChanged = true;
     }

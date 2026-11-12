@@ -311,7 +311,7 @@ impl Lowerer<'_> {
         let (d, k, i) = (&design, &kinded, &identities);
         let mut lines = crate::anatomy::param_lines(d, k, i, file);
         lines.extend(crate::params::entry_errors(d, k, i));
-        lines.extend(crate::params::written_ranges(d, k, i, &vocab()));
+        lines.extend(crate::params::written_ranges(d, k, i, &vocab(), None));
         for (line, col, e) in lines {
             let span = self.token_span(&origin, line, col);
             self.push(LowerError { span, ..e });

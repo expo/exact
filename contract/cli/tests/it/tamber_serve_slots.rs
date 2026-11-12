@@ -158,7 +158,8 @@ fn the_slot_check_is_cheap() {
         &contract::tamber_params::library(&app, None),
     );
     let (folding, _) =
-        contract::tamber_params::fold_with(DESIGN, &app, &contract_lower::tamber_vocab()).unwrap();
+        contract::tamber_params::fold_with(DESIGN, &app, &contract_lower::tamber_vocab(), None)
+            .unwrap();
     let t = std::time::Instant::now();
     for _ in 0..100 {
         assert!(
@@ -358,7 +359,8 @@ fn the_slot_check_alone_is_under_ten_milliseconds_on_a_clone_sized_design() {
         &contract::tamber_params::library(&app, None),
     );
     let (folding, _) =
-        contract::tamber_params::fold_with(clone, &app, &contract_lower::tamber_vocab()).unwrap();
+        contract::tamber_params::fold_with(clone, &app, &contract_lower::tamber_vocab(), None)
+            .unwrap();
     let median = |touched: &[&str]| {
         let _ = contract_lower::anatomy::slot::check_slots(&folding, None, &chains, touched); // (warm)
         let mut runs: Vec<std::time::Duration> = (0..5)
@@ -415,7 +417,8 @@ fn the_slot_check_alone_on_the_clone_with_the_real_packages() {
         "no library chains: is node_modules/@exact installed?"
     );
     let (folding, _) =
-        contract::tamber_params::fold_with(clone, &app, &contract_lower::tamber_vocab()).unwrap();
+        contract::tamber_params::fold_with(clone, &app, &contract_lower::tamber_vocab(), None)
+            .unwrap();
     let median = |touched: &[&str]| {
         let _ = contract_lower::anatomy::slot::check_slots(&folding, None, &chains, touched);
         let mut runs: Vec<std::time::Duration> = (0..5)

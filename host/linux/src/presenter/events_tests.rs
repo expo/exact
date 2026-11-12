@@ -909,15 +909,11 @@ fn tabindex_makes_tab_stops_and_tab_walks_them() {
     let walked: Vec<String> = (0..7).map(|_| tab(&mut p, false)).collect();
     assert_eq!(
         walked,
-        ["one", "two", "", "zero", "reveal", "disabled", "one"],
-        "positive first, then tree order (the column hears keys, so the web makes it a stop); \
+        ["reveal", "disabled", "one", "two", "", "zero", "reveal"],
+        "from -1's tree position, then positive first on wrap (the column hears keys, so the web makes it a stop); \
          -1, plain, the disabled button, inert, hidden skipped; the disabled box is a stop; wraps"
     );
-    assert_eq!(
-        tab(&mut p, true),
-        "disabled",
-        "Shift-Tab walks back, wrapping"
-    );
+    assert_eq!(tab(&mut p, true), "zero", "Shift-Tab walks back");
     let keys = |p: &Presenter<Keeps>| {
         let k = p.host().kernel();
         let n = k.node_by_key(k.find_by_test_id("keys")[0]).unwrap();

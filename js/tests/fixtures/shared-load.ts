@@ -43,6 +43,13 @@ async function quiet(i: number): Promise<Row> {
 function answer(source: string, args: unknown[]): unknown {
   if (source === "row" && typeof args[0] === "number") return row(args[0]);
   if (source === "quiet" && typeof args[0] === "number") return quiet(args[0]);
+  if (source === "completed") return loadShared().then(text => ({ text }));
+  if (source === "unrelated") return fetch(`${API}/unrelated/${args[0]}`).then(r => r.text()).then(text => ({ text }));
+  if (source === "forever") return new Promise<Row>(() => {});
+  if (source === "timed") return Promise.race([
+    loadShared().then(text => ({ text })),
+    new Promise<Row>(resolve => setTimeout(() => resolve({ text: "timer" }), 50)),
+  ]);
   throw { kind: "UnknownSource", message: source };
 }
 

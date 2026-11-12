@@ -12,6 +12,21 @@ use exact_runner::{
 use std::cell::RefCell;
 use std::rc::Rc;
 
+#[test]
+fn runner_owned_sources_cannot_be_list_resources() {
+    for (source, field) in [
+        ("exactSurface(\"board\")", "count: number"),
+        ("exactTransport()", "state: string"),
+        ("exactMIDI()", "state: string"),
+    ] {
+        let error = contract::compile(&format!(
+            "shape Fact\n  {field}\ncomponent App\n  state xs = [1]\n  resource facts = {source} for x in xs as shape Fact\n  view\n    text facts.length.toString()\n"
+        ))
+        .unwrap_err();
+        assert_eq!(error.id, "lower-resource-for-source", "{source}: {error}");
+    }
+}
+
 const SOURCE: &str = r##"shape Got
   phase: string
 component App
@@ -63,6 +78,9 @@ impl DataSource for Receiver {
         _: &[Value],
         outcome: Outcome,
     ) -> Result<Answer, DataError> {
+        if let Outcome::Failed { message, .. } = &outcome {
+            return Err(DataError::Unavailable(message.clone()));
+        }
         let Outcome::Response(r) = outcome else {
             return Err(DataError::Unavailable("no reply".into()));
         };
@@ -246,57 +264,6 @@ fn a_list_whose_elements_streams_are_open_is_listed_open() {
     let checkpoint = r.document_checkpoint("/");
     assert_eq!(checkpoint.open, ["heard"]);
     assert!(checkpoint.pending.is_empty(), "{:?}", checkpoint.pending);
-}
-
-/// `look(u)` answers at once, with `u` as the phase.
-struct Look;
-
-impl DataSource for Look {
-    fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
-        Err(DataError::UnknownSource(source.into()))
-    }
-
-    fn answer(&mut self, _: &mut Store, _: &str, args: &[Value]) -> Result<Answer, DataError> {
-        Ok(Answer::Now(Value::record(vec![args[0].clone()])))
-    }
-}
-
-/// A member whose element left is a row a later element takes: a window
-/// moved half a window at a time, many times over and back again, keeps as
-/// many rows as one move has elements (those that stay, leave and join). The
-/// list reads a resource declared after it, so its elements are read in a
-/// later sweep than the members whose elements left.
-#[test]
-fn a_list_whose_elements_change_keeps_rows_for_the_elements_live() {
-    let plan = contract::compile(
-        "shape Got\n  phase: string\ncomponent App\n  state ids: string[] = []\n  resource got = look(u) for u in ids.filter(x => x != skip.phase) as shape Got\n  resource skip = look(\"none\") as shape Got\n  action show(xs: string[])\n    ids = xs\n  derive phases = got.map(g => g.phase).join(\",\")\n  view\n    text phases\n",
-    )
-    .unwrap();
-    let mut r = Runner::boot(
-        plan,
-        Look,
-        Kernel::with_monospace(),
-        Default::default(),
-        "/",
-    )
-    .unwrap();
-    let declared = r.declared_resources().len();
-    let mut most = 0;
-    for round in 0..300 {
-        // Pages 0, 1, 0, 1, 2, 1, 2, 3, 2…: keys leave and return.
-        let page = round / 3 + usize::from(round % 3 == 1);
-        let ids: Vec<String> = (page * 25..page * 25 + 50).map(|n| n.to_string()).collect();
-        let list = Value::list(ids.iter().map(|s| Value::str(s)).collect());
-        r.act("show", vec![list]).unwrap();
-        let phases = r.derive("phases").unwrap().as_str().unwrap().to_string();
-        assert_eq!(phases, ids.join(","), "round {round}");
-        most = most.max(r.plan().resources.len());
-    }
-    assert_eq!(r.declared_resources().len(), declared);
-    assert!(
-        most <= declared + 75,
-        "{most} rows for 50 elements live and 25 joining"
-    );
 }
 
 /// A row a returning element takes asks anew: the reply to the request its
@@ -562,4 +529,76 @@ fn a_landed_write_waits_for_each_member_until_answered_or_removed() {
     let send = r.take_requests()[0].ticket;
     r.fulfill(send, reply(200, "")).unwrap();
     assert!(r.writes().is_empty(), "an empty list holds no landed write");
+}
+
+#[test]
+fn inspection_names_a_list_once_and_keeps_its_failure_history() {
+    let mut r = Runner::boot(
+        contract::compile(SOURCE).unwrap(),
+        Receiver::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    r.measure(true, false);
+    for (i, (_, ticket)) in asked(&mut r).into_iter().enumerate() {
+        r.advance((i + 1) as f64 * 10.).unwrap();
+        r.fulfill(
+            ticket,
+            Outcome::Failed {
+                kind: exact_runner::FailureKind::Network,
+                message: format!("{i} failed"),
+            },
+        )
+        .unwrap();
+    }
+    assert_eq!(r.failed_resources(), [("got", "0 failed")]);
+    let counts = r.failure_counts();
+    assert_eq!(counts.len(), 1);
+    assert_eq!(
+        (counts[0].1.count, counts[0].1.first, counts[0].1.last),
+        (3, 10., 30.)
+    );
+    for u in ["a", "b", "c"] {
+        r.act("drop", vec![Value::str(u)]).unwrap();
+    }
+    r.act("add", vec![Value::str("d")]).unwrap();
+    let ticket = asked(&mut r)[0].1;
+    r.advance(40.).unwrap();
+    r.fulfill(
+        ticket,
+        Outcome::Failed {
+            kind: exact_runner::FailureKind::Network,
+            message: "d failed".into(),
+        },
+    )
+    .unwrap();
+    let state = exact_runner::agent::state(&r);
+    // Count before JSON parsing, which silently accepts duplicate object keys.
+    assert_eq!(state.matches("\"got\":").count(), 4, "{state}");
+    let state: serde_json::Value = serde_json::from_str(&state).unwrap();
+    assert_eq!(state["failed"]["got"], "d failed");
+    assert_eq!(
+        state["failures"]["got"],
+        serde_json::json!({"count":4,"first":10,"last":40})
+    );
+    assert_eq!(state["resourceStatus"].as_object().unwrap().len(), 1);
+}
+
+#[test]
+fn list_members_do_not_change_the_plan() {
+    let plan = contract::compile(SOURCE).unwrap();
+    let encoded = plan.encode();
+    let mut r = Runner::boot(
+        plan,
+        Receiver::default(),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(r.plan().encode(), encoded);
+    r.act("add", vec![Value::str("d")]).unwrap();
+    assert_eq!(r.plan().encode(), encoded);
 }

@@ -240,6 +240,90 @@ fn the_face_has_a_subtitle_and_all_four_placements() {
         );
     }
 }
+
+#[test]
+fn button_faces_measure_text_with_the_titles_effective_white_space() {
+    let source = "  a\t b \n x\u{a0}\u{2003}y  ";
+    let answers = Rc::new(RefCell::new((false, Vec::new())));
+    let mut k = tree(Box::new(Buttons(answers.clone())));
+    k.set_env(env(17.0)).unwrap();
+    k.apply(
+        0,
+        2,
+        &[prop(3, PropId::Text, source), prop(4, PropId::Text, source)],
+    )
+    .unwrap();
+    patch(&mut k, 4, &[(StyleId::WhiteSpace, "pre")]);
+    for (value, white_space, expected) in [
+        ("pre", WhiteSpace::Pre, source),
+        ("pre-wrap", WhiteSpace::PreWrap, source),
+        ("pre-line", WhiteSpace::PreLine, "a b\nx\u{a0}\u{2003}y"),
+        ("normal", WhiteSpace::Normal, "a b x\u{a0}\u{2003}y"),
+        ("nowrap", WhiteSpace::Nowrap, "a b x\u{a0}\u{2003}y"),
+    ] {
+        patch(&mut k, 2, &[(StyleId::WhiteSpace, value)]);
+        answers.borrow_mut().1.clear();
+        layout(&mut k);
+        let face = k.press_face(2).unwrap();
+        assert_eq!(face.title.as_deref(), Some(expected), "{value}");
+        assert_eq!(face.subtitle.as_deref(), Some(source));
+        let state = answers.borrow();
+        assert!(!state.1.is_empty(), "{value} must remeasure the face");
+        for request in &state.1 {
+            assert_eq!(request.face.title.as_deref(), Some(expected));
+            assert_eq!(request.style.title.white_space, white_space);
+            assert_eq!(request.face.subtitle.as_deref(), Some(source));
+            assert_eq!(
+                request.style.subtitle.as_ref().unwrap().white_space,
+                WhiteSpace::Pre
+            );
+        }
+    }
+    patch(&mut k, 2, &[(StyleId::WhiteSpace, "normal")]);
+    patch(&mut k, 3, &[(StyleId::WhiteSpace, "pre-wrap")]);
+    answers.borrow_mut().1.clear();
+    layout(&mut k);
+    let state = answers.borrow();
+    assert!(!state.1.is_empty());
+    for request in &state.1 {
+        assert_eq!(request.face.title.as_deref(), Some(source));
+        assert_eq!(request.style.title.white_space, WhiteSpace::PreWrap);
+    }
+}
+
+#[test]
+fn custom_button_faces_inherit_white_space_while_native_buttons_reset_it() {
+    let mut k = tree(Box::new(MonospaceMeasurer::default()));
+    patch(&mut k, 1, &[(StyleId::WhiteSpace, "pre")]);
+    k.apply(0, 2, &[prop(3, PropId::Text, " a  b\nx ")])
+        .unwrap();
+    assert_eq!(k.press_face(2).unwrap().title.as_deref(), Some("a b x"));
+    k.apply(
+        0,
+        3,
+        &[
+            Op::CreateView {
+                id: 6,
+                node_type: NodeType::Pressable,
+            },
+            Op::SetChildren {
+                id: 2,
+                children: vec![],
+            },
+            Op::SetChildren {
+                id: 6,
+                children: vec![3],
+            },
+            Op::SetChildren {
+                id: 1,
+                children: vec![6],
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(k.press_face(6).unwrap().title.as_deref(), Some(" a  b\nx "));
+}
+
 fn font(size: f32) -> ControlFont {
     ControlFont {
         family: "Platform".into(),

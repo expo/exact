@@ -5,7 +5,9 @@
 // boolean attributes). Region anchors (comments) are not written: adoption
 // inserts its own.
 const VOID = new Set(['img', 'input', 'br', 'hr', 'meta', 'link', 'source', 'area', 'col', 'embed', 'wbr']);
-const esc = (s, attr) => String(s).replace(attr ? /[&"\r]/g : /[&<>\r]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\r': '&#13;' })[c]);
+// An attribute value's `<` and `>` are references too, as HTML's serializer writes them: the render server's hero
+// image scan ends a tag at its first `>` (render.mjs `heroImage`).
+const esc = (s, attr) => String(s).replace(attr ? /[&"<>\r]/g : /[&<>\r]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\r': '&#13;' })[c]);
 
 let Trees = 0;
 class Node {

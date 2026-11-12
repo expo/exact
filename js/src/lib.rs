@@ -32,7 +32,7 @@
 //! browser's event loop has it (LLP 1027.003.000 §13, option 1; hn-reader
 //! F7): an answer that awaits a promise another answer started (a fetch
 //! memoized across answers, a queue behind another's storage) waits while
-//! the module has work outstanding and is asked again after each delivery;
+//! the module has work outstanding and is asked again when its chain moves (LLP 1162 D3);
 //! one that waits with nothing outstanding is refused as pending on nothing.
 //! A worker-placed source runs one turn to its end, so it still refuses one.
 //! `store` is `{get, set, forget}` over the runner's [`Store`]: reads
@@ -42,8 +42,8 @@
 //! formatting without an explicit timestamp refuse, including at module
 //! initialization and after await. Explicit-value Date construction and UTC
 //! arithmetic remain available. An answer's own `setTimeout` (and
-//! `AbortSignal.timeout`) is due on the runner's clock: the runner keeps the
-//! answer's continuation back until then, and the timer runs in that turn;
+//! `AbortSignal.timeout`) is due on the runner's clock. Its continuation
+//! wakes when due or when another turn changes its wait (LLP 1162 D3);
 //! the other timers refuse (LLP 1027.000 D1). `scheduler.yield()`
 //! ends an answer's turn: the host asks it again at once, and it goes on in
 //! a new turn with a budget of its own (LLP 1141.001 D10).
@@ -70,6 +70,7 @@ mod paired;
 mod phase_cost_tests;
 mod pure;
 mod reply;
+mod resume;
 mod secrets;
 mod socket;
 mod source;
@@ -162,7 +163,7 @@ struct Sig {
 }
 
 /// A parked answer's key: the runner's target when it named one, then the
-/// source and its arguments. The runner keeps one request in flight per
+/// source and its arguments. The runner keeps one answer in flight per
 /// target, so two targets asking one source with equal arguments are two
 /// calls; a new call on the same key replaces the old one. Each send of a
 /// parallel mutation is its own target (`Target::Sent`, LLP 1161.000 D5), so
@@ -174,21 +175,19 @@ type Key = (Option<Target>, String, Vec<u8>);
 struct Parked {
     call: u64,
     ticket: u64,
+    more: Option<Request>,
     /// The fetch it awaits may change its server (`Request::has_effects`):
     /// let go, it runs to its end (LLP 1146 D2).
     effects: bool,
     work_taken: bool,
-    /// The module's progress when it parked: an answer waiting on another
-    /// answer's work is asked again once something has landed since.
-    progress: u64,
+    ready: bool,
+    due: Option<u64>,
     /// Asked again with nothing outstanding in the module: its last settle.
     last: bool,
 }
 
-/// The ticket of an answer that awaits another answer's work (a fetch it
-/// shares, a queue behind another's storage): it waits while the module has
-/// work outstanding, and is asked again after each delivery (LLP
-/// 1027.003.000 §13, the module-wide rule; hn-reader F7).
+/// An answer awaiting module work or a live-clock timer: a turn that changes
+/// its wait can wake it before its deadline (LLP 1162 D3).
 const WAITING: u64 = u64::MAX - 1;
 
 /// The ticket of an answer that awaited `scheduler.yield()` (LLP 1141.001
@@ -196,17 +195,15 @@ const WAITING: u64 = u64::MAX - 1;
 /// resolve in that new turn, which has a budget of its own.
 const YIELDED: u64 = u64::MAX - 2;
 
-/// The ticket of an answer that awaits only its own timers (`setTimeout`,
-/// LLP 1027.000 D1): the runner keeps its continuation back until the
-/// earliest is due (`Request::due_ms`), and the timer runs in that turn.
+/// A timer at bake, on a worker, or already due (`Request::due_ms`). Future
+/// timers on main use `WAITING` so another turn can change their wait (LLP 1162 D3).
 const TIMER: u64 = u64::MAX - 3;
 
 /// The prefix of a handler's name as the runner asks for it (LLP 1133.016 D9).
 const TOOL: &str = "tool:";
 
-/// The continuation of a wait on `ticket`: one for the answer's own timer is
-/// kept back until the runner's clock reaches `due`; one for other answers'
-/// work and a timer is released then, if nothing came first.
+/// Bake and worker timers stay with the runner until due. A live-clock wait
+/// reaches the host now so another turn can wake it early (LLP 1162 D3).
 fn timer_due(request: Request, ticket: u64, due: Option<u64>) -> Request {
     match due {
         Some(ms) if ticket == TIMER => request.due(ms),
@@ -350,8 +347,6 @@ pub struct Module {
     streams: Vec<(Key, Parked)>,
     /// Answers waiting on another answer's work whose dispatch was held.
     waiters: Vec<u64>,
-    /// Deliveries and new answers so far: what a waiting answer waits for.
-    progress: u64,
     /// Overlays whose answer was encoded for the module's `exact.overlay`.
     overlays_encoded: u64,
     /// Whether the module had an `exact.overlay` when it loaded.
@@ -439,7 +434,6 @@ impl Module {
             retired: std::collections::HashMap::new(),
             streams: Vec::new(),
             waiters: Vec::new(),
-            progress: 0,
             overlays_encoded: 0,
             has_overlay: true,
             budget_ms: DEFAULT_BUDGET_MS,
@@ -474,6 +468,16 @@ impl Module {
     pub fn with_canvas_surfaces(mut self, surfaces: &[(&str, usize)]) -> Self {
         self.canvas_surfaces = surfaces.iter().map(|(n, a)| (n.to_string(), *a)).collect();
         self
+    }
+
+    /// The module's ABI, read by the bake for its receipt.
+    pub fn abi(&mut self) -> Result<u32, String> {
+        self.load()?;
+        let engine = self.engine.as_ref().expect("loaded");
+        engine
+            .string("abi")?
+            .parse()
+            .map_err(|e| format!("exact-js: invalid ABI: {e}"))
     }
 
     /// The Canvas 2D roster: name and arity.
@@ -828,7 +832,12 @@ impl Module {
 
     /// Answers awaiting a fetch the host has yet to fulfil.
     pub fn in_flight(&self) -> usize {
-        self.parked.len() + self.streams.len()
+        self.parked
+            .iter()
+            .chain(&self.streams)
+            .map(|(_, p)| p.call)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
     }
 
     /// How many calls the prelude still tracks, parked or not: a diagnostic
@@ -892,8 +901,6 @@ impl Module {
             );
         }
         let args_text = Json::Array(json_args).to_string();
-        // A new answer's JavaScript may settle what another answer awaits.
-        self.progress += 1;
         let mut store = store;
         self.host.store = store.as_mut().map(|s| &mut **s as *mut Store);
         self.host.socket_ops.clear();
@@ -906,7 +913,7 @@ impl Module {
         // amendment of 2026-10-18); a call for no target sends nothing.
         let mutation = match target {
             Some(Target::Mutation(_) | Target::Sent(..)) if session => "mutation",
-            Some(Target::Resource(_)) if session => "answer",
+            Some(Target::Resource(_)) if session => "resource",
             None if session && source.starts_with(TOOL) => "tool",
             _ => "",
         };
@@ -933,8 +940,7 @@ impl Module {
                 engine
                     .drain()
                     .map_err(|e| DataError::Unavailable(format!("`{source}` threw: {e}")))?;
-                let text = engine
-                    .call("__exact_settle", [&call.to_string(), "", ""])
+                let text = Module::settle_reply(engine, &call.to_string(), "")
                     .map_err(|e| DataError::Unavailable(format!("`{source}` threw: {e}")))?;
                 reply = Module::decode_reply(sig, engine, source, &text)?;
             }
@@ -1035,11 +1041,8 @@ impl Module {
                 } else {
                     Vec::new()
                 };
-                // Park first. The let-go delivery below bumps progress after
-                // that, so an answer waiting on the discarded call is asked
-                // again (files F18). Delivering first parks it at the new
-                // progress, and nothing asks it again.
-                self.park(key, call, ticket, &request)?;
+                self.park(key.clone(), call, ticket, &request)?;
+                self.park_more(&key, call)?;
                 self.forget_calls(replaced);
                 Ok(Answer::Later(request))
             }
@@ -1153,326 +1156,6 @@ impl Module {
                 "`{source}`'s overlay failed: {}",
                 reply.get("message").and_then(Json::as_str).unwrap_or("")
             ))),
-        }
-    }
-
-    /// Continue an answer: fulfil its fetch, drain, settle. No store at
-    /// bake, where only a timer continues one (`source.rs`, `query`).
-    fn resume(
-        &mut self,
-        mut store: Option<&mut Store>,
-        target: Option<Target>,
-        source: &str,
-        args: &[Value],
-        outcome: Outcome,
-    ) -> Result<Answer, DataError> {
-        if self.engine.is_none() {
-            return Err(DataError::Unavailable(
-                "exact-js: the engine is not loaded".into(),
-            ));
-        }
-        let key = Module::key(target, source, args);
-        // A stream's mapper call parked on its key is resumed first: the
-        // runner delivers no message while one is out (`mapper_turns.rs`).
-        let turn = self.parked.iter().any(|(k, _)| *k == key);
-        if let (true, false, Some(store)) = (
-            self.streams.iter().any(|(k, _)| *k == key),
-            turn,
-            &mut store,
-        ) {
-            return self.message(store, source, key, outcome);
-        }
-        let Some(pos) = self.parked.iter().position(|(k, _)| *k == key) else {
-            return Err(DataError::Unavailable(format!(
-                "`{source}`: a reply for an answer not in flight"
-            )));
-        };
-        let Parked {
-            call, ticket, last, ..
-        } = self.parked.remove(pos).1;
-        self.retired.remove(&call);
-        if matches!(ticket, WAITING | YIELDED | TIMER) {
-            if let Outcome::Failed { message, .. } = &outcome {
-                // The answer ends here: its call is unlinked from the
-                // prelude's bookkeeping, so its pending fetches are dropped
-                // with it (LLP 1041 §8.4, Q5). A continuation the shared
-                // promise still runs is not cancelled by this.
-                let message = message.clone();
-                self.forget_calls(vec![call]);
-                return Err(DataError::Unavailable(message));
-            }
-        }
-        if ticket != WAITING {
-            self.progress += 1; // a delivery: what a waiting answer waits for
-        }
-        let outcome_text = outcome_to_json(&outcome).to_string();
-        let now = store
-            .as_deref()
-            .map_or(String::new(), |s| s.clock_ms().to_string());
-        self.host.store = store.as_mut().map(|s| &mut **s as *mut Store);
-        self.host.answer_ops.clear();
-        if let Some(store) = store.as_deref() {
-            self.host.socket_buffered = socket::snapshot(&self.streams, store);
-        }
-        let started = Instant::now();
-        let budget_ms = self.turn_budget_ms(started);
-        // (its own time on this thread's CPU clock, a wall backstop beside it: turn.rs)
-        let clock = TurnClock::start(&self.turn_time);
-        let result: Result<Step, DataError> = (|| {
-            let engine = self.engine.as_mut().expect("checked above");
-            module_work::begin_turn(engine, call, source)?;
-            if ticket == WAITING || ticket == TIMER {
-                // A timer of its own due by now runs: for a wait on others'
-                // work, any; for one on a timer, the one it waited for.
-                let due = if ticket == TIMER { "due" } else { "" };
-                engine
-                    .call("__exact_timer", [&call.to_string(), &now, due])
-                    .map_err(|e| DataError::Unavailable(format!("`{source}` threw: {e}")))?;
-            } else if ticket == YIELDED {
-                engine
-                    .call("__exact_yielded", [&call.to_string(), "", ""])
-                    .map_err(|e| DataError::Unavailable(format!("`{source}` threw: {e}")))?;
-            } else if ticket == secrets::TICKET {
-                let error = self.host.secrets.ready(call, store.as_deref_mut());
-                engine
-                    .call("__exact_secret_ready", [&call.to_string(), &error, ""])
-                    .map_err(DataError::Unavailable)?;
-            } else if ticket == 0 {
-                if matches!(outcome, Outcome::Failed { .. }) {
-                    engine
-                        .call(
-                            "__exact_storage_failed",
-                            [&call.to_string(), &outcome_text, ""],
-                        )
-                        .map_err(DataError::Unavailable)?;
-                } else {
-                    engine
-                        .deliver_storage_one()
-                        .map_err(DataError::Unavailable)?;
-                }
-            } else {
-                engine
-                    .call("__exact_fulfill", [&ticket.to_string(), &outcome_text, ""])
-                    .map_err(|e| DataError::Unavailable(format!("`{source}` threw: {e}")))?;
-            }
-            engine
-                .drain()
-                .map_err(|e| DataError::Unavailable(format!("`{source}` threw: {e}")))?;
-            let settle = if last { "final" } else { "" };
-            let text = engine
-                .call("__exact_settle", [&call.to_string(), settle, ""])
-                .map_err(|e| DataError::Unavailable(format!("`{source}` threw: {e}")))?;
-            let Some(sig) = self.sigs.get(source) else {
-                engine.clear_reply();
-                return Err(DataError::UnknownSource(source.to_string()));
-            };
-            let reply = Module::decode_reply(sig, engine, source, &text)?;
-            Ok(Module::step(sig, engine, source, reply, self.host.baking))
-        })();
-        self.host.store = None;
-        // What this turn of an answer sent (D7, the amendment of 2026-10-18).
-        let answer_ops = std::mem::take(&mut self.host.answer_ops);
-        if let (Some(store), false) = (store, answer_ops.is_empty()) {
-            self.stage_answer(store, source, answer_ops);
-        }
-        let deadline = self.snapshot_deadline.is_some();
-        let over = clock.judge(
-            budget_ms,
-            deadline,
-            self.main_thread,
-            source,
-            &mut self.logs,
-        );
-        if result.is_err() || over.is_some() || matches!(&result, Ok(Step::Done(_))) {
-            self.host.secrets.retire(call);
-        }
-        if result.is_err() || over.is_some() {
-            self.engine.as_mut().expect("checked above").clear_reply();
-            self.forget_calls(vec![call]);
-        }
-        if result.is_err() && self.watch.take() {
-            self.finish_let_go();
-            return Err(DataError::Unavailable(format!(
-                "`{source}` was interrupted"
-            )));
-        }
-        if let Some(why) = over {
-            self.overruns += 1;
-            self.finish_let_go();
-            return Err(over_budget(source, &why));
-        }
-        let answer = match result {
-            Err(e) => Err(e),
-            Ok(Step::Done(r)) => r.map(Answer::Now),
-            Ok(Step::Pending { call, ticket, due }) => {
-                let request = if matches!(ticket, 0 | WAITING | YIELDED | TIMER | secrets::TICKET) {
-                    timer_due(Request::continuation(call), ticket, due)
-                } else {
-                    let Some(mut request) = self.take_request(ticket) else {
-                        self.finish_let_go();
-                        return Err(DataError::Unavailable(format!(
-                            "`{source}` awaits a fetch it never made"
-                        )));
-                    };
-                    request.fetch = Some(ticket);
-                    fetch_timer(request, due)
-                };
-                self.park(key, call, ticket, &request)?;
-                Ok(Answer::Later(request))
-            }
-        };
-        // After the park, so a waiter records this progress and the let-go
-        // delivery is a later one it is asked again for (files F18). No
-        // store: the let-go call's file writes land and its Store writes do
-        // not (LLP 1097; a934686a0).
-        self.finish_let_go();
-        answer
-    }
-
-    /// Park a call on the request it waits for. A stream's call is not
-    /// resumed by its reply: each message is mapped (`__exact_message`).
-    fn park(
-        &mut self,
-        key: Key,
-        call: u64,
-        ticket: u64,
-        request: &Request,
-    ) -> Result<(), DataError> {
-        if request.has_effects() {
-            if let Err(error) = self.host.secrets.begin_effect(call) {
-                self.forget_calls(vec![call]);
-                return Err(DataError::Unavailable(error));
-            }
-        }
-        self.host
-            .secrets
-            .sent(call, request.has_effects().then_some(ticket));
-        let parked = Parked {
-            call,
-            ticket,
-            effects: request.has_effects(),
-            work_taken: false,
-            progress: self.progress,
-            last: false,
-        };
-        if request.stream {
-            self.streams.push((key, parked));
-        } else {
-            self.parked.push((key, parked));
-        }
-        Ok(())
-    }
-
-    /// One message of the stream answer `key` began, or its end: the
-    /// source's `exactStream` maps it to the answer (LLP 1016.000 D1). A
-    /// mapper that returns a promise is settled as an answer is, and parks
-    /// on the stream's key until it gives its value (Charlie, 2026-11-10).
-    fn message(
-        &mut self,
-        store: &mut Store,
-        source: &str,
-        key: Key,
-        outcome: Outcome,
-    ) -> Result<Answer, DataError> {
-        let Some(at) = self.streams.iter().position(|(k, _)| *k == key) else {
-            return Err(DataError::Unavailable(format!(
-                "`{source}`: a message for a stream not open"
-            )));
-        };
-        let call = self.streams[at].1.call;
-        let ended = !matches!(outcome, Outcome::Message(_));
-        self.progress += 1;
-        let (outcome_text, binary) = wire::message_to_json(outcome);
-        self.host.binary = binary;
-        self.host.socket_buffered = socket::snapshot(&self.streams, store);
-        self.host.socket_ops.clear();
-        self.host.answer_ops.clear();
-        self.host.store = Some(store as *mut Store);
-        let started = Instant::now();
-        let budget_ms = self.turn_budget_ms(started);
-        // (its own time on this thread's CPU clock, a wall backstop beside it: turn.rs)
-        let clock = TurnClock::start(&self.turn_time);
-        let mut mapper = None;
-        let result: Result<Step, DataError> = (|| {
-            let engine = self.engine.as_mut().expect("checked by resume");
-            let threw = |e| DataError::Unavailable(format!("`{source}` threw: {e}"));
-            let text = engine
-                .call("__exact_message", [&call.to_string(), &outcome_text, ""])
-                .map_err(threw)?;
-            let Some(sig) = self.sigs.get(source) else {
-                engine.clear_reply();
-                return Err(DataError::UnknownSource(source.to_string()));
-            };
-            let mut reply = Module::decode_reply(sig, engine, source, &text)?;
-            if reply.fields.get("tag").and_then(Json::as_u64) == Some(3) {
-                mapper = reply.fields.get("call").and_then(Json::as_u64);
-                let id = mapper.unwrap_or_default().to_string();
-                engine.drain().map_err(threw)?;
-                let text = engine
-                    .call("__exact_settle", [&id, "", ""])
-                    .map_err(threw)?;
-                reply = Module::decode_reply(sig, engine, source, &text)?;
-            }
-            Ok(Module::step(sig, engine, source, reply, self.host.baking))
-        })();
-        self.host.store = None;
-        self.host.binary = Vec::new();
-        // The replies the mapper staged answering this frame (LLP 1016.000
-        // D7), staged on the store however the call ended: the runner sends
-        // them with this frame's commit, or journals them refused.
-        // A socket no resource owns (a mutation's stream) takes none.
-        let ops = std::mem::take(&mut self.host.socket_ops);
-        let staged = self.stage_sockets(store, ops);
-        if let Err(why) = &staged {
-            (self.logs).push(format!(
-                "mapper `{source}` failed: {why}; socket frames were refused"
-            ));
-        }
-        let result = match staged {
-            Err(why) if matches!(result, Ok(Step::Done(Ok(_)))) => Ok(Step::Done(Err(
-                DataError::Failed(FailureCode::Error, why, String::new()),
-            ))),
-            _ => result,
-        };
-        if ended {
-            self.streams.remove(at);
-            self.forget_calls(vec![call]);
-        }
-        let deadline = self.snapshot_deadline.is_some();
-        let over = clock.judge(
-            budget_ms,
-            deadline,
-            self.main_thread,
-            source,
-            &mut self.logs,
-        );
-        if result.is_err() || over.is_some() {
-            self.engine
-                .as_mut()
-                .expect("checked by resume")
-                .clear_reply();
-            self.forget_calls(mapper.into_iter().collect());
-        }
-        if let Some(why) = over {
-            self.overruns += 1;
-            return Err(DataError::Overrun(format!("`{source}` {why}")));
-        }
-        match result? {
-            Step::Done(r) => r.map(Answer::Now),
-            // Its later turns: a yield's, or a wait on another answer's work.
-            Step::Pending { call, ticket, due }
-                if matches!(ticket, WAITING | YIELDED | secrets::TICKET) =>
-            {
-                let request = timer_due(Request::continuation(call), ticket, due);
-                self.park(key, call, ticket, &request)?;
-                Ok(Answer::Later(request))
-            }
-            Step::Pending { call, .. } => {
-                self.forget_calls(vec![call]);
-                Err(DataError::Unavailable(format!(
-                    "`{source}`: a stream's mapper awaits only promises and scheduler.yield()"
-                )))
-            }
         }
     }
 }

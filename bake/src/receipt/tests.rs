@@ -1,6 +1,255 @@
 use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[test]
+fn package_extensions_follow_placed_library_components() {
+    let dir = std::env::temp_dir().join(format!("exact-library-extensions-{}", std::process::id()));
+    let put = |path: &str, text: &str| {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    put(
+        "package.json",
+        r#"{"dependencies":{"@fixture/swatch":"1.0.0","@repro/lib":"1.0.0","@repro/outer":"1.0.0"}}"#,
+    );
+    put(
+        "node_modules/@fixture/swatch/package.json",
+        include_str!("../../../packages/fixtures/swatch/package.json"),
+    );
+    put(
+        "node_modules/@fixture/swatch/exact.json",
+        include_str!("../../../packages/fixtures/swatch/exact.json"),
+    );
+    for (target, declaration) in [
+        (
+            "apple",
+            include_str!("../../../packages/fixtures/swatch/apple/exact.json"),
+        ),
+        (
+            "android",
+            include_str!("../../../packages/fixtures/swatch/android/exact.json"),
+        ),
+        (
+            "web",
+            include_str!("../../../packages/fixtures/swatch/web/exact.json"),
+        ),
+    ] {
+        put(
+            &format!("node_modules/@fixture/swatch/{target}/exact.json"),
+            declaration,
+        );
+    }
+    for name in ["lib", "outer"] {
+        put(
+            &format!("node_modules/@repro/{name}/package.json"),
+            &format!(
+                r#"{{"name":"@repro/{name}","version":"1.0.0","exports":{{".":"./index.contract"}},"dependencies":{{"@fixture/swatch":"1.0.0","@repro/lib":"1.0.0"}}}}"#
+            ),
+        );
+    }
+    const TILE: &str = "component Tile\n  view\n    swatch-box tint=\"#d33\" caption=\"lib\" width=160 height=90 testId=\"box\"\n";
+    put("node_modules/@repro/lib/index.contract", TILE);
+    put(
+        "node_modules/@repro/outer/index.contract",
+        "use Tile from \"@repro/lib\"\n",
+    );
+    let graph = |source: &str| {
+        put("app.contract", source);
+        let plan =
+            contract::compile_path(&dir.join("app.contract")).unwrap_or_else(|e| panic!("{e:?}"));
+        artifact_graph(&plan, &json!({}), &[], false, "aarch64-apple-darwin").unwrap()
+    };
+    for package in ["@repro/lib", "@repro/outer"] {
+        let source = format!("use Tile from \"{package}\"\ncomponent App\n  view\n    Tile()\n");
+        assert_eq!(
+            graph(&source)["extensions"],
+            json!({"swatch":"@fixture/swatch"}),
+            "{package}"
+        );
+        let unused =
+            format!("use Tile from \"{package}\"\ncomponent App\n  view\n    text \"plain\"\n");
+        assert_eq!(graph(&unused)["extensions"], json!({}), "unused {package}");
+    }
+    assert_eq!(graph("use Tile from \"@repro/lib\"\ncomponent App\n  state shown = false\n  view\n    column\n      if shown\n        Tile()\n")["extensions"], json!({"swatch":"@fixture/swatch"}));
+    assert_eq!(
+        graph(&format!(
+            "component App\n  view\n    text \"plain\"\n{TILE}"
+        ))["extensions"],
+        json!({})
+    );
+    put(
+        "node_modules/@repro/lib/index.contract",
+        "use swatchReports, SwatchReports from \"@fixture/swatch\"\n",
+    );
+    assert_eq!(
+        graph("use swatchReports, SwatchReports from \"@repro/lib\"\ncomponent App\n  resource heard = swatchReports() as shape SwatchReports else empty()\n  view\n    text heard.text\n")["extensions"],
+        json!({"swatch":"@fixture/swatch"})
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn check_package_selection(name: &str, source: &str, expected: Result<Value, &str>) {
+    let dir = std::env::temp_dir().join(format!(
+        "exact-package-selection-{name}-{}",
+        std::process::id()
+    ));
+    let put = |path: &str, value: &str| {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, value).unwrap();
+    };
+    put(
+        "package.json",
+        r#"{"dependencies":{"@a/swatch":"1.0.0","@b/swatch":"1.0.0","@fixture/bell":"1.0.0"}}"#,
+    );
+    for (package, tag) in [
+        ("@a/swatch", "a-box"),
+        ("@b/swatch", "b-box"),
+        ("@fixture/bell", ""),
+    ] {
+        put(
+            &format!("node_modules/{package}/package.json"),
+            &json!({"name":package,"version":"1.0.0","exports":{".":"./exact.json"}}).to_string(),
+        );
+        let mut declaration =
+            json!({"kind":"interface","name":package,"version":"1.0.0","names":[]});
+        if tag.is_empty() {
+            declaration["start"] = json!("load");
+            declaration["names"] =
+                json!([{"event":"chime","on":"root","raised":"emit","args":[],"hold":4}]);
+        } else {
+            declaration["views"] = json!({tag:{"props":{}}});
+        }
+        put(
+            &format!("node_modules/{package}/exact.json"),
+            &declaration.to_string(),
+        );
+    }
+    put("app.contract", source);
+    let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
+    let plan = exact_plan::Plan::decode(&plan.encode()).unwrap();
+    let graph = artifact_graph(&plan, &json!({}), &[], false, "aarch64-apple-darwin");
+    std::fs::remove_dir_all(dir).unwrap();
+    assert_eq!(
+        graph
+            .map(|graph| graph["extensions"].clone())
+            .as_ref()
+            .map_err(String::as_str),
+        expected.as_ref().map_err(|e| *e)
+    );
+}
+
+#[test]
+fn package_selection_distinguishes_scopes() {
+    check_package_selection(
+        "scopes",
+        "component App\n  view\n    a-box\n",
+        Ok(json!({"swatch":"@a/swatch"})),
+    );
+}
+
+#[test]
+fn package_selection_refuses_two_used_packages_with_the_same_basename() {
+    check_package_selection(
+        "conflicting-scopes",
+        "component App\n  view\n    column\n      a-box\n      b-box\n",
+        Err("bake-extension-ambiguous: extension 'swatch' names both '@a/swatch' and '@b/swatch'; host rosters require one package per extension"),
+    );
+}
+
+#[test]
+fn package_selection_keeps_event_only_packages() {
+    check_package_selection("events", "use chime from \"@fixture/bell\"\ncomponent App\n  state heard = false\n  action hear\n    heard = true\n  view\n    column chime=hear\n      text `${heard}`\n", Ok(json!({"bell":"@fixture/bell"})));
+}
+
+#[test]
+#[cfg(unix)]
+fn plist_keys_ignore_translation_prose_and_keep_library_calls() {
+    let dir = std::env::temp_dir().join(format!("exact-plist-sources-{}", std::process::id()));
+    let put = |path: &str, text: &str| {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    };
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    put("node_modules/@exact/.keep", "");
+    std::os::unix::fs::symlink(
+        repo.join("packages/geolocation"),
+        dir.join("node_modules/@exact/geolocation"),
+    )
+    .unwrap();
+    put(
+        "package.json",
+        r#"{"dependencies":{"@exact/geolocation":"1.0.0","@repro/lib":"1.0.0"}}"#,
+    );
+    put(
+        "node_modules/@repro/lib/package.json",
+        r#"{"name":"@repro/lib","version":"1.0.0","exports":{".":"./index.contract"},"dependencies":{"@exact/geolocation":"1.0.0"}}"#,
+    );
+    put("node_modules/@repro/lib/index.contract", "use requestPreciseLocation, GeolocationStatus from \"@exact/geolocation\"\ncomponent Locate\n  mutation precise as shape GeolocationStatus\n  action ask\n    send precise = requestPreciseLocation(purposeKey=\"nav\")\n  view\n    button press=ask\n      text \"Locate\"\n");
+    put("app.contract", "use Locate from \"@repro/lib\"\n");
+    put(
+        "strings/en.json",
+        r#"{"nav":"Precise location for navigation.","help":"Example: requestPreciseLocation(purposeKey='example')"}"#,
+    );
+    let out = dir.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
+    std::fs::write(out.join("app.plan"), plan.encode()).unwrap();
+    let manifest = Manifest::read(&dir).unwrap();
+    let mut compat = Compat {
+        id: String::new(),
+        inputs: json!({"store":{"L":"0"}}),
+        channel: String::new(),
+        origin: None,
+        activate: "next-launch".into(),
+        target: String::new(),
+        embedded: Value::Null,
+        reach: Value::Null,
+        painter: None,
+        game: false,
+    };
+    emit(
+        &mut compat,
+        "development",
+        &dir,
+        ("macos", "aarch64-apple-darwin"),
+        &manifest,
+        &out,
+        &Default::default(),
+    )
+    .unwrap();
+    let result = crate::bun()
+        .args([
+            "--eval",
+            r#"
+        import assert from 'node:assert/strict';
+        import {readFileSync} from 'node:fs';
+        import {modulePlist} from './host/apple/plist.mjs';
+        import {infoPlist} from './host/apple/build.mjs';
+        const dir = process.argv[1];
+        const graph = JSON.parse(readFileSync(dir + '/out/artifacts.json', 'utf8'));
+        const app = {id:'com.example.plist', displayName:'Plist', dir, manifest:{host:{}}};
+        const reach = modulePlist(app, null, 'ios', graph.extensions, graph.contractSources);
+        const plist = infoPlist(app, false, {reach});
+        assert.match(plist, /<key>nav<\/key>/);
+        assert.doesNotMatch(plist, /<key>example<\/key>/);
+        assert.ok(graph.contractSources.every(p => p.endsWith('.contract')));
+    "#,
+        ])
+        .arg(&dir)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
 /// A plan pushed to an installed cohort is described by its own format, so a
 /// cohort whose binary reads another format is refused, not given a plan it
 /// cannot decode.

@@ -6,6 +6,90 @@ import XCTest
 @testable import ExactKit
 
 final class NativeFieldsMacTests: XCTestCase {
+    func testFieldsKeepTheirGeometryAndEditingInsideAResizingBorder() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "resizing-fields")
+        defer { session.destroy() }
+        let p = session.presenter
+        let node = NodeView(id: 1, kind: "input", presenter: p)
+        p.views[node.id] = node
+        node.frame = NSRect(x: 0, y: 0, width: 240, height: 80)
+        let window = NSWindow(contentRect: node.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = node
+        defer { window.close() }
+        for (type, appearance) in [("text", "auto"), ("password", "auto"), ("search", "auto"),
+                                   ("text", "none"), ("password", "none")] {
+            node.applyProps(set: ["type": type, "value": "Content", "accessibilityInvalid": "true"], clear: [])
+            node.applyStyle(["appearance": .string(appearance), "font_size": 13, "border_width": 6,
+                             "border_radius": 20, "overflow_x": "hidden", "overflow_y": "hidden"])
+            node.applyFieldContent(["rect": [20.0, 15.0, 200.0, 50.0]])
+            let field = try XCTUnwrap(node.field), cell = try XCTUnwrap(field.cell)
+            let frame = field.frame
+            let drawing = cell.drawingRect(forBounds: field.bounds), title = cell.titleRect(forBounds: field.bounds)
+            let search = (cell as? NSSearchFieldCell)?.searchTextRect(forBounds: field.bounds)
+            XCTAssertTrue(window.makeFirstResponder(field))
+            let editor = try XCTUnwrap(node.editingEditor)
+            editor.setSelectedRange(NSRange(location: 2, length: 2))
+            for height in [40.0, 60.0, 100.0] {
+                p.apply(wireBatch([["op": "present", "id": 1, "property": "layout", "h": height - 80]]))
+                let box = try XCTUnwrap(node.clipBox), surface = try XCTUnwrap(node.surface)
+                XCTAssertTrue(field.superview === box, "\(type), \(appearance): clipped inside the border")
+                XCTAssertTrue(box.layer?.mask === surface.clip)
+                let path = try XCTUnwrap(surface.clip.path)
+                XCTAssertEqual(path.boundingBoxOfPath, CGRect(x: 6, y: 6, width: 228, height: height - 12))
+                XCTAssertFalse(path.contains(CGPoint(x: 120, y: height - 3)))
+                XCTAssertEqual(field.frame, frame, "content keeps its laid-out size")
+                XCTAssertEqual(cell.drawingRect(forBounds: field.bounds), drawing)
+                XCTAssertEqual(cell.titleRect(forBounds: field.bounds), title)
+                XCTAssertEqual((cell as? NSSearchFieldCell)?.searchTextRect(forBounds: field.bounds), search)
+                XCTAssertEqual(cell.accessibilityAttributeValue(.init(rawValue: "AXInvalid")) as? String, "true")
+                XCTAssertTrue(window.firstResponder === editor)
+                XCTAssertTrue(node.editingEditor === editor)
+                XCTAssertEqual(editor.selectedRange(), NSRange(location: 2, length: 2))
+            }
+            editor.insertText("X", replacementRange: editor.selectedRange())
+            XCTAssertEqual(node.fieldText, "CoXent")
+            node.applyProps(set: ["type": type == "password" ? "text" : "password", "value": "CoXent"], clear: [])
+            let replacement = try XCTUnwrap(node.field)
+            XCTAssertFalse(replacement === field)
+            XCTAssertTrue(replacement.superview === node.clipBox, "a replacement field enters the active clip")
+            XCTAssertEqual(node.fieldText, "CoXent")
+            XCTAssertEqual(node.editingEditor?.selectedRange(), NSRange(location: 3, length: 0))
+            p.apply(wireBatch([["op": "present", "id": 1, "property": "layout", "h": 0.0]]))
+            XCTAssertNil(node.clipBox)
+            XCTAssertNil(node.surface)
+            XCTAssertTrue(replacement.superview === node)
+            XCTAssertNotNil(node.editingEditor)
+            XCTAssertTrue(window.firstResponder === node.editingEditor)
+            XCTAssertTrue(window.makeFirstResponder(nil))
+        }
+    }
+
+    func testLentFieldsKeepAppKitGeometry() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "lent-field-geometry")
+        defer { session.destroy() }
+        for type in ["text", "password", "search"] {
+            let node = NodeView(id: 1, kind: "input", presenter: session.presenter)
+            node.frame = NSRect(x: 0, y: 0, width: 240, height: 80)
+            node.applyProps(set: ["type": type, "value": "Content"], clear: [])
+            node.applyStyle(["font_size": 26, "line_height": "80px"])
+            node.applyFieldContent(["rect": [20.0, 15.0, 200.0, 50.0]])
+            let lent = try XCTUnwrap(type == "search" ? node.lendFieldToBar() : node.lendFieldToAlert())
+            let standard: NSTextField = type == "search" ? NSSearchField() : type == "password" ? NSSecureTextField() : NSTextField()
+            lent.frame = NSRect(x: 0, y: 0, width: 160, height: 28)
+            standard.frame = lent.frame
+            standard.font = lent.font
+            standard.stringValue = lent.stringValue
+            let cell = try XCTUnwrap(lent.cell), appKit = try XCTUnwrap(standard.cell)
+            XCTAssertEqual(cell.drawingRect(forBounds: lent.bounds), appKit.drawingRect(forBounds: standard.bounds), type)
+            XCTAssertEqual(cell.titleRect(forBounds: lent.bounds), appKit.titleRect(forBounds: standard.bounds), type)
+            XCTAssertEqual((cell as? NSSearchFieldCell)?.searchTextRect(forBounds: lent.bounds),
+                           (appKit as? NSSearchFieldCell)?.searchTextRect(forBounds: standard.bounds), type)
+        }
+    }
+
     func testSearchAndPlainComboboxesServeTheirAuthoredExpandedState() throws {
         _ = NSApplication.shared
         let p = Presenter()

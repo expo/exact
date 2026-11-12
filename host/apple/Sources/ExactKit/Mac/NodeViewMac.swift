@@ -283,13 +283,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         if inputCanvas?.canvasInput?.key(event, down: true, source: self) == true { return }
         guard !disabled else { return }
         if presenter?.menus.key(event) == true || presenter?.dialogs.key(event) == true { return }
-        if isParagraph, window?.firstResponder === self, event.modifierFlags.contains(.command) {
-            switch event.charactersIgnoringModifiers?.lowercased() {
-            case "a": presenter?.selection.selectAll(in: window); return
-            case "c": presenter?.selection.copy(); return
-            default: break
-            }
-        }
+        if paragraphCommand(event) { return }
         let name = NodeView.keyName(event)
         // Sequential focus from here, a stop or not (KeyViewLoopMac.swift): which views are stops follows macOS "Keyboard navigation" (LLP 1115.000 D7.2).
         if name == "Tab", event.modifierFlags.intersection([.command, .control, .option]).isEmpty, let window {
@@ -330,13 +324,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
     /// usual path; this catches it when that item is disabled (a secure
     /// field) or when the event arrives at the window rather than the app.
     package override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        if isParagraph, window?.firstResponder === self, event.modifierFlags.contains(.command) {
-            switch event.charactersIgnoringModifiers?.lowercased() {
-            case "a": presenter?.selection.selectAll(in: window); return true
-            case "c": presenter?.selection.copy(); return true
-            default: break
-            }
-        }
+        if paragraphCommand(event) { return true }
         if let editor = textArea, NodeView.isCommandA(event), window?.firstResponder === editor {
             editor.selectAll(nil)
             return true
@@ -348,11 +336,21 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
         }
         return super.performKeyEquivalent(with: event)
     }
+    /// ⌘A and ⌘C at a focused paragraph act on the reader's selection.
+    private func paragraphCommand(_ event: NSEvent) -> Bool {
+        guard isParagraph, window?.firstResponder === self, event.modifierFlags.contains(.command) else { return false }
+        switch NodeView.commandKey(event) {
+        case "a": presenter?.selection.selectAll(in: window)
+        case "c": presenter?.selection.copy()
+        default: return false
+        }
+        return true
+    }
     /// Command-A with no other chord, ignoring Caps Lock / function noise.
     static func isCommandA(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown else { return false }
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
-        return mods == .command && event.charactersIgnoringModifiers?.lowercased() == "a"
+        return mods == .command && commandKey(event) == "a"
     }
     /// Select the field's whole value. A secure editor can ignore `selectAll:`.
     static func selectAll(in f: NSTextField) {
@@ -609,6 +607,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
             blur.blendingMode = sheetGround ? .behindWindow : .withinWindow
             blur.state = .followsWindowActiveState
         }
+        if #available(macOS 26.0, *), let glass = materialView as? NSGlassEffectView { glass.tintColor = glassTint.flatMap { NSColor(cgColor: $0) } }
         syncMaterialVisibility()
         applyMaterialRadius()
     }

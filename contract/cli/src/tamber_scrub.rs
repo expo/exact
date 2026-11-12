@@ -100,7 +100,7 @@ impl Server {
             .map(|(f, t, _)| (f.clone(), t.clone()))
             .collect();
         let exprs = base.exprs.clone().unwrap_or_default();
-        let params = crate::tamber_ops::params(&base.params);
+        let params = crate::tamber_ops::params(&base.params, &self.design);
         let synthetic = exact_tamber::Synthetic {
             file: &self.design,
             exprs: &exprs,
@@ -224,7 +224,10 @@ impl Server {
             &touched,
             &folded.design,
             folded,
-            || was.as_ref().map(|d| contract::tamber_params::laid(d, app)),
+            || {
+                was.as_ref()
+                    .map(|d| contract::tamber_params::laid(d, app, Some(&self.design)))
+            },
             &exprs,
             &app.tokens,
         );
@@ -320,7 +323,7 @@ impl Server {
         let mut folded = None;
         if !app.packages.is_empty() || chains.is_some() || self.rows.is_some() {
             for (path, text, _) in planned.files.iter().filter(|(p, _, _)| *p == self.design) {
-                match contract::tamber_params::fold_with(text, &app, &self.vocab) {
+                match contract::tamber_params::fold_with(text, &app, &self.vocab, Some(path)) {
                     Ok((f, _)) => folded = Some((path.clone(), f)),
                     Err(all) if !app.packages.is_empty() => {
                         return Err(
@@ -387,7 +390,8 @@ impl Server {
                     .iter()
                     .find(|(p, _)| *p == self.design)
                     .and_then(|(_, t)| {
-                        contract::tamber_params::fold_with(t, &app, &self.vocab).ok()
+                        contract::tamber_params::fold_with(t, &app, &self.vocab, Some(&self.design))
+                            .ok()
                     });
                 if let Some((before, _)) = &was {
                     all = contract_lower::anatomy::slot::check_slots(

@@ -2,6 +2,22 @@
 use super::Module;
 
 #[test]
+fn reading_the_abi_keeps_the_loaded_bindings_alive() {
+    let bytecode = include_bytes!(concat!(env!("OUT_DIR"), "/pure.hbc")).to_vec();
+    for mut module in [
+        Module::inspect(bytecode.clone()).unwrap(),
+        Module::loaded(bytecode, "test.pure", "").unwrap(),
+    ] {
+        let context = std::sync::Arc::downgrade(&module.storage.as_ref().unwrap().context);
+        assert_eq!(module.abi().unwrap(), 1);
+        assert!(
+            context.upgrade().is_some(),
+            "the loaded engine still borrows its original bindings context"
+        );
+    }
+}
+
+#[test]
 fn hardening_refuses_a_reachable_abort_hook_handoff() {
     let mut module = Module::new(
         include_bytes!(concat!(env!("OUT_DIR"), "/pure.hbc")).to_vec(),

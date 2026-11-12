@@ -341,9 +341,9 @@ fn flex_region_explicit_min_max_and_zero_basis_forms_match_ordinary_layout() {
             let mut k = flex_region_fixture();
             let mut patch = StyleProps::default();
             patch.mask = mask(&[StyleId::FlexBasis, StyleId::MinHeight, StyleId::MaxHeight]);
-            patch.flex_basis = basis;
-            patch.min_height = min;
-            patch.max_height = max;
+            patch.flex_basis = basis.clone();
+            patch.min_height = min.clone();
+            patch.max_height = max.clone();
             k.apply(0, 0, &[flex_style(2, patch)]).unwrap();
             let mut oracle = k.rehydrate(Box::new(MonospaceMeasurer::default()));
             oracle

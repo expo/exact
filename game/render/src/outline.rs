@@ -171,55 +171,61 @@ fn hull_pipeline(
         ("ENCODE_SRGB", if format.is_srgb() { 0. } else { 1. }),
         ("FADES", if fading { 1. } else { 0. }),
     ];
-    d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("game outline"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("outline_vs"),
-            compilation_options: Default::default(),
-            buffers: &[
-                pipeline::vertex_layout()[0].clone(),
-                Some(wgpu::VertexBufferLayout {
-                    array_stride: 24,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![4 => Float32x3, 5 => Float32x3],
-                }),
-            ],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some("outline_fs"),
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &constants,
+    crate::perf::pipeline(|| {
+        d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("game outline"),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("outline_vs"),
+                compilation_options: Default::default(),
+                buffers: &[
+                    pipeline::vertex_layout()[0].clone(),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 24,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![4 => Float32x3, 5 => Float32x3],
+                    }),
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("outline_fs"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &constants,
+                    ..Default::default()
+                },
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: if direct {
+                        format
+                    } else {
+                        wgpu::TextureFormat::Rgba16Float
+                    },
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Front),
+                front_face: if mirrored {
+                    wgpu::FrontFace::Cw
+                } else {
+                    wgpu::FrontFace::Ccw
+                },
                 ..Default::default()
             },
-            targets: &[Some(wgpu::ColorTargetState {
-                format: if direct {
-                    format
-                } else {
-                    wgpu::TextureFormat::Rgba16Float
-                },
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            cull_mode: Some(wgpu::Face::Front),
-            front_face: if mirrored {
-                wgpu::FrontFace::Cw
-            } else {
-                wgpu::FrontFace::Ccw
+            depth_stencil: pipeline::scene_depth(
+                true,
+                wgpu::CompareFunction::Less,
+                Default::default(),
+            ),
+            multisample: wgpu::MultisampleState {
+                count: p.samples,
+                ..Default::default()
             },
-            ..Default::default()
-        },
-        depth_stencil: pipeline::scene_depth(true, wgpu::CompareFunction::Less, Default::default()),
-        multisample: wgpu::MultisampleState {
-            count: p.samples,
-            ..Default::default()
-        },
-        multiview_mask: None,
-        cache: p.cache.handle.as_ref(),
+            multiview_mask: None,
+            cache: p.cache.handle.as_ref(),
+        })
     })
 }
 impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {

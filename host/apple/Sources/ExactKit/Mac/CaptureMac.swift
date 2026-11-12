@@ -79,66 +79,56 @@ extension Capture {
 }
 
 extension Agent {
-    /// Whether `window` is covered and holds a canvas a GPU module draws: a covered
-    /// window's Metal layers present no frames (`GpuMac.visible`), so the window
-    /// server's picture of it holds none of what they draw.
-    /// The sessions whose nodes are in `view`: a host's window holds several.
-    static func sessions(in view: NSView) -> [ExactSession] {
-        var found: [ObjectIdentifier: ExactSession] = [:], order: [ExactSession] = []
-        func walk(_ v: NSView) {
-            if let session = (v as? NodeView)?.presenter?.session, found.updateValue(session, forKey: ObjectIdentifier(session)) == nil { order.append(session) }
-            v.subviews.forEach(walk)
-        }
-        walk(view)
-        return order
-    }
-
-    static func coveredCanvases(_ window: NSWindow) -> Bool {
-        guard !window.occlusionState.contains(.visible), let content = window.contentView else { return false }
-        func canvas(_ view: NSView) -> Bool {
-            if let node = view as? NodeView, node.kind == "canvas", !node.isHiddenOrHasHiddenAncestor, node.canvases?.readback(view: node) != nil { return true }
-            return view.subviews.contains(where: canvas)
-        }
-        return canvas(content)
-    }
-
-    /// `image`, the window server's picture of `window`, with its content as the
-    /// capture paints it (`Capture.picture`: views in their z order, each canvas
-    /// from its readback, every session's) in place of what a covered window's
-    /// Metal layers left. The frame stays the window server's, its shape kept
-    /// (source-atop), and so is its title bar.
-    static func paintedContent(_ image: CGImage, of window: NSWindow) -> CGImage {
-        guard let content = window.contentView, window.frame.width > 0,
-              let picture = Capture.withGuests(of: sessions(in: content), { Capture.picture(of: content) })?.cgImage,
-              let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return image }
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        // Window coordinates run up from the frame's bottom left, as the context's do.
-        let scale = CGFloat(image.width) / window.frame.width
-        ctx.scaleBy(x: scale, y: scale)
-        ctx.setBlendMode(.sourceAtop)
-        ctx.draw(picture, in: content.convert(content.bounds, to: nil))
-        ctx.setBlendMode(.normal)
-        // The title bar is the window server's: a capture draws it as an active
-        // window's, without its hairline. Through a transparent one the content
-        // shows, so there only its buttons are drawn over the content.
-        if let bar = window.standardWindowButton(.closeButton)?.superview, !bar.isHiddenOrHasHiddenAncestor {
-            if window.titlebarAppearsTransparent {
-                for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-                    guard let button = window.standardWindowButton(kind), !button.isHiddenOrHasHiddenAncestor,
-                          let drawn = Capture.picture(of: button)?.cgImage else { continue }
-                    ctx.draw(drawn, in: button.convert(button.bounds, to: nil))
-                }
-            } else {
-                ctx.saveGState()
-                ctx.clip(to: bar.convert(bar.bounds, to: nil))
-                ctx.setBlendMode(.copy)
-                ctx.draw(image, in: CGRect(origin: .zero, size: window.frame.size))
-                ctx.restoreGState()
+    /// Let the window server composite readbacks at the Metal layers' places.
+    /// A CPU capture of the whole content loses backdrop filters and materials.
+    static func canvasReadbacks(in window: NSWindow) -> (painted: Bool, restore: () -> Void) {
+        var replacements: [(CALayer, Bool, CALayer)] = []
+        CATransaction.begin(); CATransaction.setDisableActions(true)
+        func walk(_ view: NSView) {
+            guard !view.isHiddenOrHasHiddenAncestor else { return }
+            if let node = view as? NodeView, node.kind == "canvas",
+               let image = node.canvases?.readback(view: node)?.cgImage,
+               let metal = node.metal?.layer, let parent = metal.superlayer {
+                let picture = metal.valueCopy()
+                picture.contents = image
+                picture.zPosition = metal.zPosition
+                picture.isHidden = metal.isHidden
+                parent.insertSublayer(picture, above: metal)
+                replacements.append((metal, metal.isHidden, picture))
+                metal.isHidden = true
             }
+            view.subviews.forEach(walk)
         }
-        return ctx.makeImage() ?? image
+        var seen: Set<Int> = []
+        func visit(_ window: NSWindow) {
+            guard seen.insert(window.windowNumber).inserted else { return }
+            if let content = window.contentView { walk(content) }
+            for child in ([window.attachedSheet].compactMap { $0 } + (window.childWindows ?? [])) where child.isVisible { visit(child) }
+        }
+        visit(window)
+        CATransaction.commit()
+        return (!replacements.isEmpty, {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            for (metal, hidden, picture) in replacements {
+                metal.isHidden = hidden
+                picture.removeFromSuperlayer()
+            }
+            CATransaction.commit()
+        })
+    }
+
+    static func drawingWindows(_ windows: [(CGRect, CGImage)], over image: CGImage, in frame: CGRect) -> CGImage {
+        guard frame.width > 0,
+              let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return image }
+        let scale = CGFloat(image.width) / frame.width
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        for (child, picture) in windows {
+            context.draw(picture, in: CGRect(x: (child.minX - frame.minX) * scale, y: (child.minY - frame.minY) * scale,
+                                             width: child.width * scale, height: child.height * scale))
+        }
+        return context.makeImage() ?? image
     }
 }
 #endif

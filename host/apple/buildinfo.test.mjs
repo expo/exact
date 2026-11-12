@@ -37,6 +37,13 @@ test('the orientation lock is part of an iPhone and Android binary\'s identity, 
   expect(nativeManifestMetadata({ ...manifest, orientation: 'portrait' }, 'macos')).toEqual(nativeManifestMetadata(manifest, 'macos'));
 });
 
+test('the dark icons are part of an iPhone binary\'s identity, not a Mac\'s, which has no dark raster icon', () => {
+  const manifest = { app: { id: 'com.exact.dusk' }, icons: [{ src: 'assets/icon.png' }] };
+  const dark = { ...manifest, color_scheme_dark: { icons: [{ src: 'assets/icon-dark.png' }] } };
+  expect(nativeManifestMetadata(dark, 'ios')).not.toEqual(nativeManifestMetadata(manifest, 'ios'));
+  expect(nativeManifestMetadata(dark, 'macos')).toEqual(nativeManifestMetadata(manifest, 'macos'));
+});
+
 test('an app inside exact2 carries exact2\'s commit alone, and the kind', () => {
   const info = buildInfo({ dir: resolve(root, 'apps/caltrain') }, { root, now });
   expect(info.ExactBuildTime).toBe('2026-10-08T10:00:00.000Z');
