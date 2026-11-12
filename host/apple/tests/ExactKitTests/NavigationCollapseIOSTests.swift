@@ -70,7 +70,8 @@ final class NavigationCollapseIOSTests: XCTestCase {
     private func pushed(_ name: String) throws -> (ExactSession, UINavigationController, RouteController) {
         let session = try booted("EXACT_NAVIGATION_BARS_PLAN", label: "scroller-\(name)")
         let nav = try XCTUnwrap(session.presenter.navigation.primaryNavigation)
-        _ = Agent(session: session).tap(["id": Int(try node(session, "start-open-\(name)").id)])
+        let reply = Agent(session: session).tap(["id": Int(try node(session, "start-open-\(name)").id)])
+        XCTAssertNil(reply["error"], "the opener for \(name) is tapped")
         until("\(name) pushed") { nav.viewControllers.count == 2 && nav.transitionCoordinator == nil }
         spin(0.3)
         return (session, nav, try XCTUnwrap(nav.topViewController as? RouteController))
