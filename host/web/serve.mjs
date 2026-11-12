@@ -900,8 +900,8 @@ export async function serveBuildTree(dist, req, res, { pinned = null, pages = nu
     sendStaticBody(req, res, answers.body, { 'content-type': answers.status === 200 ? 'application/json' : 'text/plain; charset=utf-8', 'cache-control': answers.status === 200 ? 'private, max-age=3600, immutable' : 'no-store' }, answers.status);
     return;
   }
-  const under = target && generationPath(target.pathname), path = under?.path ?? target?.pathname;
-  const negotiated = !!target && under !== 'bad' && !extname(path), markdown = negotiated && prefersMarkdown(req.headers.accept) ? await servedFile(dist, `${under ? target.pathname.slice(0, -path.length) : ''}${path.replace(/\/+$/, '') || '/index'}.md`, req.headers.accept, { pinned }) : null;
+  const under = target && generationPath(target.pathname), path = under?.path ?? target?.pathname, prefix = under ? target.pathname.slice(0, -path.length) : '';
+  const negotiated = !!target && under !== 'bad' && !extname(path), markdown = negotiated && prefersMarkdown(req.headers.accept) ? await servedFile(dist, `${prefix}${path.replace(/\/+$/, '') || '/index'}.md`, req.headers.accept, { pinned }) : null;
   let r = markdown?.status === 200 && markdown.route.endsWith('.md') ? markdown : target ? await servedFile(dist, target.pathname, req.headers.accept, { pinned }) : { status: 404 };
   // A request taking any type (curl's) is answered as a navigation where that is a page rendered for it, as any
   // server rendering pages answers it; a route the client draws stays a browser's.
@@ -909,7 +909,10 @@ export async function serveBuildTree(dist, req, res, { pinned = null, pages = nu
     const page = await servedFile(dist, target.pathname, 'text/html', { pinned });
     if (page.route === '/shell.html' && ['request', 'cached'].includes(page.render)) r = page;
   }
-  if (markdown && r.status === 404) { const missing = await servedFile(dist, '/404.md', req.headers.accept, { pinned }); if (missing.status === 200 && missing.route === '/404.md') r = { ...missing, status: 404 }; }
+  if (markdown && r.status === 404 && (await servedFile(dist, target.pathname, 'text/html', { pinned })).status === 404) {
+    const missing = await servedFile(dist, `${prefix}/404.md`, req.headers.accept, { pinned });
+    if (missing.status === 200 && missing.route === '/404.md') r = { ...missing, status: 404 };
+  }
   if (r.status === 410) { res.writeHead(410, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(`build generation ${r.id} is no longer kept here: load the page again\n`); return; }
   if (pages && [200, 404].includes(r.status) && r.route === '/shell.html' && ['request', 'cached'].includes(r.render) && ['GET', 'HEAD'].includes(req.method)) {
     let page = null;
