@@ -901,7 +901,7 @@ export async function serveBuildTree(dist, req, res, { pinned = null, pages = nu
     return;
   }
   const negotiated = !!target && !extname(target.pathname), markdown = negotiated && prefersMarkdown(req.headers.accept) ? await servedFile(dist, `${target.pathname.replace(/\/+$/, '') || '/index'}.md`, req.headers.accept, { pinned }) : null;
-  let r = markdown?.status === 200 ? markdown : target ? await servedFile(dist, target.pathname, req.headers.accept, { pinned }) : { status: 404 };
+  let r = markdown?.status === 200 && markdown.route.endsWith('.md') ? markdown : target ? await servedFile(dist, target.pathname, req.headers.accept, { pinned }) : { status: 404 };
   // A request taking any type (curl's) is answered as a navigation where that is a page rendered for it, as any
   // server rendering pages answers it; a route the client draws stays a browser's.
   if (pages && target && r !== markdown && asksPage(req, target.pathname) && !acceptsHTML(req.headers.accept)) {
@@ -922,7 +922,7 @@ export async function serveBuildTree(dist, req, res, { pinned = null, pages = nu
       const accepted = compression ? acceptedEncodings(req.headers['accept-encoding']) : new Set();
       const encoding = ['br', 'gzip'].find(name => accepted.has(name));
       const body = encoding === 'br' ? brotliCompressSync(page.html, { params: { [zlib.BROTLI_PARAM_QUALITY]: 5 } }) : encoding ? gzipSync(page.html) : page.html;
-      const vary = [compression && 'Accept-Encoding', ...(page.vary ?? '').split(', ').filter(v => v && v !== 'Accept-Encoding')].filter(Boolean).join(', ');
+      const vary = [compression && 'Accept-Encoding', negotiated && 'Accept', ...(page.vary ?? '').split(', ').filter(v => v && v !== 'Accept-Encoding' && v !== 'Accept')].filter(Boolean).join(', ');
       sendStaticBody(req, res, body, { ...headers, ...(vary ? { vary } : {}), ...(encoding ? { 'content-encoding': encoding } : {}) }, page.status);
       return;
     }

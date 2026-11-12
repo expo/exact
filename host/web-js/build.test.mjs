@@ -658,7 +658,7 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     writeFileSync(resolve(out, 'index.md'), '# Home\n');
     writeFileSync(resolve(out, 'live.md'), '# Live\n');
     for (const [path, accept, type, body] of [['/', 'text/markdown', 'text/markdown', '# Home\n'], ['/live', 'text/markdown, text/html;q=0.9', 'text/markdown', '# Live\n'],
-      ['/live', 'text/html, text/markdown;q=0.5', 'text/html', null], ['/item/7', 'text/markdown, text/html;q=0.9', 'text/html', null]]) {
+      ['/live', 'text/html, text/markdown;q=0.5', 'text/html', null], ['/item/7', 'text/markdown, text/html;q=0.9', 'text/html', null], ['/live', 'text/markdown;q=0.5, text/*', 'text/html', null], ['/', 'text/markdown, */*;q=0.1', 'text/markdown', '# Home\n']]) {
       const r = await fetch(url(path), { headers: { accept } });
       expect([path, accept, r.status, r.headers.get('content-type').split(';')[0], r.headers.get('vary')]).toEqual([path, accept, 200, type, 'Accept']);
       if (body) expect(await r.text()).toBe(body);
@@ -690,7 +690,14 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     const raw = (path) => new Promise((ok, no) => httpGet({ host: '127.0.0.1', port: serve.port, path, headers: { accept: 'text/html', 'accept-encoding': 'br, gzip' } },
       (r) => { const chunks = []; r.on('data', (c) => chunks.push(c)); r.on('end', () => ok({ headers: r.headers, body: Buffer.concat(chunks) })); }).on('error', no));
     const sent = await raw('/live');
-    expect([sent.headers['content-encoding'], sent.headers.vary, brotliDecompressSync(sent.body).toString().includes('The note, rendered.')]).toEqual(['br', 'Accept-Encoding', true]);
+    expect([sent.headers['content-encoding'], sent.headers.vary, brotliDecompressSync(sent.body).toString().includes('The note, rendered.')]).toEqual(['br', 'Accept-Encoding, Accept', true]);
+    // A page rendered for the request varies by Accept too, and a page with no Markdown beside it is rendered for its own
+    // path when Markdown is preferred, not for the `.md` path asked for first.
+    writeFileSync(resolve(out, 'live.md'), '# Live\n');
+    const md = await fetch(`http://127.0.0.1:${serve.port}/live`, { headers: { accept: 'text/markdown' } });
+    expect([md.headers.get('content-type'), md.headers.get('vary'), await md.text()]).toEqual(['text/markdown; charset=utf-8', 'Accept', '# Live\n']);
+    const feedAsked = await fetch(`http://127.0.0.1:${serve.port}/feed`, { headers: { accept: 'text/markdown, text/html;q=0.9' } });
+    expect([feedAsked.status, (await feedAsked.text()).includes('>/feed<')]).toEqual([200, true]);
     const file = await raw('/app.js');
     const hosted = await serving(root, out, { fromEnv: true });
     try { expect((await hosted.get('/live')).body).toContain('The note, rendered.'); } finally { await hosted.stop(); }
