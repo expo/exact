@@ -91,6 +91,7 @@ fn boot(source: &str, canvases: &[&str]) -> (Presenter<()>, PathBuf) {
                 restore_input: false,
                 restore_bytes: None,
                 restore_logged: false,
+                uploaded: None,
             },
         );
     }

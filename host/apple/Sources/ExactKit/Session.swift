@@ -816,7 +816,10 @@ public final class ExactSession {
         presenter.onScroll = { [unowned self] id, metrics in applyUnlessEmpty(runtime.scroll(id, metrics: metrics, now: now()), scrolled: true) }
         presenter.onScrollend = { [unowned self] id in applyUnlessEmpty(runtime.scrollend(id, now: now())) }
         presenter.onScrollDrag = { [unowned self] id, end in applyUnlessEmpty(end.map { runtime.scrolldragend(id, velocity: $0.velocity, target: $0.target, now: now()) } ?? runtime.scrolldragstart(id, now: now())) }
-        presenter.onScrolled = { [unowned self] id, left, top in runtime.scrolled(id, left: left, top: top) }
+        presenter.onScrolled = { [unowned self] id, left, top in
+            runtime.scrolled(id, left: left, top: top)
+            timelineScrolled(id, left: left, top: top)
+        }
         #if canImport(AppKit)
         presenter.onListIndex = { [unowned self] id, key in runtime.listIndex(id, key: key) }
         presenter.onListText = { [unowned self] id, first, last in runtime.listText(id, first: first, last: last) }
@@ -1260,7 +1263,7 @@ public final class ExactSession {
                     app.deliver { [weak self] in self?.presenter.formatElement(args) }
                     continue
                 }
-                if ["playSound", "playSounds", "stopSounds", "sendMIDI", "requestMIDIAccess", "setRootFontSize"].contains(name) { continue } // the runner's own: its voice table's `sound` op plays them (LLP 1096 D8), its MIDI queue's `midi` op sends (LLP 1125 D7); the root font size is laid out already (LLP 1069.000 D3)
+                if ["playSound", "playSounds", "stopSounds", "setSounds", "sendMIDI", "requestMIDIAccess", "setRootFontSize"].contains(name) { continue } // the runner's own: its voice table's `sound` op plays them (LLP 1096 D8), its MIDI queue's `midi` op sends (LLP 1125 D7); the root font size is laid out already (LLP 1069.000 D3)
                 if app.handleCommand(name) { continue }
                 app.deliver { [weak self] in guard let self else { return }; delegate?.exactSession(self, command: name, args: args) }
             }

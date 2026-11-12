@@ -3,9 +3,16 @@ import CExact
 import Foundation
 
 extension Runtime {
-    func collectionSnap(_ view: UInt32, proposed: Double, port: Double, maximum: Double, distance: Double = .infinity) -> Double? {
+    func collectionSnap(_ view: UInt32, proposed: Double, port: Double, minimum: Double = 0, maximum: Double, distance: Double = .infinity) -> Double? {
         on(busy: nil) {
-            let value = exact_collection_snap(rt, view, proposed, port, maximum, distance)
+            let value = exact_collection_snap(rt, view, proposed, port, minimum, maximum, distance)
+            return value.isFinite ? value : nil
+        }
+    }
+
+    func collectionSnapStop(_ view: UInt32, release: Double, rest: Double, port: Double, minimum: Double, maximum: Double) -> Double? {
+        on(busy: nil) {
+            let value = exact_collection_snap_stop(rt, view, release, rest, port, minimum, maximum)
             return value.isFinite ? value : nil
         }
     }

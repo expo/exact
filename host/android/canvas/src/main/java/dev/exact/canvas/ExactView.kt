@@ -132,10 +132,16 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         set(value) { field = value; value?.timerReader(this) }
     private var timerTouch = false
     private var timerApplied = 0L
+    /** When the ingest of the streams [timerReport] tells of began and ended (`System.nanoTime`), 0 when none. */
+    private var ingestBegan = 0L
+    private var ingestEnded = 0L
     private var timerIdlePosted = false
     internal fun timerReport() {
         val o = owner
-        if (o != null) o.timerReport(this, timerTouch || scrolling.timerActive, samplerPosted, timerApplied)
+        if (o != null) {
+            o.timerReport(this, timerTouch || scrolling.timerActive, samplerPosted, timerApplied, ingestBegan, ingestEnded)
+            ingestBegan = 0L; ingestEnded = 0L
+        }
         else if (started && Native.timerObservation(timerTouch || scrolling.timerActive, samplerPosted, false, false)) pump()
     }
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -366,6 +372,12 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         if (o != null) o.under(x, y, then) else then(Native.under(x, y))
     }
 
+    /** [Native.snapsAround], on exact2's thread when it has one. */
+    internal fun snapsAround(id: Int, vertical: Boolean, release: Float, projected: Float, then: (IntArray) -> Unit) {
+        val o = owner
+        if (o != null) o.snapsAround(id, vertical, release, projected, then) else then(Native.snapsAround(id, vertical, release, projected))
+    }
+
     /** Whether the touch that is down is a hosted field's that asked to keep it ([Fields.keeps]): no scroll takes it. */
     internal fun fieldKeeps() = fields?.keeps == true
 
@@ -523,6 +535,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
      * the last paint; the feed's group then drawn where the scrolls the owner has not applied put it. */
     private fun takeOwned(): Boolean {
         val o = owner ?: return false
+        val began = System.nanoTime()
         var any = false
         var painted = false
         var allQuiet = true
@@ -565,6 +578,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         moved = !painted
         quiet = painted && allQuiet && move == null
         timerApplied = publication
+        if (any) { ingestBegan = began; ingestEnded = System.nanoTime() }
         timerReport()
         return any
     }

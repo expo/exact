@@ -945,8 +945,17 @@ pub fn style_fallback(name: &str) -> String {
 /// css.rs writes no declaration for the row's empty value.
 const NONE: &str = "v=>v==null||/^\\s*none\\s*$/i.test(v)?null:v";
 
+/// `animation-timeline` as CSS's own row where a name may be a drag's: only
+/// `scroll()` and `view()` (css.rs).
+pub(super) const ANONYMOUS_TIMELINE: &str = "v=>v!=null&&/^\\s*(scroll|view)\\(/i.test(v)?v:null";
+
+/// `animation-range` as CSS's own row.
+pub(super) const ANIMATION_RANGE: &str = "v=>v==null||/^\\s*normal\\s*$/i.test(v)?null:v";
+
+/// A name's consumer is paused for the drag code; `scroll()` or `view()`
+/// only where the browser has no `animation-timeline` (css.rs, index.html).
 pub(super) const TIMELINE_PLAY_STATE: &str =
-    "v=>v==null||/^\\s*(unset|auto|(-exact-)?clock\\(.*\\))?\\s*$/i.test(v)?null:\"paused\"";
+    "v=>v==null||/^\\s*(unset|auto|(-exact-)?clock\\(.*\\))?\\s*$/i.test(v)?null:/^\\s*(scroll|view)\\(/i.test(v)?\"var(--exact-timeline-play,paused)\":\"paused\"";
 
 /// A bound corner's map: a list (white space outside parentheses, or a
 /// `/`) is the elliptical radius no row holds, refused whole with the
@@ -1156,10 +1165,17 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         StyleId::DragTimeline => vec![with("--exact-drag-timeline", NONE)],
         // @ref LLP 1055.002 — `-exact-clock(Name)` is css.rs's clock property and
         // leaves the play state alone; a drag timeline pauses.
+        // @ref LLP 1057.003 D5 — `scroll()` and `view()` as CSS's own row
+        // too, which the browser runs; a name the glue resolves (css.rs).
         StyleId::AnimationTimeline => vec![
             with(
                 "--exact-animation-timeline",
                 "v=>v==null||/^\\s*(unset|auto|(-exact-)?clock\\(.*\\))\\s*$/i.test(v)?null:v",
+            ),
+            with("animation-timeline", ANONYMOUS_TIMELINE),
+            with(
+                "--exact-css-timeline",
+                "v=>v!=null&&/^\\s*(scroll|view)\\(/i.test(v)?\"1\":null",
             ),
             with(
                 "--exact-animation-clock",
@@ -1170,10 +1186,21 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
                 TIMELINE_PLAY_STATE,
             ),
         ],
-        StyleId::AnimationRange => vec![with(
-            "--exact-animation-range",
-            "v=>v==null||/^\\s*normal\\s*$/i.test(v)?null:v",
-        )],
+        StyleId::AnimationRange => vec![
+            with(
+                "--exact-animation-range",
+                "v=>v==null||/^\\s*normal\\s*$/i.test(v)?null:v",
+            ),
+            with("animation-range", ANIMATION_RANGE),
+        ],
+        StyleId::ScrollTimelineName => vec![
+            with("scroll-timeline-name", NONE),
+            with("--exact-scroll-timeline", NONE),
+        ],
+        StyleId::ViewTimelineName => vec![
+            with("view-timeline-name", NONE),
+            with("--exact-view-timeline", NONE),
+        ],
         StyleId::TimelineScope => vec![
             with("timeline-scope", NONE),
             with("--exact-timeline-scope", NONE),

@@ -52,6 +52,12 @@ impl Device {
         if !available!(macos = 11.0, ios = 14.0, tvos = 14.0, visionos = 1.0) {
             return Err("Metal binary archives require macOS 11 or iOS/tvOS 14".into());
         }
+        // The simulator's Metal aborts the process serializing an archive
+        // (`MTLReportFailure` under `-[_MTLBinaryArchive legacySerializeToURL:options:error:]`,
+        // iOS 27 simulator, 2026-11-12).
+        if cfg!(target_abi = "sim") {
+            return Err("the simulator has no Metal binary archives".into());
+        }
         let mut installed = self.binary_archive.lock();
         let archive = autoreleasepool(|_| {
             let descriptor = MTLBinaryArchiveDescriptor::new();

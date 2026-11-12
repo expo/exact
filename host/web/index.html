@@ -36,6 +36,13 @@
      half-circles on every platform. */
   :root { --exact-curve: round; --exact-curve-reach: 1; }
   @supports (corner-shape: superellipse(2)) { :root { --exact-curve: superellipse(1.6); --exact-curve-reach: 1.52; } }
+  /* LLP 1057.003 D5: a `scroll()` or `view()` consumer is paused only where the browser has no
+     `animation-timeline`, which would play it on the clock (css.rs). */
+  :root { --exact-timeline-play: paused; }
+  @supports (animation-timeline: scroll()) { :root { --exact-timeline-play: running; } }
+  /* Where it has none, a consumer of a timeline the browser would run (`--exact-css-timeline`, css.rs) shows its own
+     values, as an inactive timeline's does: no motion piece may be there to put it out of effect. */
+  @supports not (animation-timeline: scroll()) { [style*="--exact-css-timeline"] { animation-name: none !important; } }
   @media (min-resolution: 1.5dppx) { :root { --exact-hairline: calc(1px / 1.5); } }
   @media (min-resolution: 2dppx) { :root { --exact-hairline: .5px; } }
   @media (min-resolution: 2.5dppx) { :root { --exact-hairline: .4px; } }

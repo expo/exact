@@ -79,6 +79,16 @@ extension NavigationHost {
                      left: edges ? max(0, safe.left - env.left) : 0)
     }
 
+    /// What covers `node` but for `kept`, which stays in the page: the node
+    /// itself, or, where it holds any of `kept`, each part of it that holds
+    /// none (host/linux/src/bars.rs `covered`).
+    static func covered(_ node: NodeView, keeping kept: [NodeView]) -> [NodeView] {
+        guard kept.contains(where: { $0.isDescendant(of: node) }) else { return [node] }
+        return node.container.subviews.compactMap { $0 as? NodeView }
+            .filter { child in !kept.contains { $0 === child } }
+            .flatMap { child in kept.contains { $0.isDescendant(of: child) } ? covered(child, keeping: kept) : [child] }
+    }
+
     /// Whether `sv` is pulled past where its title's inset rests (`origin`),
     /// as to refresh. UIKit grows the scroller's safe area with the pull, and
     /// with the refresh control's room while it shows, and gives it back as
@@ -211,10 +221,13 @@ extension NavigationHost {
             guard let edges else { continue }
             if edges != .init(top: 0, right: 0, bottom: 0, left: 0) { wanted[c.node.id] = .edges(edges) }
         }
-        // The tablist whose place the tab bar takes takes no room.
+        // The tablist whose place the tab bar takes takes no room. One that
+        // holds the root's panels keeps them, and their routes, in the page.
         if let list = adoptedTablist.flatMap({ presenter.views[$0] }) {
             measuredTablist = presenter.session?.view.map { list.convert(list.bounds, to: $0) }
-            if adopts(tablist: list) { wanted[list.id] = .whole }
+            if adopts(tablist: list) {
+                for node in Self.covered(list, keeping: tabPanels.compactMap { presenter.views[$0] }) { wanted[node.id] = .whole }
+            }
             else if tablistAppearanceNone, list.style["display"]?.string != "none",
                     wantsWholeView, presenter.viewportFit != "cover",
                     let view = presenter.session?.view, view.window != nil {

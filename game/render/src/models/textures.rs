@@ -37,12 +37,37 @@ pub(crate) fn device_format(data: &TextureData) -> wgpu::TextureFormat {
     }
 }
 
-pub(super) fn upload_texture(
+/// A delivered texture written to the device and not yet installed: what
+/// [`write`] makes, on the presenting thread or off it (`super::uploads`).
+pub(crate) struct Written {
+    texture: wgpu::Texture,
+    digest: u64,
+    data: TextureShape,
+}
+impl Written {
+    pub(crate) fn digest(&self) -> u64 {
+        self.digest
+    }
+}
+/// What installing a written texture reads of its record, the mips gone.
+struct TextureShape {
+    size: [u32; 2],
+    bytes: u64,
+    format: TextureFormat,
+    wrap: [Wrap; 2],
+    filter: [Filter; 3],
+}
+
+/// Validate `data` and write it to a new device texture. Device and queue
+/// calls only: safe off the presenting thread, whose next submit carries the
+/// writes.
+pub(crate) fn write(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     data: &TextureData,
-    samplers: &mut BTreeMap<([Wrap; 2], [Filter; 3]), wgpu::Sampler>,
-) -> Result<Texture, RenderError> {
+    digest: u64,
+) -> Result<Written, RenderError> {
+    data.validate().map_err(RenderError::scene)?;
     let format = device_format(data);
     // Refuse by name before wgpu would: a family the device did not enable,
     // or an edge beyond the granted limit, is a delivery error, not a crash.
@@ -110,14 +135,33 @@ pub(super) fn upload_texture(
             },
         );
     }
+    Ok(Written {
+        texture,
+        digest,
+        data: TextureShape {
+            size: [data.width, data.height],
+            // Device memory is the delivered level bytes, blocks included.
+            bytes: data.mips.iter().map(|mip| mip.len() as u64).sum(),
+            format: data.format,
+            wrap: data.wrap,
+            filter: data.filter,
+        },
+    })
+}
 
-    let sampler = samplers.entry((data.wrap, data.filter)).or_insert_with(|| {
-        let wrap = |w| match w {
+fn sampler(
+    device: &wgpu::Device,
+    samplers: &mut BTreeMap<([Wrap; 2], [Filter; 3]), wgpu::Sampler>,
+    wrap: [Wrap; 2],
+    filter: [Filter; 3],
+) -> wgpu::Sampler {
+    let sampler = samplers.entry((wrap, filter)).or_insert_with(|| {
+        let address = |w| match w {
             Wrap::Repeat => wgpu::AddressMode::Repeat,
             Wrap::Clamp => wgpu::AddressMode::ClampToEdge,
             Wrap::Mirror => wgpu::AddressMode::MirrorRepeat,
         };
-        let filters = data.filter.map(|f| {
+        let filters = filter.map(|f| {
             if f == Filter::Nearest {
                 wgpu::FilterMode::Nearest
             } else {
@@ -126,16 +170,16 @@ pub(super) fn upload_texture(
         });
         device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("game shared sampler"),
-            address_mode_u: wrap(data.wrap[0]),
-            address_mode_v: wrap(data.wrap[1]),
+            address_mode_u: address(wrap[0]),
+            address_mode_v: address(wrap[1]),
             mag_filter: filters[0],
             min_filter: filters[1],
-            mipmap_filter: if data.filter[2] == Filter::Nearest {
+            mipmap_filter: if filter[2] == Filter::Nearest {
                 wgpu::MipmapFilterMode::Nearest
             } else {
                 wgpu::MipmapFilterMode::Linear
             },
-            anisotropy_clamp: if data.filter.iter().all(|f| *f == Filter::Linear) {
+            anisotropy_clamp: if filter.iter().all(|f| *f == Filter::Linear) {
                 4
             } else {
                 1
@@ -143,17 +187,78 @@ pub(super) fn upload_texture(
             ..Default::default()
         })
     });
-    Ok(Texture {
-        active: true,
-        size: [data.width, data.height],
-        // Device memory is the delivered level bytes, blocks included.
-        bytes: data.mips.iter().map(|mip| mip.len() as u64).sum(),
-        format: data.format,
-        digest: 0,
-        view: texture.create_view(&Default::default()),
-        sampler: sampler.clone(),
-        sprite_bind: None,
-    })
+    sampler.clone()
+}
+
+impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
+    /// Reuse a name only when its content digest matches. CPU mips may be dropped.
+    pub fn add_texture(&mut self, name: &str, data: &TextureData) -> Result<(), RenderError> {
+        let digest = exact_game::hash::of(data);
+        if self.reactivate_texture(name, digest) {
+            return Ok(());
+        }
+        let written = write(&self.device, &self.queue, data, digest)?;
+        self.install_texture(name, written);
+        Ok(())
+    }
+    /// Whether `name` is resident with `digest`, now active again.
+    pub(crate) fn reactivate_texture(&mut self, name: &str, digest: u64) -> bool {
+        let resident = self.models.textures.get_mut(name);
+        let Some(texture) = resident.filter(|t| t.digest == digest) else {
+            return false;
+        };
+        texture.active = true;
+        true
+    }
+    /// Make a written texture `name`'s, binding it into every material that
+    /// samples it and has all its textures.
+    pub(crate) fn install_texture(&mut self, name: &str, written: Written) {
+        let Written {
+            texture,
+            digest,
+            data,
+        } = written;
+        let mut texture = Texture {
+            active: true,
+            size: data.size,
+            bytes: data.bytes,
+            format: data.format,
+            digest,
+            view: texture.create_view(&Default::default()),
+            sampler: sampler(
+                &self.device,
+                &mut self.models.samplers,
+                data.wrap,
+                data.filter,
+            ),
+            sprite_bind: None,
+        };
+        let sprite = (self.models.textures.get(name)).is_some_and(|t| t.sprite_bind.is_some());
+        if sprite {
+            texture.sprite_bind = Some(self.quads.sprite_bind(&self.device, &texture));
+        }
+        self.models.textures.insert(name.into(), texture);
+        self.models.uploads += 1;
+        for material in &mut self.models.materials {
+            if material.bind.is_some()
+                && material.names.iter().flatten().any(|n| n == name)
+                && material
+                    .names
+                    .iter()
+                    .flatten()
+                    .all(|n| self.models.textures.contains_key(n))
+            {
+                *material = super::material_bind(
+                    &self.device,
+                    &self.queue,
+                    &self.pipelines.models.as_ref().unwrap().material,
+                    (&material.data, &material.names),
+                    &self.models.textures,
+                    None,
+                );
+            }
+        }
+    }
 }
 
 /// Active delivered textures (the 1×1 defaults excluded) for `state.world.gpu`:

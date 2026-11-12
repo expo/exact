@@ -54,6 +54,28 @@ test('health windows use finalized cursors and preserve the source without start
   await expect(perfOp(unobserved, ['frames', 'health', 'scroll'])).rejects.toThrow('unobserved');
 });
 
+test('Android live windows read their baseline once the lease lends the clock, and follow the clock it returns', async () => {
+  const requests = [], cursor = { version: 3 };
+  const s = { host: 'android', now: 500, op: async request => {
+    requests.push(request);
+    if (request.capture === 'start') return { capture: true, lent: true, clock: 500 };
+    if (request.capture === 'stop') return { capture: false, lent: false, clock: 1700 };
+    return request.cursor ? { available: true, source: request.source, window: { kind: 'delta' } } : { available: true, cursor };
+  }, perf: () => { throw new Error('legacy sampler'); } };
+  const reply = await perfOp(s, ['frames', 'live', '1']);
+  expect([reply.source, reply.windowFrames.source]).toEqual(['app', 'window']);
+  expect(renderFrameHealthMetrics(reply)).toContain('frame health · window');
+  expect(requests.map(request => request.capture ?? `${request.cursor ? 'delta' : 'health'} ${request.source}`)).toEqual(['start', 'health app', 'health window', 'delta app', 'delta window', 'stop']);
+  expect(s.now).toBe(1700);
+  // A capture the host cannot lend (a production bake, collection off) reads nothing
+  const refused = { host: 'android', op: async request => (request.capture ? { available: false, capture: false, reason: 'collection-disabled' } : {}) };
+  expect((await perfOp(refused, ['frames', 'live', '1'])).reason).toBe('collection-disabled');
+  await expect(perfOp(s, ['frames', 'live', '30001'])).rejects.toThrow();
+  // A manual stop's clock is the driver's from then on
+  await perfOp(s, ['frames', 'capture', 'stop']);
+  expect(s.now).toBe(1700);
+});
+
 test('Apple live windows use a host-side wait and release their lease on errors', async () => {
   const requests = [], cursor = { version: 1 };
   const s = { host: 'ios', op: async request => {

@@ -21,6 +21,7 @@ object Native {
     @JvmStatic external fun configure(
         night: Boolean, fontScale: Float, locale: String, rtl: Boolean, hour24: Boolean, noAnimations: Boolean,
         boldText: Boolean, highContrast: Boolean, touch: Boolean, tv: Boolean, touchSlop: Float, dates: String,
+        formatLocale: String,
     )
     /** The device's colours ([Palette], LLP 1115.001 D4): Material 3's colour roles as the reader resolved them for
      * this device, twelve under the light scheme and then the same twelve under the dark one, ARGB. Before [start],
@@ -42,6 +43,24 @@ object Native {
     @JvmStatic external fun timerObservation(scrolling: Boolean, sampling: Boolean, applying: Boolean, idle: Boolean): Boolean
     @JvmStatic external fun timerHeld(): Int
     @JvmStatic external fun displayFrame()
+    /** `perf frames` (LLP 1079.000 §6.2), all on exact2's thread and in `System.nanoTime`: a Choreographer turn at
+     * [vsync], its frame's [deadline] and its vsyncs' [period] (0 where Choreographer gave none), when it ran from
+     * [arrival] to [finished], and the publication it made (0: none), whose ingest finishes its work. */
+    @JvmStatic external fun frameTurn(arrival: Long, vsync: Long, deadline: Long, period: Long, finished: Long, publication: Long)
+    /** The main thread ingested every publication through [applied], from [began] to [ended]. */
+    @JvmStatic external fun frameLanded(applied: Long, began: Long, ended: Long)
+    /** No turn is asked for: the run of turns ends. */
+    @JvmStatic external fun frameIdle()
+    /** The display's refresh period: a GPU canvas's frame period (LLP 1009) and a turn's where Choreographer gives
+     * none. */
+    @JvmStatic external fun framePeriod(period: Long)
+    /** [count] window frames ([WindowFrames], five words each) and the reports [lost] before they were read. */
+    @JvmStatic external fun frameWindow(words: LongArray, count: Int, lost: Long)
+    /** The device a `perf frames report` names, as JSON. */
+    @JvmStatic external fun frameIdentity(identity: ByteArray)
+    /** The frame rates GPU canvases ask for (`Surface::max_fps`) that changed since last asked: view and rate (0: the
+     * display's) pairs, or null. */
+    @JvmStatic external fun frameRates(): IntArray?
     @JvmStatic external fun animating(): Boolean
     @JvmStatic external fun owed(): Boolean
     /** The collection pass a scroll left; `limit` >= 0 slices it (rows past what shows per list), the scrolled list
@@ -60,8 +79,16 @@ object Native {
      * (x, y) and the box it shows in (x, y, width, height). exact2 tells the reader of each of them from then on
      * ([scrollers]). After the scrollers: the native module button under the point (0: none), then its painted
      * box x, y, width and height as float bits, in pixels, its allocation slot and generation, and how many long
-     * presses a node has taken so far (wrapping). */
+     * presses a node has taken so far (wrapping). Then each scroller's snap, in the same order (`host/linux/src/presenter/snap.rs`,
+     * `reader_snaps`): flags (bit 0 it snaps sideways, bit 1 up and down, bit 2 `mandatory`), then sideways and then up
+     * and down its snapport's length as float bits, a count, and per snap area the least and greatest offsets it rests
+     * at as float bits and 1 for `scroll-snap-stop: always`, in pixels; flag bit 3: a virtualized list, whose areas past
+     * these [snapsAround] tells. */
     @JvmStatic external fun under(x: Float, y: Float): IntArray
+    /** Virtualized list [id]'s snap areas up and down ([vertical]) or sideways, for a release at offset [release] whose
+     * rest is projected near [projected] (pixels): a count, then per area its least and greatest offsets as float bits
+     * and 1 for `scroll-snap-stop: always` (`host/linux/src/presenter/snap.rs`, `reader_snaps_around`). */
+    @JvmStatic external fun snapsAround(id: Int, vertical: Boolean, release: Float, projected: Float): IntArray
     /** What exact2 tells the reader of the text fields it hosts (LLP 1115.001 D8), when that is not what this last
      * returned (else null): a count, then for each field, in tree order: its id, its generation (moved on when its
      * node became another row's item: the view starts over), flags (bit 0 it was painted and has a place, bit 1 it
@@ -170,8 +197,9 @@ object Native {
      * Backspace. A hosted field ([Fields]) takes its keys itself. */
     @JvmStatic external fun key(code: Int, backspace: Boolean)
     /** A gamepad's state for the canvas a key would reach (LLP 1127.003 D2): [values] its 17 standard buttons, then
-     * its 4 axes; [connected] false when it went away. */
-    @JvmStatic external fun pad(index: Int, connected: Boolean, values: FloatArray)
+     * its 4 axes; [connected] false when it went away. [at] is the event's `eventTime`
+     * (`SystemClock.uptimeMillis()`), 0 for a send no event caused: the host stamps it on arrival then. */
+    @JvmStatic external fun pad(index: Int, connected: Boolean, values: FloatArray, at: Long)
     /** A remote's key, down or up, by the web's `code` and `key` (LLP 1115.001.003 D3): a D-pad arrow, or Select. */
     @JvmStatic external fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean)
     /** System Back (LLP 1115.001 D6): whether the app took it. From its navigation root's selected route it goes to
@@ -179,6 +207,9 @@ object Native {
      * false when there is nowhere to go back to, and the activity finishes. The reader takes Back only while the
      * host says it has somewhere to go (a request, [requests]). */
     @JvmStatic external fun back(): Boolean
+    /** Predictive Back as it goes (Android 14): `phase` 0 started, 1 moved, 2 cancelled; `progress` 0 to 1 as the
+     * system eases it; `edge` 0 the left, 1 the right. Whether exact2 previews it. The commit is [back]. */
+    @JvmStatic external fun backProgress(phase: Int, progress: Float, edge: Int): Boolean
     /** A URL given to the running app: its location goes to the navigation root's `navigate` (LLP 1133.023 D15 item 3). */
     @JvmStatic external fun open(href: String)
     /** A share given to the running app, `{"target", "share"}` as [Shares.request] writes it (LLP 1133.024 D5). */

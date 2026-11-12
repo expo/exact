@@ -16,6 +16,27 @@ import UIKit
 /// on its segment views, in order, after each layout, which is when UIKit
 /// makes them. A segment named by nothing is UIKit's (its title).
 class LabelledSegmentedControl: UISegmentedControl {
+    /// UIKit's parts stood in for at the frames the surface draws them at,
+    /// inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    private let placedParts = PlacedStandIns()
+    private func placedElements() -> [PlacedElement]? {
+        placedParts.elements(of: self) {
+            declaredElements(super.accessibilityElements, count: super.accessibilityElementCount(), at: { super.accessibilityElement(at: $0) })
+        }
+    }
+    override var accessibilityElements: [Any]? {
+        get { placedElements() ?? super.accessibilityElements }
+        set { super.accessibilityElements = newValue }
+    }
+    override func accessibilityElementCount() -> Int { placedElements()?.count ?? super.accessibilityElementCount() }
+    override func accessibilityElement(at index: Int) -> Any? {
+        guard let elements = placedElements() else { return super.accessibilityElement(at: index) }
+        return elements.indices.contains(index) ? elements[index] : nil
+    }
+    override func index(ofAccessibilityElement element: Any) -> Int {
+        guard let elements = placedElements() else { return super.index(ofAccessibilityElement: element) }
+        return elements.firstIndex { $0 === element as AnyObject } ?? NSNotFound
+    }
     var segmentLabels: [String?] = [] { didSet { if segmentLabels != oldValue { setNeedsLayout() } } }
     var segmentIDs: [String?] = [] { didSet { if segmentIDs != oldValue { setNeedsLayout() } } }
     var segmentUnavailable: [Bool] = [] { didSet { if segmentUnavailable != oldValue { setNeedsLayout() } } }

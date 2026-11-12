@@ -285,7 +285,26 @@ and `target/host-dev/llp [corpus-or-document]` (full screen). Both embed their
 terminal entry as a compiled plan. Rebuild after editing the entry or an
 import; launching the binary needs no Contract source or compiler work.
 `exact-terminal <entry.contract>` remains the source-driven development
-host. All three accept the headless operations and `--size COLSxROWS`.
+host. All three take the same command line (LLP 1101.003; `--help` lists it):
+
+- The words are the launch location: a `/…` word is the location itself,
+  any other word one path segment, and `--name value` the query parameter
+  `name=value` (`todo /active`, `harness --prompt "why?"`).
+- With `--print`, `--json`, or a pipe on stdin or stdout, the entry runs
+  once: it lays out at `--columns` (else the terminal's width, `$COLUMNS`,
+  80), runs until no request is pending, no `after` timer is armed and no
+  node is `aria-busy`, writes its rows (`--json`: its settled `state`, with
+  `navigation` and `exit`) and exits. `exactViewport().update` is `"none"`.
+  The exit status is 1 when the active `head`'s `status` is 404, 410 or
+  503 or the runner refused something, 2 for a usage error, 124 after
+  `--timeout` (120 s by default; `0` for none), 130 or 143 on SIGINT or
+  SIGTERM, 141 when stdout closes; at exit every `beforeunload` hears it.
+  `--color=auto` writes SGR to a terminal and plain text elsewhere;
+  `always` and `never` force it.
+- After `--drive`, the headless operations, at `--size COLSxROWS`.
+- Otherwise the app runs in this terminal, at the location.
+
+Only a terminal entry's plan runs here, and a GUI host refuses one.
 Interactive terminal I/O runs on Unix only; Windows supports headless operations.
 
 An interactive launch draws a fresh 32-bit seed for `exactTime()`. Its `locale`
@@ -1037,6 +1056,38 @@ receipt, and signed GPU frameworks (primary and named modules). Copy those
 frameworks intact into the embedding app's `Frameworks/`; their binaries must
 retain the baked digests.
 
+### Mac provisioning profiles
+
+Some entitlements hold on a Mac only under a provisioning profile that
+authorizes them (Apple TN3125), and the Mac build signs them from one (LLP
+1133.010 D7): push's `com.apple.developer.aps-environment` (`device.push`), App
+Attest's environment (`device.attestation`), the Declared Age Range
+(`device.age-range`), the keychain group a locked secret is kept in
+(`secret.keep` with a presence policy), and a passkey's associated domains
+(`auth.passkey`). An app whose grants need any of them is built from the
+newest installed macOS profile for its id (or the team's wildcard) that allows
+them all: a development profile that names this Mac for a development build, a
+Developer ID one for `exact release`. `EXACT_MAC_PROFILE=<path>` names one, and
+the build says why a named one does not fit. The build signs with that
+profile's team's identity (Apple Development, or `EXACT_DEVELOPER_ID` for a
+release; one `EXACT_IDENTITY` or `EXACT_DEVELOPER_ID` names must be of that
+kind and team, or the build is refused), writes the application identifier,
+the team and each entitlement (an environment `development` under a
+development profile, `production` otherwise), embeds the profile as
+`Contents/embedded.provisionprofile`, and always assembles the `.app`, where
+the profile holds.
+
+With no profile that fits, a development build signs none of them and says,
+for each grant, what the app then reports (`available: false`,
+`NotSupportedError`). A release build is refused (`grant-needs-profile`) for
+App Attest, the age range, a passkey or a locked secret that is not
+`optional`; one granting push ships without it, reporting push unavailable.
+An app with Mac widgets signs both under one profile, of the widgets' team,
+chosen among the profiles that grant the widgets' App Group and shared
+Keychain group and the grants' entitlements; with none that grants both, the
+grants sign nothing. An ad hoc build (`EXACT_IDENTITY=-`) signs no profile's
+entitlements.
+
 ### Native CI preparation
 
 The [EAS iOS](recipes/eas-ios.md) and [EAS Android](recipes/eas-android.md)
@@ -1778,7 +1829,10 @@ and refuses a store reached through a symbolic link; one drive holds a native st
 at a time. On the web it is Chrome's profile for the name and its page's origin,
 empty each drive unless `--keep-storage` (a Firefox or WebKit drive's is its own). A drive that compares with a
 reference starts empty on every host unless `--keep-storage`. An authored test gets a fresh
-one of its own, removed after it. A data module's `secret.keep` rides that same
+one of its own, removed after it. If Chrome (including its headless shell) survives an
+interrupted drive, the next drive refuses before resetting or opening its profile and
+names the profile and PID; close that browser or use another store name. A drive also refuses when the profile's
+owner cannot be verified. A data module's `secret.keep` rides that same
 store: files under the named tree on Apple and Linux, `localStorage` in the named
 web profile. Apple native modules receive the same named data, cache and temporary
 roots across launches. A fresh drive clears them; the picker's temporary documents
@@ -2328,7 +2382,7 @@ reminder posts the next one when the app runs.
 ### Push
 
 `@exact/push` (LLP 1133.004 §9) is a visible push from the app's own server,
-on iOS and iPadOS, by the Push API's names. Exact sends nothing and relays
+on iOS, iPadOS and macOS, by the Push API's names. Exact sends nothing and relays
 nothing: the app sends its device token to its own server, and the server
 sends to APNs.
 
@@ -2354,8 +2408,11 @@ signs `aps-environment` into an iOS or iPadOS build: `development` on a
 simulator and under a development profile, `production` under an Ad Hoc,
 enterprise or App Store one, the value a Live Activity that takes pushes signs
 too. A device build is refused unless its profile has Push Notifications with
-that value. A Mac or tvOS build writes nothing for it and is not refused. An
-app with Live Activities may register beside them under this grant.
+that value. A Mac build signs `com.apple.developer.aps-environment` only under
+a macOS provisioning profile that allows it (see "Mac provisioning profiles"),
+with the same values; without one it signs nothing, says so, and is not
+refused. A tvOS build writes nothing for it. An app with Live Activities may
+register beside them under this grant.
 
 - `subscribePush()` is the one call that asks: while notifications'
   permission is `prompt` it shows the system's prompt; while `denied` it is
@@ -2372,9 +2429,10 @@ app with Live Activities may register beside them under this grant.
   permission in Settings is read again when the app comes back to the front.
 - `pushPermissionState()` reads `{available, state}`, notifications'
   permission, which the two modules share.
-- On macOS, tvOS, Android, the web, Linux, Windows and the terminal each call
-  is refused `NotSupportedError`, `pushSubscription()` reads null and the
-  state `available: false`.
+- On a Mac build signed without the entitlement, and on tvOS, Android, the
+  web, Linux, Windows and the terminal, each call is refused
+  `NotSupportedError`, `pushSubscription()` reads null and the state
+  `available: false`.
 
 The server sends APNs an alert (`apns-push-type: alert`, `apns-topic` the
 bundle id), APNs's own `aps` dictionary and one key of Exact's:
@@ -2562,15 +2620,20 @@ or both, each with its own strings key (LLP 1069.008.000):
 ### Sounds
 
 A declared WAV (`sound "assets/…wav"`) is played by `playSound(src, at=,
-gain=, group=, playbackRate=, pan=)`, `playSounds(hits)` and ended by
-`stopSounds(group=)` (LLP 1096; the rate and pan, LLP 1125 D10). The runner keeps the voice table, so what was scheduled, when, and how
+gain=, group=, playbackRate=, pan=)`, `playSounds(hits)`, changed while it plays
+by `setSounds(group=, gain=, playbackRate=, pan=, ramp=)` and ended by
+`stopSounds(group=)` (LLP 1096; the rate and pan, LLP 1125 D10; `setSounds`,
+LLP 1096 D14). A change starts at the commit's time and moves each value given
+linearly over `ramp` ms (20 by default) from where it is; the runner follows each
+voice's place in its file, so a rate change moves its end, which a group cuts
+and the voice bound counts as any other end. The runner keeps the voice table, so what was scheduled, when, and how
 each voice ended is the same on every host and under the driver's clock
 (`state.sounds`, `expect sound`).
 
 | host | output |
 | --- | --- |
-| web (both targets) | Web Audio: a one-shot `AudioBufferSourceNode` per voice at `start(when)` with its `playbackRate`, through a `StereoPannerNode` when its `pan` is not 0, aimed at the speaker through the context's output timestamp; the first sound after the page's first tap or key (one before it is dropped and journaled `sound blocked`) |
-| macOS, iOS, tvOS | one `AVAudioEngine` with a C mixer behind an `AVAudioSourceNode`, sample-accurate (a playback rate reads between frames by linear interpolation; a pan follows the `StereoPannerNode`'s equal-power algorithm), in an arm loaded on demand (`libexact_sound.dylib`; `ExactSound.framework` in an `.ipa`) |
+| web (both targets) | Web Audio: a one-shot `AudioBufferSourceNode` per voice at `start(when)` with its `playbackRate`, through a `StereoPannerNode` when its `pan` is not 0, aimed at the speaker through the context's output timestamp; a change is `setValueAtTime` then `linearRampToValueAtTime` on the voice's `gain`, `playbackRate` (k-rate: it moves once per 128-frame render quantum) and `pan`, a panner added when a change first gives a pan; the first sound after the page's first tap or key (one before it is dropped and journaled `sound blocked`) |
+| macOS, iOS, tvOS | one `AVAudioEngine` with a C mixer behind an `AVAudioSourceNode`, sample-accurate (a playback rate reads between frames by linear interpolation; a pan follows the `StereoPannerNode`'s equal-power algorithm; a change's ramp is read at every frame), in an arm loaded on demand (`libexact_sound.dylib`; `ExactSound.framework` in an `.ipa`) |
 | Linux, Windows, Android (the Linux host in its reader) | no Contract sound output: the runner keeps the voice record |
 
 Under the driver no scheduled sound plays on any host (`output: "agent"`). The
@@ -2595,9 +2658,10 @@ only while something has sound: the sound arm and a canvas's audio once they
 start, a `video` or `audio` while it has a source and is not muted, and a
 media-session claimant (`metadata=`, which Now Playing needs). With no capture
 or speech claim and no call owning the session, muting or removing the last of
-those returns the session to ambient, which mixes with other apps' audio, as
-Bluesky's player does on
-re-mute; it is given up, so a paused podcast resumes, once no player is left.
+those returns a `"playback"` session to ambient, which mixes with other apps'
+audio, as Bluesky's player does on re-mute; a `"playback-mix"` session already
+mixes and keeps its category. Either is given up, so a paused podcast resumes,
+once no player is left.
 A call keeps its category, mode and options when a sound or player ends, and
 leaves activation to the system until its last claim ends and the system
 deactivates it. Either playback value can continue in the background with
@@ -2605,7 +2669,9 @@ deactivates it. Either playback value can continue in the background with
 Before a GPU module makes a surface, the host sets a session that nothing
 holds to ambient, without activating it: a module's output that opens before
 its `exact:audio` request is handled mixes and obeys the switch until the
-request takes the app's category (`gpu/README.md`). The driver's frozen clock
+request takes the app's category (`gpu/README.md`). Under `"playback-mix"` it
+sets the app's own configuration instead, so the category never changes while
+that output plays (a change then interrupts other apps' audio). The driver's frozen clock
 skips preparation and opens no surface output. With `EXACT_AGENT_TIMING=platform`,
 preparation runs, but the driver drops `exact:audio` requests, so they do not
 raise the prepared ambient session.
@@ -2847,14 +2913,58 @@ for why.
 ### Pick a file of any type
 
 An `input type="file"` with no `accept` (or `accept="*/*"`) offers any file;
-`multiple` allows more than one. `showPicker(id)` opens it, and `change`
-receives `Picked[]` with each file's name, type, size and
+`multiple` allows more than one. Tap a visible input or call `showPicker(id)`
+from an action to open it. `change` receives `Picked[]` with each file's name, type, size and
 `app:/tmp/picked/` path. The copy at `path` is named `<id>.<ext>`, `<id>` from the
 launch and a counter, never after the file: show or upload it under `name`. A
 specific `accept` list is limited to media types and types in the app's
 `file_handlers`. The live Linux picker is unavailable;
 its agent substitute accepts any file. Image pixel and Canvas readback remain
 deferred.
+
+For a PDF picker, declare the type in `app.json`:
+
+```json
+"file_handlers": [{ "action": "/", "accept": { "application/pdf": [".pdf"] } }]
+```
+
+In `app.contract`, receive the selected file's display name and app path.
+Cancelling keeps the previous choice:
+
+```contract
+component PdfPicker
+  state name = "No PDF selected"
+  state path = ""
+  state cancels = 0
+  action picked(files: Picked[])
+    name = match files.at(0) { case some(f) => f.name, case none => name }
+    path = match files.at(0) { case some(f) => f.path, case none => path }
+  action cancelled
+    cancels = cancels + 1
+  view
+    column
+      input type="file" id="pdf" testId="pdf" accept="application/pdf" change=picked cancel=cancelled aria-label="Choose a PDF"
+      text name testId="filename"
+```
+
+Put a PDF at `fixtures/report.pdf` beside `app.test.contract`, then run
+`bun exact.mjs test web`. The test's `pick` answers the picker that `tap`
+opened; paths are relative to the test file:
+
+```contract
+test "choose a PDF and cancel the next picker" on web
+  tap "pdf"
+  pick "pdf" "fixtures/report.pdf"
+  expect text "filename" == "report.pdf"
+  tap "pdf"
+  pick "pdf" cancel
+  expect state cancels == 1
+  expect text "filename" == "report.pdf"
+```
+
+The picker needs no grant. Reading `path` through `storage.fs.readFile`
+needs `fs.read app:/tmp/picked`. In a drive, `tap pdf` followed by
+`type @pick fixtures/report.pdf` selects a file; `tap @pick cancel` dismisses it.
 
 ### Shrink a picked image for upload (`storage.fs.compressImage`)
 
@@ -2992,7 +3102,8 @@ fails `TypeError`. A valid format unsupported by the host fails `NotSupportedErr
 | iOS, iPadOS, macOS | Vision, stills and live scanning. |
 | tvOS | Vision on stills; `tracks: false`. |
 | Web | The browser's `BarcodeDetector`, where present; otherwise empty `formats`, `tracks: false`, and detection fails `NotSupportedError`. |
-| Android, Windows, Linux, terminal, and targets without an implementation | Declared default: `formats: []`, `tracks: false`; `detectBarcodes` and `detectedBarcodes` fail `NotSupportedError`. |
+| Android | Bundled ML Kit (`barcode-scanning` 17.3.0), stills and live scanning; `tracks: true`. |
+| Windows, Linux, terminal, and targets without an implementation | Declared default: `formats: []`, `tracks: false`; `detectBarcodes` and `detectedBarcodes` fail `NotSupportedError`. |
 
 `detectedBarcodes(track=, formats=, interval=)` analyses a camera track already
 shown by a viewfinder; it never starts or keeps a camera open. Its answer includes
@@ -3321,6 +3432,7 @@ bare-plan host fixtures. The driver supports `ios --device [--phone <name|udid>]
 the phone connects outward to a temporary Mac-side port with a per-launch token.
 Use a trusted LAN, allow local networking, and keep the app visible;
 `EXACT_AGENT_HOST` overrides the Mac IPv4 address. The carrier is not encrypted.
+Android APK drives (`bun exact.mjs agent android`, or `agent.mjs android --reader`) check and wake the screen, dismiss an insecure keyguard, and refuse a secure lock screen: unlock the device and retry; a readiness timeout includes the observed screen state.
 
 The dev page's **Open in native…** link offers an installed-client action and
 local setup instructions at `/__dev/open`. Development Apple builds register an

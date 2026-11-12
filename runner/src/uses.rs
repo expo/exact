@@ -51,9 +51,10 @@ pub enum Capability {
     /// `input type="file"` and `showPicker` (LLP 1069.002): a plan with a
     /// file input, or whose code runs the command.
     Picker,
-    /// Drag timelines (LLP 1057.003): `-exact-drag-timeline`, `animation-timeline`,
-    /// `animation-range` and `timeline-scope`, their grammar, lowering and
-    /// name lookup. A timeline follows a held value, so it uses motion too.
+    /// Timelines (LLP 1057.003): `-exact-drag-timeline`, the scroll and view
+    /// timeline rows, `animation-timeline`, `animation-range` and
+    /// `timeline-scope`, their grammar, lowering, name lookup and placement.
+    /// A timeline follows a held value or a scroll, so it uses motion too.
     Timelines,
     /// `text-transform` (LLP 1064 D5): its Unicode case mapping, for a plan
     /// that binds the row.
@@ -347,6 +348,11 @@ pub fn uses(plan: &Plan) -> Uses {
                             | StyleId::AnimationTimeline
                             | StyleId::AnimationRange
                             | StyleId::TimelineScope
+                            | StyleId::ScrollTimelineName
+                            | StyleId::ScrollTimelineAxis
+                            | StyleId::ViewTimelineName
+                            | StyleId::ViewTimelineAxis
+                            | StyleId::ViewTimelineInset
                     )
                 ) {
                     uses = uses.with(Capability::Timelines).with(Capability::Motion);
@@ -571,7 +577,10 @@ fn stdlib_calls(plan: &Plan) -> (bool, bool, bool) {
 pub fn runs_sounds(plan: &Plan) -> bool {
     !plan.sounds.is_empty()
         || !plan.sequences.is_empty()
-        || runs_command(plan, &["playSound", "playSounds", "stopSounds"])
+        || runs_command(
+            plan,
+            &["playSound", "playSounds", "stopSounds", "setSounds"],
+        )
 }
 
 /// Whether `plan` asks for MIDI ports or hears an input (LLP 1125 D6–D8):

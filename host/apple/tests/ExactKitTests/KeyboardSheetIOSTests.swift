@@ -34,10 +34,7 @@ final class KeyboardSheetIOSTests: XCTestCase {
         return try XCTUnwrap((state["resources"] as? [String: Any])?["viewport"] as? [String: Any])
     }
 
-    private func fixture() throws -> ExactSession {
-        guard let scene = hostedWindowScene() else {
-            throw missing("scene", "a sheet and the system keyboard need the hosted app's window scene")
-        }
+    private func fixture(_ scene: UIWindowScene) throws -> ExactSession {
         let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_KEYBOARD_SHEET_PLAN"], "build.mjs --test --ios compiles keyboard-sheet.contract")
         let session = ExactApp.shared.makeSession(label: "keyboard-sheet")
         self.session = session
@@ -58,7 +55,10 @@ final class KeyboardSheetIOSTests: XCTestCase {
     }
 
     func testASheetsKeyboardToolbarSitsOnTheKeysAndTheOverlapIsAViewportFact() throws {
-        let session = try fixture()
+        guard let scene = hostedWindowScene() else {
+            throw missing("scene", "a sheet and the system keyboard need the hosted app's window scene")
+        }
+        let session = try fixture(scene)
         let p = session.presenter
         XCTAssertEqual(p.keyboardPolicy, "resizes-content")
         XCTAssertEqual(try viewport()["keyboardHeight"] as? Double, 0)
@@ -91,7 +91,10 @@ final class KeyboardSheetIOSTests: XCTestCase {
     /// A dialog sheet's editor: the page is not avoided under it (the sheet
     /// ends at the keys itself), and the app still reads what they cover.
     func testADialogSheetsEditorStillTellsTheKeyboardHeight() throws {
-        let session = try fixture()
+        guard let scene = hostedWindowScene() else {
+            throw missing("scene", "a sheet and the system keyboard need the hosted app's window scene")
+        }
+        let session = try fixture(scene)
         let p = session.presenter
         p.press(try XCTUnwrap(named("open-note")).id)
         until("the dialog sheet is presented") { self.named("note")?.field?.window != nil && p.menus.sheets.top != nil }

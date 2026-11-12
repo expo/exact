@@ -8,17 +8,27 @@
 // stops answering them, so a long session costs what a short one does.
 // The conversation, the models and the tools live in the Rust data module
 // (apps/harness/data); this file is only the screen.
+//
+// From a shell, `harness --print --prompt "…"` opens `/?prompt=…`: the
+// prompt is asked once, the transcript is printed as it settles, and the
+// run ends when the turn does (LLP 1101.003).
 
-use Run, Line, Block, Entry, Approval, ModelChoice, Session, Workspace, FrameRun, Frame, Ack from "./shapes.contract"
+routes nav
+  home "/"
+
+use Run, Line, Block, LogEntry, Approval, ModelChoice, Session, Workspace, FrameRun, Frame, Ack from "./shapes.contract"
 
 shape Cmd
   name: string
   help: string
 
-// The terminal's size in layout pixels (a column is 8, a row 16).
+// The terminal's size in layout pixels (a column is 8, a row 16), and
+// whether what it shows can change once written: `none` for a run from
+// the command line, whose output is printed once.
 shape Viewport
   width: number
   height: number
+  update: string
 
 // The host's record (LLP 1101.001 P10): how it occupies the terminal, how
 // it draws images, its colour depth, which log it is printing (one more
@@ -49,13 +59,14 @@ fn matching(cmds: Cmd[], draft: string): Cmd[] = cmds.filter(c => c.name.indexOf
 component Harness
   resource terminal = exactSurface("terminal") as shape Terminal
   resource workspace = workspace() as shape Workspace
-  resource session = session(terminal.mode) as shape Session
+  resource session = session(terminal.mode, viewport.update) as shape Session
   mutation sent as shape Ack queue
   mutation answered as shape Ack
   mutation stopped as shape Ack
   mutation chosen as shape Ack
   mutation keyed as shape Ack
   mutation retired as shape Ack
+  mutation submitted as shape Ack
   state draft = ""
   state history = []
   state back = -1
@@ -104,6 +115,13 @@ component Harness
   derive animations = ["/plasma", "/fire", "/matrix", "/spinners", "/bars", "/donut", "/knot", "/tesseract", "/warp", "/tunnel", "/wave"]
   derive inline = terminal.mode != "fullscreen"
   resource viewport = exactViewport() as shape Viewport
+  // A run from the command line: nothing below the transcript is drawn
+  // that only a person at the keyboard could use.
+  derive unattended = viewport.update == "none"
+  // `--prompt`, from the launch location (LLP 1101.003 D4): asked once,
+  // as written, never as a slash command.
+  derive launchPrompt = searchParam(top(nav), "prompt")
+  state asked = false
   // Animations fill the width and most of the height, within reason.
   derive animCols = max(20, min(160, floor(viewport.width / 8) - 2))
   derive animRows = max(6, min(40, floor(viewport.height / 16) - 9))
@@ -115,10 +133,19 @@ component Harness
     every(40, nextFrame)
   task disarm when quitArmed
     after(2000, unarm)
+  task ask when launchPrompt != "" and not asked
+    after(1, askLaunch)
   // What the terminal printed is the data module's to let go of.
   task letGo when terminal.printed != "" and terminal.printed != lastRetired key=terminal.printed
     after(1, retire)
 
+  action askLaunch
+    asked = true
+    send submitted = submitPrompt(launchPrompt)
+  // The terminal is closing: a running turn stops, and its tool with it.
+  action stop
+    if session.busy
+      send stopped = interrupt()
   action step
     let now = performanceNow()
     tick = tick + 1
@@ -243,7 +270,11 @@ component Harness
     anim = ""
 
   view
-    column width="100%" height=(inline ? "auto" : "100%")
+    column width="100%" height=(inline ? "auto" : "100%") beforeunload=stop
+      // A failed turn is the app's answer (LLP 1101.003 D8): a command
+      // line exits 1.
+      if session.failed
+        head status=503
       // Inline, the transcript flows into the terminal's scrollback; full
       // screen, it scrolls in place and follows its end.
       // Keyed by the session's epoch: `/clear` makes a new log, and an
@@ -256,7 +287,9 @@ component Harness
           for epoch in [session.epoch] key=epoch
             Transcript(entries=session.entries, tick=tick)
       // The live tail: everything below the log is redrawn in place.
-      column testId="live" flex-shrink=0
+      // Busy while a turn runs, its silent start and gaps between rounds
+      // included: a run from the command line ends only after it.
+      column testId="live" flex-shrink=0 aria-busy=session.busy
         if session.busy and session.approval.id == ""
           row margin-top="1lh" color="#d78700"
             text `${star(tick)} ${phaseWord(session.phase)}…` font-weight=700
@@ -290,24 +323,27 @@ component Harness
               button press=sendText(c.name) display="flex" text-align="start" background-color=(i == sel ? "#303050" : "transparent") padding="0 1ch" testId=`complete-${c.name}`
                 text c.name width="12ch" flex-shrink=0 color=(i == sel ? "#afafff" : "#87afff") font-weight=(i == sel ? 700 : 400)
                 text c.help color="#8a8a8a" white-space="nowrap" text-overflow="ellipsis" flex-shrink=1 min-width=0
-        if session.queued.length > 0
+        if session.queued.length > 0 and not unattended
           column margin-top="1lh" color="#8a8a8a" padding="0 1ch" testId="queued"
             for q, i in session.queued key=i
               row
                 text "⏵ queued: " white-space="pre" flex-shrink=0
                 text q white-space="nowrap" text-overflow="ellipsis" min-width=0
-        row margin-top="1lh" border="thin solid #585858" border-radius="1ch" padding="0 1ch"
-          text "› " white-space="pre" color="#87afff" font-weight=700 flex-shrink=0
-          textarea value=draft appearance="none" input=write key=onKey disabled=(session.approval.id != "") autofocus=true placeholder=(session.busy ? "Type ahead — it runs when this turn ends" : "Ask anything, or / for commands") flex-grow=1 rows=min(8, draft.split("\n").length) testId="prompt"
-        row padding="0 1ch" color="#6c6c6c" gap="2ch"
-          button appearance="none" commandfor="models" command="show-modal" aria-keyshortcuts="Control+o" testId="model-button" white-space="nowrap" flex-shrink=0
-            text `${session.model} (${session.provider})` color="#87afff"
-          text `${session.cwd}${workspace.branch == "" ? "" : ` (${workspace.branch})`}` white-space="nowrap" text-overflow="ellipsis" flex-shrink=1 min-width=0
-          text `↑ ${kilo(session.tokensIn)} ↓ ${kilo(session.tokensOut)} · ${floor(session.contextPct)}% context` margin-left="auto" white-space="nowrap"
-        if quitArmed
-          text "Press Ctrl-C again to exit" color="#ffaf00" padding="0 1ch"
-        if session.toast != ""
-          text session.toast color="#5fd75f" padding="0 1ch"
+        // The composer, the status row, the quit hint and the toast are for
+        // a person at the keyboard: a run from the command line draws none.
+        if not unattended
+          row margin-top="1lh" border="thin solid #585858" border-radius="1ch" padding="0 1ch"
+            text "› " white-space="pre" color="#87afff" font-weight=700 flex-shrink=0
+            textarea value=draft appearance="none" input=write key=onKey disabled=(session.approval.id != "") autofocus=true placeholder=(session.busy ? "Type ahead — it runs when this turn ends" : "Ask anything, or / for commands") flex-grow=1 rows=min(8, draft.split("\n").length) testId="prompt"
+          row padding="0 1ch" color="#6c6c6c" gap="2ch"
+            button appearance="none" commandfor="models" command="show-modal" aria-keyshortcuts="Control+o" testId="model-button" white-space="nowrap" flex-shrink=0
+              text `${session.model} (${session.provider})` color="#87afff"
+            text `${session.cwd}${workspace.branch == "" ? "" : ` (${workspace.branch})`}` white-space="nowrap" text-overflow="ellipsis" flex-shrink=1 min-width=0
+            text `↑ ${kilo(session.tokensIn)} ↓ ${kilo(session.tokensOut)} · ${floor(session.contextPct)}% context` margin-left="auto" white-space="nowrap"
+          if quitArmed
+            text "Press Ctrl-C again to exit" color="#ffaf00" padding="0 1ch"
+          if session.toast != ""
+            text session.toast color="#5fd75f" padding="0 1ch"
       // Inline, the host anchors an open dialog to the bottom of the live
       // region (above it is the terminal's scrollback); full screen, it
       // centres it.
@@ -339,7 +375,7 @@ component Harness
 // the host reports back when it has printed it).
 component Transcript
   props
-    entries: Entry[]
+    entries: LogEntry[]
     tick: number
   view
     column role="log" testId="transcript"
@@ -412,7 +448,7 @@ component BlockView
 // block, so a long reply scrolls by while it is written.
 component EntryView
   props
-    e: Entry
+    e: LogEntry
     tick: number
   view
     column id=e.id aria-busy=e.busy margin-top=(e.kind == "more" ? "0" : "1lh") testId=`entry-${e.id}`

@@ -35,6 +35,10 @@ internal class Requests(private val activity: ExactActivity) {
         private set
     /** The top layer's windows (LLP 1115.001 D10): what exact2 says of its open surface goes to them. */
     var surfaces: Surfaces? = null
+    /** The GPU surfaces' haptics (LLP 1009 D10), made at the first, and whether the activity is paused, which they are
+     * made with: the first may come after a pause. */
+    private var haptics: SurfaceHaptics? = null
+    private var paused = false
 
     /** `x_log_requests=1` (exact2's EXACT_LOG_REQUESTS): each request as it is acted on, to the log. A haptic or a
      * clipboard write shows nowhere else. */
@@ -87,6 +91,8 @@ internal class Requests(private val activity: ExactActivity) {
                     MODULE -> Extensions.call(id, string(words, body).first)
                     PRESENCE -> Presence.check(string(words, body).first)
                     ORIENTATION -> orientation.told(words, body)
+                    // The surface, then its message's JSON.
+                    SURFACE_HAPTIC -> (haptics ?: SurfaceHaptics(activity, paused).also { haptics = it }).told(words[body], string(words, body + 1).first)
                 }
             } catch (e: RuntimeException) {
                 // The platform refused (no activity to start from, a full clipboard transaction): the app goes on.
@@ -220,13 +226,19 @@ internal class Requests(private val activity: ExactActivity) {
     /** The activity is in front again. A share sheet that was up and has said nothing was dismissed: answered so a
      * moment later, since the sheet's word of a choice is a broadcast and may land just after. */
     fun resumed() {
+        paused = false
+        haptics?.suspended = false
         if (sharing.isEmpty()) return
         val waiting = sharing.toIntArray()
         activity.window.decorView.postDelayed({ for (id in waiting) if (sharing.remove(id)) Exact.answer(id, "dismissed") }, DISMISSED_MS)
     }
 
+    /** Paused: no surface's haptics play until [resumed]. */
+    fun paused() { paused = true; haptics?.suspended = true }
+
     /** The activity goes: no sheet of its answers any more, and each still up is cancelled. */
     fun destroy() {
+        haptics?.destroy()
         if (listening) activity.unregisterReceiver(receiver)
         for (id in sharing) Exact.answer(id, null)
         sharing.clear()
@@ -257,6 +269,7 @@ internal class Requests(private val activity: ExactActivity) {
         const val PRESENCE = 12
         const val ORIENTATION = 13
         const val PAD_INPUT = 14
+        const val SURFACE_HAPTIC = 15
         /** How long after the activity is in front again a share sheet's choice is still waited for. */
         const val DISMISSED_MS = 500L
     }

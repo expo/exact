@@ -484,9 +484,9 @@ final class CanvasPlacedDrawingIOSTests: XCTestCase {
         child.addSubview(fill)
         placedIndices = [0]
         d.frame()
-        child.applyStyle(["filter": .object(["p": .array(program.map { .number($0) })])])
         d.canvas.needsCapture = false
-        child.renderFilter() // its first picture, drawn at once
+        // Outside a batch, its first picture is drawn at once.
+        child.applyStyle(["filter": .object(["p": .array(program.map { .number($0) })])])
         XCTAssertNotNil(child.filterPicture)
         XCTAssertTrue(d.canvas.needsCapture, "its first pixels ask")
         d.canvas.needsCapture = false

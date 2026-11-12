@@ -533,6 +533,35 @@ fn display_mode_bits_preserve_fold_and_preferences_at_boot_and_without_a_resize(
     }
 }
 
+/// LLP 1101.003 D6: the page's `update` rides beside the preference bits,
+/// which have no room for it, and holds across a boot and a resize.
+#[test]
+fn update_holds_across_boot_and_resize() {
+    let source = "shape Viewport\n  update: string\ncomponent App\n  resource viewport = exactViewport() as shape Viewport\n  view\n    text viewport.update\n";
+    let plan = contract::bake(contract::compile(source).unwrap(), NoData)
+        .unwrap()
+        .encode();
+    let mut bridge = exact_web::abi::Bridge::new();
+    bridge.set_links(exact_web::HostLinks::ALL);
+    let update = |bridge: &mut exact_web::abi::Bridge<NoData>| {
+        let n = bridge.input_write(br#"{"op":"state"}"#);
+        let len = bridge.agent(n);
+        let state: serde_json::Value =
+            serde_json::from_slice(bridge.output_bytes(len as usize)).unwrap();
+        state["resources"]["viewport"]["update"].clone()
+    };
+    bridge.set_update(2);
+    bridge.set_preferences(0xff);
+    bridge.boot(&plan, NoData, 600.0, 400.0, "/");
+    assert_eq!(update(&mut bridge), "none");
+    bridge.set_update(1);
+    bridge.resize(600.0, 400.0, 0, 0.0);
+    assert_eq!(update(&mut bridge), "slow");
+    bridge.set_update(0);
+    bridge.resize(600.0, 400.0, 0xff, 0.0);
+    assert_eq!(update(&mut bridge), "fast");
+}
+
 /// LLP 1039 D9: a rotation's size and the page's geometry reach the runner
 /// in one `exact_resize` and one commit, so a branch both decide, which
 /// holds before and after, is never torn down between them; the geometry

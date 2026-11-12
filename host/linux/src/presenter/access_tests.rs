@@ -199,6 +199,10 @@ fn shelf(books: usize) -> Presenter<Data> {
 }
 
 fn settle(p: &mut Presenter<Data>) {
+    // A sheet or a crossing comes to rest (`stage.rs`).
+    if let Some(end) = p.stage_settles_at() {
+        p.tick(end);
+    }
     for _ in 0..12 {
         assert!(p.pump(p.host.now()).is_none());
         p.run_commands(|| Data(0));

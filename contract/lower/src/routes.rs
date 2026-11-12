@@ -179,7 +179,7 @@ fn route_policy(
 
 /// Where an element sits relative to a navigation root (LLP 1038 D6, LLP
 /// 1075.003 §3.7). Every host finds a root's routes among its own children
-/// and among its tabpanels' children, and nowhere else: a route behind a
+/// and among its linked tabpanels' children, and nowhere else: a route behind a
 /// wrapper was ignored, with only a runtime log naming its key (hn-reader
 /// F5, shop F9), so the compiler refuses it.
 #[derive(Clone, Debug, Default)]
@@ -187,15 +187,15 @@ pub(crate) enum NavPlace {
     /// No navigation root encloses it.
     #[default]
     Outside,
-    /// A root's child: the tags from the root down.
-    RootChild(Vec<String>),
+    /// A root's child: the tags from the root down and any possible tab links.
+    RootChild(Vec<String>, Vec<Expr>),
     /// A child of a root that holds tabs, whose routes are its tabpanels'
     /// children only (LLP 1075.003 §3.7).
-    TabbedRootChild(Vec<String>),
-    /// A tabpanel's child, the panel in a root.
-    PanelChild(Vec<String>),
+    TabbedRootChild(Vec<String>, Vec<Expr>),
+    /// A linked tabpanel's child, with the root's tab links.
+    PanelChild(Vec<String>, Vec<Expr>),
     /// Deeper inside a root, behind a wrapper, outside any route.
-    InRoot(Vec<String>),
+    InRoot(Vec<String>, Vec<Expr>),
     /// Inside a route.
     InRoute,
 }
@@ -210,7 +210,13 @@ pub(crate) fn split_placeholder(attrs: &[Attr]) -> Option<&Attr> {
 }
 
 impl NavPlace {
-    /// @ref LLP 1116 D6, LLP 1115 D5 — the first root carrying a
+    fn is_root(&self, first_root: bool, attrs: &[Attr]) -> bool {
+        first_root
+            && matches!(self, NavPlace::Outside)
+            && attrs.iter().any(|a| a.name == "navigationKey")
+    }
+
+    /// @ref LLP 1116 D6, LLP 1115 D5 — the app's first element carrying a
     /// `navigationKey` is the navigation root with or without
     /// `navigationBack`. One that names no Back control is given the empty
     /// name, which no element's `id` carries: every host and the runner
@@ -223,11 +229,7 @@ impl NavPlace {
         span: Span,
     ) -> Option<Vec<Attr>> {
         let has = |name: &str| attrs.iter().any(|a| a.name == name);
-        (first_root
-            && matches!(self, NavPlace::Outside)
-            && has("navigationKey")
-            && !has("navigationBack"))
-        .then(|| {
+        (self.is_root(first_root, attrs) && !has("navigationBack")).then(|| {
             let mut attrs = attrs.to_vec();
             attrs.push(Attr {
                 name: "navigationBack".into(),
@@ -312,10 +314,10 @@ impl NavPlace {
     }
 
     /// Whether an element here with `attrs` is a route: a child of the
-    /// navigation root or of a `role="tabpanel"` in it, with a `navigationKey`.
-    fn is_route(&self, attrs: &[Attr]) -> bool {
+    /// navigation root or of a linked `role="tabpanel"` in it, with a `navigationKey`.
+    pub(crate) fn is_route(&self, attrs: &[Attr]) -> bool {
         let has = |name: &str| attrs.iter().any(|a| a.name == name);
-        matches!(self, NavPlace::RootChild(_) | NavPlace::PanelChild(_))
+        matches!(self, NavPlace::RootChild(..) | NavPlace::PanelChild(..))
             && has("navigationKey")
             && !has("navigationBack")
     }
@@ -324,6 +326,7 @@ impl NavPlace {
     /// no host would find here.
     pub(crate) fn enter(
         &self,
+        first_root: bool,
         tag: &str,
         attrs: &[Attr],
         children: &[Node],
@@ -331,6 +334,14 @@ impl NavPlace {
     ) -> Result<NavPlace, LowerError> {
         let has = |name: &str| attrs.iter().any(|a| a.name == name);
         let path = |p: &[String]| [p, &[tag.to_string()]].concat();
+        let root = self.is_root(first_root, attrs);
+        if has("navigationKey") && has("navigationBack") && !root {
+            return err(
+                "lower-route-place",
+                "`navigationKey` with `navigationBack` marks a navigation root, which must be the app view's first element, outside any wrapper, branch or existing navigation root. Move the pair onto that first element and put the keyed screens directly inside it or its linked tabpanels (docs/recipes/navigation-stack.md)",
+                attrs.iter().find(|a| a.name == "navigationBack").unwrap().span,
+            );
+        }
         // @ref LLP 1115.000 D5.2 — the bar is each route's, so `navigationBar`
         // is a route's word: on the root or on a box inside a screen no host
         // reads it, and the screen would keep the bar it meant to drop.
@@ -342,7 +353,7 @@ impl NavPlace {
             };
             return err(
                 "lower-route-bar",
-                format!("`navigationBar` is on {on}, where no host reads it: it belongs to a route (an element with a `navigationKey`, a child of the navigation root or of a `role=\"tabpanel\"` in it) and says whether that one screen shows the platform's navigation bar. Move it onto each route that draws its own chrome (docs/recipes/navigation-stack.md)"),
+                format!("`navigationBar` is on {on}, where no host reads it: it belongs to a route (an element with a `navigationKey`, a child of the navigation root or of a linked `role=\"tabpanel\"` in it) and says whether that one screen shows the platform's navigation bar. Move it onto each route that draws its own chrome (docs/recipes/navigation-stack.md)"),
                 attrs
                     .iter()
                     .find(|a| a.name == "navigationBar")
@@ -379,7 +390,7 @@ impl NavPlace {
             if !self.is_route(attrs) {
                 return err(
                     "lower-attr-value",
-                    "`navigationInitialDetent` is read only on a route (an element with a `navigationKey`, a child of the navigation root or of a `role=\"tabpanel\"` in it), beside its `navigationDetent`: move both onto the sheet's route",
+                    "`navigationInitialDetent` is read only on a route (an element with a `navigationKey`, a child of the navigation root or of a linked `role=\"tabpanel\"` in it), beside its `navigationDetent`: move both onto the sheet's route",
                     a.span,
                 );
             }
@@ -423,21 +434,22 @@ impl NavPlace {
                 a.span,
             );
         }
-        if has("navigationKey") && has("navigationBack") {
+        if root {
             let path = vec![tag.to_string()];
-            return Ok(if holds_tabs(children) {
-                NavPlace::TabbedRootChild(path)
+            let (tabs, tabbed) = linked_tabs(children);
+            return Ok(if tabbed {
+                NavPlace::TabbedRootChild(path, tabs)
             } else {
-                NavPlace::RootChild(path)
+                NavPlace::RootChild(path, tabs)
             });
         }
         if has("navigationKey") {
             let shown = match self {
-                NavPlace::InRoot(p) => p.join(" > "),
+                NavPlace::InRoot(p, _) => p.join(" > "),
                 // @ref LLP 1116.020 D2 — round 18's contacts took its add sheet out of the tab's
                 // stack and drew it beside the tabs: no host presented it, and its header sat
                 // under the status bar with Save and Cancel dead.
-                NavPlace::TabbedRootChild(_) => {
+                NavPlace::TabbedRootChild(..) => {
                     let modal = attrs.iter().rev().find(|a| a.name == "navigationPresentation");
                     let sheet = if modal.is_some() {
                         " (a `navigationPresentation=\"modal\"` here is no sheet: it is drawn over the page, its header under the status bar)"
@@ -453,7 +465,7 @@ impl NavPlace {
                 NavPlace::InRoute => {
                     return err(
                         "lower-route-place",
-                        format!("this `{tag}` has a `navigationKey` inside another route; a route is a child of the navigation root or of a `role=\"tabpanel\"` in it, never of a route, so no host would show it"),
+                        format!("this `{tag}` has a `navigationKey` inside another route; a route is a child of the navigation root or of a linked `role=\"tabpanel\"` in it, never of a route, so no host would show it"),
                         span,
                     )
                 }
@@ -465,11 +477,11 @@ impl NavPlace {
             };
             return err(
                 "lower-route-place",
-                format!("this `{tag}` has a `navigationKey` but sits at `{shown} > {tag}`; the hosts find a route only as a child of the navigation root (the first root with a `navigationKey`) or of a `role=\"tabpanel\"` in it, so this one is never shown. Move the wrapper's layout onto the route or inside it (docs/contract-for-agents.md, \"Tabs and stacks\")"),
+                format!("this `{tag}` has a `navigationKey` but sits at `{shown} > {tag}`; the hosts find a route only as a child of the navigation root (the app view's first element, carrying `navigationKey`) or of a linked `role=\"tabpanel\"` in it, so this one is never shown. Put the route directly in the root or a linked panel; move any wrapper's layout onto the route or inside it (docs/contract-for-agents.md, \"Tabs and stacks\")"),
                 span,
             );
         }
-        // A dynamic `role` may be a tabpanel: its children are given the benefit.
+        // A computed role or link may name a tabpanel; a literal mismatch cannot.
         let panel = attrs
             .iter()
             .rev()
@@ -479,29 +491,42 @@ impl NavPlace {
                 _ => true,
             });
         Ok(match self {
-            NavPlace::RootChild(p) | NavPlace::TabbedRootChild(p) | NavPlace::InRoot(p)
-                if panel =>
-            {
-                NavPlace::PanelChild(path(p))
+            NavPlace::RootChild(p, tabs)
+            | NavPlace::TabbedRootChild(p, tabs)
+            | NavPlace::PanelChild(p, tabs)
+            | NavPlace::InRoot(p, tabs) => {
+                let id = attrs.iter().rev().find(|a| a.name == "id");
+                if panel && id.is_some_and(|a| tabs.iter().any(|tab| may_name(tab, &a.value))) {
+                    NavPlace::PanelChild(path(p), tabs.clone())
+                } else {
+                    NavPlace::InRoot(path(p), tabs.clone())
+                }
             }
-            NavPlace::RootChild(p)
-            | NavPlace::TabbedRootChild(p)
-            | NavPlace::PanelChild(p)
-            | NavPlace::InRoot(p) => NavPlace::InRoot(path(p)),
             other => other.clone(),
         })
     }
 }
 
-/// Whether a navigation root's own subtree, outside its routes, holds a
-/// literal `tablist` and `tabpanel`: its routes are then its tabpanels'
-/// children, never its own (`host/web/navigation.js` `stacksOf`, the iOS and
-/// Mac hosts' `NavigationTabs`, the runner's `tab_panels`). What the compiler
-/// cannot see (a computed role, a component's use) is not counted.
-fn holds_tabs(children: &[Node]) -> bool {
-    let (mut list, mut panel) = (false, false);
-    let mut stack: Vec<&Node> = children.iter().collect();
-    while let Some(node) = stack.pop() {
+/// Possible links from the first linked tablist, as hosts discover it.
+/// Computed roles allow panel routes without ruling out root-child routes.
+fn linked_tabs(children: &[Node]) -> (Vec<Expr>, bool) {
+    struct Name<'a> {
+        value: &'a Expr,
+        literal_role: bool,
+        unconditional: bool,
+    }
+    struct List<'a> {
+        literal_role: bool,
+        unconditional: bool,
+        controls: Vec<Name<'a>>,
+    }
+    let (mut lists, mut panels): (Vec<List<'_>>, Vec<Name<'_>>) = (Vec::new(), Vec::new());
+    let mut stack: Vec<_> = children
+        .iter()
+        .rev()
+        .map(|n| (n, None::<usize>, true))
+        .collect();
+    while let Some((node, in_list, unconditional)) = stack.pop() {
         match node {
             Node::Element {
                 attrs, children, ..
@@ -509,27 +534,100 @@ fn holds_tabs(children: &[Node]) -> bool {
                 if attrs.iter().any(|a| a.name == "navigationKey") {
                     continue;
                 }
-                match attrs
-                    .iter()
-                    .rev()
-                    .find(|a| a.name == "role")
-                    .map(|a| &a.value)
-                {
-                    Some(Expr::Str(r, _)) if r == "tablist" => list = true,
-                    Some(Expr::Str(r, _)) if r == "tabpanel" => panel = true,
-                    _ => {}
+                let value = |name| {
+                    attrs
+                        .iter()
+                        .rev()
+                        .find(|a| a.name == name)
+                        .map(|a| &a.value)
+                };
+                let role = value("role");
+                let may_be = |word| {
+                    role.is_some_and(|role| match role {
+                        Expr::Str(r, _) => r == word,
+                        _ => true,
+                    })
+                };
+                let literal_role = matches!(role, Some(Expr::Str(..)));
+                if let Some(index) = in_list.filter(|_| may_be("tab")) {
+                    if let Some(value) = value("aria-controls") {
+                        lists[index].controls.push(Name {
+                            value,
+                            literal_role,
+                            unconditional,
+                        });
+                    }
                 }
-                stack.extend(children);
+                if may_be("tabpanel") {
+                    if let Some(value) = value("id") {
+                        panels.push(Name {
+                            value,
+                            literal_role,
+                            unconditional,
+                        });
+                    }
+                }
+                let list = may_be("tablist").then(|| {
+                    let index = lists.len();
+                    lists.push(List {
+                        literal_role,
+                        unconditional,
+                        controls: Vec::new(),
+                    });
+                    index
+                });
+                stack.extend(children.iter().rev().map(|n| (n, list, unconditional)));
             }
             Node::When {
                 then, otherwise, ..
-            } => stack.extend(then.iter().chain(otherwise)),
-            Node::Each { body, .. } => stack.extend(body),
-            Node::Match { some, none, .. } => stack.extend(some.1.iter().chain(none)),
+            } => {
+                stack.extend(
+                    then.iter()
+                        .chain(otherwise)
+                        .rev()
+                        .map(|n| (n, in_list, false)),
+                );
+            }
+            Node::Each { body, .. } => {
+                stack.extend(body.iter().rev().map(|n| (n, in_list, false)));
+            }
+            Node::Match { some, none, .. } => {
+                stack.extend(some.1.iter().chain(none).rev().map(|n| (n, in_list, false)));
+            }
             Node::Use { .. } | Node::Children { .. } => {}
         }
     }
-    list && panel
+    let (mut controls, mut tabbed) = (Vec::new(), false);
+    for list in lists {
+        let mut selected = false;
+        for control in list.controls {
+            for panel in &panels {
+                if !may_name(control.value, panel.value) {
+                    continue;
+                }
+                controls.push(control.value.clone());
+                let literal_roles = list.literal_role && control.literal_role && panel.literal_role;
+                tabbed |= literal_roles;
+                selected |= literal_roles
+                    && list.unconditional
+                    && control.unconditional
+                    && panel.unconditional
+                    && matches!((control.value, panel.value), (Expr::Str(..), Expr::Str(..)));
+            }
+        }
+        // A later list can own the stack only while an earlier one's links are uncertain.
+        if selected {
+            break;
+        }
+    }
+    (controls, tabbed)
+}
+
+fn may_name(control: &Expr, panel: &Expr) -> bool {
+    match (control, panel) {
+        (Expr::Str(a, _), Expr::Str(b, _)) => a == b,
+        _ => true,
+    }
 }
 
 /// A route's literal `navigationScroll` names its content scroller by HTML

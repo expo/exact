@@ -5,13 +5,13 @@
 use super::nested_header::WRAPPERS;
 use super::width::{last, rows};
 use super::{computed, has, literal};
-use crate::LowerError;
+use crate::{routes::NavPlace, LowerError};
 use contract_syntax::{Attr, Expr, Node};
 use contract_types::Checked;
 
 pub(super) fn check(checked: &Checked<'_>, out: &mut Vec<LowerError>) {
     let view = &checked.expanded.root.view;
-    if has_route(view, false) {
+    if has_route(view, &NavPlace::Outside, true) {
         return;
     }
     let styles = &checked.file.styles;
@@ -38,7 +38,7 @@ pub(super) fn check(checked: &Checked<'_>, out: &mut Vec<LowerError>) {
             if !none_or_computed(&rows, "appearance") && headings(children) == Some(1) {
                 out.push(LowerError {
                     id: "lower-header-routeless",
-                    message: "this app has no navigation route (a keyed screen inside a keyed navigation root), so on iOS this `header` is drawn in the page, not as the navigation bar. Add a navigation root holding a separately keyed screen (both have `navigationKey`), with this header as the screen's first child, or set `appearance=\"none\"` on the header to keep it drawn as written (docs/recipes/navigation-stack.md)".into(),
+                    message: "this app has no navigation route (a keyed screen directly inside the app's first, keyed element or one of its linked tabpanels), so on iOS this `header` is drawn in the page, not as the navigation bar. Make the app's first element a navigation root holding a separately keyed screen (both have `navigationKey`), with this header as the screen's first child, or set `appearance=\"none\"` on the header to keep it drawn as written (docs/recipes/navigation-stack.md)".into(),
                     span: node.span(),
                 });
             }
@@ -52,22 +52,29 @@ pub(super) fn check(checked: &Checked<'_>, out: &mut Vec<LowerError>) {
 }
 
 // A route in any branch counts, including one that is initially hidden.
-fn has_route(nodes: &[Node], in_root: bool) -> bool {
-    nodes.iter().any(|node| match node {
+fn has_route(nodes: &[Node], place: &NavPlace, first_root: bool) -> bool {
+    nodes.iter().enumerate().any(|(index, node)| match node {
         Node::Element {
-            attrs, children, ..
+            tag,
+            attrs,
+            children,
+            span,
+            ..
         } => {
-            let keyed = has(attrs, "navigationKey");
-            // A host may treat a keyed child as a route even with `navigationBack`.
-            (in_root && keyed) || has_route(children, in_root || keyed)
+            let Ok(next) = place.enter(first_root && index == 0, tag, attrs, children, *span)
+            else {
+                return false;
+            };
+            place.is_route(attrs) || has_route(children, &next, false)
         }
         Node::When {
             then, otherwise, ..
-        } => has_route(then, in_root) || has_route(otherwise, in_root),
-        Node::Match { some, none, .. } => has_route(&some.1, in_root) || has_route(none, in_root),
-        Node::Each { body, .. } => has_route(body, in_root),
-        Node::Use { children, .. } => has_route(children, in_root),
-        Node::Children { .. } => false,
+        } => has_route(then, place, false) || has_route(otherwise, place, false),
+        Node::Match { some, none, .. } => {
+            has_route(&some.1, place, false) || has_route(none, place, false)
+        }
+        Node::Each { body, .. } => has_route(body, place, false),
+        Node::Use { .. } | Node::Children { .. } => false,
     })
 }
 

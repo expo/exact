@@ -4,13 +4,30 @@ use crate::style::metrics::{self, Column};
 use std::borrow::Cow;
 
 static HEADER: std::sync::LazyLock<StyleProps> = std::sync::LazyLock::new(|| {
-    let mut style = StyleProps::default();
+    // Static defaults keep roles, independent of the initializing app's theme.
+    let role = |name| {
+        let metric = metrics::named(name).expect("schema header metric");
+        let crate::generated::MetricValue::Text(name) = metric.neutral else {
+            panic!("schema header role");
+        };
+        crate::ColorValue::Role(crate::style::roles::role(name).expect("schema header role"))
+    };
+    let mut style = StyleProps {
+        background_color: Some(role("-exact-header-ground")),
+        text_color: role("-exact-header-color"),
+        ..StyleProps::default()
+    };
+    style.border_color_bottom = Some(role("-exact-header-edge-color"));
+    for id in [
+        StyleId::BackgroundColor,
+        StyleId::TextColor,
+        StyleId::BorderColorBottom,
+    ] {
+        style.mask.set(id);
+    }
     for (id, name) in [
-        (StyleId::BackgroundColor, "-exact-header-ground"),
-        (StyleId::TextColor, "-exact-header-color"),
         (StyleId::BorderWidthBottom, "-exact-header-edge-width"),
         (StyleId::BorderStyleBottom, "-exact-header-edge-style"),
-        (StyleId::BorderColorBottom, "-exact-header-edge-color"),
         (StyleId::MinHeight, "-exact-header-min-height"),
         (StyleId::PaddingTop, "-exact-header-padding-block"),
         (StyleId::PaddingBottom, "-exact-header-padding-block"),

@@ -19,7 +19,7 @@ import { Counting, heldTickets } from "./held.js";
 const WAIT = 5_000, BOUND = 10_000, KEPT = 20;
 /** The commands a call's commit does not run, each moving the person's view (D4a); any other but RUN is refused. */
 const SKIPPED = new Set(["focus", "blur", "scrollIntoView", "selectText", "setSelectionRange", "fastSeek", "load", "haptic"]);
-const RUN = new Set(["postMessage", "stopSounds", "preventDefault", "stopPropagation"]);
+const RUN = new Set(["postMessage", "stopSounds", "setSounds", "preventDefault", "stopPropagation"]);
 
 /** `json` against plan type `type` (type_descriptors.rs), strictly, as the runner's `tools.rs` checks it: the value the
  * runtime holds (a record as its fields in order), else an Error naming the first failing path. */

@@ -26,8 +26,15 @@ impl Painter {
         offset: (f32, f32),
         clip: Option<Rect4>,
     ) {
+        if self.staged(id) {
+            return;
+        }
         let Some(s) = self.split.as_ref() else {
-            return self.node_at(walk, id, ts, offset, clip);
+            self.node_at(walk, id, ts, offset, clip);
+            if self.keeps(id) {
+                self.keep_route(walk, id);
+            }
+            return;
         };
         if s.chevrons.contains(&id) || s.placeholder == Some(id) {
             return;

@@ -13,6 +13,7 @@ impl Surfaces {
         self.edits_admitted |=
             abi.agent(c.id, &json!({"op":"state"}))["world"]["developmentEdits"] == true;
         abi.destroy(c.id);
+        self.haptics.gone(view);
         if c.owner {
             self.error = self.error.take().or(host.surface_record(&c.name, None));
             if c.performance {

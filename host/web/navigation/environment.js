@@ -242,9 +242,15 @@ export const preferences = () => {
 };
 // a dev pin's scheme is the system's (LLP 1122 D4; dev.js), else the manifest's fixed `userInterfaceStyle` (the shell's `<meta name="color-scheme">`, look.mjs), as `UIUserInterfaceStyle` is an iOS app's
 export const displayMode = () => DISPLAY_MODES[preferences() >>> 29 & 7];
+// @ref LLP 1101.003 D6 — Media Queries 4's `update`: 0 `fast` (a screen, and a page that cannot ask), 1 `slow`, 2 `none` (print). The preference bits have no room for it; the wasm host takes it through `exact_set_update`.
+let updateQueries;
+const updates = () => updateQueries ??= ["(update: slow)", "(update: none)"].map(q => globalThis.matchMedia?.(q));
+export const UPDATES = ["fast", "slow", "none"];
+export const updateCode = () => updates()[1]?.matches ? 2 : updates()[0]?.matches ? 1 : 0;
 /** A phone-sized screen (its short side under 600 CSS px): the GPU tier's class when the adapter says nothing it knows, and never `high` (LLP 1139.003 D2). */ export const handheld = (platform = globalThis) => Math.min(platform.screen?.width ?? Infinity, platform.screen?.height ?? Infinity) < 600;
 export const onPreferences = (changed) => {
   queries().forEach(([q]) => q.addEventListener("change", changed));
+  updates().forEach(q => q?.addEventListener?.("change", changed));
   // A window can move between displays without changing its logical size.
   let resolution;
   const watch = () => {

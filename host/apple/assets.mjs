@@ -533,6 +533,18 @@ export const macReleaseEntitlements = (compat, widgets = {}) => {
     ...(domains.length ? { 'com.apple.developer.associated-domains': domains } : {}) });
 };
 
+/** The keys a macOS provisioning profile authorizes (presence.mjs `macProfileEntitlements`). */
+export const PROFILE_KEYS = ['com.apple.application-identifier', 'com.apple.developer.team-identifier', 'keychain-access-groups',
+  'com.apple.developer.aps-environment', 'com.apple.developer.devicecheck.appattest-environment', 'com.apple.developer.declared-age-range',
+  'com.apple.developer.associated-domains'];
+
+/** Of `bundle`'s signed entitlements, those a profile authorizes; `signed`: its entitlements as a plist (a test's). */
+export function profileEntitlements(bundle, signed = run('codesign', ['-d', '--entitlements', '-', '--xml', bundle], { encoding: 'utf8', stdio: 'pipe' }).stdout) {
+  if (!signed?.includes('<plist')) return {};
+  const json = JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', '-'], { input: signed, encoding: 'utf8', stdio: 'pipe' }).stdout);
+  return Object.fromEntries(Object.entries(json).filter(([key]) => PROFILE_KEYS.includes(key)));
+}
+
 /** The executable a bundle runs, as Foundation resolves it (`NSBundle`
  *  `executablePath`, the resolver `codesign` shares): it honours
  *  `Info-macos.plist`, XML comments and entities, which `bundleExecutable`'s
@@ -607,6 +619,8 @@ export function signRelease(bundle, { compat, manifest, identity, id, scratch, t
     if (!signed?.includes('<plist')) throw new Error('Mac widget extension has no entitlements to preserve');
     plists.set(extension, signed);
   }
+  // What the build signed under its embedded macOS profile (LLP 1133.010 D7), kept as the build chose it.
+  if (existsSync(resolve(bundle, 'Contents/embedded.provisionprofile'))) Object.assign(widgets, profileEntitlements(bundle));
   const own = macReleaseEntitlements(compat, widgets);
   if (own) plists.set(bundle, own);
   let n = 0;
@@ -637,7 +651,7 @@ export function iosExecutableRefusal(manifest, name, key = 'app.name') {
 
 /** The trees every Apple bundle gets from the build's capture (`copyAppleStaticTrees`):
  *  under the Mac's `Contents/Resources`, at the top of an iOS bundle. */
-export const APPLE_STATIC_TREES = ['assets', 'deck', 'shaders', 'rust', 'plans', 'typescript', 'activities'];
+export const APPLE_STATIC_TREES = ['assets', 'deck', 'shaders', 'exact-metal', 'rust', 'plans', 'typescript', 'activities'];
 
 /** What the Mac build writes under `Contents/Resources` (bundle.mjs, intents.mjs) beside
  *  the trees an app declares, which may not take one of these places; and a

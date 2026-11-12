@@ -1990,6 +1990,7 @@ dependencies = [
  "contract",
  "exact-kernel",
  "exact-plan",
+ "exact-route",
  "exact-runner",
  "exact-textflow",
  "getrandom 0.3.4",
@@ -1997,6 +1998,7 @@ dependencies = [
  "libc",
  "png",
  "rustix 1.1.4",
+ "serde_json",
  "signal-hook",
  "smol_str",
  "unicode-segmentation",
@@ -2639,6 +2641,7 @@ dependencies = [
  "contract",
  "exact-terminal",
  "harness-data",
+ "serde_json",
 ]
 
 [[package]]

@@ -302,7 +302,10 @@ A form you lay out (fields, Save, Cancel) is a route presented as a sheet:
 `navigationBack` names, so the iOS swipe down and the web's Escape press it, and the screen
 under it is inert. A question with buttons only is a `dialog role="alertdialog"`
 (`contract vocab confirm`). A `dialog` you lay out yourself is a smaller thing: the web's and
-macOS's modal `dialog`, and on iOS a sheet as tall as its content, with no bar.
+macOS's modal `dialog`, and on iOS a sheet as tall as its content, with no bar. One whose own
+`background-color` or `background-image` you write is your box, not the platform's: on iOS it is
+HTML's top layer, over any sheet, centred, its own `animation` its entrance and, when an `if`
+removes it, its `-exact-exit-animation` its exit.
 `role="dialog"` on a `column` gets no Escape, focus or sheet anywhere. A `dialog` opens with
 `showModal(id)` or `commandfor=id command="show-modal"` and takes no `open`: in HTML `open` alone
 shows a dialog non-modally, and a dialog that state holds open is not available yet.
@@ -1194,7 +1197,8 @@ surface of your own takes `backgroundMaterial`: `"glass"` or `"glass-clear"` is
 `"menu"`, `"popover"`, `"hud-window"` the Mac's. The web and Linux draw a blur that
 approximates each. A glass button is `buttonStyle="glass"` or
 `"prominent-glass"`, and `glassGroup=<points>` on a box merges the glass inside it as
-SwiftUI's `GlassEffectContainer` does.
+SwiftUI's `GlassEffectContainer` does. On iOS a glass a tap adds to a group grows out of the
+nearest glass within that spacing, and one it removes is drawn back into it.
 
 ```contract
 component App

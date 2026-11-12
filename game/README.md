@@ -449,7 +449,7 @@ pushed as far, the lower index); a button is down while any pad holds it. Per ho
 | Host | Reads | Limits |
 |---|---|---|
 | Web | the Gamepad API, polled each frame while a pad is connected; a pad without the standard mapping is reported (`pad 1 connected unmapped` in the journal) and delivers nothing | as the browser exposes pads |
-| macOS, iOS, tvOS | GameController's extended gamepad, on each change, and every pad as it is now when a canvas or a control in it takes or gives up the focus, when the app becomes active, and on the Mac when a window becomes or stops being key | a controller without the extended profile (the Siri Remote) is unmapped; on iPadOS with several windows the pads go to the earliest-made canvas holding the focus in any of them, not to the key window's |
+| macOS, iOS, tvOS | GameController's extended gamepad, opened only for a world that reads pads (an action or a rebinding names a pad button or stick, or a tick calls `Input::pad`), on each change, and every pad as it is now when a canvas or a control in it takes or gives up the focus, when the app becomes active, and on the Mac when a window becomes or stops being key | a controller without the extended profile (the Siri Remote) is unmapped; on iPadOS with several windows the pads go to the earliest-made canvas holding the focus in any of them, not to the key window's |
 | Android | gamepad keys and joystick axes; each trigger with an axis (LTRIGGER or BRAKE for the left, RTRIGGER or GAS for the right) reports its travel, one without its key; releases readings when the reader's window loses focus or the activity stops, keeping slots | every pad is reported standard; the host reads no pad's state on focus gain, so a pad reports itself with its next event, and a button held while unfocused reads up until pressed again |
 | Linux | evdev, at each report, stamped with the report's time moved into the host's clock by one origin per read and kept when that report moves the pads to a canvas, so readings buffered in one read keep their spacing and several pads' arrive in the order they happened (ties by index, then as read); in the kernel's gamepad layout (Xbox drivers' letters read as their positions); a pad's state is read when it opens and delivered ahead of the reports buffered since | pads present at launch only; every pad is reported standard |
 | Windows | XInput's four slots, every 8 ms while one is connected and every 250 ms otherwise, while the window has focus, and all four at once when it regains focus, so a pad unplugged meanwhile reads gone | `GamepadHome` is never down (XInput does not report the guide button); a reading is stamped at its poll |
@@ -1088,6 +1088,12 @@ stays resident. Simulation cannot read a streamed asset (`w.model` is None), so
 load order never reaches the hash; a save refuses only while a shown one is in
 flight. A model a tick animates or reads belongs in `ASSETS`. Streamed names are
 models and textures (sounds are not streamed yet), and never also in `ASSETS`.
+Under the live clock a renderer's first frame waits only for what the world presents
+(the models entities' meshes name, sprite and material-override textures, and their
+models' textures); a look registered at tick zero and not shown is prepared after that
+frame, a few milliseconds a frame, and textures are written to the GPU off the
+presenting thread. On Apple the files are read off the main thread too. Under the
+agent's clock everything is prepared before the first frame, as before.
 Models and sprites need the asset-capable module; sounds and untextured emitters do
 not. `assets/` is the bake's output, not a test's input: a hostless test builds its world
 with `exact_game::sim_with_art!(Options::default())`, which bakes the game's `art/` in

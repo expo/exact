@@ -33,6 +33,7 @@ pub const FIELDS: &[&str] = &[
     "hover",
     "gpuTier",
     "accessibilityTextSize",
+    "update",
 ];
 
 /// The host's layout viewport, before the first settlement.
@@ -209,6 +210,33 @@ pub struct Preferences {
     /// Bold Text is on (LLP 1115.000 D12.3): no media feature, the
     /// kernel's, which weights the system font (`Kernel::set_bold_text`).
     pub bold_text: bool,
+    /// `update`: how often the output can change once shown.
+    pub update: Update,
+}
+
+/// Media Queries 4's `update` values (§6.4): how often the output device
+/// can change what it shows. A screen is `fast`; output that cannot change
+/// once written, the terminal's print mode, is `none` (LLP 1101.003 D6).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Update {
+    /// `fast`, and what a host that reports nothing says.
+    #[default]
+    Fast,
+    /// `slow`.
+    Slow,
+    /// `none`.
+    None,
+}
+
+impl Update {
+    /// CSS's keyword.
+    pub fn keyword(self) -> &'static str {
+        match self {
+            Update::Fast => "fast",
+            Update::Slow => "slow",
+            Update::None => "none",
+        }
+    }
 }
 
 /// CSS's `display-mode`, including the Window Controls Overlay extension.
@@ -367,6 +395,7 @@ impl Preferences {
         high_dynamic_range: false,
         display_mode: DisplayMode::Standalone,
         bold_text: false,
+        update: Update::Fast,
     };
 
     /// The hosts' wire form: bit 0 reduced motion, bit 1 reduced
@@ -374,8 +403,9 @@ impl Preferences {
     /// `custom`), bit 4 a dark system scheme, bit 5 pointer `coarse`, bit 6
     /// pointer `none` (over bit 5), bit 7 hover `none`, bits 8–9 the gamut
     /// (0 sRGB, 1 P3, 2 rec2020), bit 10 a high dynamic range, bits 11–13
-    /// the [`DisplayMode`] discriminant, bit 14 Bold Text; other bits
-    /// are ignored. Zero is a mouse's `fine` and `hover`.
+    /// the [`DisplayMode`] discriminant, bit 14 Bold Text, bits 15–16
+    /// `update` (0 `fast`, 1 `slow`, 2 `none`); other bits are ignored.
+    /// Zero is a mouse's `fine` and `hover` on a screen.
     pub fn from_bits(bits: u32) -> Self {
         Self {
             reduced_motion: bits & 1 != 0,
@@ -405,6 +435,11 @@ impl Preferences {
             high_dynamic_range: bits & 1024 != 0,
             display_mode: DisplayMode::from_bits(bits),
             bold_text: bits & (1 << 14) != 0,
+            update: match (bits >> 15) & 3 {
+                1 => Update::Slow,
+                2 | 3 => Update::None,
+                _ => Update::Fast,
+            },
         }
     }
 
@@ -434,6 +469,11 @@ impl Preferences {
             | (u32::from(self.high_dynamic_range) << 10)
             | ((self.display_mode as u32) << 11)
             | (u32::from(self.bold_text) << 14)
+            | (match self.update {
+                Update::Fast => 0,
+                Update::Slow => 1,
+                Update::None => 2,
+            } << 15)
     }
 
     /// `"light"` or `"dark"`, CSS's words for the system's scheme.
@@ -512,6 +552,7 @@ impl Viewport {
             "verticalViewportSegments" => Some(Value::Number(f64::from(self.fold.rows))),
             "pointer" => Some(Value::str(self.preferences.pointer.keyword())),
             "hover" => Some(Value::str(self.preferences.hover.keyword())),
+            "update" => Some(Value::str(self.preferences.update.keyword())),
             _ => None,
         }
     }
@@ -639,6 +680,15 @@ mod tests {
         // LLP 1100 D9: the display's gamut and range.
         for bits in [0, 256, 512, 1024, 256 | 1024] {
             assert_eq!(Preferences::from_bits(bits).bits(), bits);
+        }
+        // LLP 1101.003 D6: `update`, unset `fast`.
+        for (bits, name) in [(0, "fast"), (1 << 15, "slow"), (2 << 15, "none")] {
+            assert_eq!(Preferences::from_bits(bits).bits(), bits);
+            let viewport = Viewport {
+                preferences: Preferences::from_bits(bits),
+                ..Viewport::default()
+            };
+            assert_eq!(viewport.field("update"), Some(Value::str(name)));
         }
         // LLP 1115.000 D12.3: Bold Text.
         assert!(Preferences::from_bits(1 << 14).bold_text);

@@ -183,6 +183,98 @@ final class ShownIOSTests: XCTestCase {
         waitForFrame(p, showing: 2)
     }
 
+    /// Issue 34: a docked composer made with an autofocused field. UIKit
+    /// commits the turn's layers as it brings up the keyboard, then lays the
+    /// window out for the keys inside their animation, before this turn's
+    /// after-commit pass (`Presenter.committed`). Committed at the bottom, the
+    /// composer rides up from there with the keys, as a view UIKit laid out
+    /// before `becomeFirstResponder` does.
+    func testAViewMadeAndCommittedInItsTurnMovesWithAnAnimation() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "what the last frame showed is read in a scene's window") }
+        let p = presenter("shown-committed", in: scene)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 400.0],
+        ]))
+        waitForFrame(p, showing: 1)
+        p.apply(wireBatch([
+            ["op": "create", "id": 2, "kind": "view", "style": ["background_color": [255, 0, 0, 255]]],
+            ["op": "create", "id": 3, "kind": "text", "props": ["text": "Draft"], "style": ["font_size": 20.0]],
+            ["op": "children", "id": 2, "ids": [3]],
+            ["op": "children", "id": 1, "ids": [2]],
+            ["op": "frame", "id": 2, "x": 8.0, "y": 340.0, "w": 384.0, "h": 52.0],
+            ["op": "frame", "id": 3, "x": 12.0, "y": 12.0, "w": 200.0, "h": 28.0],
+        ]))
+        let composer = try XCTUnwrap(p.views[2]), draft = try XCTUnwrap(p.views[3])
+        CATransaction.flush()
+        XCTAssertEqual(composer.shown, .uncopied, "the turn's after-commit pass has not run")
+        animating {
+            p.apply(wireBatch([
+                ["op": "frame", "id": 2, "x": 8.0, "y": 100.0, "w": 384.0, "h": 92.0],
+                ["op": "frame", "id": 3, "x": 12.0, "y": 32.0, "w": 200.0, "h": 28.0],
+            ]))
+        }
+        XCTAssertNotNil(composer.layer.animation(forKey: "position"), "it rides up from where it was committed")
+        XCTAssertNotNil(draft.layer.animation(forKey: "position"), "its field moves with it, though the composer's copy is now on its way")
+    }
+
+    /// A view that showed, taken out of the window and put back after the
+    /// commit that took it out (a row into its cell while the keyboard comes
+    /// up): it is no new view, and waits for the turn's after-commit pass
+    /// however many commits in its turn have its place.
+    func testAViewPutBackAfterACommitTookItOutHasNotShownAgain() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "what the last frame showed is read in a scene's window") }
+        let p = presenter("shown-returned", in: scene)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "Row"], "style": ["font_size": 20.0]],
+            ["op": "children", "id": 1, "ids": [2]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 400.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 100.0, "h": 30.0],
+        ]))
+        waitForFrame(p, showing: 2)
+        let view = try XCTUnwrap(p.views[2])
+        p.apply(wireBatch([["op": "children", "id": 1, "ids": []]]))
+        CATransaction.flush()
+        p.apply(wireBatch([["op": "children", "id": 1, "ids": [2]], ["op": "frame", "id": 2, "x": 0.0, "y": 100.0, "w": 100.0, "h": 30.0]]))
+        CATransaction.flush()
+        XCTAssertEqual(view.shown, .unshown, "no new view")
+        animating {
+            p.apply(wireBatch([["op": "frame", "id": 2, "x": 40.0, "y": 140.0, "w": 100.0, "h": 30.0]]))
+        }
+        XCTAssertEqual(moving(view.layer), [])
+    }
+
+    /// A view that showed, taken out of the window and put back in its turn
+    /// at the same place, as a row goes into another cell: what Core
+    /// Animation has of it is from before, where it is now only by chance,
+    /// so it takes its place at once inside an animation until a commit has
+    /// shown it there.
+    func testAViewPutBackInItsTurnHasNotShownAgainThoughItsOldCopyMatches() throws {
+        guard let scene = hostedWindowScene() else { throw missing("scene", "what the last frame showed is read in a scene's window") }
+        let p = presenter("shown-recycled", in: scene)
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view"],
+            ["op": "create", "id": 2, "kind": "text", "props": ["text": "Row"], "style": ["font_size": 20.0]],
+            ["op": "children", "id": 1, "ids": [2]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 400.0],
+            ["op": "frame", "id": 2, "x": 0.0, "y": 0.0, "w": 100.0, "h": 30.0],
+        ]))
+        waitForFrame(p, showing: 2)
+        let view = try XCTUnwrap(p.views[2])
+        p.apply(wireBatch([["op": "children", "id": 1, "ids": []]]))
+        p.apply(wireBatch([["op": "children", "id": 1, "ids": [2]]]))
+        XCTAssertEqual(view.layer.presentation()?.position, view.layer.position, "its old copy is where it is")
+        XCTAssertFalse(p.showed(view))
+        animating {
+            p.apply(wireBatch([["op": "frame", "id": 2, "x": 40.0, "y": 140.0, "w": 100.0, "h": 30.0]]))
+        }
+        XCTAssertEqual(moving(view.layer), [])
+    }
+
     /// A view hidden in a frame and shown again in place under a held
     /// commit: what Core Animation has of it is hidden, so it has not shown
     /// again until the commit, and takes its place at once.

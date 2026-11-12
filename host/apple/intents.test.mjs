@@ -75,7 +75,8 @@ test.skipIf(process.platform !== 'darwin')('portable App Intents metadata matche
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 120000);
 
-test('the metadata pass runs the processor and toolchain of the Xcode xcrun selects', () => {
+// Linux writes the metadata with the portable emitter and runs no processor.
+test.skipIf(process.platform === 'linux')('the metadata pass runs the processor and toolchain of the Xcode xcrun selects', () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-intents-tool-'));
   const toolchain = '/Applications/Xcode-beta.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain';
   const ran = [];

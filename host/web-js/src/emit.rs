@@ -140,6 +140,8 @@ struct Em<'a> {
     /// Possible height and transform owners whose motion values must be observed.
     heights: std::collections::BTreeSet<u32>,
     transforms: std::collections::BTreeSet<u32>,
+    /// Whether a node can declare a drag timeline (`rows::drag_timelines`).
+    drag_timelines: bool,
     /// The `@keyframes` that animate `scale` (a pressed node plays their `-exact-press` copies).
     press_keyframes: Vec<String>,
     /// Whether a dynamic row can reference an element (`url(#…)`): nodes
@@ -221,6 +223,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         symbols: (false, false),
         heights: Default::default(),
         transforms: Default::default(),
+        drag_timelines: crate::timelines::drag_timelines(plan),
         press_keyframes: rows::press_keyframes(plan),
         refs: rows::can_refer(plan),
         site_attrs,
@@ -922,6 +925,9 @@ impl Em<'_> {
         }
         let mut css = parts.css.clone();
         css.push_str(&extra);
+        if !self.drag_timelines {
+            crate::timelines::css_timelines(&mut css);
+        }
         // @ref LLP 1063 — `-exact-layout-transition` and `-exact-exit-animation` are custom
         // properties the web host's presence-glue.js reads from the element's
         // own declaration: inline, as the live host writes every row, not

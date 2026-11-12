@@ -115,7 +115,9 @@ mod scroll_drag;
 mod scroll_end;
 mod scrollbar;
 mod scrollers;
+pub mod snap;
 pub(crate) mod split;
+mod stage;
 mod wheel;
 use scroll_end::Completion;
 #[cfg(all(test, not(windows)))]
@@ -125,6 +127,7 @@ mod status_bar;
 #[cfg(target_os = "android")]
 pub(crate) mod still;
 mod swipe;
+mod timeline_scroll;
 pub mod top;
 mod transform;
 mod transform_geometry;
@@ -164,6 +167,7 @@ pub use palette::{material, ContrastPalette, Material, Palette, MATERIAL_ROLES};
 pub use pointer::PointerKind;
 pub use requests::{Haptic, Pick, Request};
 pub use scrollers::{Scroller, Under, PAGE};
+pub use stage::SHEET_HANDLE;
 pub use window::{Chrome, Window};
 
 /// The presenter: one host, its painter, and the host state.
@@ -175,6 +179,12 @@ pub struct Presenter<D: DataSource> {
     pub(crate) host: Host<D>,
     /// The scroller the last wheel moved.
     last_wheel: Option<ViewId>,
+    /// Per snapping scroller, where its wheel would have put it unsnapped and
+    /// where it put it (`snap.rs`).
+    wheel_free: BTreeMap<ViewId, snap::WheelFree>,
+    /// Per scroller and axis (true: y), the snap area it was last found
+    /// resting on and the position (`snap.rs`).
+    snap_rested: BTreeMap<(ViewId, bool), (ViewId, f32)>,
     /// The display's clock while it owns time, given to every host (`clock.rs`)
     live_clock: Option<clock::Wall>,
     native_timers: bool,
@@ -308,6 +318,8 @@ pub struct Presenter<D: DataSource> {
     /// The top layer's open surface, where a shell makes windows (D10).
     top: top::State,
     alert: Option<alert::Open>,
+    /// The routes it places itself: sheets, and pushes and pops crossing.
+    stage: stage::State,
     /// The shell's top app bar and navigation bar, where it has them (D11).
     bars: bars::State,
     /// The accessibility tree its shell was last told, where one asks (D13).
@@ -506,6 +518,8 @@ impl<D: DataSource> Presenter<D> {
         }
         let mut p = Presenter {
             last_wheel: None,
+            wheel_free: BTreeMap::new(),
+            snap_rested: BTreeMap::new(),
             host,
             executor,
             parked: BTreeMap::new(),
@@ -593,6 +607,7 @@ impl<D: DataSource> Presenter<D> {
             hosted: Default::default(),
             top: Default::default(),
             alert: None,
+            stage: Default::default(),
             bars: Default::default(),
             access: Default::default(),
             segments: Vec::new(),
@@ -831,6 +846,7 @@ impl<D: DataSource> Presenter<D> {
         // wake another turn; waking here makes an idle list redraw forever.
         self.schedule_collections();
         let refined = crate::traced(c"exact refine collections", || self.refine_collections());
+        self.resnap_scrollers();
         let geometry = self.refresh_transform_geometry();
         self.sync_surface();
         error.or(refined).or(geometry)
@@ -842,6 +858,7 @@ impl<D: DataSource> Presenter<D> {
     }
     fn service_commit(&mut self) -> Option<String> {
         self.sync_split();
+        self.sync_stage();
         // A resource refused, a request or a send failed (LLP 1142 D4): on
         // stderr as well as in the journal. The runner queues none unless it
         // measures, so a production binary prints none.
@@ -1275,7 +1292,8 @@ impl<D: DataSource> Presenter<D> {
         let animating = self.arrange.is_some()
             || self.group.is_some()
             || self.focus.is_some()
-            || self.brush.moving();
+            || self.brush.moving()
+            || self.stage_moving();
         let (layout, paint) = self.host.tick_effects(now_ms);
         if layout {
             self.hatches.stale = true;

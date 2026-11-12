@@ -1270,6 +1270,7 @@ package final class Presenter {
             if !collections.owns(node.id) { node.restoreScrollPosition() }
             if node.pendingScrollTop != nil || node.pendingScrollLeft != nil { collections.userIntent(node.id) }
             node.applyPendingScroll()
+            node.resnap()
         }
         pendingScrolls.removeAll()
         segments.sync()

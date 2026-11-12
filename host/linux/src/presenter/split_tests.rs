@@ -695,7 +695,7 @@ fn a_shell_bar_room_takes_back_the_split() {
     let mut p = boot(1200., "auto");
     tap(&mut p, "a");
     let item = id(&p, "route-item");
-    p.host.set_bar_room(Some((60., 0.))).unwrap();
+    p.host.set_bar_room(Some((60., 0., 0.))).unwrap();
     assert_eq!(p.after_commit(), None);
     assert!(state(&mut p).is_null());
     assert_eq!(p.host.kernel().host_block(item), None);
@@ -717,7 +717,7 @@ fn shell_bar_support_keeps_an_authored_header_split_adaptive() {
     );
     let mut p = boot_source(1200., &source);
     p.serve_windows(Box::new(SplitSurface));
-    p.host.set_bar_room(Some((60., 0.))).unwrap();
+    p.host.set_bar_room(Some((60., 0., 0.))).unwrap();
     assert_eq!(p.after_commit(), None);
     tap(&mut p, "a");
     assert!(p.host.bars().routes.is_empty());

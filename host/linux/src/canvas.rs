@@ -170,6 +170,10 @@ mod device;
 #[cfg(target_os = "android")]
 #[path = "canvas/field.rs"]
 pub mod field;
+#[cfg(target_os = "android")]
+#[doc(hidden)]
+#[path = "canvas/frames.rs"]
+pub mod frames;
 #[path = "canvas/glyphs.rs"]
 mod glyphs;
 #[path = "canvas/gradient.rs"]
@@ -196,7 +200,7 @@ pub mod jni;
 #[cfg(target_os = "android")]
 #[path = "canvas/journal.rs"]
 mod journal;
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 #[path = "canvas/keys.rs"]
 mod keys;
 #[path = "canvas/layer.rs"]
@@ -1161,7 +1165,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
     }
 
     fn now(&self) -> f64 {
-        agent::clock(&self.p).unwrap_or_else(|| self.started.elapsed().as_secs_f64() * 1000.0)
+        agent::clock(&self.p)
+            .unwrap_or_else(|| self.started.elapsed().as_secs_f64() * 1000.0 - agent::offset())
     }
 
     /// One turn: the presenter's work, then a recording when anything

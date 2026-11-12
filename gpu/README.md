@@ -65,8 +65,9 @@ the web, Android, Linux and Windows report unknown.
 |---|---|---|---|
 | web | yes | `gpu_due` in the `requestAnimationFrame` loop | callback times; thermal unknown |
 | iOS, tvOS, macOS | yes | capped `CADisplayLink` range and `gpu_due` per canvas | callback times, fastest period, thermal state |
-| Android | yes | `gpu_due` per canvas | none |
-| Linux, Windows (readback and window frame) | no: a rendered canvas repaints every display frame | no | none |
+| Android | yes | `gpu_due` per canvas; the cap asked of the platform: `Surface.setFrameRate` as a fixed source for a canvas with a window of its own (Android 11 and later), `View.setRequestedFrameRate` for one in the reader's window (Android 15 and later) | `gpu_period`: Choreographer's vsync spacing (Android 13 and later), else the display's refresh |
+| Linux (display) | no: a rendered canvas repaints every display frame | no | `gpu_period`: the DRM mode's pixel clock over its total pixels |
+| Linux headless, Windows (readback and window frame) | no: a rendered canvas repaints every display frame | no | none |
 
 ## Performance
 
@@ -125,7 +126,22 @@ installation, copy its `exact-*.bin` files into the app bundle's resources under
 `exact-pipelines/`, or point `EXACT_GPU_CACHE_SEED` at that directory. The seed is
 read-only and is used when no valid writable cache exists. It must match the cache
 key, including device and OS build; this is not a portable archive for every GPU.
-A fresh installation without a matching seed still compiles its initial pipelines.
+A fresh installation without a matching seed still compiles its initial pipelines,
+but not their MSL when the build shipped it compiled (below).
+
+**Shader libraries compiled at build time.** wgpu writes each pipeline's MSL at run
+time. A development build on a Mac or a simulator records each source it compiled in
+the app's `.exact/metal/` (the bundle's `ExactMetalSources`); the next Apple build
+compiles those for its SDK (`host/apple/shader-libraries.mjs`, kept in
+`target/metal-kept/shaders`) into the bundle's `exact-metal/`, and the module loads
+a library in place of a source whose text and options match its name
+(`vendor/wgpu-hal/EXACT-PATCHES.md` 16). A changed shader, layout or OS that writes
+different MSL compiles at run time and is recorded for the next build. So a build
+ships what development runs drew: run the app's screens before building a release.
+`EXACT_METAL_LIBRARIES` and `EXACT_METAL_SOURCES` replace either directory. On an
+M5 Max, a fresh install's 28 first-frame pipelines took 0.8 to 1.1 s instead of 3.7
+to 3.9 s; on the iOS simulator, whose GPU compile no archive keeps, 3.8 to 4.0 s
+instead of 4.0 to 4.3.
 Render and compute pipelines participate; mesh-shader pipelines do not yet.
 
 The backend's `BinaryArchive::counts` reports successful binary lookups and misses.
@@ -149,6 +165,13 @@ Immediately before a GPU module makes a surface on iOS or tvOS, the owner
 sets an unclaimed session to `.ambient`, without activating it. Output opened
 before its request is handled therefore mixes with other apps' audio and
 obeys the ring/silent switch until the request takes the app's configuration.
+Under `"playback-mix"` the owner sets the app's own configuration instead
+(`.playback` with `.mixWithOthers`), so output may start before the request
+and the request only activates: a category change while output plays
+interrupts other apps' audio, even toward a mixing category. Under
+`"playback"` an early `.playback` would stop other apps' audio before the
+request, so that app is prepared in `.ambient`; its category rises when the
+request is handled, which is what `"playback"` does anyway.
 A held or claimed session stays as it is. This preparation does not run for
 Canvas 2D, an app with no GPU canvas, or the driver's frozen clock, which
 makes surfaces seekable and opens no output. Under `EXACT_AGENT_TIMING=platform`
@@ -157,3 +180,37 @@ the owner prepares too: surfaces can open output, but the driver drops
 macOS, the web, Linux and Android consume the request without configuring a session.
 On Android that means a module's output gets no audio focus and no interruption
 report from Exact: the module asks Android for focus and handles its loss itself.
+
+## A module's own haptics
+
+A surface plays haptics from its own callbacks, where the gesture and the
+physics are, by returning `exact_gpu::haptics::Haptic::message()` strings from
+`Surface::messages` (LLP 1009 D10). The host consumes them; the app never sees
+them. The names are Core Haptics':
+
+- `Haptic::texture(intensity, sharpness)` starts the surface's texture, a
+  continuous vibration, or moves it to new values. Send it as often as every
+  frame while the finger drags; each value is 0–1. `Haptic::Stop` stops it.
+  A surface has one texture.
+- `Haptic::Pattern` plays a short pattern now, beside the texture: transient
+  events (taps) and continuous ones, each at its time with its intensity and
+  sharpness, and curves over the pattern that multiply its intensity or add to
+  its sharpness (`CHHapticParameterCurve`). A pattern lasts at most 30 s.
+
+The host owns their life. A surface's texture stops when the surface is
+destroyed, and every texture stops while the canvases are hidden or interrupted
+(iOS) or the activity is paused (Android); a later texture message starts it
+again, so a surface that sends one each frame resumes by itself. The person's
+system haptics setting applies, as it does to `haptic()`.
+
+- **iOS**: Core Haptics, one `CHHapticEngine` for the process, haptics only, so
+  no audio session is involved. A texture is a looping continuous event moved by
+  `hapticIntensityControl` and `hapticSharpnessControl`; a pattern is a
+  `CHHapticPattern` played at once. A device without a haptic engine plays
+  nothing.
+- **Android**: the vibrator (`host/android/README.md`, "Haptics"). A texture is
+  an amplitude, so its sharpness is not played, and a device without amplitude
+  control plays no texture; a pattern is click and tick primitives, or a
+  waveform. The shell's manifest asks for `VIBRATE`.
+- **macOS, tvOS, the web, Linux, Windows**, and every host under the driver,
+  consume the messages and play nothing.

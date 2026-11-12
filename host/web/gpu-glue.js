@@ -624,7 +624,8 @@ function messages(entry, drainAssets = true) {
   if (texts === undefined) return;
   for (const text of JSON.parse(texts)) {
     if (live(entry.view) !== entry) break;
-    if (text !== "exact:audio") exact.message(entry.host, text);
+    // The host's own: the browser has no audio session here, and no haptics a page can drive (LLP 1009 D10).
+    if (text !== "exact:audio" && !text.startsWith("exact:haptics ")) exact.message(entry.host, text);
   }
 }
 function listen(entry) {

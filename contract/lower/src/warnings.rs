@@ -4,9 +4,8 @@
 //! them: a warning fails no build and no test, and names its repair as a
 //! refusal does.
 //!
-//! Each is read from the checked file's expanded root, as lowering reads it, and gives what
-//! it cannot see the benefit of the doubt, as `routes.rs`'s `check_scroll` does: an `if`,
-//! `for` or `match`, a use or a slot, a computed role or type.
+//! Each check names what it can establish from the expanded root, as lowering reads it.
+//! Unexpanded uses and slots, and computed roles and types, stay unknown.
 
 use crate::tags::AttrTarget;
 use crate::LowerError;
@@ -38,7 +37,10 @@ mod sounds;
 mod states;
 mod svg;
 mod tabs;
+mod text_styles;
 mod title;
+mod transform;
+mod transform_drag;
 mod width;
 pub(crate) use width::horizontal_flex;
 
@@ -53,19 +55,7 @@ pub fn warnings(checked: &Checked<'_>) -> Vec<LowerError> {
     with_text_styles(checked, &TextStyles::new())
 }
 
-/// Effective text sizing and native control boundaries from lowering. A reused
-/// source site whose own style differs between instances stays unknown. The tag
-/// distinguishes a button from the title synthesized at the same source span.
-pub(crate) type TextStyles = std::collections::BTreeMap<(Span, u32, String), Option<TextStyle>>;
-
-#[derive(Clone, PartialEq)]
-pub(crate) struct TextStyle {
-    pub(crate) native: Option<bool>,
-    pub(crate) font: Option<Attr>,
-    pub(crate) layout: Vec<Attr>,
-    /// The lowered parent includes list cards and swipe scrollers absent from the source.
-    pub(crate) parent_horizontal_flex: Option<bool>,
-}
+pub(crate) use text_styles::{TextStyle, TextStyles};
 
 pub(crate) fn with_text_styles(checked: &Checked<'_>, lowered: &TextStyles) -> Vec<LowerError> {
     let root = &checked.expanded.root;
@@ -165,6 +155,8 @@ pub(crate) fn with_text_styles(checked: &Checked<'_>, lowered: &TextStyles) -> V
     performance_now(root, &checked.file.fns, &mut out);
     sounds::undeclared(checked, &mut out);
     geometry::unnamed(checked, &mut out);
+    transform::owners(checked, &mut out);
+    transform_drag::check(&root.view, &checked.file.styles, &mut out);
     // @ref LLP 1027.005 D6 — an identifying argument of the launch's own.
     launch::launch_identity(root, &checked.file.fns, &mut out);
     width::width_padding(&root.view, &checked.file.styles, &mut out);

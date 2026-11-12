@@ -19,6 +19,22 @@ macro_rules! canvas_jni_scroll {
             with(|h| h.scrolled(id as u32, dx, dy, rev as u32));
         }
 
+        /// List `id`'s snap areas around a release's projection
+        /// (`CanvasHost::snaps_around`; px).
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_snapsAround(
+            env: *mut $crate::canvas::jni_sys::JNIEnv,
+            _class: $crate::canvas::jni_sys::jclass,
+            id: $crate::canvas::jni_sys::jint,
+            vertical: $crate::canvas::jni_sys::jboolean,
+            release: $crate::canvas::jni_sys::jfloat,
+            projected: $crate::canvas::jni_sys::jfloat,
+        ) -> $crate::canvas::jni_sys::jintArray {
+            let words = with(|h| h.snaps_around(id as u32, vertical != 0, release, projected))
+                .unwrap_or_else(|| vec![0]);
+            ints(env, &words)
+        }
+
         /// A finger began dragging scroller `id`, or (`ended`) let go of it
         /// (`CanvasHost::drag_began`, `drag_ended`; px/s, px).
         #[no_mangle]

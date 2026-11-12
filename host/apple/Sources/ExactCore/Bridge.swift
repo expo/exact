@@ -429,6 +429,12 @@ package final class Runtime {
         }
     }
     package func hasHold(_ token: UInt64) -> Bool { on(busy: false) { !destroyed && exact_has_hold(rt, token) != 0 } }
+    /// A scroller marked `scrollTimeline` (nil: the page) now stands at
+    /// `left`, `top`: the scroll and view timelines it drives, presented, to
+    /// apply in the scroll's own frame (LLP 1057.003 D5).
+    package func timelineScrolled(_ view: UInt32?, left: Double, top: Double) -> Batch {
+        on { read(exact_timeline_scrolled(rt, view == nil ? 1 : 0, view ?? 0, left, top)) }
+    }
     package func holdUpdate(_ token: UInt64, x: Double, y: Double, now: Double) -> Batch {
         return on {
             read(exact_hold_update(rt, token, x, y, now))

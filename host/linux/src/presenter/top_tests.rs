@@ -918,6 +918,7 @@ fn a_surface_follows_the_scheme_the_font_scale_and_a_reader_made_again() {
         tv: false,
         touch_slop: 8.0,
         dates: String::new(),
+        format_locale: String::new(),
     };
     assert!(p.set_device(&phone).is_none());
     let dark = told(&mut p);
@@ -1296,10 +1297,8 @@ fn shell_top_layer_reports_viewport_frames_and_modal_visibility_to_reads() {
             .is_none());
         let frame = told(&mut p).into_iter().find(|s| s.1 == 2).unwrap().2;
         let [px, py, ..] = p.chrome().frame;
-        let (x, y) = (
-            f64::from(frame[0]) / 2.0 - f64::from(px) + 1.0,
-            f64::from(frame[1]) / 2.0 - f64::from(py) + 1.0,
-        );
+        let x = f64::from(frame[0]) / 2.0 - f64::from(px) + 1.0;
+        let y = f64::from(frame[1]) / 2.0 - f64::from(py) + 1.0;
         probe(&mut p, x, y);
         assert_eq!(p.host.runner().slot("hit"), Some(&Value::str("menu")));
         assert_eq!(

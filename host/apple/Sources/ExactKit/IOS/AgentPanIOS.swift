@@ -425,7 +425,7 @@ extension Agent {
         let node = sv.superview as? NodeView
         let snap = node?.snapTarget(want, in: sv)
         place(sv, at: snap ?? want, x: x, y: y)
-        if snap != nil && node?.style["scroll_snap_type"]?.string == "y mandatory" { return }
+        if snap != nil && ScrollSnap.Kind(node?.style["scroll_snap_type"]?.string)?.y == true { return }
         // tvOS has no large titles.
         #if os(iOS)
         let o = sv.contentOffset, top = -sv.adjustedContentInset.top, reach = min(sv.bounds.height, sv.window?.bounds.height ?? 0) / 2

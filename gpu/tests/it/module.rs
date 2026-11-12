@@ -1130,6 +1130,50 @@ fn storage_capacity_is_independent_of_inter_stage_capacity() {
 }
 
 #[test]
+fn v3d_limits_are_not_exceeded() {
+    // Mesa cdc6a0bf, v3dv_device.c:get_device_properties, v3dv_limits.h and v3d_limits.h:
+    // https://gitlab.freedesktop.org/mesa/mesa/-/tree/cdc6a0bfed71b22cfbb5ce7f6b778ee3fdedf409/src/broadcom
+    // V3D 4.2, without V3D_WEBGPU_OVERRIDE; unspecified wgpu fields stay conservative.
+    let available = wgpu::Limits {
+        max_texture_dimension_1d: 4096,
+        max_texture_dimension_2d: 4096,
+        max_texture_dimension_3d: 4096,
+        max_texture_array_layers: 2048,
+        max_color_attachments: 4,
+        max_inter_stage_shader_variables: 15, // wgpu: 64 / 4 - 1 for position
+        max_compute_workgroup_storage_size: 32768,
+        max_compute_invocations_per_workgroup: 256,
+        max_compute_workgroup_size_x: 256,
+        max_compute_workgroup_size_y: 256,
+        max_compute_workgroup_size_z: 256,
+        max_compute_workgroups_per_dimension: 65535,
+        min_uniform_buffer_offset_alignment: 32,
+        min_storage_buffer_offset_alignment: 32,
+        ..wgpu::Limits::default()
+    };
+    let requested = exact_gpu::requested_limits(available.clone());
+    requested.check_limits_with_fail_fn(&available, false, |name, requested, available| {
+        panic!("{name}: requested {requested}, available {available}")
+    });
+    assert_eq!(requested.max_texture_dimension_2d, 4096);
+    assert!(requested.max_inter_stage_shader_variables >= 13); // Ink's vertex output
+    assert!(requested.max_storage_buffers_per_shader_stage >= 8); // Vello's coarse pass
+    assert!(requested.max_compute_invocations_per_workgroup >= 256);
+
+    // Alignment minima go the opposite way from capacities. Also exercise
+    // capacities not covered by using_resolution or the storage grant above.
+    let weaker = wgpu::Limits {
+        min_uniform_buffer_offset_alignment: 512,
+        min_storage_buffer_offset_alignment: 512,
+        max_uniform_buffer_binding_size: 8192,
+        max_vertex_attributes: 12,
+        max_sampled_textures_per_shader_stage: 8,
+        ..available
+    };
+    assert!(exact_gpu::requested_limits(weaker.clone()).check_limits(&weaker));
+}
+
+#[test]
 fn child_count_shrink_retires_each_index_exactly_once() {
     use exact_gpu::{ChildrenMode, Surface};
     #[derive(Default)]

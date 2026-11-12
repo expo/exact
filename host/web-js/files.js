@@ -10,7 +10,7 @@
 // `tap @t …` / `type @t …` answers it
 // (agent.js). Bundled only for a plan with a file input or one of the
 // commands.
-import { journal, clock, nextTicket, inflight, Hosts, OnHooks, viewId, Views, data, painted } from './rt.js';
+import { journal, clock, nextTicket, inflight, Hosts, OnHooks, viewId, Views, data, painted, pressFeedback } from './rt.js';
 import { record } from './pointer.js';
 import { inertAncestor, reportPlace, liveById } from './navigation.js';
 import { appGrantSet, coversPath } from './admission.js';
@@ -36,6 +36,7 @@ const glue = () => Glue ??= import(new URL('./picker-glue.js', import.meta.url).
 const counted = p => { inflight.n++; return Promise.resolve(p).finally(() => inflight.n--); };
 const extension = name => { const e = /\.([^.]*)$/.exec(name)?.[1]?.toLowerCase() ?? ''; return e && e.length <= 8 && /^[a-z0-9]+$/.test(e) ? e : 'bin'; };
 const byId = id => { const el = liveById(id); return el ? { el, view: viewId(el) } : null; };
+OnHooks.loading = painted().then(() => clock.agent && pressFeedback());
 
 // A file input's `change` payload (picker.rs `Picked::payload`): one line
 // per file, as `Picked` records; null for anything malformed.
@@ -94,7 +95,7 @@ export async function answer(req) {
   const out = await h.answer(value, req);
   return { ticket: h.ticket, capability: h.capability, answered: value == null ? req.choice : 'value', delivery: 'substituted', ...out };
 }
-Object.assign(x(), { files: { holds, answer } });
+Object.assign(x(), { files: { holds, answer, activate: el => holdPicker(el, el.id) } });
 
 // ---------------------------------------------------------------- showPicker (picker.rs)
 export const tokens = el => (el.getAttribute('accept') ?? '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
@@ -115,9 +116,13 @@ Hosts.showPicker = id => {
     try { el.showPicker(); } catch (e) { say(`picker: refused: ${e.name}`); counted(glue().then(m => m.cancel(viewId(el)))); }
     return;
   }
+  holdPicker(el, String(id));
+};
+function holdPicker(el, id) {
   if (Holds.some(h => h.capability === 'pick' && h.el === el)) return say(`picker: "${id}" is already open`);
   const accept = tokens(el), multiple = el.hasAttribute('multiple');
   hold('pick', el, { id: String(id), accept, multiple }, (value, req) => counted(glue().then(m => m.answer(viewId(el), value == null ? null : req.files ?? []))));
+  x().pickerOpened?.();
   const h = Holds.at(-1);
   // What the real picker would have let the person choose (`check_pick`), with iOS Safari's HEIC rule (D6).
   h.check = v => {
@@ -132,7 +137,7 @@ Hosts.showPicker = id => {
     }
     return null;
   };
-};
+}
 
 // ---------------------------------------------------------------- saveFile (save_file.rs)
 // `(id, from, suggestedName)`, or `(id, none, suggestedName, text)` for

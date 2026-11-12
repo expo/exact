@@ -884,6 +884,32 @@ impl Batch {
                     }
                     s.push('}');
                 }
+                // LLP 1096 D14: only the values the call gave.
+                SoundOp::Set {
+                    id,
+                    at,
+                    gain,
+                    playback_rate,
+                    pan,
+                    ramp,
+                } => {
+                    push_text!(
+                        &mut s,
+                        "{{\"op\":\"set\",\"id\":{},\"at\":{}",
+                        id,
+                        Shortest(*at)
+                    );
+                    for (name, v) in [
+                        ("gain", gain),
+                        ("playbackRate", playback_rate),
+                        ("pan", pan),
+                    ] {
+                        if let Some(v) = v {
+                            push_text!(&mut s, ",\"{}\":{}", name, Shortest(*v));
+                        }
+                    }
+                    push_text!(&mut s, ",\"ramp\":{}}}", Shortest(*ramp));
+                }
                 SoundOp::End { id, at } => push_text!(
                     &mut s,
                     "{{\"op\":\"end\",\"id\":{},\"at\":{}}}",

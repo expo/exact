@@ -120,6 +120,11 @@ mod svg_lower;
 #[cfg(test)]
 #[path = "svg_tests.rs"]
 mod svg_tests;
+#[path = "timeline_scroll.rs"]
+mod timeline_scroll;
+#[cfg(test)]
+#[path = "timeline_scroll_tests.rs"]
+mod timeline_scroll_tests;
 #[path = "transform_drag.rs"]
 mod transform_drag;
 #[path = "transform_drag_wire.rs"]
@@ -157,6 +162,7 @@ pub(crate) struct Mirror {
     children: Box<[ViewId]>,
     frame: Option<(f32, f32, f32, f32)>,
     content: Option<(f32, f32)>,
+    fit_height: Option<f32>,
     flow: Box<[exact_kernel::FlowShape]>,
     /// Boxed: only a text field has one, and inline it was a quarter of the mirror.
     field_content: Option<Box<crate::batch::ContentBox>>,
@@ -212,6 +218,8 @@ pub struct Host<D: DataSource> {
     fit_routes: Vec<(ViewId, Option<[f32; 10]>)>,
     /// Each sticky node's constraint as the presenter last heard it (LLP 1083).
     stickies: IdMap<ViewId, exact_kernel::StickyConstraint>,
+    /// The scrollers scroll and view timelines read (LLP 1057.003 D5).
+    timeline_scrolls: timeline_scroll::TimelineScrolls,
     /// Each multi-column record as the presenter last heard it (LLP 1093 D7).
     fragments: IdMap<ViewId, String>,
     ranks: IdMap<ViewId, i64>,
@@ -556,6 +564,7 @@ impl<D: DataSource> Host<D> {
             in_advance: false,
             fit_routes: Vec::new(),
             stickies: IdMap::default(),
+            timeline_scrolls: Default::default(),
             fragments: IdMap::default(),
             ranks: IdMap::default(),
             roots: Vec::new(),

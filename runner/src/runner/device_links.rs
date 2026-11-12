@@ -35,6 +35,8 @@ pub struct PickerLinks<D: DataSource> {
     pub picker: fn(&Runner<D>, &str) -> Option<super::PickerRequest>,
     /// `showPicker(id)` held for the agent.
     pub hold: fn(&mut Runner<D>, &str) -> Result<u64, String>,
+    /// A file input activated by view, including one with no authored id.
+    pub hold_view: fn(&mut Runner<D>, exact_kernel::ViewId) -> Result<u64, String>,
     /// A picked file's name under `app:/tmp/picked/`.
     pub picked_path: fn(&mut Runner<D>, &str) -> String,
     /// An agent's files, checked against the input before the hold is spent.
@@ -54,6 +56,7 @@ impl<D: DataSource> PickerLinks<D> {
     pub const LINKED: PickerLinks<D> = PickerLinks {
         picker: Runner::<D>::picker,
         hold: Runner::<D>::hold_picker,
+        hold_view: Runner::<D>::hold_picker_view,
         picked_path: Runner::<D>::picked_path,
         check: Runner::<D>::check_pick,
     };

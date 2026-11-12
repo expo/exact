@@ -94,6 +94,9 @@ struct Row {
 /// to and the transform it was drawn in.
 type Slot = (ViewId, Rect4, Shape, Transform);
 
+/// The row state [`Painter::rows_pause`] set aside.
+pub(super) struct Paused(Option<Capture>, bool);
+
 /// A row being recorded.
 #[derive(Default)]
 struct Capture {
@@ -335,6 +338,20 @@ impl Painter {
     }
 
     /// Whether `key` is the container walked for its scroller's rows.
+    /// Rows neither record nor keep until [`Painter::rows_resume`]: a tape
+    /// walks every node (`stage.rs`).
+    pub(super) fn rows_pause(&mut self) -> Paused {
+        Paused(
+            self.rows.recording.take(),
+            std::mem::replace(&mut self.rows.active, false),
+        )
+    }
+
+    pub(super) fn rows_resume(&mut self, Paused(recording, active): Paused) {
+        self.rows.recording = recording;
+        self.rows.active = active;
+    }
+
     pub(super) fn rows_wrapper(&self, key: NodeKey) -> bool {
         self.rows.wrapper == Some(key)
     }

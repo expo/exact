@@ -918,7 +918,7 @@ reading. Nothing that isn't HTML is added by it.
   §8's sound-effect paragraph are deleted. Round-1 review A held that neither
   is doing-list work; to the extent it is not, the admission stands on the
   orchestrator's waiver under the same delegation. Still out: synthesis,
-  loops, fades and gain automation, effects, a handle to one voice, a stop
+  loops, effects, a handle to one voice, a stop
   at a future time, compressed formats, sound produced by a data module,
   the microphone as a sound source (recording it to a file is LLP
   1133.009's, §Components), and output on Linux and Windows (LLP 1096 §7;
@@ -939,6 +939,16 @@ reading. Nothing that isn't HTML is added by it.
   SysEx, Bluetooth MIDI pairing, MIDI 2.0, Continue and Song Position out,
   clock thru (sending clock while following one), Ableton Link, swing, Linux, Windows and Android output, synthesis (LLP 1125
   §8).
+- **Expanded (LLP 1096 D14; expo/exact#347, assigned for Charlie in the
+  2026-11-12 issue session):** changing what plays, by Web Audio's names:
+  `setSounds(group=, gain=, playbackRate=, pan=, ramp=)` moves the voices
+  sounding or waiting, in a group when one is given, to new values over a
+  linear ramp, and the runner moves a voice's end by what is left of its
+  file. Consumer: the tactile toys of #347, whose sound follows a drag.
+  Unblocks a sound that follows a gesture without restarting its source, and
+  fades. Take: none offered; waived by that assignment. Still out: loops, a
+  change at a future time (`at=`), curves other than a straight line, and a
+  handle to one voice (a group names it).
 - **Expanded (LLP 1098; admitted by the orchestrator under Charlie's
   2026-10-04 delegation, "make decisions without me"):** the media session,
   by the Media Session API's names, on HTML's media element:

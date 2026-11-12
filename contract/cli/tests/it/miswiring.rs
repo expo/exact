@@ -128,6 +128,36 @@ fn a_swipe_row_wired_inside_its_scroll_is_not_named() {
 }
 
 #[test]
+fn a_literal_swipe_name_must_fit_all_fixed_template_text() {
+    for (content, id, matches) in [
+        ("\"delete\"", "`delete-${i}`", false),
+        ("\"tail\"", "`${i}-tail`", false),
+        ("\"aba\"", "`ab${i}ba`", false),
+        ("\"first-last\"", "`first-${i}-middle-${i}-last`", false),
+        ("\"delete-Milk\"", "`delete-${i}`", true),
+        ("\"Milk-tail\"", "`${i}-tail`", true),
+        ("\"abba\"", "`ab${i}ba`", true),
+        (
+            "\"first-Milk-middle-Milk-last\"",
+            "`first-${i}-middle-${i}-last`",
+            true,
+        ),
+    ] {
+        let src = rows(
+            &format!("swipeContent={content} swipeTrailing=\"action\""),
+            &format!("row id={id}\n  text i\nbutton id=\"action\" press=remove(i) aria-label=\"x\"\n  image \"symbol:delete\""),
+            "",
+        );
+        let expected = if matches {
+            vec![]
+        } else {
+            vec![(SWIPE.to_string(), 8)]
+        };
+        assert_eq!(warned(&src), expected, "{src}");
+    }
+}
+
+#[test]
 fn a_choice_of_swipe_actions_is_read_arm_by_arm() {
     let row = |trailing: &str| {
         rows(

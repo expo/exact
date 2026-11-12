@@ -543,6 +543,11 @@ pub fn wants_input(id: u32) -> bool {
     with(|m| m.wants_input(id)).unwrap_or(false)
 }
 
+/// Whether a canvas reads gamepads.
+pub fn wants_pads(id: u32) -> bool {
+    with(|m| m.wants_pads(id)).unwrap_or(false)
+}
+
 /// Present between CPU UI layers without reading the game back.
 /// # Safety
 /// The HWND remains live until `window_detach`; slices contain premultiplied RGBA.
@@ -1040,6 +1045,9 @@ macro_rules! module {
         /// Whether a canvas wants raw input.
         #[no_mangle]
         pub extern "C" fn gpu_wants_input(id: u32) -> u32 { u32::from($crate::native::wants_input(id)) }
+        /// Whether a canvas reads gamepads: 1 or 0.
+        #[no_mangle]
+        pub extern "C" fn gpu_wants_pads(id: u32) -> u32 { u32::from($crate::native::wants_pads(id)) }
         /// Instance policy: bit 0 promises alpha one, bit 1 requests SDR.
         #[no_mangle]
         pub extern "C" fn gpu_presentation_flags(id: u32) -> u32 { $crate::native::presentation_flags(id) }

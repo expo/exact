@@ -469,11 +469,17 @@ fn lower_with_sites(
     // place.
     match lower_body(&mut l, checked, asset_root) {
         Ok(()) => {
-            let plan = l.b.finish().map_err(|e| LowerError {
+            let mut plan = l.b.finish().map_err(|e| LowerError {
                 id: "lower-invalid-plan",
                 message: format!("{e:?}"),
                 span: root.span,
             })?;
+            // LLP 1101.003 D9: the plan says which medium it was written for.
+            plan.surface = match profile {
+                Profile::Terminal => "terminal",
+                Profile::Web => "gui",
+            }
+            .into();
             Ok((plan, l.sites))
         }
         Err(fatal) => {

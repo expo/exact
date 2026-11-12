@@ -368,6 +368,7 @@ fn device(tv: bool) -> Device {
         tv,
         touch_slop: 8.0,
         dates: String::new(),
+        format_locale: String::new(),
     }
 }
 

@@ -147,6 +147,10 @@ function tree(request) {
         value: shownValue(el)
       };
     }
+    // The projection opt-out is a written style, not a prop or a browser default.
+    if (el?.dataset?.exactSaid?.split(' ').includes('appearance')) {
+      node.style = { appearance: { value: getComputedStyle(el).appearance, source: 'authored' } };
+    }
     node.focused = el === document.activeElement;
     if (el?.exactNative) {
       node.module = el.exactNative.status();

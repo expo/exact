@@ -3,7 +3,10 @@
 //! run the tools it calls (waiting for approval where one is needed), and
 //! ask again until it answers without tools. An interrupt settles the
 //! turn's entries from the caller's thread; this thread then finds its turn
-//! is no longer current and leaves without touching anything.
+//! is no longer current and leaves without touching them. The turn stays
+//! the running one, and the session busy, until this thread has left: a
+//! host waiting for the app to finish (LLP 1101.003 D2's shutdown) waits
+//! for the tool it was running to stop.
 
 use crate::providers::{self, Ask, Route};
 use crate::settle::{Reply, TailUpdate};
@@ -45,6 +48,7 @@ pub fn start(shared: &Arc<Shared>, prompt: &str) {
                 None
             }
             Ok(route) => {
+                s.failed = false;
                 s.history.push(Msg::user(prompt));
                 s.next_turn += 1;
                 s.turn = Some(Turn {
@@ -68,6 +72,7 @@ pub fn start(shared: &Arc<Shared>, prompt: &str) {
 
 fn run(shared: &Arc<Shared>, turn: &Turn, route: &Route) {
     let mut done = false;
+    let mut stopped = false;
     for _ in 0..MAX_ROUNDS {
         match round(shared, turn, route) {
             Some(true) => continue,
@@ -75,11 +80,14 @@ fn run(shared: &Arc<Shared>, turn: &Turn, route: &Route) {
                 done = true;
                 break;
             }
-            None => return,
+            None => {
+                stopped = true;
+                break;
+            }
         }
     }
     let mut s = shared.lock();
-    if s.current(turn) {
+    if !stopped && s.current(turn) {
         if !done {
             s.notice(vec![Block::p(vec![Run::dim(format!(
                 "Stopped after {MAX_ROUNDS} rounds of tool calls."
@@ -88,6 +96,27 @@ fn run(shared: &Arc<Shared>, turn: &Turn, route: &Route) {
         end(&mut s);
         drop(s);
         shared.changed();
+        pump(shared);
+        return;
+    }
+    drop(s);
+    release(shared, turn);
+}
+
+/// The thread of an interrupted turn has left: the turn ends here, not at
+/// the interrupt. A prompt queued meanwhile then starts, except in a run
+/// nobody attends, where the only interrupt is the host's shutdown.
+pub(crate) fn release(shared: &Arc<Shared>, turn: &Turn) {
+    let unattended = {
+        let mut s = shared.lock();
+        if s.turn.as_ref().map(|t| t.id) != Some(turn.id) {
+            return;
+        }
+        s.turn = None;
+        s.unattended
+    };
+    shared.changed();
+    if !unattended {
         pump(shared);
     }
 }
@@ -112,6 +141,12 @@ pub fn pump(shared: &Arc<Shared>) {
 /// Finish the turn: nothing busy, nothing waiting.
 fn end(s: &mut State) {
     s.turn = None;
+    settle_turn(s);
+}
+
+/// Everything [`end`] does but end the turn: what an interrupt does while
+/// the turn's thread is still leaving.
+fn settle_turn(s: &mut State) {
     s.phase = "idle".into();
     s.approval = Default::default();
     s.decision = None;
@@ -160,7 +195,8 @@ fn finish_round(s: &mut State, assistant: Msg, mut results: Vec<Part>) {
 }
 
 /// Interrupt the running turn, from any thread: its busy entries settle
-/// with a dim "[interrupted]" note. Whether one was running.
+/// with a dim "[interrupted]" note, and the turn ends once its thread has
+/// left ([`release`]). Whether one was running.
 pub fn interrupt(shared: &Arc<Shared>) -> bool {
     let mut s = shared.lock();
     let Some(turn) = s.turn.clone() else {
@@ -174,11 +210,10 @@ pub fn interrupt(shared: &Arc<Shared>) -> bool {
         e.blocks.push(Block::p(vec![Run::dim("[interrupted]")]));
         e.busy = false;
     }
-    end(&mut s);
+    settle_turn(&mut s);
     drop(s);
     shared.wake.notify_all();
     shared.changed();
-    pump(shared);
     true
 }
 
@@ -383,6 +418,29 @@ fn tool(
             return None;
         }
         let ask = needs && !s.always.iter().any(|t| t == name);
+        if ask && s.unattended {
+            // Nobody can answer (LLP 1101.003 D8): refused, not awaited,
+            // and the turn stops, so a script knows the answer is
+            // incomplete.
+            s.push(Entry {
+                kind: "tool".into(),
+                title,
+                status: "denied".into(),
+                blocks: vec![Block::lines(vec![Line {
+                    runs: vec![Run::dim("needs approval")],
+                }])],
+                link: tools::file_link(name, input),
+                model: turn.model.clone(),
+                ..Entry::default()
+            });
+            s.turn_error(&format!(
+                "`{name}` needs approval, which a run from the command line cannot give."
+            ));
+            end(&mut s);
+            drop(s);
+            shared.changed();
+            return None;
+        }
         let id = s.push(Entry {
             kind: "tool".into(),
             busy: true,

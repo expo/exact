@@ -515,6 +515,63 @@ fn a_drag_timeline_holds_its_consumer_at_the_drag() {
     assert!(!e.timeline_bound(NODE));
 }
 
+// LLP 1057.003 D5: a scroll or view timeline holds its consumer at its
+// scroller's offset on one axis, over the offsets layout placed, the moment
+// the host gives the offset; the clock never moves it, the other axis
+// repaints nothing, and a zero-length range is an inactive timeline.
+#[test]
+fn a_scroll_timeline_holds_its_consumer_at_its_scrollers_offset() {
+    const SCROLLER: u64 = 9;
+    let mut e = Engine::new();
+    observe(&mut e, Property::Opacity, 0.25);
+    e.set_animations(NODE, &row("fade 1s linear both")).unwrap();
+    let scroll = NamedTimeline::Scroll {
+        scroller: SCROLLER,
+        x: true,
+    };
+    e.set_animation_timeline(NODE, Some((scroll, [100.0, 300.0])));
+    assert_eq!(
+        opacity(&mut e),
+        Some(0.0),
+        "a scroller never given an offset is at its start"
+    );
+    e.set_scroll_offset(SCROLLER, 200.0, 0.0);
+    assert_eq!(opacity(&mut e), Some(0.5));
+    e.set_scroll_offset(SCROLLER, 200.0, 80.0);
+    assert_eq!(opacity(&mut e), None, "the other axis moves nothing");
+    e.set_scroll_offset(SCROLLER, 350.0, 80.0);
+    assert_eq!(
+        opacity(&mut e),
+        Some(1.0),
+        "past the range, the fill holds its end"
+    );
+    e.advance(3.0).unwrap();
+    assert_eq!(opacity(&mut e), None, "the clock does not move it");
+    e.set_scroll_offset(SCROLLER, 150.0, f64::NAN);
+    assert_eq!(opacity(&mut e), None, "a non-finite offset is ignored");
+    e.set_animation_timeline(NODE, Some((scroll, [100.0, 100.0])));
+    assert_eq!(
+        opacity(&mut e),
+        Some(0.25),
+        "a zero-length range is inactive"
+    );
+    e.set_animation_timeline(
+        NODE,
+        Some((
+            NamedTimeline::Scroll {
+                scroller: SCROLLER,
+                x: false,
+            },
+            [0.0, 160.0],
+        )),
+    );
+    assert_eq!(opacity(&mut e), Some(0.5), "on y, the offset given last");
+    // A scroller forgotten (destroyed, or renewed) is at its start again
+    // until its host gives an offset.
+    e.remove(SCROLLER);
+    assert_eq!(opacity(&mut e), Some(0.0));
+}
+
 // LLP 1057.003 D2: the range spans the delay and the active interval
 // together, unclamped, on the horizontal axis, as a CSS scroll timeline maps
 // them (the parity fixture's `tl-` cases); an endless animation holds its

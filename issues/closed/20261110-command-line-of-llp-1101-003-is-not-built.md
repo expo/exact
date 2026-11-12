@@ -1,6 +1,7 @@
 # DEFERRED.md says a terminal entry runs once from a shell; the command line of LLP 1101.003 is not built
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The terminal host now has LLP 1101.003's command line: print mode and `--json`, argv as the launch location, done by D2's settle test, the head's `status` as the exit status, one termination record with its watchdogs, and the plan's `surface` marker.
 **Systems:** rules/DEFERRED.md, LLP 1101.003, host/terminal (cli.rs), QUEUE.md
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

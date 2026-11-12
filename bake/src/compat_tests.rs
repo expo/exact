@@ -226,6 +226,7 @@ fn list_scroll_offset_requires_a_new_binary_cohort() {
             let shape = match *name {
                 "share" => "3",
                 "stopSounds" => "1",
+                "setSounds" => "5",
                 "playSounds" => "1:4|5|6",
                 "playSound" => "6",
                 "sendMIDI" => "3",

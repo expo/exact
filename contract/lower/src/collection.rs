@@ -144,7 +144,7 @@ impl Lowerer<'_> {
             return Ok(());
         }
         let row = row_list(attrs);
-        self.collection_axis(attrs, row, span)?;
+        self.collection_axis(attrs, row, span, scope)?;
         // Computed bounds are checked by the bake's measured-layout lint.
         // Merely spelling `auto` or a non-growing flex is not a bound.
         if !row
@@ -278,10 +278,36 @@ impl Lowerer<'_> {
         }
     }
 
+    /// Whether `value` is a number of points: a literal one at least
+    /// `least` (`positive`: more than it), or a computed one; a string could
+    /// be `auto` or a percentage.
+    fn points(&self, value: &Expr, scope: &Scope, positive: bool) -> bool {
+        match (numeric_literal(value), value) {
+            (Some(n), _) => n.is_finite() && if positive { n > 0.0 } else { n >= 0.0 },
+            (None, Expr::Ternary(_, yes, no, _)) => {
+                self.points(yes, scope, positive) && self.points(no, scope, positive)
+            }
+            (None, Expr::Str(..) | Expr::Bool(..)) => false,
+            (None, value) => matches!(
+                contract_types::infer(value, scope, &self.types.shapes),
+                Ok(Ty::Number) | Err(_)
+            ),
+        }
+    }
+
     /// The rules that make a list's axis CSS's and keep its index's starts
-    /// prefix sums (LLP 1070 H2, §8): a row list is a literal-height flex row,
-    /// left to right, that neither wraps, reverses nor spreads its items.
-    fn collection_axis(&self, attrs: &[Attr], row: bool, span: Span) -> Result<(), LowerError> {
+    /// prefix sums (LLP 1070 H2, §8, as amended for #226): a row list is a
+    /// flex row of a definite height, left to right, that neither wraps,
+    /// reverses nor spreads its items; its `gap` is a number of points the
+    /// index counts between items. A vertical list is a block, where CSS lays
+    /// out no gap.
+    fn collection_axis(
+        &self,
+        attrs: &[Attr],
+        row: bool,
+        span: Span,
+        scope: &Scope,
+    ) -> Result<(), LowerError> {
         if let Some(display) = literal(attrs, "display") {
             if !matches!(string(display), Some("block" | "flex")) {
                 return err("lower-collection-flow", "a virtualized list's `display` is a literal `block` (it scrolls vertically) or `flex` (a row that scrolls horizontally)", display.span);
@@ -316,13 +342,22 @@ impl Lowerer<'_> {
         if let Some(reorder) = literal(attrs, "reorderdrop").filter(|_| row) {
             return err("lower-collection-reorder", "reordering is vertical; a virtualized row list refuses `reorderdrop` until a consumer needs it (LLP 1070 §4.7)", reorder.span);
         }
+        for gap in attrs
+            .iter()
+            .filter(|a| matches!(a.name.as_str(), "gap" | "row-gap" | "column-gap"))
+        {
+            if !row && numeric_literal(&gap.value) != Some(0.0) {
+                return err("lower-collection-flow", format!("`{}` on a vertical virtualized list: it is a block, where CSS lays out no gap; space rows with a `margin-bottom` on the row root", gap.name), gap.span);
+            }
+            if row && !self.points(&gap.value, scope, false) {
+                return err("lower-collection-flow", format!("`{}` on a virtualized row list is a nonnegative number of points, a literal or a computed number, which the list counts between its items", gap.name), gap.span);
+            }
+        }
         if !row {
             return Ok(());
         }
-        if !literal(attrs, "height")
-            .is_some_and(|a| numeric_literal(&a.value).is_some_and(|n| n > 0.0))
-        {
-            return err("lower-collection-cross", "a virtualized row list needs a literal `height`: an auto height would be its tallest mounted item, which changes as items mount", span);
+        if !literal(attrs, "height").is_some_and(|a| self.points(&a.value, scope, true)) {
+            return err("lower-collection-cross", "a virtualized row list needs a `height` in points, a literal or a computed number: an auto height would be its tallest mounted item, which changes as items mount", span);
         }
         for a in attrs {
             let refusal = match a.name.as_str() {
@@ -478,9 +513,7 @@ impl Lowerer<'_> {
                     };
                     matches!(&a.value, Expr::Str(s, _) if if a.name == main { s == "scroll" || s == "auto" } else { s == "hidden" })
                 }
-                "gap" | "row-gap" | "column-gap" if container => {
-                    numeric_literal(&a.value) == Some(0.0)
-                }
+                "gap" | "row-gap" | "column-gap" if container => true, // `collection_axis`
                 "flex-direction" | "flex-wrap" | "grid-template-rows" | "grid-template-columns"
                     if container =>
                 {

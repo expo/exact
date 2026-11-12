@@ -5,9 +5,13 @@
 // starts its engine with no category and a capture's claim composes nothing.
 //
 // The app holds `.ambient`, `.playback`, or `.playback` with `.mixWithOthers`
-// (`playback-mix`). With no holder, claim or active call it returns to `.ambient`. Before
-// a GPU module makes a surface, an unclaimed session takes `.ambient` without
-// activation, so an output opened before its `exact:audio` request mixes.
+// (`playback-mix`). With no holder, claim or active call it rests: `.ambient`, or for
+// `playback-mix` the app's own configuration, which already mixes, so its
+// category never changes under output that is running. Before a GPU module
+// makes a surface, an unclaimed session takes its resting configuration
+// without activation, so an output opened before its `exact:audio` request
+// mixes (and, under `playback-mix`, is already in the category the request
+// asks for: a change while that output plays interrupts other apps' audio).
 //
 // A capture (a microphone, LLP 1133.009) claims the session: while any claim
 // is held the category is `.playAndRecord`, with the mode and options of the
@@ -58,6 +62,11 @@ package enum AudioSession {
     }
     /// The app's category and options, settable together for tests.
     nonisolated(unsafe) static var configuration = Configuration(Bundle.main.object(forInfoDictionaryKey: "ExactAudioSession") as? String)
+    /// The session with nothing holding it. Returning to ambient exists to stop
+    /// interrupting other apps' audio, which a mixing configuration never does.
+    static var resting: Configuration {
+        configuration.options.contains(.mixWithOthers) ? configuration : Configuration(nil)
+    }
     /// What wants the app's category now: the sound arm and a canvas's audio
     /// for as long as they run, and each video while it has sound. A want
     /// whose activation failed (during a call) stays, and is activated again
@@ -117,13 +126,13 @@ package enum AudioSession {
     nonisolated(unsafe) static var nextHoldFailure: Error?
 
     /// Prepare for a GPU module opening output before its `exact:audio`
-    /// request. No activation, and no change to a held or claimed session.
-    /// The driver's frozen clock opens no output; platform timing does.
+    /// request: the resting configuration. No activation, and no change to a
+    /// held or claimed session. The driver's frozen clock opens no output;
+    /// platform timing does.
     package static func prepareForSurface() {
         guard !ExactEnv.agentFreezes, holders.isEmpty, captures.isEmpty, configuring == nil,
               speeches.isEmpty, spoken == nil, !inCall else { return }
-        guard AVAudioSession.sharedInstance().category != .ambient else { return }
-        try? apply(Configuration(nil))
+        try? apply(resting)
     }
 
     /// Set the app's category and options and activate the session, for good (a
@@ -143,7 +152,8 @@ package enum AudioSession {
 
     /// `holder` no longer plays sound. With nothing left wanting it, a
     /// playback app goes back to `.ambient`, which mixes with other apps'
-    /// audio, as Bluesky's player does on re-mute. A muted player keeps
+    /// audio, as Bluesky's player does on re-mute; `playback-mix` already
+    /// mixes, so it stays. A muted player keeps
     /// running, so the session itself is given up (telling other apps they
     /// may resume) only once no player is left. A capture's category stays;
     /// a call keeps its category and activation.
@@ -152,7 +162,7 @@ package enum AudioSession {
         // A boundary at which nothing may run: speech takes its configuration, or gives it up.
         if !speeches.isEmpty || spoken != nil { return composeSpeech() }
         guard configuration.category != .ambient else { return }
-        try? apply(Configuration(nil))
+        try? apply(resting)
         giveUpIfIdle()
     }
 
@@ -248,7 +258,7 @@ package enum AudioSession {
             spoken = want
         } else {
             spoken = nil
-            try? session.setCategory(.ambient)
+            try? session.setCategory(resting.category, options: resting.options)
             try? session.setActive(false, options: .notifyOthersOnDeactivation)
         }
     }
@@ -303,7 +313,7 @@ package enum AudioSession {
             if holders.isEmpty { return composeSpeech() }
         }
         if holders.isEmpty {
-            try? apply(Configuration(nil))
+            try? apply(resting)
             if players.isEmpty { try? session.setActive(false, options: .notifyOthersOnDeactivation) }
         } else {
             try? apply(configuration)
@@ -369,7 +379,7 @@ package enum AudioSession {
                 spoken = type
             } catch {}
         } else {
-            try? apply(holders.isEmpty ? Configuration(nil) : configuration)
+            try? apply(holders.isEmpty ? resting : configuration)
         }
     }
 

@@ -13,7 +13,7 @@
 // - `exactSurface` (LLP 1047 D3; runner/src/surface_record.rs): a GPU
 //   surface's published record, decoded against each reader's shape.
 import { data, Resources, commit, R, Refusal, Kept, say } from "./rt.js";
-import { environment, keyboardInset, onKeyboard, displayMode, preferences, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold } from "./navigation.js";
+import { environment, keyboardInset, onKeyboard, displayMode, preferences, UPDATES, updateCode, onPreferences, pageReporter, fold, foldEnv, onFold, preferFold } from "./navigation.js";
 
 const again = (source, why) => () => commit(() => { for (const r of Resources) if (r.source === source) R(r); }, why);
 // `readers`: resource name → [its fields, in its shape's order, …].
@@ -30,6 +30,7 @@ export function viewportFacts(geometry = false) {
     .map(([x, y, width, height]) => ({ x, y, width, height }));
   return { width: innerWidth, height: innerHeight, safeAreaTop, safeAreaRight, safeAreaBottom, safeAreaLeft, segments, devicePixelRatio: Number.isFinite(globalThis.devicePixelRatio) && globalThis.devicePixelRatio > 0 ? globalThis.devicePixelRatio : null, prefersReducedMotion: !!(p & 1), prefersReducedTransparency: !!(p & 2),
     displayMode: displayMode(),
+    update: UPDATES[updateCode()], // @ref LLP 1101.003 D6
     prefersContrast: CONTRAST[(p >> 2) & 3], prefersColorScheme: p & 16 ? "dark" : "light",
     devicePosture: f.posture, horizontalViewportSegments: f.cols, verticalViewportSegments: f.rows, // @ref LLP 1078 D2, D6
     colorGamut: GAMUT[(p >>> 26) & 3], dynamicRange: p & (1 << 28) ? "high" : "standard", // @ref LLP 1100 D9

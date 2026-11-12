@@ -162,6 +162,40 @@ pub enum Mode {
     Inline,
 }
 
+/// How a command line starts the host (LLP 1101.003 D3, D6).
+pub(crate) struct Start {
+    /// The person's place and wall clock (interactive and print mode), not
+    /// the agent's fixed ones (a headless drive).
+    pub person: bool,
+    /// The directory a relative `image` source is read beneath.
+    pub assets: Option<std::path::PathBuf>,
+    /// The launch location.
+    pub location: String,
+    /// The `update` media feature: `none` in print mode.
+    pub update: exact_runner::Update,
+}
+
+impl Default for Start {
+    fn default() -> Start {
+        Start {
+            person: false,
+            assets: None,
+            location: "/".into(),
+            update: exact_runner::Update::Fast,
+        }
+    }
+}
+
+/// What one step of the loop did: whether it committed, and the runner's
+/// refusal if one stopped it (LLP 1101.003 D2, D8).
+#[derive(Debug, Default)]
+pub struct Pass {
+    /// Something committed, so the frame changed.
+    pub committed: bool,
+    /// The runner refused an announcement, a timer or an action.
+    pub error: Option<RunnerError>,
+}
+
 /// One runner, one grid.
 pub struct Host<D: DataSource> {
     idle_timer_retry: bool,
@@ -229,18 +263,16 @@ impl<D: DataSource> Host<D> {
         cols: usize,
         rows: usize,
     ) -> Result<Host<D>, String> {
-        Self::boot_with_clock(plan, data, mode, cols, rows, false, None)
+        Self::boot_with_clock(plan, data, mode, cols, rows, Start::default())
     }
 
-    /// `assets`: the directory a relative `image` source is read beneath.
     pub(crate) fn boot_with_clock(
         plan: Plan,
         data: D,
         mode: Mode,
         cols: usize,
         rows: usize,
-        interactive: bool,
-        assets: Option<std::path::PathBuf>,
+        start: Start,
     ) -> Result<Host<D>, String> {
         exact_kernel::style::link_segments();
         exact_kernel::timeline::link();
@@ -268,10 +300,12 @@ impl<D: DataSource> Host<D> {
             ..kernel.env().clone()
         };
         kernel.set_env(env).map_err(|e| format!("{e:?}"))?;
-        let viewport = Viewport::sized(cols as f64 * COLUMN as f64, rows as f64 * ROW as f64);
-        let (launch, notes) = crate::zone::launch(interactive, |key| std::env::var(key).ok())?;
+        let mut viewport = Viewport::sized(cols as f64 * COLUMN as f64, rows as f64 * ROW as f64);
+        viewport.preferences.update = start.update;
+        let (launch, notes) = crate::zone::launch(start.person, |key| std::env::var(key).ok())?;
+        let location = start.location.as_str();
         let mut runner = exact_runner::time::launching_with(launch, ||
-            Runner::boot(plan, data, kernel, viewport, "/")).map_err(|e| match e {
+            Runner::boot(plan, data, kernel, viewport, location)).map_err(|e| match e {
                 // The data module answered another declaration than the
                 // screen's: most often a binary older than the shapes.
                 RunnerError::Shape { resource, why } => format!(
@@ -304,7 +338,7 @@ impl<D: DataSource> Host<D> {
             generation: 0,
             quit: false,
             prevented: false,
-            images: crate::image::Images::new(assets),
+            images: crate::image::Images::new(start.assets),
             presented: crate::pointer::Presented::default(),
             requests: crate::requests::Requests::default(),
             outbound: Vec::new(),
@@ -344,15 +378,20 @@ impl<D: DataSource> Host<D> {
 
     /// Apply what the data module announced: the watching resources are
     /// asked again.
-    pub fn announced(&mut self) {
-        self.land_images();
+    pub fn announced(&mut self) -> Pass {
+        let pictures = self.land_images();
         let landed = self.land_requests();
-        let (receipts, _) = self.runner.apply_announced();
-        if landed || !receipts.is_empty() {
+        let (receipts, error) = self.runner.apply_announced();
+        let committed = landed || !receipts.is_empty();
+        if committed {
             self.after_commit();
         } else {
             // (what a landing asked with no commit, a background round's next request, still goes out)
             self.run_requests();
+        }
+        Pass {
+            committed: committed || pictures,
+            error,
         }
     }
 
@@ -693,18 +732,24 @@ impl<D: DataSource> Host<D> {
         self.tick(now);
     }
 
-    /// Advance the app's clock: timers fire.
-    pub fn tick(&mut self, now_ms: f64) {
+    /// Advance the app's clock: timers fire. A refusal stops it.
+    pub fn tick(&mut self, now_ms: f64) -> Pass {
         let kinds = exact_runner::WaitKinds::FRAME
             .union(exact_runner::WaitKinds::UPDATE)
             .union(exact_runner::WaitKinds::SCROLLEND);
+        let mut pass = Pass::default();
         loop {
             let batch = self.runner.release_waits(kinds, now_ms);
             if !batch.advanced.receipts.is_empty() {
                 self.after_commit();
+                pass.committed = true;
+            }
+            if let Some(error) = batch.advanced.error {
+                pass.error = Some(error);
+                return pass;
             }
             if !batch.continuing {
-                break;
+                return pass;
             }
         }
     }

@@ -183,7 +183,7 @@ const readMapped = `(() => {
   }));
   for (const name of ['timeline', 'animation', 'pressed', 'shared', 'shared-pressed', 'unset-animation']) {
     const e = document.querySelector('[data-testid="' + name + '"]');
-    values[name] = [e.style.animationPlayState, getComputedStyle(e).animationPlayState, e.getAnimations().map(a => a.playState)];
+    values[name] = [e.style.animationPlayState, getComputedStyle(e).animationPlayState, e.getAnimations().map(a => a.playState), getComputedStyle(e).animationTimeline];
   }
   values.accent.push(document.querySelector('[data-testid="accent"]').style.getPropertyValue('--exact-accent'));
   return values;
@@ -201,12 +201,18 @@ async function action(evaluate, id, mode) {
   })`);
 }
 
+// A bound timeline name holds its animations. This plan has no drag timeline, so the JS target writes the name as
+// CSS's own row (LLP 1057.003 D5: the browser's timeline, none here, which holds them); the wasm target pauses them
+// for the drag code, which finds no source.
+const bound = (runtime, mapped) => runtime === 'JS' ? [mapped[1], mapped[3]] : [mapped[1]];
+const held = runtime => runtime === 'JS' ? ['running', '--local'] : ['paused'];
+
 for (const runtime of ['JS', 'wasm']) {
   const check = need('fixture', runtime === 'wasm' && !process.env.EXACT_WEB_DIST ? 'name a wasm web build with EXACT_WEB_DIST' : null);
   check(`${runtime}: an unset timeline leaves its animations running`, () => fixture(runtime, async evaluate => {
     await action(evaluate, 'timelineOn', 'timeline');
     const active = await evaluate(readMapped);
-    expect(active.timeline[1]).toBe('paused');
+    expect(bound(runtime, active.timeline)).toEqual(held(runtime));
     expect(active['unset-animation'][1]).toBe('running');
     for (const id of ['timelineUnset', 'timelineOff']) {
       await action(evaluate, id, 'running');
@@ -379,19 +385,17 @@ component Fam
         }
       }
       expect(actual.timeline[1]).toBe('running');
-      if (runtime === 'JS') expect(actual.timeline).toEqual(['', 'running', ['running']]);
+      if (runtime === 'JS') expect(actual.timeline).toEqual(['', 'running', ['running'], 'auto']);
     }
     await action(evaluate, 'timelineOn', 'timeline');
-    const paused = (await evaluate(readMapped)).timeline;
-    expect(paused[1]).toBe('paused');
-    if (runtime === 'JS') expect(paused).toEqual(['paused', 'paused', ['paused']]);
+    expect(bound(runtime, (await evaluate(readMapped)).timeline)).toEqual(held(runtime));
     await action(evaluate, 'timelineUnset', 'running');
     expect((await evaluate(readMapped)).timeline[1]).toBe('running');
     await action(evaluate, 'timelineOn', 'timeline');
     await action(evaluate, 'timelineOff', 'running');
     const cleared = await evaluate(readMapped);
     expect(cleared.timeline[1]).toBe('running');
-    if (runtime === 'JS') expect(cleared.timeline).toEqual(['', 'running', ['running']]);
+    if (runtime === 'JS') expect(cleared.timeline).toEqual(['', 'running', ['running'], 'auto']);
     for (const name of ['animation', 'pressed']) {
       expect(cleared[name][2]).toEqual([]);
       if (runtime === 'JS') expect(cleared[name][0]).toBe('');

@@ -117,11 +117,21 @@ impl<D: DataSource> Bridge<D> {
     /// `env(viewport-segment-*)` lengths itself; the runner answers the
     /// three `exactViewport` fields. Bit 25 is reserved. Bits 26–27 carry
     /// gamut, 28 HDR, and 29–31 display mode; unpack these above the low
-    /// byte for the runner.
+    /// byte for the runner. `update` has no room here and keeps what
+    /// [`Bridge::set_update`] last said.
     pub fn set_preferences(&mut self, bits: u32) {
-        self.preferences =
-            exact_runner::Preferences::from_bits((bits & 0xff) | ((bits >> 26) << 8));
+        self.preferences = exact_runner::Preferences {
+            update: self.preferences.update,
+            ..exact_runner::Preferences::from_bits((bits & 0xff) | ((bits >> 26) << 8))
+        };
         self.fold = fold_bits(bits);
+    }
+
+    /// The page's `update` media feature (LLP 1101.003 D6): 0 `fast`, 1
+    /// `slow`, 2 `none`, as the native wire's bits 15–16 hold it. Taken by
+    /// the next boot or resize, which the page sends after this.
+    pub fn set_update(&mut self, code: u32) {
+        self.preferences.update = exact_runner::Preferences::from_bits((code & 3) << 15).update;
     }
 
     /// UTF-8 launch location carried after optional plan bytes.
@@ -1212,6 +1222,13 @@ macro_rules! host {
         #[no_mangle]
         pub extern "C" fn exact_request_active(ticket: f64) -> u32 {
             EXACT_BRIDGE.with(|b| b.borrow().request_active(ticket))
+        }
+
+        /// The page's `update` media feature, for the next boot or resize
+        /// (`Bridge::set_update`).
+        #[no_mangle]
+        pub extern "C" fn exact_set_update(code: u32) {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().set_update(code))
         }
 
         /// The viewport or the page's facts (bit 0 reduced motion, bit 1

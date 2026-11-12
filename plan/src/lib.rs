@@ -198,6 +198,12 @@ pub enum PlanError {
     BadMagic,
     /// A running host received a snapshot, or the snapshot reader received another entry.
     WrongEntry,
+    /// A plan compiled for another surface than the host's (LLP 1101.003
+    /// D9): a terminal plan on a GUI host, or a GUI plan on the terminal.
+    WrongSurface {
+        plan: String,
+        host: &'static str,
+    },
     UnsupportedVersion(u32),
     FormatDigestMismatch {
         expected: u64,
@@ -353,6 +359,17 @@ impl CodeError {
 }
 
 impl Plan {
+    /// This plan's bytes through the decoder of its own surface's hosts
+    /// (LLP 1101.003 D9): how a tool that reads a plan of either surface, a
+    /// type generator, checks one a caller built.
+    pub fn redecode(&self) -> Result<Plan, PlanError> {
+        let bytes = self.encode();
+        match self.surface.as_str() {
+            "terminal" => Plan::decode_terminal(&bytes),
+            _ => Plan::decode(&bytes),
+        }
+    }
+
     /// The rules the row codecs cannot express: region topology and timer
     /// progress. Called by the generated `validate`, so every loaded or built
     /// plan has passed it.

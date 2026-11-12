@@ -849,6 +849,15 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 ## Actions
 
+- **A command-line run ends while the data module still works on a thread.**
+  A terminal entry run once from a shell (`--print`, or stdout a pipe) exits
+  when nothing holds it: no request in flight, no one-shot timer armed and no
+  node `aria-busy` (LLP 1101.003 D2). A thread the module started after
+  answering a send is none of these, so the run settles and prints before
+  the work is done. Keep a node `aria-busy` from the send until the thread
+  has finished, as the harness's live column does with `session.busy`
+  (`apps/harness/terminal.contract`). (The harness's `--print`, 2026-11-12.)
+
 - **App resources belong in the root component.** A child can declare a reserved
   viewport reader, but an app source there fails with `type-child-resource`.
   Declare the resource in the root and pass the value the child needs as a prop.
@@ -1073,17 +1082,19 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   longer exists (declared in LLP 1005). Fix: keep the pressed node across the state
   change (change its contents, not which branch renders it).
   **Candidate diagnostic:** the runtime could log a dropped up in development.
-- **A `transformDragFor` handle does nothing.** No pinch or drag follows and
-  nothing is logged. Cause: the binding resolves only for a strict shape and
-  otherwise returns none silently (`kernel/src/transform.rs`; only the agent's
-  transform-drag command reports "no photo binding"). The target, the handle's one
-  ancestor with that `id`, needs
+- **A `transformDragFor` handle does nothing.** The binding resolves only for a
+  strict shape (`kernel/src/transform.rs`). The compiler warns with
+  `lower-transform-drag-ineligible` when it can prove a target, clip or path
+  violates that shape, naming the element and repair. Dynamic values and host
+  geometry remain runtime checks; the agent's transform-drag command reports
+  "no photo binding" when those fail. The target, the handle's one
+  ancestor with that `id`, must be a plain view (`column` or `box`) with
   `width="100%" height="100%" box-sizing="border-box"`, no padding, border,
-  margin or offsets, and its direct parent needs `overflow="hidden"` on both axes
-  and no padding or border; every other ancestor must be untransformed. (Signal
-  Clone, build 11: the photo viewer lacked `overflow="hidden"` and
-  `box-sizing`.) **Candidate diagnostic:** the compiler or a development log
-  could name the failed condition.
+  margin or offsets. Its direct parent must also be a plain view, with
+  `overflow="hidden"` on both axes and no padding or border. The handle and every
+  ancestor must be displayed, enabled and non-inert; all except the target must
+  be untransformed. (Signal Clone, build 11: the photo viewer lacked
+  `overflow="hidden"` and `box-sizing`.)
 
 - **A field normalized while the person types fights the typing.** A `task … when
   people != "${count}"` (or a timer, or an `input` action) that rewrites an
@@ -1239,6 +1250,12 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   (Authoring bench, LLP 1087, t2-todo on iOS: about 20 minutes, 2026-10-05.)
 
 ## Driving and testing
+
+- **An Android APK drive needs an awake, unlocked screen.** The relay checks and
+  wakes it and dismisses an insecure keyguard before launching. A secure lock
+  screen fails at once: unlock the device and run the drive again. A readiness
+  timeout includes the screen state observed before launch. Headless drives do
+  not need the display. (expo/exact#365; covered with stubbed adb calls.)
 
 - **A production bake does not open an agent socket.** Its baked
   `embedded.trust="production"` makes the host ignore `EXACT_AGENT` and
@@ -2181,9 +2198,18 @@ leave a binding on every page or list row. The JS target resolves `transformDrag
 `heightDragFor` and `reorderFor` after each commit against current ancestor IDs.
 Each binding must name exactly one strict ancestor; self, siblings and duplicate
 matching ancestors do not qualify. Changing the binding or ancestor ID cancels a
-drag whose target is no longer valid. The runtime journal names
-each passed-over target view and the owner once, then reports it again only after
-its valid bindings disappear and return. Read it with
+drag whose target is no longer valid. The compiler's `lower-transform-drag-owners`
+warning marks competing binding sites, including targets repeated by a `for`
+template. Guards over literal row values or indices that admit at most one
+iteration do not count as repetition; an index equality can also select one row
+of a dynamic list.
+Several handles for one target and mutually exclusive branches do not compete,
+including branches inside rows when their condition is shared across rows.
+Statically unreachable `if` and `match` arms are excluded, as are targets hidden
+by a static class or inline `display="none"`. Inline attributes override the
+class. Computed names it cannot resolve stay
+unknown. The runtime journal names each passed-over target view and the owner
+once, then reports it again only after its valid bindings disappear and return. Read it with
 `bun scripts/agent.mjs web logs` (or the native host).
 
 - The root file's first component is the app root. A fixture component placed

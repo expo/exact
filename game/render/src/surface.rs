@@ -96,6 +96,13 @@ pub struct WorldSurface<G: Game, P: Executor = (), const ASSETS: bool = false, H
     samples: Option<exact_game::SceneSamples>,
     /// This frame's timing facts (`Surface::timing`), for the hooks' `FrameView.time`.
     timing: exact_gpu::FrameTiming,
+    /// Delivered textures a live renderer prepares later (`prepare_now`).
+    waiting: std::collections::BTreeMap<String, exact_game::asset::TextureData>,
+    /// Models a live preparation left for a later frame.
+    held_back: bool,
+    /// Texture uploads off the presenting thread, under the live clock.
+    #[cfg(not(target_arch = "wasm32"))]
+    uploads: Option<crate::models::Uploads>,
 }
 impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, P, ASSETS, H> {
     /// Bake-owned development capability; production modules refuse live edits.
@@ -501,6 +508,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
                 // unless the replacement fetches another texture family.
                 if family_changed {
                     sim.take_textures();
+                    self.waiting.clear();
                 }
                 if family_changed || (!self.device && !self.device_assets_invalidated) {
                     sim.invalidate_device_assets();
@@ -520,6 +528,13 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         self.device = false;
         self.render = None;
         self.ready_work = None;
+        // The replacement device's textures are delivered again.
+        self.waiting.clear();
+        self.held_back = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.uploads = None;
+        }
         self.format = None;
         self.storage_limit = 0;
         if ASSETS && !self.device_assets_invalidated {
@@ -620,6 +635,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
     }
     fn wants_input(&self) -> bool {
         true
+    }
+    fn wants_pads(&self) -> bool {
+        self.sim.as_ref().is_some_and(Sim::reads_pads)
     }
     fn input(&mut self, event: &InputEvent) {
         self.reported = false;

@@ -5,13 +5,12 @@
 use std::borrow::Cow;
 use taffy::prelude::{auto, length, percent};
 
-use crate::arena::NodeArena;
-use crate::error::StyleValueError;
 use crate::generated::{
     AlignContent, AlignItems, AlignSelf, BoxSizing, Direction, Display, FlexDirection, FlexWrap,
     GridAutoFlow, JustifyContent, JustifyItems, NodeType, Overflow, PositionType, StyleId,
     StyleMask, StyleProps,
 };
+use crate::{arena::NodeArena, error::StyleValueError};
 
 mod backdrop;
 pub use backdrop::{link as link_backdrop_filter, BackdropFilter, BackdropOp};
@@ -889,6 +888,10 @@ pub enum RowValue<'a> {
     AnimationRange(&'a crate::timeline::AnimationRange),
     /// CSS `timeline-scope` (LLP 1057.003 D4).
     TimelineScope(&'a crate::timeline::TimelineScope),
+    /// CSS `scroll-timeline-name` or `view-timeline-name` (LLP 1057.003 D5).
+    TimelineName(&'a crate::timeline::TimelineName),
+    /// CSS `view-timeline-inset` (LLP 1057.003 D5).
+    ViewTimelineInset(&'a crate::timeline::ViewTimelineInset),
     /// SVG paint (LLP 1055 D2).
     Paint(&'a crate::svg::Paint),
     /// SVG `stroke-dasharray` (LLP 1055 D2).
@@ -942,50 +945,6 @@ pub enum RowValue<'a> {
     Transitions(&'a Transitions),
     /// The `animation` row (LLP 1055 D5).
     Animations(&'a Animations),
-}
-
-impl RowValue<'_> {
-    /// Whether every number the row carries is finite. Rows without floats
-    /// (and the CSS values, which parse to finite numbers) are.
-    pub(crate) fn is_finite(&self) -> bool {
-        match self {
-            RowValue::LineHeight(v) => v.is_finite(),
-            RowValue::BackdropFilter(v) => v.is_finite(),
-            RowValue::Dimension(v) => v.is_finite(),
-            RowValue::Number(v) => v.is_finite(),
-            RowValue::Vec2(v) => v.x.is_finite() && v.y.is_finite(),
-            RowValue::Tracks(v) => v.is_finite(),
-            RowValue::Transitions(v) => v.is_finite(),
-            RowValue::Animations(v) => v.is_finite(),
-            RowValue::DashArray(v) => v.0.iter().all(|n| n.is_finite()),
-            RowValue::Transform(v) => v.is_finite(),
-            RowValue::TransformOrigin(v) => v.is_finite(),
-            RowValue::AnimationRange(v) => v.0.is_none_or(|[a, b]| a.is_finite() && b.is_finite()),
-            RowValue::Paint(_)
-            | RowValue::PaintOrder(_)
-            | RowValue::Marker(_)
-            | RowValue::Filter(_)
-            | RowValue::ClipPath(_)
-            | RowValue::ShapeOutside(_)
-            | RowValue::AspectRatio(_)
-            | RowValue::PositionTryFallbacks(_)
-            | RowValue::DragTimeline(_)
-            | RowValue::AnimationTimeline(_)
-            | RowValue::TimelineScope(_)
-            | RowValue::BackgroundImage(_)
-            | RowValue::TextShadow(_)
-            | RowValue::FontVariations(_)
-            | RowValue::FontFeatures(_)
-            | RowValue::BoxShadow(_)
-            | RowValue::MaskImage(_)
-            | RowValue::CornerShape(_)
-            | RowValue::RotateAxis(_)
-            | RowValue::SymbolPalette(_)
-            | RowValue::ColorValue(_)
-            | RowValue::Enum(_)
-            | RowValue::Placement(_) => true,
-        }
-    }
 }
 
 /// Two floats.
@@ -1486,15 +1445,16 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     s
 }
 
+mod decoration;
+// Whether a row's numbers are finite.
+mod finite;
 #[cfg(test)]
 mod finite_tests;
+pub mod snap;
 #[cfg(test)]
 mod tests;
 pub(crate) mod top_layer;
 // A `touch-action` value's pinch and pan parts.
-mod decoration;
-#[cfg(test)]
-mod decoration_tests;
 mod touch_action;
 #[cfg(test)]
 mod touch_action_tests;

@@ -112,8 +112,8 @@ fn swipeleft_mirrors_swiperight_with_its_arguments() {
 }
 
 #[test]
-fn scroll_snap_compiles_both_axes_and_center() {
-    for axis in ["x", "y"] {
+fn scroll_snap_compiles_each_axis_strictness_alignment_and_stop() {
+    for axis in ["x", "y", "both"] {
         let source = format!("component App\n  view\n    scroll height=100 width=300 scroll-snap-type=\"{axis} mandatory\"\n      view scroll-snap-align=\"center\"\n");
         let plan = contract::compile(&source).unwrap();
         let r = Runner::boot(plan, (), Kernel::with_monospace(), Default::default(), "/").unwrap();
@@ -132,9 +132,31 @@ fn scroll_snap_compiles_both_axes_and_center() {
             "center"
         );
     }
+    let source = "component App\n  view\n    scroll height=100 width=300 scroll-snap-type=\"x proximity\"\n      view scroll-snap-align=\"start center\" scroll-snap-stop=\"always\"\n";
+    let r = Runner::boot(
+        contract::compile(source).unwrap(),
+        (),
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let node = r.kernel().node(r.roots()[0]).unwrap();
+    assert_eq!(
+        node.style.scroll_snap_type.name(),
+        "x",
+        "`proximity` is the axis alone"
+    );
+    let area = r.kernel().node(node.children()[0]).unwrap();
+    assert_eq!(area.style.scroll_snap_align.name(), "start center");
+    assert_eq!(
+        area.style.scroll_snap_stop,
+        exact_kernel::ScrollSnapStop::Always
+    );
     for attr in [
-        "scroll-snap-type=\"x proximity\"",
-        "scroll-snap-stop=\"always\"",
+        "scroll-snap-type=\"block mandatory\"",
+        "scroll-snap-align=\"start center end\"",
+        "scroll-snap-stop=\"never\"",
     ] {
         assert!(contract::compile(&format!(
             "component App\n  view\n    scroll height=100 {attr}\n"

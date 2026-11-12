@@ -351,6 +351,34 @@ impl Paragraph {
         })
     }
 
+    /// The same lines, owned apart from the text engine's caches: what a
+    /// tape draws after its node is gone (`paint/tape.rs`). `None` for text
+    /// flowed around shapes.
+    pub(crate) fn retained(&self) -> Option<Rc<Paragraph>> {
+        if self.flow.is_some() {
+            return None;
+        }
+        Some(Rc::new(Paragraph {
+            source: self.source.clone(),
+            record: std::cell::OnceCell::from(self.layouts().clone()),
+            measured: RefCell::new(None),
+            remake: None,
+            flow: None,
+            #[cfg(test)]
+            layout_lifetime: self.layout_lifetime.clone(),
+            width: self.width,
+            height: self.height,
+            first_baseline: self.first_baseline,
+            baselines: self.baselines.clone(),
+            bottoms: self.bottoms.clone(),
+            ink: RefCell::new(Default::default()),
+            strokes: RefCell::new(Default::default()),
+            ellipsized: RefCell::new(None),
+            resident_capacity_bytes: 0,
+            private_text_bytes_estimate: 0,
+        }))
+    }
+
     /// The record's bytes if it exists.
     fn lines_capacity_bytes(&self) -> usize {
         self.record.get().map_or(0, |l| l.capacity_bytes())

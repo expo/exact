@@ -456,6 +456,7 @@ fn commands_digest() -> String {
         let shape = match *name {
             "share" => "3",
             "stopSounds" => "1",
+            "setSounds" => "5",
             "playSounds" => "1:4|5|6",
             "playSound" => "6",
             "sendMIDI" => "3",

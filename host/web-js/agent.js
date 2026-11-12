@@ -72,8 +72,12 @@ const typed = (v, t) => v == null || typeof t === 'string' ? v : Array.isArray(t
 // `state`'s reply with every string a live password field holds as the tree shows the field, `•••`: the slot it writes and
 // a value that copies it are the same secret (LLP 1156.001 D6). `expect state` asks `reveal` to compare; nothing prints that.
 const masked = (req, reply) => { const secrets = req.reveal ? [] : [...document.querySelectorAll('#exact-root input[type=password]')].map(e => e.value).filter(Boolean), hide = v => typeof v === 'string' ? secrets.includes(v) ? '•••' : v : Array.isArray(v) ? v.map(hide) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, hide(x)])) : v; return secrets.length ? { ...reply, slots: hide(reply.slots), derives: hide(reply.derives), resources: hide(reply.resources) } : reply; };
-const PROPS = [['aria-live', 'accessibilityLive'], ['role', 'accessibilityRole'], ['data-alertpart', 'alertPart'], ['aria-controls', 'accessibilityControls'], ['id', 'id'], ['aria-description', 'accessibilityHint'], ['aria-keyshortcuts', 'accessibilityKeyShortcuts'], ['aria-orientation', 'accessibilityOrientation'], ['aria-pressed', 'accessibilityPressed'], ['aria-current', 'accessibilityCurrent'], ['aria-sort', 'accessibilitySort'], ['colspan', 'colSpan', 1], ['rowspan', 'rowSpan', 1], ['scope', 'scope'], ['aria-level', 'accessibilityHeadingLevel', 1], ['aria-posinset', 'accessibilityPosInSet', 1], ['aria-setsize', 'accessibilitySetSize', 1], ['aria-valuenow', 'accessibilityValueNow'], ['aria-valuemin', 'accessibilityValueMin'], ['aria-valuemax', 'accessibilityValueMax'], ['aria-valuetext', 'accessibilityValueText'], ['placeholder', 'placeholder'], ['autocomplete', 'autocomplete'], ['viewportFit', 'viewportFit'], ['interactiveWidget', 'interactiveWidget'], ['data-hatch', 'hatch'], ['data-nativeviewmodulename', 'nativeViewModuleName'], ['data-nativeviewprops', 'nativeViewProps']];
-const TABLE_TAGS = /^(table|caption|thead|tbody|tfoot|tr|th|td|dl|dt|dd)$/;
+const PROPS = [['aria-live', 'accessibilityLive'], ['role', 'accessibilityRole'], ['data-alertpart', 'alertPart'], ['aria-controls', 'accessibilityControls'], ['id', 'id'], ['aria-description', 'accessibilityHint'], ['aria-keyshortcuts', 'accessibilityKeyShortcuts'], ['aria-orientation', 'accessibilityOrientation'], ['aria-pressed', 'accessibilityPressed'], ['aria-current', 'accessibilityCurrent'], ['aria-sort', 'accessibilitySort'], ['colspan', 'colSpan', 1], ['rowspan', 'rowSpan', 1], ['scope', 'scope'], ['aria-level', 'accessibilityHeadingLevel', 1], ['aria-posinset', 'accessibilityPosInSet', 1], ['aria-setsize', 'accessibilitySetSize', 1], ['aria-valuenow', 'accessibilityValueNow'], ['aria-valuemin', 'accessibilityValueMin'], ['aria-valuemax', 'accessibilityValueMax'], ['aria-valuetext', 'accessibilityValueText'], ['placeholder', 'placeholder'], ['autocomplete', 'autocomplete'], ['viewportFit', 'viewportFit'], ['interactiveWidget', 'interactiveWidget'], ['data-hatch', 'hatch'], ['data-nativeviewmodulename', 'nativeViewModuleName'], ['data-nativeviewprops', 'nativeViewProps'],
+  ['navigationKey', 'navigationKey'], ['navigationBack', 'navigationBack'], ['data-navigationbar', 'navigationBar'],
+  ['navigationPresentation', 'navigationPresentation'], ['type', 'type'], ['popover', 'popover'],
+  ['popovertarget', 'popovertarget'], ['popovertargetaction', 'popovertargetaction'], ['commandfor', 'commandfor'], ['command', 'command'],
+];
+const SEMANTIC_TAGS = /^(main|header|footer|section|article|aside|nav|dialog|table|caption|thead|tbody|tfoot|tr|th|td|dl|dt|dd)$/;
 const TYPES = { TEMPLATE: 'Head', BUTTON: 'Pressable', INPUT: 'TextInput', TEXTAREA: 'TextInput', VIDEO: 'Video', AUDIO: 'Video', IMG: 'Image', IFRAME: 'WebView', A: 'Pressable' };
 /** The view an operation names: its id, else the first node with that testId on an active screen, a covered
  * screen's or an unselected tab's copy only when no active one carries it, as the runner's `target`. */
@@ -102,9 +106,10 @@ export function install(exact) {
     const props = {};
     if (el.hasAttribute('data-decorations')) props.decorations = el.getAttribute('data-decorations');
     if (el.dataset.testid) props.testId = el.dataset.testid;
-    // HTML's table and description list are their elements (LLP 1153 D7): the runner's tree names each by its `semanticTag`.
-    if (TABLE_TAGS.test(el.localName) && el.namespaceURI === 'http://www.w3.org/1999/xhtml') props.semanticTag = el.localName;
+    // Keep the semantic element as the runner's tree does, including the header a platform bar projects.
+    if (SEMANTIC_TAGS.test(el.localName) && el.namespaceURI === 'http://www.w3.org/1999/xhtml') props.semanticTag = el.localName;
     if (el.tagName === 'IMG') props.imageSource = el.dataset.symbolSource ?? el.dataset.appSrc ?? el.getAttribute('src') ?? '';
+    if (el.tagName === 'BUTTON' && !el.hasAttribute('role')) props.accessibilityRole = 'button';
     if (el.hasAttribute('aria-label')) props.accessibilityLabel = el.getAttribute('aria-label');
     else if (el.tagName === 'IMG' && el.getAttribute('alt')) props.accessibilityLabel = el.getAttribute('alt');
     // A paragraph of runs has no text of its own: its runs carry it.
@@ -134,6 +139,7 @@ export function install(exact) {
     if (el.getAttribute('aria-busy') === 'true') props.accessibilityBusy = true;
     if (el.hasAttribute('autofocus')) props.autofocus = true; else if (el.dataset.autofocus === 'false') props.autofocus = false;
     const n = { id: id(el), type: type(el), depth, props };
+    if (el.dataset.exactSaid?.split(' ').includes('appearance')) n.style = { appearance: { value: getComputedStyle(el).appearance, source: 'authored' } };
     if (el.dataset.exactOn) n.handlers = el.dataset.exactOn.split(' ');
     if (document.activeElement === el) n.focused = true;
     // As glue.js's `tree` adds them: an iframe's url, load state and

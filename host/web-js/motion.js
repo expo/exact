@@ -183,6 +183,10 @@ export async function engine({ clock, wall, views, viewId, hooks, say, inflight 
   };
   globalThis.exact.settleAt = () => { const t = w.m_settle(); return t < 0 ? null : t * 1000; };
   globalThis.exact.synced = () => api.followTimelines();
+  // The tree this piece arrives after is followed now, not at the next
+  // commit: a scroll or view timeline's name is handed to the browser
+  // (LLP 1057.003 D5), a drag timeline's consumer held where its source is.
+  api.followTimelines();
   return {
     api, request, now,
     observe,

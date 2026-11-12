@@ -32,6 +32,18 @@ fn choice(p: &Presenter<()>, style: &str, from: Option<&str>, light: bool) {
     assert_eq!(p.chrome().status_light_icons, light);
 }
 
+// Contract refuses nested navigation roots. These host guards still need
+// a tree with one, built through the kernel's property operations.
+fn nested_navigation(p: &mut Presenter<()>) {
+    p.host.apply_test_ops(&[exact_kernel::Op::SetProp {
+        id: id(p, "navigator"),
+        prop: PropId::NavigationBack,
+        value: exact_kernel::PropValue::Str("back".into()),
+    }]);
+    assert_eq!(p.host.commit(&[], None), None);
+    assert_eq!(p.after_commit(), None);
+}
+
 fn screen(route: &str, header: &str, overlay: &str, header_style: &str) -> Presenter<()> {
     boot(&format!(
         r#"    main
@@ -370,14 +382,15 @@ fn a_push_after_a_hidden_presentation_keeps_the_root_declaration() {
 
 #[test]
 fn a_display_none_navigation_root_cannot_cover_the_bar() {
-    let p = boot(
+    let mut p = boot(
         r#"    main testId="root" status-bar-style="light-content"
       text "Visible page"
-      box display="none" navigationKey="cover" navigationBack="back"
+      box display="none" navigationKey="cover" testId="navigator"
         box navigationKey="cover" navigationPresentation="fullscreen"
           text "Hidden page"
 "#,
     );
+    nested_navigation(&mut p);
     choice(&p, "light-content", Some("root"), true);
 }
 
@@ -391,11 +404,12 @@ fn toggling_a_navigation_roots_display_releases_and_recaptures_the_bar() {
   view
     main testId="root" status-bar-style="light-content"
       button "Flip" press=flip testId="flip"
-      box display=(shown ? "block" : "none") navigationKey="cover" navigationBack="back"
+      box display=(shown ? "block" : "none") navigationKey="cover" testId="navigator"
         box navigationKey="cover" navigationPresentation="fullscreen"
           text "Cover"
 "#,
     );
+    nested_navigation(&mut p);
     choice(&p, "default", None, false);
     let flip = id(&p, "flip");
     p.tap(flip).unwrap();
@@ -407,14 +421,15 @@ fn toggling_a_navigation_roots_display_releases_and_recaptures_the_bar() {
 #[test]
 fn navigation_in_a_projection_cannot_cover_the_bar() {
     for projection in ["dialog", "box popover=\"auto\""] {
-        let p = boot(&format!(
+        let mut p = boot(&format!(
             r#"    main testId="root" status-bar-style="light-content"
       {projection}
-        box navigationKey="cover" navigationBack="back"
+        box navigationKey="cover" testId="navigator"
           box navigationKey="cover" navigationPresentation="fullscreen"
             text "Projected page"
 "#
         ));
+        nested_navigation(&mut p);
         choice(&p, "light-content", Some("root"), true);
     }
 }

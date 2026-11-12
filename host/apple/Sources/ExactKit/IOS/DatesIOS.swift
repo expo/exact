@@ -119,24 +119,40 @@ final class BoundDatePicker: UIDatePicker {
     /// each of UIKit's, kept while that element lives so VoiceOver's cursor
     /// stays on one (`EmptyDateElement`).
     private var standIns: [EmptyDateElement] = []
+    /// What UIKit declares as the picker's elements, before any of Exact's
+    /// stand in; UIKit's answer may ask this picker again meanwhile.
+    private var readingDeclared = false
+    private func declared() -> [NSObject] {
+        readingDeclared = true
+        defer { readingDeclared = false }
+        return declaredElements(super.accessibilityElements, count: super.accessibilityElementCount(), at: { super.accessibilityElement(at: $0) })
+    }
     private func emptyElements() -> [EmptyDateElement] {
-        let natives = nativeAccessibilityElements()
+        let natives = nativeAccessibilityElements(declared: declared())
         standIns = natives.map { native in standIns.first { $0.native === native } ?? EmptyDateElement(standingFor: native, in: self) }
         return standIns
     }
+    /// Inside a placed canvas child, UIKit's parts are stood in for at the
+    /// frames the surface draws them at (PlacedAccessibilityIOS.swift).
+    private let placedParts = PlacedStandIns()
+    /// Exact's elements, when any stand in for UIKit's.
+    private func ownElements() -> [UIAccessibilityElement]? {
+        if readingDeclared { return nil }
+        if empty { return emptyElements() }
+        return placedParts.elements(of: self, declared: declared)
+    }
     override var accessibilityElements: [Any]? {
-        get { empty ? emptyElements() : super.accessibilityElements }
+        get { ownElements() ?? super.accessibilityElements }
         set { super.accessibilityElements = newValue }
     }
-    override func accessibilityElementCount() -> Int { empty ? emptyElements().count : super.accessibilityElementCount() }
+    override func accessibilityElementCount() -> Int { ownElements()?.count ?? super.accessibilityElementCount() }
     override func accessibilityElement(at index: Int) -> Any? {
-        guard empty else { return super.accessibilityElement(at: index) }
-        let elements = emptyElements()
+        guard let elements = ownElements() else { return super.accessibilityElement(at: index) }
         return elements.indices.contains(index) ? elements[index] : nil
     }
     override func index(ofAccessibilityElement element: Any) -> Int {
-        guard empty else { return super.index(ofAccessibilityElement: element) }
-        return emptyElements().firstIndex { $0 === element as AnyObject } ?? NSNotFound
+        guard let elements = ownElements() else { return super.index(ofAccessibilityElement: element) }
+        return elements.firstIndex { $0 === element as AnyObject } ?? NSNotFound
     }
     /// A choice ends the empty state while VoiceOver's cursor may be on one
     /// of Exact's elements, which then go: the cursor moves to UIKit's.

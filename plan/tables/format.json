@@ -1,5 +1,5 @@
 {
-  "formatVersion": 5,
+  "formatVersion": 6,
   "_header": "Extra header fields after the four fixed integers (magic, version, format digest, kernel schema, compiler identity), in declaration order. `string` is length-prefixed UTF-8. `app_id` is the app identity, reverse-DNS (LLP 1023 D5): bake writes it from DataSource::app_id(); empty is unnamed (a fixture or a stand-in) and unnamed matches anything at boot. LLP 1038 D2: router names the root slot filled before initializers.",
   "header": [
     {
@@ -19,6 +19,11 @@
       "name": "snapshot_entry",
       "codec": "string",
       "_comment": "LLP 1126 D2: empty for a running app, otherwise the snapshot entry kind; checked before decoding tables."
+    },
+    {
+      "name": "surface",
+      "codec": "string",
+      "_comment": "LLP 1101.003 D9: the medium the plan was compiled for, `gui` or `terminal`: the terminal profile writes `terminal`, every other compile `gui`, and empty (a plan no compiler wrote, a fixture) reads as `gui`. Checked at decode, before any table: `Plan::decode` refuses a `terminal` plan and `Plan::decode_terminal` any other."
     },
     {
       "name": "snapshot_refresh",

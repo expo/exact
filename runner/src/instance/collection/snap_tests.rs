@@ -20,6 +20,7 @@ fn query_bounded(h: &Harness, proposed: f64, distance: f64) -> (Option<f64>, usi
             [
                 proposed,
                 300.0,
+                0.0,
                 (h.snapshot().total_extent - 300.0).max(0.0),
                 distance,
             ],
@@ -84,6 +85,38 @@ fn snap_uses_each_rows_alignment_and_index_size_beyond_the_mounted_window() {
     );
 }
 
+/// CSS Scroll Snap 1 §6.2: the first unmounted `always` row past a release
+/// toward its rest, either way, and none outside the travel.
+#[test]
+fn snap_stop_names_the_first_unmounted_always_row_on_the_way() {
+    let source = r#"component App
+  view
+    list virtualized=true display="flex" width=300 height=100 estimated-item-width=150
+      for n in range(1000) key=n
+        view width=150 height=100 scroll-snap-align="start" scroll-snap-stop=(n == 100 || n == 120 ? "always" : "normal")
+"#;
+    let r = crate::Runner::boot(
+        contract::compile(source).unwrap(),
+        NoData,
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let id = r.collections()[0].view;
+    let stop = |release: f64, rest: f64| {
+        r.collection_snap_stop(id, [release, rest], [300.0, 0.0, 149700.0])
+    };
+    assert_eq!(stop(900.0, 30000.0), Some(15000.0));
+    assert_eq!(
+        stop(30000.0, 900.0),
+        Some(18000.0),
+        "going back, the nearer one"
+    );
+    assert_eq!(stop(18500.0, 30000.0), None);
+    assert_eq!(stop(900.0, 14000.0), None);
+}
+
 #[test]
 fn snap_uses_estimates_and_current_data_and_styles_within_the_local_window() {
     let source = r#"component App
@@ -108,26 +141,26 @@ fn snap_uses_estimates_and_current_data_and_styles_within_the_local_window() {
     .unwrap();
     let id = r.collections()[0].view;
     assert_eq!(
-        r.collection_snap(id, 30020.0, 300.0, 59700.0, f64::INFINITY),
+        r.collection_snap(id, [30020.0, 300.0, 0.0, 59700.0, f64::INFINITY]),
         None
     );
     r.act("flip", vec![]).unwrap();
     assert_eq!(
-        r.collection_snap(id, 30020.0, 300.0, 59700.0, f64::INFINITY),
+        r.collection_snap(id, [30020.0, 300.0, 0.0, 59700.0, f64::INFINITY]),
         Some(29700.0)
     );
     r.act("trim", vec![]).unwrap();
     assert_eq!(
-        r.collection_snap(id, 30020.0, 300.0, 29700.0, f64::INFINITY),
+        r.collection_snap(id, [30020.0, 300.0, 0.0, 29700.0, f64::INFINITY]),
         Some(29700.0)
     );
     r.act("flip", vec![]).unwrap();
     assert_eq!(
-        r.collection_snap(id, 30020.0, 300.0, 29700.0, f64::INFINITY),
+        r.collection_snap(id, [30020.0, 300.0, 0.0, 29700.0, f64::INFINITY]),
         None
     );
     assert_eq!(
-        r.collection_snap(id, f64::NAN, 300.0, 29700.0, f64::INFINITY),
+        r.collection_snap(id, [f64::NAN, 300.0, 0.0, 29700.0, f64::INFINITY]),
         None
     );
 }
@@ -374,4 +407,31 @@ fn snap_vertical_and_center_use_the_axis_insets_and_margins() {
             );
         }
     }
+}
+
+#[test]
+fn snap_reads_two_alignments_and_scroll_margin() {
+    // A row list reads the inline (second) alignment: each 150 card's
+    // centre rests at the 300 snapport's.
+    let row = r#"component App
+  view
+    list virtualized=true display="flex" width=300 height=100 estimated-item-width=150
+      for n in range(1000) key=n
+        view width=150 height=100 scroll-snap-align="none center"
+"#;
+    let h = Harness::from_parts(contract::compile(row).unwrap(), vec![]);
+    assert_eq!(query(&h, 30000.0), Some(29925.0));
+    // A column list reads the block (first) alignment along y, and
+    // `scroll-margin-top` grows each area.
+    let column = r#"component App
+  view
+    list virtualized=true height=300 estimated-item-height=150
+      for n in range(1000) key=n
+        view height=150 scroll-margin-top=10 scroll-snap-align="start none"
+"#;
+    let h = Harness::from_parts(contract::compile(column).unwrap(), vec![]);
+    assert_eq!(query(&h, 30020.0), Some(29990.0));
+    let none = column.replace("start none", "none start");
+    let h = Harness::from_parts(contract::compile(&none).unwrap(), vec![]);
+    assert_eq!(query(&h, 30020.0), None, "no alignment along y");
 }

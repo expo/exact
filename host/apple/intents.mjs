@@ -208,10 +208,19 @@ const xcrunFind = tool => spawnSync('xcrun', ['--find', tool], { encoding: 'utf8
  * the module, found as `swiftc` is (`xcrun` honours `DEVELOPER_DIR` and `xcode-select`); its toolchain is the
  * directory that holds its `usr/bin`. */
 export function intentsMetadata({ moduleName, dir, sdk, triple, platform, deployment, binary, sources, values, runApple, find = xcrunFind }) {
+  const metadata = resolve(dir, 'Metadata.appintents');
+  // Linux has no Xcode and no processor: the portable emitter writes the same file from the module's constant values.
+  if (process.platform === 'linux') {
+    const major = parseInt(JSON.parse(readFileSync(resolve(sdk, 'SDKSettings.json'), 'utf8')).Version);
+    const actions = emittedIntentsMetadata(JSON.parse(readFileSync(values, 'utf8')), major, { module: moduleName });
+    mkdirSync(metadata, { recursive: true });
+    writeFileSync(resolve(metadata, 'extract.actionsdata'), JSON.stringify(actions));
+    writeFileSync(resolve(metadata, 'version.json'), JSON.stringify({ toolsVersion: 'exact-1', version: '3.0' }));
+    return metadata;
+  }
   const found = find('appintentsmetadataprocessor'), processor = found.status === 0 ? found.stdout.trim() : '';
   if (!processor) throw new Error(`host/apple: intents: xcrun finds no appintentsmetadataprocessor: ${(found.stderr ?? found.error?.message ?? '').trim()}`);
   const toolchain = resolve(processor, '../../..');
-  const metadata = resolve(dir, 'Metadata.appintents');
   writeFileSync(resolve(dir, 'sources.txt'), sources.join('\n') + '\n');
   writeFileSync(resolve(dir, 'values.txt'), values + '\n');
   writeFileSync(resolve(dir, 'none.txt'), '');
@@ -250,15 +259,7 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
       '-module-cache-path', extensionModuleCache, '-target', triple, '-sdk', sdk,
       ...constValueArgs(values, dir),
       '-c', file, '-o', object]);
-    if (process.platform === 'linux') {
-      const major = parseInt(JSON.parse(readFileSync(resolve(sdk, 'SDKSettings.json'), 'utf8')).Version);
-      const actions = emittedIntentsMetadata(JSON.parse(readFileSync(values, 'utf8')), major);
-      mkdirSync(metadata, { recursive: true });
-      writeFileSync(resolve(metadata, 'extract.actionsdata'), JSON.stringify(actions));
-      writeFileSync(resolve(metadata, 'version.json'), JSON.stringify({ toolsVersion: 'exact-1', version: '3.0' }));
-    } else {
-      intentsMetadata({ moduleName: 'ExactIntents', dir, sdk, triple, platform, deployment, binary: object, sources: [file], values, runApple });
-    }
+    intentsMetadata({ moduleName: 'ExactIntents', dir, sdk, triple, platform, deployment, binary: object, sources: [file], values, runApple });
     console.log(`host/apple: intents: ${faces.length} faced tool${faces.length === 1 ? '' : 's'} compiled with their metadata (${Date.now() - started} ms)`);
   }
   return {

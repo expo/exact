@@ -32,7 +32,7 @@ fn run(name: &str, ops: &[&str]) -> Vec<String> {
 fn run_err(name: &str, ops: &[&str]) -> (Vec<String>, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_llp"))
         .arg(corpus(name))
-        .args(["--size", "80x20", "until", "LLP 0001"])
+        .args(["--size", "80x20", "--drive", "until", "LLP 0001"])
         .args(ops)
         .output()
         .expect("runs");
@@ -51,7 +51,7 @@ fn run_err(name: &str, ops: &[&str]) -> (Vec<String>, String) {
 fn link(name: &str, text: &str) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_llp"))
         .arg(corpus(name))
-        .args(["--size", "80x20", "until", "LLP 0001", "tree"])
+        .args(["--size", "80x20", "--drive", "until", "LLP 0001", "tree"])
         .output()
         .expect("runs");
     let tree = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -104,7 +104,7 @@ fn closing_the_tree_releases_its_rows_and_reopening_restores_them() {
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_llp"))
             .arg(corpus(name))
-            .args(["--size", "80x20", "until", "LLP 0001"])
+            .args(["--size", "80x20", "--drive", "until", "LLP 0001"])
             .args(ops)
             .arg("tree")
             .output()
@@ -136,6 +136,7 @@ fn the_tree_opens_on_a_document_beyond_its_first_window() {
         .args([
             "--size",
             "80x20",
+            "--drive",
             "until",
             "Document 60",
             "key",

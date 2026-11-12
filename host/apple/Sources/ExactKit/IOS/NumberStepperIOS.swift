@@ -22,6 +22,27 @@ import UIKit
 
 /// The stepper in a number input: `UIStepper`, which keeps what it last showed.
 final class FieldStepper: UIStepper {
+    /// UIKit's parts stood in for at the frames the surface draws them at,
+    /// inside a placed canvas child (PlacedAccessibilityIOS.swift).
+    private let placedParts = PlacedStandIns()
+    private func placedElements() -> [PlacedElement]? {
+        placedParts.elements(of: self) {
+            declaredElements(super.accessibilityElements, count: super.accessibilityElementCount(), at: { super.accessibilityElement(at: $0) })
+        }
+    }
+    override var accessibilityElements: [Any]? {
+        get { placedElements() ?? super.accessibilityElements }
+        set { super.accessibilityElements = newValue }
+    }
+    override func accessibilityElementCount() -> Int { placedElements()?.count ?? super.accessibilityElementCount() }
+    override func accessibilityElement(at index: Int) -> Any? {
+        guard let elements = placedElements() else { return super.accessibilityElement(at: index) }
+        return elements.indices.contains(index) ? elements[index] : nil
+    }
+    override func index(ofAccessibilityElement element: Any) -> Int {
+        guard let elements = placedElements() else { return super.index(ofAccessibilityElement: element) }
+        return elements.firstIndex { $0 === element as AnyObject } ?? NSNotFound
+    }
     /// The field's value as last written: a change from it is a step up or down.
     var shown = 0.0
 }

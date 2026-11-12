@@ -50,9 +50,9 @@ import { guardFlags } from './help.mjs';
 import { holderOf, takePort } from './port-lock.mjs';
 import { backendOriginSelection, privateNetwork } from '../js/bake/src/typescript.mjs';
 import { contractVerify, semanticsSummary } from './verify-semantics.mjs';
-import { byRule, groups, ruleOf } from './verify-findings.mjs';
+import { byRule, groups, ruleOf, largeRemedy, iosNavigationContent } from './verify-findings.mjs';
 import { cargoDiagnosticFilter } from './cargo-check.mjs';
-export { byRule, groups, ruleOf };
+export { byRule, groups, ruleOf, largeRemedy };
 
 import { inlineSettings } from '../js/bake/src/__exact_env.mjs';
 
@@ -703,31 +703,10 @@ const ANDROID = 'not on Android yet: check\'s findings (each screen is captured 
 // layout is the builder's (LLP 1115.000 D12.1), and a failure would invite `overflow: hidden`. iOS sets the
 // simulator's own size, which UIKit's controls and Exact's text both follow; the web, where a builder iterates, sets the root
 // font size to iOS's body at that size on the phone's width. Only the kinds of finding a larger text makes are kept, each with
-// a remedy that keeps the text's size: a smaller font is the platform tell this pass exists to prevent.
+// a remedy that keeps the text's size: a smaller font is the platform tell this pass exists to prevent. The web omits
+// content iOS projects into its navigation bar: its authored web boxes do not measure UIKit's title and items.
 export const LARGEST = 'accessibility-extra-extra-extra-large', LARGEST_PX = 53;
 const LARGE_KINDS = new Set(['overflow', 'clipped', 'overlap', 'squeezed']), PAGES = 6;
-const WRAP = 'wrap the row: flex-wrap="wrap" with a flex-basis in rem on its items (docs/recipes/responsive-columns.md)';
-/** The remedy for a finding at the largest size: never a smaller or fixed font. A text in a list's row (`inRow`) is cut by
- * the row, which wrapping the row does not change: at the accessibility sizes UIKit's cells wrap a label and grow taller,
- * never truncating it, so a `line-clamp` there reads as a tell (round 22's book-club and contacts took one from this
- * remedy). A grouped list's standard cell already hyphenates as its label does. Elsewhere a UILabel wraps at words and breaks
- * between syllables only a word longer than its line (iOS 27), so `hyphens="auto"` is the remedy for a text of one word;
- * on a heading or sentence it hyphenates words a UILabel keeps whole, which round 26's graders named a tell. */
-export function largeRemedy(f, { inRow = false } = {}) {
-  const wide = (f.detail?.need ?? f.detail?.cut ?? [0])[0] > 0;
-  if (f.kind === 'clipped' && inRow && !f.detail?.edge) {
-    return `${wide ? 'give the text more of the row (no px width beside it) and ' : ''}let the row grow taller with its text, as a cell does at this size (no px height on the row or what it holds; no \`line-clamp\`, which cuts what a cell shows whole)`;
-  }
-  const oneWord = typeof f.text === 'string' && f.text.trim() !== '' && !/\s/.test(f.text.trim());
-  if (f.kind === 'clipped') return f.detail?.edge ? 'let the page scroll there (a scroll with flex=1 min-height=0)'
-    : wide && f.detail?.need ? `give it room (no px width on its box), or ${WRAP}; ${oneWord ? 'a word longer than any line breaks between syllables with `hyphens="auto"`, as a UILabel breaks it' : 'not `hyphens="auto"`, which breaks words a UILabel wraps whole'}`
-    : f.detail?.need ? 'let its box grow with its text: no px height on it (a rem size, or none)' : `give the box that cuts it room (no px width or height on it), or ${WRAP}`;
-  if (f.kind === 'squeezed') return `let it keep its words (no min-width: 0 or px width beside it), or ${WRAP}`;
-  // Overlapping cells of a row that stays one line (a week's days) wrap nowhere: UIKit's calendar caps its day numbers, which
-  // grow to 31 points and no further (iOS 27), never shrinking them.
-  if (f.kind === 'overlap') return `${WRAP}; for a row of equal cells that must stay one line (a week's days), cap the size its text grows to, as UIKit's calendar does: font-size="min(-exact-subheadline, 31px)"`;
-  return WRAP;
-}
 /** LLP 1116.020 D4: each font size the app's own Contract fixes (no-tells.mjs `fixedSizesIn`), which no spill shows (a fixed
  * size never grows to spill), and LLP 1116.021 D6's two like it: a symbol sized in points beside text that grows
  * (`fixedSymbolsIn`), and text that breaks inside words (`brokenWordsIn`), the remedy builders reached for when a large
@@ -762,7 +741,7 @@ const contentSize = (udid, size) => spawnSync('xcrun', ['simctl', 'ui', udid, 'c
  * own size is put back after, and when the process ends first. Null on iOS with no simulator to set. */
 /** Where the largest text size's pictures go, this run's (`deviceMain`): one per screen with a finding (LLP 1156.001 D3). */
 let largeShots = null;
-async function largestText(s, screen) {
+export async function largestText(s, screen) {
   const web = s.host === 'web', udid = s.carrier?.udid, was = web ? null : udid && contentSize(udid).stdout?.trim();
   if (!web && !was) return null;
   const started = Date.now(), body = async () => (await s.prefer({})).page?.['root-font-size'];
@@ -782,19 +761,22 @@ async function largestText(s, screen) {
     await s.clock('settle');
     const [{ judge, line, accepts }, tree] = await Promise.all([import('./agent-check.mjs'), s.op({ op: 'tree' })]);
     const nodes = new Map((tree.nodes ?? []).map((n) => [n.id, n])), looked = new Set(), found = new Map();
+    const projected = web ? await iosNavigationContent(nodes, async id => (await s.op({ op: 'layout', id })).node?.style) : new Set();
     let obs; const shots = [];
     // A screen at a time, as check reads one: the page is scrolled to the first node with a testId that no reading has
-    // held yet, at most PAGES times (a list's rows off the screen have no cells to read).
+    // held yet, at most PAGES times (a list's rows off the screen have no cells to read). Never to projected content:
+    // scrolling sideways to a header item the bar would size moves the whole page past the viewport.
     for (let page = 0; page < PAGES; page++) {
       obs = await s.op({ op: 'check' });
       for (const it of obs.items ?? []) looked.add(it.id).add(it.of);
       const before = found.size;
-      for (const f of judge(obs, null, { host: web ? 'web' : 'ios' })) if (LARGE_KINDS.has(f.kind) && !accepts(ACCEPT, f, nodes) && !found.has(`${f.kind} ${f.id}`)) found.set(`${f.kind} ${f.id}`, f);
+      const compared = { ...obs, items: (obs.items ?? []).filter(it => !projected.has(it.id) && !projected.has(it.of)) };
+      for (const f of judge(compared, null, { host: web ? 'web' : 'ios' })) if (LARGE_KINDS.has(f.kind) && !accepts(ACCEPT, f, nodes) && !found.has(`${f.kind} ${f.id}`)) found.set(`${f.kind} ${f.id}`, f);
       // Each page as its findings were read, before it scrolls on, so each finding is seen, not reproduced by hand.
       if (found.size > before && largeShots) { const shot = resolve(largeShots.dir, `${largeShots.host}-largest-${++largeShots.n}.png`); if (await s.screenshot(shot).then(() => true, () => false)) shots.push(shot); }
       let moved = false;
       for (const n of tree.nodes ?? []) {
-        if (n.inactive || n.props?.testId == null || looked.has(n.id)) continue;
+        if (n.inactive || n.props?.testId == null || looked.has(n.id) || projected.has(n.id)) continue;
         looked.add(n.id);
         if ((await s.carrier.reveal(n.id).catch(() => null))?.scrolled) { moved = true; break; }
       }

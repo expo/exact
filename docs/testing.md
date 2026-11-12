@@ -192,6 +192,14 @@ Use a simulator you created when another person shares the Mac.
   the condition the product itself uses (`Agent.nativeInFlight()` on Apple, the
   agent's `clock settle`), not a hardcoded sleep timeout.
 
+For a `contextPopover` source, use `tap <source> drag 0 0 press 1000` under
+`--touch platform`, then `clock settle`. `tap <action>` selects UIKit's
+row. An explicit `tap <root> at <x> <y>` on UIKit's backdrop dismisses it;
+settle again before checking that `state.navigation.popover` is null.
+`tap <source> contextmenu` delivers the recognized event and does not
+qualify a real long press. `scripts/smoke-touch.mjs` covers ordinary and
+projected grouped-list sources in both timing modes.
+
 A real drag with `during` ops fails when the touch runner finishes before a
 dispatch-log read sees the touch begin. The failure carries the aim, the injection
 result and the log, and says whether the touch began and lifted. The log's `t` and

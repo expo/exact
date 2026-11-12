@@ -234,12 +234,14 @@ pub const HOST_COMMANDS: &[&str] = &[
     // status item, the app still running, as Electron's `BrowserWindow.hide`.
     // The Mac's; a host or an app that cannot keep running refuses it.
     "hideWindow",
-    // @ref LLP 1096 D2 — `playSound(src, at=, gain=, group=, playbackRate=, pan=)`,
-    // `playSounds(hits)` and `stopSounds(group=)`: the runner keeps the voice
-    // table, so every host skips them as the runner's own.
+    // @ref LLP 1096 D2, D14 — `playSound(src, at=, gain=, group=, playbackRate=, pan=)`,
+    // `playSounds(hits)`, `stopSounds(group=)` and `setSounds(group=, gain=,
+    // playbackRate=, pan=, ramp=)`: the runner keeps the voice table, so
+    // every host skips them as the runner's own.
     "playSound",
     "playSounds",
     "stopSounds",
+    "setSounds",
     // @ref LLP 1125 D6, D7 — `requestMIDIAccess()` and `sendMIDI(output,
     // data, at=)`: the runner keeps the MIDI queue and answers `exactMIDI()`,
     // so every host skips them as the runner's own.

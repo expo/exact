@@ -19,3 +19,13 @@ tap tinypan
 tap tinyleft
 tap tinygain
 clock +100
+tap glide
+clock +10
+tap bend
+clock +15
+tap bendup
+tap bendnan
+clock +100
+tap bendall
+tap playset
+clock +3000

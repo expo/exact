@@ -43,6 +43,13 @@ enum Piece {
 #[derive(Clone, PartialEq)]
 struct Name(Vec<Piece>);
 
+pub(super) fn names_may_match(a: &Expr, b: &Expr) -> bool {
+    match (Name::of(a), Name::of(b)) {
+        (Some(a), Some(b)) => a.may_match(&b),
+        _ => true,
+    }
+}
+
 impl Name {
     /// The name, when it is a literal or a template of holes it can spell.
     fn of(e: &Expr) -> Option<Name> {
@@ -131,11 +138,42 @@ impl Name {
 
     /// Whether some value of the holes could make the two names one.
     fn may_match(&self, other: &Name) -> bool {
-        if let (Some(a), Some(b)) = (self.literal(), other.literal()) {
-            return a == b;
+        if let Some(a) = self.literal() {
+            return other.can_be(&a);
+        }
+        if let Some(b) = other.literal() {
+            return self.can_be(&b);
         }
         let (ha, hb, ta, tb) = (self.head(), other.head(), self.tail(), other.tail());
         (ha.starts_with(&hb) || hb.starts_with(&ha)) && (ta.ends_with(&tb) || tb.ends_with(&ta))
+    }
+
+    /// Holes may be empty, but cannot remove or overlap the written text.
+    fn can_be(&self, literal: &str) -> bool {
+        let mut chunks = vec![String::new()];
+        for piece in &self.0 {
+            match piece {
+                Piece::Text(text) => chunks.last_mut().unwrap().push_str(text),
+                Piece::Hole(_) => chunks.push(String::new()),
+            }
+        }
+        let Some(mut rest) = literal.strip_prefix(chunks[0].as_str()) else {
+            return false;
+        };
+        if chunks.len() == 1 {
+            return rest.is_empty();
+        }
+        let Some(middle) = rest.strip_suffix(chunks.last().unwrap().as_str()) else {
+            return false;
+        };
+        rest = middle;
+        for chunk in &chunks[1..chunks.len() - 1] {
+            let Some(position) = rest.find(chunk.as_str()) else {
+                return false;
+            };
+            rest = &rest[position + chunk.len()..];
+        }
+        true
     }
 
     /// As written: the literal's text, a template's with its holes.

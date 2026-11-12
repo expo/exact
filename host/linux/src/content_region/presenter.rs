@@ -97,7 +97,8 @@ impl<D: DataSource> Presenter<D> {
             self.brush.scrollbars.limits = self.collection_scroll_limits();
             self.brush.scrollbars.pointer = self.hover_point;
         }
-        self.brush.placements = self.surfaces.placements(&self.host);
+        self.brush.placements = self.surfaces.placements(&self.host, true);
+        self.brush.composites.canvases = self.surfaces.composites();
         self.host
             .sync_canvases(self.brush.scale as f64, true, &self.assets);
         let previous = std::mem::replace(&mut self.brush.canvases, self.host.canvas_snapshots());
@@ -124,10 +125,15 @@ impl<D: DataSource> Presenter<D> {
         self.refresh_looks(None); // the focus's ring (LLP 1121 D8)
         self.restore_scroll_anchors();
         self.arm_scroll_anchors();
+        self.scroll_timelines();
         let dirty = self.host.take_row_dirty();
         self.brush.numerals.now = self.host.now();
         self.brush.numerals.still = self.host.runner().viewport().preferences.reduced_motion;
         self.brush.rows_dirty(self.host.kernel(), dirty);
+        self.sync_stage();
+        let stage = self.stage_paint();
+        self.brush.set_stage(self.host.kernel(), stage);
+        let shows = self.stage_shows();
         let roots = self.host.roots();
         let collection_limits = if self.host.content_region().is_some() {
             self.collection_scroll_limits()
@@ -156,7 +162,10 @@ impl<D: DataSource> Presenter<D> {
         };
         let scene = Scene {
             kernel: host.kernel(),
-            hidden: &|id| host.route_visibility(id).0,
+            hidden: &|id| match shows.is_empty() {
+                true => host.route_visibility(id).0,
+                false => host.route_hidden_but(id, &shows),
+            },
             roots: &roots,
             presented: &presented,
             paths: &|id| host.presented_path(id),
@@ -219,6 +228,8 @@ impl<D: DataSource> Presenter<D> {
             }
         }
         let notes = self.brush.take_notes();
+        let pictures = std::mem::take(&mut self.brush.composites.pictures);
+        self.surfaces.children_pictures(pictures);
         self.last_frame_succeeded = painted.is_ok();
         let (pixmap, boxes) = match painted {
             Ok(Frame { pixmap, boxes }) => {

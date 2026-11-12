@@ -280,7 +280,7 @@ export const Hosts = {
   observe: n => say(`observe ${n}`), observeAttributes: () => {}, observeError: m => say(`observeError ${m}`) }; // journal lines only; marks.js replaces these when the app has launch modules
 export function useCommands(table) { for (const name in table) Hosts[name] = table[name](say, () => agentMode()); } // commands.js's, each by name as the compiled plan imported it for an action that names it (emit.rs, LLP 1047.002 D1): a factory over the journal and whether the agent drives the page; one no action names is never linked
 let KeyEvent = null, Propagating = null; Hosts.preventDefault = () => { KeyEvent?.preventDefault(); if (KeyEvent?.type === "beforeunload") KeyEvent.returnValue = ""; if (!KeyEvent && Propagating?.type === "pointerdown") Propagating.preventDefault(); /* a pointerdown handler's: the browser keeps the focus, places no caret, starts no selection; the click still fires (LLP 1005 §3) */ }; Hosts.stopPropagation = () => { const e = KeyEvent ?? Propagating; if (e) e.$stopped = true; }; // Propagating: the pointer's down or up a handler is running for, which only its `stopPropagation()` reaches (its default is the browser's); // the key, focus, wheel, beforeunload or clipboard event whose handler is running (`on`): commands run before its commit returns; a stopped key reaches no ancestor's `key` handler, its default still does (files diary F8); a prevented beforeunload is the browser's "Leave site?" (Safari reads `returnValue`)
-export const Sounds = { apply: null, own: new Set(["playSound", "playSounds", "stopSounds", "sendMIDI", "requestMIDIAccess"]), gate: null, stood: null, seq: null, midi: null, midiApply: null, beatAt: null }; // The voice table's and the MIDI queue's commands (LLP 1096 D5, LLP 1125 D7): the runtime's own, never a host's; sounds.js and midi.js apply a commit's once it stood, and transport.js reads the sequences in the gate step and plays them once it stood (LLP 1125 D2).
+export const Sounds = { apply: null, own: new Set(["playSound", "playSounds", "stopSounds", "setSounds", "sendMIDI", "requestMIDIAccess"]), gate: null, stood: null, seq: null, midi: null, midiApply: null, beatAt: null }; // The voice table's and the MIDI queue's commands (LLP 1096 D5, LLP 1125 D7): the runtime's own, never a host's; sounds.js and midi.js apply a commit's once it stood, and transport.js reads the sequences in the gate step and plays them once it stood (LLP 1125 D2).
 function command(name, args, origin) {
   const f = Hosts[name];
   say(`command ${name}`);
@@ -844,10 +844,10 @@ export function css(e, prop, unit, v, rendered) {
   // The value this binding last wrote: the same again writes nothing (a write restyles and repaints the node, for every dynamic row a list update touched).
   const last = e.$css ??= {}, t = cssText(prop, unit, v);
   if (last[prop] === t) return;
-  last[prop] = t;
-  // An adopted node's inline style is the renderer's: a value it already
-  // shows is not written again (a write restyles and repaints the node).
-  // (`transparent` is the color the renderer writes as rgba(0, 0, 0, 0).)
+  last[prop] = t; // The `animation` shorthand resets the longhands a timeline's consumer writes again after it (LLP 1057.003 D5).
+  if (prop === "animation") for (const p of ["animation-timeline", "animation-range", "animation-play-state"]) delete last[p];
+  // An adopted node's inline style is the renderer's: a value it already shows is not written again (a write
+  // restyles and repaints the node). (`transparent` is the color the renderer writes as rgba(0, 0, 0, 0).)
   if (rendered) {
     const now = e.style.getPropertyValue(prop);
     if (t == null ? !now : same(now) === (normal(prop, t) || "unset")) return;
@@ -1156,14 +1156,14 @@ export const pressFeedback = () => input(); if (DEVELOPMENT_STORE) globalThis.__
 /** The web host's input piece (input-glue.js), after first paint: pans. */
 let Input = null, Inputs = null;
 function input() {
-  if (Inputs || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
+  if (Inputs || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return Inputs;
   inflight.n++;
   // Its link handler asks the wasm's route table; this runtime routes its own.
   const x = globalThis.exact ??= {}; (x.wasm ??= {}).exact_route_match ??= () => 0;
   const to = (id, p, k) => Views.get(id)?.[k]?.(...p.split(",").map(Number));
-  Inputs = new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 1000); }).then(() => import("./input-glue.js")).then(m => { // after paint, or a second on where frames are held (a frame scrolled out of view)
+  return Inputs = new Promise(r => { requestAnimationFrame(() => setTimeout(r)); setTimeout(r, 1000); }).then(() => import("./input-glue.js")).then(m => { // after paint, or a second on where frames are held (a frame scrolled out of view)
     Input = m.createInputHandlers({ root: document.getElementById("exact-root"), views: Views, retiredViews: new WeakSet(), ready: () => true,
-      inertAncestor, agentMode: clock.agent, dispatch: (id, p) => to(id, p, "$pan"), release: (id, p) => to(id, p, "$panrelease"),
+      inertAncestor, agentMode: clock.agent, pick: el => x.files?.activate(el), dispatch: (id, p) => to(id, p, "$pan"), release: (id, p) => to(id, p, "$panrelease"),
       velocity: { sample: (...a) => Mo?.pan.sample(...a), velocity: (...a) => Mo?.pan.velocity(...a) }, log: say }); Input.arrive(); // the stack as it stands, for the focus to follow (LLP 1115.000 D4.2)
   }).catch(err => say(`input: ${err.message}`)).finally(() => inflight.n--);
 }

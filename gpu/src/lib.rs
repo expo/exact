@@ -54,6 +54,7 @@ mod release;
 #[cfg(any(target_os = "android", test))]
 mod ring_order;
 pub use input::{InputEvent, PointerKind, PointerPhase, SensorKind};
+pub mod haptics;
 pub mod json;
 pub mod shaders;
 mod target;
@@ -340,6 +341,12 @@ pub trait Surface {
     fn wants_input(&self) -> bool {
         false
     }
+    /// Whether this canvas reads gamepads; a host whose pad service costs
+    /// something to open (Apple's GameController) opens it only for one that
+    /// does. Every canvas that takes input does unless it says otherwise.
+    fn wants_pads(&self) -> bool {
+        self.wants_input()
+    }
     /// One device event in canvas points, stamped with the host's clock.
     fn input(&mut self, _event: &InputEvent) {}
     /// Whether the event the last [`Surface::input`] took changed what the
@@ -351,7 +358,7 @@ pub trait Surface {
         true
     }
     /// Strings posted to the app, drained after render, input and agent calls (S2).
-    /// The host consumes `"exact:audio"` instead of dispatching it to the app.
+    /// The host consumes `"exact:audio"` and [`haptics::Haptic::message`]'s instead.
     /// On iOS/tvOS it asks for the app's `audio_session` configuration and activation;
     /// first success sends no reply. Failure sends `Lifecycle::Interrupted`,
     /// retries after 300 live display-link frames, on becoming visible or a

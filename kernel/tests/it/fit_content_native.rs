@@ -128,6 +128,51 @@ fn fitted(k: &mut Kernel, height: f32) -> (f32, f32) {
     )
 }
 
+#[test]
+fn a_scrolling_routes_natural_height_ignores_its_block_and_preserves_layout() {
+    let mut k = route(NodeType::View, &[(StyleId::Height, "264")], &[]);
+    k.apply(
+        0,
+        2,
+        &[Op::SetStyle {
+            id: 2,
+            patch: rows(&[(StyleId::OverflowY, "auto")]),
+        }],
+    )
+    .unwrap();
+    for (seq, natural) in [(3, 264.0_f32), (4, 352.0)] {
+        k.apply(
+            0,
+            seq,
+            &[Op::SetStyle {
+                id: 3,
+                patch: rows(&[(StyleId::Height, &natural.to_string())]),
+            }],
+        )
+        .unwrap();
+        for height in [80.0, 500.0, 40.0] {
+            k.set_host_block(
+                2,
+                Some(HostBlock {
+                    width: BlockAxis::Is(390.0),
+                    height: BlockAxis::Is(height),
+                }),
+            )
+            .unwrap();
+            k.compute_layout(1, Offer::definite(390.0, 844.0)).unwrap();
+            assert_eq!(k.node(3).unwrap().frame.height, natural.min(height));
+            let before = k.export(None).unwrap();
+            let epoch = k.epoch();
+            let key = k.node(2).unwrap().key;
+            assert_eq!(k.fit_content_height(key), Some(natural));
+            assert_eq!(k.export(None).unwrap(), before);
+            assert_eq!(k.epoch(), epoch);
+            let receipt = k.compute_layout(1, Offer::definite(390.0, 844.0)).unwrap();
+            assert!(receipt.changed.is_empty() && receipt.updated.is_empty());
+        }
+    }
+}
+
 /// Its floor is the screen's 844 points (and the field's chrome below it)
 /// at every sheet height, measured and laid out alike.
 #[test]

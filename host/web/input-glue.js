@@ -2,11 +2,12 @@ import { viewChildren, viewParent } from './navigation.js';
 // Input-only glue: loaded after the baked first pixel, independently of data readiness.
 import "./prompt-glue.js"; // a prompt's Return
 import "./alert-message.js"; // a grouped alert's message box
+const hearsPress = el => (el.exactHandlers ?? el.dataset?.exactOn?.split(" "))?.includes("press") === true;
 /** An element whose `press` the keyboard reaches only through its tabindex:
  * not one the browser activates itself (the wasm host's handler list, or the
  * JS target's `data-exact-on`). */
 const pressesByKey = el => !el.matches("button, a[href], input, select, textarea, summary")
-  && (el.exactHandlers ?? el.dataset.exactOn?.split(" "))?.includes("press") === true;
+  && hearsPress(el);
 const shortcutKeys = new Set(["Enter", "Tab", "Escape", "Backspace", "Delete", "Insert", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"]);
 /** A shortcut's key when `e.key` is one character outside ASCII and the Latin script (ㅠ on KeyB under Korean 2-Set,
  * Russian, Greek): what its physical key (`code`) types on a US layout, with Shift, as web apps match (the macOS host
@@ -100,7 +101,28 @@ function roveArrow(root, event) {
   if (next !== el) { if (!menu) rove(all, next); next.focus(); }
   return true;
 }
-export function createInputHandlers({ root, views, retiredViews, ready, inertAncestor, editMenu, dispatch, release: dispatchRelease = () => {}, velocity = {}, agentMode = false, log = () => {}, documents = null }) {
+export function createInputHandlers({ root, views, retiredViews, ready, inertAncestor, editMenu, dispatch, release: dispatchRelease = () => {}, velocity = {}, agentMode = false, log = () => {}, documents = null, pick = null }) {
+  // A press stops bubbling at its nearest handler; otherwise the click reaches the root.
+  // Append the default there so the handler's updates and showPicker run first.
+  // A successful showPicker consumes the activation, even for another input.
+  // The JS executor may hold the press's commit for a view transition (shared.js):
+  // the choice waits for it, and the input is checked again.
+  let pickerActivations = 0;
+  (globalThis.exact ??= {}).pickerOpened = () => pickerActivations++;
+  if (agentMode && pick) root.addEventListener("click", event => {
+    const el = event.target;
+    if (!(el instanceof HTMLInputElement) || el.type !== "file") return;
+    const activation = pickerActivations;
+    const after = event.composedPath().find(n => n === root || hearsPress(n));
+    const usable = () => ready() && el.isConnected && !retiredViews.has(el) && [...views.values()].includes(el)
+      && el.type === "file" && !el.matches(":disabled") && !inertAncestor(el) && el.getClientRects().length > 0
+      && !["hidden", "collapse"].includes(getComputedStyle(el).visibility);
+    after.addEventListener("click", e => {
+      if (e !== event || e.defaultPrevented || !usable()) return;
+      e.preventDefault();
+      (globalThis.exact.afterCommit ?? (run => run()))(() => { if (pickerActivations === activation && usable()) pick(el); });
+    }, { once: true });
+  }, true);
   // @ref LLP 1005 §Events — a pointer's down goes along the event's own path,
   // innermost first, to each node's `exactPointerDown` (`pointer` below), from
   // this one listener at the root's capture, before any element's: a

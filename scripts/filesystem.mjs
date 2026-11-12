@@ -72,17 +72,13 @@ function executable() {
   }
   // A helper another process checked from these same inputs: a record named by the digest of what the build reads
   // (`helperInputs`, never trusted by time), naming a capture whose bytes still have the digest its name gives.
-  const inputs = helperInputs(), record = inputs && resolve(directory, `checked-${inputs}`);
-  if (record) try {
-    const named = readFileSync(record, 'utf8').trim(), digest = new RegExp(`^exact-filesystem-([0-9a-f]{64})${suffix.replace('.', '\\.')}$`).exec(named)?.[1];
-    const captured = resolve(directory, named);
-    if (digest && createHash('sha256').update(readFileSync(captured)).digest('hex') === digest) return binary = captured;
-  } catch { /* none checked yet */ }
+  const checked = helperCapture(directory, suffix, helperInputs());
+  if (checked) return binary = checked;
   const target = resolve(directory, `debug/exact-filesystem${suffix}`);
   // A separate tooling target also permits calls from an active app Cargo
   // build script: the helper has no compiler/app dependency and never waits
   // on that app build directory lock. Otherwise Cargo checks sources, lockfile
-  // and toolchain, once per Bun process.
+  // and toolchain when no checked capture is available.
   // An mtime-only shortcut can silently reuse an obsolete helper dependency.
   // The host's deployment target always, whether a build script's (an app's macOS minimum) or not: its own target directory.
   const own = { ...process.env, HERMES_LEAN_SYS_OFFLINE: '1' };
@@ -111,6 +107,10 @@ function executable() {
   };
   process.once('exit', release);
   try {
+    // A builder ahead of us may have published a capture. Inputs may have changed while we waited.
+    const inputs = helperInputs(), record = inputs && resolve(directory, `checked-${inputs}`);
+    const checked = helperCapture(directory, suffix, inputs);
+    if (checked) return binary = checked;
     const built = spawnSync('cargo', ['build', '--quiet', '--locked', '--offline', '-p', 'exact-filesystem', '--target-dir', directory], { cwd: root, env, encoding: 'utf8' });
     if (built.error) throw built.error;
     if (built.status !== 0) throw new Error(built.stderr || `could not build exact-filesystem (status ${built.status}, signal ${built.signal ?? 'none'})`);
@@ -131,6 +131,15 @@ function executable() {
     }
     return captured;
   } finally { release(); }
+}
+
+function helperCapture(directory, suffix, inputs) {
+  if (inputs) try {
+    const named = readFileSync(resolve(directory, `checked-${inputs}`), 'utf8').trim();
+    const digest = new RegExp(`^exact-filesystem-([0-9a-f]{64})${suffix.replace('.', '\\.')}$`).exec(named)?.[1];
+    const captured = resolve(directory, named);
+    if (digest && createHash('sha256').update(readFileSync(captured)).digest('hex') === digest) return captured;
+  } catch { /* none checked yet */ }
 }
 
 /** The digest of what building the helper reads: its crate's files, the workspace manifest, lock and toolchain pin,

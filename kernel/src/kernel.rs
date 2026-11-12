@@ -480,6 +480,11 @@ impl Kernel {
         &self.arena
     }
 
+    /// The arena, for a crate module that keeps a registry in it.
+    pub(crate) fn arena_mut(&mut self) -> &mut NodeArena {
+        &mut self.arena
+    }
+
     /// The arena, the engine tree and the measurer, for the multicol probe.
     #[cfg(test)]
     pub(crate) fn parts(&mut self) -> (&NodeArena, &LayoutTree, &mut dyn TextMeasurer) {

@@ -212,7 +212,9 @@ fn split_back_comes_from_its_own_navigation_ancestor() {
     let source = APP.replace("SPLIT", "auto")
         .replace("  view\n    main", "  view\n    column navigationBack=\"other-back\"\n      text \"Other navigator\"\n    main")
         .replace("            header", "            button id=\"other-back\" press=back testId=\"wrong-back\"\n              text \"Other Back\"\n            header");
-    let source = source.replace(" navigate=follow", "");
+    let source = source
+        .replace(" navigate=follow", "")
+        .replace(" navigationBack=\"back\"", " testId=\"navigator\"");
     let (head, body) = source.split_once("  view\n").unwrap();
     let source = format!(
         "{head}  view\n    box width=\"100%\" height=\"100%\"\n{}",
@@ -221,6 +223,14 @@ fn split_back_comes_from_its_own_navigation_ancestor() {
             .collect::<String>()
     );
     let mut p = boot_source(1200., &source);
+    // Contract admits one navigation root; this host containment case
+    // constructs a second through the kernel's property operations.
+    p.host.apply_test_ops(&[exact_kernel::Op::SetProp {
+        id: id(&p, "navigator"),
+        prop: PropId::NavigationBack,
+        value: exact_kernel::PropValue::Str("back".into()),
+    }]);
+    assert_eq!(p.host.commit(&[], None), None);
     // Select the second navigator's stack, as a shell can do for its active container.
     let home = id(&p, "route-home");
     p.host.navigation.stack = Some(vec![home]);

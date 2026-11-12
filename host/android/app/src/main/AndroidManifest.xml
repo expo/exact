@@ -7,6 +7,9 @@
          remote picture fail at the name lookup. What an app may reach is still its own grants' to say (`net.fetch`),
          which exact2 enforces; this is only the platform's door. A normal permission: nothing is asked of the person. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- A GPU surface's haptics play on the vibrator (LLP 1009 D10), which needs this normal permission; `haptic()`
+         and a press's haptic need none (`performHapticFeedback`). Nothing is asked of the person. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- No usesCleartextTraffic and no Network Security Config, for any app: its `fetch` and WebSocket are the Rust
          transport's own sockets, which Android's cleartext policy does not govern ("there's no expectation that the
          Socket API honors this flag"), so `http:` and `ws:` reach any host the grants admit with no key (on Apple,

@@ -276,6 +276,7 @@ fn materials_radio_and_touch_target_reach_past_the_drawn_control() {
         tv: false,
         touch_slop: 8.0,
         dates: String::new(),
+        format_locale: String::new(),
     };
     assert!(p.set_device(&phone).is_none());
     p.set_pointer_kind(crate::presenter::PointerKind::Touch);

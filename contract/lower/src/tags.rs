@@ -1084,11 +1084,21 @@ pub(crate) fn validate_list(
             estimate.span,
         );
     }
-    if !matches!(estimate.value, Expr::Number(n, _) if n.is_finite() && n > 0.0) {
+    // A computed estimate is read again as it changes (LLP 1070, as amended
+    // for #226); a literal one is positive.
+    let positive = match (
+        super::values::numeric_literal(&estimate.value),
+        &estimate.value,
+    ) {
+        (Some(n), _) => n.is_finite() && n > 0.0,
+        (None, Expr::Str(..) | Expr::Bool(..)) => false,
+        _ => true,
+    };
+    if !positive {
         return super::err(
             "lower-list-height",
             format!(
-                "virtualized lists accept one positive literal `{}`",
+                "virtualized lists accept one positive `{}`, a literal or a computed number",
                 estimate.name
             ),
             estimate.span,

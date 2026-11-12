@@ -820,9 +820,10 @@ export const navigation = {
         return;
       }
       // The innermost shown sheet's Back: its named control, else the app bar's way, as iOS's swipe down (`goBack`).
+      // A route pushed inside a sheet goes Back to the route before it in the sheet, as Android's Back does there.
       for (const nav of [...root.querySelectorAll("[navigationBack]")].reverse()) {
-        const route = selectedRoute(nav);
-        if (!["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation")) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
+        const route = selectedRoute(nav), routes = routesOf(nav), inSheet = route && sheetAt(routes, routes.indexOf(route)) >= 0;
+        if (!(inSheet || ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"))) || inertAncestor(route) || route.checkVisibility?.({ visibilityProperty: true }) === false) {
           continue;
         }
         event.preventDefault();

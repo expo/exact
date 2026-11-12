@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { open } from '../../scripts/agent.mjs';
 import { checkOp, judge, ratio } from '../../scripts/agent-check.mjs';
-import { decodePng } from '../../scripts/png.mjs';
+import { decodePng, encodePng } from '../../scripts/png.mjs';
 import { serveBuildTree } from './serve.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -420,6 +420,39 @@ test('a padded percentage width past its parent is an overflow that names its ca
   expect(ios.map((x) => [x.kind, x.detail.past, x.detail.of, x.detail.pad, x.detail.written, x.detail.unit])).toEqual([['overflow', 14, 3, 14, undefined, 'pt']]);
   // The viewport's own overflow is still there beside it, not instead: the cause is named first, once.
   expect(judge({ viewport: { w: 40, h: 20 }, scheme: 'light', target: 24, items: [{ ...padded, outX: 14 }] }, png)).toHaveLength(1);
+});
+
+test('a graphic past the viewport needs fitting or clipping, including one hidden from accessibility', async () => {
+  const nodes = new Map([
+    [1, { id: 1, type: 'Svg', props: { testId: 'chart' } }],
+    [2, { id: 2, type: 'Svg', props: { testId: 'decoration', accessibilityElementsHidden: true } }],
+    [3, { id: 3, type: 'Image', props: { testId: 'photo' } }],
+    [4, { id: 4, type: 'Control', props: { testId: 'button' } }],
+    [5, { id: 5, type: 'Text', props: { testId: 'caption' } }],
+  ]);
+  const obs = { viewport: { w: 402, h: 874 }, scheme: 'light', target: 44, items: [...nodes.keys()].map((id) => ({
+    id, x: 0, y: (id - 1) * 100, w: 420, h: 80, outX: 18, ...(id === 4 ? { control: 'button', sized: 'author' } : id === 5 ? { text: 'Caption' } : {}),
+  })) };
+  const graphic = 'fit the graphic (`width="100%"`), or clip it in its containing box (`overflow="hidden"`)';
+  const layout = 'let it wrap (`flex-wrap: wrap` with a `flex-basis` in rem, `min-width: 0`, `max-width: 100%`), or scroll it inside its own box';
+  for (const host of ['web', 'ios']) {
+    const found = judge(obs, null, { host, nodes });
+    expect(found.map((f) => [f.kind, f.id, f.box, f.detail])).toEqual([...nodes.keys()].map((id) => [
+      'overflow', id, [0, (id - 1) * 100, 420, 80], { past: 18, width: 402, unit: host === 'web' ? 'px' : 'pt' },
+    ]));
+    expect(found.map((f) => f.hint)).toEqual([graphic, graphic, graphic, layout, layout]);
+  }
+  const png = encodePng({ width: 402, height: 874, data: new Uint8Array(402 * 874 * 4).fill(255) });
+  const session = {
+    host: 'ios',
+    op: async ({ op }) => op === 'check' ? obs : { nodes: [...nodes.values()] },
+    carrier: { screenshot: async (path) => writeFileSync(path, png) },
+    tagged: (result) => result,
+  };
+  const run = (await checkOp(session)).check[0];
+  expect(run.findings.map((f) => [f.node, f.hint])).toEqual([
+    ['chart', graphic], ['decoration', graphic], ['photo', graphic], ['button', layout], ['caption', layout],
+  ]);
 });
 
 test('two texts drawn over each other run together, unless one stands on the opaque fill of the view laid over the other', () => {

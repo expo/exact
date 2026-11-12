@@ -54,9 +54,9 @@ final class TextPlaceIOSTests: XCTestCase {
         // A frame shows it: its ink has a presentation copy, and the view is
         // shown (`Presenter.unshown`), so UIKit's animations move it
         let end = Date().addingTimeInterval(2)
-        while node.textRasterLayer?.presentation() == nil || !node.showed, Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+        while node.textRasterLayer?.presentation() == nil || node.shown != .showed, Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
         XCTAssertTrue(node.textRasterReady, "painted")
-        XCTAssertTrue(node.showed, "shown")
+        XCTAssertEqual(node.shown, .showed, "shown")
         return (p, node)
     }
 

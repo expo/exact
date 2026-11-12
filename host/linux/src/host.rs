@@ -1443,6 +1443,11 @@ impl<D: DataSource> Host<D> {
         self.navigation.visibility(self.runner.kernel(), id)
     }
 
+    /// Whether `id` is hidden, the routes in `shown` counting as shown.
+    pub(crate) fn route_hidden_but(&self, id: ViewId, shown: &[ViewId]) -> bool {
+        self.navigation.hidden_but(self.runner.kernel(), id, shown)
+    }
+
     pub(crate) fn route_visibility_to(&self, id: ViewId, root: Option<ViewId>) -> (bool, bool) {
         self.navigation
             .visibility_to(self.runner.kernel(), id, true, root)

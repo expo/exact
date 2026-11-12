@@ -56,6 +56,8 @@ pub mod device;
 pub mod failure;
 pub mod file_pickers;
 mod format;
+/// The native hosts' frame-health reducer (LLP 1079.000 §5.1): Apple's and Android's collectors.
+pub mod frame_health;
 pub mod geometry;
 pub mod grants;
 pub mod hardened;
@@ -123,18 +125,18 @@ pub use request::{
     MAX_BODY_FROM_PATH, MAX_BODY_TO_BYTES, MAX_HOST_WORK_BYTES, MAX_TIMEOUT_MS, NATIVE_URL,
 };
 pub use runner::{
-    canvas_engine, press_writes_router, routing, virtual_frame, Advanced, Announce, AuthLinks,
-    BackgroundState, BlockPlacement, CallOrigin, CanvasEngine, CanvasLink, CanvasList, Carried,
-    Checkpoint, Command, ControlValue, DataError, DataSource, DataSourceWrapper, DeviceLinks,
-    DrawReply, DrawRequest, Drawn, DropEvent, Event, FieldSelection, FormatLink, Geometry,
-    GeometryLink, Hold, HoldAnswer, InFlight, InputDetails, Interrupt, Intersection, KeyModifiers,
-    KeyboardEvent, Limits, ListTextPolicy, ListTextPosition, MouseEvent, Native, NativeCall,
-    NativeHandler, Overlaid, Picked, PickerLinks, PickerRequest, PointerEvent, PreloadWake,
-    ResizeRect, RouterChange, RouterLink, Routing, Runner, RunnerError, RunnerLinks, ScrollEvent,
-    SelectionDirection, SnapshotModule, SocketReader, SocketState, StackSplit, StreamCount,
-    SurfaceAnswer, Target, Timed, UploadEnd, UploadMark, WheelEvent, Write, BACKGROUND,
-    JOURNAL_RING, MAX_CLOCK_MS, PICKED, QUEUE_BOUND, RESIZE_UNDELIVERED, TIMER_FIRE_LIMIT,
-    VIRTUAL_FRAME_MS,
+    canvas_engine, launch_matches, press_writes_router, routing, virtual_frame, Advanced, Announce,
+    AuthLinks, BackgroundState, BlockPlacement, CallOrigin, CanvasEngine, CanvasLink, CanvasList,
+    Carried, Checkpoint, Command, ControlValue, DataError, DataSource, DataSourceWrapper,
+    DeviceLinks, DrawReply, DrawRequest, Drawn, DropEvent, Event, FieldSelection, FormatLink,
+    Geometry, GeometryLink, Hold, HoldAnswer, InFlight, InputDetails, Interrupt, Intersection,
+    KeyModifiers, KeyboardEvent, Limits, ListTextPolicy, ListTextPosition, MouseEvent, Native,
+    NativeCall, NativeHandler, Overlaid, Picked, PickerLinks, PickerRequest, PointerEvent,
+    PreloadWake, ResizeRect, RouterChange, RouterLink, Routing, Runner, RunnerError, RunnerLinks,
+    ScrollEvent, SelectionDirection, SnapshotModule, SocketReader, SocketState, StackSplit,
+    StreamCount, SurfaceAnswer, Target, Timed, UploadEnd, UploadMark, WheelEvent, Write,
+    BACKGROUND, JOURNAL_RING, MAX_CLOCK_MS, PICKED, QUEUE_BOUND, RESIZE_UNDELIVERED,
+    TIMER_FIRE_LIMIT, VIRTUAL_FRAME_MS,
 };
 pub use runner::{AppState, LiveApplied, LiveRefusal, Place, Tamber};
 pub use runner::{CallHow, WakeHow};
@@ -150,7 +152,7 @@ pub mod tamber {
 pub use secrets::{SecretLease, SecretWait, SharedSecrets};
 pub use store::{Socket, SocketCall, Store, StoreChange, StoreError, StoreWrite};
 pub use uses::{svg_filters, svg_islands, uses, Capability, Uses};
-pub use viewport::{Contrast, Fold, Gamut, Hover, Pointer, Posture, Preferences, Viewport};
+pub use viewport::{Contrast, Fold, Gamut, Hover, Pointer, Posture, Preferences, Update, Viewport};
 pub use vm::Trap;
 
 /// Timer admission observations shared by all hosts.

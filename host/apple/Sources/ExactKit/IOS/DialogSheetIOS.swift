@@ -14,12 +14,32 @@
 // the swipe down; `closerequest`, HTML's default, permits it; `any` also
 // takes a tap on the dimmed page. A dismissal the person made fires HTML's
 // `cancel` at the dialog.
+//
+// A dialog whose author painted its surface (a `background-color` or a
+// `background-image` on the dialog) is the author's box, not the
+// platform's sheet: it is HTML's top layer (LLP 1035.001 D11). It is
+// presented over everything already presented, a sheet included, full
+// screen and with no transition of UIKit's, laid out as written and centred
+// in the window as HTML centres a modal dialog; its own `animation` and,
+// when it is removed, its `-exact-exit-animation` are its motion, and the
+// presentation stays until that exit ends. Beneath it the page is dimmed
+// as UIKit dims beneath a sheet. `closedby="any"` closes it on a tap
+// outside its box; Escape and VoiceOver's escape are its close request.
 #if os(iOS) || os(tvOS)
 import UIKit
 
 final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate, UIScrollViewDelegate {
+    /// What the top layer lays over the page beneath: UIKit's dimming under a
+    /// page or form sheet (`UIDimmingView`, black at 20%, read on an iOS 27 simulator).
+    static let dimming = UIColor.black.withAlphaComponent(0.2)
     fileprivate weak var host: DialogSheets?
+    /// The author's box in the top layer, not a sheet.
+    let topLayer: Bool
     let scroller = ScrollView()
+    #if os(iOS)
+    /// The top layer's probe of the keyboard's top.
+    private let keys = UIView()
+    #endif
     /// The dialog's box as the kernel laid it out: the sheet's height.
     private(set) var box = CGSize.zero
     private var backdropTap: UITapGestureRecognizer?
@@ -28,6 +48,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
     #endif
     /// The presentation's height offer stays independent of the chosen detent.
     var availableHeight: CGFloat? {
+        if topLayer { return viewIfLoaded.map(\.bounds.height) }
         #if !os(tvOS)
         if let maximumDetentHeight { return maximumDetentHeight }
         #endif
@@ -39,9 +60,17 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
     var relay: MountRelay?
     #endif
 
-    fileprivate init(host: DialogSheets) {
+    fileprivate init(host: DialogSheets, topLayer: Bool) {
         self.host = host
+        self.topLayer = topLayer
         super.init(nibName: nil, bundle: nil)
+        if topLayer {
+            // Over whatever is presented, its presenter's views kept; the
+            // dialog's own animation is its entrance.
+            modalPresentationStyle = .overFullScreen
+            modalTransitionStyle = .crossDissolve
+            return
+        }
         #if os(tvOS)
         // tvOS has no sheets; every modal covers the screen.
         modalPresentationStyle = .overFullScreen
@@ -70,15 +99,44 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
 
     override func loadView() {
         let view = UIView()
+        if topLayer {
+            #if os(iOS)
+            // Its presenter's theme and tint, as a sheet's (below): the dialog
+            // in it resolves its roles by them, and a live edit reaches it.
+            ThemeRoles.adopt(view, from: host?.root)
+            if let tint = ThemeRoles.color("AccentColor", in: view) { view.tintColor = tint }
+            #endif
+            view.backgroundColor = DialogSheetController.dimming
+            scroller.backgroundColor = .clear
+            scroller.contentInsetAdjustmentBehavior = .never
+            #if os(iOS)
+            scroller.keyboardDismissMode = .interactive
+            #endif
+            scroller.delegate = self
+            scroller.frame = view.bounds
+            scroller.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            view.addSubview(scroller)
+            #if os(iOS)
+            // The keyboard's top, as UIKit's guide follows it: the dialog is
+            // centred above it, and laid out again as it moves.
+            keys.isHidden = true
+            keys.translatesAutoresizingMaskIntoConstraints = false
+            view.keyboardLayoutGuide.usesBottomSafeArea = false
+            view.addSubview(keys)
+            NSLayoutConstraint.activate([keys.leadingAnchor.constraint(equalTo: view.leadingAnchor), keys.widthAnchor.constraint(equalToConstant: 1),
+                                         keys.heightAnchor.constraint(equalToConstant: 1), keys.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor)])
+            #endif
+            self.view = view
+            return
+        }
         #if os(tvOS)
         view.backgroundColor = .white
         #else
-        // The sheet's surface where the dialog painted none: the platform's
-        // (LLP 1115 D2), which UIKit elevates in dark mode.
         ThemeRoles.adopt(view, from: host?.root)
         // Its presenter's tint, as the root's (LLP 1095 D4): a sheet sits outside it.
         if let tint = ThemeRoles.color("AccentColor", in: view) { view.tintColor = tint }
-        view.backgroundColor = ThemeRoles.color("background", in: view) ?? ThemeRoles.color("Canvas", in: view, or: .systemBackground)
+        self.view = view
+        paintSurface()
         scroller.keyboardDismissMode = .interactive
         #endif
         scroller.delegate = self
@@ -125,11 +183,37 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         if PopoverLayer.containing(touch.view) != nil { return false }
+        if topLayer {
+            guard host?.closesOnBackdrop(self) == true,
+                  let dialog = scroller.subviews.lazy.compactMap({ $0 as? NodeView }).first else { return false }
+            // A control the scroll range reaches below the dialog's box (its
+            // overflow) is the dialog's, not the backdrop.
+            if let view = touch.view, view === dialog || view.isDescendant(of: dialog) { return false }
+            return !dialog.bounds.contains(touch.location(in: dialog))
+        }
         guard let container = presentationController?.containerView, let presented = presentationController?.presentedView,
               host?.closesOnBackdrop(self) == true else { return false }
         return !presented.convert(presented.bounds, to: container).contains(touch.location(in: container))
     }
     @objc private func tappedBackdrop() { host?.closeRequest(self) }
+
+    /// How far the dialog's content reaches below its top: a dialog its
+    /// height caps (`HostBlock.Axis.fit`) overflows its box, and its
+    /// presentation scrolls the overflow, as the web's modal dialog
+    /// (`overflow: auto` under its `max-height`) scrolls itself. Its
+    /// children's boxes, flat ones included (LLP 1068 §6.1), and what their
+    /// descendants show past them, to each clipping box or scroller
+    /// (`documentOverflow`). None for a dialog that scrolls itself.
+    static func overflow(of dialog: NodeView) -> CGFloat {
+        guard dialog.scrollView == nil else { return 0 }
+        let views = dialog.container.subviews.lazy.compactMap { $0 as? NodeView }.map(\.laidOutFrame.maxY).max() ?? 0
+        let flats = dialog.presenter?.flats
+        let leaves = (flats?.children(of: dialog.id) ?? []).compactMap { flats?.leaves[$0]?.layout.maxY }.max() ?? 0
+        // From its children: the walk does not enter a dialog, its own root included.
+        let shown = dialog.overflowClips ? 0 : dialog.container.subviews.lazy.compactMap { $0 as? NodeView }
+            .map { $0.documentOverflow(in: dialog).maxY }.filter(\.isFinite).max() ?? 0
+        return max(views, leaves, shown)
+    }
 
     /// The dialog's box is `size` now: the sheet follows it, in UIKit's own
     /// animation of a detent change.
@@ -139,7 +223,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
         // The frame op arrived in the dialog's authored parent coordinates.
         // Recenter before UIKit captures the detent animation's starting geometry.
         place()
-        guard resized else { return }
+        guard resized, !topLayer else { return }
         #if !os(tvOS)
         if let sheet = sheetPresentationController {
             if viewIfLoaded?.window != nil, !ExactEnv.agentFreezes { sheet.animateChanges { sheet.invalidateDetents() } }
@@ -155,6 +239,28 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
     /// by them (a phone in landscape, the iPhone Duo's status column).
     fileprivate func place() {
         guard isViewLoaded, let dialog = scroller.subviews.lazy.compactMap({ $0 as? NodeView }).first else { return }
+        if topLayer {
+            // Centred in the window both ways, as HTML's modal dialog is
+            // (`margin: auto` in the viewport), above the keyboard; larger,
+            // it scrolls from its start.
+            #if os(iOS)
+            let above = min(scroller.bounds.height, max(0, keys.frame.maxY))
+            #else
+            let above = scroller.bounds.height
+            #endif
+            let covered = scroller.bounds.height - above
+            if scroller.contentInset.bottom != covered { scroller.contentInset.bottom = covered; scroller.verticalScrollIndicatorInsets.bottom = covered }
+            let s = max(1, view.traitCollection.displayScale), size = dialog.bounds.size, port = CGSize(width: scroller.bounds.width, height: above)
+            let origin = CGPoint(x: PixelGrid.round(max(0, (port.width - size.width) / 2), scale: s),
+                                 y: PixelGrid.round(max(0, (port.height - size.height) / 2), scale: s))
+            let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+            if dialog.center != center { dialog.center = center }
+            // Children past its box (a dialog its `max-height` caps) are reached by scrolling, as on the sheet.
+            let content = CGSize(width: max(port.width, origin.x + size.width),
+                                 height: max(port.height, origin.y + max(size.height, Self.overflow(of: dialog))))
+            if scroller.contentSize != content { scroller.contentSize = content }
+            return
+        }
         let inset = scroller.adjustedContentInset
         let width = max(box.width, scroller.bounds.width - inset.left - inset.right)
         // Its origin on the pixel grid, as every box's is (`PixelGridIOS.swift`).
@@ -163,14 +269,7 @@ final class DialogSheetController: UIViewController, UIGestureRecognizerDelegate
                              y: PixelGrid.round((box.height - size.height) / 2, scale: s))
         let center = CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
         if dialog.center != center { dialog.center = center }
-        // A dialog its sheet's height caps (`HostBlock.Axis.fit`) overflows
-        // its box, and the sheet scrolls the overflow, as the web's modal
-        // dialog (`overflow: auto` under its `max-height`) scrolls itself.
-        // Flat children have no view, but their layout extends that range too (LLP 1068 §6.1).
-        let views = dialog.container.subviews.lazy.compactMap { $0 as? NodeView }.map(\.laidOutFrame.maxY).max() ?? 0
-        let flats = dialog.presenter?.flats
-        let leaves = (flats?.children(of: dialog.id) ?? []).compactMap { flats?.leaves[$0]?.layout.maxY }.max() ?? 0
-        let overflow = dialog.scrollView != nil ? 0 : max(views, leaves)
+        let overflow = Self.overflow(of: dialog)
         let port = max(0, scroller.bounds.width - inset.left - inset.right)
         let content = CGSize(width: max(port, origin.x + size.width),
                              height: max(box.height, origin.y + max(size.height, overflow)))
@@ -233,6 +332,13 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
     init(presenter: Presenter) { self.presenter = presenter }
     fileprivate func geometryChanged() { presenter?.nativeGeometry.changed() }
 
+    /// Whether `dialog`'s author painted its surface, which makes it the
+    /// author's box in the top layer rather than the platform's sheet or
+    /// alert (LLP 1035.001 D11).
+    static func paintsOwnSurface(_ dialog: NodeView) -> Bool {
+        dialog.wrote("background_color") || dialog.wrote("background_image")
+    }
+
     /// Shown, or still on screen while its sheet leaves.
     func owns(_ node: NodeView) -> Bool { (entries + resuming).contains { $0.dialog === node } }
     /// A dialog's authored parent while it is in its sheet; nil for any other node.
@@ -268,6 +374,8 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
             let scroller = entry.controller.scroller
             guard scroller.window != nil, !scroller.bounds.isEmpty,
                   let height = entry.controller.availableHeight, height > 0 else { return nil }
+            // The top layer's block is the window, as HTML's is the viewport.
+            if entry.controller.topLayer { return (entry.dialog.id, HostBlock(width: .size(scroller.bounds.width), height: .fit(height))) }
             let inset = scroller.adjustedContentInset
             let size = CGSize(width: max(0, scroller.bounds.width - inset.left - inset.right), height: height)
             return (entry.dialog.id, HostBlock(width: .size(size.width), height: .fit(size.height)))
@@ -288,7 +396,8 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
         guard let entry = entries.last else { return nil }
         let moving = entry.closing || entry.controller.isBeingPresented || entry.controller.isBeingDismissed
         return ["kind": "dialog", "dialog": Int(entry.dialog.id), "source": entry.source.map { Int($0.id) as Any } ?? NSNull(),
-                "closedby": entry.dialog.props["closedby"] ?? "closerequest", "presentation": "sheet", "phase": moving ? "transition" : "open"]
+                "closedby": entry.dialog.props["closedby"] ?? "closerequest", "presentation": entry.controller.topLayer ? "top-layer" : "sheet",
+                "phase": moving ? "transition" : "open"]
     }
     /// LLP 1080.001 D3: the views this host adds.
     func inspectionOwns(_ view: UIView) -> Bool { entries.contains { $0.controller.viewIfLoaded === view || $0.controller.scroller === view } }
@@ -348,7 +457,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
         // The focus moves into the dialog, as `showModal()` moves it: a field
         // editing on the page ends its editing, and takes it back at the close.
         let previous: UIView? = old == nil ? presenter.focusedNode.map { $0.textArea ?? $0.field ?? $0 } : old?.previous
-        let controller = DialogSheetController(host: self)
+        let controller = DialogSheetController(host: self, topLayer: Self.paintsOwnSurface(dialog))
         let entry = Entry(dialog, source: source, previous: previous, controller: controller)
         let under: UIView = top?.viewIfLoaded ?? presenter.modals.coordinateView ?? presenter.session?.view ?? presenter.viewport
         entry.under = under
@@ -368,7 +477,7 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
         controller.isModalInPresentation = refuses(dialog)
         controller.fit(dialog.bounds.size)
         controller.presentationController?.delegate = self
-        owner.present(controller, animated: !ExactEnv.agentFreezes) { [weak self, entry] in
+        owner.present(controller, animated: !ExactEnv.agentFreezes && !controller.topLayer) { [weak self, entry] in
             if let leave = entry.afterPresenting {
                 entry.afterPresenting = nil
                 // Let UIKit finish unwinding the presentation before dismissing.
@@ -410,6 +519,8 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
         dismiss(entry, animated: animated, cancelled: false)
     }
     private func dismiss(_ entry: Entry, animated: Bool, cancelled: Bool) {
+        // The top layer leaves as HTML's does, at once: the author's exit is its motion.
+        let animated = animated && !entry.controller.topLayer
         if entry.dialog.pressContact?.responderContact?.routesBubbledPress == true { entry.dialog.cancelPressContact() }
         // A finger is taking it down already: UIKit's delegate ends it, and
         // should the finger let it back up, this closes it then.
@@ -619,6 +730,8 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
             let dialog = entry.dialog
             let parent = entry.parent
             let shown = parent?.window != nil && parent.map { !presenter.navigation.isInactiveRoute(containing: $0) } == true
+            // A top-layer dialog leaving with its exit stays until the exit ends.
+            if exiting(entry) { continue }
             if !live(dialog) || dialog.props["semanticTag"] != "dialog" || dialog.props["popover"] != nil || !shown {
                 dismiss(entry, animated: false, cancelled: false)
             } else {
@@ -654,12 +767,29 @@ final class DialogSheets: NSObject, UIAdaptivePresentationControllerDelegate {
         resuming.removeAll { $0.parent === parent && !wanted.contains($0.dialog) }
         for entry in entries where entry.parent === parent {
             if let i = wanted.firstIndex(where: { $0 === entry.dialog }) { entry.index = i }
-            else if !entry.closing { dismiss(entry, animated: false, cancelled: false) }
+            else if !entry.closing, !exiting(entry) { dismiss(entry, animated: false, cancelled: false) }
         }
+    }
+    /// A top-layer dialog playing its `-exact-exit-animation`, in place.
+    private func exiting(_ entry: Entry) -> Bool {
+        entry.controller.topLayer && presenter?.isLeaving(entry.dialog) == true && entry.dialog.superview === entry.controller.scroller
     }
     func reset() {
         resuming.removeAll()
         for entry in entries.reversed() where !entry.closing { dismiss(entry, animated: false, cancelled: false) }
     }
 }
+
+#if os(iOS)
+extension DialogSheetController: PaintsSheetSurface {
+    /// Its surface, which a live theme edit paints again
+    /// (`Presenter.applyThemeTint`): the top layer's dimming, else the
+    /// sheet's ground where the dialog painted none, the platform's (LLP
+    /// 1115 D2), which UIKit elevates in dark mode.
+    func paintSurface() {
+        guard let view = viewIfLoaded else { return }
+        view.backgroundColor = topLayer ? Self.dimming : ThemeRoles.color("background", in: view) ?? ThemeRoles.color("Canvas", in: view, or: .systemBackground)
+    }
+}
+#endif
 #endif

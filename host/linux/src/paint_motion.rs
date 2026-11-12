@@ -213,6 +213,16 @@ impl<D: DataSource> Host<D> {
         }
         out
     }
+    /// The scrollers scroll and view timelines read now stand at these
+    /// offsets (`(node, x, y)`, LLP 1057.003 D5): their consumers, presented
+    /// now; whether anything changed.
+    pub(crate) fn scroll_timelines(&mut self, offsets: &[(u64, f64, f64)]) -> bool {
+        for &(node, x, y) in offsets {
+            self.engine.set_scroll_offset(node, x, y);
+        }
+        self.present()
+    }
+
     /// Every presentation value the engine changed, kept by node.
     pub(super) fn present(&mut self) -> bool {
         // Holds and commits both reconcile reader tracks before publishing.

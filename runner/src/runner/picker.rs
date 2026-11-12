@@ -283,21 +283,26 @@ impl<D: DataSource> Runner<D> {
     pub fn picker(&self, id: &str) -> Option<PickerRequest> {
         self.kernel.find_by_id(id).into_iter().find_map(|key| {
             let n = self.kernel.node_by_key(key)?;
-            if n.node_type != NodeType::Control || n.props.str(PropId::Type) != Some("file") {
-                return None;
-            }
-            Some(PickerRequest {
-                view: n.id,
-                accept: n
-                    .props
-                    .str(PropId::Accept)
-                    .unwrap_or("")
-                    .split(',')
-                    .map(|t| t.trim().to_ascii_lowercase())
-                    .filter(|t| !t.is_empty())
-                    .collect(),
-                multiple: n.props.bool(PropId::Multiple) == Some(true),
-            })
+            self.picker_at(n.id)
+        })
+    }
+
+    fn picker_at(&self, view: ViewId) -> Option<PickerRequest> {
+        let n = self.kernel.node(view)?;
+        if n.node_type != NodeType::Control || n.props.str(PropId::Type) != Some("file") {
+            return None;
+        }
+        Some(PickerRequest {
+            view,
+            accept: n
+                .props
+                .str(PropId::Accept)
+                .unwrap_or("")
+                .split(',')
+                .map(|t| t.trim().to_ascii_lowercase())
+                .filter(|t| !t.is_empty())
+                .collect(),
+            multiple: n.props.bool(PropId::Multiple) == Some(true),
         })
     }
 
@@ -310,6 +315,24 @@ impl<D: DataSource> Runner<D> {
             self.log(e.clone());
             return Err(e);
         };
+        self.hold_picker_request(request, id)
+    }
+
+    /// An activated file input's hold, with or without an authored `id`.
+    pub fn hold_picker_view(&mut self, view: ViewId) -> Result<u64, String> {
+        let request = self
+            .picker_at(view)
+            .ok_or_else(|| format!("picker: refused: view {view} is not a file input"))?;
+        let id = self
+            .kernel
+            .node(view)
+            .and_then(|n| n.props.str(PropId::Id))
+            .unwrap_or("")
+            .to_owned();
+        self.hold_picker_request(request, &id)
+    }
+
+    fn hold_picker_request(&mut self, request: PickerRequest, id: &str) -> Result<u64, String> {
         if self
             .device_holds()
             .iter()
@@ -344,6 +367,36 @@ impl<D: DataSource> Runner<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_activated_file_input_can_hold_by_view_without_an_authored_id() {
+        let source =
+            "component App\n  view\n    input type=\"file\" testId=\"files\" multiple=true\n";
+        let mut runner = Runner::boot(
+            contract::compile(source).unwrap(),
+            (),
+            exact_kernel::Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let key = runner.kernel.find_by_test_id("files")[0];
+        let view = runner.kernel.node_by_key(key).unwrap().id;
+        let request = format!("{{\"op\":\"showPicker\",\"view\":{view}}}");
+        let (reply, _) = crate::agent::answer(&mut runner, &request).unwrap();
+        assert!(reply.contains("\"ticket\":"), "{reply}");
+        let hold = &runner.device_holds()[0];
+        assert_eq!(hold.node, Some(view));
+        assert_eq!(hold.args, r#"{"id":"","accept":[],"multiple":true}"#);
+        let ticket = hold.ticket;
+        let (again, _) = crate::agent::answer(&mut runner, &request).unwrap();
+        assert!(again.contains("already open"), "{again}");
+        assert_eq!(runner.device_holds().len(), 1);
+        runner
+            .answer_hold(ticket, &crate::HoldAnswer::Value("/a.pdf /b.pdf".into()))
+            .unwrap();
+        assert!(runner.device_holds().is_empty());
+    }
 
     #[test]
     fn an_image_picker_accepts_svg_bmp_and_ico_by_type() {

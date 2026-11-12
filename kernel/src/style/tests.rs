@@ -983,21 +983,37 @@ fn clip_keeps_content_minimums_without_becoming_a_scroll_container() {
 }
 
 #[test]
-fn scroll_snap_admits_both_axes_and_center_but_not_proximity() {
+fn scroll_snap_admits_each_axis_strictness_and_alignment() {
     let mut style = StyleProps::default();
-    for name in ["none", "x mandatory", "y mandatory"] {
+    for name in [
+        "none",
+        "x mandatory",
+        "y mandatory",
+        "both mandatory",
+        "x",
+        "y",
+        "both",
+    ] {
         style
             .set_dynamic(StyleId::ScrollSnapType, &StyleValue::Text(name.into()))
             .unwrap();
         assert_eq!(style.scroll_snap_type.name(), name);
     }
-    for name in ["none", "start", "center", "end"] {
+    for name in ["none", "start", "center", "end", "start center"] {
         style
             .set_dynamic(StyleId::ScrollSnapAlign, &StyleValue::Text(name.into()))
             .unwrap();
         assert_eq!(style.scroll_snap_align.name(), name);
     }
-    for name in ["x proximity", "y proximity", "both mandatory"] {
+    // A strictness left unsaid is `proximity`, which the row spells as the axis alone.
+    style
+        .set_dynamic(
+            StyleId::ScrollSnapType,
+            &StyleValue::Text("y proximity".into()),
+        )
+        .unwrap();
+    assert_eq!(style.scroll_snap_type.name(), "y");
+    for name in ["block mandatory", "x y", "none mandatory"] {
         assert!(style
             .set_dynamic(StyleId::ScrollSnapType, &StyleValue::Text(name.into()))
             .is_err());

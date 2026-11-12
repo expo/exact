@@ -247,6 +247,16 @@ impl<D: DataSource> Presenter<D> {
         } else {
             off.1
         };
+        let (nx, ny) = if self
+            .host
+            .kernel()
+            .node(id)
+            .is_some_and(|n| n.style.scroll_snap_type != exact_kernel::ScrollSnapType::None)
+        {
+            self.wheel_snapped(id, off, (nx, ny), max)
+        } else {
+            (nx, ny)
+        };
         // A wheel is a new input: the list's own pending position is retired now (`ack.rs`).
         self.retire_for_wheel(id);
         let moved = self.anchor_input(id, off, if take_y { dy } else { 0. }, (nx, ny));

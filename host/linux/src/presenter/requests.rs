@@ -85,6 +85,10 @@ pub enum Request {
     /// whether a holder says `natural` or `current`, and each counted
     /// holder's view and word for a conflict line the shell writes.
     Orientation(Session),
+    /// A GPU surface's haptic message (LLP 1009 D10), its JSON as
+    /// `exact_gpu::haptics` wrote it: the shell plays it on the vibrator.
+    /// The canvas's view id, then the JSON.
+    SurfaceHaptic(u32, String),
 }
 
 /// What a picker is opened with, each value as HTML writes it and empty
@@ -125,6 +129,7 @@ impl Request {
             Request::Presence(_) => 12,
             Request::Orientation(_) => 13,
             Request::PadInput(_) => 14,
+            Request::SurfaceHaptic(..) => 15,
         }
     }
 }
@@ -299,6 +304,10 @@ fn encode(id: u32, request: &Request, out: &mut Vec<i32>) {
         },
         Request::Surface(surface) => surface.encode(out),
         Request::Hatch(words) => out.extend(words),
+        Request::SurfaceHaptic(surface, json) => {
+            out.push(*surface as i32);
+            string(out, json);
+        }
         // The node, then the kind and the four values.
         Request::Pick(pick) => {
             out.push(pick.node as i32);
@@ -321,6 +330,7 @@ impl<D: DataSource> Presenter<D> {
     /// with no shell refuses them or does nothing.
     pub fn serve_requests(&mut self) {
         self.requests.shell = true;
+        self.surfaces.haptics.shell = true;
         (self.requests.wakelock, self.requests.wakelock_epoch) = (None, None);
         (self.requests.orientation, self.requests.orientation_epoch) = (None, None);
         // The shell's extensions answer the module calls the runner hands
@@ -499,6 +509,9 @@ impl<D: DataSource> Presenter<D> {
         }
         // The top layer first: a surface that closes here changes Back.
         self.tell_surface();
+        for (surface, json) in self.surfaces.haptics.take_queued() {
+            self.queue(Request::SurfaceHaptic(surface, json));
+        }
         let epoch = self.host.kernel().epoch();
         if self.requests.back_epoch != Some(epoch) {
             self.requests.back_epoch = Some(epoch);

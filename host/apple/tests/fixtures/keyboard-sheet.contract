@@ -1,10 +1,11 @@
 // KeyboardSheetIOSTests (LLP 1039 D9; LLP 1008 §9.1): a sheet route under
 // the root's default `resizes-content`, its field and a keyboard toolbar at
 // its bottom, a dialog sheet's field, and the software keyboard's overlap as
-// a value.
+// a value. ModalDetentIOSTests opens a scrolling menu with shrinkable rows.
 routes nav
   home "/"
     players "/players"
+    menu "/menu"
 
 shape Viewport
   keyboardHeight: number
@@ -13,6 +14,11 @@ shape Viewport
 component App
   resource viewport = exactViewport() as shape Viewport
   state name = ""
+  state rows = [0, 1]
+  action more
+    rows = rows.concat([rows.length])
+  action fewer
+    rows = rows.slice(0, rows.length - 1)
   action follow(url: string)
     nav = go(nav, url)
   action back
@@ -29,6 +35,8 @@ component App
             text `${viewport.keyboardHeight}` testId="keyboard"
             link href="/players" testId="open"
               text "Players"
+            link href="/menu" testId="open-menu"
+              text "Menu"
             button press=openNote testId="open-note"
               text "Note"
             dialog id="note" width=300 height=200
@@ -40,3 +48,11 @@ component App
             row role="toolbar" toolbarPlacement="keyboard" aria-label="Keys" padding="8px 16px" testId="keys"
               button press=back testId="done"
                 text "Done"
+        if e.name == "menu"
+          column testId="scrolling-menu" navigationKey=`${e.id}` navigationPresentation="modal" navigationDetent="fit-content large" position="absolute" inset=0 overflow-y="auto" display="flex" flex-direction="column" padding=16
+            button testId="more" press=more height=44
+              text "More"
+            button testId="fewer" press=fewer height=44
+              text "Fewer"
+            for i in rows key=i
+              row height=44 testId=`row-${i}`

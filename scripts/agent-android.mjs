@@ -33,9 +33,9 @@ import { writeTamberNames } from './tamber-names.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
-import { homedir, userInfo } from 'node:os';
+import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, gpuModules, injectedProfiles, linuxBuild, mavenProblems, resolveApp, wholeProgram } from './app.mjs';
 import { ANDROID_MIN_API, hermesAndroidBundle } from './hermes-android.mjs';
@@ -483,6 +483,60 @@ async function headless([tool, serial, command, encodedLease]) {
  * the frames that follow, and a window of the top layer comes with its own animation. */
 const SHOT_SETTLE_MS = 400;
 
+/** Power and keyguard facts exposed by Android's dumpsys, including Android 10's policy delegate. */
+export function androidScreenState(power, window) {
+  const wakefulness = /\bmWakefulness=(\w+)/.exec(power)?.[1];
+  if (!wakefulness) throw new Error('Android screen state: dumpsys power has no mWakefulness');
+  const lines = window.split('\n'), heading = lines.findIndex(line => /^\s*KeyguardServiceDelegate\b/.test(line));
+  let delegate = '';
+  if (heading >= 0) {
+    const indent = lines[heading].match(/^\s*/)[0].length;
+    for (const line of lines.slice(heading + 1)) {
+      if (line.trim() && line.match(/^\s*/)[0].length <= indent) break;
+      delegate += line + '\n';
+    }
+  }
+  const flag = (text, names) => {
+    const values = [...text.matchAll(new RegExp(`\\b(?:${names})=(true|false)\\b`, 'g'))].map(match => match[1]);
+    return values.length ? values.includes('true') : null;
+  };
+  const showing = flag(window, 'isKeyguardShowing|mShowingLockscreen') ?? flag(delegate, 'showing');
+  const secure = flag(window, 'isKeyguardSecure') ?? flag(delegate, 'secure');
+  return { wakefulness, showing, secure };
+}
+
+const screenDescription = ({ wakefulness, showing }) => `${wakefulness}, keyguard ${showing == null ? 'unknown' : showing ? 'showing' : 'hidden'}`;
+
+async function prepareAndroidScreen(tool, serial) {
+  const run = (...args) => {
+    const result = spawnSync(tool, ['-s', serial, 'shell', ...args], { encoding: 'utf8', timeout: 5000, maxBuffer: 4 << 20 });
+    if (result.status !== 0) throw new Error(`Android screen state: adb shell ${args.join(' ')}: ${(result.error?.message || result.stderr || result.stdout || `exit ${result.status}`).trim()}`);
+    return result.stdout;
+  };
+  const read = () => androidScreenState(run('dumpsys', 'power'), run('dumpsys', 'window', 'policy'));
+  let state = read();
+  const initial = screenDescription(state);
+  if (state.wakefulness !== 'Awake') run('input', 'keyevent', 'KEYCODE_WAKEUP');
+  let dismissed = false;
+  let deadline = Date.now() + 2000;
+  for (;;) {
+    if (state.showing && state.secure !== false) throw new Error(`Android ${state.secure ? 'secure lock screen' : 'lock screen (security unknown)'} is showing (${state.wakefulness}); unlock the device and run the drive again`);
+    if (state.wakefulness === 'Awake' && !state.showing) {
+      const final = screenDescription(state);
+      return initial === final ? final : `${initial} → ${final}`;
+    }
+    const canDismiss = state.wakefulness === 'Awake' && state.showing && state.secure === false;
+    if (Date.now() >= deadline && !(canDismiss && !dismissed)) throw new Error(`Android screen is not ready (${screenDescription(state)}); wake and unlock the device and run the drive again`);
+    if (canDismiss) {
+      run('wm', 'dismiss-keyguard');
+      // Slow wake observations must not consume the first dismissal or its observation budget.
+      if (!dismissed) { deadline = Date.now() + 2000; dismissed = true; }
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+    state = read();
+  }
+}
+
 /** The reader carrier's process: launch the app with a driver's socket (the shell's `agent=<name>` extra), have
  * adb forward it, and carry the protocol's lines between this process's stdio and the app. Every line is the app's
  * to answer but `screenshot`, whose picture is the device's (`screencap`), tagged as the app tags a reply. The
@@ -511,10 +565,13 @@ async function relay([serial, id, vars, encodedLease]) {
     // as another app would (a share's `-a android.intent.action.SEND …`, LLP 1133.024 D5).
     const { EXACT_AGENT_INTENT: intent = '', ...launch } = JSON.parse(vars);
     const extras = Object.entries(launch).flatMap(([k, v]) => ['--es', `x_${k.slice('EXACT_'.length).toLowerCase()}`, quote(v)]);
+    console.error(`Android screen before launch: ${await prepareAndroidScreen(tool, serial)}`);
     sh('shell', 'am', 'force-stop', id);
     sh('logcat', '-c');
-    // `lower=0`: the engine samples every animation, so none plays on the reader's own clock.
-    const started = sh('shell', ['am', 'start', '-W', '-n', `${id}/dev.exact.app.MainActivity`, '--es', 'agent', name, '--es', 'lower', '0', ...extras, intent].join(' '));
+    // `--activity-clear-task`: a force-stop ends the app's process but leaves its task, and an activity of another
+    // app in it (the permission controller's dialog a last drive raised) would cover this launch. `lower=0`: the
+    // engine samples every animation, so none plays on the reader's own clock.
+    const started = sh('shell', ['am', 'start', '-W', '--activity-clear-task', '-n', `${id}/dev.exact.app.MainActivity`, '--es', 'agent', name, '--es', 'lower', '0', ...extras, intent].join(' '));
     if (started.status !== 0 || /Error/.test(started.stdout + started.stderr)) throw new Error(`am start ${id}: ${(started.stderr || started.stdout).trim()}`);
     port = Number(sh('forward', 'tcp:0', `localabstract:${name}`).stdout.trim());
     if (!port) throw new Error('adb forward gave no port');
@@ -854,16 +911,17 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
   const development = JSON.parse(readFileSync(resolve(out, 'compat.json'), 'utf8')).embedded?.trust !== 'production';
   // The token names its hatches read (LLP 1121 D12), beside them in the build.
   if (existsSync(resolve(app.dir, 'modules/android'))) writeTamberNames(app, 'kotlin');
-  const graph = mavenGraph(app, writeLocks, maven);
+  const graph = mavenGraph(app, writeLocks, maven, env);
   if (!graph) return null;
   let assembled;
   try {
     // Without file watching Gradle reads its inputs to decide what is up to date; a watcher that missed an edit
-    // shipped the reader's old classes once (LLP 1159.002 D1).
-    assembled = runGradle(['--no-watch-fs', ...(env.CI ? ['--no-daemon'] : []), bundle ? ':app:bundleRelease' : ':app:assembleRelease', `-Papp=${app.name}`, `-PappDir=${app.manifest.game ? app.workspace : app.dir}`,
+    // shipped the reader's old classes once (LLP 1159.002 D1). A daemon started in the locks' own Gradle home would
+    // outlive the home.
+    assembled = runGradle(['--no-watch-fs', ...(env.CI || graph.env.GRADLE_USER_HOME ? ['--no-daemon'] : []), bundle ? ':app:bundleRelease' : ':app:assembleRelease', `-Papp=${app.name}`, `-PappDir=${app.manifest.game ? app.workspace : app.dir}`,
       `-PexactDevelopment=${development ? '1' : '0'}`,
       `-PappBuildDir=${dirs.app}`, `-PcanvasBuildDir=${dirs.canvas}`, `-PndkPath=${env.ANDROID_NDK_HOME}`, '--project-cache-dir', dirs.cache, `-Pkotlin.project.persistent.dir=${dirs.kotlin}`,
-      ...gpuArgs, ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env) } });
+      ...gpuArgs, ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env), ...graph.env } });
     if (assembled) graph.kept();
   } finally {
     graph.done();
@@ -919,19 +977,41 @@ function mavenLocksPresent(app, maven) {
  * reader's own AndroidX, locked to the app's `gradle.lockfile` and verified against its `gradle-verification.xml`,
  * both beside its other locks. The verification file is Gradle's, which it reads only from the reader's `gradle/`:
  * it is put there for this build (`done` takes it away). `writeLocks` writes both from the graph as it resolves
- * (`kept` copies the verification back). Missing locks are refused before Gradle runs. */
-function mavenGraph(app, writeLocks, maven) {
+ * (`kept` copies the verification back), in a Gradle user home of its own (`coldGradleHome`, its variables `env`).
+ * Missing locks are refused before Gradle runs. */
+function mavenGraph(app, writeLocks, maven, env) {
   const placed = resolve(READER, 'gradle/verification-metadata.xml');
-  const none = { args: [], kept() {}, done() {} };
+  const none = { args: [], env: {}, kept() {}, done() {} };
   if (!maven.length) return none;
   const lock = resolve(app.dir, 'gradle.lockfile'), checksums = resolve(app.dir, 'gradle-verification.xml');
   rmSync(placed, { force: true });
   if (existsSync(checksums)) copyFileSync(checksums, placed);
+  const home = writeLocks ? coldGradleHome(env) : null;
   return {
     args: [`-Pmaven=${maven.join(',')}`, `-PmavenLock=${lock}`, ...(writeLocks ? ['--write-locks', '--write-verification-metadata', 'sha256'] : ['--dependency-verification=strict'])],
+    env: home ? { GRADLE_USER_HOME: home } : {},
     kept() { if (writeLocks && existsSync(placed)) copyFileSync(placed, checksums); },
-    done() { rmSync(placed, { force: true }); },
+    done() { rmSync(placed, { force: true }); if (home) rmSync(home, { recursive: true, force: true }); },
   };
+}
+
+/** A new Gradle user home for writing the locks, with nothing resolved in it, as a fresh machine's is. Gradle writes a
+ * checksum for each file it fetches, and from a warm cache it fetches fewer than a fresh machine's strict build
+ * verifies (a BOM's `.module` beside its `.pom`, another version's parent POM), so checksums written warm fail there.
+ * It keeps what is configuration or the tool, never a dependency: the home's `gradle.properties` and init scripts
+ * (`init.gradle`, `init.gradle.kts`, `init.d`: proxies, mirrors, credentials, JVM options) copied, and the wrapper's
+ * distributions linked, so Gradle is not downloaded again. The caller removes it. */
+export function coldGradleHome(env = process.env) {
+  const warm = env.GRADLE_USER_HOME || resolve(homedir(), '.gradle');
+  const home = mkdtempSync(resolve(tmpdir(), 'exact-gradle-locks-'));
+  for (const kept of ['gradle.properties', 'init.gradle', 'init.gradle.kts', 'init.d']) {
+    if (existsSync(resolve(warm, kept))) cpSync(resolve(warm, kept), resolve(home, kept), { recursive: true });
+  }
+  mkdirSync(resolve(warm, 'wrapper/dists'), { recursive: true });
+  mkdirSync(resolve(home, 'wrapper'));
+  // A junction on Windows, which needs no privilege to make.
+  symlinkSync(resolve(warm, 'wrapper/dists'), resolve(home, 'wrapper/dists'), 'junction');
+  return home;
 }
 
 /** What the modules the app uses add to the APK (LLP 1133.001 D4, D5; LLP 1133.002 D6): each bound implementation's

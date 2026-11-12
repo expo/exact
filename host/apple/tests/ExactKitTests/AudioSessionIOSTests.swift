@@ -102,8 +102,12 @@ final class AudioSessionIOSTests: XCTestCase {
             XCTAssertEqual(session.categoryOptions, [.mixWithOthers])
             XCTAssertEqual(activations, [], "restoring a call does not activate")
         }
-        AudioSession.release(ObjectIdentifier(holder))
-        XCTAssertEqual(session.category, .ambient)
+        try counting {
+            AudioSession.release(ObjectIdentifier(holder))
+            XCTAssertEqual(categorySets, 0, "a mixing session rests in its own configuration")
+        }
+        XCTAssertEqual(session.category, .playback)
+        XCTAssertEqual(session.categoryOptions, [.mixWithOthers])
         // The category alone matches: a non-mixing app must still clear the option.
         try session.setCategory(.playback, options: [.mixWithOthers])
         AudioSession.configuration = .init("playback")
@@ -125,6 +129,37 @@ final class AudioSessionIOSTests: XCTestCase {
             XCTAssertEqual(categorySets, 1, "ambient is already in force")
             XCTAssertEqual(activations, [], "the inactive session is never activated")
         }
+    }
+
+    /// camchis's iPhone 12 log (#55): a module's output running under the
+    /// prepared ambient, then the request's rise to `.playback`, interrupted
+    /// Podcasts. A mixing app is prepared in its own configuration, so the
+    /// request changes nothing and only activates.
+    func testPlaybackMixPreparesItsOwnConfigurationAndTheRequestOnlyActivates() throws {
+        XCTAssertFalse(ExactEnv.agentFreezes, "this test needs a live surface clock")
+        AudioSession.configuration = .init("playback-mix")
+        try session.setActive(false)
+        try session.setCategory(.soloAmbient)
+        try counting {
+            AudioSession.prepareForSurface()
+            XCTAssertEqual(session.category, .playback)
+            XCTAssertEqual(session.categoryOptions, [.mixWithOthers])
+            XCTAssertEqual(categorySets, 1)
+            AudioSession.prepareForSurface()
+            XCTAssertEqual(categorySets, 1, "the configuration is already in force")
+            XCTAssertEqual(activations, [], "the inactive session is never activated")
+            try AudioSession.activate()
+            XCTAssertEqual(categorySets, 1, "the request finds nothing to change")
+            XCTAssertEqual(activations, [true])
+        }
+        // A plain playback app still prepares ambient: applying `.playback`
+        // early would stop other apps' audio before the request.
+        AudioSession.reset()
+        AudioSession.configuration = .init("playback")
+        try session.setActive(false)
+        try session.setCategory(.soloAmbient)
+        AudioSession.prepareForSurface()
+        XCTAssertEqual(session.category, .ambient)
     }
 
     func testTheHostPreparesBeforeTheModuleCreatesItsSurface() throws {
@@ -279,7 +314,8 @@ final class AudioSessionIOSTests: XCTestCase {
                         AudioSession.releaseCall(call)
                         unchanged("restoration waits for the system's deactivation")
                         AudioSession.callActivated(false)
-                        XCTAssertEqual(session.category, .ambient, "the released sound holds nothing after the call")
+                        XCTAssertEqual(session.category, value == "playback-mix" ? .playback : .ambient,
+                                       "the released sound holds nothing after the call: the session rests")
                         XCTAssertEqual(activations, [], "restoring a call leaves activation to the system")
                     }
                     try counting {
@@ -332,7 +368,8 @@ final class AudioSessionIOSTests: XCTestCase {
                     }
                     try counting {
                         AudioSession.callActivated(false)
-                        XCTAssertEqual(session.category, .ambient, "the released \(kind) holds nothing after the call")
+                        XCTAssertEqual(session.category, AudioSession.resting.category,
+                                       "the released \(kind) holds nothing after the call: the session rests")
                         XCTAssertEqual(activations, [], "restoration leaves activation to the system")
                     }
                     if kind == "speech" {
@@ -413,7 +450,7 @@ final class AudioSessionIOSTests: XCTestCase {
                     case "capture": AudioSession.releaseCapture(claim)
                     default: AudioSession.releaseSpeech(claim)
                     }
-                    XCTAssertEqual(session.category, .ambient)
+                    XCTAssertEqual(session.category, AudioSession.resting.category, "nothing held: the session rests")
                 }
             }
         }

@@ -550,8 +550,8 @@ impl Kernel {
     /// The tabs of the navigation root `root` (LLP 1075.003 §3.7), or
     /// `None` when it has none (one stack): the first of its own tablists,
     /// in tree order, with a tab that names one of its own tabpanels. What
-    /// is inside a route is that route's, and a tablist's own subtree holds
-    /// no panel of the root's.
+    /// is inside a route is that route's; a panel inside a tablist still
+    /// belongs to the root.
     pub fn root_tabs(&self, root: ViewId) -> Option<RootTabs> {
         fn walk(
             kernel: &Kernel,
@@ -570,7 +570,7 @@ impl Kernel {
                 if role == Some("tablist") {
                     lists.push(*id);
                 }
-                if node.props.str(PropId::NavigationKey).is_none() && role != Some("tablist") {
+                if node.props.str(PropId::NavigationKey).is_none() {
                     walk(kernel, &node.children(), lists, panels);
                 }
             }

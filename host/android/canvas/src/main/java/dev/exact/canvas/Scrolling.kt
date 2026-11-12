@@ -3,6 +3,7 @@ package dev.exact.canvas
 import android.content.Context
 import android.graphics.RectF
 import android.graphics.RenderNode
+import android.os.SystemClock
 import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.VelocityTracker
@@ -64,6 +65,15 @@ internal class Scrolling(private val view: ExactView) {
         /** Its edges' effects: top, bottom, left, right. */
         val edges = arrayOfNulls<EdgeEffect>(4)
         var bar: Indicator? = null
+        /** Its snap, as the last touch's answer told it ([Native.under]): whether a rest must be a snap position, and
+         * sideways ([0]) and up and down ([1]) the snapport's length (0: it does not snap that way), each snap area's
+         * least and greatest offsets, and whether a snap may not pass over it (`scroll-snap-stop: always`). */
+        var snapMandatory = false
+        val snapPort = FloatArray(2)
+        val snaps = arrayOf(FloatArray(0), FloatArray(0))
+        val stops = arrayOf(BooleanArray(0), BooleanArray(0))
+        /** It is a virtualized list: its areas past those told are asked for at a release ([Native.snapsAround]). */
+        var snapList = false
         val barless get() = flags and 8 != 0
         val node get() = flags and 4 != 0
         fun at(sideways: Boolean) = if (sideways) nowX + pendX else nowY + pendY
@@ -82,7 +92,8 @@ internal class Scrolling(private val view: ExactView) {
     private val minFling = config.scaledMinimumFlingVelocity
     private val maxFling = config.scaledMaximumFlingVelocity
     private val frames = Choreographer.getInstance()
-    private val fling = OverScroller(view.context)
+    /** Its settle onto a snap position ([OverScroller.startScroll]) eases out as ViewPager's does. */
+    private val fling = OverScroller(view.context) { t -> val u = t - 1f; u * u * u * u * u + 1f }
     private var tracker: VelocityTracker? = null
 
     /** The touch that is down: counted, so an answer for one that ended is not taken for the next. */
@@ -104,6 +115,8 @@ internal class Scrolling(private val view: ExactView) {
     private var lastX = 0f
     private var lastY = 0f
     private var flingAt = 0
+    /** Where the drag's innermost scroller was when the drag began, along its axis ([snapRest]'s start). */
+    private var dragFrom = 0f
 
     /**
      * A touch event: whether it was taken here (a scroll's), so that exact2 does not hear it. A down, and every move
@@ -120,7 +133,12 @@ internal class Scrolling(private val view: ExactView) {
                 if (mode == FLINGING) {
                     // A finger on a list that is flinging stops it and has it, as the platform's lists do: no press.
                     halt()
-                    if (active.any { it.port.contains(e.x, e.y) }) { mode = DRAGGING; return true }
+                    // The drag that catches it begins where it was caught ([snapRest]'s start).
+                    if (active.any { it.port.contains(e.x, e.y) }) {
+                        mode = DRAGGING
+                        dragFrom = active.first().at(sideways)
+                        return true
+                    }
                 }
                 mode = WATCHING; answered = false; chain = emptyList(); claims = 0
                 return false
@@ -187,6 +205,23 @@ internal class Scrolling(private val view: ExactView) {
             links.add(Link(s, w[i + 1] and 1 != 0, w[i + 1] and 2 != 0))
             i += 11
         }
+        // After the module's eight words, each scroller's snap.
+        var at = 3 + 11 * w[1] + 8
+        for (link in links) {
+            if (at >= w.size) break
+            val s = link.s
+            s.snapMandatory = w[at] and 4 != 0
+            s.snapList = w[at] and 8 != 0
+            at++
+            for (axis in 0..1) {
+                if (at + 2 > w.size) break
+                val n = w[at + 1]
+                s.snapPort[axis] = f(w[at])
+                s.snaps[axis] = FloatArray(2 * n) { f(w[at + 2 + 3 * (it / 2) + it % 2]) }
+                s.stops[axis] = BooleanArray(n) { w[at + 4 + 3 * it] != 0 }
+                at += 2 + 3 * n
+            }
+        }
         // The indicators of scrollers this touch is not over go: they have faded, or are about to.
         for (s in scrollers.values) if (links.none { it.s === s }) s.bar?.let { (it.parent as? ViewGroup)?.removeView(it); s.bar = null }
         chain = links
@@ -210,6 +245,7 @@ internal class Scrolling(private val view: ExactView) {
             else -> return
         }
         active = chain.filter { if (sideways) it.x else it.y }.map { it.s }
+        dragFrom = active.firstOrNull()?.at(sideways) ?: 0f
         mode = DRAGGING
         lastX = x; lastY = y
         view.forward(3, x, y, tool, 0L)
@@ -329,6 +365,7 @@ internal class Scrolling(private val view: ExactView) {
         val edged = edged()
         val stretched = edged != null && STRETCH && edged.edges.any { it != null && it.distance != 0f }
         if (edged != null) { for (e in edged.edges) e?.onRelease(); if (stretched) stretching() }
+        if (!stretched && snap(v)) return
         if (stretched || abs(v) < minFling || active.isEmpty()) { mode = IDLE; return }
         mode = FLINGING
         flingAt = 0
@@ -337,6 +374,95 @@ internal class Scrolling(private val view: ExactView) {
         if (sideways) fling.fling(0, 0, v.toInt(), 0, Int.MIN_VALUE, Int.MAX_VALUE, 0, 0)
         else fling.fling(0, 0, 0, v.toInt(), 0, 0, Int.MIN_VALUE, Int.MAX_VALUE)
         frames.postFrameCallback(flinger)
+    }
+
+    /** How a list's areas around a release's projection are asked for ([ExactView.snapsAround]). */
+    internal var snapsAround: (Int, Boolean, Float, Float, (IntArray) -> Unit) -> Unit = view::snapsAround
+
+    /**
+     * The drag's innermost scroller snaps along the drag's axis (LLP 1008 §9): it comes to rest where [snapRest] says,
+     * from where the platform's fling at [v] px/s would have left it, and settles there in ViewPager's time. At its end
+     * and flung on past it, it does not: the fling goes on to the scrollers outside. Whether it took the release; a
+     * list's `proximity` snap that the areas the touch told leave free does not, and may still take it once the
+     * areas around the projection arrive ([aimAgain]).
+     */
+    private fun snap(v: Float): Boolean {
+        val s = active.firstOrNull() ?: return false
+        val axis = if (sideways) 0 else 1
+        if (s.snapPort[axis] <= 0f || s.snaps[axis].isEmpty()) return false
+        val at = s.at(sideways)
+        val end = s.end(sideways)
+        if ((v < 0f && at <= 0f) || (v > 0f && at >= end)) return false
+        val flung = abs(v) >= minFling
+        var projected = at
+        if (flung) {
+            if (sideways) fling.fling(0, 0, v.toInt(), 0, Int.MIN_VALUE, Int.MAX_VALUE, 0, 0)
+            else fling.fling(0, 0, 0, v.toInt(), 0, 0, Int.MIN_VALUE, Int.MAX_VALUE)
+            projected += if (sideways) fling.finalX else fling.finalY
+            fling.forceFinished(true)
+        }
+        val way = if (flung) (if (v > 0f) 1 else -1) else 0
+        val target = snapRest(s.snaps[axis], s.stops[axis], projected, at, dragFrom, way, s.snapMandatory, s.snapPort[axis])
+        if (target == null && !s.snapList) return false
+        if (target != null) {
+            val d = (target.coerceIn(0f, end) - at).roundToInt()
+            // ViewPager's settle: four times as long as the finger's speed would take to cover it, within its bound;
+            // a release too slow to fling takes the platform's default scroll duration.
+            settle(d, if (flung) settleMs(d, v) else SNAP_MS)
+        }
+        // A list told only the areas around where the touch landed: those around the projection, and an `always` one
+        // on the way, are asked for now, and the settle (or the fling) is aimed again with them.
+        if (s.snapList) {
+            val aim = Aim(serial, s.rev, axis, projected, at, dragFrom, way, target != null)
+            snapsAround(s.id, !sideways, at, projected) { w -> aimAgain(s, aim, w) }
+        }
+        return target != null
+    }
+
+    /** ViewPager's settle time over [d] px for a finger, or a fling, moving at [v] px/s. */
+    private fun settleMs(d: Int, v: Float) = (4000f * abs(d) / abs(v)).roundToInt().coerceIn(100, SNAP_MAX_MS)
+
+    /** A release's snap, as [snap] decided it: for touch [touch], the scroller at revision [rev], and whether it
+     * [settles] (else it flings, or rests, unsnapped). */
+    private class Aim(
+        val touch: Int, val rev: Int, val axis: Int, val projected: Float, val release: Float, val start: Float, val way: Int,
+        val settles: Boolean,
+    )
+
+    /** When the snap's settle of [d] px is to end. */
+    private var settleEnds = 0L
+
+    /** Settle the drag's scrollers [d] px along its axis in [ms]. */
+    private fun settle(d: Int, ms: Int) {
+        fling.forceFinished(true)
+        frames.removeFrameCallback(flinger)
+        if (d == 0) { mode = IDLE; return }
+        fling.startScroll(0, 0, if (sideways) d else 0, if (sideways) 0 else d, ms)
+        settleEnds = SystemClock.uptimeMillis() + ms
+        mode = FLINGING
+        flingAt = 0
+        frames.postFrameCallback(flinger)
+    }
+
+    /**
+     * A list's areas around its release's projection arrived ([Native.snapsAround]): merged with those the touch told,
+     * and the settle aimed again where [snapRest] now says, in the time it had left (a fling that was not snapping, in
+     * ViewPager's time at its speed), unless another touch began since or the app scrolled the list (a new revision).
+     * A rest past the areas the touch told is otherwise the last of them, behind the projection.
+     */
+    private fun aimAgain(s: Scroller, aim: Aim, w: IntArray) {
+        if (aim.touch != serial || aim.rev != s.rev || active.firstOrNull() !== s || (mode != FLINGING && mode != IDLE)) return
+        mergeSnaps(s, aim.axis, w)
+        val target = snapRest(s.snaps[aim.axis], s.stops[aim.axis], aim.projected, aim.release, aim.start, aim.way, s.snapMandatory,
+            s.snapPort[aim.axis]) ?: return
+        val d = (target.coerceIn(0f, s.end(sideways)) - s.at(sideways)).roundToInt()
+        if (d == 0 && mode == IDLE) return
+        val ms = when {
+            aim.settles -> (settleEnds - SystemClock.uptimeMillis()).toInt().coerceIn(100, SNAP_MAX_MS)
+            mode == FLINGING && fling.currVelocity > 0f -> settleMs(d, fling.currVelocity)
+            else -> SNAP_MS
+        }
+        settle(d, ms)
     }
 
     private val flinger: Choreographer.FrameCallback = Choreographer.FrameCallback {
@@ -520,7 +646,68 @@ internal class Scrolling(private val view: ExactView) {
         const val BOTTOM = 1
         const val LEFT = 2
         const val RIGHT = 3
+        /** `Scroller`'s default duration, and ViewPager's longest settle. */
+        const val SNAP_MS = 250
+        const val SNAP_MAX_MS = 600
         /** An edge's stretch, and the distance it is read by, are Android 12's (`EdgeEffect.getDistance`). */
         val STRETCH = android.os.Build.VERSION.SDK_INT >= 31
     }
+}
+
+/**
+ * Where a scroll released at [release] and projected to rest at [projected] comes to rest among one axis's snap areas
+ * ([snaps]: each one's least and greatest offset, which differ for one longer than the snapport; [stops]:
+ * `scroll-snap-stop: always`), or null to rest where it would. LLP 1008 §9's rule, as
+ * `host/linux/src/presenter/snap.rs`'s `rest`: the position nearest the projection (the smaller of two as near); for a
+ * fling [way] (1 as the offset grows, -1 back, 0 for a release too slow to fling), at least the first position past
+ * [start], where the drag began, that way; then short of the first `always` position past the release in the way it
+ * goes (CSS Scroll Snap 1 §6.2); and for `proximity` ([mandatory] false), only within a third of the snapport ([port])
+ * of the projection.
+ */
+internal fun snapRest(
+    snaps: FloatArray, stops: BooleanArray, projected: Float, release: Float, start: Float, way: Int, mandatory: Boolean, port: Float,
+): Float? {
+    val n = stops.size
+    if (n == 0) return null
+    var rest = 0f
+    var best = Float.MAX_VALUE
+    for (k in 0 until n) {
+        val p = projected.coerceIn(snaps[2 * k], snaps[2 * k + 1])
+        val d = abs(p - projected)
+        if (d < best || (d == best && p < rest)) { best = d; rest = p }
+    }
+    // A move under half a pixel is none: positions from layout are fractional.
+    val e = 0.5f
+    // A fling that would rest back where its drag began, or behind, goes on to the next position its way.
+    if (way != 0 && way * (rest - start) <= e) {
+        var next = Float.NaN
+        for (k in 0 until n) {
+            val p = (start + way * 2 * e).coerceIn(snaps[2 * k], snaps[2 * k + 1])
+            if (way * (p - start) > e && (next.isNaN() || way * p < way * next)) next = p
+        }
+        if (!next.isNaN()) rest = next
+    }
+    if (rest > release + e) {
+        for (k in 0 until n) if (stops[k]) {
+            val from = snaps[2 * k]; val to = snaps[2 * k + 1]
+            val stop = if (from > release + e) from else if (to > release + e) to else continue
+            rest = minOf(rest, stop)
+        }
+    } else if (rest < release - e) {
+        for (k in 0 until n) if (stops[k]) {
+            val from = snaps[2 * k]; val to = snaps[2 * k + 1]
+            val stop = if (to < release - e) to else if (from < release - e) from else continue
+            rest = maxOf(rest, stop)
+        }
+    }
+    return if (mandatory || abs(rest - projected) <= port / 3f) rest else null
+}
+
+/** Add [w]'s snap areas ([Native.snapsAround]: a count, then each one's least and greatest offsets as float bits and 1
+ * for `always`) to [s]'s along [axis]. */
+internal fun mergeSnaps(s: Scrolling.Scroller, axis: Int, w: IntArray) {
+    val n = w.getOrElse(0) { 0 }.coerceAtMost((w.size - 1) / 3)
+    if (n <= 0) return
+    s.snaps[axis] = s.snaps[axis] + FloatArray(2 * n) { java.lang.Float.intBitsToFloat(w[1 + 3 * (it / 2) + it % 2]) }
+    s.stops[axis] = s.stops[axis] + BooleanArray(n) { w[3 + 3 * it] != 0 }
 }

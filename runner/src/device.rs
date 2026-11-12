@@ -40,6 +40,11 @@ pub struct Device {
     /// The macOS hardened-runtime entitlement: without it a notarised build is
     /// silently refused, whatever `Info.plist` says.
     pub hardened: Option<&'static str>,
+    /// macOS signing entitlements only a provisioning profile authorizes
+    /// (Apple TN3125), apart from `hardened`, which any signature carries:
+    /// the Mac build signs them under a profile that allows them, and
+    /// without one signs none (`host/apple/presence.mjs`, `macProvisioning`).
+    pub macos_profile: &'static [&'static str],
     /// The web `Permissions-Policy` feature, where the feature is policy-controlled.
     pub web: Option<&'static str>,
     /// Further `Permissions-Policy` features the row turns on beside `web`:
@@ -100,6 +105,7 @@ const ROW: Device = Device {
     android_writes: &[],
     macos: &[],
     hardened: None,
+    macos_profile: &[],
     web: None,
     policy: &[],
     ios_entitlements: &[],
@@ -248,13 +254,14 @@ pub const DEVICES: &[Device] = &[
     // A visible push (LLP 1133.004 §9 P2): the Push API's name. Nothing asks
     // about push itself (the prompt is notifications', which it needs), so no
     // purpose. The environment's value is the build's, by the signing
-    // (`host/apple/presence.mjs`). A Mac takes `aps-environment` only with a
-    // provisioning profile, so the row writes nothing there, as tvOS omits it.
+    // (`host/apple/presence.mjs`). A Mac spells the key with Apple's prefix
+    // and takes it only under a provisioning profile.
     Device {
         name: "push",
         purpose: false,
         needs: Some("notifications"),
         ios_entitlements: &["aps-environment"],
+        macos_profile: &["com.apple.developer.aps-environment"],
         tvos: false,
         ..ROW
     },
@@ -466,11 +473,12 @@ pub const DEVICES: &[Device] = &[
     // App Attest and Play Integrity (LLP 1133.028 D6): nothing is shown or
     // asked. The entitlement's value, `development` or `production`, is the
     // build's to choose (`host/apple/build.mjs`); a Mac takes it only with a
-    // profile (D17), so no macOS key.
+    // profile (D17).
     Device {
         name: "attestation",
         purpose: false,
         ios_entitlements: &["com.apple.developer.devicecheck.appattest-environment"],
+        macos_profile: &["com.apple.developer.devicecheck.appattest-environment"],
         ..ROW
     },
     // The stores' age signal (D10): the platform's sheet says what it asks,
@@ -479,6 +487,7 @@ pub const DEVICES: &[Device] = &[
         name: "age-range",
         purpose: false,
         ios_entitlements: &["com.apple.developer.declared-age-range"],
+        macos_profile: &["com.apple.developer.declared-age-range"],
         tvos: false,
         ..ROW
     },
@@ -714,6 +723,10 @@ mod tests {
         let push = ok.iter().find(|g| g.device.name == "push").unwrap();
         assert!(push.purpose.is_empty());
         assert_eq!(push.device.ios_entitlements, ["aps-environment"]);
+        assert_eq!(
+            push.device.macos_profile,
+            ["com.apple.developer.aps-environment"]
+        );
         assert!(
             !push.device.tvos && push.device.hardened.is_none() && push.device.macos.is_empty()
         );

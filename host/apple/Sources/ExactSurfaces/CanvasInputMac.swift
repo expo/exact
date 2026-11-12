@@ -27,13 +27,19 @@ final class CanvasInputHost {
         }
         focusIfUnheld()
         DispatchQueue.main.async { [weak self] in self?.focusIfUnheld() }
-        CanvasPads.shared.add(self)
+    }
+    /// Whether this canvas hears the pads: once its world reads them.
+    private(set) var padsOpened = false
+    func openPads() {
+        guard !padsOpened else { return }
+        padsOpened = true
+        CanvasPads.open().add(self)
     }
     /// The pads follow the focus here (`CanvasPads.resync`).
-    func focused() { CanvasPads.shared.resync() }
+    func focused() { CanvasPads.opened?.resync() }
     /// And away from here, wherever it went: an editor outside every canvas
     /// says nothing as it takes the focus.
-    func focusLeft() { CanvasPads.shared.reconcile() }
+    func focusLeft() { CanvasPads.opened?.reconcile() }
     /// Pads go to the canvas with the keyboard focus in the key window, as keys do.
     var padFocus: Bool {
         guard let view, let window = view.window, window.isKeyWindow, let responder = window.firstResponder as? NSView else { return false }
@@ -81,7 +87,7 @@ final class CanvasInputHost {
         buttons = 0; modifiers.removeAll(); keys.removeAll(); last = nil
         if let c=view.canvases as? CanvasesHost, let e=c.entries[view.id] {c.cancelControls(e)}
         view.canvases?.input(view, ["t": "blur"])
-        CanvasPads.shared.blurred(self)
+        CanvasPads.opened?.blurred(self)
     }
     func key(_ event: NSEvent, down: Bool, source: NodeView) -> Bool {
         guard let view else { return false }

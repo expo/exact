@@ -651,7 +651,7 @@ fn cli_color_detection_and_explicit_overrides_agree_with_the_app() {
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
             .arg(&path)
-            .args(["--color", flag, "print"])
+            .args(["--color", flag, "--drive", "print"])
             .env("TERM", term)
             .env("NO_COLOR", no_color)
             .env_remove("COLORTERM")
@@ -768,7 +768,7 @@ fn run(name: &str, ops: &[&str]) -> (bool, String, String) {
 fn run_in(mode: &str, name: &str, ops: &[&str]) -> (bool, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
         .arg(entry(name))
-        .args(["--size", "40x12", mode])
+        .args(["--size", "40x12", mode, "--drive"])
         .args(ops)
         .output()
         .expect("runs");
@@ -789,7 +789,7 @@ fn nonbreaking_space_does_not_add_a_terminal_row() {
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
         .arg(path)
-        .args(["--size", "4x6", "tree", "document"])
+        .args(["--size", "4x6", "--drive", "tree", "document"])
         .output()
         .unwrap();
     assert!(
@@ -842,12 +842,17 @@ fn a_terminal_field_is_a_filled_row() {
     );
     let shot = entry("field").with_file_name("field.ans");
     // Full screen, the screenshot is the grid, faint included.
-    let (ok, _, err) = run_in(
-        "--fullscreen",
-        "field",
-        &["--color", "truecolor", "screenshot", shot.to_str().unwrap()],
+    let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
+        .arg(entry("field"))
+        .args(["--size", "40x12", "--fullscreen", "--color", "truecolor"])
+        .args(["--drive", "screenshot", shot.to_str().unwrap()])
+        .output()
+        .expect("runs");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
-    assert!(ok, "{err}");
     let ans = std::fs::read_to_string(&shot).unwrap();
     // The host's fill: #303030 behind the placeholder, without compiled rows.
     assert!(ans.contains("48;2;48;48;48"), "{ans:?}");
@@ -946,7 +951,7 @@ fn a_progress_bar_is_a_row_of_blocks() {
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
         .arg(&path)
-        .args(["--size", "40x6", "--inline", "print"])
+        .args(["--size", "40x6", "--inline", "--drive", "print"])
         .output()
         .expect("runs");
     let text = String::from_utf8_lossy(&out.stdout);
@@ -966,7 +971,7 @@ fn headless_time_uses_agent_facts_and_survives_an_invalid_place() {
     for (locale, clock) in [("en-US", "7:00 PM"), ("invalid@locale", "7:00 PM")] {
         let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
             .arg(&path)
-            .args(["--size", "80x6", "print"])
+            .args(["--size", "80x6", "--drive", "print"])
             .env("EXACT_AGENT_EPOCH", "1767225600000")
             .env("EXACT_AGENT_TIME_ZONE", "America/Toronto")
             .env("EXACT_AGENT_LOCALE", locale)
@@ -999,7 +1004,7 @@ fn layout_and_plan_answer_as_json() {
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
         .arg(&path)
-        .args(["--size", "40x10", "plan", "layout"])
+        .args(["--size", "40x10", "--drive", "plan", "layout"])
         .output()
         .unwrap();
     assert!(
@@ -1055,7 +1060,9 @@ fn type_distinguishes_offscreen_fields_from_ineligible_fields() {
     std::fs::write(&path, APP.replace("button press=pick(v) commandfor=\"d\" command=\"close\" text-align=\"start\" testId=v\n              text v", "input value=v testId=v")).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
         .arg(path)
-        .args(["--size", "40x12", "tap", "open", "type", "epsilon", "hello"])
+        .args([
+            "--size", "40x12", "--drive", "tap", "open", "type", "epsilon", "hello",
+        ])
         .output()
         .unwrap();
     assert!(!out.status.success());
@@ -1109,7 +1116,15 @@ fn modal_with_popover_refuses_background_tap_type_and_focus_command() {
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_exact-terminal"))
             .arg(&path)
-            .args(["--size", "60x20", "tap", "open", "tap", "open-popover"])
+            .args([
+                "--size",
+                "60x20",
+                "--drive",
+                "tap",
+                "open",
+                "tap",
+                "open-popover",
+            ])
             .args(ops)
             .output()
             .unwrap();

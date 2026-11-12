@@ -74,7 +74,7 @@ impl<D: DataSource> Presenter<D> {
                 self.surfaces.window_layers = None;
             }
             let cached = !self.dirty()
-                && self.surfaces.placements(&self.host).is_empty()
+                && self.surfaces.placements(&self.host, true).is_empty()
                 && self
                     .surfaces
                     .window_layers

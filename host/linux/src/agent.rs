@@ -1001,6 +1001,7 @@ fn settle<D: DataSource>(p: &Presenter<D>) -> Option<f64> {
         .chain(p.scroll_end_due())
         .chain(p.brush.numerals.settles_at())
         .chain(p.brush.labels.settles_at())
+        .chain(p.stage_settles_at())
         .reduce(f64::max)
 }
 

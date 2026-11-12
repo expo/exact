@@ -48,6 +48,35 @@ pub fn survivor(shown: &[String], declared: impl Fn(&str) -> bool) -> Option<Str
     shown.iter().rev().find(|key| declared(key)).cloned()
 }
 
+/// How a route is presented over the routes beneath it (LLP 1035.001 D4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presented {
+    /// Pushed: in the sheet beneath it if there is one, else a page.
+    Pushed,
+    /// A sheet (`modal`): it shows what it sits over.
+    Sheet,
+    /// A full-screen route whose author wrote a background, which
+    /// composites over the page (Charlie, 2026-11-10).
+    Over,
+    /// A full-screen route that paints nothing: it hides the page.
+    Full,
+}
+
+impl Presented {
+    pub(crate) fn of(node: &NodeRef<'_>) -> Self {
+        match node.props.str(PropId::NavigationPresentation) {
+            Some("modal") => Self::Sheet,
+            Some("fullscreen") if over_page(node) => Self::Over,
+            Some("fullscreen") => Self::Full,
+            _ => Self::Pushed,
+        }
+    }
+
+    fn presents(self) -> bool {
+        self != Self::Pushed
+    }
+}
+
 /// A full-screen route's authored background composites over the page,
 /// including while its colour animates toward transparent (Charlie, 2026-11-10).
 pub(crate) fn over_page(node: &NodeRef<'_>) -> bool {
@@ -61,21 +90,41 @@ pub(crate) fn over_page(node: &NodeRef<'_>) -> bool {
     }
 }
 
-/// Hidden and inert, respectively, for each direct route child, `overlays`
-/// saying which routes show what they sit over: a modal or a full-screen
-/// route with an authored background. These keep the page (the last route
-/// beneath them that is not an overlay) and every overlay between visible,
-/// as navigation.js `covered` does. An unmatched selection leaves the
-/// previously projected state alone.
+/// The sheet route `index` shows in: itself when it is one, or the sheet
+/// it was pushed in, since a push inside a sheet stays in it as a
+/// navigation controller's in a presented sheet does (expo/exact#326; the
+/// web's `sheetAt`). `None` for a page, a full-screen route, and a route
+/// pushed over one.
+pub fn sheet_of(kinds: &[Presented], index: usize) -> Option<usize> {
+    (0..=index.min(kinds.len().checked_sub(1)?))
+        .rev()
+        .find(|i| kinds[*i].presents())
+        .filter(|i| kinds[*i] == Presented::Sheet)
+}
+
+/// Hidden and inert, respectively, for each direct route child, `kinds`
+/// saying how each is presented. A route that shows what it sits over (a
+/// sheet, a route pushed inside one, a full-screen route with an authored
+/// background) keeps the page (the last route beneath it that is neither)
+/// and every such route between visible and inert, as navigation.js
+/// `covered` does; of one sheet's routes only its top one shows. An
+/// unmatched selection leaves the previously projected state alone.
 pub fn route_visibility(
     keys: &[&str],
     selected: &str,
-    overlays: &[bool],
+    kinds: &[Presented],
 ) -> Option<Vec<(bool, bool)>> {
     let selected = keys.iter().position(|key| *key == selected)?;
-    let overlay = |i: usize| overlays.get(i).copied().unwrap_or(false);
-    let page = (0..selected).rev().find(|i| !overlay(*i)).unwrap_or(0);
-    let covered = |i: usize| overlay(selected) && (page..selected).contains(&i);
+    let kind = |i: usize| kinds.get(i).copied().unwrap_or(Presented::Pushed);
+    let sheet = |i: usize| sheet_of(kinds, i);
+    let over =
+        |i: usize| matches!(kind(i), Presented::Sheet | Presented::Over) || sheet(i).is_some();
+    // The route the selected one is presented as: its sheet, or itself.
+    let presented = sheet(selected).unwrap_or(selected);
+    let page = (0..presented).rev().find(|i| !over(*i)).unwrap_or(0);
+    // A sheet shows the last of its routes beneath the selection.
+    let top = |i: usize| sheet(i).is_none() || sheet(i + 1) != sheet(i);
+    let covered = |i: usize| over(presented) && (page..presented).contains(&i) && top(i);
     Some(
         (0..keys.len())
             .map(|index| {
@@ -159,9 +208,10 @@ pub struct RouteBar {
 #[derive(Debug, Default)]
 pub struct Projection {
     /// The room the shell's bars take of a route: the top bar from its top
-    /// edge and the navigation bar from its bottom, in points. `None`: no
+    /// edge and the navigation bar from its bottom, and the system's bar
+    /// under a sheet's foot, in points. `None`: no
     /// shell has bars, and nothing is projected.
-    pub(crate) room: Option<(f32, f32)>,
+    pub(crate) room: Option<(f32, f32, f32)>,
     /// The navigation root.
     pub root: Option<ViewId>,
     /// Its routes whose header is a bar, in every stack.
@@ -260,16 +310,21 @@ impl Navigation {
                 } else {
                     keys.last().copied().unwrap_or("")
                 };
+                let kinds: Vec<Presented> = (routes.iter())
+                    .map(|r| {
+                        kernel
+                            .node(*r)
+                            .map_or(Presented::Pushed, |n| Presented::of(&n))
+                    })
+                    .collect();
                 if stack == at {
                     let through = keys.iter().position(|k| *k == shown).map_or(0, |i| i + 1);
                     if let Some(tabs) = &tabs {
-                        // A sheet covers the root's tab bar too (LLP 1115.000 D4.5).
-                        let inert = matches!(
-                            kernel
-                                .node(routes[through - 1])
-                                .and_then(|n| n.props.str(PropId::NavigationPresentation)),
-                            Some("modal" | "fullscreen")
-                        );
+                        // A sheet covers the root's tab bar too, and so does
+                        // a route pushed inside one (LLP 1115.000 D4.5).
+                        let top = through.saturating_sub(1);
+                        let inert = kinds.get(top).is_some_and(|k| k.presents())
+                            || sheet_of(&kinds, top).is_some();
                         self.routes.insert(tabs.tablist, (false, inert));
                     }
                     self.shown
@@ -278,11 +333,7 @@ impl Navigation {
                         self.stack = Some(routes[..through].to_vec());
                     }
                 }
-                let overlays: Vec<bool> = routes
-                    .iter()
-                    .map(|r| kernel.node(*r).is_some_and(|n| over_page(&n)))
-                    .collect();
-                if let Some(visibility) = route_visibility(&keys, shown, &overlays) {
+                if let Some(visibility) = route_visibility(&keys, shown, &kinds) {
                     for (route, state) in routes.iter().zip(visibility) {
                         self.routes.insert(*route, state);
                     }
@@ -336,6 +387,24 @@ impl Navigation {
         lifted: bool,
         root: Option<ViewId>,
     ) -> (bool, bool) {
+        self.visibility_with(kernel, id, lifted, root, &[])
+    }
+
+    /// Whether `id` is hidden, the routes in `shown` counting as shown: the
+    /// presenter's stage draws them though the stack hides them (a route a
+    /// push covers, while it slides out).
+    pub(crate) fn hidden_but(&self, kernel: &Kernel, id: ViewId, shown: &[ViewId]) -> bool {
+        self.visibility_with(kernel, id, true, None, shown).0
+    }
+
+    fn visibility_with(
+        &self,
+        kernel: &Kernel,
+        id: ViewId,
+        lifted: bool,
+        root: Option<ViewId>,
+        shown: &[ViewId],
+    ) -> (bool, bool) {
         // No route, popover or inert node anywhere: nothing to climb for.
         if self.routes.is_empty()
             && (self.lifted.is_empty() || !lifted)
@@ -348,10 +417,11 @@ impl Navigation {
         let mut at = Some(id);
         while let Some(id) = at {
             let Some(node) = kernel.node(id) else { break };
-            let (hidden, inert) = self
+            let (mut hidden, inert) = self
                 .split
                 .visibility(id)
                 .unwrap_or_else(|| self.routes.get(&id).copied().unwrap_or_default());
+            hidden &= !shown.contains(&id);
             // Closed popovers retain their tree but neither paint nor take input.
             let closed = self.popovers
                 && Some(id) != self.shown_popover
@@ -388,11 +458,123 @@ impl<D: exact_runner::DataSource> crate::Host<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use Presented::{Pushed as P, Sheet as S};
+
+    #[test]
+    fn ordinary_and_tabbed_roots_project_their_routes_through_push_and_back() {
+        let routes = r#"column navigationKey="home" testId="home"
+  header
+    text "Home" role="heading"
+  button press=push testId="push"
+    text "Open"
+column navigationKey="detail" testId="detail"
+  header
+    button id="back" press=back testId="back"
+      text "Back"
+    text "Detail" role="heading"
+"#;
+        let tablist = "row role=\"tablist\"\n  button role=\"tab\" aria-controls=\"panel\"\n    text \"Home\"\n";
+        let indent = |view: &str| {
+            view.lines()
+                .map(|line| format!("  {line}\n"))
+                .collect::<String>()
+        };
+        let unlinked = tablist.replace(" aria-controls=\"panel\"", "");
+        let linked = format!(
+            "column role=\"tabpanel\" id=\"panel\"\n{}{tablist}",
+            indent(routes)
+        );
+        for back in ["", " navigationBack=\"back\""] {
+            for (children, tabbed) in [
+                (routes.to_string(), false),
+                (
+                    format!("{routes}{unlinked}column role=\"tabpanel\" id=\"panel\"\n"),
+                    false,
+                ),
+                (
+                    format!(
+                        "column\n  column role=\"tabpanel\" id=\"panel\"\n{}{tablist}",
+                        indent(&indent(routes))
+                    ),
+                    true,
+                ),
+                (
+                    format!(
+                        "{tablist}  column role=\"tabpanel\" id=\"panel\"\n{}",
+                        indent(&indent(routes))
+                    ),
+                    true,
+                ),
+                (
+                    linked.replace("role=\"tablist\"", "role=(shown ? \"tablist\" : \"group\")"),
+                    true,
+                ),
+                (
+                    linked.replace("role=\"tab\"", "role=(shown ? \"tab\" : \"group\")"),
+                    true,
+                ),
+                (
+                    linked.replace(
+                        "role=\"tabpanel\"",
+                        "role=(shown ? \"tabpanel\" : \"group\")",
+                    ),
+                    true,
+                ),
+            ] {
+                let source = format!(
+                    "component App\n  state shown = true\n  state selected = \"home\"\n  action push\n    selected = \"detail\"\n  action back\n    selected = \"home\"\n  view\n    main navigationKey=selected{back}\n{}",
+                    indent(&indent(&indent(&children)))
+                );
+                let plan = contract::compile(&source).unwrap();
+                let (mut host, error) = crate::Host::boot(
+                    &plan.encode(),
+                    (),
+                    Box::new(exact_kernel::MonospaceMeasurer::default()),
+                    390.,
+                    844.,
+                )
+                .unwrap();
+                assert!(error.is_none(), "{error:?}");
+                let id = |name: &str| {
+                    let kernel = host.kernel();
+                    kernel
+                        .node_by_key(kernel.find_by_test_id(name)[0])
+                        .unwrap()
+                        .id
+                };
+                let (home, detail, push, back) = (id("home"), id("detail"), id("push"), id("back"));
+                let root = host.kernel().roots()[0];
+                let (tabs, stacks) = stacks(host.kernel(), root);
+                assert_eq!(tabs.is_some(), tabbed, "{source}");
+                assert_eq!(stacks, [vec![home, detail]], "{source}");
+                assert_eq!(host.shown_stack(), Some([home].as_slice()));
+                assert_eq!(host.route_visibility(home), (false, false));
+                assert_eq!(host.route_visibility(detail), (true, true));
+                assert!(host
+                    .dispatch_at(push, exact_runner::Event::Press, 0.)
+                    .is_none());
+                assert_eq!(host.shown_stack(), Some([home, detail].as_slice()));
+                assert_eq!(host.route_visibility(home), (true, true));
+                assert_eq!(host.route_visibility(detail), (false, false));
+                assert!(host
+                    .dispatch_at(back, exact_runner::Event::Press, 1.)
+                    .is_none());
+                assert_eq!(host.shown_stack(), Some([home].as_slice()));
+                assert_eq!(host.route_visibility(home), (false, false));
+                assert_eq!(host.route_visibility(detail), (true, true));
+                assert!(
+                    !exact_runner::agent::logs(host.runner(), 0).contains("matches no route"),
+                    "{source}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn selected_route_and_only_its_modal_underlay_are_visible() {
         let keys = ["a", "b", "c", "d"];
         assert_eq!(
-            route_visibility(&keys, "c", &[false; 4]),
+            route_visibility(&keys, "c", &[P; 4]),
             Some(vec![
                 (true, true),
                 (true, true),
@@ -401,7 +583,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            route_visibility(&keys, "c", &[false, false, true, false]),
+            route_visibility(&keys, "c", &[P, P, S, P]),
             Some(vec![
                 (true, true),
                 (false, true),
@@ -410,7 +592,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            route_visibility(&keys, "a", &[true, false, false, false]),
+            route_visibility(&keys, "a", &[S, P, P, P]),
             Some(vec![
                 (false, false),
                 (true, true),
@@ -423,13 +605,13 @@ mod tests {
     }
 
     /// A sheet over a sheet shows both the sheet beneath it and the page
-    /// (LLP 1133.029 D3), as navigation.js `covered` does; a page pushed
-    /// beneath the first sheet hides the route it was pushed over.
+    /// (LLP 1133.029 D3), as navigation.js `covered` does; a route pushed
+    /// inside the first sheet shows in it in place of the sheet's own.
     #[test]
     fn a_sheet_over_a_sheet_shows_the_page_and_the_sheets_between() {
         let keys = ["a", "b", "c", "d"];
         assert_eq!(
-            route_visibility(&keys, "d", &[false, false, true, true]),
+            route_visibility(&keys, "d", &[P, P, S, S]),
             Some(vec![
                 (true, true),
                 (false, true),
@@ -438,12 +620,52 @@ mod tests {
             ])
         );
         assert_eq!(
-            route_visibility(&keys, "d", &[false, true, false, true]),
+            route_visibility(&keys, "d", &[P, S, P, S]),
             Some(vec![
-                (true, true),
+                (false, true),
                 (true, true),
                 (false, true),
                 (false, false)
+            ])
+        );
+    }
+
+    /// A route pushed inside a sheet shows in it, over the page the sheet
+    /// covers; the sheet's own route waits beneath it (expo/exact#326).
+    #[test]
+    fn a_route_pushed_inside_a_sheet_keeps_the_page_beneath_the_sheet() {
+        let keys = ["home", "info", "settings", "sounds"];
+        let kinds = [P, S, P, P];
+        assert_eq!(sheet_of(&kinds, 0), None);
+        assert_eq!(sheet_of(&kinds, 3), Some(1));
+        assert_eq!(
+            route_visibility(&keys, "settings", &kinds),
+            Some(vec![
+                (false, true),
+                (true, true),
+                (false, false),
+                (true, true)
+            ])
+        );
+        assert_eq!(
+            route_visibility(&keys, "sounds", &kinds),
+            Some(vec![
+                (false, true),
+                (true, true),
+                (true, true),
+                (false, false)
+            ])
+        );
+        // Over a full-screen route a push is a page of its own.
+        let kinds = [P, Presented::Full, P, P];
+        assert_eq!(sheet_of(&kinds, 2), None);
+        assert_eq!(
+            route_visibility(&keys, "settings", &kinds),
+            Some(vec![
+                (true, true),
+                (true, true),
+                (false, false),
+                (true, true)
             ])
         );
     }

@@ -826,6 +826,7 @@ package final class Presenter {
             // Restore and author offsets after collection inset compensation,
             // before deferred callbacks can replace the captured positions.
             restoreScrollPositions()
+            if moved { for id in scrollers { views[id]?.resnap() } }
             pool.end()
             PaintOrder.end()
             if outermost {
@@ -894,7 +895,7 @@ package final class Presenter {
                 let reused = pool.take(id)
                 if let reused, !fieldsWaiting.contains(id) { reused.makeWaitingField() }
                 let v = reused ?? NodeView(id: id, kind: op.kind, presenter: self)
-                unshown(v) // a reused view too: it is another node
+                made(v) // a reused view too: it is another node
                 #if os(iOS)
                 v.groupedOwner = op.kind == "list" && op.props["listStyle"] != nil
                 #endif
@@ -975,6 +976,7 @@ package final class Presenter {
                 forgetFlight(id)
                 if flats.isFlat(id) { flats.destroy(id); return }
                 if endExit(id) { return }
+                if let view = views[id] { glassGroups.depart(view) }
                 // A collection's retired row parks for the next of its shape.
                 if let view = views[id], pool.retire(view) { return }
                 // Out of the map before out of the window: the editing-ended
@@ -1222,6 +1224,7 @@ package final class Presenter {
             applyFrame(v, CGRect(x: op.x, y: op.y, width: op.w, height: op.h))
         case .content:
             v.content = CGSize(width: op.w, height: op.h)
+            v.fitContentHeight = op.fitHeight.map { CGFloat($0) }
             v.fitScroll()
             if v.props["navigationDetent"] != nil { modals.contentChanged(v) }
         case .fieldContent: applyContentGeometry(v, op)

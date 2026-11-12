@@ -1138,17 +1138,18 @@ package final class TextEngine {
             // A word too long for its line keeps its width in layout, as CSS
             // measures it; only what is drawn ends in "…".
             var natural: CGFloat?
+            let indent = insets.at(start).width
+            let room = limit - Double(indent)
             if spec.lineClamp > 0 && lines.count + 1 == spec.lineClamp
-                && Self.clampsLast(line, start: start, count: count, length: length, width: limit) {
+                && Self.clampsLast(line, start: start, count: count, length: length, width: room) {
                 if start + count == length { natural = CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil)) }
-                line = ellipsizedLine(spec, range: NSRange(location: start, length: count), width: limit) ?? line
+                line = ellipsizedLine(spec, range: NSRange(location: start, length: count), width: room) ?? line
                 clampedRange = range
                 clamps = true
             }
             var ascent: CGFloat = 0, descent: CGFloat = 0, leading: CGFloat = 0
             // The natural width, the first line's indent in it: justification
             // fills the box, never sizes it.
-            let indent = insets.at(start).width
             let drawn = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, &leading))
             let w = max(0, (natural ?? (drawn - removed(line, CGFloat(limit) - indent))) + indent)
             if spec.align == 3, !clamps, width.isFinite {

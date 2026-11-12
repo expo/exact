@@ -37,6 +37,7 @@ import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
+import dev.exact.canvas.TrackError
 import dev.exact.canvas.TrackConsumer
 import dev.exact.canvas.VideoSource
 import org.json.JSONArray
@@ -63,6 +64,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         var shown = false
         var madeBy = "app"
         var sub: Sub? = null
+        var picture: Bitmap? = null
     }
 
     private class Sub(val track: String, val origin: String) : TrackConsumer {
@@ -104,7 +106,10 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
     }
 
     override fun preferred(values: JSONObject) {
-        picture = values.optJSONObject("picture")?.optString("path")?.ifEmpty { null }
+        val next = values.optJSONObject("picture")?.optString("path")?.ifEmpty { null }
+        if (next == picture) return
+        picture = next
+        for (v in views.values) if (v.picture != null) v.sub?.let { show(v, it, null) }
     }
 
     // Viewfinders (D3, D8 items 1 and 2)
@@ -142,6 +147,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         val v = views.values.firstOrNull { it.view === view } ?: return
         // The reader lets a hidden viewfinder's view go (`display: none`) and makes another when it shows again,
         // under the same id: what the runner said of it stands, since it reports a `srcObject` it bound only once.
+        blank(v)
         v.view = null
         v.sub?.leave?.invoke()
         v.sub = null
@@ -168,12 +174,12 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         val v = views[id] ?: return
         val src = v.src ?: ""
         val want = v.view != null && v.shown && src.isNotEmpty() && v.reports >= v.changes && context.tracks.lookup(src)?.kind == "video"
-        v.sub?.let { if (!want || it.track != src) { it.leave(); v.sub = null; blank(v.view) } }
+        v.sub?.let { if (!want || it.track != src) { blank(v); it.leave(); v.sub = null } }
         v.sub?.let { if (want && !it.live && v.madeBy == "app" && it.origin != "app") { it.leave(); v.sub = null } }
         if (!want || v.sub != null) return
         val sub = Sub(src, v.madeBy)
         sub.onLive = { source -> show(v, sub, source) }
-        sub.onBlank = { if (v.sub === sub) blank(v.view) }
+        sub.onBlank = { if (v.sub === sub) blank(v) }
         v.sub = sub
         try {
             sub.leave = context.tracks.subscribe(src, sub, false, v.madeBy)
@@ -189,7 +195,10 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         val facing = context.tracks.lookup(sub.track)?.state?.invoke()?.optJSONObject("settings")?.optString("facingMode")
         when (val view = v.view) {
             is ImageView -> {
-                view.setImageBitmap(agentBitmap())
+                val bitmap = agentBitmap()
+                view.setImageBitmap(bitmap)
+                v.picture = bitmap
+                context.tracks.lookup(sub.track)?.picture = bitmap
                 view.scaleX = if (facing == "user") -1f else 1f
             }
             is PreviewView -> {
@@ -204,8 +213,16 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    private fun blank(view: View?) {
-        when (view) {
+    private fun blank(v: ViewState) {
+        v.sub?.let { sub ->
+            context.tracks.lookup(sub.track)?.let { entry ->
+                if (v.picture != null && entry.picture === v.picture) {
+                    entry.picture = views.values.firstOrNull { it !== v && it.sub?.track == sub.track && it.picture != null }?.picture
+                }
+            }
+        }
+        v.picture = null
+        when (val view = v.view) {
             is ImageView -> view.setImageDrawable(null)
             is PreviewView -> if (showing === view) {
                 showing = null
@@ -242,7 +259,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         }
         val source = entry.video?.invoke() ?: return reply(error("InvalidStateError"))
         val android = args.optJSONObject("android") ?: JSONObject()
-        val capture = imageCapture(source, args, android)
+        val capture = try { imageCapture(source, args, android) } catch (e: TrackError) { return reply(error(e.code)) }
         if (android.optBoolean("shutterSound", true) || MediaActionSound.mustPlayShutterSound()) sound.play(MediaActionSound.SHUTTER_CLICK)
         // A photo in flight is a consumer: its lease holds until the file is written (D3).
         val holder = Sub(entry.id, "app")
@@ -275,7 +292,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
             val builder = ImageCapture.Builder().setCaptureMode(mode)
             if (quality in 1..100) builder.setJpegQuality(quality)
             imageCaptureHatch?.invoke(builder)
-            builder.build().also { source.add(it) }
+            builder.build().also { if (!source.attach(it)) throw TrackError("UnknownError") }
         }
         val flash = android.optString("flashMode").ifEmpty { null } ?: when (args.optString("fillLightMode")) { "flash" -> "on"; "auto" -> "auto"; else -> "off" }
         made.flashMode = when (flash) { "on" -> ImageCapture.FLASH_MODE_ON; "auto" -> ImageCapture.FLASH_MODE_AUTO; else -> ImageCapture.FLASH_MODE_OFF }

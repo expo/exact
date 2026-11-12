@@ -366,6 +366,12 @@ pub(crate) fn style_json_rows(
                     true
                 }
             },
+            // The timelines' axes are the host's to place (timeline_scroll.rs).
+            RowValue::Enum(_)
+                if matches!(id, StyleId::ScrollTimelineAxis | StyleId::ViewTimelineAxis) =>
+            {
+                false
+            }
             RowValue::Enum(e) => {
                 out.push('"');
                 out.push_str(e);
@@ -398,11 +404,14 @@ pub(crate) fn style_json_rows(
                 true
             }
             RowValue::Transitions(_) => false, // the engine's, not the presenter's
-            // @ref LLP 1057.003 D2 — drag timelines are the engine's too.
+            // @ref LLP 1057.003 D2, D5 — timelines are the engine's too,
+            // placed by the host (timeline_scroll.rs).
             RowValue::DragTimeline(_)
             | RowValue::AnimationTimeline(_)
             | RowValue::AnimationRange(_)
-            | RowValue::TimelineScope(_) => false,
+            | RowValue::TimelineScope(_)
+            | RowValue::TimelineName(_)
+            | RowValue::ViewTimelineInset(_) => false,
             // @ref LLP 1055 D4/D7 — the `svg` scene and CA specs carry these.
             RowValue::Paint(_)
             | RowValue::DashArray(_)

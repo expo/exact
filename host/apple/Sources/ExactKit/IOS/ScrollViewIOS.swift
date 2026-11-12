@@ -28,6 +28,10 @@ package final class PlainView: UIView {
 /// (`AgentIOS.swift`).
 package class ScrollView: UIScrollView {
     var scrollingNode: NodeView? { (superview as? NodeView) ?? (self as? Viewport)?.documentNode }
+    /// Where it last came to rest along x and y, and on which snap area (`ScrollSnapIOS.swift`).
+    var snapRested = [ScrollSnap.Rested(), ScrollSnap.Rested()]
+    /// UIKit's paging is on because its snap is a pager's (`ScrollSnapIOS.swift`).
+    var snapPages = false
     package override func layoutSubviews() {
         super.layoutSubviews()
         keepPlatformViewsOver()

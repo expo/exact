@@ -22,22 +22,20 @@ pub struct ListTextPosition<'a> {
 }
 
 impl<D: DataSource> Runner<D> {
-    /// Nearest unmounted row snap area along a collection's axis, using its
-    /// measured sizes or current estimates. At most 64 local rows are evaluated;
-    /// no row is mounted. `distance` bounds the search by the nearest mounted
-    /// target, or infinity when there is none.
-    pub fn collection_snap(
-        &self,
-        view: ViewId,
-        proposed: f64,
-        port: f64,
-        maximum: f64,
-        distance: f64,
-    ) -> Option<f64> {
+    /// Nearest unmounted row snap area in a collection, along its axis, using
+    /// its measured sizes or current estimates. At most 64 local rows are
+    /// evaluated; no row is mounted. `geometry`: the snapport start's
+    /// projected rest, the snapport's length, the least and greatest rests,
+    /// and the distance of the nearest mounted target (infinity when there is
+    /// none), which bounds the search.
+    pub fn collection_snap(&self, view: ViewId, geometry: [f64; 5]) -> Option<f64> {
+        let [proposed, port, minimum, maximum, distance] = geometry;
         if self.poisoned
-            || ![proposed, port, maximum].into_iter().all(f64::is_finite)
+            || ![proposed, port, minimum, maximum]
+                .into_iter()
+                .all(f64::is_finite)
             || port <= 0.0
-            || maximum < 0.0
+            || maximum < minimum
             || distance.is_nan()
             || distance <= 0.0
         {
@@ -48,11 +46,82 @@ impl<D: DataSource> Runner<D> {
         u.fonts = Some(self.fonts.clone());
         self.tree
             .as_ref()?
-            .collection_snap(
+            .collection_snap(&mut u, &self.kernel, view, geometry)
+            .ok()
+            .flatten()
+    }
+
+    /// The positions each unmounted row root with a snap alignment along a
+    /// collection's axis rests at, first to last, in
+    /// [`Runner::collection_snap`]'s coordinates: of the rows `window` covers,
+    /// at most `cap` up to and including the one at `around` and `cap` after
+    /// it. `snapport`: its length and the least and greatest positions of its
+    /// start. No row is mounted.
+    pub fn collection_snap_areas(
+        &self,
+        view: ViewId,
+        (around, window, cap): (f64, [f64; 2], usize),
+        snapport: [f64; 3],
+    ) -> Vec<(f64, f64, bool)> {
+        let [port, minimum, maximum] = snapport;
+        if self.poisoned
+            || ![around, window[0], window[1], port, minimum, maximum]
+                .into_iter()
+                .all(f64::is_finite)
+            || port <= 0.0
+            || maximum < minimum
+        {
+            return Vec::new();
+        }
+        let mut ids = Ids::default();
+        let mut u = Update::new(self.env(&[], &[]), &self.sites, &mut ids);
+        u.fonts = Some(self.fonts.clone());
+        self.tree
+            .as_ref()
+            .and_then(|tree| {
+                tree.collection_snap_areas(
+                    &mut u,
+                    &self.kernel,
+                    view,
+                    (around, window, cap),
+                    snapport,
+                )
+                .ok()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The first position past `release` toward `rest` an unmounted row
+    /// root with `scroll-snap-stop: always` holds a snap at, in
+    /// [`Runner::collection_snap`]'s coordinates; `snapport`: its length and
+    /// the least and greatest positions of its start. At most 256 rows past
+    /// the release are read; no row is mounted.
+    pub fn collection_snap_stop(
+        &self,
+        view: ViewId,
+        [release, rest]: [f64; 2],
+        snapport: [f64; 3],
+    ) -> Option<f64> {
+        let [port, minimum, maximum] = snapport;
+        if self.poisoned
+            || ![release, rest, port, minimum, maximum]
+                .into_iter()
+                .all(f64::is_finite)
+            || port <= 0.0
+            || maximum < minimum
+        {
+            return None;
+        }
+        let mut ids = Ids::default();
+        let mut u = Update::new(self.env(&[], &[]), &self.sites, &mut ids);
+        u.fonts = Some(self.fonts.clone());
+        self.tree
+            .as_ref()?
+            .collection_snap_stop(
                 &mut u,
                 &self.kernel,
                 view,
-                [proposed, port, maximum, distance],
+                [release, rest, port, minimum, maximum],
             )
             .ok()
             .flatten()

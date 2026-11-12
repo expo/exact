@@ -2,6 +2,7 @@
 
 mod cli;
 mod collections;
+mod command_line;
 mod input;
 mod reading;
 mod screen;

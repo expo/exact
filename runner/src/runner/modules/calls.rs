@@ -54,6 +54,7 @@ const SKIPPED: &[&str] = &[
 const RUN: &[&str] = &[
     "postMessage",
     "stopSounds",
+    "setSounds",
     "preventDefault",
     "stopPropagation",
 ];

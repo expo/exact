@@ -113,6 +113,34 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
     }
 }
 
+// Vello 0.10's coarse pass binds eight storage buffers and uses 16 KiB
+// of workgroup memory; the scan passes use 256 threads. Area AA's fine
+// pass binds two sampled textures and one storage texture (vello/src/shaders.rs).
+fn requested_limits(available: wgpu::Limits) -> Result<wgpu::Limits, String> {
+    let limits = wgpu::Limits::default().or_worse_values_from(&available);
+    let needed = wgpu::Limits {
+        max_bind_groups: 1,
+        max_bindings_per_bind_group: 9,
+        max_storage_buffers_per_shader_stage: 8,
+        max_uniform_buffers_per_shader_stage: 1,
+        max_sampled_textures_per_shader_stage: 2,
+        max_storage_textures_per_shader_stage: 1,
+        max_compute_workgroup_storage_size: 16384,
+        max_compute_invocations_per_workgroup: 256,
+        max_compute_workgroup_size_x: 256,
+        max_compute_workgroup_size_y: 16,
+        max_compute_workgroup_size_z: 1,
+        ..limits.clone()
+    };
+    let mut error = None;
+    needed.check_limits_with_fail_fn(&limits, true, |name, need, have| {
+        error = Some(format!(
+            "Vello needs {name} >= {need}, adapter offers {have}"
+        ));
+    });
+    error.map_or(Ok(limits), Err)
+}
+
 /// Where the pipeline cache for an adapter lives: `EXACT_CACHE`, else
 /// `$XDG_CACHE_HOME/exact`, else `~/.cache/exact`.
 fn cache_path(key: &str) -> Option<PathBuf> {
@@ -152,6 +180,7 @@ impl Gpu {
         let caching = adapter.features().contains(wgpu::Features::PIPELINE_CACHE);
         let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("exact"),
+            required_limits: requested_limits(adapter.limits())?,
             required_features: if caching {
                 wgpu::Features::PIPELINE_CACHE
             } else {
@@ -1074,6 +1103,40 @@ impl Backend for Gpu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weak_adapter_limits_preserve_vello_compute_or_name_the_missing_capacity() {
+        // Mesa cdc6a0bf: v3dv_device.c:get_device_properties and v3d_limits.h.
+        // https://gitlab.freedesktop.org/mesa/mesa/-/tree/cdc6a0bfed71b22cfbb5ce7f6b778ee3fdedf409/src/broadcom
+        let mut available = wgpu::Limits {
+            max_texture_dimension_1d: 4096,
+            max_texture_dimension_2d: 4096,
+            max_color_attachments: 4,
+            max_inter_stage_shader_variables: 15, // wgpu: 64 / 4 - 1 for position
+            max_compute_workgroup_storage_size: 32768,
+            max_compute_invocations_per_workgroup: 256,
+            max_compute_workgroup_size_x: 256,
+            max_compute_workgroup_size_y: 256,
+            max_compute_workgroup_size_z: 256,
+            ..Default::default()
+        };
+        let requested = requested_limits(available.clone()).unwrap();
+        assert!(requested.check_limits(&available));
+        assert!(requested.max_storage_buffers_per_shader_stage >= 8);
+        assert!(requested.max_compute_invocations_per_workgroup >= 256);
+        assert!(requested.max_compute_workgroup_storage_size >= 16384);
+        available.max_storage_buffers_per_shader_stage = 4;
+        assert_eq!(
+            requested_limits(available.clone()).unwrap_err(),
+            "Vello needs max_storage_buffers_per_shader_stage >= 8, adapter offers 4"
+        );
+        available.max_storage_buffers_per_shader_stage = 8;
+        available.max_compute_invocations_per_workgroup = 128;
+        assert_eq!(
+            requested_limits(available).unwrap_err(),
+            "Vello needs max_compute_invocations_per_workgroup >= 256, adapter offers 128"
+        );
+    }
 
     #[test]
     #[ignore = "requires a native GPU adapter; run explicitly in native validation"]

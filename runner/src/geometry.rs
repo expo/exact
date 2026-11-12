@@ -179,6 +179,18 @@ impl Scrolled {
         }
     }
 
+    /// `view`'s offset as last noted, or the page's for `None`; zero for a
+    /// node with none noted.
+    pub fn shown(&self, kernel: &Kernel, view: Option<ViewId>) -> (f64, f64) {
+        match view {
+            None => self.page,
+            Some(view) => kernel
+                .arena()
+                .key_of(view)
+                .map_or((0.0, 0.0), |key| self.offset(key)),
+        }
+    }
+
     /// One scroller's offset, zero for a node with none noted.
     fn offset(&self, key: NodeKey) -> (f64, f64) {
         self.boxes

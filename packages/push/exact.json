@@ -35,7 +35,6 @@
           "error": "AbortError"
         },
         "unsupported": [
-          "macos",
           "tvos",
           "android",
           "web",
@@ -64,10 +63,6 @@
           "state": "prompt"
         },
         "targets": {
-          "macos": {
-            "available": false,
-            "state": "unknown"
-          },
           "tvos": {
             "available": false,
             "state": "unknown"

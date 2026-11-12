@@ -131,6 +131,18 @@ impl Display {
         self.mode.vrefresh()
     }
 
+    /// The mode's frame period, milliseconds: its total pixels a frame over
+    /// its pixel clock (kHz), which `vrefresh`'s whole hertz round.
+    pub fn period_ms(&self) -> f64 {
+        let (h, v) = (self.mode.hsync().2, self.mode.vsync().2);
+        let clock = self.mode.clock();
+        if clock == 0 || h == 0 || v == 0 {
+            1000.0 / f64::from(self.refresh().max(1))
+        } else {
+            f64::from(h) * f64::from(v) / f64::from(clock)
+        }
+    }
+
     fn pending(&self) -> bool {
         self.flips.pending()
     }
@@ -297,6 +309,8 @@ pub fn run<D: DataSource + Default>(config: &mut Config, started: Instant) -> i3
     // SIGUSR1 (LLP 1079 D3, D5); a production binary does neither.
     let measured = !exact_runner::delivery::production(&p.compat);
     let mut frames = crate::frames::Frames::new(display.refresh());
+    // A GPU canvas's `Frame::period_ms` (LLP 1009).
+    p.surfaces.period(display.period_ms());
     if measured {
         trace_on_signal();
     }

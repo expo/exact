@@ -59,7 +59,35 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Default
             idle_tick: None,
             samples: None,
             timing: Default::default(),
+            waiting: Default::default(),
+            held_back: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            uploads: None,
         }
+    }
+}
+
+/// Milliseconds a live frame spends preparing what the world does not
+/// present, once its first frame is drawn.
+const LATER_MS: f64 = 4.0;
+
+/// Whether a live preparation may do work for what the world does not present
+/// yet: none before the first frame, then [`LATER_MS`] of it.
+struct Later {
+    live: bool,
+    first: bool,
+    started: Option<Stamp>,
+}
+impl Later {
+    fn new(live: bool, first: bool) -> Self {
+        Self {
+            live,
+            first,
+            started: None,
+        }
+    }
+    fn allows(&mut self) -> bool {
+        !self.first && self.started.get_or_insert_with(Stamp::now).elapsed() < LATER_MS
     }
 }
 
@@ -90,11 +118,12 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             self.models_seen = models.unwrap();
             self.assets_dirty = true;
         }
-        if !self.assets_dirty && self.format == Some(format) {
+        if !self.assets_dirty && self.format == Some(format) && !self.asset_work() {
             return;
         }
         let Some(sim) = &mut self.sim else { return };
-        let textures = sim.take_textures();
+        sim.refresh_presented();
+        let mut textures = sim.take_textures();
         if self.render.is_none()
             && sim.presentation_models().next().is_none()
             && textures.is_empty()
@@ -129,25 +158,32 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         }
         let (renderer, _feed) = self.render.as_mut().unwrap();
         let live = sim.presentation_assets().map(str::to_owned).collect();
+        // Under the live clock what the world does not present (`Sim::presents`:
+        // looks registered for later) waits for its first frame, then prepares
+        // a few milliseconds a frame, and textures upload off this thread. Under
+        // the agent's clock everything prepares here, now.
+        let mut later = Later::new(!self.seekable, self.ready_work.is_none());
+        self.held_back = false;
         // Accept deliveries before the sole compaction: live identical residents
         // may still be marked retired until preparation reactivates them.
-        let prepared: Vec<_> = sim
-            .presentation_models()
-            .map(|(name, model)| {
-                let digest = *self
-                    .placed
-                    .attachments
-                    .model_digests
-                    .entry(name.to_owned())
-                    .or_insert_with(|| crate::models::model_digest(model));
-                (
-                    name.to_owned(),
-                    renderer
-                        .prepare_model_digest(name, model, digest)
-                        .map_err(|e| e.to_string()),
-                )
-            })
-            .collect();
+        let mut prepared = Vec::new();
+        for (name, model) in sim.presentation_models() {
+            if later.live && !sim.is_prepared(name) && !sim.presents(name) && !later.allows() {
+                self.held_back = true;
+                continue;
+            }
+            let digest = *self
+                .placed
+                .attachments
+                .model_digests
+                .entry(name.to_owned())
+                .or_insert_with(|| {
+                    sim.model_identity(name)
+                        .unwrap_or_else(|| crate::models::model_digest(model))
+                });
+            let result = renderer.prepare_model_digest(name, model, digest);
+            prepared.push((name.to_owned(), result.map_err(|e| e.to_string())));
+        }
         // Resident geometry is independent of draw readiness: a texture still in
         // flight hides the model but must not evict this pass's accepted bytes.
         let touched = prepared
@@ -158,7 +194,58 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         for (name, result) in prepared {
             sim.asset_prepared(&name, result);
         }
+        // Uploads that finished install first: under the agent's clock every one
+        // sent, so an inline upload of a newer delivery below replaces them. A
+        // name delivered again since its upload was sent (now in `textures` or
+        // waiting) has that upload superseded first: its result, a failure
+        // included, never reaches the world.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(uploads) = &mut self.uploads {
+            for name in textures.keys().chain(self.waiting.keys()) {
+                uploads.supersede(name);
+            }
+            for (name, result) in uploads.finished(!later.live) {
+                // A name retired since it was sent has nothing to install; a
+                // replacement of one already prepared does (`Uploads` keeps
+                // only each name's latest delivery).
+                if !sim.is_loaded(&name) {
+                    continue;
+                }
+                let result = result.map(|written| {
+                    if !renderer.reactivate_texture(&name, written.digest()) {
+                        renderer.install_texture(&name, written);
+                    }
+                });
+                sim.asset_prepared(&name, result);
+            }
+        }
+        // What waits is reconsidered every time, under the presentation and
+        // the clock as they are now; a newer delivery of a waiting name replaces it.
+        let mut waited = std::mem::take(&mut self.waiting);
+        waited.append(&mut textures);
+        textures = waited;
+        #[cfg(not(target_arch = "wasm32"))]
+        if later.live && self.uploads.is_none() {
+            self.uploads = crate::models::Uploads::new(device, queue);
+        }
         for (name, texture) in textures {
+            let presented = sim.presents(&name);
+            if later.live && later.first && !presented {
+                self.waiting.insert(name, texture);
+                continue;
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            let (name, texture) = match self.uploads.as_mut().filter(|_| later.live) {
+                Some(uploads) => match uploads.send(name, texture) {
+                    Ok(()) => continue,
+                    Err(back) => back,
+                },
+                None => (name, texture),
+            };
+            if later.live && !presented && !later.allows() {
+                self.waiting.insert(name, texture);
+                continue;
+            }
             let result = renderer
                 .add_texture(&name, &texture)
                 .map_err(|e| e.to_string());
@@ -199,6 +286,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         }
         self.device = true;
         self.prepare_assets(device, queue, format);
+        let asset_work = self.asset_work();
         let Some(sim) = &mut self.sim else {
             return false;
         };
@@ -260,8 +348,18 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             );
             return sim.assets_pending();
         }
-        if ASSETS && !sim.device_assets_ready() {
-            return sim.assets_pending();
+        // After a live first frame no frame waits: an entity whose model is not
+        // ready keeps its previous look (#90), and the world keeps ticking.
+        let ready = if self.seekable {
+            sim.device_assets_ready()
+        } else if self.ready_work.is_some() {
+            true
+        } else {
+            sim.refresh_presented();
+            sim.presented_assets_ready()
+        };
+        if ASSETS && !ready {
+            return sim.assets_pending() || asset_work;
         }
         // A new world's first size runs `Game::first_frame`: this frame shows it.
         if sim.viewport(frame.width, frame.height) {
@@ -531,8 +629,22 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         };
         let hooks = self.hooks.needs().contains(crate::Needs::ANIMATE)
             || self.hooks.needs().contains(crate::Needs::PENDING);
-        self.resting = rests && !hooks;
-        (wants && !rests) || hooks
+        self.resting = rests && !hooks && !asset_work;
+        (wants && !rests) || hooks || asset_work
+    }
+
+    /// Live asset work left for later frames: textures waiting for the first
+    /// frame or the frame's budget, uploads on the worker, models held back.
+    pub(super) fn asset_work(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self
+            .uploads
+            .as_ref()
+            .is_some_and(crate::models::Uploads::busy)
+        {
+            return true;
+        }
+        self.held_back || !self.waiting.is_empty()
     }
 
     /// A display frame the module does not render: run the ticks due by
@@ -555,7 +667,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         };
         if !frame.now_ms.is_finite()
             || sim.is_loading()
-            || (ASSETS && !sim.device_assets_ready())
+            || (ASSETS && self.ready_work.is_none())
             || self.generation != sim.world().presentation_generation()
         {
             return;

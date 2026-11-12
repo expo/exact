@@ -36,6 +36,7 @@ pub use shape::Shape;
 mod box_filter;
 pub(crate) mod button;
 mod caret;
+mod composite;
 pub(crate) mod control;
 pub(crate) mod damage;
 pub(crate) mod dates;
@@ -73,7 +74,9 @@ pub mod rows;
 mod shadow;
 pub(crate) mod space;
 mod split;
+pub(crate) mod stage;
 mod svg;
+pub(crate) mod tape;
 pub(crate) use svg::{fitted, view_box};
 mod text_clip;
 mod text_decoration;
@@ -448,6 +451,8 @@ pub struct Painter {
     fresh_order: HashMap<ViewId, exact_kernel::paint_order::Potentials>,
     rank_increments: u32,
     pub(crate) placements: BTreeMap<ViewId, crate::placement::Placement>,
+    /// The canvases whose children their surfaces composite, and their pictures.
+    pub(crate) composites: composite::Composites,
     /// Each 2D canvas's latest bitmap (LLP 1056).
     pub(crate) canvases: BTreeMap<ViewId, crate::canvas2d::CanvasPaint>,
     /// Each hatched node's overlay as last published (LLP 1075.003.000.001 §2.2.1).
@@ -506,6 +511,9 @@ pub struct Painter {
     pub(crate) numerals: numerals::Numerals,
     /// Material's fields' labels, floated or resting (`material.rs`).
     pub(crate) labels: material::Labels,
+    /// The routes the presenter places itself, and their kept drawings.
+    pub(crate) stage: stage::Stage,
+    kept: stage::Kept,
 }
 
 struct Walk<'a, 'b> {
@@ -580,6 +588,7 @@ impl Painter {
             svg_warned: Default::default(),
             decoration_warning: false,
             placements: BTreeMap::new(),
+            composites: Default::default(),
             canvases: BTreeMap::new(),
             overlays: BTreeMap::new(),
             top_surface: None,
@@ -605,6 +614,8 @@ impl Painter {
             svg_layers: Vec::new(),
             numerals: Default::default(),
             labels: Default::default(),
+            stage: Default::default(),
+            kept: Default::default(),
         }
     }
 
@@ -1038,6 +1049,9 @@ impl Painter {
             .presented(&shown.colors)
             .states(node, &shown, self.dark);
         self.split_row(node, &mut paint);
+        if self.bare(node) {
+            paint.background = [0; 4];
+        }
         self.clipped = Some((node.id, paint.background));
         let geometry = paint.geometry(rect);
         // @ref LLP 1063 — a layout transition's size is the surface's alone.

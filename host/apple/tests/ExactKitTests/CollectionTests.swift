@@ -25,6 +25,30 @@ final class CollectionTests: XCTestCase {
         XCTAssertEqual(p.collections.entries[node.id]?.snapshot.revision, before.revision)
     }
 
+    /// An unmounted `always` row between a release and its rest holds a snap
+    /// (CSS Scroll Snap 1 §6.2): the runner names the first one either way.
+    func testSnapStopQueryNamesTheFirstUnmountedAlwaysRowOnTheWay() throws {
+        #if canImport(AppKit)
+        _ = NSApplication.shared
+        #endif
+        let session = ExactApp.shared.makeSession(label: "snap-stop-query")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: CGSize(width: 300, height: 100)).error)
+        let node = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == "stops" })
+        let stop = { (release: Double, rest: Double) in
+            session.runtime.collectionSnapStop(node.id, release: release, rest: rest, port: 300, minimum: 0, maximum: 149700)
+        }
+        XCTAssertEqual(stop(14000, 30000), 15000)
+        XCTAssertEqual(stop(16000, 3000), 15000, "going back too")
+        XCTAssertNil(stop(15500, 30000), "none past the release")
+        XCTAssertNil(stop(14000, 14200), "none short of it")
+        #if os(macOS)
+        // On AppKit the rule takes it: a lift released at 14,000 projected to 30,000 rests on the `always` row.
+        let rest = node.snappedOrigin(CGPoint(x: 30000, y: 0), release: CGPoint(x: 14000, y: 0))
+        XCTAssertEqual(rest?.x ?? 0, 15000, accuracy: 0.01)
+        #endif
+    }
+
     func testWireIsVersionFourLittleEndianAndPreservesLargeEpochs() {
         let facts = CollectionFacts(offset: 12, portMain: 480, portCross: 320, cross: 300,
             measurements: [.init(view: 23, epoch: 0xfedcba9876543210, size: 72)], focus: 31, interaction: nil,
