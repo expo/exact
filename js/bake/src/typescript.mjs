@@ -1060,6 +1060,67 @@ function appText(app) {
   return [join(app,'app.ts'),...contracts(app)].map(f=>{ try { return readFileSync(f,'utf8'); } catch { return ''; } }).join('\n');
 }
 
+/** The end of the string or template literal that starts at `at`, or -1. A
+ * quote with no match on its line starts none; a template literal may span
+ * lines and nest literals in its `${…}`. */
+function literalEnd(code, at) {
+  const quote=code[at];
+  if (quote!=="'" && quote!=='"' && quote!=='`') return -1;
+  for (let k=at+1; k<code.length;) {
+    const c=code[k];
+    if (c==='\\') k+=2;
+    else if (c==='\n' && quote!=='`') return -1;
+    else if (c==='$' && quote==='`' && code[k+1]==='{') { k=substitutionEnd(code,k+2); if (k<0) return -1; }
+    else if (c===quote) return k+1;
+    else k++;
+  }
+  return -1;
+}
+
+function substitutionEnd(code, k) {
+  for (let depth=1; k<code.length; k++) {
+    const end=literalEnd(code,k);
+    if (end>=0) { k=end-1; continue; }
+    if (code[k]==='{') depth++;
+    else if (code[k]==='}' && --depth===0) return k+1;
+  }
+  return -1;
+}
+
+/** TypeScript `text` without its comments, its string and template literals
+ * kept whole: a comment marker inside a literal is the literal's text. */
+function uncommented(text) {
+  let out='';
+  for (let at=0; at<text.length;) {
+    const end=literalEnd(text,at);
+    if (end>=0) { out+=text.slice(at,end); at=end; }
+    else if (text.startsWith('/*',at)) { const close=text.indexOf('*/',at+2); if (close<0) { out+='/*'; at+=2; } else at=close+2; }
+    else if (text.startsWith('//',at) && !(at>0 && ":'\"\\".includes(text[at-1]))) { const line=text.indexOf('\n',at); at=line<0 ? text.length : line; }
+    else out+=text[at++];
+  }
+  return out;
+}
+
+const IMPORT=/(import|export)(\s+type\b)?[^'";]*?\bfrom\s*(['"])([^'"\n]+)\3|import\s*\(?\s*(['"])([^'"\n]+)\5/y;
+
+/** The specifiers TypeScript `text` imports and re-exports from, a type-only
+ * statement's left out. Text inside a string or template literal is no
+ * import (`contract/cli/src/sources/data.rs` reads the same). */
+export function importSpecifiers(text) {
+  const code=uncommented(text), out=[];
+  for (let at=0; at<code.length;) {
+    const end=literalEnd(code,at);
+    if (end>=0) { at=end; continue; }
+    if ((code[at]==='i' || code[at]==='e') && !(at>0 && /\w/.test(code[at-1]))) {
+      IMPORT.lastIndex=at;
+      const m=IMPORT.exec(code);
+      if (m) { if (!m[2]) out.push(m[4] ?? m[6]); at=IMPORT.lastIndex; continue; }
+    }
+    at++;
+  }
+  return out;
+}
+
 /** The packages the app imports, wherever it imports them (LLP 1133.004
  * stage 0, LLP 1133 D6 rule 6): every Contract file `app.contract` reaches
  * through relative `use … from "./…"`, and every TypeScript file `app.ts`
@@ -1078,11 +1139,9 @@ export function usedPackages(app) {
     try { text=readFileSync(file,'utf8'); } catch { return; }
     texts.push(text);
     // Comments name nothing, and a type-only import links nothing.
-    const code=text.replace(/\/\*[\s\S]*?\*\//g,'').replace(/(^|[^:'"\\])\/\/.*$/gm,'$1');
     const specs=contract
-      ? [...code.matchAll(/^\s*use\b[^\n]*?\bfrom\s+"([^"]+)"/gm)].map(m=>m[1])
-      : [...code.matchAll(/\b(import|export)(\s+type\b)?[^'";]*?\bfrom\s*(['"])([^'"\n]+)\3|\bimport\s*\(?\s*(['"])([^'"\n]+)\5/g)]
-          .filter(m=>!m[2]).map(m=>m[4] ?? m[6]);
+      ? [...text.replace(/\/\*[\s\S]*?\*\//g,'').replace(/(^|[^:'"\\])\/\/.*$/gm,'$1').matchAll(/^\s*use\b[^\n]*?\bfrom\s+"([^"]+)"/gm)].map(m=>m[1])
+      : importSpecifiers(text);
     for (const spec of specs) {
       if (spec.startsWith('.')) visit(contract ? resolve(dirname(file),spec) : tsFile(resolve(dirname(file),spec)), contract);
       else if (!spec.startsWith('exact:') && !spec.startsWith('node:')) names.add(packageName(spec));

@@ -127,41 +127,82 @@ fn ts_file(base: &Path) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// `text` without its comments: a block comment, and a line comment whose
-/// `//` follows no `:`, quote or backslash (a URL's or a string's stays).
+/// `text` without its comments, its string and template literals kept whole:
+/// a block comment, and a line comment whose `//` follows no `:`, quote or
+/// backslash. A comment marker inside a literal is the literal's text.
 fn uncommented(text: &str) -> String {
-    let mut blockless = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(start) = rest.find("/*") {
-        blockless.push_str(&rest[..start]);
-        match rest[start + 2..].find("*/") {
-            Some(end) => rest = &rest[start + 2 + end + 2..],
-            None => {
-                // An unclosed `/*` is no comment: kept, as the bake keeps it.
-                blockless.push_str(&rest[start..start + 2]);
-                rest = &rest[start + 2..];
-            }
-        }
-    }
-    blockless.push_str(rest);
-    let mut out = String::with_capacity(blockless.len());
-    for line in blockless.split_inclusive('\n') {
-        let bytes = line.as_bytes();
-        let cut = (0..bytes.len().saturating_sub(1)).find(|&i| {
-            &bytes[i..i + 2] == b"//"
-                && (i == 0 || !matches!(bytes[i - 1], b':' | b'\'' | b'"' | b'\\'))
-        });
-        match cut {
-            Some(i) => {
-                out.push_str(&line[..i]);
-                if line.ends_with('\n') {
-                    out.push('\n');
+    let code = text.as_bytes();
+    let mut out = Vec::with_capacity(code.len());
+    let mut at = 0;
+    while at < code.len() {
+        if let Some(end) = literal(code, at) {
+            out.extend_from_slice(&code[at..end]);
+            at = end;
+        } else if code[at..].starts_with(b"/*") {
+            match code[at + 2..].windows(2).position(|w| w == b"*/") {
+                Some(end) => at += 2 + end + 2,
+                None => {
+                    // An unclosed `/*` is no comment: kept, as the bake keeps it.
+                    out.extend_from_slice(b"/*");
+                    at += 2;
                 }
             }
-            None => out.push_str(line),
+        } else if code[at..].starts_with(b"//")
+            && (at == 0 || !matches!(code[at - 1], b':' | b'\'' | b'"' | b'\\'))
+        {
+            at += code[at..]
+                .iter()
+                .position(|&b| b == b'\n')
+                .unwrap_or(code.len() - at);
+        } else {
+            out.push(code[at]);
+            at += 1;
         }
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The end of the string or template literal that starts at `at`. A quote
+/// with no match on its line starts none; a template literal may span lines
+/// and nest literals in its `${…}`.
+fn literal(code: &[u8], at: usize) -> Option<usize> {
+    let quote = *code.get(at).filter(|q| matches!(q, b'\'' | b'"' | b'`'))?;
+    let mut k = at + 1;
+    while let Some(&b) = code.get(k) {
+        match b {
+            b'\\' => k += 2,
+            b'\n' if quote != b'`' => return None,
+            b'$' if quote == b'`' && code.get(k + 1) == Some(&b'{') => {
+                k = substitution(code, k + 2)?;
+            }
+            _ if b == quote => return Some(k + 1),
+            _ => k += 1,
+        }
+    }
+    None
+}
+
+/// The end of a template literal's `${…}` whose expression starts at `k`.
+fn substitution(code: &[u8], mut k: usize) -> Option<usize> {
+    let mut depth = 1;
+    while let Some(&b) = code.get(k) {
+        if let Some(end) = literal(code, k) {
+            k = end;
+            continue;
+        }
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(k + 1);
+                }
+            }
+            _ => {}
+        }
+        k += 1;
+    }
+    None
 }
 
 fn word(b: u8) -> bool {
@@ -197,12 +238,17 @@ fn spaces(code: &[u8], mut at: usize) -> usize {
 
 /// The specifiers `code` imports and re-exports from, as the bake's
 /// pattern reads them: `import … from "x"` and `export … from "x"` (not
-/// `import type` or `export type`), `import "x"` and `import("x")`.
+/// `import type` or `export type`), `import "x"` and `import("x")`. Text
+/// inside a string or template literal is no import.
 fn specifiers(code: &str) -> Vec<String> {
     let code = code.as_bytes();
     let mut out = Vec::new();
     let mut at = 0;
     while at < code.len() {
+        if let Some(end) = literal(code, at) {
+            at = end;
+            continue;
+        }
         match statement(code, at).or_else(|| bare_import(code, at)) {
             Some((end, spec)) => {
                 out.extend(spec);
@@ -281,5 +327,18 @@ mod tests {
                 "after-url"
             ]
         );
+    }
+
+    #[test]
+    fn an_import_quoted_in_a_literal_is_not_read() {
+        let code = uncommented(
+            "export const sample = \"import { open } from '@exact/hid';\";\n\
+             const escaped = 'it\\'s import \"quoted-pkg\"';\n\
+             const page = `import { a } from 'templated';\n${`import 'nested'`} // kept`;\n\
+             const glob = 'src/**/*.ts'; import real from 'after-glob'; /* gone */\n\
+             const url = \"https://example.com\"; import('after-string');\n",
+        );
+        assert_eq!(specifiers(&code), ["after-glob", "after-string"]);
+        assert!(code.contains("// kept") && !code.contains("gone"));
     }
 }
