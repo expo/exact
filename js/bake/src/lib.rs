@@ -8,6 +8,7 @@ mod android;
 mod beside;
 pub mod cli;
 mod icon;
+mod launch;
 mod library;
 mod linked;
 #[path = "../../package_tool.rs"]
@@ -1097,6 +1098,7 @@ fn bake_in(
         "__exact_config.mjs",
         "__exact_binding.mjs",
         "__exact_env.mjs",
+        "__exact_launch_setting.mjs",
         "__exact_portable.mjs",
         "__exact_env.json",
         "__exact_paths.json",
@@ -1112,6 +1114,7 @@ fn bake_in(
     {
         return Err("__exact_* and app.js (the bundle) are reserved for the producer".into());
     }
+    launch::module_name(&captured)?;
     stage_capture(stage, previous, &captured)?;
     // The Contract is compiled where it lives, as the web build compiles it
     // (LLP 1091 D10): its uses, packages and links resolve as they do for
@@ -1237,6 +1240,7 @@ fn bake_in(
     let grants = module.grants().to_owned();
     exact_runner::auth::session_grant_refusal(&grants)
         .map_or(Ok(()), |refusal| Err(format!("app.ts: {refusal}")))?;
+    let settings = launch::settings(stage, &grants)?;
     let surfaces: serde_json::Map<String, serde_json::Value> = module
         .canvas_roster()
         .iter()
@@ -1299,14 +1303,9 @@ fn bake_in(
     if !packages.is_empty() {
         receipt["packages"] = packages.into();
     }
-    // The settings app.ts read (`import.meta.env`, LLP 1153 D4), each with the
-    // value inlined and its source (`typescript.mjs` `configure`; absent with none).
-    if let Ok(bytes) = std::fs::read(stage.join("__exact_env.json")) {
-        let settings: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if settings.as_object().is_some_and(|s| !s.is_empty()) {
-            receipt["env"] = settings;
-        }
+    // The settings app.ts read (`launch::settings`), absent with none.
+    if settings.as_object().is_some_and(|s| !s.is_empty()) {
+        receipt["env"] = settings;
     }
     let receipt = receipt.to_string();
     Ok(Baked {

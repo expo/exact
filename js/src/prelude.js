@@ -13,7 +13,7 @@
   // (op, a, b) -> string | undefined, js/src/door.rs's ops: 1 a request, 2-4 and 18-20 the store, 5 storage,
   // 6 native, 7 pure, 8 secure randomness drawn, 9/10 canvas, 11 the agent's random bytes, 12 auth, 13 a journal line,
   // 16 a request withdrawn unsent, 21 the runner's clock as the call began, 22 module work's state (module-work.js), 23
-  // a handed-out request the app aborted, 27 a native request/call id.
+  // a handed-out request the app aborted, 27 a native request/call id, 28 a setting's value from the launch (launch.js).
   var host = global.__exact_host;
   delete global.__exact_host;
   var browserSecrets = global.__exact_browser_secrets;
@@ -1014,7 +1014,7 @@
         lastEventId: "",
         coalesced: 0,
         kind: o.failed.kind,
-        message: o.failed.message,
+        message: launchRefusal(o.failed, call.streamUrl).message,
         status: 0,
       };
     else
@@ -1316,6 +1316,14 @@
       copyBytes: copyBytes,
       toBase64: toBase64,
     });
+  // A refusal at the origin of a setting a launch gave names the setting (js/src/launch.js, LLP 1153.002 D3); a realm
+  // without it has no launch.
+  var launchRefusal =
+    global.__exact_launch_refusal ||
+    function (failed) {
+      return failed;
+    };
+  delete global.__exact_launch_refusal;
   global.__exact_fulfill = function (ticket, outcomeJson) {
     var p = settled(Number(ticket));
     if (!p) return;
@@ -1329,7 +1337,7 @@
     if (o.failed && o.failed.kind === "Timeout" && p.timed) timers.expire(p.signal);
     // A reply delivered after the signal aborts still rejects with that signal's reason.
     if (p.signal && p.signal.aborted) p.reject(p.signal.reason);
-    else if (o.failed) p.reject(new FetchError(o.failed));
+    else if (o.failed) p.reject(new FetchError(launchRefusal(o.failed, p.url)));
     else p.resolve(hostReply(o.response, p.bodyTo, p.head));
   };
 })(globalThis);
