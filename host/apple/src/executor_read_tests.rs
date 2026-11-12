@@ -295,6 +295,53 @@ fn replies_released_in_reverse_order_drain_in_admission_order() {
 }
 
 #[test]
+fn a_read_held_behind_an_earlier_reply_reports_its_delivery_wait() {
+    let server = Server::new();
+    let (core, _) = server.core(false);
+    for ticket in [1, 2] {
+        core.run(read_job(&server, ticket), None).unwrap();
+    }
+    server.seen(&[1, 2]);
+    server.reply(2, b"second");
+    completed(&core, 2);
+    let (finished_at, elapsed_ms) = {
+        let state = core.shared.state.lock().unwrap();
+        let done = state.completed[0].iter().find(|d| d.ticket == 2).unwrap();
+        (done.finished_at, done.elapsed_ms)
+    };
+    let hold = Duration::from_millis(375);
+    let now = finished_at + hold;
+    assert!(core.drain_with_clock(|| now).is_empty());
+    server.reply(1, b"first");
+    completed(&core, 1);
+    let now = now.max(Instant::now());
+    assert_eq!(core.drain_with_clock(|| now)[0].0, 1);
+    let (ticket, outcome, timing) = core.drain_with_clock(|| now).pop().unwrap();
+    assert_eq!(ticket, 2);
+    assert!(matches!(outcome, Outcome::Response(_)));
+    let timing = timing.unwrap();
+    assert_eq!(timing.elapsed_ms, elapsed_ms);
+    assert!(timing.delivery_wait_ms >= hold.as_millis() as u64);
+}
+
+#[test]
+fn an_unheld_reply_reports_zero_delivery_wait() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (core, _) = server.core(asynchronous);
+        core.run(read_job(&server, 1), None).unwrap();
+        server.seen(&[1]);
+        server.reply(1, b"first");
+        completed(&core, 1);
+        let now = core.shared.state.lock().unwrap().completed[0][0].finished_at;
+        let (ticket, outcome, timing) = core.drain_with_clock(|| now).pop().unwrap();
+        assert_eq!(ticket, 1);
+        assert!(matches!(outcome, Outcome::Response(_)));
+        assert_eq!(timing.unwrap().delivery_wait_ms, 0);
+    }
+}
+
+#[test]
 fn reads_keep_posts_storage_work_and_handoffs_in_their_places() {
     let server = Server::new();
     let (core, woke) = server.core(false);

@@ -37,6 +37,7 @@ impl QueuedDeadline {
                 let job = state.jobs[lane].remove(index).unwrap();
                 state.book.sized.remove(&ticket);
                 state.completed[lane].push_back(Completed {
+                    finished_at: std::time::Instant::now(),
                     ticket,
                     elapsed_ms: ms.into(),
                     outcome: failed(

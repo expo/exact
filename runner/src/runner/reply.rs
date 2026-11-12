@@ -45,18 +45,18 @@ impl<D: DataSource> Runner<D> {
         self.fulfill_measured(ticket, outcome, None)
     }
 
-    /// Fulfill with elapsed wall milliseconds measured by the executor, never
-    /// by the seekable agent clock. Missing measurements stay unnamed.
+    /// Fulfill with execution and delivery wait measured by the executor,
+    /// never by the seekable agent clock. Missing measurements stay unnamed.
     pub fn fulfill_measured(
         &mut self,
         ticket: u64,
         outcome: Outcome,
-        elapsed_ms: Option<u64>,
+        timing: Option<crate::CompletionTiming>,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
         // A let-go request's reply: it has ended, and an abort names it no more.
         self.retired_fetches.retain(|r| r.1 != ticket);
         let answering = std::mem::replace(&mut self.churn.answering, true);
-        let out = self.arrived(|r| r.fulfill_now(ticket, outcome, elapsed_ms));
+        let out = self.arrived(|r| r.fulfill_now(ticket, outcome, timing));
         self.churn.answering = answering;
         out
     }
@@ -65,7 +65,7 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         ticket: u64,
         outcome: Outcome,
-        elapsed_ms: Option<u64>,
+        timing: Option<crate::CompletionTiming>,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
         if self.is_background(ticket) {
             // Its own path (LLP 1097 D5): no commit, no `then`, no update.
@@ -87,8 +87,15 @@ impl<D: DataSource> Runner<D> {
             std::ops::ControlFlow::Break(done) => return done,
         };
         let mut summary = outcome.summary();
-        if let Some(ms) = elapsed_ms {
-            exact_num::push_text!(&mut summary, "; wall {} ms", ms);
+        if let Some(timing) = timing {
+            exact_num::push_text!(&mut summary, "; wall {} ms", timing.elapsed_ms);
+            if timing.delivery_wait_ms > 0 {
+                exact_num::push_text!(
+                    &mut summary,
+                    "; delivery wait {} ms",
+                    timing.delivery_wait_ms
+                );
+            }
         }
         let Some(pos) = self.pending.iter().position(|p| p.ticket == ticket) else {
             self.log(super::lines::dropped(ticket, &summary));

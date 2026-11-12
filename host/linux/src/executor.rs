@@ -1,7 +1,7 @@
 //! Bounded native I/O, shared with Apple. A nonblocking socketpair makes
 //! completions and admission refusals visible to the Linux display loop.
 use crate::wake::Stream as UnixStream;
-use exact_runner::{Outcome, RequestOut, Work};
+use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -145,7 +145,7 @@ impl Executor {
         (&self.wake).read(&mut [0; 1]).is_ok_and(|n| n > 0)
     }
     /// One completion per turn, rearming the FD if more remain.
-    pub fn drain(&self) -> Vec<(u64, Outcome, Option<u64>)> {
+    pub fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
         self.core.drain()
     }
     /// Wake for a refusal stored on a runner ticket.

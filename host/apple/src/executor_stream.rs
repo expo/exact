@@ -292,10 +292,12 @@ fn deliver(shared: &Shared, ticket: u64, mut message: Message, reply: bool) -> b
     match waiting {
         Some(done) if reply => {
             done.elapsed_ms = elapsed_ms;
+            done.finished_at = std::time::Instant::now();
         }
         Some(done) if done.reply => {
             done.outcome = Outcome::Message(message);
             done.elapsed_ms = elapsed_ms;
+            done.finished_at = std::time::Instant::now();
             done.reply = false;
         }
         Some(done) => {
@@ -307,8 +309,10 @@ fn deliver(shared: &Shared, ticket: u64, mut message: Message, reply: bool) -> b
             }
             done.outcome = Outcome::Message(message);
             done.elapsed_ms = elapsed_ms;
+            done.finished_at = std::time::Instant::now();
         }
         None => state.completed[lane].push_back(Completed {
+            finished_at: std::time::Instant::now(),
             elapsed_ms,
             ticket,
             outcome: Outcome::Message(message),

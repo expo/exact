@@ -818,7 +818,7 @@ pub fn settle<D: DataSource>(
         }
         let outcomes = executor.drain();
         if !outcomes.is_empty() {
-            for (ticket, outcome, elapsed_ms) in outcomes {
+            for (ticket, outcome, timing) in outcomes {
                 // Refused by the environment (a grant the host doesn't hold):
                 // the resource keeps its placeholder for the client.
                 if matches!(
@@ -831,7 +831,7 @@ pub fn settle<D: DataSource>(
                     held.refused.insert(ticket);
                     continue;
                 }
-                runner.fulfill_measured(ticket, outcome, elapsed_ms)?;
+                runner.fulfill_measured(ticket, outcome, timing)?;
             }
             // Replies that keep coming (an answer re-asked without end) still
             // meet the deadline.

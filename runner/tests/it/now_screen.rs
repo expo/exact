@@ -246,12 +246,21 @@ fn a_timers_send_lands_only_if_its_reply_beats_the_next_tick() {
     assert_eq!(requests.len(), 2);
     let (first, last) = (requests[0].ticket, requests[1].ticket);
     let dropped = r
-        .fulfill(first, exact_runner::Outcome::Storage(b"three".to_vec()))
+        .fulfill_measured(
+            first,
+            exact_runner::Outcome::Storage(b"three".to_vec()),
+            Some(exact_runner::CompletionTiming {
+                elapsed_ms: 17,
+                delivery_wait_ms: 0,
+            }),
+        )
         .unwrap();
     assert!(dropped.is_none());
     let line = format!("reply {first} dropped: no such request in flight");
     assert!(
-        r.journal().any(|l| l.contains(&line)),
+        r.journal().any(|l| l.contains(&line)
+            && l.contains("; wall 17 ms")
+            && !l.contains("delivery wait")),
         "{:?}",
         r.journal().collect::<Vec<_>>()
     );
@@ -260,14 +269,16 @@ fn a_timers_send_lands_only_if_its_reply_beats_the_next_tick() {
         .fulfill_measured(
             last,
             exact_runner::Outcome::Storage(b"four".to_vec()),
-            Some(212)
+            Some(exact_runner::CompletionTiming {
+                elapsed_ms: 212,
+                delivery_wait_ms: 37
+            })
         )
         .unwrap()
         .is_some());
     assert_eq!(r.slot("result"), Some(&Value::some(Value::str("four"))));
-    assert!(r
-        .journal()
-        .any(|line| line.starts_with("t=1200 fulfil ") && line.contains("wall 212 ms")));
+    assert!(r.journal().any(|line| line.starts_with("t=1200 fulfil ")
+        && line.contains("wall 212 ms; delivery wait 37 ms")));
 }
 
 fn style_id(name: &str) -> u16 {

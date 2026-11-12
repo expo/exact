@@ -1107,7 +1107,11 @@ fn settle(state: &mut State, run: Run, outcome: Outcome) {
     }
     r.terminal = true;
     let (lane, limit, read, forgotten) = (r.lane, r.limit, r.read, r.forgotten);
-    let elapsed = r.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    let finished_at = std::time::Instant::now();
+    let elapsed = finished_at
+        .duration_since(r.started)
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
     if r.blocking {
         r.blocking = false;
         state.book.blocking = false;
@@ -1120,6 +1124,7 @@ fn settle(state: &mut State, run: Run, outcome: Outcome) {
     } else {
         state.light += usize::from(read);
         state.completed[lane].push_back(Completed {
+            finished_at,
             elapsed_ms: elapsed,
             ticket: run.0,
             outcome,

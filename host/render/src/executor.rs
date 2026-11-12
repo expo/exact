@@ -2,7 +2,7 @@
 //! (grant-checked transport, ordered and independent lanes, continuations on
 //! its workers), with a wake the rendering thread waits on instead of a UI
 //! loop. Dropping it aborts whatever is still in flight.
-use exact_runner::{Outcome, RequestOut, Work};
+use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 #[path = "../../apple/src/executor_core.rs"]
@@ -81,7 +81,7 @@ impl Executor {
     }
 
     /// At most one completion, oldest ordered first; more rewake.
-    pub fn drain(&self) -> Vec<(u64, Outcome, Option<u64>)> {
+    pub fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
         self.core.begin_pump();
         self.core.drain()
     }

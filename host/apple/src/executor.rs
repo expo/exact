@@ -1,7 +1,7 @@
 //! Bounded native I/O (LLP 1016 / 1041 / 1162). Reads and parallel sends
 //! overlap on six shared HTTP workers while retaining ordered delivery.
 //! Independent HTTP shares them; its held sockets cannot occupy the ordered worker.
-use exact_runner::{Outcome, RequestOut, Work};
+use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::ffi::c_void;
 #[path = "executor_core.rs"]
 mod core;
@@ -123,7 +123,7 @@ impl Executor {
         self.core.begin_pump();
     }
     /// Take at most one result; remaining outcomes schedule another pump.
-    pub fn drain(&self) -> Vec<(u64, Outcome, Option<u64>)> {
+    pub fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
         self.core.drain()
     }
     /// Wake the presenter for a refusal retained on a runner ticket.
@@ -182,7 +182,7 @@ pub trait Io {
     /// [`Executor::begin_pump`].
     fn begin_pump(&self);
     /// [`Executor::drain`].
-    fn drain(&self) -> Vec<(u64, Outcome, Option<u64>)>;
+    fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)>;
     /// [`Executor::notify`].
     fn notify(&self);
     /// [`Executor::waker`].
@@ -229,7 +229,7 @@ impl Io for Executor {
     fn begin_pump(&self) {
         Executor::begin_pump(self)
     }
-    fn drain(&self) -> Vec<(u64, Outcome, Option<u64>)> {
+    fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
         Executor::drain(self)
     }
     fn notify(&self) {

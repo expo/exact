@@ -859,7 +859,7 @@ impl<D: DataSource> Host<D> {
     /// the ones before it stand.
     pub fn fulfill_all(
         &mut self,
-        outcomes: Vec<(u64, Outcome, Option<u64>)>,
+        outcomes: Vec<(u64, Outcome, Option<exact_runner::CompletionTiming>)>,
         now_ms: f64,
     ) -> String {
         self.now_ms = now_ms.max(self.now_ms);
@@ -875,8 +875,8 @@ impl<D: DataSource> Host<D> {
                 receipt,
             })
             .collect();
-        for (ticket, outcome, elapsed_ms) in outcomes {
-            match self.runner.fulfill_measured(ticket, outcome, elapsed_ms) {
+        for (ticket, outcome, timing) in outcomes {
+            match self.runner.fulfill_measured(ticket, outcome, timing) {
                 Ok(Some(receipt)) => receipts.push(Timed {
                     at_ms: self.now_ms,
                     receipt,

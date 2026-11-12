@@ -1474,12 +1474,11 @@ fn completed_latency_is_measured_before_the_ui_drains_it() {
     fixture.release();
     woke.recv_timeout(Duration::from_secs(5)).unwrap();
     let completed_by = before.elapsed().as_millis() as u64;
-    // Simulate a UI owner busy after the reply; its wait is not network latency.
-    std::thread::sleep(Duration::from_millis(20));
-    let (ticket, outcome, elapsed) = core.drain().pop().unwrap();
+    let now = Instant::now() + Duration::from_millis(20);
+    let (ticket, outcome, elapsed) = core.drain_with_clock(|| now).pop().unwrap();
     assert_eq!(ticket, 991);
     assert!(matches!(outcome, Outcome::Response(_)));
-    assert!(elapsed.unwrap() <= completed_by);
+    assert!(elapsed.unwrap().elapsed_ms <= completed_by);
 }
 
 #[path = "executor_timeout_tests.rs"]

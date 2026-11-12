@@ -1266,6 +1266,15 @@ pub enum RequestClass {
     Parallel(u32),
 }
 
+/// Monotonic milliseconds measured by the executor, apart from the agent clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompletionTiming {
+    /// Time spent executing the request, ending before delivery (LLP 1162 D1).
+    pub elapsed_ms: u64,
+    /// Time from the exchange ending until its outcome is drained (LLP 1162 D1).
+    pub delivery_wait_ms: u64,
+}
+
 /// A request the host is to run: its ticket, the resource or mutation it
 /// answers, and the request. Taken by [`Runner::take_requests`].
 #[derive(Debug, Clone, PartialEq, Eq)]

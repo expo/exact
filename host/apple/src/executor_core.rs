@@ -2,8 +2,8 @@
 //! Reads and parallel sends overlap on shared workers, retaining their place
 //! in the ordered lane (LLP 1162 D1). Each worker owns its transport.
 use exact_runner::{
-    FailureKind, HttpScheduling, Outcome, Reply, Request, RequestClass, RequestOut, Response,
-    Work as OwnedWork,
+    CompletionTiming, FailureKind, HttpScheduling, Outcome, Reply, Request, RequestClass,
+    RequestOut, Response, Work as OwnedWork,
 };
 use ibex2::stdlib::abort::AbortController;
 use std::collections::VecDeque;
@@ -98,6 +98,7 @@ struct Running {
 }
 struct Completed {
     elapsed_ms: u64,
+    finished_at: std::time::Instant,
     ticket: u64,
     outcome: Outcome,
     bytes: usize,
@@ -472,7 +473,14 @@ impl Core {
 
     /// One complete transaction per pump. Alternate ready lanes; never drain
     /// and lose later results when parsing one reply fails.
-    pub(super) fn drain(&self) -> Vec<(u64, Outcome, Option<u64>)> {
+    pub(super) fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
+        self.drain_with_clock(std::time::Instant::now)
+    }
+
+    fn drain_with_clock(
+        &self,
+        now: impl FnOnce() -> std::time::Instant,
+    ) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
         self.resume_waiting();
         let mut state = self.shared.state.lock().unwrap();
         let ready = |lane: usize, state: &State| {
@@ -497,6 +505,13 @@ impl Core {
         let done = state.completed[lane]
             .remove(index)
             .expect("ready completion");
+        let timing = CompletionTiming {
+            elapsed_ms: done.elapsed_ms,
+            delivery_wait_ms: now()
+                .saturating_duration_since(done.finished_at)
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+        };
         drained(&mut state, done.ticket);
         if lane == 0 {
             state.ordered.pop_front();
@@ -521,7 +536,7 @@ impl Core {
         // an upload waiting may take.
         stream::place_freed(&self.shared, state, done.ticket, lane == 1 && !done.message);
         self.resume_waiting();
-        vec![(done.ticket, done.outcome, Some(done.elapsed_ms))]
+        vec![(done.ticket, done.outcome, Some(timing))]
     }
 
     pub(super) fn ordered_idle(&self) -> bool {
@@ -684,6 +699,7 @@ fn settle_again(state: &mut State, ticket: u64) -> bool {
     state.bytes[0] += AGAIN_BYTES;
     state.completed[0].push_back(Completed {
         elapsed_ms: 0,
+        finished_at: std::time::Instant::now(),
         ticket,
         outcome: exact_runner::Dispatch::again_outcome(),
         bytes: AGAIN_BYTES,
@@ -716,6 +732,7 @@ fn has_ready(state: &State) -> bool {
 }
 
 fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
+    let finished_at = std::time::Instant::now();
     let mut state = shared.state.lock().unwrap();
     if state.retired {
         return;
@@ -757,7 +774,11 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
     // A finished read holds no effect slot while it waits to be drained.
     state.light += usize::from(run.read);
     state.completed[lane].push_back(Completed {
-        elapsed_ms: run.started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+        elapsed_ms: finished_at
+            .duration_since(run.started)
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64,
+        finished_at,
         ticket,
         outcome,
         bytes,
