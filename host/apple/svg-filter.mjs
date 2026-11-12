@@ -39,9 +39,11 @@ export function svgFilterLibrary(sdkName, minimum, out, required = false) {
   if (missing && required) throw new Error(`host/apple: this build requires the Metal toolchain for its SVG filter kernels. ${install}`);
   if (missing) return console.warn(`host/apple: no Metal toolchain, so no ${svgFilterLibraryName}: SVG filter pictures draw with Core Image. ${install}`), null;
   const flag = { iphoneos: `-mios-version-min=${minimum}`, iphonesimulator: `-mios-simulator-version-min=${minimum}`, appletvos: `-mtvos-version-min=${minimum}`, appletvsimulator: `-mtvos-simulator-version-min=${minimum}`, macosx: `-mmacosx-version-min=${minimum}` }[sdkName];
-  // Kept by what it is made of (the kernel source, the SDK, the deployment flag and the compiler), shared by every app.
+  // Kept by what it is made of (the kernel source, the selected SDK and its version, the deployment flag and the
+  // compiler), shared by every app.
   const source = resolve(root, 'host/apple/metal/SvgFilter.metal');
-  const key = createHash('sha256').update(JSON.stringify([readFileSync(source, 'utf8'), sdkName, flag, version.stdout])).digest('hex').slice(0, 20);
+  const sdk = ['--show-sdk-path', '--show-sdk-version'].map(q => spawnSync('xcrun', ['--sdk', sdkName, q], { encoding: 'utf8' }).stdout?.trim());
+  const key = createHash('sha256').update(JSON.stringify([readFileSync(source, 'utf8'), sdkName, sdk, flag, version.stdout])).digest('hex').slice(0, 20);
   const kept = resolve(root, 'target', 'metal-kept', `${key}-${svgFilterLibraryName}`);
   if (existsSync(kept)) { copyFileSync(kept, out); return out; }
   const air = out.replace(/\.metallib$/, '') + '.air';

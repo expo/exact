@@ -224,7 +224,11 @@ test('unsigned device builds and archives refuse incompatible options before bui
     const refusal = appleBuildRefusal(args, env);
     assert.equal(refusal == null, !(unsigned && (!device || run) || archive && (!device || run || host || !unsigned && !signed)), JSON.stringify({ args, signed, refusal }));
   }
-  assert.match(appleBuildRefusal(['--device', '--unsigned', '--run'], {}), /ad-hoc signed device bundle cannot launch on a stock device/);
+  assert.match(appleBuildRefusal(['--device', '--unsigned', '--run'], {}, 'darwin'), /ad-hoc signed device bundle cannot launch on a stock device/);
+  assert.match(appleBuildRefusal(['--ios', '--run'], {}, 'linux'), /Linux has neither/);
+  assert.match(appleBuildRefusal(['--device', '--unsigned'], {}, 'linux'), /--device on Linux needs --archive/);
+  assert.equal(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned'], {}, 'linux'), null);
+  assert.equal(appleBuildRefusal(['--ios'], {}, 'linux'), null);
   for (const args of [['--watchos', '--unsigned'], ['--watchos', '--device', '--unsigned']]) assert.match(appleBuildRefusal(args, {}), /--unsigned takes no --watchos/);
   for (const args of [['--device', '--development'], ['--device', '--unsigned', '--development'], ['--device', '--archive', 'a.ipa', '--development']]) assert.match(appleBuildRefusal(args, {}), /--development needs --archive and --unsigned/);
   assert.equal(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned', '--development'], {}), null);

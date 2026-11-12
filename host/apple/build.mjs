@@ -556,6 +556,7 @@ export function copyAppleGpuProducts(capture, destination, artifacts, archive = 
 
 async function main(args, lockHeld = false) {
   const refusal = appleBuildRefusal(args);
+  if (process.platform === 'linux' && !args.includes('--no-install')) args = [...args, '--no-install']; // nothing to install to
   if (refusal) { console.error(refusal); process.exitCode = 1; return; }
   let launchEnv;
   try { launchEnv = developmentLaunchEnvironment(args); }

@@ -633,7 +633,10 @@ const documented = (verb) => [...HELP[verb].flags, ...(HELP[verb].more ?? [])];
 export const knownFlags = (verb) => new Map([...documented(verb).flatMap(([row]) => specs(row)), ...(HELP[verb].internal ?? [])].map((spec) => [name(spec), takesValue(spec)]));
 
 /** Why an Apple build cannot take these options (signing, packaging, linking), or null. */
-export function appleBuildRefusal(args, env = process.env) {
+export function appleBuildRefusal(args, env = process.env, platform = process.platform) {
+  // Linux has no simulator, phone discovery or launcher: it builds bundles and archives only.
+  if (platform === 'linux' && args.includes('--run')) return '--run needs an iOS simulator or connected iPhone, which Linux has neither of: build without --run';
+  if (platform === 'linux' && args.includes('--device') && !args.includes('--archive')) return '--device on Linux needs --archive: no phone is discovered there to sign a bundle for';
   const unsigned = args.includes('--unsigned'), archive = args.includes('--archive');
   // link.mjs `linksByPlan` reads any other word as no flag, and the build links every capability.
   if (args.includes('--link') && args[args.indexOf('--link') + 1] !== 'plan') return `--link takes plan, not ${args[args.indexOf('--link') + 1] ?? 'nothing'}`;
