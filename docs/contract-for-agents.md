@@ -2658,7 +2658,8 @@ allows every path, and with `app.json`'s `app.origin` a `sitemap.xml` of the pag
 by the render server's rule: not the `notfound` page, a page whose status is neither 200 nor 503
 (a render at its deadline), one whose `head` says `robots="noindex"` or `"none"`, or one whose
 `canonical` is another page. A page rendered per request is not made at build, so the built
-sitemap does not list it. Inside the app, `--out` is `dist` (or a path under `dist/` or
+sitemap does not list it. A declared route at `/robots.txt` or `/sitemap.xml` keeps that path
+instead of a generated file. Inside the app, `--out` is `dist` (or a path under `dist/` or
 `target/`), which no build reads as source; the build it replaces is kept beside it in
 `dist.gen` while a page sent from it may still ask for its files, and `--out` refuses a directory
 beside which something else holds one of those names (`dist.gen`, `dist.previous`, `dist.lock`).

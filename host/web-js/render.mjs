@@ -460,6 +460,7 @@ if (import.meta.main) {
     console.log(`serving ${dist} with pages rendered by the JavaScript runtime on ${port}`);
   } else if (args.includes('--build')) {
     const pages = JSON.parse(readFileSync(resolve(dist, '.gen/pages.json'), 'utf8')), docs = [];
+    const routes = JSON.parse(readFileSync(resolve(dist, 'routes.json'), 'utf8')).routes;
     let origin = null;
     for (const p of pages) {
       const page = await render(p.location);
@@ -472,7 +473,7 @@ if (import.meta.main) {
       for (const failure of page.failed) console.log(`  ${p.location}: resource ${failure}`);
       for (const refused of page.refused) console.log(`  ${p.location}: ${refusedLine(refused)}`);
     }
-    writeCrawlerFiles(dist, docs, origin);
+    writeCrawlerFiles(dist, docs, origin, routes);
   } else for (const location of args.slice(1)) {
     const page = await render(location);
     for (const failure of page.failed) console.error(`${location}: resource ${failure}`);

@@ -4,6 +4,7 @@
 // another. A page rendered per request is not made at build, so it is not listed.
 import { existsSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { canonical } from '../web-js/route-pattern.js';
 
 const xml = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 // The URL a page's `<link rel="canonical">` names, as both renderers write it (an attribute escaped as HTML's).
@@ -12,15 +13,22 @@ const canonicalOf = page => {
   return href?.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 };
 
-/** Writes both files into `dir` for `pages` (each `{ location, notfound, status, robots, page }`, its location
- * percent-encoded and `page` its HTML), against the manifest's `origin`. A file the app renders a route at, which
- * `dir` then holds as a directory, is left alone. Without an origin, or a page to list, there is no sitemap. */
-export function writeCrawlerFiles(dir, pages, origin) {
+/** Writes crawler files for built `pages` against the manifest's `origin`. A route declared at either file's path
+ * keeps it, whether rendered at build or per request; a route with a parameter does not claim it. Without an origin,
+ * or a page to list, there is no sitemap. */
+export function writeCrawlerFiles(dir, pages, origin, routes) {
   const site = origin?.replace(/\/+$/, '');
+  const claimed = path => routes.some(r => !r.notfound && canonical(r.pattern) === path);
+  const excluded = robots => (robots ?? '').split(',').some(directive => /^(noindex|none)$/i.test(directive.split(':', 1)[0].trim()));
+  const selfCanonical = p => {
+    const href = canonicalOf(p.page);
+    if (href === undefined) return true;
+    try { return new URL(href).href === new URL(site + canonical(p.location)).href; } catch { return false; }
+  };
   const listed = !site ? [] : pages.filter(p => !p.notfound && (p.status === 200 || p.status === 503)
-    && !/\b(noindex|none)\b/i.test(p.robots ?? '') && (canonicalOf(p.page) ?? site + p.location) === site + p.location)
+    && !excluded(p.robots) && selfCanonical(p))
     .map(p => p.location);
-  const sitemap = listed.length > 0 && !existsSync(resolve(dir, 'sitemap.xml'));
+  const sitemap = listed.length > 0 && !claimed('/sitemap.xml') && !existsSync(resolve(dir, 'sitemap.xml'));
   if (sitemap) writeFileSync(resolve(dir, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${listed.map(l => `  <url><loc>${xml(site + l)}</loc></url>\n`).join('')}</urlset>\n`);
-  if (!existsSync(resolve(dir, 'robots.txt'))) writeFileSync(resolve(dir, 'robots.txt'), `User-agent: *\nAllow: /\n${sitemap ? `Sitemap: ${site}/sitemap.xml\n` : ''}`);
+  if (!claimed('/robots.txt') && !existsSync(resolve(dir, 'robots.txt'))) writeFileSync(resolve(dir, 'robots.txt'), `User-agent: *\nAllow: /\n${sitemap ? `Sitemap: ${site}/sitemap.xml\n` : ''}`);
 }

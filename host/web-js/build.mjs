@@ -1060,12 +1060,12 @@ if (pages.length && how === 'rust') {
     mkdirSync(dirname(resolve(out, file)), { recursive: true });
     writeFileSync(resolve(out, file), doc.page);
   }
-  writeCrawlerFiles(out, docs, manifest.app?.origin);
+  writeCrawlerFiles(out, docs, manifest.app?.origin, routes);
   console.log(`${out}: ${pages.length} pages rendered by ${bin}`);
 } else if (pages.length && how === 'js') {
   const r = spawnSync('bun', [resolve(here, 'render.mjs'), out, '--build'], { cwd: root, stdio: 'inherit' });
   if (r.status !== 0) process.exit(1);
 } else if (how !== 'none' && routes.length) {
-  writeCrawlerFiles(out, [], null); // robots.txt alone: no page made at build to list
+  writeCrawlerFiles(out, [], null, routes); // robots.txt alone: no page made at build to list
 }
 console.log(`${out}: built`);

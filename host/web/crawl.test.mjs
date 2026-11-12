@@ -6,12 +6,12 @@ import { writeCrawlerFiles } from './crawl.mjs';
 
 const ORIGIN = 'https://site.invalid';
 const page = (location, more = {}) => ({ location, notfound: false, status: 200, robots: null, page: '<html>', ...more });
-const written = (pages, origin = ORIGIN, before = () => {}) => {
+const written = (pages, origin = ORIGIN, before = () => {}, routes = []) => {
   const dir = mkdtempSync(resolve(tmpdir(), 'crawl-'));
   try {
     before(dir);
     const read = f => statSync(resolve(dir, f), { throwIfNoEntry: false })?.isFile() ? readFileSync(resolve(dir, f), 'utf8') : null;
-    writeCrawlerFiles(dir, pages, origin);
+    writeCrawlerFiles(dir, pages, origin, routes);
     return { robots: read('robots.txt'), sitemap: read('sitemap.xml') };
   } finally { rmSync(dir, { recursive: true, force: true }); }
 };
@@ -41,4 +41,37 @@ test('without an origin or a page to list there is no sitemap, and robots.txt na
 test('a route the app renders at either path keeps it', () => {
   const routed = dir => { for (const f of ['sitemap.xml', 'robots.txt']) mkdirSync(resolve(dir, f)); };
   expect(written([page('/')], ORIGIN, routed)).toEqual({ robots: null, sitemap: null });
+});
+
+test('declared request routes keep crawler paths even without built pages', () => {
+  for (const path of ['/robots.txt', '/sitemap.xml']) {
+    const routes = [{ pattern: path, render: 'request', notfound: false }];
+    const files = written([page('/')], ORIGIN, () => {}, routes);
+    expect(files[path.slice(1).split('.')[0]]).toBeNull();
+  }
+});
+
+test('a route with a parameter does not claim either path', () => {
+  const files = written([page('/')], ORIGIN, () => {}, [{ pattern: '/:slug', render: 'request', notfound: false }]);
+  expect(files.robots).toContain('Allow: /');
+  expect(locs(files.sitemap)).toEqual(['https://site.invalid/']);
+});
+
+test('a Unicode self canonical stays in the sitemap with either origin spelling', () => {
+  for (const origin of [ORIGIN, ORIGIN + '/']) {
+    const { sitemap } = written([page('/caf%C3%A9', {
+      page: '<link rel="canonical" href="https://site.invalid/café">',
+    })], origin);
+    expect(locs(sitemap)).toEqual(['https://site.invalid/caf%C3%A9']);
+  }
+});
+
+test('robots directives use their names, not values', () => {
+  const { sitemap } = written([
+    page('/preview', { robots: 'max-image-preview:none' }),
+    page('/other', { robots: 'follow, noarchive:none' }),
+    page('/hidden', { robots: 'follow, NoIndex' }),
+    page('/none', { robots: 'NoNe:example' }),
+  ]);
+  expect(locs(sitemap)).toEqual(['https://site.invalid/preview', 'https://site.invalid/other']);
 });
