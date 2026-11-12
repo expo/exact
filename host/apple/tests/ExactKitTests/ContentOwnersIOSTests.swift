@@ -333,43 +333,68 @@ final class ContentOwnersIOSTests: XCTestCase {
         let p = session.presenter, navigation = try XCTUnwrap(route.navigationController)
         let primary = try XCTUnwrap(first.scrollView), secondary = try XCTUnwrap(second.scrollView)
         route.setContentScrollView(primary, for: .bottom)
-        // nil is UIKit's automatic selection: the authored one, the pane `navigationScroll` names
-        // (pane-second from the second pass on)
-        for selected in [secondary, primary, nil] as [UIScrollView?] {
-            route.setContentScrollView(selected, for: .top)
-            let target = selected ?? secondary
-            XCTAssertTrue(target.scrollsToTop, "a native write updates scroll-to-top without an authored batch")
-            XCTAssertFalse((target === secondary ? primary : secondary).scrollsToTop)
-            XCTAssertTrue(route.contentScrollView(for: .top) === target, "the bar follows the selection at once")
-            route.node.props["navigationScroll"] = selected === secondary ? "pane-first" : "pane-second"
+        // The route's pass and an authored batch
+        let pass = {
             p.navigation.prepareRoutes([route], in: navigation)
             p.apply(wireBatch([]))
-            until("native selection keeps the panes beneath the shared bar") {
+        }
+        let panesUnderTheBar = {
+            self.until("the panes stay beneath the shared bar") {
                 self.window?.layoutIfNeeded()
                 return abs(first.convert(first.bounds, to: route.view).minY) < 1
                     && abs(second.convert(second.bounds, to: route.view).minY) < 1
             }
-            XCTAssertTrue(route.contentScrollView(for: .top) === target, "authored defaults do not overwrite a native selection, and nil gives the edge back to them")
+        }
+        // A native selection holds the top edge through a batch whose `navigationScroll` names the other pane
+        for (selected, other, named) in [(secondary, primary, "pane-first"), (primary, secondary, "pane-second")] {
+            route.setContentScrollView(selected, for: .top)
+            XCTAssertTrue(selected.scrollsToTop, "a native write updates scroll-to-top without an authored batch")
+            XCTAssertFalse(other.scrollsToTop)
+            XCTAssertTrue(route.contentScrollView(for: .top) === selected, "the bar follows the selection at once")
+            route.node.props["navigationScroll"] = named
+            pass()
+            panesUnderTheBar()
+            XCTAssertTrue(route.contentScrollView(for: .top) === selected, "authored defaults do not overwrite a native selection")
             XCTAssertTrue(route.contentScrollView(for: .bottom) === primary, "the other edge keeps its own native selection")
-            XCTAssertTrue(p.navigation.contentScrollView(of: route) === target)
-            XCTAssertTrue(p.scrollsToTopTarget() === target, "nil gives scroll-to-top back to the authored scroller")
+            XCTAssertTrue(p.navigation.contentScrollView(of: route) === selected)
+            XCTAssertTrue(p.scrollsToTopTarget() === selected)
             XCTAssertTrue([primary, secondary].allSatisfy { $0.contentInsetAdjustmentBehavior == .automatic })
         }
-        for selected in [primary, nil] as [UIScrollView?] {
-            route.setContentScrollView(selected, for: .all)
-            let target = selected ?? secondary
-            XCTAssertTrue(target.scrollsToTop)
-            XCTAssertFalse((target === secondary ? primary : secondary).scrollsToTop)
-            // Exact's bottom scroller here is the pane `navigationScroll` names
-            XCTAssertTrue(route.contentScrollView(for: .bottom) === target, "nil gives the bottom edge back to Exact's bottom scroller at once")
-            p.navigation.prepareRoutes([route], in: navigation)
-            p.apply(wireBatch([]))
-            self.window?.layoutIfNeeded()
-            XCTAssertTrue(route.contentScrollView(for: .top) === target, "UIKit's all-edges selection survives projection")
-            XCTAssertTrue(route.contentScrollView(for: .bottom) === target)
-            XCTAssertTrue(p.navigation.contentScrollView(of: route) === target)
-            XCTAssertTrue(p.scrollsToTopTarget() === target)
-        }
+        // nil is UIKit's automatic selection, which Exact makes: the pane `navigationScroll` names
+        route.node.props["navigationScroll"] = "pane-second"
+        route.setContentScrollView(nil, for: .top)
+        XCTAssertTrue(secondary.scrollsToTop)
+        XCTAssertFalse(primary.scrollsToTop)
+        XCTAssertTrue(route.contentScrollView(for: .top) === secondary, "nil gives the edge back at once")
+        pass()
+        panesUnderTheBar()
+        XCTAssertTrue(route.contentScrollView(for: .top) === secondary, "and the pass keeps it")
+        XCTAssertTrue(route.contentScrollView(for: .bottom) === primary)
+        XCTAssertTrue(p.navigation.contentScrollView(of: route) === secondary)
+        XCTAssertTrue(p.scrollsToTopTarget() === secondary, "nil gives scroll-to-top back to the authored scroller")
+        XCTAssertTrue([primary, secondary].allSatisfy { $0.contentInsetAdjustmentBehavior == .automatic })
+        // `.all` selects the top and bottom edges together, and nil gives both back
+        route.setContentScrollView(primary, for: .all)
+        XCTAssertTrue(primary.scrollsToTop)
+        XCTAssertFalse(secondary.scrollsToTop)
+        XCTAssertTrue(route.contentScrollView(for: .bottom) === primary)
+        pass()
+        self.window?.layoutIfNeeded()
+        XCTAssertTrue(route.contentScrollView(for: .top) === primary, "UIKit's all-edges selection survives projection")
+        XCTAssertTrue(route.contentScrollView(for: .bottom) === primary)
+        XCTAssertTrue(p.navigation.contentScrollView(of: route) === primary)
+        XCTAssertTrue(p.scrollsToTopTarget() === primary)
+        route.setContentScrollView(nil, for: .all)
+        XCTAssertTrue(secondary.scrollsToTop)
+        XCTAssertFalse(primary.scrollsToTop)
+        // Exact's bottom scroller here is the pane `navigationScroll` names
+        XCTAssertTrue(route.contentScrollView(for: .bottom) === secondary, "nil gives the bottom edge back to Exact's bottom scroller at once")
+        pass()
+        self.window?.layoutIfNeeded()
+        XCTAssertTrue(route.contentScrollView(for: .top) === secondary)
+        XCTAssertTrue(route.contentScrollView(for: .bottom) === secondary)
+        XCTAssertTrue(p.navigation.contentScrollView(of: route) === secondary)
+        XCTAssertTrue(p.scrollsToTopTarget() === secondary)
     }
 
     func testArrangedPeersScrollUnderTheBarsWithTheirOwnInsets() throws {

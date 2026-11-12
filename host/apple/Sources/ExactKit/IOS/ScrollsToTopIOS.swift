@@ -105,9 +105,9 @@ extension NavigationHost {
 
     /// The native selection, authored scroller or default document viewport.
     func contentScrollView(of route: RouteController) -> UIScrollView? {
-        if route.nativeContentScrollEdges.contains(.top), let selected = route.contentScrollView(for: .top) { return selected }
-        if let node = contentScroller(of: route) { return shownScroll(node) }
-        if !route.nativeContentScrollEdges.contains(.top), let name = route.node.props["navigationScroll"], !name.isEmpty { return nil }
+        if route.nativeContentScrollEdges.contains(.top) { return route.contentScrollView(for: .top) }
+        if let node = automaticContentScroller(of: route) { return shownScroll(node) }
+        if let name = route.node.props["navigationScroll"], !name.isEmpty { return nil }
         return route.contentViewport
     }
 }

@@ -2589,15 +2589,14 @@ Set only the native properties the app needs to change. For a fixed header, set
 `minimizationBehavior` to `.never`. Select the bar's scroll view with
 `route.controller.setContentScrollView(_:for:)`. An explicit native selection
 survives authored layout updates. Passing `nil` makes the edge automatic again, as
-in UIKit, where the view controller then finds the scroll view itself. UIKit cannot
-find an authored scroller through Exact's views, so Exact selects as it does on a
-route the app never touched: for the top edge, the scroller `navigationScroll` names,
-else the first visible vertical one, when it sits under the bar (none when content other
-than control bars sits above it), and for the bottom edge the scroller at the route's
-bottom.
-`contentScrollView(for:)` reports Exact's top and bottom selections too, so it does
-not tell an automatic edge from a selected one. UIKit's getter accepts only those
-two edges. Each edge is independent, and `.all` selects all edges.
+in UIKit, and Exact selects as on a route the app never touched: for the top edge
+the scroller `navigationScroll` names, else the first visible vertical one, when it
+sits under the bar (none when content other than control bars sits above it), and
+for the bottom edge the scroller at the route's bottom.
+`contentScrollView(for:)` reports Exact's selections too, so it does not tell an
+automatic edge from a selected one. UIKit takes a selection for the top and bottom
+edges only: it ignores one for a side edge, and `contentScrollView(for:)` raises an
+exception when asked for one. The two edges are independent, and `.all` selects both.
 For example, a menu action can select the secondary pane after the arrangement
 has mounted:
 
