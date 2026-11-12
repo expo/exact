@@ -355,7 +355,7 @@ fn only_the_first_eight_definitions_start_and_bodies_and_replies_have_bounds() {
     );
     drop(set);
 
-    for body in [false, true] {
+    for (asynchronous, body) in [(false, false), (false, true), (true, false), (true, true)] {
         let mut def = definition(&server, "/large");
         if body {
             def.request.body = vec![0; MAX_BODY_BYTES + 1];
@@ -367,14 +367,14 @@ fn only_the_first_eight_definitions_start_and_bodies_and_replies_have_bounds() {
         }
         let set = launch(&server, vec![def]);
         complete_set(&set);
-        let (core, woke) = server.core(false, true);
+        let (core, woke) = server.core(asynchronous, true);
         adopt(&core, set);
         server.plan("/large", Plan::new(200, &[], b"sent"));
         let (reply, cached) = read(&core, &woke, &server, 1, "/large");
         assert!(!cached);
         assert_eq!(reply.body, b"sent");
     }
-    assert_eq!(server.count(), 11);
+    assert_eq!(server.count(), 14);
 }
 
 #[test]
@@ -457,14 +457,14 @@ fn exited(location: &Location) {
 }
 #[test]
 fn dropping_a_set_or_its_adopting_executor_retires_every_launch_thread() {
-    for adopted in [false, true] {
+    for adopted in [None, Some(false), Some(true)] {
         let server = Server::new();
         let release = held_plan(&server, "/pending", b"cancelled");
         let set = launch(&server, vec![definition(&server, "/pending")]);
         server.seen(1);
         let location = set.destination.clone();
-        if adopted {
-            let (core, _) = server.core(true, true);
+        if let Some(asynchronous) = adopted {
+            let (core, _) = server.core(asynchronous, true);
             adopt(&core, set);
             let shared = core.shared.clone();
             drop(core);
