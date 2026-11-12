@@ -716,7 +716,7 @@ export function validate(value, node, at, root) {
   }
   const types = node.type ? [].concat(node.type) : null;
   const actual = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
-  if (types && !types.includes(actual)) { problems.push(`${where}: expected ${types.join(' or ')}, got ${actual}`); return problems; }
+  if (types && !types.includes(actual) && !(types.includes('integer') && Number.isInteger(value))) { problems.push(`${where}: expected ${types.join(' or ')}, got ${actual}`); return problems; }
   if (node.enum && !node.enum.includes(value)) problems.push(`${where}: ${JSON.stringify(value)} is not one of ${node.enum.map((e) => JSON.stringify(e)).join(', ')}`);
   if (typeof value === 'string') {
     if (node.minLength != null && value.length < node.minLength) problems.push(`${where}: shorter than ${node.minLength}`);
@@ -727,6 +727,8 @@ export function validate(value, node, at, root) {
   if (actual === 'array' && node.maxItems != null && value.length > node.maxItems) problems.push(`${where}: more than ${node.maxItems} items`);
   if (actual === 'array' && node.items) value.forEach((v, i) => problems.push(...validate(v, node.items, `${at}[${i}]`, root)));
   if (actual === 'object') {
+    if (node.maxProperties != null && Object.keys(value).length > node.maxProperties) problems.push(`${where}.${Object.keys(value)[node.maxProperties]}.name: at most ${node.maxProperties} entries`);
+    if (node.propertyNames) for (const key of Object.keys(value)) problems.push(...validate(key, node.propertyNames, `${at}.${key}.name`, root));
     for (const key of node.required ?? []) if (!(key in value)) problems.push(`${where}: missing required ${JSON.stringify(key)}`);
     for (const [key, v] of Object.entries(value)) {
       const sub = node.properties?.[key];

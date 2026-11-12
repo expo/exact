@@ -418,7 +418,8 @@ fn a_linked_bake_gives_the_archive_what_rust_compiles() {
 #[test]
 fn a_linked_module_leaves_its_bytecode_to_the_link() {
     let meta = serde_json::json!({"appId": "a", "grants": "", "module": {"sha256": "beef"}});
-    let linked = super::module_constants(&meta, false, "ios", true, None).unwrap();
+    let linked =
+        super::module_constants(&meta, false, "ios", true, None, &serde_json::Value::Null).unwrap();
     assert!(
         !linked.contains("beef") && !linked.contains("app.hbc"),
         "{linked}"
@@ -427,7 +428,9 @@ fn a_linked_module_leaves_its_bytecode_to_the_link() {
         linked.contains("::exact_apple::baked::bytecode()"),
         "{linked}"
     );
-    let embedded = super::module_constants(&meta, false, "ios", false, None).unwrap();
+    let embedded =
+        super::module_constants(&meta, false, "ios", false, None, &serde_json::Value::Null)
+            .unwrap();
     assert!(
         embedded.contains("REVISION: &str = \"beef\"") && embedded.contains("/app.hbc"),
         "{embedded}"
@@ -496,14 +499,30 @@ fn a_package_declaring_native_writes_the_factory_and_a_second_refuses() {
     // The link reads the rest of `native` from the same declaration.
     assert!(slot.native["library"].is_object(), "{:?}", slot.native);
     let meta = serde_json::json!({"appId": "a", "grants": "", "module": {"sha256": "beef"}});
-    let linux = super::module_constants(&meta, false, "linux", false, Some(&slot)).unwrap();
+    let linux = super::module_constants(
+        &meta,
+        false,
+        "linux",
+        false,
+        Some(&slot),
+        &serde_json::Value::Null,
+    )
+    .unwrap();
     assert!(
         linux.contains(&format!("#[path = {:?}]\n", root.display().to_string()))
             && linux.contains("mod exact_native_shim;")
             && linux.contains("pub fn exact_native(_grants: &str) -> Box<dyn exact_js::NativeModule> {\n    Box::new(exact_native_shim::Vault::new(APP))\n}"),
         "{linux}"
     );
-    let web = super::module_constants(&meta, false, "web", false, Some(&slot)).unwrap();
+    let web = super::module_constants(
+        &meta,
+        false,
+        "web",
+        false,
+        Some(&slot),
+        &serde_json::Value::Null,
+    )
+    .unwrap();
     assert!(!web.contains("exact_native"), "{web}");
 
     package(

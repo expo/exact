@@ -72,12 +72,14 @@ pub use contract_types::strings::Strings;
 /// The data seam, re-exported for an app's build script: the bake asks the
 /// crate its grants for the compatibility id (`Caltrain.grants()`).
 pub use exact_runner::DataSource;
+mod preload;
 pub use logic::{
     apple_linked, linux_entry, native_storage_constructor, rust_entry, web_linked, web_rust_mode,
 };
 pub use manifest::{Activity, Manifest, Widget};
 pub use map::{plan_digest, SourceMap};
 pub use module_rust::module_rust;
+pub use preload::preload_expression;
 pub use resolve::Origin;
 pub use rust::{compile_path_for_rust, rust};
 pub use sources::{

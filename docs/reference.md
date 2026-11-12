@@ -354,6 +354,14 @@ A standalone macOS app treats `kill -TERM <pid>` as an orderly quit: its
 hold, and each session's native module is destroyed before exit. Repeated SIGTERM
 requests share that hold's original deadline. SIGKILL cannot run this cleanup.
 
+`app.json`'s `preload` maps names to requests of shape `{ url: string,
+method?: string, headers?: { [name]: string }, body?: string,
+timeoutMs?: integer, when?: "start" | "foreground" }` (LLP 1162.000 D2).
+`method` defaults to `GET`, `when` to `"start"`. URL, header values and body may
+reference a kept secret as `{secret:NAME}`; write `{{` for a literal brace.
+The bake checks at most eight entries against fetch and `secret.keep` grants.
+Hosts that support preloads send them at process start.
+
 A one-window Mac app ends when its window closes. An app with work the person
 expects to go on without the window (a server, a sync), as Mail and Messages
 have, sets `"keepRunning": true` in `app.json`'s `host.macos.window`. ⌘W,

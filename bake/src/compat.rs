@@ -316,6 +316,8 @@ pub fn compatibility_id_pinned(
         Err(_) => return Err("EXACT_UPDATE_TRUST is not UTF-8".into()),
     };
     crate::reach::parsed(app_dir, grants, rust_grants, trust == "production")?;
+    let ceiling = rust_grants.map(|rust| grant_union(grants.unwrap_or(""), rust));
+    let preloads = crate::preload::checked(app_dir, manifest, ceiling.as_deref().or(grants))?;
     // @ref LLP 1100 D1 — a colour this platform can't show is refused here.
     // The app's plan, compiled once here: its colours checked, and (stage
     // 14 C2) its icons' fill rules read below.
@@ -323,7 +325,6 @@ pub fn compatibility_id_pinned(
     if let Some(plan) = &plan {
         crate::colors::check_plan(app_dir, plan, platform)?;
     }
-    let ceiling = rust_grants.map(|rust| grant_union(grants.unwrap_or(""), rust));
     let mut compat = compatibility_with_trust(
         app_dir,
         platform,
@@ -332,6 +333,13 @@ pub fn compatibility_id_pinned(
         ceiling.as_deref().or(grants),
         &trust,
     )?;
+    if preloads
+        .as_array()
+        .is_some_and(|entries| !entries.is_empty())
+    {
+        compat.inputs["preload"] = preloads;
+        compat.id = compatibility_digest(&compat.inputs);
+    }
     if let Some(rust) = rust_grants {
         source_scopes(&mut compat, grants.unwrap_or(""), rust);
     }

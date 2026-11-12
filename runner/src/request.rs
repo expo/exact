@@ -81,6 +81,9 @@ pub enum HttpScheduling {
 }
 
 pub use http::{CacheMode, Redirect};
+#[path = "request_preload.rs"]
+mod preload;
+pub use preload::{MissingPreloadSecret, Preload, PreloadPart, PreloadWhen};
 #[path = "request_http.rs"]
 mod http;
 

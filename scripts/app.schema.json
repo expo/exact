@@ -14,6 +14,25 @@
       "additionalProperties": false,
       "properties": { "mode": { "enum": ["off", "core"] } }
     },
+    "preload": {
+      "type": "object",
+      "description": "Named requests sent at process start by hosts that support them (LLP 1162.000 D2). Strings in url, header values and body may use {secret:NAME} for a secret.keep grant; {{ writes a literal brace. Checked and parsed at bake, with present secrets filled in on the device.",
+      "maxProperties": 8,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["url"],
+        "additionalProperties": false,
+        "properties": {
+          "url": { "type": "string" },
+          "method": { "type": "string", "default": "GET" },
+          "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+          "body": { "type": "string" },
+          "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 3600000 },
+          "when": { "enum": ["start", "foreground"], "default": "start" }
+        }
+      }
+    },
     "launch": {
       "type": "array",
       "description": "Modules whose launch parts run at launch, in this order. Each names modules/<name>/ in the app, else in exact2. Its apple/launch/*.swift is linked into the executable. Its apple/service/*.swift becomes lib<name>_service.dylib, loaded after startup.",

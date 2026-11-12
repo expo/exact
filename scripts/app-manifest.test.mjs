@@ -652,3 +652,51 @@ test('host.android.maven accepts only pinned group:artifact:version coordinates'
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('preload admits the entry shape and refuses malformed names, fields and bounds', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-preload-'));
+  const read = preload => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Fixture', app: { id: 'test.preload', name: 'Fixture' }, preload }));
+    return readManifest(dir, 'fixture');
+  };
+  try {
+    const preload = { second: { url: 'https://api.example/{secret:session}' }, first: { url: 'https://api.example', method: 'POST', headers: { Authorization: 'Bearer {secret:session}' }, body: '{{', timeoutMs: 42, when: 'foreground' } };
+    assert.deepEqual(read(preload).preload, preload);
+    for (const [value, field] of [
+      [{ Wrong: { url: 'https://api.example' } }, 'Wrong.name'],
+      [{ feed: { url: 1 } }, 'feed.url'],
+      [{ feed: { url: 'https://api.example', extra: true } }, 'feed.extra'],
+      [{ feed: { url: 'https://api.example', timeoutMs: 1.5 } }, 'feed.timeoutMs'],
+      [{ feed: { url: 'https://api.example', timeoutMs: 0 } }, 'feed.timeoutMs'],
+      [{ feed: { url: 'https://api.example', timeoutMs: 3600001 } }, 'feed.timeoutMs'],
+      [{ feed: { url: 'https://api.example', headers: { Accept: 1 } } }, 'feed.headers.Accept'],
+      [{ feed: { url: 'https://api.example', when: 'later' } }, 'feed.when'],
+      [Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`request-${i}`, { url: 'https://api.example' }])), 'request-8.name'],
+    ]) assert.throws(() => read(value), error => error.message.includes(`preload.${field}:`));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('adding and removing preload regenerates native shells with the baked accessor', async () => {
+  const { ensureShells } = await import('./app-shells.mjs');
+  const { readFileSync } = await import('node:fs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-preload-shell-'));
+  const manifest = { name: 'Preload', app: { id: 'test.preload', name: 'Preload' }, host: { linux: {} }, deploy: { store: { web: '0', linux: '0' } } };
+  const generate = () => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
+    return ensureShells(dir, manifest, 'preload');
+  };
+  try {
+    const initial = generate();
+    const source = resolve(initial.workspace, 'linux/src/main.rs');
+    const before = readFileSync(source, 'utf8');
+    assert.ok(!before.includes('.with_preloads'));
+    manifest.preload = { feed: { url: 'https://api.example' } };
+    assert.equal(generate().wrote, true);
+    assert.ok(readFileSync(source, 'utf8').includes('.with_preloads(PRELOAD)'));
+    assert.equal(generate().wrote, false);
+    delete manifest.preload;
+    assert.equal(generate().wrote, true);
+    assert.equal(readFileSync(source, 'utf8'), before);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 30000);

@@ -798,6 +798,11 @@ data_source! {
         ""
     }
 
+    /// Checked process-start definitions, without activating this source (LLP 1162.000 D2).
+    fn preloads(&self) -> &[crate::request::Preload] {
+        &[]
+    }
+
     /// Identity of replaceable logic, if any. A changed identity invalidates
     /// carried resource answers, but not slots, the clock, or app secrets.
     /// Rust sources remain binary-bound and return `None`.

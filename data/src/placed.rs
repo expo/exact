@@ -231,6 +231,7 @@ pub struct Placed<D> {
     spawn: Spawn<D>,
     app_id: String,
     grants: String,
+    preloads: Vec<exact_runner::request::Preload>,
     revision: Option<String>,
     /// Taken at construction: a moved source's handle still reaches it on its
     /// owner, and a built instance shares its template's.
@@ -289,6 +290,7 @@ impl<D: DataSource + 'static> Placed<D> {
             storage_changed: Default::default(),
             app_id: source.app_id().to_string(),
             grants: source.grants().to_string(),
+            preloads: source.preloads().to_vec(),
             revision: source.revision().map(str::to_string),
             interrupt: source.interrupt(),
             native: source.native(),
@@ -806,6 +808,10 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
 
     fn app_id(&self) -> &str {
         &self.app_id
+    }
+
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        &self.preloads
     }
 
     fn grants(&self) -> &str {

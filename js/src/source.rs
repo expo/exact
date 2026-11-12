@@ -247,6 +247,7 @@ impl DataSource for Module {
                 module.directories = self.directories.clone();
                 module.host.secrets = self.host.secrets.replacement();
                 module.document_owner = self.document_owner;
+                module.preloads = self.preloads;
                 module.native_factory = self.native_factory;
                 // It keeps the placement (`Placed::replacement`), not `placed`'s word.
                 module.keeps_plan = self.keeps_plan;
@@ -257,6 +258,10 @@ impl DataSource for Module {
 
     fn app_id(&self) -> &str {
         &self.app_id
+    }
+
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        self.preloads
     }
 
     fn grants(&self) -> &str {

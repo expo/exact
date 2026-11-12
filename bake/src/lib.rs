@@ -13,6 +13,7 @@ pub mod colors;
 pub mod compat;
 mod icon_rules;
 mod link;
+mod preload;
 mod reach;
 mod receipt;
 mod widgets;

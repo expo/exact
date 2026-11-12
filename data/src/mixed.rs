@@ -932,6 +932,14 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
     fn app_id(&self) -> &str {
         &self.app_id
     }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        if self.javascript.preloads().is_empty() {
+            self.rust.preloads()
+        } else {
+            self.javascript.preloads()
+        }
+    }
+
     fn grants(&self) -> &str {
         &self.grants
     }
