@@ -601,7 +601,7 @@ export function install(data, mixed = false, modules = null) {
       if (k && types) try { source.kept(r.source, k[0].map((a, i) => named(a, types[0][i])), named(k[1], types[1])); } catch {}
     }
   };
-  const ts = (name, args, store, target, mutation = false, forced = false) => {
+  const ts = (name, args, store, target, mutation = false, forced) => {
     if (!seeded) seed();
     const types = sourceTypes[name], [params, result] = types ?? [[], 'u'];
     // The store as the module sees it (LLP 1018): a read marks the answer.

@@ -82,7 +82,7 @@ export const signalDeadline = { arm: null };
 // `origin`: who asked it (LLP 1133.036 D6); a tool's, a wake's or the device's reach to a less public space is checked.
 // `decided`: `fetchOf` has already armed the signal's deadline before the file work, or found the request has none
 // (ts-fetch.js), so it is not weighed again.
-export async function fetchWith(set, input, init = {}, expires = null, redirect = redirectOf(input, init), read = within, origin = 'app', decided = false, forced = false) {
+export async function fetchWith(set, input, init = {}, expires = null, redirect = redirectOf(input, init), read = within, origin = 'app', decided = false, forced) {
   let value, asset, deadline, signal, own, armed;
   init ??= {};
   deadline = deadlineOf(init);
@@ -103,13 +103,12 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
   if (unreached) throw new FetchError('Refused', `NotAllowedError: ${unreached}`);
   redirect = redirectFor(origin, redirect);
   try {
-    const rest = ownWithout(init, ['exactTimeout', 'exactIndependentHttp', 'redirect', 'signal', 'cache', 'mode']);
-    const givenCache = init.cache;
-    const cache = givenCache !== undefined ? givenCache : typeof Request === 'function' && input instanceof Request ? input.cache : undefined;
-    if (cache !== undefined || forced) rest.cache = forced && cache !== 'no-store' ? 'reload' : cache;
-    const mode = init.mode;
-    if (mode !== undefined) rest.mode = mode;
-    else if (rest.cache === 'only-if-cached') rest.mode = 'same-origin';
+    const rest = ownWithout(init, ['exactTimeout', 'exactIndependentHttp', 'redirect', 'signal']);
+    // A forced ask reloads unless the request stores nothing; Fetch allows only-if-cached same-origin (LLP 1162 D4).
+    const cache = init.cache ?? input?.cache, sent = forced && cache !== 'no-store' ? 'reload' : cache;
+    const mode = init.mode ?? (sent === 'only-if-cached' && 'same-origin');
+    if (sent) rest.cache = sent;
+    if (mode) rest.mode = mode;
     // The caller's signal, read once by name, as `fetch` reads its init's members (an inherited one too), else the
     // input `Request`'s (`null` clears the Request's, `undefined` keeps it, as `fetch` has them).
     const given = init.signal;

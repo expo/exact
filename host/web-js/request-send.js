@@ -1,4 +1,4 @@
-import { counted, longPollEnded, trackAnswer, Open } from "./held.js";
+import { counted, longPollEnded, longPollReplied, trackAnswer, Open } from "./held.js";
 import { failureCode, failureReason } from "./shape.js";
 
 export function sendRequest(t, land, out, data, inflight, say) {

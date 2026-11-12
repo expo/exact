@@ -53,7 +53,7 @@ export function refusedFile(input, init, owner) {
   if (refusal) return Promise.reject(new TypeError(refusal));
   return from ? readBodyFile(init.exactBodyFrom, tsGrantSet, owner) : openBodyTarget(init.exactBodyTo, tsGrantSet, owner);
 }
-export async function fromFile(input, init, redirect, started, origin = 'app', armed, forced = false) {
+export async function fromFile(input, init, redirect, started, origin = 'app', armed, forced) {
   const from = init.exactBodyFrom !== undefined, to = init.exactBodyTo !== undefined;
   const refusal = (from ? bodyFromRefusal(input, init) : null) ?? (to ? bodyToRefusal(input, init) : null);
   if (refusal) throw new TypeError(refusal);

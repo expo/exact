@@ -6,7 +6,7 @@ export { liveTime } from "./live-time.js";
 import { viewChildren, listRow, listItem, syncListItemRoles, listOwner, unwrapListItem, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, inertAncestor, sheetLeaves, liveById, renderMarkup, reportPlace, onSelection, textField, sourceField, editMenu, settleRadios, installFits, contextAt, scrollDrag } from "./navigation.js"; export { animationClocks, launchLocation } from "./navigation.js"; export { fontFamily } from './font-family.js'; // synced animations (LLP 1055.002, emit.rs `clocks`)
 import { Docs, Head, head, markDocument, projectRoots, openTabs, unopened, tp } from "./document.js"; export { Head, unopened, tp }; export { canSetStatus, statusSubject } from "./document.js"; import { conforms, eq, equal, unchangedArguments, failureCode, failureReason, loneSurrogate, Refusal, Failed, checkArguments, finiteArguments } from "./shape.js"; import { pointer, record } from "./pointer.js"; import { autofocus, press } from "./focus.js";
 let Paint; export function usePaint(pass) { Paint = pass; } export { conforms, eq, equal, Refusal, Failed }; // the compiler installs `Paint` only when a plan can layer boxes
-import * as Ov from "./overlay.js"; import { beatAfter } from "./beat.js"; import { counted, heldAsks, heldReplies, longPollReplied, Open, closeLetGo } from "./held.js"; export { heldAsks, heldReplies }; // optimistic writes shown over answers (the runner's writes.rs)
+import * as Ov from "./overlay.js"; import { beatAfter } from "./beat.js"; import { heldAsks, heldReplies, Open, closeLetGo } from "./held.js"; export { heldAsks, heldReplies }; // optimistic writes shown over answers (the runner's writes.rs)
 export const writeRecords = () => Ov.Writes.list.map(w => ({ id: w.id, mutation: w.m.name, landed: !!w.landed })); // the agent's `state.writes`
 let Media = null; export function useMedia(m) { Media = m; } let Nav = null; export function useNavigation(n) { Nav = n; } // media.js only where a plan has a `video` or `audio`; navigation.js's `navigation` (the history, the stacks, the app bar) only where a plan has routes or a back control, handed over by the router (router.js `navigationRoots`): a plan without either never links it (LLP 1047.002 D1)
 // The JS runtime is imported by name, so a bundle carries only what its generated plan uses.
@@ -403,7 +403,7 @@ export const inflight = { n: 0 }; // Requests in flight, for the agent's `clock 
 export const busy = () => [...document.querySelectorAll('[aria-busy="true"]')].map(el => el.getAttribute('data-testid') ?? el.id); // the elements the app marks `aria-busy="true"` (still loading), by test id else id
 const send = (t, land) => sendRequest(t, land, Out, data, inflight, say);
 
-function ask(source, args, name, mutation, forced = false) {
+function ask(source, args, name, mutation, forced) {
   checkArguments(name, args);
   if (mutation) mutation.requests++;
   if (["startActivity", "updateActivity", "endActivity"].includes(source)) throw new Refusal(`${source} is not linked into this artifact`);
