@@ -8,7 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pollUntil } from './agent-launch.mjs';
-import { androidJavaEnv, androidSdk, androidSdkPackages, reverseRoot } from './agent-android.mjs';
+import { androidJavaEnv, androidSdk, androidSdkPackages, androidScreenState, reverseRoot } from './agent-android.mjs';
 
 test('the Android reader variable filter and activity allowlist include the auth fixture; loopback URLs select ports', async () => {
   const { readerVariables, reversedPorts } = await import('./agent-android.mjs');
@@ -23,12 +23,15 @@ test('the Android reader variable filter and activity allowlist include the auth
 });
 
 // The stand-in device reaches the fixture only while its reverse mapping exists.
-function androidDriveFixture(reader, destination = null, reacquire = false, failedRemoval = null, stuckShell = false) {
+function androidDriveFixture(reader, destination = null, reacquire = false, failedRemoval = null, stuckShell = false, screen = {}) {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-adb-')), calls = resolve(dir, 'calls'), mappings = resolve(dir, 'mappings');
   writeFileSync(mappings, JSON.stringify(destination ? { 'tcp:4791': destination } : {}));
-  let disconnected; const closed = new Promise(done => { disconnected = done; });
+  const display = resolve(dir, 'display');
+  writeFileSync(display, JSON.stringify({ wakefulness: 'Awake', showing: false, secure: false, ...screen }));
+  let disconnected, connection; const closed = new Promise(done => { disconnected = done; });
+  const connected = new Promise(done => { connection = done; });
   const server = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: {
-    open(socket) { socket.write('{"ready":true}\n'); },
+    open(socket) { connection(); if (screen.ready !== false) socket.write('{"ready":true}\n'); },
     data(socket) { socket.write(JSON.stringify({ fixture: JSON.parse(readFileSync(mappings, 'utf8'))['tcp:4791'] === 'tcp:4791' }) + '\n'); },
     close() { disconnected(); },
   } });
@@ -40,6 +43,25 @@ import { createInterface } from 'node:readline';
 const args = process.argv.slice(2);
 appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n');
 const cmd = args.slice(2);
+const display = ${JSON.stringify(display)}, screen = JSON.parse(readFileSync(display, 'utf8'));
+if (cmd[0] === 'shell' && cmd[1] === 'dumpsys') {
+  if (screen.failDump === cmd[2]) { console.error('dump failed'); process.exit(1); }
+  if (cmd[2] === 'power' && screen.waking) {
+    screen.wakefulness = 'Awake'; screen.waking = false; writeFileSync(display, JSON.stringify(screen));
+  }
+  if (cmd[2] === 'window' && !cmd[3] && screen.largeWindow) process.stdout.write('Window details\\n'.repeat(150000));
+  if (cmd[2] === 'power') console.log(screen.power ?? ('mWakefulness=' + screen.wakefulness));
+  if (cmd[2] === 'window') console.log(screen.window ?? ('  isKeyguardShowing=' + screen.showing + '\\n  KeyguardServiceDelegate\\n    showing=' + screen.showing + '\\n    secure=' + screen.secure));
+}
+if (cmd[0] === 'shell' && cmd[1] === 'input' && cmd[3] === 'KEYCODE_WAKEUP') {
+  screen.waking = true; writeFileSync(display, JSON.stringify(screen));
+}
+if (cmd[0] === 'shell' && cmd[1] === 'wm' && cmd[2] === 'dismiss-keyguard' && !screen.secure && screen.wakefulness === 'Awake') {
+  if (screen.dismissMs) await Bun.sleep(screen.dismissMs);
+  screen.dismissals = (screen.dismissals ?? 0) + 1;
+  if (screen.dismissals >= (screen.dismissAfter ?? 1)) screen.showing = false;
+  writeFileSync(display, JSON.stringify(screen));
+}
 if (cmd[0] === 'reverse') {
   const file = ${JSON.stringify(mappings)}, gate = file + '.' + cmd[1];
   if (existsSync(gate + '.hold')) {
@@ -84,7 +106,7 @@ if (cmd[0] === 'shell' && cmd[1] === '-T') {
   const env = { ...process.env, ANDROID_HOME: dir, ANDROID_SERIAL: serial,
     XDG_CACHE_HOME: resolve(dir, 'cache'), EXACT_AGENT: '1', EXACT_AUTH_FIXTURE: 'http://127.0.0.1:4791' };
   for (const name of ['EXACT_DEV_PLAN', 'EXACT_PLAN', 'EXACT_WORLD', 'EXACT_LAUNCH_URL']) delete env[name];
-  return { port: server.port, app: { id: 'dev.exact.fixture', dir }, bin, env, closed,
+  return { port: server.port, app: { id: 'dev.exact.fixture', dir }, bin, env, closed, connected,
     commands: () => readFileSync(calls, 'utf8').trim().split('\n').map(JSON.parse),
     mappings: () => JSON.parse(readFileSync(mappings, 'utf8')), stopSocket: () => server.stop(true),
     replace: destination => writeFileSync(mappings, JSON.stringify(destination ? { 'tcp:4791': destination } : {})),
@@ -100,6 +122,145 @@ if (cmd[0] === 'shell' && cmd[1] === '-T') {
     dispose() { server.stop(true); rmSync(dir, { recursive: true, force: true }); rmSync(reverseRoot(serial), { recursive: true, force: true }); },
   };
 }
+test('Android screen dumps distinguish modern, older and unknown keyguard states', () => {
+  const power = 'mWakefulness=Awake';
+  expect(androidScreenState(power, 'isKeyguardShowing=true\nisKeyguardSecure=true')).toEqual({ wakefulness: 'Awake', showing: true, secure: true });
+  expect(androidScreenState(power, 'mShowingLockscreen=false')).toEqual({ wakefulness: 'Awake', showing: false, secure: null });
+  expect(androidScreenState('mWakefulness=Asleep', `  KeyguardServiceDelegate
+    showing=true
+    secure=false
+  AnotherSection
+    secure=true
+`)).toEqual({ wakefulness: 'Asleep', showing: true, secure: false });
+  expect(androidScreenState(power, 'some other showing=true')).toEqual({ wakefulness: 'Awake', showing: null, secure: null });
+  expect(() => androidScreenState('mIsPowered=true', '')).toThrow('dumpsys power has no mWakefulness');
+});
+
+for (const wakefulness of ['Asleep', 'Awake']) test(`the Android reader checks an ${wakefulness} screen before launching`, async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(true, null, false, null, false, { wakefulness, showing: wakefulness === 'Asleep' });
+  let child;
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    const closed = once(child, 'close');
+    child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\n'));
+    expect(await closed).toEqual([0, null]);
+    const commands = fixture.commands().map(args => args.slice(2));
+    const launch = commands.findIndex(args => args[0] === 'shell' && args[1].startsWith('am start '));
+    const screenCalls = commands.filter(args => args[0] === 'shell' && ['dumpsys', 'input', 'wm'].includes(args[1]));
+    const check = [['shell', 'dumpsys', 'power'], ['shell', 'dumpsys', 'window', 'policy']];
+    expect(screenCalls).toEqual(wakefulness === 'Awake' ? check : [
+      ...check, ['shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'], ...check, ['shell', 'wm', 'dismiss-keyguard'], ...check,
+    ]);
+    expect(commands.indexOf(screenCalls.at(-1))).toBeLessThan(launch);
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+});
+
+for (const [name, screen, dismissals] of [
+  ['a large window dump', { largeWindow: true }, 0],
+  ['a keyguard that needs another dismissal', { showing: true, dismissAfter: 2 }, 2],
+  ['a dismissal longer than the poll deadline', { showing: true, dismissMs: 2100 }, 1],
+  ['slow dismissals that need another observation budget', { showing: true, dismissMs: 2100, dismissAfter: 2 }, 2],
+]) test(`the Android reader launches after ${name}`, async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(true, null, false, null, false, screen);
+  let child;
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    const closed = once(child, 'close'); let error = '';
+    child.stderr.on('data', data => { error += data; });
+    child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\n'));
+    expect({ closed: await closed, error }).toEqual({ closed: [0, null], error: expect.stringContaining('keyguard hidden') });
+    const commands = fixture.commands().map(args => args.slice(2));
+    expect(commands.filter(args => args[1] === 'wm')).toHaveLength(dismissals);
+    expect(commands).toContainEqual(['shell', 'dumpsys', 'window', 'policy']);
+    expect(commands).not.toContainEqual(['shell', 'dumpsys', 'window']);
+    const launch = commands.findIndex(args => args[0] === 'shell' && args[1].startsWith('am start '));
+    const lastDismissal = commands.findLastIndex(args => args[1] === 'wm');
+    expect(launch).toBeGreaterThan(lastDismissal);
+    expect(commands.slice(lastDismissal + 1, launch)).toContainEqual(['shell', 'dumpsys', 'power']);
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+}, 15000);
+
+test('the Android reader refuses a secure lock screen before launching', async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(true, null, false, null, false, { showing: true, secure: true });
+  let child;
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    const closed = once(child, 'close'); let error = '';
+    child.stderr.on('data', data => { error += data; });
+    child.stdout.once('data', () => child.stdin.end('{"op":"quit"}\n'));
+    expect((await closed)[0]).not.toBe(0);
+    expect(error).toContain('secure lock screen');
+    expect(error).toContain('unlock the device and run the drive again');
+    const commands = fixture.commands().map(args => args.slice(2));
+    expect(commands.some(args => args[0] === 'shell' && args[1].startsWith('am start '))).toBe(false);
+    expect(commands).not.toContainEqual(['shell', 'wm', 'dismiss-keyguard']);
+    expect(fixture.mappings()).toEqual({});
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+});
+
+for (const dump of ['power', 'window']) test(`the Android reader reports a failed ${dump} dump before launching`, async () => {
+  const { androidDeploy } = await import('./agent-android.mjs');
+  const fixture = androidDriveFixture(true, null, false, null, false, { failDump: dump });
+  let child;
+  try {
+    child = androidDeploy(fixture.app, fixture.bin, fixture.env).spawn();
+    const closed = once(child, 'close'); let error = '';
+    child.stderr.on('data', data => { error += data; });
+    expect((await closed)[0]).not.toBe(0);
+    expect(error).toContain(`Android screen state: adb shell dumpsys ${dump}${dump === 'window' ? ' policy' : ''}: dump failed`);
+    expect(fixture.commands().some(args => args[2] === 'shell' && args[3].startsWith('am start '))).toBe(false);
+    expect(fixture.mappings()).toEqual({});
+  } finally {
+    if (child?.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
+    fixture.dispose();
+  }
+});
+
+test('an Android readiness timeout includes the screen state observed before launch', async () => {
+  const fixture = androidDriveFixture(true, null, false, null, false, { wakefulness: 'Asleep', ready: false });
+  writeFileSync(resolve(fixture.app.dir, 'app.json'), JSON.stringify({ name: 'fixture', app: { id: fixture.app.id, name: 'Fixture' } }));
+  writeFileSync(resolve(fixture.app.dir, 'app.contract'), 'component App\n  view\n    text "Fixture"\n');
+  let driver;
+  try {
+    driver = spawn(process.execPath, ['--eval', `
+      import { openStdio } from ${JSON.stringify(resolve(import.meta.dir, 'agent-stdio.mjs'))};
+      const timer = globalThis.setTimeout;
+      let expire;
+      globalThis.setTimeout = (fn, ms, ...args) => {
+        if (ms === 60000) { expire = fn; process.send('armed'); return null; }
+        return timer(fn, ms, ...args);
+      };
+      process.on('message', () => expire());
+      try { await openStdio({ host: 'android', app: ${JSON.stringify(fixture.app.dir)} }); process.exit(0); }
+      catch (error) { console.error(error.message); process.exit(1); }
+    `], { env: { ...fixture.env, EXACT_ANDROID_BIN: fixture.bin }, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
+    const closed = once(driver, 'close'), armed = once(driver, 'message');
+    let error = '';
+    driver.stderr.on('data', data => { error += data; });
+    await Promise.all([armed, fixture.connected]);
+    driver.send('expire readiness deadline');
+    expect((await closed)[0]).toBe(1);
+    expect(error).toContain('the app never became ready;');
+    expect(error).toContain('Android screen before launch: Asleep, keyguard hidden → Awake, keyguard hidden');
+    expect(fixture.mappings()).toEqual({});
+  } finally {
+    if (driver?.exitCode === null) { const closed = once(driver, 'close'); driver.kill(); await closed; }
+    fixture.dispose();
+  }
+}, 15000);
+
 for (const reader of [false, true]) for (const present of [false, true]) test(`the Android ${reader ? 'reader' : 'headless'} drive ${present ? 'keeps an existing reverse' : 'adds and removes its reverse'} and passes the fixture`, async () => {
     const { androidDeploy } = await import('./agent-android.mjs');
     const fixture = androidDriveFixture(reader, present ? 'tcp:4791' : null, reader && !present); let child;
@@ -112,7 +273,7 @@ for (const reader of [false, true]) for (const present of [false, true]) test(`t
       await once(child.stdout, 'data');
       child.stdin.end('{"op":"quit"}\n');
       expect(await closed).toEqual([0, null]);
-      expect(error).toBe(''); expect(out.trim()).toBe('{"ready":true}');
+      expect(error).toBe(reader ? 'Android screen before launch: Awake, keyguard hidden\n' : ''); expect(out.trim()).toBe('{"ready":true}');
       const commands = fixture.commands();
       expect(commands.every(args => args[0] === '-s' && args[1] === fixture.env.ANDROID_SERIAL)).toBe(true);
       const reverse = commands.map(args => args.slice(2)).filter(args => args[0] === 'reverse');

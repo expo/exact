@@ -483,6 +483,59 @@ async function headless([tool, serial, command, encodedLease]) {
  * the frames that follow, and a window of the top layer comes with its own animation. */
 const SHOT_SETTLE_MS = 400;
 
+/** Power and keyguard facts exposed by Android's dumpsys, including Android 10's policy delegate. */
+export function androidScreenState(power, window) {
+  const wakefulness = /\bmWakefulness=(\w+)/.exec(power)?.[1];
+  if (!wakefulness) throw new Error('Android screen state: dumpsys power has no mWakefulness');
+  const lines = window.split('\n'), heading = lines.findIndex(line => /^\s*KeyguardServiceDelegate:?\s*$/.test(line));
+  let delegate = '';
+  if (heading >= 0) {
+    const indent = lines[heading].match(/^\s*/)[0].length;
+    for (const line of lines.slice(heading + 1)) {
+      if (line.trim() && line.match(/^\s*/)[0].length <= indent) break;
+      delegate += line + '\n';
+    }
+  }
+  const flag = (text, names) => {
+    const values = [...text.matchAll(new RegExp(`\\b(?:${names})=(true|false)\\b`, 'g'))].map(match => match[1]);
+    return values.length ? values.includes('true') : null;
+  };
+  const showing = flag(window, 'isKeyguardShowing|mShowingLockscreen') ?? flag(delegate, 'showing');
+  const secure = flag(window, 'isKeyguardSecure') ?? flag(delegate, 'secure');
+  return { wakefulness, showing, secure };
+}
+
+const screenDescription = ({ wakefulness, showing }) => `${wakefulness}, keyguard ${showing == null ? 'unknown' : showing ? 'showing' : 'hidden'}`;
+
+async function prepareAndroidScreen(tool, serial) {
+  const run = (...args) => {
+    const result = spawnSync(tool, ['-s', serial, 'shell', ...args], { encoding: 'utf8', timeout: 5000, maxBuffer: 4 << 20 });
+    if (result.status !== 0) throw new Error(`Android screen state: adb shell ${args.join(' ')}: ${(result.error?.message || result.stderr || result.stdout || `exit ${result.status}`).trim()}`);
+    return result.stdout;
+  };
+  const read = () => androidScreenState(run('dumpsys', 'power'), run('dumpsys', 'window', 'policy'));
+  let state = read();
+  const initial = screenDescription(state);
+  if (state.wakefulness !== 'Awake') run('input', 'keyevent', 'KEYCODE_WAKEUP');
+  let dismissed = false;
+  let deadline = Date.now() + 2000;
+  for (;;) {
+    if (state.showing && state.secure !== false) throw new Error(`Android ${state.secure ? 'secure lock screen' : 'lock screen (security unknown)'} is showing (${state.wakefulness}); unlock the device and run the drive again`);
+    if (state.wakefulness === 'Awake' && !state.showing) {
+      const final = screenDescription(state);
+      return initial === final ? final : `${initial} → ${final}`;
+    }
+    if (Date.now() >= deadline) throw new Error(`Android screen is not ready (${screenDescription(state)}); wake and unlock the device and run the drive again`);
+    if (state.wakefulness === 'Awake' && state.showing && state.secure === false) {
+      run('wm', 'dismiss-keyguard');
+      // Dismissal can consume its command timeout; observation gets its own budget once.
+      if (!dismissed) { deadline = Date.now() + 2000; dismissed = true; }
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+    state = read();
+  }
+}
+
 /** The reader carrier's process: launch the app with a driver's socket (the shell's `agent=<name>` extra), have
  * adb forward it, and carry the protocol's lines between this process's stdio and the app. Every line is the app's
  * to answer but `screenshot`, whose picture is the device's (`screencap`), tagged as the app tags a reply. The
@@ -511,6 +564,7 @@ async function relay([serial, id, vars, encodedLease]) {
     // as another app would (a share's `-a android.intent.action.SEND …`, LLP 1133.024 D5).
     const { EXACT_AGENT_INTENT: intent = '', ...launch } = JSON.parse(vars);
     const extras = Object.entries(launch).flatMap(([k, v]) => ['--es', `x_${k.slice('EXACT_'.length).toLowerCase()}`, quote(v)]);
+    console.error(`Android screen before launch: ${await prepareAndroidScreen(tool, serial)}`);
     sh('shell', 'am', 'force-stop', id);
     sh('logcat', '-c');
     // `lower=0`: the engine samples every animation, so none plays on the reader's own clock.

@@ -3284,6 +3284,7 @@ bare-plan host fixtures. The driver supports `ios --device [--phone <name|udid>]
 the phone connects outward to a temporary Mac-side port with a per-launch token.
 Use a trusted LAN, allow local networking, and keep the app visible;
 `EXACT_AGENT_HOST` overrides the Mac IPv4 address. The carrier is not encrypted.
+Android APK drives (`bun exact.mjs agent android`, or `agent.mjs android --reader`) check and wake the screen, dismiss an insecure keyguard, and refuse a secure lock screen: unlock the device and retry; a readiness timeout includes the observed screen state.
 
 The dev page's **Open in native…** link offers an installed-client action and
 local setup instructions at `/__dev/open`. Development Apple builds register an

@@ -1240,6 +1240,12 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
 
 ## Driving and testing
 
+- **An Android APK drive needs an awake, unlocked screen.** The relay checks and
+  wakes it and dismisses an insecure keyguard before launching. A secure lock
+  screen fails at once: unlock the device and run the drive again. A readiness
+  timeout includes the screen state observed before launch. Headless drives do
+  not need the display. (expo/exact#365; covered with stubbed adb calls.)
+
 - **A production bake does not open an agent socket.** Its baked
   `embedded.trust="production"` makes the host ignore `EXACT_AGENT` and
   `EXACT_AGENT_*`, including `EXACT_AGENT_SOCKET` and `EXACT_AGENT_LIVE`,
