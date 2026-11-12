@@ -232,7 +232,8 @@ export const modulePlist = (app, reach, target, extensions, contractSources = []
   if (dictionaries.length) {
     const base = reach?.base ?? 'en', strings = JSON.parse(readFileSync(resolve(app.dir, `strings/${base}.json`), 'utf8'));
     for (const { extension, key, keys } of dictionaries) packages.push({ extension, key, value: Object.fromEntries(keys.map((k) => {
-      if (typeof strings[k] !== 'string') throw new Error(`host/apple: ${key} names "${k}", which strings/${base}.json lacks`);
+      // A blank text is no purpose, as for a grant's (bake/src/reach.rs).
+      if (typeof strings[k] !== 'string' || !strings[k].trim()) throw new Error(`host/apple: ${key} names "${k}", which strings/${base}.json lacks or leaves blank`);
       return [k, strings[k]];
     })) });
   }
