@@ -11,7 +11,8 @@
 // - `silent` leaves `sound` nil; the host's foreground presentation then
 //   omits `.sound` too (it reads the content's sound).
 // - A post while `notDetermined` asks first (Q4): `.alert`, `.sound` and
-//   `.badge`, the options a post and a badge use.
+//   `.badge`, the options a post and a badge use. An authorization held
+//   already (provisional and ephemeral included) never prompts.
 // - The state is a fact (D8): `getNotificationSettings`, read again when
 //   the app becomes active, announced when it changes.
 // - An unbundled process has no notification centre (`current()` traps), so
@@ -103,10 +104,9 @@ public final class NotificationsModule: NSObject, ExactPackage {
         if let words = args["apple"] as? [String: Any] { apply(words, to: content) }
         let at = (args["showTrigger"] as? NSNumber)?.doubleValue
         let center = UNUserNotificationCenter.current()
-        // While `notDetermined` a post asks first (Q4); while denied it refuses.
-        // A refusal is journaled once, by the runner, from the reply.
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { [self] granted, _ in
+        let post = { [self] (granted: Bool) in
             status { status in DispatchQueue.main.async { self.announce(status) } }
+            // A refusal is journaled once, by the runner, from the reply.
             guard granted else { return DispatchQueue.main.async { reply(["error": "NotAllowedError"]) } }
             // The wait from now, once the person answered: `showTrigger` is an instant.
             let wait = at.map { $0 / 1000 - Date().timeIntervalSince1970 } ?? 0
@@ -117,6 +117,14 @@ public final class NotificationsModule: NSObject, ExactPackage {
                     if error == nil { context.log(trigger == nil ? "showNotification: shown" : "showNotification: scheduled") }
                     reply(error.map { ["error": "UnknownError", "message": $0.localizedDescription] } ?? [:])
                 }
+            }
+        }
+        center.getNotificationSettings { settings in
+            switch settings.authorizationStatus {
+            case .notDetermined:
+                center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in post(granted) }
+            case .denied: post(false)
+            default: post(true)
             }
         }
     }

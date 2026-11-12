@@ -109,7 +109,7 @@ impl Resolver<'_, '_> {
                 else {
                     continue;
                 };
-                (t, tf::translate(vp.x(cs.x), vp.y(cs.y)))
+                (t, tf::translate(vp.x(cs.x.clone()), vp.y(cs.y.clone())))
             } else if c.node_type.is_svg_shape() {
                 (c, tf::IDENTITY)
             } else {

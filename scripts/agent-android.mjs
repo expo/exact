@@ -31,13 +31,13 @@
 // SwiftShader crashes it).
 import { writeTamberNames } from './tamber-names.mjs';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
-import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, hermesBundle, cargoEnvironment, copyShaders, injectedProfiles, linuxBuild, resolveApp, wholeProgram } from './app.mjs';
+import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, injectedProfiles, linuxBuild, resolveApp, wholeProgram } from './app.mjs';
 import { hermesAndroidBundle } from './hermes-android.mjs';
 import { ANDROID_PAGE_SIZE, androidCargo } from './cargo-check.mjs';
 import { guardFlags, reportBuilt } from './help.mjs';
@@ -191,12 +191,16 @@ export function androidDeploy(app, bin, env) {
   }
   Object.assign(vars, { HOME: home, EXACT_ASSETS: dir, EXACT_NATIVE_LIBS: dir, EXACT_PAINTER: env.EXACT_PAINTER ?? 'cpu' });
   const assignments = Object.entries(vars).map(([k, v]) => `${k}=${quote(v)}`).join(' ');
-  const shot = `${dir}/agent-shot.png`, { release: releasePorts } = reverseForDrive(tool, serial, vars);
+  const shot = `${dir}/agent-shot.png`, { lease, release: releasePorts } = reverseForDrive(tool, serial, vars);
   return {
     serial, dir, shot,
-    spawn: (args = []) => spawn(tool, ['-s', serial, 'shell', '-T',
-      `cd ${quote(dir)} && env ${assignments} ${[`./${exe}`, ...args].map(quote).join(' ')}; s=$?; cd / && rm -rf ${quote(dir)}; exit $s`], { stdio: ['pipe', 'pipe', 'pipe'] })
-      .on('exit', releasePorts),
+    spawn: (args = []) => {
+      const command = `cd ${quote(dir)} && env ${assignments} ${[`./${exe}`, ...args].map(quote).join(' ')}; s=$?; cd / && rm -rf ${quote(dir)}; exit $s`;
+      const child = lease.ports.length
+        ? spawnCarrier(['headless', tool, serial, command, JSON.stringify(lease)], env)
+        : spawn(tool, ['-s', serial, 'shell', '-T', command], { stdio: ['pipe', 'pipe', 'pipe'] });
+      return child.on('exit', releasePorts).on('error', releasePorts);
+    },
     pull(path) {
       const r = spawnSync(tool, ['-s', serial, 'pull', shot, resolve(path)], { encoding: 'utf8' });
       if (r.status !== 0) throw new Error(`adb pull the screenshot: ${(r.stderr || r.stdout).trim()}`);
@@ -256,7 +260,7 @@ export function apkRecord(app, apk = readerApk(app)) {
 /** The reader's own sources, which every APK compiles. */
 export const READER_SOURCES = ['canvas/src', 'app/src'].map((d) => resolve(READER, d));
 
-// A relay failure that still released its mappings; other failures leave cleanup to its parent.
+// A reader failure whose cleanup succeeded.
 const RELAY_CLEANED_ERROR = 70;
 
 /** The reader carrier (LLP 1107 D1): install the APK and return what `androidDeploy` returns, with a process that
@@ -295,11 +299,14 @@ function readerDeploy(app, apk, env) {
     run(['shell', `chmod 644 ${quote(plan)}`], 'chmod the plan');
     env = { ...env, EXACT_PLAN: plan };
   }
-  const vars = readerVariables(env), { added, release: releasePorts } = reverseForDrive(tool, serial, vars);
+  const vars = readerVariables(env), { lease, release: releasePorts } = reverseForDrive(tool, serial, vars);
   return {
     serial, dir, shot,
-    spawn: () => spawn(process.execPath, [import.meta.path, 'relay', serial, id, JSON.stringify(vars), JSON.stringify(added)], { env, stdio: ['pipe', 'pipe', 'pipe'] })
-      .on('exit', code => { if (code !== 0 && code !== RELAY_CLEANED_ERROR) releasePorts(); }),
+    spawn: () => spawnCarrier(['relay', serial, id, JSON.stringify(vars), JSON.stringify(lease)], env)
+      .on('exit', code => {
+        if (code !== 0 && code !== RELAY_CLEANED_ERROR) spawnSync(tool, ['-s', serial, 'shell', 'am', 'force-stop', id]);
+        releasePorts();
+      }).on('error', releasePorts),
     pull(path) {
       const r = spawnSync(tool, ['-s', serial, 'pull', shot, resolve(path)], { encoding: 'utf8' });
       if (r.status !== 0) throw new Error(`adb pull the screenshot: ${(r.stderr || r.stdout).trim()}`);
@@ -321,42 +328,140 @@ export const reversedPorts = (vars) => [...new Set([vars.EXACT_DEV_PLAN, vars.EX
   .filter((url) => url && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname))
   .map((url) => url.port || (url.protocol === 'https:' ? '443' : '80')))];
 
-// Reverse mappings belong to the device. Keep those already present, including a person's manual setup.
+// SQLite supplies a process lock on every desktop host. The ownership file stays outside its transaction
+// so a rollback after SIGKILL cannot discard a claim for an adb change that already happened.
+function withReverseState(lease, body) {
+  const { Database } = import.meta.require('bun:sqlite');
+  mkdirSync(lease.root, { recursive: true });
+  const lock = new Database(resolve(lease.root, 'lock')), path = resolve(lease.root, 'owners.json');
+  try {
+    lock.exec('PRAGMA busy_timeout = 30000; BEGIN EXCLUSIVE');
+    const state = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {};
+    const save = () => {
+      const pending = resolve(lease.root, 'owners.pending');
+      writeFileSync(pending, JSON.stringify(state)); renameSync(pending, path);
+    };
+    return body(state, save);
+  } finally { lock.close(); }
+}
+
+const reverseOwner = () => ({ pid: process.pid, started: new Date().toISOString() });
+
+// Finish the adb command and its ownership write even if the calling drive or its process group is killed.
+function reverseCall(action, tool, serial, lease, ports = []) {
+  const result = spawnSync(process.execPath, [import.meta.path, 'reverse', action, tool, serial, JSON.stringify(lease), JSON.stringify(ports)], { encoding: 'utf8', detached: true });
+  if (result.status !== 0) throw new Error(`Android reverse ${action}: ${(result.stderr || result.error?.message || '').trim()}`);
+  const reply = JSON.parse(result.stdout);
+  if (reply.error) throw new Error(reply.error);
+  return reply.value;
+}
+
+/** Where the drives of one adb server and device record who owns its reverse mappings. Drives
+ * share the account's adb server whatever cache their environments name, so the record is under
+ * the account's home directory, not `XDG_CACHE_HOME` or `HOME`. */
+export function reverseRoot(serial) {
+  const server = (process.env.ADB_SERVER_SOCKET ?? `tcp:${process.env.ANDROID_ADB_SERVER_ADDRESS ?? 'localhost'}:${process.env.ANDROID_ADB_SERVER_PORT ?? '5037'}`)
+    .replace(/^tcp:(?:(?:localhost|127\.0\.0\.1|::1|\[::1\]):)?(\d+)$/, 'tcp:localhost:$1');
+  const key = createHash('sha256').update(JSON.stringify([server, serial])).digest('hex');
+  return resolve(userInfo().homedir, '.cache/exact/android-reverse', key);
+}
+
+// Existing mappings without an ownership record are external and are never removed by a drive.
 function reverseForDrive(tool, serial, vars) {
-  const ports = reversedPorts(vars), added = [];
-  const release = () => releaseReverse(tool, serial, added.splice(0));
+  const ports = reversedPorts(vars);
+  const lease = { root: reverseRoot(serial), token: randomUUID(), owner: reverseOwner(), ports: [] };
+  if (ports.length) lease.ports = reverseCall('acquire', tool, serial, lease, ports);
+  return { lease, release: () => releaseReverse(tool, serial, lease) };
+}
+
+function acquireReverse(tool, serial, lease, ports) {
   const run = (...args) => {
     const r = spawnSync(tool, ['-s', serial, 'reverse', ...args], { encoding: 'utf8' });
     if (r.status !== 0) throw new Error(`adb reverse ${args.join(' ')}: ${(r.stderr || r.stdout || r.error?.message || '').trim()}`);
     return r.stdout;
   };
   if (ports.length) {
-    const present = new Map(run('--list').trim().split('\n').filter(Boolean).map(line => line.trim().split(/\s+/).slice(1, 3)));
     try {
-      for (const port of ports.map(port => `tcp:${port}`)) {
-        if (present.has(port)) {
-          if (present.get(port) !== port) throw new Error(`adb reverse: ${port} maps to ${present.get(port)}; needed ${port}`);
-          continue;
+      withReverseState(lease, (state, save) => {
+        const present = new Map(run('--list').trim().split('\n').filter(Boolean).map(line => line.trim().split(/\s+/).slice(1, 3)));
+        for (const port of ports.map(port => `tcp:${port}`)) {
+          if (present.has(port) && present.get(port) !== port) {
+            delete state[port]; save();
+            throw new Error(`adb reverse: ${port} maps to ${present.get(port)}; needed ${port}`);
+          }
+          if (present.has(port) && !state[port]) continue;
+          state[port] ??= { generation: randomUUID(), owners: {} };
+          state[port].owners[lease.token] = lease.owner;
+          lease.ports.push({ port, generation: state[port].generation });
+          save(); // Keep the claim if this process dies after adb adds the mapping.
+          if (!present.has(port)) {
+            try { run('--no-rebind', port, port); }
+            catch (error) {
+              delete state[port].owners[lease.token];
+              if (!Object.keys(state[port].owners).length) delete state[port];
+              save();
+              throw error;
+            }
+          }
         }
-        run('--no-rebind', port, port);
-        added.push(port);
-      }
-    } catch (e) { release(); throw e; }
+      });
+    } catch (e) { releaseReverseState(tool, serial, lease); throw e; }
   }
-  return { added, release };
+  if (!claimLive(JSON.stringify(lease.owner))) releaseReverseState(tool, serial, lease);
+  return lease.ports;
 }
 
-// A failed relay may have removed some ports already; another drive can have acquired them since.
-function releaseReverse(tool, serial, ports) {
-  if (!ports.length) return true;
-  const listed = spawnSync(tool, ['-s', serial, 'reverse', '--list'], { encoding: 'utf8' });
-  if (listed.status !== 0) return false;
-  const present = new Map(listed.stdout.trim().split('\n').filter(Boolean).map(line => line.trim().split(/\s+/).slice(1, 3)));
-  let released = true;
-  for (const port of ports) if (present.get(port) === port) {
-    if (spawnSync(tool, ['-s', serial, 'reverse', '--remove', port]).status !== 0) released = false;
+// Both the carrier and its parent can release a lease. Generations make retries harmless after replacement.
+function releaseReverse(tool, serial, lease) {
+  return !lease.ports.length || reverseCall('release', tool, serial, lease);
+}
+
+function releaseReverseState(tool, serial, lease) {
+  if (!lease.ports.length) return true;
+  return withReverseState(lease, (state, save) => {
+    const owned = lease.ports.filter(({ port, generation }) => state[port]?.generation === generation && state[port].owners[lease.token]);
+    if (!owned.length) return true;
+    const listed = spawnSync(tool, ['-s', serial, 'reverse', '--list'], { encoding: 'utf8' });
+    if (listed.status !== 0) return false;
+    const present = new Map(listed.stdout.trim().split('\n').filter(Boolean).map(line => line.trim().split(/\s+/).slice(1, 3)));
+    let released = true;
+    for (const { port } of owned) {
+      const others = Object.entries(state[port].owners).filter(([token, owner]) => token !== lease.token && claimLive(JSON.stringify(owner)));
+      if (present.has(port) && present.get(port) !== port) delete state[port];
+      else if (others.length) state[port].owners = Object.fromEntries(others);
+      else if (!present.has(port) || spawnSync(tool, ['-s', serial, 'reverse', '--remove', port]).status === 0) delete state[port];
+      else released = false;
+      save();
+    }
+    return released;
+  });
+}
+
+// A killed wrapper must stop its adb children before the parent releases its reverse mappings.
+function spawnCarrier(args, env) {
+  const grouped = process.platform !== 'win32';
+  const child = spawn(process.execPath, [import.meta.path, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'], detached: grouped });
+  if (grouped) {
+    const signalGroup = signal => {
+      if (!child.pid) return false;
+      try { process.kill(-child.pid, signal); return true; }
+      catch (error) { if (error.code !== 'ESRCH') throw error; return false; }
+    };
+    child.kill = (signal = 'SIGTERM') => {
+      const sent = signalGroup(signal);
+      if (sent) child.killed = true;
+      return sent;
+    };
+    child.once('exit', () => signalGroup('SIGKILL'));
   }
-  return released;
+  return child;
+}
+
+async function headless([tool, serial, command, encodedLease]) {
+  const lease = JSON.parse(encodedLease);
+  const child = spawn(tool, ['-s', serial, 'shell', '-T', command], { stdio: 'inherit' });
+  const code = await new Promise(resolve => { child.on('exit', code => resolve(code ?? 1)); child.on('error', () => resolve(1)); });
+  process.exit(releaseReverse(tool, serial, lease) ? code : 1);
 }
 
 /** How long after an operation's answer a screenshot is taken: the reader draws what the operation painted over
@@ -367,9 +472,9 @@ const SHOT_SETTLE_MS = 400;
  * adb forward it, and carry the protocol's lines between this process's stdio and the app. Every line is the app's
  * to answer but `screenshot`, whose picture is the device's (`screencap`), tagged as the app tags a reply. The
  * app's own stderr (logcat's `exact` tag) is this process's. Ends when stdin does, and the app with it. */
-async function relay([serial, id, vars, added]) {
+async function relay([serial, id, vars, encodedLease]) {
   const tool = adb(), sh = (...args) => spawnSync(tool, ['-s', serial, ...args], { encoding: 'utf8' });
-  const name = `exact-agent-${process.pid}`, ports = JSON.parse(added);
+  const name = `exact-agent-${process.pid}`, lease = JSON.parse(encodedLease);
   let port, logs, cleaned = false, released = true, connected = false, turn = Promise.resolve(), buffered = '';
   let input = data => { buffered += data; };
   const cleanup = () => {
@@ -378,7 +483,7 @@ async function relay([serial, id, vars, added]) {
     logs?.kill();
     if (port && sh('forward', '--remove', `tcp:${port}`).status !== 0) released = false;
     sh('shell', 'am', 'force-stop', id);
-    if (!releaseReverse(tool, serial, ports)) released = false;
+    if (!releaseReverse(tool, serial, lease)) released = false;
     return released;
   };
   const done = code => { process.exit(cleanup() ? (code === 0 ? 0 : RELAY_CLEANED_ERROR) : 1); };
@@ -588,15 +693,9 @@ export function runGradle(args, options, platform = process.platform, { studio, 
  * ships beside it and must reach the device byte for byte (the Gradle shell extracts it and keeps its symbols).
  * Gradle wants a JDK (17 or newer) and the SDK's platform. The APK's path, or null. */
 export function buildApk(app, env, profile, writeLocks = false) {
-  const maven = mavenLibraries(app);
-  if (!writeLocks && !mavenLocksPresent(app, maven)) return null;
   const crate = app.crate('android');
   if (!app.manifest.game && !crateManifest(app, 'android')) throw new Error(`${app.dir} has no android/ crate, the app's library for the Canvas host: bun exact.mjs update adds one to an app that names android in app.json (apps/shelf/android is one)`);
   const built = (name) => resolve(app.target, ANDROID_TARGET, profile, `lib${name.replaceAll('-', '_')}.so`);
-  // The packages' configuration (LLP 1133.021 §9 item 7), before anything compiles: a required value that is absent
-  // refuses the build by its code (`maps-key-missing` for a release without the Maps key).
-  let config;
-  try { config = packageConfig(app.dir, 'android', { release: profile === 'release' }); } catch (error) { console.error(`${app.name}: ${error.message}`); return null; }
   let gpu = null, out = null;
   if (app.manifest.game || app.hasGpu) {
     try { buildBake(app, 'linux', ANDROID_TARGET, { profile, env, kind: 'android' }); }
@@ -609,6 +708,12 @@ export function buildApk(app, env, profile, writeLocks = false) {
     if (cargo.status !== 0) return null;
     out = planOut(cargo.stdout.toString(), crate);
   }
+  const extensions = JSON.parse(readFileSync(resolve(out, 'artifacts.json'), 'utf8')).extensions;
+  const bound = androidImplementations(app.dir, extensions);
+  const maven = [...new Set(bound.flatMap(b => b.maven ?? []))].sort();
+  if (!writeLocks && !mavenLocksPresent(app, maven)) return null;
+  let config;
+  try { config = packageConfig(app.dir, 'android', { extensions, release: profile === 'release' }); } catch (error) { console.error(`${app.name}: ${error.message}`); return null; }
   const uses = planUses(out);
   // The page-size argument is in every rustflags source the build makes or Cargo was handed (`androidCargo`), but a
   // table in the app's Cargo configuration takes precedence over the build's own and can leave it out.
@@ -644,7 +749,7 @@ export function buildApk(app, env, profile, writeLocks = false) {
     assembled = runGradle(['--no-watch-fs', ':app:assembleRelease', `-Papp=${app.name}`, `-PappDir=${app.manifest.game ? app.workspace : app.dir}`,
       `-PexactDevelopment=${development ? '1' : '0'}`,
       `-PappBuildDir=${dirs.app}`, `-PcanvasBuildDir=${dirs.canvas}`, `-PndkPath=${env.ANDROID_NDK_HOME}`, '--project-cache-dir', dirs.cache, `-Pkotlin.project.persistent.dir=${dirs.kotlin}`,
-      ...(gpu ? [`-PgpuModule=${basename(gpu)}`] : []), ...compose, ...extensionArgs(app, out, config), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env) } });
+      ...(gpu ? [`-PgpuModule=${basename(gpu)}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env) } });
     if (assembled) graph.kept();
   } finally {
     graph.done();
@@ -659,13 +764,6 @@ export function buildApk(app, env, profile, writeLocks = false) {
   recordBuiltSettings(apk, app, out);
   return apk;
 }
-
-/** The Maven libraries the bound modules name (LLP 1133.008 D8 item 5), as Gradle arguments: one graph with the
- * reader's own AndroidX, locked to the app's `gradle.lockfile` and verified against its `gradle-verification.xml`,
- * both beside its other locks. The verification file is Gradle's, which it reads only from the reader's `gradle/`:
- * it is put there for this build (`done` takes it away). `writeLocks` writes both from the graph as it resolves
- * (`kept` copies the verification back). Missing locks are refused before Rust compiles. */
-const mavenLibraries = app => [...new Set(androidImplementations(app.dir).flatMap(b => b.maven ?? []))].sort();
 
 /** Where to run the lock-writing command, through the app's launcher or this repository. */
 export function androidLockCommand(app) {
@@ -682,6 +780,11 @@ function mavenLocksPresent(app, maven) {
   return false;
 }
 
+/** The Maven libraries the bound modules name (LLP 1133.008 D8 item 5), as Gradle arguments: one graph with the
+ * reader's own AndroidX, locked to the app's `gradle.lockfile` and verified against its `gradle-verification.xml`,
+ * both beside its other locks. The verification file is Gradle's, which it reads only from the reader's `gradle/`:
+ * it is put there for this build (`done` takes it away). `writeLocks` writes both from the graph as it resolves
+ * (`kept` copies the verification back). Missing locks are refused before Gradle runs. */
 function mavenGraph(app, writeLocks, maven) {
   const placed = resolve(READER, 'gradle/verification-metadata.xml');
   const none = { args: [], kept() {}, done() {} };
@@ -701,8 +804,8 @@ function mavenGraph(app, writeLocks, maven) {
  * permissions the app's grant lines derive (the bake's `reach.android`) with those its names derive, and the
  * components its packages' manifest fragments declare with the meta-data `config` (`packageConfig`'s) carries, as
  * Gradle properties. */
-function extensionArgs(app, out, config) {
-  const bound = androidImplementations(app.dir), generated = resolve(apkDirs(app).app, 'extensions');
+function extensionArgs(app, out, config, bound) {
+  const generated = resolve(apkDirs(app).app, 'extensions');
   rmSync(generated, { recursive: true, force: true });
   let permissions = [], services = {}, features = [];
   try {
@@ -796,7 +899,15 @@ export async function androidCaptures(s, { screen, shot, failed }) {
   return runs;
 }
 
-if (import.meta.main && process.argv[2] === 'relay') {
+if (import.meta.main && process.argv[2] === 'reverse') {
+  const [action, tool, serial, encodedLease, ports] = process.argv.slice(3), lease = JSON.parse(encodedLease);
+  try {
+    const value = action === 'acquire' ? acquireReverse(tool, serial, lease, JSON.parse(ports)) : releaseReverseState(tool, serial, lease);
+    console.log(JSON.stringify({ value }));
+  } catch (error) { console.log(JSON.stringify({ error: error.message })); }
+} else if (import.meta.main && process.argv[2] === 'headless') {
+  await headless(process.argv.slice(3)).catch((e) => { console.error(e.message); process.exit(1); });
+} else if (import.meta.main && process.argv[2] === 'relay') {
   // The reader carrier's own process (`readerDeploy`): not a verb a person runs.
   await relay(process.argv.slice(3)).catch((e) => { console.error(e.message); process.exit(1); });
 } else if (import.meta.main) {

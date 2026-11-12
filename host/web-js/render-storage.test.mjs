@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { open } from '../../scripts/agent.mjs';
 import { webCompiler } from './module.mjs';
@@ -26,7 +26,7 @@ async function build(dir) {
 // A page rendered on the server has no storage (LLP 1048.000 D9): a source that reads a file there is refused before
 // any storage code runs, and its resource keeps its placeholder, pending, not failed and not in the checkpoint's
 // answers; the render does not wait for it. The reader's page, once it adopts the document, asks it again.
-test('a page rendered on the server keeps a storage source pending, and the reader\'s page asks it', async () => {
+test.each(['TypeScript', 'Rust'])('a page rendered on the server keeps a %s storage source pending, and the reader\'s page asks it', async language => {
   const dir = scratch();
   let site, browser;
   try {
@@ -47,7 +47,73 @@ component App
       text (pending(prefs) ? "pending" : failed(prefs) ? "failed" : "answered") testId="state"
 `);
     // On the reader's device the file is not there yet: the source says so, which shows that storage was asked.
-    writeFileSync(resolve(dir, 'app.ts'), `export const grants = 'fs.read app:/data/prefs.json';
+    if (language === 'Rust') {
+      mkdirSync(resolve(dir, 'data/src'), { recursive: true });
+      mkdirSync(resolve(dir, 'web'));
+      writeFileSync(resolve(dir, 'web/build.rs'), 'fn main() { contract::bake(plan, render_storage_data::Prefs); }\n');
+      writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]
+name = "render-storage-data"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+exact-runner = { path = "${root}/runner" }
+[workspace]
+`);
+      writeFileSync(resolve(dir, 'data/src/lib.rs'), `use exact_runner::{Answer, DataError, DataSource, Outcome, Request, Store, Value};
+
+pub struct Prefs;
+impl DataSource for Prefs {
+    fn app_id(&self) -> &str {
+        "test.render-storage"
+    }
+    fn grants(&self) -> &str {
+        "fs.read app:/data/prefs.json"
+    }
+    fn query(&mut self, source: &str, args: &[Value]) -> Result<Value, DataError> {
+        if source != "title" {
+            return Err(DataError::UnknownSource(source.into()));
+        }
+        let Value::List(ids) = &args[0] else {
+            unreachable!()
+        };
+        Ok(Value::str(
+            &ids.first()
+                .map(|id| format!("Item {}", id.as_str().unwrap()))
+                .unwrap_or("Home".into()),
+        ))
+    }
+    fn answer(&mut self, _: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
+        if source == "title" {
+            return self.query(source, args).map(Answer::Now);
+        }
+        Ok(Answer::Later(Request::storage(
+            br#"{"version":1,"op":"fs.readFile","args":{"path":"app:/data/prefs.json"}}"#.to_vec(),
+        )))
+    }
+    fn parse(
+        &mut self,
+        _: &mut Store,
+        _: &str,
+        _: &[Value],
+        outcome: Outcome,
+    ) -> Result<Answer, DataError> {
+        match outcome {
+            Outcome::Storage(bytes)
+                if String::from_utf8_lossy(&bytes)
+                    .contains("no such file or directory: app:/data/prefs.json") =>
+            {
+                Ok(Answer::Now(Value::record(vec![Value::str(
+                    "asked on the device",
+                )])))
+            }
+            other => Err(DataError::Unavailable(format!(
+                "unexpected storage outcome: {other:?}"
+            ))),
+        }
+    }
+}
+`);
+    } else writeFileSync(resolve(dir, 'app.ts'), `export const grants = 'fs.read app:/data/prefs.json';
 export const answer = async (name: string, args: string[][], _store: unknown, storage: any): Promise<any> => {
   if (name === 'title') return args[0].length ? 'Item ' + args[0][0] : 'Home';
   try { return { name: new TextDecoder().decode(await storage.fs.readFile('app:/data/prefs.json')) }; }
@@ -73,7 +139,8 @@ export const answer = async (name: string, args: string[][], _store: unknown, st
     expect(pending(html)).toEqual({ name: 'placeholder', state: 'pending', pending: ['prefs'], answered: ['title'] });
     expect(html).not.toContain('"revalidate":true');
     expect(lines.join('\n')).not.toMatch(/failed|structuredClone|dynamic import/);
-    expect(lines.join('\n')).toContain('resource prefs is pending: a page rendered on the server has no storage (storage.fs.readFile())');
+    const api = language === 'Rust' ? 'storage request' : 'storage.fs.readFile()';
+    expect(lines.join('\n')).toContain(`resource prefs is pending: a page rendered on the server has no storage (${api})`);
     const direct = await render('/item/7', 30000);
     expect([direct.status, direct.settled, direct.failed]).toEqual([200, true, []]);
     // The reader's page adopts the document and asks the source, which now reads storage.
@@ -83,11 +150,11 @@ export const answer = async (name: string, args: string[][], _store: unknown, st
       const asset = Bun.file(resolve(dist, path.slice(1)));
       return await asset.exists() ? new Response(asset) : new Response(null, { status: 404 });
     } });
-    browser = await open({ host: 'web', url: new URL('/item/7', site.url).href });
+    browser = await open({ host: 'web', url: new URL('/item/7?storage=render-prefs', site.url).href });
     await browser.clock('settle');
     const journal = await browser.carrier.evaluate('globalThis.exact.journal');
     expect(journal.some(l => l.endsWith('adopted the document')), journal.join('\n')).toBe(true);
-    expect(await browser.carrier.evaluate(`['name', 'state'].map(id => document.querySelector('[data-testid="' + id + '"]').textContent)`))
+    expect(await browser.carrier.evaluate(`['name', 'state'].map(id => document.querySelector('[data-testid="' + id + '"]').textContent)`), journal.join('\n'))
       .toEqual(['asked on the device', 'answered']);
   } finally {
     await browser?.close(); site?.stop(true);
@@ -296,6 +363,10 @@ test('a render holds streams and uploads beside a refused call, and refuses file
   watch "/watch" render=request
   watchBad "/watch-bad" render=request
   watchThen "/watch-then" render=request
+  watchAwait "/watch-await" render=request
+  watchHelpers "/watch-helpers" render=request
+  bodyFromAwait "/body-from-await" render=request
+  bodyToAwait "/body-to-await" render=request
   timeout "/timeout" render=request
   aborted "/aborted" render=request
   streamVoid "/stream-void" render=request
@@ -311,7 +382,20 @@ component App
       text prefs testId="prefs"
       text live testId="live"
 `);
-    writeFileSync(resolve(dir, 'app.ts'), `export const grants = 'fs.read app:/data\\nfs.write app:/data\\nnet.fetch ${api.url.origin}';
+    writeFileSync(resolve(dir, 'watch.ts'), `class Document {
+  #path = 'doc:/notes';
+  get path() { return this.#path; }
+}
+async function* paths() { yield new Document().path; }
+export async function watch(storage: any): Promise<string> {
+  await Promise.resolve();
+  const { ignored, ...options } = { ...{ recursive: true }, ignored: 0 };
+  for await (const path of paths()) storage.fs.watch(path, options);
+  return options.recursive ? 'watched' : 'missing';
+}
+`);
+    writeFileSync(resolve(dir, 'app.ts'), `import { watch } from './watch';
+export const grants = 'fs.read app:/data\\nfs.write app:/data\\nnet.fetch ${api.url.origin}';
 const API = '${api.url.origin}';
 const stop = new AbortController();
 export const answer = async (name: string, [route]: string[], _store: unknown, storage: any): Promise<any> => {
@@ -324,6 +408,10 @@ export const answer = async (name: string, [route]: string[], _store: unknown, s
   if (route === 'aborted') return (await fetch(API + '/upload', { method: 'POST', exactBodyFrom: 'app:/data/b', signal: stop.signal } as RequestInit)).text();
   if (route === 'expectBad') { try { await storage.fs.writeFile('app:/data/b', 'x', { expect: { modified: 0 } }); return 'written'; } catch (e: any) { return 'rejected ' + e.name; } }
   if (route === 'watchThen') return Promise.resolve().then(() => { storage.fs.watch('doc:/notes'); return 'watched'; });
+  if (route === 'watchAwait') { await Promise.resolve(); storage.fs.watch('doc:/notes'); return 'watched'; }
+  if (route === 'watchHelpers') return watch(storage);
+  if (route === 'bodyFromAwait') { await Promise.resolve(); return (await fetch(API + '/upload', { method: 'POST', exactBodyFrom: 'app:/data/b' } as RequestInit)).text(); }
+  if (route === 'bodyToAwait') { await Promise.resolve(); await fetch(API + '/upload', { exactBodyTo: 'app:/data/b' } as RequestInit); return 'saved'; }
   if (route === 'streamVoid') { void Promise.resolve().then(() => storage.fs.readFile('app:/data/p')); return fetch(API + '/events', { exactStream: (e: any) => e.data } as RequestInit); }
   if (route === 'abortedFrom' || route === 'abortedTo') {
     const gone = new AbortController();
@@ -359,15 +447,23 @@ export const answer = async (name: string, [route]: string[], _store: unknown, s
       seen[path] = await page(path);
     }
     const refused = api => ({ status: 200, settled: true, live: '', pending: ['live'], open: [], refused: [['live', api]], failed: [], quick: true });
-    for (const [path, api] of [['/body-from', 'exactBodyFrom app:/data/b'], ['/body-to', 'exactBodyTo app:/data/b'], ['/upload-from', 'exactBodyFrom app:/data/b']]) {
+    for (const [path, api] of [
+      ['/body-from', 'exactBodyFrom app:/data/b'], ['/body-from-await', 'exactBodyFrom app:/data/b'],
+      ['/body-to', 'exactBodyTo app:/data/b'], ['/body-to-await', 'exactBodyTo app:/data/b'],
+      ['/upload-from', 'exactBodyFrom app:/data/b'],
+    ]) {
       wanted[path] = refused(api);
       seen[path] = await page(path);
     }
     wanted['/watch'] = { status: 200, settled: true, live: 'watched', pending: [], open: ['live'], refused: [], failed: [], quick: true };
     seen['/watch'] = await page('/watch');
+    for (const path of ['/watch-await', '/watch-helpers']) {
+      wanted[path] = wanted['/watch'];
+      seen[path] = await page(path);
+    }
     wanted['/watch-bad'] = { status: 200, settled: true, live: '', pending: [], open: [], refused: [], failed: ['live'], quick: true };
     seen['/watch-bad'] = await page('/watch-bad');
-    // A plain `.then` runs outside its answer, on the device as here: the watch throws there, so it throws here.
+    // A plain `.then` runs outside its answer in the reader's page too, so the watch throws in both.
     wanted['/watch-then'] = wanted['/watch-bad'];
     seen['/watch-then'] = await page('/watch-then');
     // A file body's refusal is no request in flight: neither the fetch's timeout nor its abort ends it, though the

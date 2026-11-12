@@ -3,6 +3,7 @@
 //! memory.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// The kv scope the runner's kept answers live in, beside secrets
 /// (LLP 1027 D4). The same scope Apple's store writes.
@@ -126,17 +127,85 @@ impl exact_data::secrets::Backend for SecretFiles {
     }
 }
 
-pub(super) fn shared_secrets(app: &str) -> Option<std::sync::Arc<dyn exact_runner::SharedSecrets>> {
+struct GrantedSecrets {
+    coordinator: exact_data::secrets::Coordinator,
+    grants: ibex2::grant::GrantSet,
+}
+impl GrantedSecrets {
+    fn new(
+        namespace: exact_data::secrets::Namespace,
+        backend: Arc<dyn exact_data::secrets::Backend>,
+        grants: &str,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            coordinator: exact_data::secrets::Coordinator::new(namespace, backend),
+            grants: ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants))
+                .unwrap_or_default(),
+        })
+    }
+    fn admit(&self, name: &str) -> Result<(), String> {
+        ibex2::boundary::admit(
+            &self.grants,
+            &ibex2::grant::Operation::SecretKeep { name: name.into() },
+        )
+        .map_err(|error| error.to_string())
+    }
+}
+impl exact_runner::SharedSecrets for GrantedSecrets {
+    fn acquire(
+        &self,
+        name: &str,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Box<dyn exact_runner::SecretWait> {
+        // Admission precedes acquisition: taking a name fences queued writes
+        // and may delete a credential left by an abandoned effect.
+        if let Err(error) = self.admit(name) {
+            let wait = DeniedSecretWait(Some(Arc::new(DeniedSecret(error))));
+            wake();
+            return Box::new(wait);
+        }
+        self.coordinator.acquire(name, wake)
+    }
+}
+
+struct DeniedSecret(String);
+impl exact_runner::SecretLease for DeniedSecret {
+    fn read(&self) -> Result<Option<String>, String> {
+        Err(self.0.clone())
+    }
+    fn write(&self, _: Option<&str>) -> Result<(), String> {
+        Err(self.0.clone())
+    }
+    fn begin_effect(&self) -> Result<(), String> {
+        Err(self.0.clone())
+    }
+    fn finish(&self) -> Result<(), String> {
+        Err(self.0.clone())
+    }
+}
+
+struct DeniedSecretWait(Option<Arc<dyn exact_runner::SecretLease>>);
+impl exact_runner::SecretWait for DeniedSecretWait {
+    fn take(&mut self) -> Option<Result<Arc<dyn exact_runner::SecretLease>, String>> {
+        self.0.take().map(Ok)
+    }
+}
+
+pub(super) fn shared_secrets(
+    app: &str,
+    grants: &str,
+) -> Option<std::sync::Arc<dyn exact_runner::SharedSecrets>> {
     let roots = store_roots(app);
     let namespace = secret_namespace(&roots)?;
     let root = roots.ok()??.1?;
-    Some(std::sync::Arc::new(exact_data::secrets::Coordinator::new(
+    Some(GrantedSecrets::new(
         namespace,
         std::sync::Arc::new(SecretFiles(
             ibex2::secrets::FileStore::new(root.join("secrets")),
             root.join("secrets"),
         )),
-    )))
+        grants,
+    ))
 }
 
 struct SecretMemory(ibex2::secrets::MemoryStore);
@@ -158,9 +227,9 @@ pub(super) struct SecretSession {
     memory: Option<(exact_data::secrets::Namespace, std::sync::Arc<SecretMemory>)>,
 }
 impl SecretSession {
-    pub fn new(app: &str) -> Result<Self, String> {
+    pub fn new(app: &str, grants: &str) -> Result<Self, String> {
         store_roots(app)?;
-        if let Some(shared) = shared_secrets(app) {
+        if let Some(shared) = shared_secrets(app, grants) {
             return Ok(Self {
                 shared,
                 memory: None,
@@ -169,10 +238,7 @@ impl SecretSession {
         let namespace = exact_data::secrets::Namespace::memory();
         let backend = std::sync::Arc::new(SecretMemory(ibex2::secrets::MemoryStore::new()));
         Ok(Self {
-            shared: std::sync::Arc::new(exact_data::secrets::Coordinator::new(
-                namespace.clone(),
-                backend.clone(),
-            )),
+            shared: GrantedSecrets::new(namespace.clone(), backend.clone(), grants),
             memory: Some((namespace, backend)),
         })
     }

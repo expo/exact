@@ -384,7 +384,7 @@ export function perfExpectation(measured, st, resources = []) {
   if (st.subject === 'query') {
     if (!measured.whole.resources) return `this host counts no resource asks, so \`expect perf ${said}\` cannot be read`;
     if (resources.length && !resources.includes(st.target)) return `no resource is named ${st.target} (${resources.join(', ')})`;
-    got = measured.whole.resources.find((r) => r.name === st.target)?.asked ?? 0;
+    got = measured.whole.resources.reduce((n, r) => n + (r.name === st.target ? r.asked : 0), 0);
   } else {
     const count = st.subject === 'built' ? (x) => (x.created ?? 0) + (x.rowConstructed ?? 0) : (x) => x.evaluated ?? 0;
     let sites = measured.whole.sites.filter((x) => x.source?.component === st.target);

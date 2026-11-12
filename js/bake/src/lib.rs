@@ -1034,24 +1034,12 @@ fn bake_in(
     let exported = contract::design_exports(&app.join("app.contract"));
     let entries = contract::snapshot::entries(&app)?;
     let source_plan = contract::snapshot::source_plan(&entries, &plan)?;
-    let mut declarations = contract::typescript_exporting(&source_plan, exported.as_deref())?;
-    // Canvas 2D (LLP 1056 D1): a module that exports `draw` and `surfaces`
-    // speaks ABI 2, and only it carries the recorder.
-    let app_ts = String::from_utf8_lossy(&captured[Path::new("app.ts")]).into_owned();
-    let draws = exports(&app_ts, "draw");
-    if draws != exports(&app_ts, "surfaces") {
-        return Err(
-            "app.ts exports `draw` and `surfaces` together, or neither (LLP 1056 D1)".into(),
-        );
-    }
-    if draws {
-        declarations.push_str(CANVAS_TYPES);
-        write_changed(&stage.join("__exact_canvas.js"), RECORDER.as_bytes())?;
-        write_changed(
-            &stage.join("__exact_canvas.d.ts"),
-            RECORDER_TYPES.as_bytes(),
-        )?;
-    }
+    let declarations = contract::typescript_exporting(&source_plan, exported.as_deref())?;
+    write_changed(&stage.join("__exact_canvas.js"), RECORDER.as_bytes())?;
+    write_changed(
+        &stage.join("__exact_canvas.d.ts"),
+        RECORDER_TYPES.as_bytes(),
+    )?;
     write_changed(&stage.join(DECLARATIONS), declarations.as_bytes())?;
     // And beside app.ts, so an editor type-checks the module against its plan: never captured or
     // committed, written only when it changes, so a watcher sees one event per contract change.
@@ -1071,11 +1059,9 @@ fn bake_in(
     let id = contract::Manifest::read(&app)
         .map(|m| m.id)
         .unwrap_or_default();
-    let mut entry = format!("import * as app from './app';\nimport type {{ Answer }} from './app.contract.d.ts';\nexport const abi = {};\nexport const appId: string = (app as unknown as {{ appId?: string }}).appId ?? {};\nexport const grants: string = {grants};\nexport const answer: Answer = app.answer;\n", if draws { 2 } else { 1 }, serde_json::to_string(&id).unwrap_or_default());
+    let mut entry = format!("import * as app from './app';\nimport type {{ Answer }} from './app.contract.d.ts';\nexport const appId: string = (app as unknown as {{ appId?: string }}).appId ?? {};\nexport const grants: string = {grants};\nexport const answer: Answer = app.answer;\n", serde_json::to_string(&id).unwrap_or_default());
     entry.push_str(OPTIONAL_ENTRY);
-    if draws {
-        entry.push_str(CANVAS_ENTRY);
-    }
+    entry.push_str("// __exact_canvas_entry\n");
     write_changed(&stage.join("__exact_entry.ts"), entry.as_bytes())?;
     resident::write_config(stage)?;
     let target = resident::binding_target();
@@ -1114,6 +1100,7 @@ fn bake_in(
     // bake at 104.8 ms, then passed on retry. A build fails on the source,
     // never on how busy the machine was (LLP 1027 §6).
     module.set_budget_ms(f64::INFINITY);
+    let abi = module.abi()?;
     let app_id = module.app_id().to_owned();
     let grants = module.grants().to_owned();
     exact_runner::auth::session_grant_refusal(&grants)
@@ -1159,7 +1146,7 @@ fn bake_in(
     let source_map = source_map.map(|map| map.json(&plan));
     let packages = package_code(stage)?.packages;
     let mut receipt = serde_json::json!({
-        "version": 1, "appId": app_id, "grants": grants, "abi": if draws { 2 } else { 1 },
+        "version": 1, "appId": app_id, "grants": grants, "abi": abi,
         // The prelude runtime it needs, which a push to an older binary checks (LLP 1016.000 D10).
         "typescriptRuntime": exact_bake::compat::typescript_runtime_of(&script, &grants),
         "surfaces": surfaces,
@@ -1215,41 +1202,6 @@ const RECORDER: &str = include_str!("../../../canvas/recorder.js");
 /// Its seam's type, for the generated entry's strict check.
 const RECORDER_TYPES: &str = "export declare function canvasSeam(draw: (surface: string, args: any, ctx: any, frame: any) => unknown): { draw(request: unknown, host?: unknown): string; retire(retired: unknown): void };\n";
 
-/// The entry's Canvas 2D half: the roster as JSON and the seam's two calls.
-const CANVAS_ENTRY: &str = "import { canvasSeam } from './__exact_canvas.js';\nexport const surfacesJson: string = JSON.stringify(app.surfaces);\nconst seam = canvasSeam(app.draw);\nexport const drawCanvas = (request: string, host?: unknown): string => seam.draw(JSON.parse(request), host);\nexport const retireCanvases = (retired: string): void => seam.retire(JSON.parse(retired));\n";
-
-/// What a drawing module's author types against (LLP 1056 D1, stages 1–2):
-/// the context is the web's own interface, narrowed to the built members,
-/// with `drawImage` and `createPattern` taking an image handle (D9). The web
-/// build's type check appends the same file (host/web-js/build.mjs).
-const CANVAS_TYPES: &str = include_str!("canvas-types.d.ts");
-
-/// Whether `app.ts` exports `name` (a function, a binding, or in a list).
-fn exports(source: &str, name: &str) -> bool {
-    let word = |at: usize| {
-        source[at + name.len()..]
-            .chars()
-            .next()
-            .is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == '$'))
-    };
-    [
-        "export function ",
-        "export async function ",
-        "export const ",
-        "export let ",
-    ]
-    .iter()
-    .any(|prefix| {
-        source
-            .match_indices(&format!("{prefix}{name}"))
-            .any(|(at, _)| word(at + prefix.len()))
-    }) || source.match_indices("export {").any(|(at, _)| {
-        let list = &source[at..at + source[at..].find('}').unwrap_or(0)];
-        list.split(|c: char| c == ',' || c == '{' || c.is_whitespace())
-            .any(|w| w == name)
-    })
-}
-
 /// With async break checks in every loop and function, so a host can
 /// interrupt a running call from another thread (LLP 1048.000 D10), and with
 /// ES6 block scoping: without it Hermes scopes `let` and `const` like `var`,
@@ -1294,14 +1246,14 @@ fn replace_changed(path: &Path, bytes: &[u8]) -> Result<(), String> {
 /// The one-shot producer's configuration and check: `tsc` and the repository
 /// root are its arguments; a refused check exits 3.
 const ONE_SHOT_CHECK: &str = r#"
-import { configure, check } from './__exact_config.mjs';
+import { configure, check, prepareCanvas } from './__exact_config.mjs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 const [tsc, root] = process.argv.slice(1);
 const {parseSync}=await import(createRequire(resolve(root, 'package.json')).resolve('rolldown/utils'));
 configure(process.cwd(),false,parseSync);
 const libraries = resolve(dirname(createRequire(resolve(root, 'package.json')).resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`)), 'lib');
-try { await check(process.cwd(), tsc, libraries); }
+try { await prepareCanvas(process.cwd(), libraries); await check(process.cwd(), tsc, libraries); }
 catch (error) { process.stderr.write(String(error?.message ?? error)); process.exit(3); }
 "#;
 

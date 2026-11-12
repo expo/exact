@@ -336,6 +336,7 @@ what to write. Nothing runs because a value changed (no `useEffect` or watch).
 | `==` compares lists and records by value; no `===` | values have no identity |
 | A string is well-formed: a lone surrogate becomes U+FFFD (`"😀".slice(0, 1)`) | every host holds Unicode scalar values |
 | A stored number is finite: a commit that would put `NaN` or `Infinity` in a state or derive is refused, and the write that caused it does not land | every host can carry it |
+| A resource or `send` argument must contain only finite numbers, including inside lists, records and options; the runner refuses the call before asking its source and names the argument position | Rust and TypeScript sources accept the same values on every host, whether placed on the main thread or a worker |
 | `toFixed` and the format functions print `""` for a non-finite number | one rule for every format |
 | Names hold hyphens, so subtraction takes spaces (`a - b`) | CSS's names |
 | A binding's list work is bounded (65,536 steps); a row's own binding has its own bound, so a row that searches another table costs rows × items (`lower-row-lookup`), and one that walks its own `for`'s list grows with it until the binding is unset (`lower-row-own-list`) | determinism on every host |
@@ -1264,8 +1265,9 @@ A token, a password or a key the module keeps is a secret, not a file: grant
 `secret.keep <name>` (one line per name, `secret.keep signal.token`) and use
 `store.set(name, value)`, `store.get(name)` (a string, or `null`) and
 `store.forget(name)` in an answer (LLP 1018). It is the Keychain on Apple; on the
-web, the page's `localStorage`, readable by any script on that origin; a Linux
-launch keeps it only until the app exits for now. A drive keeps it, by default,
+web, the page's `localStorage`, readable by any script on that origin; on Linux,
+unencrypted files in the app's data directory, retained across launches (an app
+without an ID keeps them in memory). A drive keeps it, by default,
 only in a named `--storage` store (`EXACT_STORE=real` gives an Apple drive, on a Mac, a simulator or a phone, the Keychain a normal launch reads).
 A secret that only the person in front of the device may read (an account's token
 behind Face ID) carries a policy on its line, `secret.keep token user-presence`
@@ -2480,10 +2482,17 @@ web implementation, Kotlin `ExactExtension.view`; `id` is the node's. A view dec
 `"displayed": true` is told `displayed(id, shown, origin)` when it shows or hides, and a
 prop marked `"binds": true` `bound(id, prop, origin)` when it changes; `origin` is `app`,
 `tool` or `wake`, that of the commit that did it. A declared prop may take a known
-attribute's name where it means what CSS means by it (`exact-camera`'s `object-fit`): written
-on the tag it goes to the view and not to the box, so declare no name the box needs (`width`
-on the tag would no longer size it). A class's rows stay the box's, and a renamed spelling
-(`fontSize`) is refused whatever is declared. `packages/fixtures/swatch` is a whole one.
+non-layout attribute's name where it means what CSS means by it (`exact-camera`'s
+`object-fit`): written on the tag it goes to the view. A declaration that names a
+layout attribute (`width`, `padding`, `flex`) is refused with `bake-view-prop-layout`,
+naming the package, view and prop; give the view prop another name. A class's rows
+style only the box: `object-fit` in a class never configures the viewfinder, so write
+it on `exact-camera` for that. A renamed spelling (`fontSize`) is refused whatever is
+declared. `packages/fixtures/swatch` is a whole one.
+
+A view placed by a Contract library counts too, including through a re-export. The app
+still declares the view's package as a direct dependency. A component the app never
+instantiates does not link its views' implementations.
 
 ### A package's native module, library and web assets
 
@@ -2666,8 +2675,13 @@ file paths stay 404, even with `notfound`.
 release build as deploy makes one (no agent mode): a page for each `render=build` route
 (rendered under Bun unless the app has a render entry of its own), `404.html` for a `notfound`
 route rendered so, `shell.html`, and `routes.json`, the route table in the plan's order with each
-route's pattern, render policy and `notfound`. Inside the app, `--out` is `dist` (or a path under
-`dist/` or `target/`), which no build reads as source; the build it replaces is kept beside it in
+route's pattern, render policy and `notfound`. An app with routes also gets `robots.txt`, which
+allows every path, and with `app.json`'s `app.origin` a `sitemap.xml` of the pages made at build,
+by the render server's rule: not the `notfound` page, a page whose status is neither 200 nor 503
+(a render at its deadline), or one whose `head` says `robots="noindex"` or `"none"`. A page rendered per request is not made at build, so the built
+sitemap does not list it. A declared route at `/robots.txt` or `/sitemap.xml` keeps that path
+instead of a generated file. Inside the app, `--out` is `dist` (or a path under `dist/` or
+`target/`), which no build reads as source; the build it replaces is kept beside it in
 `dist.gen` while a page sent from it may still ask for its files, and `--out` refuses a directory
 beside which something else holds one of those names (`dist.gen`, `dist.previous`, `dist.lock`).
 `bun exact.mjs serve dist` serves it on 127.0.0.1 (`--lan`: every interface), and any static
@@ -3397,8 +3411,10 @@ takes layout, box and paint rows, handlers, `testId`, `id`, `role`, ARIA, `disab
 and `inert`; any other known name (`color`, `value`, `command`, `href`) is refused,
 so give the module prop another name. A package's view is the exception: a prop its
 package declares for the view (`exact-camera`'s `object-fit`) goes to the view when
-written on the tag, even where the name is a known attribute. A class's rows stay
-the box's style, and a renamed spelling (`fontSize`) is refused whatever is declared. Do not
+written on the tag, even where the name is a known non-layout attribute. Declaring a
+layout attribute as a view prop is `bake-view-prop-layout`. A class's rows style only
+the box and set no view props; write `object-fit` on the camera tag to configure its
+viewfinder. A renamed spelling (`fontSize`) is refused whatever is declared. Do not
 turn a missing widget or canvas operation into invented Contract syntax.
 
 Apple native modules can include asset catalogs beside their Swift sources:
@@ -3742,10 +3758,11 @@ perf frames live 5000
 While the lease holds, an input's landing is allowed and takes nothing: its
 answers land on the platform's clock. Every other `clock` operation is refused,
 and `perf frames live` takes a lease of its own, so it comes after `capture
-stop`. The
-`scroll` source (`health scroll`, `report scroll`) reads native scrolling, which
-an agent's drag without real touches does not start: on iOS it moves a list's
-offset at once, whatever its `over`, and the source answers
+stop`. The `scroll` source (`health scroll`, `report scroll`) reads native
+scrolling. On iOS, an agent's drag without real touches moves a list's offset
+over the requested `over` duration, allowing intermediate frames to be observed.
+The recognized drag does not start the native-scroll observer, which relies on
+UIKit's dragging lifecycle. Without an observed native drag, the source answers
 `native-scroll-unobserved`.
 
 A capture lease lasts 1–120000 ms, default 60000. The card and the agent
@@ -4132,7 +4149,9 @@ A wheel (`tap <scroller> wheel 0 300`) and, without `--touch platform`, a drag o
 the scroll or list it starts on (`tap <scroller> drag 0 -300`, past the screen
 too) leave it as a person's scroll by that distance does, with no glide: the
 content moves that far, a large title collapses as it goes, and a scroll back to
-the top opens it again. As a person's, none stops with the content partway under
+the top opens it again. A drag moves over `over` milliseconds (250 by default),
+including one that ends past the screen; live frame capture observes the motion.
+As a person's, none stops with the content partway under
 a large title: it eases to the title's open or closed rest, whichever is nearer,
 so under one a wheel of 20 from the top moves nothing (with a search field in the
 bar it stays where it ends: not measured). Under `--touch platform` a drag whose ends

@@ -7,7 +7,7 @@
 //! writes nothing snaps the group back; an unbound one keeps its state in
 //! `controls`, exclusive within its group.
 use super::*;
-use exact_kernel::ControlKind;
+use exact_kernel::{ControlKind, Direction, StyleId};
 
 impl<D: DataSource> Presenter<D> {
     /// The open authored box excludes the page from radio navigation and changes.
@@ -92,20 +92,31 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// A key's default action at a focused radio: an arrow moves the focus
-    /// and the check to the next enabled radio of its group (Down, Right)
-    /// or the previous (Up, Left), wrapping; Space checks it. False when
-    /// `id` is no radio or the key is none of these.
+    /// and the check to the next enabled radio of its group or the previous,
+    /// wrapping. Down moves forward and Up back; Left and Right follow the
+    /// parent group's direction. Space checks it. False when `id` is no
+    /// radio or the key is none of these.
     pub(crate) fn radio_key(&mut self, id: ViewId, name: &str, now_ms: f64) -> bool {
         if !self.is_radio(id) {
             return false;
         }
+        let kernel = self.host.kernel();
+        let rtl = kernel
+            .node(id)
+            .and_then(|radio| radio.parent)
+            .and_then(|parent| kernel.node(parent))
+            .is_some_and(|group| {
+                group.computed_row(StyleId::Direction, |s| s.direction) == Direction::Rtl
+            });
         let forward = match name {
             " " => {
                 self.check_radio(id, now_ms);
                 return true;
             }
-            "ArrowDown" | "ArrowRight" => true,
-            "ArrowUp" | "ArrowLeft" => false,
+            "ArrowDown" => true,
+            "ArrowUp" => false,
+            "ArrowRight" => !rtl,
+            "ArrowLeft" => rtl,
             _ => return false,
         };
         let group = self.radio_group(id);
@@ -159,3 +170,7 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "radio_tests.rs"]
+mod radio_tests;

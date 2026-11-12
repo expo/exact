@@ -94,6 +94,109 @@ final class NumberStepperIOSTests: XCTestCase {
         XCTAssertFalse(stepper.isHidden)
     }
 
+    func testAStepperClipsInsideAResizingBorderAndRemainsTappable() throws {
+        let (node, heard, session) = fixture()
+        defer { session.destroy() }
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "the agent sends the stepper's action through UIApplication")
+        }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIViewController()
+        window.rootViewController?.view.addSubview(node)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        node.applyStyle(["border_width": 6, "border_radius": 20, "overflow_x": "hidden", "overflow_y": "hidden"])
+        let field = try XCTUnwrap(node.field), original = try XCTUnwrap(node.stepper)
+        let frame = original.frame
+        XCTAssertTrue(field.becomeFirstResponder())
+        for width in [200.0, 250.0, 350.0] {
+            session.presenter.apply(wireBatch([["op": "present", "id": 1, "property": "layout", "w": width - 300]]))
+            let box = try XCTUnwrap(node.clipBox), surface = try XCTUnwrap(node.surface)
+            XCTAssertTrue(original.superview === box)
+            XCTAssertTrue(field.superview === box)
+            XCTAssertTrue(box.layer.mask === surface.clip)
+            XCTAssertEqual(surface.clip.path?.boundingBoxOfPath.width ?? 0, width - 12, accuracy: 0.001)
+            XCTAssertFalse(try XCTUnwrap(surface.clip.path).contains(CGPoint(x: width - 3, y: 22)))
+            XCTAssertEqual(original.frame, frame)
+            XCTAssertTrue(field.isFirstResponder)
+        }
+        func tap(_ stepper: FieldStepper, up: Bool) throws {
+            let point = stepper.convert(CGPoint(x: stepper.bounds.width * (up ? 0.75 : 0.25), y: stepper.bounds.midY), to: nil)
+            let hit = try XCTUnwrap(window.hitTest(window.convert(point, from: nil), with: nil))
+            let result = try XCTUnwrap(session.agentInstance.steppedTap(node, hit: hit, at: point, tapped: [Double(point.x), Double(point.y)]))
+            XCTAssertEqual(result["stepped"] as? Bool, true)
+        }
+        field.selectAll(nil)
+        field.insertText("5")
+        XCTAssertEqual(field.text, "5")
+        node.fieldChanged()
+        let edits = heard().count
+        try tap(original, up: true)
+        XCTAssertEqual(field.text, "6")
+        XCTAssertEqual(heard().dropFirst(edits), ["input 6", "change 6"])
+        let box = try XCTUnwrap(node.clipBox)
+        box.bringSubviewToFront(field)
+        node.layoutStepper()
+        XCTAssertTrue(box.subviews.last === original, "the stepper stays above its field in the clip box")
+        node.applyProps(set: ["type": "text", "value": "6"], clear: [])
+        node.applyProps(set: ["type": "number"], clear: [])
+        let replacement = try XCTUnwrap(node.stepper)
+        XCTAssertTrue(replacement.superview === box)
+        XCTAssertTrue(box.subviews.last === replacement)
+        session.presenter.apply(wireBatch([["op": "present", "id": 1, "property": "layout", "w": 0.0]]))
+        XCTAssertNil(node.clipBox)
+        XCTAssertTrue(field.superview === node)
+        XCTAssertTrue(replacement.superview === node)
+        XCTAssertTrue(field.isFirstResponder)
+        try tap(replacement, up: false)
+        XCTAssertEqual(field.text, "5")
+        XCTAssertEqual(heard().suffix(2), ["input 5", "change 5"])
+    }
+
+    func testPointerEventsNoneSkipsFieldsAndSteppersDuringAResizeButKeepsAutoDescendants() throws {
+        for type in ["number", "text"] {
+            let (node, _, session) = fixture(["type": type])
+            defer { session.destroy() }
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 100))
+            let behind = UIView(frame: window.bounds)
+            node.frame.origin = .zero
+            window.addSubview(behind)
+            window.addSubview(node)
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true }
+            var style: NodeStyle = ["border_width": 6, "border_radius": 20, "overflow_x": "hidden", "overflow_y": "hidden"]
+            node.applyStyle(style)
+            let field = try XCTUnwrap(node.field)
+            let descendant = NodeView(id: 2, kind: "view", presenter: session.presenter)
+            descendant.frame = CGRect(x: 20, y: 8, width: 40, height: 28)
+            descendant.applyStyle(["pointer_events": "auto"])
+            node.container.addSubview(descendant)
+            let controls: [UIView] = [field] + (node.stepper.map { [$0] } ?? [])
+            func hit(_ view: UIView) -> UIView? {
+                let point = CGPoint(x: view is FieldStepper ? view.bounds.width * 0.75 : 100, y: view.bounds.midY)
+                return window.hitTest(view.convert(point, to: window), with: nil)
+            }
+            for offset in [0.0, 50.0, 100.0, 0.0] {
+                session.presenter.apply(wireBatch([["op": "present", "id": 1, "property": "layout", "w": offset]]))
+                XCTAssertEqual(node.clipBox != nil, offset != 0)
+                for events in ["none", "auto"] {
+                    style["pointer_events"] = .string(events)
+                    node.applyStyle(style)
+                    for control in controls {
+                        let target = try XCTUnwrap(hit(control), "\(type), resize \(offset), pointer-events \(events)")
+                        if events == "none" {
+                            XCTAssertTrue(target === behind, "\(type), resize \(offset): \(control) must let the touch through")
+                        } else {
+                            XCTAssertTrue(target === control || target.isDescendant(of: control))
+                        }
+                    }
+                    let point = descendant.convert(CGPoint(x: 20, y: 14), to: window)
+                    XCTAssertTrue(window.hitTest(point, with: nil) === descendant, "an auto descendant stays eligible")
+                }
+            }
+        }
+    }
+
     func testNoStepperWhereTheAuthorOrTheTypeSaysNone() throws {
         let (node, _, session) = fixture()
         defer { session.destroy() }

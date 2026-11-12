@@ -222,7 +222,7 @@ impl ButtonFaceStyle {
             &mut s.padding_bottom,
             &mut s.padding_left,
         ] {
-            *side = length(*side, containing_width);
+            *side = length(side.clone(), containing_width);
         }
         // Native configurations and the painted button use circular corners;
         // retain their scalar-radius approximation for percentage corners.
@@ -233,7 +233,7 @@ impl ButtonFaceStyle {
             &mut s.border_radius_bottom_right,
             &mut s.border_radius_bottom_left,
         ] {
-            *corner = length(*corner, basis);
+            *corner = length(corner.clone(), basis);
         }
     }
 }

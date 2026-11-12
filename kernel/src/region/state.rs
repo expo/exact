@@ -267,8 +267,14 @@ impl RegionState {
             ));
         }
         for (dimension, axis) in [
-            (arena.style(self.binding.owner.index).width, outer.width),
-            (arena.style(self.binding.owner.index).height, outer.height),
+            (
+                arena.style(self.binding.owner.index).width.clone(),
+                outer.width,
+            ),
+            (
+                arena.style(self.binding.owner.index).height.clone(),
+                outer.height,
+            ),
         ] {
             if matches!(dimension, Dimension::Percent(_))
                 && !matches!(axis,crate::AxisOffer::Definite(n) if n>=0.)
@@ -831,8 +837,8 @@ fn validate(arena: &NodeArena, b: ContentRegion) -> Result<(), LayoutError> {
     };
     // Keep the explicit-size path unchanged. Auto height has only the narrow
     // direct-root column certificate below, never generic intrinsic sizing.
-    if !sized(s.width)
-        || !(sized(s.height) || flex_height_independent(arena, b.owner.index))
+    if !sized(s.width.clone())
+        || !(sized(s.height.clone()) || flex_height_independent(arena, b.owner.index))
         || s.overflow_x != Overflow::Hidden
         || s.overflow_y != Overflow::Hidden
     {
@@ -853,15 +859,19 @@ fn validate(arena: &NodeArena, b: ContentRegion) -> Result<(), LayoutError> {
     // No inference through auto/intrinsic ancestors or generalized containment.
     // Width:auto is allowed only for the ordinary nonabsolute root repair;
     // height:auto is never an independent percentage containing block.
-    for (dimension, width) in [(s.width, true), (s.height, false)] {
+    for (dimension, width) in [(s.width.clone(), true), (s.height.clone(), false)] {
         if matches!(dimension, Dimension::Percent(_)) {
             let parent = arena.parent(b.owner.index).ok_or_else(bad)?;
             if !arena.is_root(parent) {
                 return Err(bad());
             }
             let root = arena.style(parent);
-            let dim = if width { root.width } else { root.height };
-            let definite = sized(dim)
+            let dim = if width {
+                root.width.clone()
+            } else {
+                root.height.clone()
+            };
+            let definite = sized(dim.clone())
                 || (width
                     && dim == Dimension::Auto
                     && crate::style::top_layer::layout_position(arena, parent)
@@ -902,24 +912,24 @@ fn flex_height_independent(arena: &NodeArena, owner: u32) -> bool {
     root.display == Display::Flex
         && root.flex_direction == crate::FlexDirection::Column
         && root.flex_wrap == crate::FlexWrap::Nowrap
-        && definite(root.width)
-        && definite(root.height)
+        && definite(root.width.clone())
+        && definite(root.height.clone())
         && s.height == Dimension::Auto
-        && definite(s.width)
+        && definite(s.width.clone())
         && crate::style::top_layer::layout_position(arena, owner) != crate::PositionType::Absolute
         && s.flex_grow == 1.
         && s.flex_shrink == 1.
-        && zero(s.flex_basis)
-        && definite(s.min_height)
-        && limit(s.max_height)
+        && zero(s.flex_basis.clone())
+        && definite(s.min_height.clone())
+        && limit(s.max_height.clone())
         // With clipping and a definite cross size, Auto here is zero, not an
         // automatic main-axis content minimum. Aspect transfer is not admitted.
-        && limit(s.min_width)
-        && limit(s.max_width)
+        && limit(s.min_width.clone())
+        && limit(s.max_width.clone())
         && s.rare.aspect_ratio.preferred().is_none()
-        && [s.margin_top, s.margin_right, s.margin_bottom, s.margin_left]
+        && [s.margin_top.clone(), s.margin_right.clone(), s.margin_bottom.clone(), s.margin_left.clone()]
             .into_iter().all(zero)
-        && [s.top, s.right, s.bottom, s.left]
+        && [s.top.clone(), s.right.clone(), s.bottom.clone(), s.left.clone()]
             .into_iter().all(|d| d == Dimension::Auto || zero(d))
 }
 fn publish(

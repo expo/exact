@@ -151,8 +151,11 @@ test.skipIf(!packagingTools)('production iOS bundles ship stripped frameworks an
       const symbols = stripProductionExecutable(bin, { production, ipa });
       const bundle = resolve(binDir, 'Fixture.app');
       const whole = JSON.stringify({ build, target: 'aarch64-apple-ios', development: production ? null : { token: 'kept' } });
+      const clipBin = resolve(binDir, 'clip', 'Clip');
+      mkdirSync(resolve(binDir, 'clip'));
+      copyFileSync(bin, clipBin);
       const result = assembleIOS({ app, paths: { bundle, executable: 'ExactClip', capture }, binDir, bin, device,
-        production, distribution: archived, ipa, bakedCompat: compat, bakedPlan: plan, buildReceipt: build,
+        clipBin, production, distribution: archived, ipa, bakedCompat: compat, bakedPlan: plan, buildReceipt: build,
         libDir: capture, gpuArtifacts: [gpu], looseArms: [[true, dylib, ...pairs[0]]],
         modulesBuilt: dylib, modulesLoadName: pairs[1][0], hasSvg: true, svgBuilt: dylib, svgLoadName: pairs[2][0],
         canvasGpuBuilt: dylib, canvasGpuLoadName: pairs[3][0], serviceDylibs: [{ built: dylib, load: pairs[4][0], framework: pairs[4][1] }],
@@ -162,7 +165,7 @@ test.skipIf(!packagingTools)('production iOS bundles ship stripped frameworks an
         receipt: () => whole, shippedReceipt, copyAppleGpuProducts, entitlements: () => plistFile({}), appClip: () => ({ id: app.id + '.Clip', name: 'Clip', executable: 'Clip' }), stripForDistribution,
       });
       const clipBytes = readFileSync(resolve(bundle, 'AppClips/Clip.app/Clip'));
-      assert.equal(codeDigest(clipBytes), codeDigest(readFileSync(bin)), 'the clip copies the parent executable, including when its name is ExactClip');
+      assert.equal(codeDigest(clipBytes), codeDigest(readFileSync(device ? bin : clipBin)), 'the clip uses its platform executable, including when the parent is named ExactClip');
       assert.equal(codeDigest(readFileSync(resolve(bundle, 'ExactClip'))), codeDigest(readFileSync(bin)));
       if (symbols) {
         const uuid = path => /UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', path]).stdout)?.[1];
@@ -817,6 +820,76 @@ test('an App Clip is its parent\'s app under a second identity: NSAppClip, the p
   assert.match(grouped, /<key>keychain-access-groups<\/key><array><string>PREFIX.com.exact.test<\/string><\/array>/);
   assert.doesNotMatch(grouped, /aps-environment/);
 });
+
+test.skipIf(!packagingTools)('simulator App Clips embed their own entitlements and preserve the parent executable', async () => {
+  useXcode();
+  const { createHash } = await import('node:crypto');
+  const { assembleIOS } = await import('../host/apple/bundle.mjs');
+  const { appClip, copyAppleGpuProducts } = await import('../host/apple/build.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-clip-entitlements-'));
+  const run = (command, args) => {
+    const result = spawnSync(command, args, { encoding: 'utf8' });
+    assert.equal(result.status, 0, `${command}: ${result.stderr}`);
+    return result;
+  };
+  const embedded = (binary) => {
+    const bytes = readFileSync(binary), name = (at) => bytes.toString('utf8', at, at + 16).replace(/\0.*$/, '');
+    assert.equal(bytes.readUInt32LE(0), 0xfeedfacf);
+    for (let i = 0, command = 32; i < bytes.readUInt32LE(16); i++) {
+      if (bytes.readUInt32LE(command) === 0x19) {
+        for (let j = 0, section = command + 72; j < bytes.readUInt32LE(command + 64); j++, section += 80) {
+          if (name(section) !== '__entitlements' || name(section + 16) !== '__TEXT') continue;
+          const start = bytes.readUInt32LE(section + 48), size = Number(bytes.readBigUInt64LE(section + 40));
+          const plist = resolve(dir, 'read.plist');
+          writeFileSync(plist, bytes.subarray(start, start + size));
+          return JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', plist]).stdout);
+        }
+      }
+      command += bytes.readUInt32LE(command + 4);
+    }
+    assert.fail(`${binary} has no __TEXT,__entitlements section`);
+  };
+  try {
+    const app = { dir, id: 'com.exact.cliptest', name: 'Clip test', displayName: 'ExactClip', manifest: {
+      share_target: {}, host: { ios: { appClip: { name: 'ExactClip' }, associatedDomains: ['applinks:clip.test', 'webcredentials:clip.test'] } },
+    } };
+    const clip = appClip(app), reach = { entitlements: ['aps-environment', 'com.apple.developer.healthkit'] };
+    const bin = resolve(dir, 'ExactClip'), clipBin = resolve(dir, 'app-clip', clip.executable);
+    mkdirSync(resolve(dir, 'app-clip'));
+    const source = resolve(dir, 'main.c');
+    writeFileSync(source, 'int main(void) { return 0; }\n');
+    for (const [binary, owner] of [[bin, app], [clipBin, { ...app, id: clip.id, clipParent: app.id }]]) {
+      const ent = `${binary}.plist`;
+      writeFileSync(ent, entitlements(owner, null, true, reach, { simulator: true }));
+      run('xcrun', ['--sdk', 'iphonesimulator', 'clang', '-target', 'arm64-apple-ios17.0-simulator', source, '-Wl,-sectcreate,__TEXT,__entitlements,' + ent, '-o', binary]);
+    }
+    const before = readFileSync(bin), plan = Buffer.from('fixture');
+    const compat = { embedded: { plan: { sha256: createHash('sha256').update(plan).digest('hex'), bytes: plan.length }, assets: [] } };
+    const bundle = resolve(dir, 'ExactClip.app');
+    assembleIOS({ app, paths: { bundle, executable: 'ExactClip', capture: dir }, binDir: dir, bin, clipBin,
+      device: false, triple: 'arm64-apple-ios17.0-simulator', sdk: run('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path']).stdout.trim(),
+      appleReach: reach, bakedCompat: compat, bakedPlan: plan, buildReceipt: { binary: { metadata: {} }, graph: {} },
+      libDir: dir, gpuArtifacts: [], looseArms: [], serviceDylibs: [], args: [], unsigned: true, sha1: '-', linkRoot: dir,
+    }, { runApple: run, infoPlist, copyAppleStaticTrees() {}, writeUsageStrings() {}, assertAppleIdentity() {},
+      receipt: () => '{}', copyAppleGpuProducts, entitlements, appClip });
+    const parent = embedded(resolve(bundle, 'ExactClip'));
+    const child = embedded(resolve(bundle, 'AppClips/ExactClip.app/ExactClip'));
+    assert.equal(child['application-identifier'], 'SIMULATORX.com.exact.cliptest.Clip');
+    assert.deepEqual(child['com.apple.developer.parent-application-identifiers'], ['SIMULATORX.com.exact.cliptest']);
+    assert.deepEqual(child['keychain-access-groups'], ['SIMULATORX.com.exact.cliptest.Clip', 'com.exact.cliptest.Clip']);
+    assert.deepEqual(child['com.apple.developer.associated-domains'], ['webcredentials:clip.test', 'appclips:clip.test']);
+    assert.equal(child['aps-environment'], undefined);
+    assert.equal(child['com.apple.security.application-groups'], undefined);
+    assert.equal(child['com.apple.developer.healthkit'], true);
+    assert.equal(parent['application-identifier'], 'SIMULATORX.com.exact.cliptest');
+    assert.equal(parent['aps-environment'], 'development');
+    assert.deepEqual(parent['com.apple.security.application-groups'], ['group.com.exact.cliptest']);
+    assert.deepEqual(parent['com.apple.developer.associated-domains'], ['applinks:clip.test', 'webcredentials:clip.test', 'appclips:clip.test']);
+    assert.equal(parent['com.apple.developer.parent-application-identifiers'], undefined);
+    assert.deepEqual(readFileSync(bin), before);
+    run('codesign', ['--verify', '--deep', '--strict', bundle]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 30_000);
 
 test('widgets share the owner Keychain groups and leave the host sample outside the group', async () => {
   const {entitlements, infoPlist} = await import('../host/apple/build.mjs');

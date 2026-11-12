@@ -170,10 +170,11 @@ impl<D: DataSource> Runner<D> {
     /// asked again (LLP 1146 §2.3). A write an action makes in a commit
     /// leaves a failure standing until its arguments change or `refresh`.
     pub(super) fn ask_failed_readers(&mut self, except: Option<Target>) {
-        for i in 0..self.failed_args.len() {
+        for i in 0..self.resources.len() {
             // (an upload's failure is never asked again at its arguments: D10)
-            let failed =
-                self.store_readers[i] && self.failed_args[i].is_some() && !self.upload_failed(i);
+            let failed = self.resources[i].store_reader
+                && self.resources[i].failed_args.is_some()
+                && !self.upload_failed(i);
             if failed && except != Some(Target::Resource(i)) {
                 self.force_refresh(i);
             }

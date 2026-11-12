@@ -144,7 +144,7 @@ pub(super) struct Extensions {
     calls: calls::Calls,
     /// Each bound live source's Contract readers, by resource, with the
     /// arguments each last asked with (`bound.rs`).
-    readers: BTreeMap<String, BTreeMap<usize, String>>,
+    pub(super) readers: BTreeMap<String, BTreeMap<usize, String>>,
     /// The argument groups each bound live source's implementation was
     /// asked for and not yet told are gone.
     groups: BTreeMap<String, BTreeSet<String>>,
@@ -341,12 +341,12 @@ impl<D: DataSource> Runner<D> {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, RunnerError> {
-        let resource = self.plan.str(self.plan.resources[i].name).to_string();
+        let resource = self.plan.str(self.resource_row(i).name).to_string();
         let key = self.key(&self.module_row(source));
         // The readers of a module's source are asked again when what it
         // answers changes (`announce`, or the bound module's own topic).
         self.store.observe_topic(&key);
-        let ty = self.plan.resources[i].ty;
+        let ty = self.resource_row(i).ty;
         self.module_target(Target::Resource(i), source, args, ty)
             .map_err(|error| RunnerError::Data { resource, error })
     }
@@ -420,7 +420,7 @@ impl<D: DataSource> Runner<D> {
         } = called;
         let (row, key, route) = (row.clone(), self.key(row), self.route(row));
         let what = match target {
-            Target::Resource(i) => format!("query {}", self.plan.str(self.plan.resources[i].name)),
+            Target::Resource(i) => format!("query {}", self.plan.str(self.resource_row(i).name)),
             Target::Mutation(m) | Target::Sent(m, _) => {
                 format!("send {}", self.plan.str(self.plan.mutations[m].name))
             }

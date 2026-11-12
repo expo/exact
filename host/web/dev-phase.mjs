@@ -31,6 +31,16 @@ export function failedPhase(error, log = console.log) {
   log(`${FAILED}${gist(error)}`);
 }
 
+/** An edit during compilation supersedes the candidate and its diagnostics. */
+export function acceptModuleReply(line, request, run, log = console.error) {
+  const reply = JSON.parse(line);
+  if (!request || reply.id !== request.id) throw new Error('unexpected module producer response');
+  if (request.id !== run) return null;
+  if (!reply.ok) throw new Error(reply.error || 'module producer refused the candidate');
+  for (const warning of reply.warnings) log(warning);
+  return reply;
+}
+
 /**
  * Build with `command`, saying `what` it builds before and how it went
  * after. Its errors are shown as they were and kept: a build that fails

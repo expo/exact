@@ -85,19 +85,29 @@ final class SelectionDocument {
         return x * x + y * y
     }
     func rects(_ range: NSRange) -> [UITextSelectionRect] {
-        var boxes: [(CGRect, NSWritingDirection)] = []
+        guard range.length > 0 else { return [] }
+        var boxes: [UITextSelectionRect] = []
         for part in parts {
             let selected = NSIntersectionRange(range, part.range)
             guard selected.length > 0 else { continue }
             let local = NSRange(location: selected.location - part.start, length: selected.length)
             let inputRange = SelectableRange(local)
-            for rect in part.input.selectionRects(for: inputRange) {
-                boxes.append((part.node.convert(rect.rect, to: surface), rect.writingDirection))
+            for case let rect as SelectableRect in part.input.selectionRects(for: inputRange) {
+                boxes.append(rect.converted(part.node.convert(rect.rect, to: surface),
+                    first: selected.location == range.location, last: NSMaxRange(selected) == NSMaxRange(range)))
             }
         }
-        return boxes.enumerated().map { i, box in
-            SelectableRect(box.0, first: i == 0, last: i == boxes.count - 1, rtl: box.1 == .rightToLeft)
+        // The newline between paragraphs has document offsets but no glyph run.
+        for (offset, first, present) in [
+            (range.location, true, boxes.contains { $0.containsStart }),
+            (NSMaxRange(range), false, boxes.contains { $0.containsEnd }),
+        ] {
+            guard !present, let part = part(at: offset) else { continue }
+            let local = part.input.endpoint(at: min(part.length, offset - part.start), first: first)
+            let rect = local.converted(part.node.convert(local.rect, to: surface))
+            if first { boxes.insert(rect, at: 0) } else { boxes.append(rect) }
         }
+        return boxes
     }
     func caret(at offset: Int) -> CGRect {
         guard let part = part(at: offset) else { return .zero }

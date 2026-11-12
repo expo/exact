@@ -62,13 +62,12 @@ impl<D: DataSource> Runner<D> {
                 entry["preferred"][&declared] = v.clone();
             }
             if !row.send {
-                let readers: Vec<&str> = (0..self.plan.resources.len())
+                let readers: Vec<&str> = (0..self.resources.len())
                     .filter(|&i| {
-                        self.plan.resources[i].source
-                            == self.plan.sources[row.source.0 as usize].name
-                            || self.watching[i].contains(&key)
+                        self.resource_row(i).source == self.plan.sources[row.source.0 as usize].name
+                            || self.resources[i].watching.contains(&key)
                     })
-                    .map(|i| self.plan.str(self.plan.resources[i].name))
+                    .map(|i| self.plan.str(self.resource_row(i).name))
                     .collect();
                 entry["readers"][&declared] = json!(readers);
             }

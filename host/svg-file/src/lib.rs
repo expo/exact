@@ -217,7 +217,8 @@ pub fn natural(prefix: &[u8]) -> Option<Natural> {
     (name == "svg" || name == "svg:svg").then(|| Natural::read(&attrs))
 }
 
-/// Parse a document into its ops.
+/// Parse a document into its ops. With no user languages supplied to this
+/// loader, elements supporting `systemLanguage` fail its condition when present.
 pub fn parse(text: &str) -> Result<Document, Error> {
     lower::lower(xml::tokenize(text)?)
 }
@@ -233,7 +234,8 @@ fn still(_: exact_kernel::NodeKey, _: exact_motion::Property) -> Option<exact_mo
     None
 }
 
-/// Parse and build `text` in a scratch kernel.
+/// Parse and build `text` in a scratch kernel, with the same conditional
+/// processing as [`parse`].
 pub fn load(text: &str) -> Result<Loaded, Error> {
     let document = parse(text)?;
     let mut kernel = Kernel::with_monospace_on_demand();
@@ -417,6 +419,214 @@ mod tests {
         let scene = loaded.scene(10.0, 10.0);
         // The link's rect (filled by the class), the use, the switch's one taken child.
         assert_eq!(scene.items.len(), 3, "{scene:#?}");
+    }
+
+    #[test]
+    fn gradients_ignore_conditional_attributes() {
+        for gradient in ["linearGradient", "radialGradient"] {
+            for condition in [
+                r#"systemLanguage="fr""#,
+                r#"requiredExtensions="unsupported""#,
+            ] {
+                for (gradient_attrs, stop_attrs) in [(condition, ""), ("", condition)] {
+                    let text = format!(
+                        r##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">
+                        <{gradient} id="g" {gradient_attrs}>
+                            <stop offset="0" stop-color="red" {stop_attrs}/>
+                        </{gradient}>
+                        <rect width="10" height="10" fill="url(#g) blue"/>
+                        </svg>"##
+                    );
+                    let loaded = load(&text).unwrap();
+                    assert!(loaded.document.warnings.is_empty(), "{text}");
+                    let scene = loaded.scene(10.0, 10.0);
+                    let [item] = scene.items.as_slice() else {
+                        panic!("expected one rectangle: {scene:?}");
+                    };
+                    let scene::Kind::Shape(shape) = &item.kind else {
+                        panic!("expected a rectangle: {item:?}");
+                    };
+                    assert_eq!(
+                        shape.fill.as_ref().unwrap().color.resolve(false),
+                        exact_kernel::Color(0xff0000ff),
+                        "{text}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn failed_conditions_leave_an_empty_picture_when_no_fallback_passes() {
+        for condition in [
+            r#"systemLanguage="fr""#,
+            r#"systemLanguage="""#,
+            r#"systemLanguage="de, fr""#,
+            r#"requiredExtensions="unsupported""#,
+        ] {
+            for body in [
+                format!(r#"<svg width="20" height="10" {condition}><text>Hello</text></svg>"#),
+                format!(
+                    r#"<svg width="20" height="10"><switch>
+                        <g {condition}><text>Hello</text></g>
+                        <text {condition}>Bonjour</text>
+                    </switch></svg>"#,
+                ),
+                format!(
+                    r#"<svg width="20" height="10"><switch {condition}>
+                        <text>Hello</text>
+                    </switch></svg>"#,
+                ),
+            ] {
+                let loaded = load(&body).unwrap();
+                assert_eq!(loaded.document.natural.size(), (20.0, 10.0));
+                assert!(loaded.document.warnings.is_empty(), "{body}");
+                let scene = loaded.scene(20.0, 10.0);
+                assert!(
+                    scene.items.iter().all(|item| matches!(
+                        &item.kind,
+                        scene::Kind::Group(children) if children.is_empty()
+                    )),
+                    "{body}: {scene:?}"
+                );
+            }
+        }
+    }
+
+    fn shape_widths(text: &str) -> Vec<f32> {
+        fn collect(items: &[scene::Item], widths: &mut Vec<f32>) {
+            for item in items {
+                match &item.kind {
+                    scene::Kind::Shape(shape) => widths.push(shape.path.bounds().unwrap().2),
+                    scene::Kind::Group(children) | scene::Kind::Viewport { children, .. } => {
+                        collect(children, widths)
+                    }
+                    _ => panic!("expected shapes: {item:?}"),
+                }
+            }
+        }
+        let loaded = load(text).unwrap();
+        assert!(
+            loaded.document.warnings.is_empty(),
+            "{text}: {:?}",
+            loaded.document.warnings
+        );
+        let mut widths = Vec::new();
+        collect(&loaded.scene(20.0, 10.0).items, &mut widths);
+        widths
+    }
+
+    #[test]
+    fn required_features_only_excludes_switch_children() {
+        let condition = r#"requiredFeatures="http://www.w3.org/TR/SVG11/feature#Shape""#;
+        for text in [
+            format!(r#"<svg {condition}><rect width="10" height="10"/></svg>"#),
+            format!(r#"<svg><rect {condition} width="10" height="10"/></svg>"#),
+            format!(r#"<svg><g {condition}><rect width="10" height="10"/></g></svg>"#),
+            format!(r#"<svg><switch {condition}><rect width="10" height="10"/></switch></svg>"#),
+            format!(
+                r#"<svg><switch><rect {condition} width="5" height="10"/>
+                <rect width="10" height="10"/></switch></svg>"#
+            ),
+        ] {
+            assert_eq!(shape_widths(&text), [10.0], "{text}");
+        }
+        assert!(shape_widths(
+            r#"<svg><switch><rect requiredFeatures="unsupported"
+            width="10" height="10"/></switch></svg>"#
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn failed_conditions_preserve_descendant_reference_targets() {
+        for condition in [
+            r#"systemLanguage="fr""#,
+            r#"requiredExtensions="unsupported""#,
+        ] {
+            for display in ["", r#"display="none""#] {
+                let text = format!(
+                    r##"<svg><g id="hidden" {display} {condition}>
+                    <rect id="r" width="10" height="10"/></g>
+                    <use href="#hidden"/><use href="#r"/></svg>"##
+                );
+                assert_eq!(shape_widths(&text), [10.0], "{text}");
+            }
+            let text = format!(
+                r##"<svg><switch><g {condition}>
+                <rect id="r" width="10" height="10"/></g><rect width="5" height="10"/>
+                </switch><use href="#r"/></svg>"##
+            );
+            assert_eq!(shape_widths(&text), [5.0, 10.0], "{text}");
+        }
+    }
+
+    #[test]
+    fn failed_conditions_hide_reference_roots_but_not_their_descendants() {
+        for condition in [
+            r#"systemLanguage="fr""#,
+            r#"requiredExtensions="unsupported""#,
+        ] {
+            let text = format!(
+                r##"<svg><rect id="r" {condition} width="10" height="10"/>
+                <use href="#r" x="10"/></svg>"##
+            );
+            assert!(shape_widths(&text).is_empty(), "{text}");
+            for attrs in ["", condition] {
+                let text = format!(
+                    r##"<svg><symbol id="s" {attrs} viewBox="0 0 10 10">
+                    <rect id="r" width="10" height="10"/></symbol>
+                    <use href="#s" width="10" height="10"/>
+                    <use href="#r" x="10"/></svg>"##
+                );
+                let expected = if attrs.is_empty() {
+                    vec![10.0, 10.0]
+                } else {
+                    vec![10.0]
+                };
+                assert_eq!(shape_widths(&text), expected, "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn failed_resource_conditions_use_fallback_paint_and_no_mask() {
+        for condition in [
+            r#"systemLanguage="fr""#,
+            r#"requiredExtensions="unsupported""#,
+        ] {
+            for attrs in ["", condition] {
+                let text = format!(
+                    r##"<svg width="10" height="10">
+                    <pattern id="p" {attrs} width="10" height="10"
+                        patternUnits="userSpaceOnUse">
+                        <rect width="10" height="10" fill="red"/>
+                    </pattern>
+                    <mask id="m" {attrs}><rect width="5" height="10" fill="white"/></mask>
+                    <rect width="10" height="10" fill="url(#p) blue" mask="url(#m)"/>
+                    </svg>"##
+                );
+                let loaded = load(&text).unwrap();
+                assert!(loaded.document.warnings.is_empty(), "{text}");
+                let scene = loaded.scene(10.0, 10.0);
+                let [item] = scene.items.as_slice() else {
+                    panic!("expected one rectangle: {scene:?}");
+                };
+                let scene::Kind::Shape(shape) = &item.kind else {
+                    panic!("expected a rectangle: {item:?}");
+                };
+                let fill = shape.fill.as_ref().unwrap();
+                assert_eq!(fill.pattern.is_some(), attrs.is_empty(), "{text}");
+                assert_eq!(item.mask.is_some(), attrs.is_empty(), "{text}");
+                if !attrs.is_empty() {
+                    assert_eq!(
+                        fill.color.resolve(false),
+                        exact_kernel::Color(0x0000ffff),
+                        "{text}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

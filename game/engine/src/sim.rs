@@ -26,7 +26,7 @@ impl Now {
 }
 /// A stateless game; components and resources hold every bit of simulation state.
 pub trait Game: 'static {
-    /// Scene sampling, fixed for the GPU renderer's lifetime.
+    /// Scene sampling, unless [`samples`](Self::samples) says otherwise.
     const SAMPLES: crate::SceneSamples = crate::SceneSamples::Four;
     /// Camera depth before colour, for opaque overdraw. Requires one scene sample.
     const DEPTH_PREPASS: bool = false;
@@ -107,6 +107,31 @@ pub trait Game: 'static {
     /// Stop world time while continuing to serve reads.
     fn paused(_args: &Self::Args) -> bool {
         false
+    }
+    /// Nothing the world shows is changing: on the display's clock the canvas
+    /// draws until the last two ticks it interpolates between are both idle,
+    /// then draws nothing until input, a bind, an asset, a resize or a hook's
+    /// `Needs::ANIMATE` wakes it. Queued input and a pending hold or tap keep
+    /// it drawing. The idle time never runs as ticks: the first frame after a
+    /// wake advances one display period. The agent's clock ignores it.
+    /// Read after each drawn frame; never saved or hashed.
+    fn render_idle(_world: &World, _args: &Self::Args) -> bool {
+        false
+    }
+    /// The canvas's drawn frames per second at most, 0 for the display's rate:
+    /// a cap on drawing alone, the tick rate (`HZ`) unchanged; a cap below 5
+    /// draws 5, since a longer gap would slow the ticks too. A render hook's
+    /// `Hooks::max_fps` may cap it lower. Read after each drawn frame; never
+    /// saved or hashed.
+    fn max_fps(_world: &World, _args: &Self::Args) -> u32 {
+        0
+    }
+    /// Scene sampling for the arguments, [`SAMPLES`](Self::SAMPLES) by default:
+    /// a change, such as a `#[live]` "smooth edges" setting, makes the GPU
+    /// renderer again (targets, pipelines and hooks) under the same world.
+    /// The quality ladder's `Low` rung still draws one sample.
+    fn samples(_args: &Self::Args) -> crate::SceneSamples {
+        Self::SAMPLES
     }
     /// One fixed step, called after inputs and before transform propagation.
     fn tick(world: &mut World, input: &Input, args: &Self::Args);
@@ -1094,6 +1119,35 @@ impl<G: Game> Sim<G> {
         let epoch = self.world.mutation_epoch();
         if self.last_epoch.replace(epoch) != epoch {
             self.settle_delay.set(100);
+        }
+    }
+    /// Whether the canvas may stop drawing ([`Game::render_idle`]): the game
+    /// says so, and no input waits for a tick, no hold or tap matures on world
+    /// time and no table edit is pending.
+    pub fn render_idle(&self) -> bool {
+        !self.setup_pending
+            && self.queue.is_empty()
+            && self.input.next_deadline().is_none()
+            && self.world.table_pending_tick().is_none()
+            && G::render_idle(&self.world, &self.args)
+    }
+    /// The display drew nothing since [`Sim::render_idle`] and draws again at
+    /// `now_ms`: the next live advance resumes as if the last frame were one
+    /// display period earlier, so the idle time runs no ticks. Input that
+    /// arrived meanwhile lands on the first tick. Seekable time never wakes.
+    pub fn wake(&mut self, now_ms: f64) {
+        let Some(last) = self.last_ms.filter(|_| now_ms.is_finite()) else {
+            return;
+        };
+        let period = if self.period_ms > 0.0 {
+            self.period_ms
+        } else {
+            1000.0 / G::HZ as f64
+        };
+        let from = now_ms - period;
+        if from > last {
+            self.last_ms = Some(from);
+            self.last_us = Some(micros(from));
         }
     }
     /// Pending input and unobserved mutations prevent rest unless time is paused.

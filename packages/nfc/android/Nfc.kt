@@ -288,7 +288,8 @@ internal object Registry : NfcAdapter.ReaderCallback {
         val write = onMain { claims.lastOrNull { it.kind != "scan" } }
         if (write != null) {
             val answer = written(write, tag)
-            return main.post { if (claims.remove(write)) { write.settle(answer); apply() } }
+            main.post { if (claims.remove(write)) { write.settle(answer); apply() } }
+            return
         }
         val ndef = Ndef.get(tag)
         val message = try { ndef?.use { it.connect(); it.ndefMessage } } catch (e: IOException) { null } catch (e: FormatException) { null }

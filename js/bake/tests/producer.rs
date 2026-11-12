@@ -417,16 +417,6 @@ fn native_host_sessions_prepare_together_and_keep_the_live_app_when_one_refuses(
 }
 
 #[test]
-fn cli_refuses_bad_arguments() {
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_exact-js-bake"))
-        .output()
-        .unwrap();
-    assert_eq!(status.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&status.stderr).contains("usage:"));
-    assert!(Path::new(env!("CARGO_MANIFEST_DIR")).is_dir());
-}
-
-#[test]
 fn storage_types_are_checked_by_the_actual_bake_without_granting_bake_io() {
     if !exact_js::ENGINE_LINKED {
         return;
@@ -1493,3 +1483,9 @@ fn windows_imported_packages_keep_identity_through_real_bakes() {
 
 #[path = "producer/widgets.rs"]
 mod widgets;
+
+#[path = "producer/exports.rs"]
+mod exports;
+
+#[path = "producer/cli.rs"]
+mod cli;

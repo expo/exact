@@ -7,7 +7,7 @@
 //! a checkbox is Chrome's rounded square, a radio its circle and a switch a
 //! pill with a thumb, filled with `accent-color`, else the platform's accent
 //! where the host reported one ([`accents`]). `appearance: none` draws
-//! nothing here: the author's box is the whole look (D6).
+//! no native chrome; a select or date field keeps its value in the author's box (D6).
 
 use super::material::Icon;
 use super::{look, neutral, rgba, Backend, Rect4, Shape};
@@ -118,9 +118,9 @@ pub(crate) fn range_mirrored(node: &NodeRef<'_>) -> bool {
         == exact_kernel::Direction::Rtl
 }
 
-/// What a date control shows: its [`choice`], else the bound value. Under
-/// the neutral look that is HTML's value, its placeholder form when empty;
-/// else the device's writing of it (`dates.rs`), nothing when empty.
+/// What a date control shows: its [`choice`], else the bound value. Native
+/// neutral fields show HTML's format hint when empty; bare fields leave
+/// room for their placeholder. Else the device formats the value (`dates.rs`).
 pub(super) fn date_text(
     node: &NodeRef<'_>,
     chosen: Option<&(String, String)>,
@@ -128,6 +128,9 @@ pub(super) fn date_text(
 ) -> String {
     let value = choice(node, chosen).unwrap_or_else(|| node.props.str(PropId::Value).unwrap_or(""));
     let kind = node.props.str(PropId::Type).unwrap_or("date");
+    if value.is_empty() && node.style.appearance == Appearance::None {
+        return String::new();
+    }
     if !look::neutral() {
         let shown = dates.and_then(|d| d.show(kind, value));
         return shown.unwrap_or_else(|| value.to_string());
@@ -257,41 +260,69 @@ impl super::Painter {
     /// A closed select, or a field that shows a value (LLP 1069.001 D7):
     /// the neutral look's field with the text, and a caret when it opens a
     /// menu; else Material's filled field with its trailing icon.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn field_control(
         &mut self,
+        walk: &super::Walk<'_, '_>,
         node: &NodeRef<'_>,
         content: Rect4,
+        outer: &Shape,
         focused: bool,
         ts: Transform,
         text: &str,
         chevron: bool,
     ) {
-        if node.style.appearance == Appearance::None {
-            return;
-        }
+        let bare = node.style.appearance == Appearance::None;
         let dark = self.dark;
-        if look::neutral() {
+        if bare || look::neutral() {
             // Focus changes without a tree commit, so a row cannot keep this ring.
             self.row_refuse();
-            // The look's field: its ground and line, the text a field's
-            // padding in, on the middle line, and a select's caret.
-            let shape = neutral::field(self.backend.as_mut(), node, content, ts, dark);
+            // No appearance keeps the value and authored ink, without the field's inset or caret.
+            let shape = if bare {
+                *outer
+            } else {
+                neutral::field(self.backend.as_mut(), node, content, ts, dark)
+            };
             let style = node.computed_style(StyleMask::INHERITED);
-            let spec = super::text_spec(&style, text);
+            let placeholder = bare && text.is_empty();
+            let shown = if placeholder {
+                node.props.str(PropId::Placeholder).unwrap_or("")
+            } else {
+                text
+            };
+            let spec = super::text_spec(&style, shown);
             let paragraph = self.text.borrow_mut().paragraph(&spec, None);
             let (x, y, w, h) = content;
             let em = neutral::em(node);
-            let inset =
-                look::px(metric::CONTROL_LINE, em) + look::px(metric::FIELD_PADDING_INLINE, em);
+            let inset = if bare {
+                0.0
+            } else {
+                look::px(metric::CONTROL_LINE, em) + look::px(metric::FIELD_PADDING_INLINE, em)
+            };
             let rtl = style.direction == exact_kernel::Direction::Rtl;
-            let ox = if rtl {
+            let ox = if bare {
+                x + crate::text::field::line_left(
+                    style.text_align,
+                    style.direction,
+                    w,
+                    paragraph.width,
+                )
+            } else if rtl {
                 x + w - inset - paragraph.width
             } else {
                 x + inset
             };
             let oy = y + ((h - paragraph.height) / 2.0).max(0.0);
             let palette = [crate::text::RunPaint {
-                color: neutral::field_ink(node, dark),
+                color: if placeholder {
+                    authored_placeholder(node.style, dark)
+                        .unwrap_or_else(|| look::role("-exact-placeholder", dark))
+                } else if bare {
+                    super::presented_color(walk, node, dark)
+                        .unwrap_or_else(|| rgba(node.text_color().resolve(dark)))
+                } else {
+                    neutral::field_ink(node, dark)
+                },
                 source: node.id,
             }];
             self.backend.push_clip(&Shape::rect(content), ts);
@@ -303,10 +334,15 @@ impl super::Painter {
                 ts,
             );
             self.backend.pop_clip();
-            if chevron {
+            if chevron && !bare {
                 neutral::caret(self.backend.as_mut(), node, content, ts, dark);
             }
-            if focused && !self.unringed(node) && node.props.bool(PropId::Disabled) != Some(true) {
+            let unringed = if bare {
+                ringless(node)
+            } else {
+                self.unringed(node)
+            };
+            if focused && !unringed && node.props.bool(PropId::Disabled) != Some(true) {
                 self.field_ring(&shape, ring(node, dark), ts);
             }
             return;

@@ -56,6 +56,44 @@ fn opens_quote(before: &str) -> bool {
         .is_none_or(|c| c.is_whitespace() || matches!(c, '=' | '(' | ',' | ':'))
 }
 
+/// Rewrite whole names outside strings, hex colours and function names.
+pub(crate) fn rewrite_names(text: &str, mut named: impl FnMut(&str) -> Option<String>) -> String {
+    let name_char = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
+    let mut out = String::new();
+    let mut rest = text;
+    let mut quote = None;
+    while let Some(c) = rest.chars().next() {
+        if let Some(q) = quote {
+            out.push(c);
+            rest = &rest[c.len_utf8()..];
+            if c == '\\' {
+                if let Some(n) = rest.chars().next() {
+                    out.push(n);
+                    rest = &rest[n.len_utf8()..];
+                }
+            } else if c == q {
+                quote = None;
+            }
+            continue;
+        }
+        if c == '"' || c == '\'' && opens_quote(&out) {
+            quote = Some(c);
+        } else if name_char(c) {
+            let end = rest.find(|c| !name_char(c)).unwrap_or(rest.len());
+            let (word, tail) = rest.split_at(end);
+            let replacement = (!out.ends_with('#') && !tail.starts_with('('))
+                .then(|| named(word))
+                .flatten();
+            out.push_str(replacement.as_deref().unwrap_or(word));
+            rest = tail;
+            continue;
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
 /// A raw line's code and its comment (from `//`, as written), split where
 /// [`strip_comment`] cuts it.
 pub(crate) fn split_comment(raw: &str) -> (&str, Option<&str>) {

@@ -48,7 +48,7 @@ import { normalizeDemangled } from '../host/web/stages.mjs';
 import { appleArtifacts, assertAppleIdentity } from '../host/apple/build.mjs';
 import { developmentBuildEnv, resolveApp, withAppFixture } from './app.mjs';
 import { Cdp, open } from './agent.mjs';
-import { chromium } from './agent-launch.mjs';
+import { chromium, quitBrowser } from './agent-launch.mjs';
 import { childFailure as failure, failureSummary } from './agent-build.mjs';
 import { fileURLToPath } from 'node:url';
 
@@ -498,15 +498,18 @@ await step('boot', () => {
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
   const { executable: chrome, unavailable } = chromium({ needs: ['gpu', 'perf'] });
-  let child, fresh;
+  let child, fresh, cdp, exited;
   try {
     if (unavailable) throw new Error(unavailable);
     fresh = mkdtempSync(resolve(tmpdir(), 'exact-metrics-'));
     child = spawn(chrome, ['--headless=new', '--remote-debugging-pipe', `--user-data-dir=${fresh}`,
       '--no-sandbox', '--disable-extensions', '--disable-background-networking', '--no-first-run',
       '--no-default-browser-check', 'about:blank'], { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
-    const cdp = new Cdp(child.stdio[3], child.stdio[4]);
-    child.on('exit', () => cdp.fail('metrics Chrome exited'));
+    exited = new Promise(resolve => {
+      child.once('exit', () => { cdp?.fail('metrics Chrome exited'); resolve(); });
+      child.on('error', error => { if (!child.pid) { cdp?.fail(error.message); resolve(); } });
+    });
+    cdp = new Cdp(child.stdio[3], child.stdio[4]);
     const { targetInfos } = await cdp.send('Target.getTargets');
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: targetInfos.find((x) => x.type === 'page')?.targetId ?? (await cdp.send('Target.createTarget', { url: 'about:blank' })).targetId, flatten: true });
     const call = (method, params) => cdp.send(method, params, sessionId);
@@ -604,13 +607,9 @@ await step('boot', () => {
     out.browser_note = String(error);
     out.browser_dom_ms ??= NaN;
   } finally {
-    if (child) {
-      const exited = new Promise(resolve => child.once('exit', resolve));
-      try { process.kill(-child.pid, 'SIGKILL'); } catch {}
-      await Promise.race([exited, new Promise(resolve => setTimeout(resolve, 2000))]);
-    }
+    try { if (child) await quitBrowser(child, cdp, exited); }
+    finally { server.close(); }
     if (fresh) rmSync(fresh, { recursive: true, force: true });
-    server.close();
   }
   out._browser_s = (Date.now() - t) / 1000;
 }
@@ -643,15 +642,18 @@ await step('boot', () => {
   const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
   const source = resolve(app.dir, 'app.contract');
   const original = readFileSync(source, 'utf8');
-  let page = null;
+  let page = null, cdp, exited;
   try {
     const ready = await until(/^(?:plan ready|module generation ready|Rust generation \w+ ready)/, 120000, 0); // a cold build of the dev bin can take a while; warm is ~1 s
     if (ready && !unavailable) {
       page = spawn(chrome, ['--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`,
         '--no-sandbox', '--disable-extensions', '--disable-background-networking', '--no-first-run',
         '--no-default-browser-check', 'about:blank'], { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
-      const cdp = new Cdp(page.stdio[3], page.stdio[4]);
-      page.on('exit', () => cdp.fail('dev metrics Chrome exited'));
+      exited = new Promise(resolve => {
+        page.once('exit', () => { cdp?.fail('dev metrics Chrome exited'); resolve(); });
+        page.on('error', error => { if (!page.pid) { cdp?.fail(error.message); resolve(); } });
+      });
+      cdp = new Cdp(page.stdio[3], page.stdio[4]);
       const { targetInfos } = await cdp.send('Target.getTargets');
       const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: targetInfos.find(x => x.type === 'page')?.targetId ?? (await cdp.send('Target.createTarget', { url: 'about:blank' })).targetId, flatten: true });
       const call = (method, params) => cdp.send(method, params, sessionId);
@@ -735,12 +737,14 @@ await step('boot', () => {
   } catch (error) { out.reload_ms = NaN; out.reload_note = String(error); } finally {
     writeFileSync(source, original);
     await sleep(300);
-    if (page) { try { process.kill(-page.pid, 'SIGKILL'); } catch {} }
-    // Both groups, explicitly: the driver's and its resident compiler's.
-    try { process.kill(-dev.pid, 'SIGTERM'); } catch {}
-    await sleep(200);
-    try { process.kill(-dev.pid, 'SIGKILL'); } catch {}
-    if (compilerPid) { try { process.kill(-Number(compilerPid), 'SIGKILL'); } catch {} }
+    try { if (page) await quitBrowser(page, cdp, exited); }
+    finally {
+      // Both groups, explicitly: the driver's and its resident compiler's.
+      try { process.kill(-dev.pid, 'SIGTERM'); } catch {}
+      await sleep(200);
+      try { process.kill(-dev.pid, 'SIGKILL'); } catch {}
+      if (compilerPid) { try { process.kill(-Number(compilerPid), 'SIGKILL'); } catch {} }
+    }
   }
   out._reload_s = (Date.now() - t) / 1000;
 }

@@ -196,7 +196,7 @@ fn css_text_in(
                 if shifted(style) {
                     out.push_str("vertical-align:");
                     if !authored(&mut out, id) {
-                        dimension(&mut out, *d);
+                        dimension(&mut out, d.clone());
                     }
                     out.push(';');
                 }
@@ -225,7 +225,7 @@ fn css_text_in(
                 property(&mut out, id);
                 out.push_str(":calc(");
                 if !authored(&mut out, id) {
-                    dimension(&mut out, *d);
+                    dimension(&mut out, d.clone());
                 }
                 push_text!(
                     &mut out,
@@ -758,10 +758,10 @@ fn declared(out: &mut String, id: StyleId, value: &RowValue<'_>) {
             d @ (Dimension::Points(v) | Dimension::Percent(v) | Dimension::Viewport(_, v)),
         ) if *v < 0.0 && exact_kernel::style::calc::nonnegative_row(id) => {
             out.push_str("calc(");
-            dimension(out, *d);
+            dimension(out, d.clone());
             out.push(')');
         }
-        RowValue::Dimension(d) => dimension(out, *d),
+        RowValue::Dimension(d) => dimension(out, d.clone()),
         // The browser resolves this one (LLP 1034 D2): handed the function
         // it does so per element against the inherited `color-scheme`, with
         // no work of ours and no repaint pass. This is the whole reason the

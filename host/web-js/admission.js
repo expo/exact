@@ -167,6 +167,7 @@ export function createRequestExecutor(appId, sourceSet, readBody = response => r
     const why = grantError(admitted);
     if (why) return { failed: 2, message: why };
     if (req.storage != null) {
+      if (globalThis.__exactRender) return { refused: 'storage request' };
       storage ??= import(new URL('./storage-request.js', import.meta.url).href).then(m => m.createStorageRequests(appId, sourceSet));
       return { storage: await (await storage).run(req.storage, admitted) };
     }

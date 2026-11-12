@@ -603,6 +603,227 @@ fn tab_from_a_focused_non_stop_goes_on_from_its_place() {
     assert_eq!(p.focus, Some(id(&p, "other")));
 }
 
+#[test]
+fn tab_from_a_focused_negative_index_control_uses_tree_order_within_its_scope() {
+    let source = r#"component App
+  view
+    column width="100%" height="100%"
+      button "Open" testId="open" commandfor="box" command="show-modal" height=30
+      button "Outside" testId="outside" height=30
+      dialog id="box" testId="box" width=200
+        button "Before" testId="before" tabindex=1 height=30
+        button "Middle" tabindex=-1 testId="middle" height=30
+        button "After" testId="after" tabindex=2 height=30
+"#;
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for popover in [false, true] {
+        let source = if popover {
+            source
+                .replace("command=\"show-modal\"", "command=\"show-popover\"")
+                .replace(
+                    "dialog id=\"box\"",
+                    "column popover=\"auto\" role=\"dialog\" id=\"box\"",
+                )
+        } else {
+            source.to_owned()
+        };
+        for position in ["between", "first", "last"] {
+            let source = match position {
+                "first" => source.replace(
+                    "testId=\"before\" tabindex=1",
+                    "testId=\"before\" tabindex=-1",
+                ),
+                "last" => source.replace(
+                    "testId=\"after\" tabindex=2",
+                    "testId=\"after\" tabindex=-1",
+                ),
+                _ => source.clone(),
+            };
+            let mut p = boot(&source);
+            tap(&mut p, "open");
+            for backward in [false, true] {
+                assert_eq!(p.set_focus(Some(id(&p, "middle")), 0.), None);
+                p.hold_modifier("ShiftLeft", backward);
+                p.key_down("Tab", 0.);
+                let next = match (position, popover, backward) {
+                    ("first", true, true) => "open",
+                    ("first", false, _) => "after",
+                    ("last", true, false) => "outside",
+                    ("last", false, _) => "before",
+                    (_, _, true) => "before",
+                    (_, _, false) => "after",
+                };
+                actual.push((popover, position, backward, p.focus()));
+                expected.push((popover, position, backward, Some(id(&p, next))));
+            }
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn tab_from_a_focused_negative_index_control_on_the_page_uses_the_popovers_invoker_slot() {
+    let source = r#"component App
+  view
+    column width="100%" height="100%"
+      button "Open" testId="open" popovertarget="menu" height=30
+      button "Middle" testId="middle" tabindex=-1 height=30
+      column id="menu" popover="auto" role="dialog" width=200
+        button "Inside" testId="inside" tabindex=1 height=30
+      button "After" testId="after" height=30
+"#;
+    let mut p = boot(source);
+    tap(&mut p, "open");
+    for (backward, expected) in [
+        (false, ["after", "open", "inside"]),
+        (true, ["inside", "open", "after"]),
+    ] {
+        assert_eq!(p.set_focus(Some(id(&p, "middle")), 0.), None);
+        p.hold_modifier("ShiftLeft", backward);
+        for next in expected {
+            p.key_down("Tab", 0.);
+            assert_eq!(p.focus(), Some(id(&p, next)), "backward={backward}: {next}");
+        }
+    }
+}
+
+#[test]
+fn tab_from_a_focused_negative_index_control_in_an_unscoped_popover_uses_page_order() {
+    let source = r#"component App
+  action pop
+    showPopover("menu")
+  view
+    column width="100%" height="100%"
+      button "Before" testId="before" press=pop height=30
+      column id="menu" popover="auto" role="dialog" width=200
+        button "Middle" testId="middle" tabindex=-1 height=30
+        button "Inside" testId="inside" tabindex=1 height=30
+      button "After" testId="after" height=30
+"#;
+    let mut p = boot(source);
+    tap(&mut p, "before");
+    assert!(p.alert.is_some());
+    for (backward, expected) in [
+        (false, ["inside", "before", "after"]),
+        (true, ["before", "inside", "after"]),
+    ] {
+        assert_eq!(p.set_focus(Some(id(&p, "middle")), 0.), None);
+        p.hold_modifier("ShiftLeft", backward);
+        for next in expected {
+            p.key_down("Tab", 0.);
+            assert_eq!(p.focus(), Some(id(&p, next)), "backward={backward}: {next}");
+        }
+    }
+}
+
+#[test]
+fn tab_from_a_focused_negative_index_control_wraps_to_stops_without_page_stops() {
+    let source = r#"component App
+  view
+    column width="100%" height="100%"
+      button "Open" testId="open" tabindex=-1 popovertarget="menu" height=30
+      column id="menu" popover="auto" role="dialog" width=200
+        button "Before" testId="before" tabindex=-1 height=30
+        button "Middle" testId="middle" tabindex=-1 height=30
+        button "After" testId="after" tabindex=-1 height=30
+"#;
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for stop in ["before", "after", "none"] {
+        let source = source.replace(
+            &format!("testId=\"{stop}\" tabindex=-1"),
+            &format!("testId=\"{stop}\" tabindex=1"),
+        );
+        let mut p = boot(&source);
+        tap(&mut p, "open");
+        for backward in [false, true] {
+            assert_eq!(p.set_focus(Some(id(&p, "middle")), 0.), None);
+            p.hold_modifier("ShiftLeft", backward);
+            for _ in 0..3 {
+                p.key_down("Tab", 0.);
+                actual.push((stop, backward, p.focus()));
+                let next = if stop == "none" { "middle" } else { stop };
+                expected.push((stop, backward, Some(id(&p, next))));
+            }
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn tab_from_a_focused_negative_index_control_that_invokes_a_popover_enters_its_scope() {
+    let source = r#"component App
+  view
+    column width="100%" height="100%"
+      button "Open" testId="open" tabindex=-1 popovertarget="menu" height=30
+      button "After" testId="after" height=30
+      column id="menu" popover="auto" role="dialog" width=200
+        button "Second" testId="second" tabindex=2 height=30
+        button "First" testId="first" tabindex=1 height=30
+"#;
+    let mut p = boot(source);
+    tap(&mut p, "open");
+    for (backward, expected) in [
+        (false, ["first", "second", "after", "first"]),
+        (true, ["after", "second", "first", "after"]),
+    ] {
+        assert_eq!(p.set_focus(Some(id(&p, "open")), 0.), None);
+        p.hold_modifier("ShiftLeft", backward);
+        for next in expected {
+            p.key_down("Tab", 0.);
+            assert_eq!(p.focus(), Some(id(&p, next)), "backward={backward}: {next}");
+        }
+    }
+}
+
+#[test]
+fn tab_from_a_focused_negative_index_control_keeps_the_surface_scope() {
+    let source = r#"component App
+  view
+    column width="100%" height="100%"
+      button "Open" testId="open" commandfor="box" command="show-modal" height=30
+      button "Outside" testId="outside" height=30
+      dialog id="box" testId="box" width=200
+        button "Before" testId="before" height=30
+        button "Middle" tabindex=-1 testId="middle" height=30
+        button "After" testId="after" height=30
+"#;
+    for popover in [false, true] {
+        let source = if popover {
+            source
+                .replace("command=\"show-modal\"", "command=\"show-popover\"")
+                .replace(
+                    "dialog id=\"box\"",
+                    "column popover=\"auto\" role=\"dialog\" id=\"box\"",
+                )
+        } else {
+            source.to_owned()
+        };
+        let mut p = boot(&source);
+        tap(&mut p, "open");
+        for backward in [false, true] {
+            assert_eq!(p.set_focus(Some(id(&p, "middle")), 0.), None);
+            p.hold_modifier("ShiftLeft", backward);
+            let expected: &[&str] = match (popover, backward) {
+                (false, false) => &["after", "before", "after"],
+                (false, true) => &["before", "after", "before"],
+                (true, false) => &["after", "outside", "open", "before", "after"],
+                (true, true) => &["before", "open", "outside", "after", "before"],
+            };
+            for name in expected {
+                p.key_down("Tab", 0.);
+                assert_eq!(
+                    p.focus(),
+                    Some(id(&p, name)),
+                    "popover={popover}, backward={backward}: {name}"
+                );
+            }
+            p.hold_modifier("ShiftLeft", false);
+        }
+    }
+}
+
 /// An invoker that is no stop still owns its popover's scope: Shift+Tab
 /// from the popover's first stop goes to what comes before the invoker.
 #[test]
@@ -687,4 +908,89 @@ fn a_popover_is_no_child_of_the_page_scroller_in_the_accessibility_tree() {
         assert_ne!(n.view, 0, "the page scroller holds the popover");
         at = n.parent;
     }
+}
+
+/// A fragment's starting point inside a popover searches the popover's
+/// scope, then leaves through its edge to the page's next stop (Shift: the
+/// invoker), as HTML's search in tree order does from inside it.
+#[test]
+fn tab_from_a_fragment_in_a_popover_leaves_through_its_edge() {
+    let source = r##"routes nav
+  home "/"
+component App
+  action follow(url: string)
+    nav = go(nav, url)
+  action back
+    nav = back(nav)
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` position="absolute" inset=0
+          button "Open" testId="open" popovertarget="menu" height=30
+          column id="menu" popover="auto" role="dialog" width=200
+            link href="#end" testId="link"
+              text "End"
+            box id="end" testId="end" height=30
+          button "After" testId="after" height=30
+"##;
+    let target_first = source.replace(
+        "            link href=\"#end\" testId=\"link\"\n              text \"End\"\n            box id=\"end\" testId=\"end\" height=30\n",
+        "            box id=\"end\" testId=\"end\" height=30\n            link href=\"#end\" testId=\"link\"\n              text \"End\"\n",
+    );
+    assert_ne!(target_first, source);
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (source, forward, backward) in [(source, "after", "link"), (&target_first, "link", "open")]
+    {
+        for (backward, next) in [(false, forward), (true, backward)] {
+            let mut p = boot(source);
+            tap(&mut p, "open");
+            tap(&mut p, "link");
+            p.run_commands(|| ());
+            p.frame();
+            assert!(p.alert.is_some(), "the popover stays open");
+            assert_eq!(
+                (p.focus, p.focus_start),
+                (None, Some(id(&p, "end"))),
+                "the fragment is the starting point"
+            );
+            p.move_focus(backward, 0.);
+            actual.push((backward, p.focus()));
+            expected.push((backward, Some(id(&p, next))));
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+/// The dialog focusing steps of a `dialog` popover choose the first stop
+/// in its own order, wherever the page's focus was: on a button, or on an
+/// inline control that is no stop.
+#[test]
+fn a_dialog_popover_shown_from_a_focused_page_control_focuses_its_first_stop() {
+    let source = r#"component App
+  action edit
+    showPopover("box")
+  view
+    column width="100%" height="100%"
+      button "Edit" testId="edit" press=edit height=30
+      dialog id="box" popover="auto" width=200
+        button "Later" testId="later" height=30
+        button "Sooner" testId="sooner" tabindex=1 height=30
+"#;
+    let inline = source.replace(
+        "      button \"Edit\" testId=\"edit\" press=edit height=30\n",
+        "      text\n        text \"Edit\" testId=\"edit\" tabindex=-1 press=edit\n",
+    );
+    assert_ne!(inline, source);
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for source in [source, &inline] {
+        let mut p = boot(source);
+        assert_eq!(p.set_focus(Some(id(&p, "edit")), 0.), None);
+        tap(&mut p, "edit");
+        assert!(p.alert.is_some());
+        actual.push(p.focus());
+        expected.push(Some(id(&p, "sooner")));
+    }
+    assert_eq!(actual, expected);
 }

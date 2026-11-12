@@ -257,7 +257,7 @@ pub fn host_css_of(
         // percentage is of the containing block's width, which a background
         // cannot reach: the line then stands at the content box's foot.
         let mut bottom = String::new();
-        crate::css::dimension(&mut bottom, node.style.padding_bottom);
+        crate::css::dimension(&mut bottom, node.style.padding_bottom.clone());
         if bottom.contains('%') || bottom == "auto" {
             bottom = "0px".into();
         }

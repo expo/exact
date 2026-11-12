@@ -5,6 +5,7 @@ use exact_kernel::CommitReceipt;
 use exact_plan::{Plan, TypeKind, TypesId, Value};
 use serde_json::{json, Value as Json};
 
+#[derive(Clone, PartialEq)]
 pub(super) struct Activities {
     snapshot: Json,
     demanded: bool,
@@ -59,11 +60,10 @@ fn decode(plan: &Plan, ty: TypesId, v: &Json) -> Option<Value> {
 impl<D: DataSource> Runner<D> {
     /// Enable sends only when the host can load the ActivityKit arm.
     pub fn link_activities(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
-        self.activities.linked = true;
-        let mut snapshot = self.activities.snapshot.clone();
-        snapshot["linked"] = Json::Bool(true);
-        self.activities.snapshot = snapshot;
-        self.recommit_activities()
+        let mut next = self.activities.clone();
+        next.linked = true;
+        next.snapshot["linked"] = Json::Bool(true);
+        self.replace_activities(next)
     }
 
     /// A failed load is recorded by the host; the next demand may retry it.
@@ -78,7 +78,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     pub(super) fn activities_answer(&mut self, i: usize) -> Result<Value, DataError> {
-        let row = &self.plan.resources[i];
+        let row = self.resource_row(i);
         if row.args.len != 0 {
             return Err(DataError::BadArguments(
                 "exactActivities takes no arguments".into(),
@@ -99,29 +99,30 @@ impl<D: DataSource> Runner<D> {
             resource: "exactActivities".into(),
             error: DataError::BadArguments(e.to_string()),
         })?;
-        self.activities.started = true;
-        self.activities.loading = false;
         snapshot["linked"] = Json::Bool(self.activities.linked);
-        if snapshot == self.activities.snapshot {
-            return Ok(None);
-        }
-        let previous = std::mem::replace(&mut self.activities.snapshot, snapshot);
-        let result = self.recommit_activities();
-        if result.is_err() {
-            self.activities.snapshot = previous;
-        }
-        result
+        let mut next = self.activities.clone();
+        next.snapshot = snapshot;
+        next.started = true;
+        next.loading = false;
+        self.replace_activities(next)
     }
 
-    fn recommit_activities(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
-        let readers = self
-            .plan
-            .resources
-            .iter()
-            .enumerate()
-            .filter_map(|(i, r)| (self.plan.str(r.source) == "exactActivities").then_some(i))
-            .collect();
-        self.recommit(readers, "activities")
+    fn replace_activities(
+        &mut self,
+        next: Activities,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.replace_fact(
+            |r| &mut r.activities,
+            next,
+            "exactActivities",
+            |r, previous, mut readers| {
+                // Loading state alone changes no answer.
+                if r.activities.snapshot == previous.snapshot {
+                    readers.clear();
+                }
+                r.recommit(readers, "activities")
+            },
+        )
     }
 
     pub(super) fn activity_send(source: &str) -> bool {
@@ -259,8 +260,10 @@ component App
             ]))
         );
         for action in ["start", "update", "end"] {
+            let requests = r.mutation_requests();
             let error = r.act(action, vec![]).unwrap_err();
             assert!(format!("{error:?}").contains("is not linked into this artifact"));
+            assert_eq!(r.mutation_requests(), requests + 1);
             assert!(r.take_requests().is_empty());
         }
     }

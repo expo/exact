@@ -548,6 +548,103 @@ final class TextSelectionIOSTests: XCTestCase {
         XCTAssertTrue(presses.isEmpty)
     }
 
+    func testMixedDirectionEndpointsSurviveParagraphAndDocumentConversion() throws {
+        let p = mounted([
+            box(1, style: ["user_select": "text"]), text(2, "Before"),
+            text(3, "אבג abc דהו", style: ["direction": "rtl"]), text(4, "After"),
+            ["op": "children", "id": 1, "ids": [2, 3, 4]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 180, w: 400), frame(2, 20, x: 20), frame(3, 70, x: 20), frame(4, 120, x: 20),
+        ])
+        let owner = try node(p, 1), prose = try node(p, 3)
+        let input = SelectableText(node: prose, host: p.textSelection, attach: false)
+        let selection = NSRange(location: 1, length: 5)
+        let local = input.selectionRects(for: SelectableRange(selection))
+        let start = try XCTUnwrap(local.first { $0.containsStart })
+        let end = try XCTUnwrap(local.first { $0.containsEnd })
+        XCTAssertEqual(local.filter { $0.containsStart }.count, 1)
+        XCTAssertEqual(local.filter { $0.containsEnd }.count, 1)
+        XCTAssertEqual(start.writingDirection, .rightToLeft)
+        XCTAssertEqual(end.writingDirection, .leftToRight)
+        XCTAssertGreaterThan(start.rect.minX, end.rect.maxX)
+        // The first rect encloses the selection's first line, its start included.
+        let first = input.firstRect(for: SelectableRange(selection))
+        XCTAssertEqual(first.maxX, start.rect.maxX, accuracy: 0.001)
+        XCTAssertEqual(first.minX, local.map(\.rect.minX).min()!, accuracy: 0.001)
+
+        let document = SelectionDocument(owner: owner, paragraphs: try [node(p, 2), prose, node(p, 4)], host: p.textSelection)
+        let base = try XCTUnwrap(document.parts.first { $0.node === prose }).start
+        let global = NSRange(location: base + selection.location, length: selection.length)
+        let converted = document.rects(global)
+        XCTAssertEqual(converted.count, local.count)
+        for (a, b) in zip(local, converted) {
+            XCTAssertEqual(b.rect, prose.convert(a.rect, to: document.surface))
+            XCTAssertEqual(b.containsStart, a.containsStart)
+            XCTAssertEqual(b.containsEnd, a.containsEnd)
+            XCTAssertEqual(b.writingDirection, a.writingDirection)
+        }
+        let across = document.rects(NSRange(location: 1, length: base + NSMaxRange(selection) - 1))
+        XCTAssertEqual(across.filter { $0.containsStart }.count, 1)
+        XCTAssertEqual(across.filter { $0.containsEnd }.count, 1)
+        XCTAssertEqual(across.first { $0.containsEnd }?.rect, prose.convert(end.rect, to: document.surface))
+    }
+
+    func testAClampedParagraphKeepsTheEndOfASelectionPastItsLastLine() throws {
+        let p = mounted([text(1, "First\nSecond\nThird", style: ["white_space": "pre", "line_clamp": 1, "user_select": "all"]),
+                         ["op": "roots", "ids": [1]], frame(1, 0)])
+        let input = SelectableText(node: try node(p, 1), host: p.textSelection, attach: false)
+        XCTAssertEqual(input.offset(from: input.beginningOfDocument, to: input.endOfDocument), 18)
+        let rects = input.selectionRects(for: SelectableRange(NSRange(location: 0, length: 18)))
+        XCTAssertEqual(rects.filter(\.containsStart).count, 1)
+        let ends = rects.filter(\.containsEnd)
+        XCTAssertEqual(ends.count, 1, "the end handle has a place though no shown line holds the end")
+        let caret = input.caretRect(for: SelectablePosition(18))
+        XCTAssertEqual(try XCTUnwrap(ends.first).rect, CGRect(x: caret.midX, y: caret.minY, width: 0, height: caret.height))
+    }
+
+    func testFirstRectStaysOnTheStartingLineInItsColumn() throws {
+        let p = mounted([text(1, "Alpha\nbeta\ngamma\ndelta", style: ["white_space": "pre", "user_select": "text"]),
+                         ["op": "roots", "ids": [1]], frame(1, 0, h: 44, w: 300),
+                         ["op": "fragments", "id": 1, "fragments": [[0, 0, 120, 44, 0, 2, 0, 0], [160, 0, 120, 44, 2, 4, 160, -44]]]])
+        let input = SelectableText(node: try node(p, 1), host: p.textSelection, attach: false)
+        let range = SelectableRange(NSRange(location: 0, length: input.offset(from: input.beginningOfDocument, to: input.endOfDocument)))
+        let rects = input.selectionRects(for: range)
+        let start = try XCTUnwrap(rects.first { $0.containsStart })
+        XCTAssertTrue(rects.contains { $0.rect.minX >= 160 && $0.rect.minY == start.rect.minY }, "gamma shares Alpha's band")
+        XCTAssertEqual(input.firstRect(for: range), start.rect)
+    }
+
+    func testDocumentSelectionKeepsEndpointsAtParagraphSeparators() throws {
+        let p = mounted([
+            box(1, style: ["user_select": "text"]), text(2, "First"), text(3, "Second"),
+            ["op": "children", "id": 1, "ids": [2, 3]], ["op": "roots", "ids": [1]],
+            frame(1, 0, h: 120, w: 400), frame(2, 20, x: 20), frame(3, 70, x: 40),
+        ])
+        let input = try XCTUnwrap(p.textSelection.install(try node(p, 2)))
+        let document = try XCTUnwrap(input.document)
+        XCTAssertEqual(document.text as String, "First\nSecond")
+        for range in [0..<6, 5..<9, 5..<6, 0..<5, 6..<9, 2..<9, 5..<5] {
+            let selection = SelectableRange(NSRange(location: range.lowerBound, length: range.count))
+            let rects = input.selectionRects(for: selection)
+            if range.isEmpty {
+                XCTAssertTrue(rects.isEmpty)
+                continue
+            }
+            let starts = rects.filter { $0.containsStart }, ends = rects.filter { $0.containsEnd }
+            XCTAssertEqual(starts.count, 1, "\(range)")
+            XCTAssertEqual(ends.count, 1, "\(range)")
+            for (offset, endpoint, first) in [(range.lowerBound, starts.first, true), (range.upperBound, ends.first, false)] {
+                guard offset == 5 || offset == 6 else { continue }
+                let endpoint = try XCTUnwrap(endpoint, "\(range)")
+                let caret = input.caretRect(for: SelectablePosition(offset))
+                let x = first ? endpoint.rect.minX : endpoint.rect.maxX
+                XCTAssertEqual(x, caret.midX, accuracy: 0.01, "\(range)")
+                XCTAssertEqual(endpoint.rect.minY, caret.minY, accuracy: 0.01)
+                XCTAssertEqual(endpoint.rect.height, caret.height, accuracy: 0.01)
+                XCTAssertEqual(endpoint.writingDirection, .leftToRight)
+            }
+        }
+    }
+
     func testOneTextInputSelectsAcrossParagraphsAndKeepsTheirSourceRanges() throws {
         let p = mounted([
             box(1, style: ["user_select": "text"]),

@@ -1,8 +1,9 @@
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import vm from 'node:vm';
 import { open } from '../../scripts/agent.mjs';
 import { webCompiler } from './module.mjs';
 
@@ -60,12 +61,6 @@ const DIFFERS = {
   // as a stream whose mapper never answers does. A stream holds a page until its first message whatever storage calls
   // are made around it; the render host's rejection of the refused call ends the message (QUEUE.md).
   '/mapper-inside': [503, false, ['r'], 'deadline'],
-  // An upload's stream fails in a JavaScript render (`data.parse is not a function`), with or without storage.
-  '/upload': [200, true, [], 'quick'],
-  // Not in these numbers, which match: the server bundle does not carry the answer across an `await` (only the
-  // page's lowers async code), so this watch throws and its resource fails in the render where the render host
-  // answers it; the reader's page asks it again and its watch holds (below).
-  '/watch-await': [200, true, [], 'quick'],
 };
 test('a render waits for work in flight and for nothing else, as the render host does', async () => {
   const dir = scratch();
@@ -194,12 +189,18 @@ export const answer = async (name: string, [route]: string[], _store: unknown, s
       const ms = reply.render, timing = ms >= DEADLINE ? 'deadline' : ms >= 90 ? 'waited' : 'quick';
       seen[path] = [reply.status, reply.settled, checkpoint.pending, timing];
       wanted[path] = DIFFERS[path] ?? native;
+      if (path === '/watch-await') {
+        expect(reply.failed).toEqual([]);
+        expect(checkpoint.open).toEqual(['r']);
+        expect(/data-testid="r"[^>]*>([^<]*)</.exec(reply.html)[1]).toBe('watched');
+      }
+      if (path === '/body-from-await') expect(reply.refused).toEqual([['r', 'exactBodyFrom app:/data/b']]);
       if (path === '/shared') site = reply.html;
     }
     expect(seen).toEqual(wanted);
-    // The shared queue's page adopts in a browser, and the reader's page asks both its sources; so does the page whose
-    // watch after an `await` failed in the render, and there the watch holds.
-    const pages = { '/shared': site, '/watch-await': (await render('/watch-await', DEADLINE)).html };
+    // Adoption asks the shared queue's sources again and establishes the watch the render deferred.
+    const pages = { '/shared': site };
+    for (const path of ['/watch-await', '/watch-then']) pages[path] = (await render(path, DEADLINE)).html;
     site = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
       const path = new URL(request.url).pathname;
       if (pages[path]) return new Response(pages[path], { headers: { 'content-type': 'text/html' } });
@@ -217,11 +218,88 @@ export const answer = async (name: string, [route]: string[], _store: unknown, s
     await browser.clock('settle');
     expect(await browser.carrier.evaluate(`[document.querySelector('[data-testid="r"]').textContent, document.querySelector('[data-testid="rstate"]').textContent]`))
       .toEqual(['watched', 'answered']);
+    await browser.close();
+    browser = await open({ host: 'web', url: new URL('/watch-then', site.url).href });
+    await browser.clock('settle');
+    expect(await browser.carrier.evaluate(`[document.querySelector('[data-testid="r"]').textContent, document.querySelector('[data-testid="rstate"]').textContent]`))
+      .toEqual(['', 'failed']);
   } finally {
     await browser?.close(); if (site?.stop) site.stop(true); api.stop(true);
     rmSync(dir, { recursive: true, force: true });
   }
 }, 180000);
+
+test.each([false, true])('a render maps upload progress and waits for its reply (storage grants: %s)', async storage => {
+  const dir = scratch();
+  let complete = false;
+  let realm, current;
+  const requests = [];
+  const api = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+    requests.push([request.method, await request.text(), request.headers.get('accept')]);
+    // Headers acknowledge the body sent; the reply's body stays open until the render's deadline.
+    const body = complete ? 'done' : new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('do')); } });
+    return new Response(body, { status: 201, headers: { 'content-type': 'text/event-stream' } });
+  } });
+  try {
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  home "/" render=client
+    upload "/upload" render=request
+
+component App
+  resource r = upload() as shape string else empty()
+  view
+    main
+      text r testId="r"
+`);
+    const grants = `${storage ? 'fs.read app:/data\nfs.write app:/data\nsqlite.open app:/data/books.db\n' : ''}net.fetch ${api.url.origin}`;
+    writeFileSync(resolve(dir, 'app.ts'), `export const grants = ${JSON.stringify(grants)};
+export const answer = (): any => {
+  const mapped: string[] = [];
+  return fetch('${api.url.origin}/upload', { method: 'POST', body: 'x', exactUploadProgress: true,
+    exactStream: (e: any) => {
+      mapped.push(e.type === 'progress' ? 'progress ' + e.loaded + '/' + e.total + ' ' + e.lengthComputable
+        : e.type === 'load' ? 'load ' + e.status + ' ' + e.data : e.type);
+      return mapped.join('; ');
+    } } as RequestInit);
+};
+`);
+    const dist = await build(dir);
+    const { renderer } = await import('./render.mjs');
+    const render = renderer(dist); render.ahead = false;
+    const createContext = vm.createContext;
+    realm = spyOn(vm, 'createContext').mockImplementation((ctx, options) => {
+      const clock = { now: 0 };
+      ctx.performance = { now: () => clock.now };
+      current = { ctx, clock };
+      return createContext(ctx, options);
+    });
+    const page = async deadline => {
+      const reply = await render('/upload', deadline);
+      const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(reply.html)[1]);
+      return { status: reply.status, settled: reply.settled, pending: checkpoint.pending, failed: reply.failed,
+        r: /data-testid="r"[^>]*>([^<]*)</.exec(reply.html)[1] };
+    };
+    let finished = false;
+    const waiting = page(1000).then(reply => { finished = true; return reply; });
+    // Only the test moves the render's deadline; the upload may take any number of event-loop turns.
+    const until = performance.now() + 10000;
+    while (!finished && current?.ctx.document.getElementById('exact-root').textContent !== 'progress 1/1 true') {
+      if (performance.now() >= until) throw new Error('upload progress did not commit');
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    expect(finished).toBe(false);
+    current.clock.now = 1000;
+    expect(await waiting).toEqual({ status: 503, settled: false, pending: ['r'], failed: [], r: 'progress 1/1 true' });
+    complete = true;
+    expect(await page(3000)).toEqual({ status: 200, settled: true, pending: [], failed: [], r: 'progress 1/1 true; load 201 done' });
+    expect(requests).toEqual([['POST', 'x', '*/*'], ['POST', 'x', '*/*']]);
+  } finally {
+    if (current) current.clock.now = Infinity;
+    realm?.mockRestore();
+    api.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120000);
 
 // A fetch an app module makes as it loads, which the reader's page runs as its answer's wait, is work in flight: the
 // render waits for it, on a page with no status too, and the page shows its answer. (A device's executor refuses a

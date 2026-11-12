@@ -18,13 +18,9 @@ pub(super) struct Checkpoint {
     /// How many let-go requests with effects were collected before it.
     letting: usize,
     slots: Vec<Value>,
-    resources: Option<Vec<Option<ResourceState>>>,
-    stale: Vec<bool>,
-    store_readers: Vec<bool>,
-    watching: Vec<Vec<String>>,
-    failed_args: Vec<Option<Vec<Value>>>,
+    resources: Vec<super::resources::ResourceRow>,
+    module_readers: std::collections::BTreeMap<String, std::collections::BTreeMap<usize, String>>,
     uploads: super::uploads::Uploads,
-    failed_why: Vec<Option<crate::failure::Failure>>,
     failed_mut: Vec<Option<crate::failure::Failure>>,
     refresh_next: Vec<usize>,
     writes: super::writes::Writes,
@@ -42,12 +38,10 @@ pub(super) struct Checkpoint {
     root_font: (super::root_font::RootFont, f32, u32),
     /// Kept answers refused before this commit (`kept::refuse`).
     refused: usize,
-    resource_inspection: Vec<crate::perf::ResourceWork>,
     /// Who each request and `then` is from (LLP 1133.023 D7).
     origins: super::modules::OriginsSaved,
     /// The arguments refused a child's resource (LLP 1133.007 D13).
     refused_args: super::modules::Refused,
-    gone: Vec<bool>, // which elements of resources over lists had left (`each.rs`)
 }
 
 /// What a settlement publishes that a refusal after it — the gate step
@@ -58,9 +52,6 @@ pub(super) struct Published {
     settled: Option<super::settlement::Settled>,
     derives: Vec<Option<Value>>,
     derive_store_dependent: Vec<bool>,
-    resource_values: Vec<Option<crate::held::Held>>,
-    resources: Vec<Option<ResourceState>>,
-    awaiting: Vec<bool>,
     requests: usize,
 }
 
@@ -73,9 +64,8 @@ impl<D: DataSource> Runner<D> {
         self.scrolled.inline = read;
     }
 
-    /// Before a commit. `resources`: the commit edits the settled caches
-    /// before settling (a reply does).
-    pub(super) fn checkpoint(&mut self, resources: bool) -> Checkpoint {
+    /// Before a commit, including every resource field a refusal restores.
+    pub(super) fn checkpoint(&mut self) -> Checkpoint {
         self.start_commit();
         self.derives_evaluated = 0;
         self.copied_at_checkpoint = self.store.copied_bytes();
@@ -86,13 +76,9 @@ impl<D: DataSource> Runner<D> {
         Checkpoint {
             store,
             slots: self.slots.clone(),
-            resources: resources.then(|| self.resources.clone()),
-            stale: self.stale.clone(),
-            store_readers: self.store_readers.clone(),
-            watching: self.watching.clone(),
-            failed_args: self.failed_args.clone(),
+            resources: self.resources.clone(),
+            module_readers: self.extensions.readers.clone(),
             uploads: self.uploads.clone(),
-            failed_why: self.failed_why.clone(),
             failed_mut: self.failed_mut.clone(),
             refresh_next: self.refresh_next.clone(),
             writes: self.writes.clone(),
@@ -108,9 +94,6 @@ impl<D: DataSource> Runner<D> {
                     settled: self.settled.clone(),
                     derives: self.derives.clone(),
                     derive_store_dependent: self.derive_store_dependent.clone(),
-                    resource_values: self.resource_values.clone(),
-                    resources: self.resources.clone(),
-                    awaiting: self.awaiting.clone(),
                     requests: self.requests.len(),
                 })
             }),
@@ -122,11 +105,9 @@ impl<D: DataSource> Runner<D> {
                 self.ids.theme.window,
             ),
             refused: self.keeping.refused.len(),
-            resource_inspection: self.ids.work.resources.clone(),
             origins: self.origins_saved(),
             refused_args: self.refused_saved(),
             letting: self.letting_len(),
-            gone: self.gone_members(),
         }
     }
 
@@ -164,20 +145,19 @@ impl<D: DataSource> Runner<D> {
                 self.forgot = true;
                 let kept = self.restore_store_refused(c.store);
                 self.slots = c.slots;
-                if let Some(resources) = c.resources {
-                    self.resources = resources;
+                let mut resources = c.resources;
+                // A refused call still drew randomness; the bake must not keep its answer.
+                for (old, attempted) in resources.iter_mut().zip(&self.resources) {
+                    old.entropy_reader |= attempted.entropy_reader;
                 }
-                self.stale = c.stale;
-                self.store_readers = c.store_readers;
+                self.resources = resources;
+                self.extensions.readers = c.module_readers;
+                self.release_sampled();
                 // A spent reply's turn read the store: its failure stands, and so does the read.
                 if let Some(i) = self.module_work.reply_reader.take() {
-                    self.store_readers[i] = true;
+                    self.resources[i].store_reader = true;
                 }
-                self.watching = c.watching;
-                self.failed_args = c.failed_args;
                 self.uploads = c.uploads;
-                self.ids.work.resources = c.resource_inspection;
-                self.failed_why = c.failed_why;
                 self.failed_mut = c.failed_mut;
                 self.refresh_next = c.refresh_next;
                 if kept {
@@ -187,7 +167,10 @@ impl<D: DataSource> Runner<D> {
                 let seq = self.writes.seq;
                 self.writes = c.writes;
                 self.writes.seq = seq;
-                self.overlays.iter_mut().for_each(|o| *o = None);
+                self.resources
+                    .iter_mut()
+                    .map(|row| &mut row.overlay)
+                    .for_each(|o| *o = None);
                 self.unsent = c.unsent;
                 self.reconciling = c.reconciling;
                 // A send its source refused when it was sent stays ended.
@@ -209,9 +192,6 @@ impl<D: DataSource> Runner<D> {
                     self.settled = p.settled;
                     self.derives = p.derives;
                     self.derive_store_dependent = p.derive_store_dependent;
-                    self.resource_values = p.resource_values;
-                    self.resources = p.resources;
-                    self.awaiting = p.awaiting;
                     // A resource request the settlement handed out goes
                     // with it: never taken, its continuation is let go.
                     let dropped: Vec<RequestOut> = self.requests.drain(p.requests..).collect();
@@ -219,7 +199,6 @@ impl<D: DataSource> Runner<D> {
                         self.discard_request(&r.request);
                     }
                 }
-                self.restore_members(&c.gone);
                 self.sync_pending_flags();
                 self.commands.truncate(c.commands);
                 // A refusal the restore undid is not said.
@@ -290,7 +269,7 @@ impl<D: DataSource> Runner<D> {
         frames: &[Frame],
     ) -> Result<CommitReceipt, RunnerError> {
         let was_poisoned = self.poisoned;
-        let checkpoint = self.checkpoint(false);
+        let checkpoint = self.checkpoint();
         let result = self.run_action_inner(action, args, frames);
         self.conclude(checkpoint, &result, was_poisoned);
         self.arm_then(result.is_ok());
@@ -447,6 +426,10 @@ impl<D: DataSource> Runner<D> {
             let write = self.accept_write(target, source, sargs);
             let early = !self.data.ready() && !exact_plan::runner_owned_source(source);
             if early && !queue {
+                if let Err(e) = self.check_send_arguments(m, sargs) {
+                    self.discard_later(&later);
+                    return Err(e);
+                }
                 // It replaces a send still in flight (newest wins).
                 if mode == MutationMode::Newest {
                     unsent.retain(|u| u.0.mutation() != Some(m));
@@ -463,7 +446,7 @@ impl<D: DataSource> Runner<D> {
                 continue;
             }
             asked.push(m);
-            match self.ask_send(target, source, sargs) {
+            match self.ask_send(target, source, sargs, write) {
                 Ok(super::queue::Asked::Now(slot, v)) => {
                     answered.push((slot as u32, v));
                     self.landed.push(m);
@@ -867,8 +850,11 @@ impl<D: DataSource> Runner<D> {
                 // (new arguments: a new streak after a turn over its budget)
                 p.reasks = 0;
                 if let Target::Resource(i) = target {
-                    p.inspection_generation =
-                        self.ids.work.resources.get(i).map_or(0, |w| w.request);
+                    p.inspection_generation = self
+                        .resources
+                        .get(i)
+                        .map(|row| &row.inspection)
+                        .map_or(0, |w| w.request);
                 }
                 let (ticket, upload) = (p.ticket, p.upload);
                 // An upload kept for newer arguments is asked at them too (D10).

@@ -86,7 +86,7 @@ impl<D: DataSource> Runner<D> {
     /// `exactMIDI()`'s answer, by the declared fields and, in its port
     /// lists, the `MIDIPort` shape's.
     pub(super) fn midi_answer(&self, i: usize) -> Result<Value, DataError> {
-        let row = &self.plan.resources[i];
+        let row = self.resource_row(i);
         if row.args.len > 0 {
             return Err(DataError::BadArguments(format!(
                 "{SOURCE} takes no arguments"

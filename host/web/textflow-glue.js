@@ -288,6 +288,7 @@ function paintContent(span, fragment, state, lineHeight) {
       const clone = original.cloneNode(false);
       // Capture-phase route handling must see the same press owner as the original.
       clone.exactHandlers = original.exactHandlers;
+      clone.exactAuthoredTabIndex = original.exactAuthoredTabIndex;
       clone.removeAttribute('id'); clone.removeAttribute('data-testid');
       // Original listeners remain valid by kernel view identity while detached.
       // Forward authored events only; a plain <a> keeps its native default.

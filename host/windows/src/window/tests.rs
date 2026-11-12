@@ -285,7 +285,7 @@ fn windowless_app(events: &EventLoop<crate::accessibility::Event>, plan: &[u8]) 
         accessibility: None,
         name: "Frame scheduling regression".into(),
         min_size: (1., 1.),
-        config: Config::from_env(&plan, ""),
+        config: Config::from_env(plan, ""),
         window: None,
         surface: None,
         preparing: None,

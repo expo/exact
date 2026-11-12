@@ -5,6 +5,169 @@ import {createInputHandlers} from '../input-glue.js';
 import { suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { glueDeclarations } from './glue-fixture.mjs';
 
+async function rovingFixture(target, run) {
+  const apply = glueDeclarations(readFileSync(new URL('../wasm/views.js', import.meta.url), 'utf8'), ['applyProps']);
+  const server = Bun.serve({port: 0, hostname: '127.0.0.1', async fetch(req) {
+    const path = new URL(req.url).pathname;
+    if (path === '/') return new Response('<div id="exact-root"></div>', {headers: {'Content-Type': 'text/html'}});
+    if (path === '/props.js') return new Response(`import {navigates} from '/host/web/navigation.js';\nconst syncMedia = () => {}, syncMarkup = () => {}, host = {inputReady: true};\n${apply}\nexport {applyProps};`, {headers: {'Content-Type': 'text/javascript'}});
+    if (path === '/host/web-js/names.js') return new Response('export const sourceTypes = [];', {headers: {'Content-Type': 'text/javascript'}});
+    if (!path.startsWith('/host/')) return new Response(null, {status: 404});
+    const local = Bun.file(new URL(`../../..${path}`, import.meta.url));
+    const file = await local.exists() ? local : Bun.file(new URL(`../../..${path.replace('/web-js/', '/web/')}`, import.meta.url));
+    return await file.exists() ? new Response(readFileSync(file.name), {headers: {'Content-Type': 'text/javascript'}}) : new Response(null, {status: 404});
+  }});
+  const browser = await suiteBrowser();
+  try {
+    for (const role of ['tab', 'radio']) {
+      const page = await browser.newPage();
+      try {
+        await page.goto(server.url.href);
+        await page.evaluate(async ([target, role]) => {
+          const root = document.querySelector('#exact-root'), state = role === 'tab' ? 'selected' : 'checked';
+          root.innerHTML = `<button id="before">Before</button><div role="${role === 'tab' ? 'tablist' : 'radiogroup'}">
+            <button id="excluded" role="${role}" aria-${state}="true" tabindex="-7">Excluded</button>
+            <button id="one" role="${role}">One</button><button id="two" role="${role}" tabindex="0">Two</button>
+            <button id="disabled" role="${role}" disabled>Disabled</button>
+          </div><button id="after">After</button>`;
+          if (target === 'wasm') {
+            const {applyProps} = await import('/props.js');
+            window.setIndex = (id, value) => applyProps(document.getElementById(id), value == null ? {} : {tabindex: value}, value == null ? ['tabindex'] : []);
+          } else {
+            const {P, sig, scope, commit, write} = await import('/host/web-js/rt.js'), indices = new Map();
+            for (const id of ['excluded', 'one', 'two']) {
+              const el = document.getElementById(id), value = sig(el.getAttribute('tabindex'));
+              indices.set(id, value);
+              scope(() => P(el, 'tabindex', value));
+            }
+            window.setIndex = (id, value) => commit(() => write(indices.get(id).n, value));
+          }
+          const {createInputHandlers} = await import('/host/web/input-glue.js');
+          window.input = createInputHandlers({root, views: new Map(), retiredViews: new Set(), ready: () => true, inertAncestor: () => false, dispatch() {}});
+        }, [target, role]);
+        await run(page, role);
+      } finally { await page.close(); }
+    }
+  } finally { await browser.close(); server.stop(true); }
+}
+
+for (const target of ['wasm', 'js']) test(`${target}: roving Tab stops preserve authored exclusions and their updates`, () => rovingFixture(target, async page => {
+  const focused = () => page.evaluate(() => document.activeElement.id);
+  const indices = () => page.evaluate(() => ['excluded', 'one', 'two'].map(id => document.getElementById(id).getAttribute('tabindex')));
+  const key = async (key, id) => { await page.keyboard.press(key); expect(await focused()).toBe(id); };
+  await page.focus('#before');
+  for (let i = 0; i < 2; i++) {
+    await key('Tab', 'one');
+    expect(await indices()).toEqual(['-7', '0', '-1']);
+    await key('Tab', 'after');
+    await key('Shift+Tab', 'one');
+    await key('Shift+Tab', 'before');
+  }
+  // Roving's own -1 remains eligible for arrows and the next Tab walk.
+  await key('Tab', 'one');
+  await key('ArrowRight', 'two');
+  expect(await indices()).toEqual(['-7', '-1', '0']);
+  await key('Tab', 'after');
+  await key('Shift+Tab', 'one');
+  // An excluded item is still focusable by arrow and script, without entering the Tab order.
+  await key('ArrowLeft', 'excluded');
+  expect((await indices())[0]).toBe('-7');
+  await key('Tab', 'after');
+  await page.focus('#excluded');
+  await key('Shift+Tab', 'before');
+
+  // An authored -1 can equal the value roving already wrote into the DOM.
+  await page.evaluate(() => { setIndex('two', '-1'); setIndex('excluded', '0'); });
+  await page.focus('#before');
+  await key('Tab', 'excluded');
+  expect(await indices()).toEqual(['0', '-1', '-1']);
+  await page.evaluate(() => { setIndex('excluded', '-3'); setIndex('one', '-2'); });
+  await page.focus('#before');
+  for (let i = 0; i < 2; i++) {
+    await key('Tab', 'after');
+    await key('Shift+Tab', 'before');
+  }
+  expect(await indices()).toEqual(['-3', '-2', '-1']);
+  // Clearing an exclusion restores eligibility, even after several roving passes.
+  await page.evaluate(() => setIndex('two', null));
+  await key('Tab', 'two');
+  await key('Tab', 'after');
+  await key('Shift+Tab', 'two');
+  await page.evaluate(() => { setIndex('excluded', '-5'); setIndex('one', '0'); });
+  await page.focus('#before');
+  await key('Tab', 'one');
+  expect(await indices()).toEqual(['-5', '0', '-1']);
+}), 60000);
+
+for (const target of ['wasm', 'js']) test(`${target}: Tab leaves a focused excluded or aria-disabled group member`, () => rovingFixture(target, async (page, role) => {
+  const key = async (name, id) => { await page.keyboard.press(name); expect(await page.evaluate(() => document.activeElement.id)).toBe(id); };
+  await page.evaluate(role => {
+    const group = document.querySelector('[role="tablist"], [role="radiogroup"]');
+    group.insertBefore(document.getElementById('one'), document.getElementById('excluded'));
+    if (role === 'tab') {
+      document.getElementById('one').setAttribute('aria-selected', 'true');
+      document.getElementById('excluded').setAttribute('aria-selected', 'false');
+    }
+  }, role);
+  await page.focus('#before');
+  await key('Tab', 'one');
+  await key('ArrowRight', 'excluded');
+  expect(await page.getAttribute('#one', 'tabindex')).toBe('-1');
+  expect(await page.getAttribute('#excluded', 'tabindex')).toBe('-7');
+  await key('Tab', 'after');
+  await key('Shift+Tab', 'one');
+  await key('ArrowRight', 'excluded');
+  await key('Shift+Tab', 'before');
+  for (const index of [null, '-2']) {
+    await page.evaluate(index => { setIndex('two', index); document.getElementById('two').setAttribute('aria-disabled', 'true'); }, index);
+    for (const [name, destination] of [['Tab', 'after'], ['Shift+Tab', 'before']]) {
+      await page.focus('#two');
+      await key(name, destination);
+      expect(await page.getAttribute('#excluded', 'tabindex')).toBe('-7');
+      expect(await page.getAttribute('#two', 'tabindex')).toBe(index ?? '0');
+    }
+  }
+}), 60000);
+
+for (const target of ['wasm', 'js']) for (const origin of ['fragment', 'route']) test(`${target}: ${origin} focus keeps an unauthored group member eligible`, () => rovingFixture(target, async (page, role) => {
+  await page.evaluate(async ([role, origin]) => {
+    const root = document.getElementById('exact-root'), state = role === 'tab' ? 'selected' : 'checked';
+    const tag = origin === 'route' ? 'h2' : 'span';
+    root.innerHTML = `<div navigationKey="1"><button id="before">Before</button><div role="${role === 'tab' ? 'tablist' : 'radiogroup'}">
+      <${tag} role="${role}" id="selected" aria-${state}="true">Selected</${tag}>
+      <button role="${role}" id="other">Other</button>
+      </div><button id="after">After</button></div>`;
+    if (origin === 'fragment') {
+      const {scroll} = await import('/host/web/fragment.js');
+      scroll(root, 1, 'selected', () => {});
+    } else {
+      const route = root.firstElementChild, nav = document.createElement('main'), first = document.createElement('div');
+      nav.setAttribute('navigationBack', 'back'); nav.setAttribute('navigationKey', '0'); first.setAttribute('navigationKey', '0');
+      root.append(nav); nav.append(first); input.arrive();
+      nav.setAttribute('navigationKey', '1'); nav.append(route);
+      const group = route.querySelector('[role="tablist"], [role="radiogroup"]'), header = document.createElement('header');
+      group.before(header); header.append(group);
+      input.arrive();
+    }
+  }, [role, origin]);
+  expect(await page.evaluate(() => document.activeElement.id)).toBe('selected');
+  expect(await page.getAttribute('#selected', 'tabindex')).toBe('-1');
+  await page.keyboard.press('Tab');
+  expect(await page.evaluate(() => document.activeElement.id)).toBe('after');
+  // The temporary focus attribute is removed on blur; the member remains eligible on re-entry.
+  await page.focus('#before');
+  for (let i = 0; i < 2; i++) {
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement.id)).toBe('selected');
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => document.activeElement.id)).toBe('after');
+    await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => document.activeElement.id)).toBe('selected');
+    await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => document.activeElement.id)).toBe('before');
+  }
+}), 60000);
+
 // The wasm host's key wire, and the early queue's copy of it (#140): the chord, its code, repeat and isComposing.
 test('the key wire carries isComposing on its fourth line',()=>{
   for (const file of ['../glue.js','../document-glue.js']) {

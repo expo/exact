@@ -15,6 +15,7 @@ struct RegionCaret: Sendable {
 struct RegionLine: Sendable {
     let range: NSRange
     let carets: [RegionCaret]
+    private let selectionRuns: [TextSelectionRun]
     let ink: CGRect
     let ascent: CGFloat
     let descent: CGFloat
@@ -41,9 +42,10 @@ struct RegionLine: Sendable {
         } else { ink = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds) }
         flushOffset = TextEngine.penOffset(line, flush: flush, room: Double(width), rtl: rtl, whiteSpace: whiteSpace, source: text)
         if !captureHits {
-            self.carets = []; hitEdges = []; edgeIndices = []; intervalIndices = []
+            self.carets = []; selectionRuns = []; hitEdges = []; edgeIndices = []; intervalIndices = []
             return
         }
+        selectionRuns = TextSelectionRun.capture(line)
         var carets: [RegionCaret] = []
         var offsets: [CGFloat] = []
         for index in r.location...(r.location + r.length) {
@@ -76,6 +78,10 @@ struct RegionLine: Sendable {
         return carets[local]
     }
 
+    func selectionSpans(_ selection: NSRange) -> [ClosedRange<CGFloat>] {
+        TextSelectionRun.spans(selection, runs: selectionRuns) { offsets(at: $0).primary }
+    }
+
     func index(at x: CGFloat) -> CFIndex {
         var low = 0, high = hitEdges.count
         while low < high {
@@ -88,6 +94,7 @@ struct RegionLine: Sendable {
 
     var arrayBytes: Int {
         carets.count * MemoryLayout<RegionCaret>.stride
+            + selectionRuns.count * MemoryLayout<TextSelectionRun>.stride
             + hitEdges.count * MemoryLayout<CGFloat>.stride
             + (edgeIndices.count + intervalIndices.count) * MemoryLayout<CFIndex>.stride
     }
@@ -211,9 +218,10 @@ final class RegionParagraph: Sendable {
             guard hi > lo else { continue }
             let y = bounds.minY + source.painted(baseline)
             guard y + line.descent >= dirty.minY, y - line.ascent <= dirty.maxY else { continue }
-            let x0 = line.offsets(at: lo).primary, x1 = line.offsets(at: hi).primary
-            result.append(CGRect(x: bounds.minX + line.flushOffset + min(x0, x1), y: y - line.ascent,
-                                 width: max(1, abs(x1 - x0)), height: line.ascent + line.descent))
+            for span in line.selectionSpans(NSRange(location: lo, length: hi - lo)) {
+                result.append(CGRect(x: bounds.minX + line.flushOffset + span.lowerBound, y: y - line.ascent,
+                                     width: max(1, span.upperBound - span.lowerBound), height: line.ascent + line.descent))
+            }
         }
         return result
     }

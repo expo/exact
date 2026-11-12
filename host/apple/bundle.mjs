@@ -163,7 +163,7 @@ export function assembleMac({intents, shared, library, serviceDylibs, macWidgets
     }
     return bundlePath;
 }
-export function assembleIOS({intents, shared, library, serviceDylibs, triple, app, paths, binDir, bin, device, development, appleReach, tv, bakedCompat, bakedPlan, ipa, linkRoot, swiftc, buildReceipt, rosterKeys, sdkName, production, distribution, stampSdk, libDir, gpuArtifacts, looseArms, modulesBuilt, modulesLoadName, hasSvg, svgBuilt, svgLoadName, svgFilterBuilt, svgFilterLibraryName, canvasGpuBuilt, canvasGpuLoadName, args, unsigned, prof, ph, sha1, composition, destination, target, sdk, hasGpu, dylib, alarm = null}, {runApple, appleArtifacts, macInfoPlist, copyAppleStaticTrees, writeUsageStrings, receipt, shippedReceipt, assertAppleIdentity, placeAppleArtifact, infoPlist, distributionKeys, copyAppleGpuProducts, entitlements, appClip, stripForDistribution}) {
+export function assembleIOS({intents, shared, library, serviceDylibs, triple, app, paths, binDir, bin, clipBin, device, development, appleReach, tv, bakedCompat, bakedPlan, ipa, linkRoot, swiftc, buildReceipt, rosterKeys, sdkName, production, distribution, stampSdk, libDir, gpuArtifacts, looseArms, modulesBuilt, modulesLoadName, hasSvg, svgBuilt, svgLoadName, svgFilterBuilt, svgFilterLibraryName, canvasGpuBuilt, canvasGpuLoadName, args, unsigned, prof, ph, sha1, composition, destination, target, sdk, hasGpu, dylib, alarm = null}, {runApple, appleArtifacts, macInfoPlist, copyAppleStaticTrees, writeUsageStrings, receipt, shippedReceipt, assertAppleIdentity, placeAppleArtifact, infoPlist, distributionKeys, copyAppleGpuProducts, entitlements, appClip, stripForDistribution}) {
   // The bundle, assembled from scratch (new inodes, see above), with the app's assets (a phone reads no other
   // machine's paths); ad-hoc signed for a simulator, signed with the team's identity, profile, and entitlements for a phone.
   iosBundleGrants(app.manifest, bakedCompat.inputs?.grantCeiling);
@@ -200,7 +200,7 @@ export function assembleIOS({intents, shared, library, serviceDylibs, triple, ap
   if (hasSvg) copyFileSync(svgBuilt, resolve(bundle, 'Frameworks', svgLoadName));
   if (svgFilterBuilt) copyFileSync(svgFilterBuilt, resolve(bundle, svgFilterLibraryName));
   if (canvasGpuBuilt) copyFileSync(canvasGpuBuilt, resolve(bundle, 'Frameworks', canvasGpuLoadName));
-  // A sibling bundle runs the app's own executable over the app's frameworks, assets and resources from an
+  // A sibling bundle runs the app's executable target over the app's frameworks, assets and resources from an
   // Info.plist of its own: the sample host (`--host`) and the App Clip (LLP 1126 D12: an App Clip is an app, the
   // whole one, under a second identity). `bundles` is signed in order: the clip before the app that holds it.
   const sibling = (path, executable, plist) => {
@@ -220,7 +220,7 @@ export function assembleIOS({intents, shared, library, serviceDylibs, triple, ap
   const bundles = [[bundle, 'app']];
   if (clip) {
     const clipBundle = resolve(bundle, 'AppClips', `${clip.executable}.app`);
-    sibling(clipBundle, [bin, clip.executable], infoPlist(app, device, { distributed: distribution, executable: clip.executable, id: clip.id, name: clip.name, clip: true, reach: appleReach, icon: assetKeys, distribution: stamp }));
+    sibling(clipBundle, [device ? bin : clipBin, clip.executable], infoPlist(app, device, { distributed: distribution, executable: clip.executable, id: clip.id, name: clip.name, clip: true, reach: appleReach, icon: assetKeys, distribution: stamp }));
     bundles.unshift([clipBundle, 'clip']);
   }
   if (args.includes('--host')) {
@@ -259,7 +259,7 @@ export function assembleIOS({intents, shared, library, serviceDylibs, triple, ap
       entitlements: readFileSync(ent, 'utf8'), gpu: hasGpu ? dylib : null, development: kind === 'app' ? development : null });
     writeFileSync(resolve(assembled, 'receipt.json'), production ? shippedReceipt(whole) : whole);
     if (production) {
-      const beside = ipa && kind === 'app' ? ipa.replace(/\.ipa$/, '') : resolve(binDir, executable);
+      const beside = kind === 'clip' && !device ? clipBin : ipa && kind === 'app' ? ipa.replace(/\.ipa$/, '') : resolve(binDir, executable);
       mkdirSync(dirname(beside), { recursive: true }); writeFileSync(`${beside}.receipt.json`, whole);
       const platform = tv ? (device ? 'AppleTVOS' : 'AppleTVSimulator') : device ? 'iPhoneOS' : 'iPhoneSimulator';
       for (const [loose, name] of [...looseArms.map(([, , load, framework]) => [load, framework]), [modulesLoadName, 'ExactModules'], [svgLoadName, 'ExactSvg'], [canvasGpuLoadName, 'ExactCanvasGpu'], ...serviceDylibs.map(svc => [svc.load, svc.framework])]) wrapFramework(resolve(assembled, 'Frameworks'), loose, name, app, platform);

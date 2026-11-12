@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, resolve } from 'node:path';
 import { PINNED_RUST } from './app.mjs';
-import { Cdp, agentPage, chromium, chromiumBuilds, launchFacts, launchEnvironment, parseFlags, launchLog, launchFailure, webPort, pollUntil, quitBrowser } from './agent-launch.mjs';
+import { Cdp, agentPage, chromium, chromiumBuilds, launchFacts, launchEnvironment, parseFlags, launchLog, launchFailure, webPort, pollUntil } from './agent-launch.mjs';
 import { PassThrough } from 'node:stream';
 import { placeReporter } from '../host/web/navigation/environment.js';
 
@@ -1307,34 +1307,6 @@ test('permission and bind values do not occupy the gallery command word', async 
     expect(parsed.argv).toEqual([flag, 'fixture', 'ios', 'state']);
   }
 });
-
-// #133: a drive's Chrome is asked to quit, so a branded one removes the bundle copy it made at launch, and is killed
-// only once it has exited or has had `ms` to: at its exit, not its reply, which often never comes.
-test('a drive asks its Chrome to quit and kills its group after it exits, or after the bound when it hangs', async () => {
-  const fixture = ({ exitsAfter, replies }) => {
-    const said = [], start = performance.now(), at = () => Math.round(performance.now() - start);
-    let exit;
-    const exited = new Promise((resolve) => { exit = () => { said.push(['exit', at()]); resolve(); }; });
-    const cdp = { send: (method) => {
-      said.push([method, at()]);
-      if (exitsAfter != null) setTimeout(exit, exitsAfter);
-      return replies ? Promise.resolve({}) : exitsAfter != null ? Promise.reject(new Error('Chrome exited')) : new Promise(() => {});
-    } };
-    return { said, exited, cdp, kill: () => said.push(['kill', at()]) };
-  };
-  const quit = async (f, ms) => { await quitBrowser(null, f.cdp, f.exited, { ms, kill: f.kill }); return f.said.map(([what]) => what); };
-  // Exits on the ask, answering or closing the pipe first: killed after its exit, well inside the bound.
-  for (const replies of [true, false]) {
-    const f = fixture({ exitsAfter: 30, replies });
-    expect(await quit(f, 2000)).toEqual(['Browser.close', 'exit', 'kill']);
-    expect(f.said.at(-1)[1]).toBeLessThan(500);
-  }
-  // Hung: no answer, no exit. Killed at the bound.
-  const hung = fixture({});
-  expect(await quit(hung, 200)).toEqual(['Browser.close', 'kill']);
-  expect(hung.said.at(-1)[1]).toBeGreaterThanOrEqual(195);
-});
-
 
 test('an APK with Maven libraries refuses missing locks before any native build work', async () => {
   const { androidLockCommand, buildApk } = await import('./agent-android.mjs');

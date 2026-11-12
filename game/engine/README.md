@@ -370,9 +370,12 @@ codec and puts the surface at Y = 0. Insert it in `setup`, or register it
 caustics and shafts out at present time without changing the resource
 (`Renderer::set_water_effects`, [renderer](../render/README.md#water)).
 
-`Game::SAMPLES` selects scene sampling for the renderer's lifetime: override it
-with `const SAMPLES: SceneSamples = SceneSamples::One` for 1×, or leave the 4×
-MSAA default. It is a renderer construction choice, not saved simulation state.
+`Game::SAMPLES` selects scene sampling: override it with `const SAMPLES:
+SceneSamples = SceneSamples::One` for 1×, or leave the 4× MSAA default.
+`Game::samples(args)` chooses it per arguments (`SAMPLES` by default); a change
+makes the renderer again under the same world. It is a renderer construction
+choice, not saved simulation state. A target's sRGB view follows `SAMPLES`, read
+when the canvas is made; at a runtime change the renderer encodes sRGB itself.
 It is the ceiling of the quality ladder (`Game::quality`, [game/README.md](../README.md#arguments-pause-and-restart)):
 the `Low` rung draws one sample whatever it says.
 At 1×, `Game::DEPTH_PREPASS = true` can reduce opaque overdraw. It adds a depth

@@ -740,7 +740,7 @@ browserTest('flowed Enter restores Back focus and Tab normalizes restored stops'
     ['link', 'pressable', 'radio', 'tab'].flatMap(kind => [false, true].map(flowed =>
       kind === 'link' || kind === 'pressable'
         ? { kind, flowed, pushes: 1, pushedFocus: 'detail-title', returnFocus: 'original', connected: true }
-        : { kind, flowed, stops: [0, -1], connected: true })),
+        : { kind, flowed, paintedStop: 0, stops: [0, -1], connected: true })),
   );
 }, 20000);
 
@@ -757,9 +757,14 @@ async function flowFocusFixture() {
     const paragraph = context.firstElementChild, ball = context.lastElementChild;
     paragraph.innerHTML = kind === 'link' ? '<a id="original" href="#detail" tabindex="0">flowed link</a>'
       : kind === 'pressable' ? '<span id="original" tabindex="0" data-exact-on="press">flowed link</span>'
-      : `<span role="${kind === 'radio' ? 'radiogroup' : 'tablist'}"><span id="original" role="${kind}" tabindex="0" aria-${kind === 'radio' ? 'checked' : 'selected'}="true">flowed</span><span id="next" role="${kind}" tabindex="-1" aria-${kind === 'radio' ? 'checked' : 'selected'}="false"> link</span></span>`;
+      : `<span role="${kind === 'radio' ? 'radiogroup' : 'tablist'}"><span id="original" role="${kind}" tabindex="0" aria-${kind === 'radio' ? 'checked' : 'selected'}="true">flowed</span><span id="next" role="${kind}" tabindex="0" aria-${kind === 'radio' ? 'checked' : 'selected'}="false"> link</span></span>`;
     const original = paragraph.querySelector('#original'), next = paragraph.querySelector('#next');
-    if (next) original.tabIndex = -1; // the source normalizes the clones' stops before capture restores the originals
+    if (next) {
+      const state = kind === 'radio' ? 'aria-checked' : 'aria-selected';
+      original.setAttribute(state, 'false'); next.setAttribute(state, 'true');
+      original.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+      original.setAttribute(state, 'true'); next.setAttribute(state, 'false');
+    }
     original.exactFlowEvents = ['keydown'];
     original.exactHandlers = kind === 'pressable' ? ['press', 'key'] : ['key'];
     const views = new Map([[1, context], [2, paragraph], [3, ball]]);
@@ -773,6 +778,11 @@ async function flowFocusFixture() {
     }
     const target = flowed ? paragraph.querySelector(navigation ? '[data-flow-fragment] [tabindex]' : `[data-flow-fragment] [role="${kind}"]`) : original;
     if (!target || flowed && (target === original || original.isConnected)) throw Error('must start from a flowed clone');
+    let paintedStop;
+    if (!navigation) {
+      target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+      paintedStop = target.tabIndex;
+    }
     let detail, pushes = 0;
     const push = () => {
       pushes++;
@@ -794,7 +804,7 @@ async function flowFocusFixture() {
       const pushedFocus = document.activeElement.id;
       detail?.remove(); nav.setAttribute('navigationKey', 'list'); input.arrive();
       results.push({ kind, flowed, pushes, pushedFocus, returnFocus: document.activeElement.id, connected: original.isConnected });
-    } else results.push({ kind, flowed, stops: [original.tabIndex, next.tabIndex], connected: original.isConnected });
+    } else results.push({ kind, flowed, paintedStop, stops: [original.tabIndex, next.tabIndex], connected: original.isConnected });
     flow.dispose();
   }
   return results;

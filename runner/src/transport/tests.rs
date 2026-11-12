@@ -7,7 +7,7 @@
 //! stop, a refused commit's derives, a `from` past exact counting, taps far
 //! ahead, an end already past, and haptics past the record's bound.
 
-use crate::sound::{By, Voice};
+use crate::sound::{By, SoundOp, Voice};
 use crate::{DataError, DataSource, Runner};
 use exact_kernel::Kernel;
 use exact_plan::{Plan, Value};
@@ -388,6 +388,335 @@ fn an_edit_retracts_what_has_not_started_and_expands_from_its_commit() {
         .sounds()
         .haptics()
         .any(|h| h.at == 2000.0 && h.state(3000.0) == "played"));
+}
+
+fn grouped_sequence() -> Runner<NoData> {
+    boot_with(&grouped_sequence_source())
+}
+
+fn grouped_sequence_source() -> String {
+    let shapes = SOURCE.split("component Seq").next().unwrap();
+    format!(
+        "{}{}",
+        shapes.replace("group=\"\"", "group=\"hat\""),
+        r#"component Seq
+  state closed = true
+  state bpm = 60
+  state playing = true
+  state hatGain = 1
+  derive hat = Step(beat=0.1, src="assets/hat.wav", gain=hatGain, group="hat", note=-1, velocity=100, channel=0, duration=0.25, haptic="")
+  derive steps = closed ? [hit(0, "assets/kick.wav"), hat] : [hit(0, "assets/kick.wav")]
+  action remove
+    closed = false
+  action slower
+    bpm = 30
+  action gain
+    hatGain = 0.5
+  action tap
+    playSound("assets/hat.wav", at=200, group="hat")
+  action choke
+    playSound("assets/hat.wav", group="hat")
+  action quiet
+    stopSounds()
+  action halt
+    playing = false
+  action sound(src: string, at: number, group: string)
+    playSound(src, at=at, group=group)
+  sequence s when playing
+    play([Track(beats=4, loops=0, offset=0, output="", steps=steps)], bpm=bpm)
+  view
+    text "kit"
+"#
+    )
+}
+
+#[test]
+fn removing_a_step_restores_the_sounding_groups_natural_end() {
+    let mut r = grouped_sequence();
+    assert_eq!((voices(&r)[0].ends, voices(&r)[0].by), (100.0, By::Group));
+    r.take_sounds();
+    r.advance(50.0).unwrap();
+    r.act("remove", vec![]).unwrap();
+    let v = voices(&r);
+    assert_eq!((v[0].ends, v[0].by), (250.0, By::End));
+    assert_eq!((v[1].ends, v[1].by), (100.0, By::Edit));
+    assert_eq!(
+        r.take_sounds(),
+        vec![
+            SoundOp::End { id: 2, at: 100.0 },
+            SoundOp::End { id: 1, at: 250.0 },
+        ]
+    );
+}
+
+#[test]
+fn a_slower_tempo_moves_the_sounding_groups_cut_to_the_new_step() {
+    let mut r = grouped_sequence();
+    r.take_sounds();
+    r.advance(50.0).unwrap();
+    r.act("slower", vec![]).unwrap();
+    let v = voices(&r);
+    assert_eq!((v[0].ends, v[0].by), (150.0, By::Group));
+    assert_eq!((v[1].ends, v[1].by), (100.0, By::Edit));
+    assert_eq!(v[2].at, 150.0);
+    assert!(r.take_sounds().contains(&SoundOp::End { id: 1, at: 150.0 }));
+}
+
+#[test]
+fn removing_a_step_keeps_other_group_cuts_and_stops_and_past_ends() {
+    for (action, edit_at, ends, by) in [
+        (Some("tap"), 50.0, 200.0, By::Group),
+        (Some("quiet"), 50.0, 25.0, By::Stop),
+        (Some("choke"), 50.0, 25.0, By::Group),
+        (None, 150.0, 100.0, By::Group),
+    ] {
+        let mut r = grouped_sequence();
+        r.advance(25.0).unwrap();
+        if let Some(action) = action {
+            r.act(action, vec![]).unwrap();
+        }
+        r.advance(edit_at).unwrap();
+        r.act("remove", vec![]).unwrap();
+        assert_eq!((voices(&r)[0].ends, voices(&r)[0].by), (ends, by));
+    }
+}
+
+#[test]
+fn restoring_a_group_cut_revalidates_future_voices() {
+    for (start, edit_at, grouped, cancelled) in [
+        (200.0, 50.0, false, 1),
+        (200.0, 50.0, true, 2),
+        (200.0, 100.0, false, 1),
+        (250.0, 50.0, false, 0),
+    ] {
+        let mut r = grouped_sequence();
+        r.advance(25.0).unwrap();
+        let tap = |r: &mut Runner<NoData>, src, at, group| {
+            r.act(
+                "sound",
+                vec![Value::str(src), Value::Number(at), Value::str(group)],
+            )
+            .unwrap();
+        };
+        if grouped {
+            tap(&mut r, "assets/kick.wav", 25.0, "other");
+        }
+        for i in 0..32 {
+            tap(
+                &mut r,
+                "assets/hat.wav",
+                start,
+                if grouped && i == 31 { "other" } else { "" },
+            );
+        }
+        let before = voices(&r);
+        assert_eq!(before.iter().filter(|v| v.at == start).count(), 32);
+        r.take_sounds();
+        r.advance(edit_at).unwrap();
+        r.act("remove", vec![]).unwrap();
+        let v = voices(&r);
+        assert_eq!((v[0].ends, v[0].by), (250.0, By::End));
+        for at in v.iter().map(|v| v.at) {
+            assert!(
+                v.iter().filter(|v| v.state(at) == "sounding").count() <= 32,
+                "overfull at {at}"
+            );
+        }
+        let ops = r.take_sounds();
+        for voice in v.iter().rev().take(cancelled) {
+            assert_eq!((voice.ends, voice.by), (start, By::Cancelled));
+            assert!(ops.contains(&SoundOp::End {
+                id: voice.id,
+                at: start
+            }));
+        }
+        assert_eq!(
+            said(&r)
+                .iter()
+                .filter(|l| l.starts_with("sound dropped: 32 voices"))
+                .count(),
+            cancelled
+        );
+        if grouped {
+            assert_eq!((v[2].ends, v[2].by), (275.0, By::End));
+        }
+    }
+}
+
+#[test]
+fn stopping_a_sequence_restores_the_tapped_voice_it_would_cut() {
+    let mut r = grouped_sequence();
+    r.advance(25.0).unwrap();
+    r.act(
+        "sound",
+        vec![
+            Value::str("assets/kick.wav"),
+            Value::Number(25.0),
+            Value::str("hat"),
+        ],
+    )
+    .unwrap();
+    assert_eq!((voices(&r)[2].ends, voices(&r)[2].by), (100.0, By::Group));
+    r.take_sounds();
+    r.advance(50.0).unwrap();
+    r.act("halt", vec![]).unwrap();
+    assert_eq!((voices(&r)[2].ends, voices(&r)[2].by), (275.0, By::End));
+    assert!(r.take_sounds().contains(&SoundOp::End { id: 3, at: 275.0 }));
+}
+
+#[test]
+fn a_gain_edit_preserves_all_future_taps_that_fit_the_final_schedule() {
+    let mut r = grouped_sequence();
+    r.advance(25.0).unwrap();
+    for _ in 0..32 {
+        r.act(
+            "sound",
+            vec![
+                Value::str("assets/hat.wav"),
+                Value::Number(200.0),
+                Value::str(""),
+            ],
+        )
+        .unwrap();
+    }
+    assert_eq!(voices(&r).len(), 34);
+    r.take_sounds();
+    r.advance(50.0).unwrap();
+    r.act("gain", vec![]).unwrap();
+    let v = voices(&r);
+    assert_eq!((v[0].ends, v[0].by), (100.0, By::Group));
+    assert_eq!((v[1].ends, v[1].by), (100.0, By::Edit));
+    assert_eq!((v[34].at, v[34].gain), (100.0, 0.5));
+    assert_eq!(
+        v.iter().filter(|v| v.state(200.0) == "sounding").count(),
+        32
+    );
+    assert!(said(&r).iter().all(|l| !l.starts_with("sound dropped")));
+    assert!(r
+        .take_sounds()
+        .iter()
+        .all(|op| !matches!(op, SoundOp::End { id: 3..=34, .. })));
+}
+
+#[test]
+fn commands_and_expansion_keep_the_group_voice_awaiting_restoration() {
+    for command in [false, true] {
+        let source = if command {
+            grouped_sequence_source().replace(
+                "closed = false",
+                "closed = false\n    playSound(\"assets/hat.wav\", at=900)",
+            )
+        } else {
+            grouped_sequence_source().replace(
+                "hit(0, \"assets/kick.wav\")",
+                "hit(0, \"assets/kick.wav\"), hit(0.5, \"assets/hat.wav\")",
+            )
+        };
+        let mut r = boot_with(&source);
+        for _ in voices(&r).len()..crate::sound::RECORD {
+            r.act(
+                "sound",
+                vec![
+                    Value::str("assets/hat.wav"),
+                    Value::Number(800.0),
+                    Value::str("padding"),
+                ],
+            )
+            .unwrap();
+        }
+        assert_eq!(voices(&r).len(), crate::sound::RECORD);
+        r.take_sounds();
+        r.advance(100.0).unwrap();
+        r.act("remove", vec![]).unwrap();
+        let v = voices(&r);
+        let kick = v
+            .iter()
+            .find(|v| v.id == 1)
+            .expect("pending group cut retained");
+        assert_eq!((kick.ends, kick.by), (250.0, By::End));
+        assert_eq!(v.len(), crate::sound::RECORD);
+        assert!(r.take_sounds().contains(&SoundOp::End { id: 1, at: 250.0 }));
+    }
+}
+
+#[test]
+fn stopping_at_a_group_cut_does_not_revive_the_sequence_voice() {
+    let mut r = grouped_sequence();
+    r.take_sounds();
+    r.advance(100.0).unwrap();
+    r.act("halt", vec![]).unwrap();
+    let v = voices(&r);
+    assert!(v.iter().all(|v| v.state(100.0) == "ended"));
+    assert_eq!(v[0].ends, 100.0);
+    assert_eq!((v[1].ends, v[1].by), (100.0, By::Cancelled));
+    assert!(r
+        .take_sounds()
+        .iter()
+        .all(|op| !matches!(op, SoundOp::End { id: 1, at } if *at > 100.0)));
+}
+
+#[test]
+fn stopping_taps_restores_the_waiting_sequence_voice_they_cut() {
+    let source = grouped_sequence_source()
+        .replace("state closed = true", "state closed = false")
+        .replace("offset=0", "offset=100");
+    let mut r = boot_with(&source);
+    r.act("tap", vec![]).unwrap();
+    assert_eq!((voices(&r)[0].ends, voices(&r)[0].by), (200.0, By::Group));
+    r.take_sounds();
+    r.advance(50.0).unwrap();
+    r.act("quiet", vec![]).unwrap();
+    let v = voices(&r);
+    assert_eq!((v[0].ends, v[0].by), (350.0, By::End));
+    assert_eq!((v[1].ends, v[1].by), (200.0, By::Cancelled));
+    assert!(r.take_sounds().contains(&SoundOp::End { id: 1, at: 350.0 }));
+}
+
+#[test]
+fn stopping_and_replacing_a_tap_keeps_voices_that_fit_the_final_schedule() {
+    for replacement in [
+        "playSound(\"assets/hat.wav\", at=200, group=\"hat\")",
+        "closed = true",
+    ] {
+        let source = grouped_sequence_source()
+            .replace("state closed = true", "state closed = false")
+            .replace("offset=0", "offset=100")
+            .replace(
+                "action quiet\n    stopSounds()",
+                &format!("action replace\n    stopSounds(group=\"hat\")\n    {replacement}"),
+            );
+        let mut r = boot_with(&source);
+        r.act("tap", vec![]).unwrap();
+        for _ in 0..32 {
+            r.act(
+                "sound",
+                vec![
+                    Value::str("assets/hat.wav"),
+                    Value::Number(300.0),
+                    Value::str(""),
+                ],
+            )
+            .unwrap();
+        }
+        assert_eq!(voices(&r).len(), 34);
+        r.take_sounds();
+        r.advance(50.0).unwrap();
+        r.act("replace", vec![]).unwrap();
+        let v = voices(&r);
+        assert_eq!((v[0].ends, v[0].by), (200.0, By::Group));
+        assert_eq!((v[1].ends, v[1].by), (200.0, By::Cancelled));
+        assert_eq!(v[34].at, 200.0);
+        assert_eq!(
+            v.iter().filter(|v| v.state(300.0) == "sounding").count(),
+            32,
+            "{replacement}"
+        );
+        assert!(said(&r).iter().all(|l| !l.starts_with("sound dropped")));
+        assert!(r
+            .take_sounds()
+            .iter()
+            .all(|op| !matches!(op, SoundOp::End { id: 3..=34, .. })));
+    }
 }
 
 #[test]

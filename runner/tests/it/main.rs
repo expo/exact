@@ -4,6 +4,7 @@
 
 mod active_route;
 mod app_module;
+mod arguments;
 mod canvas2d;
 mod children;
 mod each;
@@ -32,6 +33,7 @@ mod reach_margin;
 mod reorder_codec;
 mod replay;
 mod router;
+mod rust_sockets;
 mod secret_state;
 mod sockets;
 mod stream_mapper;

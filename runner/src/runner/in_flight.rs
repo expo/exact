@@ -17,22 +17,20 @@ impl<D: DataSource> Runner<D> {
     /// answers and the arguments of the last settlement.
     pub(super) fn sync_current_flags(&mut self) {
         let now = self.settled.as_ref().map(|s| &s.resource_args);
-        self.current_res = (0..self.resources.len())
-            .map(|i| {
-                let args = now.and_then(|a| a.get(i)).map_or(&[][..], Vec::as_slice);
-                self.is_current(i, self.resources[i].as_ref(), args)
-            })
-            .collect();
+        for i in 0..self.resources.len() {
+            let args = now.and_then(|a| a.get(i)).map_or(&[][..], Vec::as_slice);
+            self.resources[i].current = self.is_current(i, self.resources[i].state.as_ref(), args);
+        }
         // A family is current when every member it lists is.
-        for i in 0..self.current_res.len() {
+        for i in 0..self.resources.len() {
             if self.is_family(i) {
-                let members = (0..self.current_res.len())
+                let members = (0..self.resources.len())
                     .filter(|&m| self.member(m).is_some_and(|x| x.family == i && !x.gone));
                 let all = members
                     .collect::<Vec<_>>()
                     .iter()
-                    .all(|&m| self.current_res[m]);
-                self.current_res[i] = all;
+                    .all(|&m| self.resources[m].current);
+                self.resources[i].current = all;
             }
         }
     }
@@ -51,7 +49,7 @@ impl<D: DataSource> Runner<D> {
         if s.placeholder || s.slept {
             return false;
         }
-        let context = self.plan.resources.get(i).map_or(0, |r| r.context as usize);
+        let context = self.resource_row(i).context as usize;
         let identity = |a: &[Value]| a.len().saturating_sub(context).min(a.len());
         let asked = s.answered_args();
         asked[..identity(asked)] == now[..identity(now)]
@@ -60,12 +58,14 @@ impl<D: DataSource> Runner<D> {
     /// The pending flags `pending(x)` reads, from the tickets in flight and
     /// what waits for its source.
     pub(super) fn sync_pending_flags(&mut self) {
-        self.pending_res = vec![false; self.plan.resources.len()];
+        for row in &mut self.resources {
+            row.pending = false;
+        }
         self.pending_mut = vec![false; self.plan.mutations.len()];
         // A stream is pending until its first value commits (LLP 1016.000 D1).
         for p in self.pending.iter().filter(|p| p.in_flight()) {
             match p.target {
-                Target::Resource(i) => self.pending_res[i] = true,
+                Target::Resource(i) => self.resources[i].pending = true,
                 Target::Mutation(m) | Target::Sent(m, _) => self.pending_mut[m] = true,
             }
         }
@@ -75,8 +75,8 @@ impl<D: DataSource> Runner<D> {
         }
         // A placeholder shown until the source can answer is pending too,
         // and so is a send waiting for it.
-        for (i, awaiting) in self.awaiting.iter().enumerate() {
-            self.pending_res[i] |= *awaiting;
+        for row in &mut self.resources {
+            row.pending |= row.awaiting;
         }
         for m in self.unsent.iter().filter_map(|u| u.0.mutation()) {
             self.pending_mut[m] = true;
@@ -88,7 +88,7 @@ impl<D: DataSource> Runner<D> {
     /// A target's resource or mutation name.
     pub(super) fn target_name(&self, t: Target) -> String {
         match t {
-            Target::Resource(i) => self.plan.str(self.plan.resources[i].name).to_string(),
+            Target::Resource(i) => self.plan.str(self.resource_row(i).name).to_string(),
             Target::Mutation(m) | Target::Sent(m, _) => {
                 self.plan.str(self.plan.mutations[m].name).to_string()
             }

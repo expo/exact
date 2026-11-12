@@ -76,6 +76,12 @@ package protocol Canvases: AnyObject {
     /// (LLP 1133.013 D6): kept until the next display frame delivers it.
     func sensorWrite(_ surface: String, _ sensor: String, _ values: [Double], dropped: Int, at: Double, ended: Bool)
     func period(_ ms: Double)
+    /// The display callback this tick runs in, on the frame clock: its own
+    /// timestamp, when it began to run, and the display's fastest period.
+    func hostFrame(raw: Double, callback: Double, fastest: Double)
+    /// The display rate the canvases that want frames are capped at (the
+    /// highest of their caps, `Surface::max_fps`); 0 when any is uncapped.
+    var frameCap: Int { get }
     func tick(now: Double) -> Bool
     func settle(now: Double)
     func cancelMovedControls()
@@ -189,6 +195,8 @@ final class NoCanvases: Canvases {
     var isEmpty: Bool { true }
     var status: String { "not linked" }
     var wantsFrames: Bool { false }
+    var frameCap: Int { 0 }
+    func hostFrame(raw: Double, callback: Double, fastest: Double) {}
     var drawn: Int { 0 }
     var awaitingDrawable: Bool { false }
     var frameNow: Double?

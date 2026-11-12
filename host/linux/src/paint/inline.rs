@@ -20,7 +20,7 @@ pub(super) fn focus_fragments(
                     return Some(InlineBackground {
                         id: focus,
                         color: [255; 4],
-                        radii: [exact_kernel::Dimension::Points(2.0); 4],
+                        radii: [const { exact_kernel::Dimension::Points(2.0) }; 4],
                     });
                 }
                 at = kernel.node(id).and_then(|n| n.parent);
@@ -92,7 +92,7 @@ pub(super) fn text_backgrounds(
     // own background. Keep both square so their seam never exposes the page.
     for background in out.iter_mut().flatten() {
         if nested.contains(&background.id) {
-            background.radii = [exact_kernel::Dimension::Points(0.0); 4];
+            background.radii = [const { exact_kernel::Dimension::Points(0.0) }; 4];
         }
     }
     out
@@ -126,10 +126,10 @@ fn collect_backgrounds(
                 color,
                 id: n.id,
                 radii: [
-                    n.style.border_radius_top_left,
-                    n.style.border_radius_top_right,
-                    n.style.border_radius_bottom_right,
-                    n.style.border_radius_bottom_left,
+                    n.style.border_radius_top_left.clone(),
+                    n.style.border_radius_top_right.clone(),
+                    n.style.border_radius_bottom_right.clone(),
+                    n.style.border_radius_bottom_left.clone(),
                 ]
                 .map(|d| d.resolve(&kernel.env())),
             })
@@ -152,10 +152,17 @@ fn collect_backgrounds(
                 let own = super::paints(kernel, child.id, reveal)
                     .then(|| own(&child))
                     .flatten();
-                if collect_backgrounds(kernel, &child, own.or(inherited), dark, reveal, out, nested)
-                {
+                if collect_backgrounds(
+                    kernel,
+                    &child,
+                    own.clone().or_else(|| inherited.clone()),
+                    dark,
+                    reveal,
+                    out,
+                    nested,
+                ) {
                     emitted = true;
-                    if let (Some(parent), Some(child)) = (inherited, own) {
+                    if let (Some(parent), Some(child)) = (inherited.as_ref(), own.as_ref()) {
                         nested.extend([parent.id, child.id]);
                     }
                 }

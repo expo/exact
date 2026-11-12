@@ -48,6 +48,8 @@ pub struct Storage<D> {
     pending: BTreeMap<u64, Pending>,
     more: HashMap<Target, Vec<exact_runner::Request>>,
     alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(not(target_arch = "wasm32"))]
+    storage_changed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// A scripted drive (`EXACT_AGENT=1`): storage is the scratch store it
     /// names, else none.
     agent: bool,
@@ -70,6 +72,8 @@ impl<D> Storage<D> {
             pending: BTreeMap::new(),
             more: HashMap::new(),
             alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            #[cfg(not(target_arch = "wasm32"))]
+            storage_changed: Default::default(),
             agent: std::env::var("EXACT_AGENT").as_deref() == Ok("1"),
             logs: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -186,7 +190,13 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
         self.source.prepare_snapshot(module, deadline)
     }
     fn take_storage_changed(&mut self) -> bool {
-        self.source.take_storage_changed()
+        let changed = self.source.take_storage_changed();
+        #[cfg(not(target_arch = "wasm32"))]
+        let changed = self
+            .storage_changed
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+            || changed;
+        changed
     }
 
     fn note_storage_changed(&mut self) {
@@ -550,6 +560,8 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
                 let paths = self.directories.clone();
                 let owner = self.document_owner;
                 let alive = self.alive.clone();
+                let storage_changed = self.storage_changed.clone();
+                let app_grants = self.source.grants().to_owned();
                 let refused =
                     paths.is_none() && self.agent && !native::independent_storage(&payload);
                 if refused && !self.told_agent {
@@ -569,7 +581,14 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
                     if refused {
                         return native::agent_refusal();
                     }
-                    native::run(paths.as_ref(), &grants, &payload, owner)
+                    native::run(
+                        paths.as_ref(),
+                        &grants,
+                        &app_grants,
+                        &payload,
+                        owner,
+                        &storage_changed,
+                    )
                 }))
             }
         }

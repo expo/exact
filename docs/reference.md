@@ -785,8 +785,9 @@ directory to compile everything here. Every production Apple build (`--release`,
 Swift build and strips its executable, writing `<executable>.dSYM` beside the staged
 build product. Development builds keep their symbols. iPhone and iPad device app executables
 link SafariServices in development and production so dyld loads the libraries
-UIKit would load at launch (LLP 1047.001.001). An App Clip copies its parent’s
-executable and carries the same link. An IPA writes `<name>.dSYM`
+UIKit would load at launch (LLP 1047.001.001). A device App Clip copies its parent’s
+executable and carries the same link; a simulator links the same target with the Clip’s
+own embedded entitlements. An IPA writes `<name>.dSYM`
 beside its archive; `exact release` copies the build's matching dSYM beside its release.
 Production iOS and tvOS bundles ship a small receipt and stripped frameworks, whether
 archived or not. The whole receipt stays beside `<name>.app` or `<name>.ipa` as
@@ -1060,6 +1061,13 @@ runner's boot admission mark, consumed at activation. The JS target reports
 `keptSeedSupported: false`: its rendered-document checkpoint is separate from a
 persisted boot answer. `failures` counts refused answers since observation began, with
 `first` and `last` on that clock. A success clears `failed`, preserving the count.
+On the web JS target, list members use `name[id]` in `resourceStatus`, `failed`
+and `failures`. The opaque member id stays the same through reordering and is
+retired on removal; it is local to the page. Singleton keys stay their resource
+names. Each status's `resource` still identifies the declaration. The driver's
+source location names the declaration for every member. In `perf.resources`,
+each list member carries the same key as `member`, while `name` remains the
+declaration name. `expect perf query <resource>` sums its members' asks.
 
 ### What a data module can use
 
@@ -1557,7 +1565,8 @@ of them, wait; one more ends the stream. The web's wasm host maps each message
 now and refuses a promise. An `http:`/`https:` URL is read as server-sent
 events under `net.fetch`; a `ws:`/`wss:` URL is a WebSocket under
 `net.websocket` alone. Except for TypeScript sources on the web JS target and
-native hosts, described below, sockets are receive-only. An event is
+native hosts, described below, and Rust sources on native hosts ("Rust data
+sources", "A two-way socket"), sockets are receive-only. An event is
 `{type, data, lastEventId, coalesced}`; messages that arrive faster than they
 commit coalesce to the newest, counted in `coalesced`. The end is
 `{type: 'error', kind, message, status}`: `kind` is `Network` (the far side
@@ -2236,8 +2245,14 @@ half a second is left on a wake of its own that runs no action and that
 loses no step. The bound is the same for a sequence's voices and a tap's: at
 most 32 voices sound at any voice's start (another is dropped and journaled),
 and at most 256 wait to start (another tap is dropped; a sequence stops
-expanding early and wakes when the first starts, dropping nothing). The
-Apple mixer has 288 slots and a ring of 1024 ops for it (a Play that finds no free slot takes one whose voice ends inside the buffer, mixing that voice's last frames first), and frees a voice
+expanding early and wakes when the first starts, dropping nothing).
+Retracting a future group voice restores the preceding voice's pending
+cut after the commit's commands and sequence expansion. If that extension
+exceeds the bound, excess future voices are cancelled and journaled;
+sounding voices play on. At each start, the last admitted voices are
+cancelled first.
+The Apple mixer has 288 slots and a ring of
+1024 ops for it (a Play that finds no free slot takes one whose voice ends inside the buffer, mixing that voice's last frames first), and frees a voice
 retracted before it starts at once; the web lets its node go. A step's haptic
 plays on the main thread at its time (Apple's feedback generators;
 `navigator.vibrate` on the web, where it exists): a blocked main thread makes
@@ -2823,7 +2838,7 @@ Browser navigation, both Apple cold/warm handlers and malformed-link refusals ar
 tested. The page cannot detect installation, and does not trigger signing/builds.
 
 **Limits.** Linux native hosts don't run TypeScript yet (use a Rust data crate
-there); `app.ts` imports pure-JavaScript packages only (Node's modules, the DOM, a computed `import()` and native addons are refused; a use that a `typeof` test guards is not, nor a read through the global object, such as `globalThis.process?.env`, whose value is only tested, compared, spread into an object, returned, or held in a `const` whose uses are guarded in turn). Code from a string throws on every host through `Function` and `eval`, and through their own `constructor`: each throws `SyntaxError: Parsing source code unsupported`, as Hermes does. The build warns (`code-from-string`) at the uses of the global `Function` or `eval` it can see by name, a package's or `app.ts`'s: a direct call or `new`, and a member of `globalThis`. A use reached another way builds without a warning and throws the same error when it runs. Either way, code that uses them works only if it catches that error and takes another path, as zod does. What reaches `Function.prototype.constructor` or a function's own `constructor` (`(function () {}).constructor`) still runs code from a string on the web, and not on Hermes: the warning is a tripwire, not a sandbox, and refuses nothing. Under the render server's CSP and in the JS server render that throws too. A package may not read `import.meta.env`, which is app.ts's to read and pass in; a read the bundle drops, in a function nothing calls, is not one. That check keeps a module portable between Hermes and the page; it is no security boundary: on the web the module runs in the page's realm, and a package is code the author chose, trusted as their own. A package's `/// <reference lib>` to an ES library newer than the data module's (`esnext.disposable`) loads nothing, so what that library declares (`Symbol.dispose`, which Hermes lacks) stays undeclared for the app. Signed delivery of TypeScript and Rust
+there); `app.ts` imports pure-JavaScript packages only (Node's modules, the DOM, a computed `import()` and native addons are refused; a use that a `typeof` test guards is not, nor a read through the global object, such as `globalThis.process?.env`, whose value is only tested, compared, spread into an object, returned, or held in a `const` whose uses are guarded in turn). Code from a string throws on every host through `Function` and `eval`, and through their own `constructor`: each throws `SyntaxError: Parsing source code unsupported`, as Hermes does. The build warns (`code-from-string`) at the uses of the global `Function` or `eval` it can see by name, a package's or `app.ts`'s: a direct call or `new`, a member of `globalThis`, destructuring a global object's property, a parameter initializer, or a JSX component name (`<Function />`). A use reached another way builds without a warning and throws the same error when it runs. Either way, code that uses them works only if it catches that error and takes another path, as zod does. What reaches `Function.prototype.constructor` or a function's own `constructor` (`(function () {}).constructor`) still runs code from a string on the web, and not on Hermes: the warning is a tripwire, not a sandbox, and refuses nothing. Under the render server's CSP and in the JS server render that throws too. A package may not read `import.meta.env`, which is app.ts's to read and pass in; a read the bundle drops, in a function nothing calls, is not one. That check keeps a module portable between Hermes and the page; it is no security boundary: on the web the module runs in the page's realm, and a package is code the author chose, trusted as their own. A package's `/// <reference lib>` to an ES library newer than the data module's (`esnext.disposable`) loads nothing, so what that library declares (`Symbol.dispose`, which Hermes lacks) stays undeclared for the app. Signed delivery of TypeScript and Rust
 modules isn't implemented, so set `deploy.store` to `"0"`. The history of how this
 was proved on each host is in LLP 1027
 and git.
@@ -3015,6 +3030,55 @@ generates the module bindings. For a build script,
 pass to `contract::rust`; the names are compiler metadata, outside the binary
 plan. Both map scoped names such as `Point__exact` to `PointExact`.
 `Value::Number`, `Value::str`, `Value::Bool` and `Value::list` are the rest.
+
+### A two-way socket
+
+On native hosts a Rust source sends on a WebSocket with TypeScript's rules
+(LLP 1016.003). Answer `Answer::Later(Request::socket(url))` for a `ws:` or
+`wss:` URL under a `net.websocket` grant. Its `parse` is the mapper: it gets
+an `Outcome::Message` whose `event` is `open`, then one for each frame in
+order (text in `data`, a binary frame in `binary`), then `Outcome::Closed {
+code, reason, was_clean }`. While it answers `open` or a frame,
+`store.socket()` is that socket's handle; keep it to send from a mutation:
+
+```rust
+fn answer(&mut self, store: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
+    match source {
+        "book" => Ok(Answer::Later(Request::socket("wss://stream.example/ws"))),
+        "subscribe" => {
+            let socket = self.book.ok_or(DataError::Unavailable("the book is not open".into()))?;
+            socket.send_text(store, r#"{"method":"SUBSCRIBE","params":["depth.SOL_USDC"]}"#)?;
+            Ok(Answer::Now(Value::Bool(true)))
+        }
+        _ => Err(DataError::UnknownSource(source.into())),
+    }
+}
+fn parse(&mut self, store: &mut Store, _: &str, _: &[Value], outcome: Outcome) -> Result<Answer, DataError> {
+    match outcome {
+        Outcome::Message(m) if m.event == "open" => {
+            let socket = store.socket().expect("a socket's mapper has its handle");
+            self.book = Some(socket);
+            socket.send_text(store, r#"{"method":"SUBSCRIBE","params":["trade.SOL_USDC"]}"#)?;
+            Ok(Answer::Now(Value::str("open")))
+        }
+        Outcome::Message(m) => Ok(Answer::Now(Value::str(&m.data))),
+        Outcome::Closed { code, .. } => Ok(Answer::Now(Value::str(&format!("closed {code}")))),
+        other => Err(DataError::Unavailable(other.summary())),
+    }
+}
+```
+
+`Socket` has `send_text`, `send_binary`, `close(store, code, reason)`,
+`buffered_amount` and `is_open`. A mutation's `answer` may send on any open
+socket of the app's resources, and must then answer `Answer::Now`; a mapper
+sends only on its own socket. What either stages goes once its commit
+stands. A refusal is an `Err` whose text names the DOM exception a
+TypeScript handle would throw: `InvalidStateError` for a socket not open, a
+handle from before the resource was asked again, or a send from a resource's
+answer; `QuotaExceededError` past 256 operations or 1 MiB a call, which
+fails a mapper's frame even when it ignores the error. The web refuses a
+Rust socket request by name, and a worker-placed source's socket only
+listens.
 
 ### Where data lives: app storage, not secrets
 

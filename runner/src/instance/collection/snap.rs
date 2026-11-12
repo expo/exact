@@ -109,10 +109,10 @@ impl Tree {
                 }
             };
             let (Some(left), Some(right), Some(leading), Some(trailing)) = (
-                absolute(StyleId::Left, style.left),
-                absolute(StyleId::Right, style.right),
-                absolute(StyleId::MarginLeft, style.margin_left),
-                absolute(StyleId::MarginRight, style.margin_right),
+                absolute(StyleId::Left, style.left.clone()),
+                absolute(StyleId::Right, style.right.clone()),
+                absolute(StyleId::MarginLeft, style.margin_left.clone()),
+                absolute(StyleId::MarginRight, style.margin_right.clone()),
             ) else {
                 continue;
             };

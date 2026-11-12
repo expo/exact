@@ -215,16 +215,13 @@ size_t exact_gradient(const uint8_t *css, size_t len, float width, float height,
 size_t exact_corner_outline(const float *shape, float x, float y, float width, float height,
     const float *radii, float *out, size_t cap);
 
-/* Intern a CSS calculation tree; return 0 for invalid or compact lengths.
- * The returned handle has no environment; exact_calc_create supplies it. */
-uint32_t exact_calc_parse(const uint8_t *text, size_t len);
-
 /* A style owns this environment snapshot until destroy. Values: top, right, bottom, left,
  * viewport width/height (the window's when a sheet is open), segment cols/rows, the layout
  * regions' count (0 or 20) and the regions (LLP 1123 D10), the title-bar area's count (0 or 4)
- * and its x,y,w,h, then x,y,w,h per segment. create copies them and returns NULL for malformed input or an unknown handle.
+ * and its x,y,w,h, then x,y,w,h per segment. create copies them and parses the UTF-8
+ * expression; NULL for malformed input.
  * resolve borrows a live context; destroy consumes it exactly once (NULL is allowed). */
-void *exact_calc_create(uint32_t handle, const double *values, size_t count);
+void *exact_calc_create(const uint8_t *text, size_t len, const double *values, size_t count);
 double exact_calc_resolve(const void *context, double basis);
 void exact_calc_destroy(void *context);
 

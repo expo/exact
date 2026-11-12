@@ -1123,9 +1123,8 @@ test('build output claims exclude contenders and recover after an owner is kille
   }
 }, 15000);
 
-// A claim's holder (the Apple build's, the touch runner's device lock) is live unless shown dead: gone, or a pid
-// started after the claim; a claim that does not parse, or whose holder `ps` cannot date, is live (round-2 review).
-test('a claim is live unless its holder is shown gone or reused', async () => {
+// An unreadable claim or process start time cannot establish that the holder has exited or its PID was reused.
+test('a claim is live unless its holder is shown exited or reused', async () => {
   const { claimLive } = await import('./app.mjs');
   const claim = (pid, started) => JSON.stringify({ pid, started });
   assert.equal(claimLive(claim(process.pid, new Date().toISOString())), true, 'this process, claimed now');

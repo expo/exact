@@ -470,7 +470,7 @@ fn unpadded_reads_what_the_engine_style_would() {
         Dimension::Env(Edge::Top, -62.0),
     ] {
         let mut p = StyleProps::default();
-        p.padding_bottom = d;
+        p.padding_bottom = d.clone();
         assert_eq!(p.unpadded(&env), engine(&p), "{d:?}");
     }
     for (style, width) in [
@@ -489,6 +489,7 @@ fn unpadded_reads_what_the_engine_style_would() {
 
 #[test]
 fn calc_lengths_parse_one_percent_and_one_pixel_term_and_resolve_by_basis() {
+    let _lowering = super::handles::Lowering::new();
     for (text, percent, points) in [
         ("calc(100% - 89px)", 100.0, -89.0),
         ("calc(50% + 12.5px)", 50.0, 12.5),
@@ -780,7 +781,7 @@ fn segment_lengths_round_trip_the_wire() {
             Dimension::Segment(var, 15, 15, 3.0),
         ] {
             let mut w = Writer::new();
-            w.dimension(d);
+            w.dimension(d.clone());
             let bytes = w.into_vec();
             assert_eq!(bytes.len(), 7, "{d:?}");
             assert_eq!(bytes[0], 8 + var as u8);

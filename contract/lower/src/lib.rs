@@ -665,7 +665,7 @@ fn lower_body(
         if let Some(m) = file.modules.iter().find(|m| m.name == *name) {
             l.b.module(
                 id,
-                &m.extension,
+                (&m.extension, &m.package),
                 &m.declared,
                 m.kind == contract_syntax::ModuleKind::Send,
                 m.live,
@@ -798,7 +798,7 @@ fn lower_body(
             continue;
         };
         l.b.module_event(
-            &m.extension,
+            (&m.extension, &m.package),
             &m.declared,
             l.actions[i],
             &m.raised,

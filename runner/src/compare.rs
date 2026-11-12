@@ -174,6 +174,21 @@ pub fn equivalent_all(a: &[Value], b: &[Value]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(a, b)| equivalent(a, b))
 }
 
+/// Resource failures follow argument equality, with NaNs unchanged too.
+pub(crate) fn unchanged_arguments(a: &[Value], b: &[Value]) -> bool {
+    fn unchanged(a: &Value, b: &Value) -> bool {
+        match (a, b) {
+            (Value::Number(a), Value::Number(b)) => a == b || (a.is_nan() && b.is_nan()),
+            (Value::Option(Some(a)), Value::Option(Some(b))) => unchanged(a, b),
+            (Value::List(a), Value::List(b)) | (Value::Record(a), Value::Record(b)) => {
+                unchanged_arguments(a, b)
+            }
+            _ => a == b,
+        }
+    }
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| unchanged(a, b))
+}
+
 /// The language's structural equality; `None` when the kinds differ before
 /// the first difference.
 ///

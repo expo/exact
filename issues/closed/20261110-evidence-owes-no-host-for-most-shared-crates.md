@@ -1,6 +1,7 @@
 # `evidence.mjs` leaves out hosts a change owes a run: most shared crates count for none, and the first working-tree path loses its first letter
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Evidence includes shared sources and their host consumers without dropping working-tree or rename paths.
 **Systems:** scripts/evidence.mjs (hostsTouched, the changed-path list), LLP 1146 D2
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

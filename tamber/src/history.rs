@@ -735,6 +735,7 @@ mod tests {
                 token: "param.fabc.PostButton.radius".into(),
                 kind: "length".into(),
                 default: "0px".into(),
+                from_design: false,
             }],
             components: vec!["post.contract#PostButton".into()],
             ..Default::default()

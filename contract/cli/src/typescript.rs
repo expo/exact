@@ -173,6 +173,9 @@ pub fn typescript_exporting(plan: &Plan, exports: Option<&[String]>) -> Result<S
          export type Overlay = <S extends Source>(source: S, args: Args<S>, answer: Result<S>, writes: readonly Write[]) => Result<S> | undefined;\n",
     );
     tokens(plan, exports, &mut out);
+    // Canvas types describe the data seam even when `draw` is exported from
+    // another module; no producer needs to inspect app.ts to include them (LLP 1056 D1).
+    out.push_str(include_str!("../../../canvas/types.d.ts"));
     Ok(out)
 }
 

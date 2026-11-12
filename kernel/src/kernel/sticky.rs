@@ -166,10 +166,10 @@ impl Kernel {
             ],
             port,
             insets: [
-                length(style.top, h, env),
-                length(style.right, w, env),
-                length(style.bottom, h, env),
-                length(style.left, w, env),
+                length(style.top.clone(), h, env),
+                length(style.right.clone(), w, env),
+                length(style.bottom.clone(), h, env),
+                length(style.left.clone(), w, env),
             ],
         })
     }

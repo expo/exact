@@ -398,6 +398,7 @@ impl Painter {
 fn project(walk: &mut Walk<'_, '_>, child_walk: Walk<'_, '_>, inv: [f32; 9], clip: Option<Rect4>) {
     walk.text.extend(child_walk.text);
     walk.fields.extend(child_walk.fields);
+    walk.inline.extend(child_walk.inline);
     let planes = [[0., 0., 1.]; 2];
     for mut b in child_walk.boxes {
         // A box already in its own plane (a 3D child) maps through both:

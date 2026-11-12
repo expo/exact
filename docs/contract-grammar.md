@@ -1244,10 +1244,14 @@ its unknown attributes, and an SVG element's own props, pass to the module as on
 object. A known attribute binds to the module's box, and the box takes only layout,
 box and paint rows, handlers, `testId`, `id`, `class`, `data-*`, `role`, ARIA,
 `disabled` and `inert`; any other known name (`color`, `value`, `command`, `href`)
-is `lower-native-attr` (LLP 1024 D1, LLP 1088 D7.2). A prop a package declares for
-its view goes to the view when written on the tag, even under a known name
-(`exact-camera`'s `object-fit`); a class's rows are still the box's styles, and a
-renamed spelling (`fontSize`) is refused whatever is declared. A capitalized name is a component use, not a
+is `lower-native-attr` (LLP 1024 D1, LLP 1088 D7.2). A package cannot declare a
+view prop whose name writes a layout row (`width`, `padding`, `flex`): the bake
+refuses the declaration with `bake-view-prop-layout`, naming the package, view
+and prop. Other declared props go to the view when written on the tag, even
+under a known name (`exact-camera`'s `object-fit`). A class's rows style only
+the box: `object-fit` in a class never configures the camera's viewfinder;
+write it on `exact-camera` for that. A renamed spelling (`fontSize`) is refused
+whatever is declared. A capitalized name is a component use, not a
 built-in tag. Platform support can further restrict an admitted tag, notably
 native `foreignObject`.
 
@@ -2249,7 +2253,8 @@ unchecks the rest at once, then fires `input` and `change` on it, carrying its
 `value` (`on` when it has none); choosing the checked one fires nothing. With
 a radio focused, ArrowDown and ArrowRight move the focus and the check to the
 next enabled radio of its group, ArrowUp and ArrowLeft to the previous,
-wrapping, each move an `input` and a `change`; Space checks the focused one.
+wrapping. Left and Right reverse when the radio's parent group is right to
+left. Each move fires `input` and `change`; Space checks the focused one.
 `checked` is controlled as a checkbox's: after the action, every radio shows
 its bound `checked` again, so an action that writes nothing snaps the group
 back. The driver's `type <radio> true` checks it as a click does; `false` is

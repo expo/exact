@@ -136,12 +136,12 @@ pub fn run(args: &[String]) -> ExitCode {
         (true, true) => exact_tamber::check(&src, &contract_lower::tamber_vocab()),
         // With packages: what the build refuses of them too (`fold_with`).
         (_, false) => {
-            contract::tamber_params::fold_with(&src, &app, &contract_lower::tamber_vocab())
+            contract::tamber_params::fold_with(&src, &app, &contract_lower::tamber_vocab(), None)
                 .map(|(folding, _)| folding)
         }
         (false, true) => exact_tamber::parse(&src).and_then(|d| {
             exact_tamber::check_design(
-                contract::tamber_params::laid(&d, &app),
+                contract::tamber_params::laid(&d, &app, None),
                 &contract_lower::tamber_vocab(),
             )
         }),

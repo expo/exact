@@ -94,8 +94,8 @@ fn rows(rows: &[(StyleId, Dimension)]) -> StyleProps {
     let mut s = StyleProps::default();
     for (id, value) in rows {
         match id {
-            StyleId::Width => s.width = *value,
-            StyleId::Height => s.height = *value,
+            StyleId::Width => s.width = value.clone(),
+            StyleId::Height => s.height = value.clone(),
             _ => unreachable!(),
         }
         s.mask.set(*id);

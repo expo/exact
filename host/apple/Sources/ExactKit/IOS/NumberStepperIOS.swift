@@ -67,7 +67,7 @@ extension NodeView {
         let made = stepper ?? {
             let s = FieldStepper()
             s.addTarget(self, action: #selector(stepperChanged(_:)), for: .valueChanged)
-            addSubview(s)
+            (clipBox ?? self).addSubview(s)
             stepper = s
             return s
         }()
@@ -107,7 +107,8 @@ extension NodeView {
         let x = rtl ? rect.minX : rect.maxX - size.width
         let frame = CGRect(x: x, y: ((bounds.height - size.height) / 2).rounded(.toNearestOrAwayFromZero), width: size.width, height: size.height)
         if stepper.frame != frame { stepper.frame = frame; field.setNeedsLayout() }
-        if stepper.superview === self, subviews.last !== stepper { bringSubviewToFront(stepper) }
+        let parent = clipBox ?? self
+        if stepper.superview === parent, parent.subviews.last !== stepper { parent.bringSubviewToFront(stepper) }
     }
 
     /// A tap of the plus or the minus: the field's text steps one way, and
@@ -171,7 +172,7 @@ extension Agent {
     func steppedTap(_ node: NodeView, hit: UIView, at point: CGPoint, tapped at: [Double]) -> [String: Any]? {
         var up: UIView? = hit
         while let view = up, !(view is FieldStepper) { up = view.superview }
-        guard let stepper = up as? FieldStepper, stepper.superview === node else { return nil }
+        guard let stepper = up as? FieldStepper, stepper.superview === (node.clipBox ?? node) else { return nil }
         let half = stepper.convert(point, from: nil).x > stepper.bounds.midX ? "increment" : "decrement"
         guard stepper.isEnabled, !stepper.isHidden, !node.disabled, !node.inert else { return ["error": "tap #\(node.id): its stepper is disabled"] }
         let before = node.field?.text ?? ""

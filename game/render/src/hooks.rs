@@ -112,6 +112,16 @@ pub struct HookTime {
     pub scale: f32,
     /// Shader asset generation; candidate pipelines replace valid ones atomically.
     pub shader_generation: u32,
+    /// Milliseconds since this canvas's previous drawn frame; 0 for its first
+    /// and for the first after a rest or a look. With `display_period_ms`, what
+    /// an adaptive render-scale controller or a frame budget steers by.
+    pub interval_ms: f64,
+    /// The display's period as the host knows it; 0 while unknown or headless.
+    pub display_period_ms: f64,
+    /// The host's display callback for this frame.
+    pub host: exact_gpu::HostTiming,
+    /// The device's thermal state (`Unknown` where the host has no cheap source).
+    pub thermal_state: exact_gpu::ThermalState,
 }
 impl Default for HookTime {
     fn default() -> Self {
@@ -123,6 +133,10 @@ impl Default for HookTime {
             points: (1., 1.),
             scale: 1.,
             shader_generation: 0,
+            interval_ms: 0.,
+            display_period_ms: 0.,
+            host: Default::default(),
+            thermal_state: Default::default(),
         }
     }
 }
@@ -307,6 +321,12 @@ pub trait Hooks: Default {
     ) -> Result<(), RenderError> {
         Ok(())
     }
+    /// Drawn frames per second at most, 0 for none: a budget or a thermal cap
+    /// (`FrameView.time.thermal_state`). The lower of this and the game's
+    /// `Game::max_fps` stands, either 0 for none.
+    fn max_fps(&self) -> u32 {
+        0
+    }
     /// Drop device-owned state immediately; the next prepare receives reset=true.
     fn device_lost(&mut self) {
         *self = Self::default();
@@ -377,7 +397,13 @@ impl HookClock {
     pub fn reset(&mut self) {
         self.last = None;
     }
-    pub fn frame(&mut self, frame: &exact_gpu::Frame, generation: u64, paused: bool) -> HookTime {
+    pub fn frame(
+        &mut self,
+        frame: &exact_gpu::Frame,
+        timing: &exact_gpu::FrameTiming,
+        generation: u64,
+        paused: bool,
+    ) -> HookTime {
         let reset = self.generation != Some(generation)
             || self.last.is_none_or(|(t, seekable)| {
                 frame.now_ms < t || frame.seekable != seekable || frame.now_ms - t > 1000.
@@ -399,6 +425,10 @@ impl HookClock {
             points: (frame.width, frame.height),
             scale: frame.scale,
             shader_generation: frame.shader_generation,
+            interval_ms: timing.interval_ms,
+            display_period_ms: timing.display_period_ms,
+            host: timing.host,
+            thermal_state: timing.thermal_state,
         }
     }
     /// A look frame's time (LLP 1127.000): `frame` held, no time passing, and
@@ -413,6 +443,7 @@ impl HookClock {
             points: (frame.width, frame.height),
             scale: frame.scale,
             shader_generation: frame.shader_generation,
+            ..HookTime::default()
         }
     }
 }

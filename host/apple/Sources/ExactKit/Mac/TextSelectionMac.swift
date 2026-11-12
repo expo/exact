@@ -229,9 +229,17 @@ package final class TextSelection {
     func keyboardMenuPoint(in window: NSWindow) -> (NodeView, NSPoint)? {
         guard let presenter else { return nil }
         for node in paragraphs where node.window === window {
-            guard let range = range(node), range.length > 0, let rects = rectangles(node, range: range, inWindow: true) else { continue }
+            guard let range = range(node), range.length > 0, let pieces = lineRectangles(node, range: range, inWindow: true) else { continue }
             let rtl = node.userInterfaceLayoutDirection == .rightToLeft
-            for rect in rects {
+            // A line of both directions holds several rectangles, left to
+            // right; the line's selection is all of them.
+            var lines: [(line: Int, rect: CGRect)] = []
+            for piece in pieces {
+                if let i = lines.firstIndex(where: { $0.line == piece.line }) {
+                    lines[i].rect = lines[i].rect.union(piece.rect)
+                } else { lines.append(piece) }
+            }
+            for (_, rect) in lines {
                 let shown = presenter.visiblePart(of: rect, in: node)
                 guard !shown.isEmpty else { continue }
                 // The right edge itself is outside the line (`NSPointInRect`).
@@ -244,6 +252,12 @@ package final class TextSelection {
     /// The selected lines of `range` in `node`, as drawn: in the page's
     /// client space (the clip's, from its scroll origin), or in the window.
     private func rectangles(_ node: NodeView, range: NSRange?, inWindow: Bool = false) -> [CGRect]? {
+        lineRectangles(node, range: range, inWindow: inWindow)?.map(\.rect)
+    }
+
+    /// `rectangles`, each with its line: lines in different columns can
+    /// share a band. A reader paragraph has no columns, so its band is its line.
+    private func lineRectangles(_ node: NodeView, range: NSRange?, inWindow: Bool = false) -> [(line: Int, rect: CGRect)]? {
         guard let range, let presenter else { return [] }
         let clip = presenter.viewport.contentView
         let drawn = { (rect: CGRect) in
@@ -252,20 +266,24 @@ package final class TextSelection {
         if let reader = node.readerParagraph {
             guard let rects = reader.selectionRects(range) else { return nil }
             let origin = node.contentBox().origin
-            return rects.map { drawn($0.offsetBy(dx: origin.x, dy: origin.y)) }
+            var line = -1, band: (CGFloat, CGFloat)?
+            return rects.map { rect in
+                if band.map({ $0 != (rect.minY, rect.maxY) }) ?? true { line += 1; band = (rect.minY, rect.maxY) }
+                return (line, drawn(rect.offsetBy(dx: origin.x, dy: origin.y)))
+            }
         }
         guard let paragraph = node.paragraphLayout() else { return [] }
         let selected = paragraph.selectedLines(range, align: node.paragraphSpec().align, in: node.paragraphBox(), dirty: .infinite)
-        let local: [CGRect]
+        let local: [(line: Int, rect: CGRect)]
         if let fragments = node.columnRecord?.fragments, !fragments.isEmpty {
             local = fragments.flatMap { fragment in
                 selected.filter { fragment.lines.contains($0.line) }.compactMap { line in
                     let rect = line.rect.offsetBy(dx: fragment.dx, dy: fragment.dy).intersection(fragment.rect)
-                    return rect.isEmpty ? nil : rect
+                    return rect.isEmpty ? nil : (line.line, rect)
                 }
             }
-        } else { local = selected.map(\.rect) }
-        return local.map(drawn)
+        } else { local = selected }
+        return local.map { ($0.line, drawn($0.rect)) }
     }
 
     func set(_ node: NodeView, _ selection: FieldSelection) {

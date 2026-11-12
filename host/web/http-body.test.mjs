@@ -1,4 +1,4 @@
-import {expect,test} from 'bun:test';
+import {expect,spyOn,test} from 'bun:test';
 import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -545,4 +545,53 @@ test('an upload goes by XMLHttpRequest: its bytes sent are messages, its reply t
     const late = await request({ ...op, timeoutMs: 20 }, host([]));
     assert.deepEqual([late.kind, decode(late)], [10, 'the request timed out after 20 ms']);
   } finally { globalThis.XMLHttpRequest = saved; }
+});
+
+test('a render upload keeps HTTP error replies and enforces its byte ceiling, abort and deadline', async () => {
+  const saved = { fetch: globalThis.fetch, render: Object.getOwnPropertyDescriptor(globalThis, '__exactRender') };
+  globalThis.__exactRender = true;
+  const grantSet = normalized('net.fetch https://example.test'), controllers = new Set(), sent = [];
+  const op = { method: 'POST', url: 'https://example.test/upload', headers: [], body: btoa('ab'), stream: true, upload: true, maxResponseBytes: 4 };
+  const host = { grantSet, controllers, message: m => sent.push([m.event, m.data]) };
+  const decode = o => new TextDecoder().decode(o.body);
+  try {
+    globalThis.fetch = async (_url, init) => {
+      expect([...init.body]).toEqual([97, 98]);
+      expect(init.redirect).toBe('follow');
+      return new Response('busy', { status: 503 });
+    };
+    const reply = await request(op, host);
+    expect([reply.kind, reply.status, decode(reply)]).toEqual([0, 503, 'busy']);
+    expect(sent).toEqual([['exact:sending', ''], ['exact:progress', '{"loaded":2,"total":2}']]);
+    sent.length = 0;
+    globalThis.fetch = async () => new Response('large');
+    const large = await request({ ...op, body: '' }, host);
+    expect([large.kind, decode(large)]).toEqual([2, 'HTTP response exceeds limit']);
+    expect(sent).toEqual([['exact:sending', '']]);
+
+    let started = Promise.withResolvers();
+    globalThis.fetch = (_url, { signal }) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      started.resolve();
+    });
+    const controller = new AbortController(), aborted = request(op, { ...host, controller });
+    await started.promise;
+    controller.abort();
+    const stopped = await aborted;
+    expect([stopped.kind, decode(stopped)]).toEqual([4, 'request aborted']);
+    const deadline = new AbortController(), timeout = spyOn(AbortSignal, 'timeout').mockReturnValueOnce(deadline.signal);
+    try {
+      started = Promise.withResolvers();
+      const waiting = request({ ...op, timeoutMs: 20 }, host);
+      await started.promise;
+      expect(timeout).toHaveBeenCalledWith(20);
+      deadline.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+      const late = await waiting;
+      expect([late.kind, decode(late)]).toEqual([10, 'the request timed out after 20 ms']);
+    } finally { timeout.mockRestore(); }
+    expect(controllers.size).toBe(0);
+  } finally {
+    globalThis.fetch = saved.fetch;
+    if (saved.render) Object.defineProperty(globalThis, '__exactRender', saved.render); else delete globalThis.__exactRender;
+  }
 });

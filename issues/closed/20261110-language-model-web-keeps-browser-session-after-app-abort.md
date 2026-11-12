@@ -1,6 +1,7 @@
 # The web language model does not rebuild the browser's session after the app aborts a reply
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** An active response's abort invalidates the browser session before the next queued prompt rebuilds it from the committed transcript.
 **Systems:** packages/language-model/web/index.js
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

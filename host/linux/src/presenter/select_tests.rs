@@ -186,3 +186,66 @@ fn a_menu_longer_than_the_window_is_held_to_it_and_scrolls() {
         );
     }
 }
+
+#[test]
+fn a_select_menu_is_painted_chosen_and_dismissed_on_both_frame_paths() {
+    use crate::paint::control::MENU_PAD;
+    let mut failures = Vec::new();
+    for display in [false, true] {
+        for appearance in ["auto", "none"] {
+            let source = PICK.replace(
+                "select value",
+                &format!("select appearance=\"{appearance}\" value"),
+            );
+            let mut p = boot(&source, (300., 400.));
+            let paint = |p: &mut Presenter<()>| {
+                if display {
+                    let frame = p.display_frame().unwrap();
+                    let pixels = frame.pixels.clone();
+                    assert!(p.display_complete(&frame));
+                    pixels
+                } else {
+                    p.frame()
+                }
+            };
+            paint(&mut p);
+            let id = named(&p, "pick");
+            assert!(p.set_focus(Some(id), p.host.now()).is_none());
+            let closed = paint(&mut p);
+            key(&mut p, "Enter");
+            let menu = p.menu_paint().unwrap();
+            let opened = paint(&mut p);
+            let (mx, my, mw, _) = menu.rect;
+            for row in 0..3 {
+                let y = my + MENU_PAD + row as f32 * menu.row;
+                let changed = (y.ceil() as u32..(y + menu.row).floor() as u32).any(|y| {
+                    (mx.ceil() as u32..(mx + mw).floor() as u32)
+                        .any(|x| opened.pixel(x, y) != closed.pixel(x, y))
+                });
+                if !changed {
+                    failures.push(format!(
+                        "display={display} {appearance}: row {row} invisible"
+                    ));
+                }
+            }
+            let at = (mx + mw / 2., my + MENU_PAD + 1.5 * menu.row);
+            let now = p.host.now();
+            assert_eq!(p.press_at(at.0, at.1, now), Some(id));
+            assert_eq!(slot(&p, "pick"), "b", "display={display} {appearance}");
+            assert_eq!(p.menu, None);
+            key(&mut p, "ArrowRight");
+            let chosen = paint(&mut p);
+            assert!(chosen.data() != closed.data(), "the selected label changes");
+            key(&mut p, "Enter");
+            paint(&mut p);
+            key(&mut p, "Escape");
+            let dismissed = paint(&mut p);
+            assert_eq!(slot(&p, "pick"), "b", "display={display} {appearance}");
+            assert!(
+                dismissed.data() == chosen.data(),
+                "dismissal leaves no menu pixels"
+            );
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}

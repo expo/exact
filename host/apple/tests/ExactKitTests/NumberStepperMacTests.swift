@@ -161,6 +161,39 @@ final class NumberStepperMacTests: XCTestCase {
         XCTAssertFalse(stepper.isHidden)
     }
 
+    func testAStepperClipsInsideAResizingBorderAndReturnsWithItsField() throws {
+        let (node, heard, session) = fixture()
+        defer { session.destroy() }
+        node.applyStyle(["border_width": 6, "border_radius": 20, "overflow_x": "hidden", "overflow_y": "hidden"])
+        let field = try XCTUnwrap(node.field), original = try XCTUnwrap(node.stepper)
+        let frame = original.frame
+        for width in [200.0, 250.0, 350.0] {
+            session.presenter.apply(wireBatch([["op": "present", "id": 1, "property": "layout", "w": width - 300]]))
+            let box = try XCTUnwrap(node.clipBox), surface = try XCTUnwrap(node.surface)
+            XCTAssertTrue(field.superview === box)
+            XCTAssertTrue(original.superview === box)
+            XCTAssertTrue(box.layer?.mask === surface.clip)
+            XCTAssertEqual(surface.clip.path?.boundingBoxOfPath.width ?? 0, width - 12, accuracy: 0.001)
+            XCTAssertFalse(try XCTUnwrap(surface.clip.path).contains(CGPoint(x: width - 3, y: 14)))
+            XCTAssertEqual(original.frame, frame)
+        }
+        press(original, up: true)
+        XCTAssertEqual(field.stringValue, "4")
+        XCTAssertEqual(heard(), ["input 4", "change 4"])
+        node.applyProps(set: ["type": "text", "value": "4"], clear: [])
+        XCTAssertNil(node.stepper)
+        node.applyProps(set: ["type": "number"], clear: [])
+        let replacement = try XCTUnwrap(node.stepper)
+        XCTAssertTrue(replacement.superview === node.clipBox, "a stepper made during a resize enters the clip")
+        session.presenter.apply(wireBatch([["op": "present", "id": 1, "property": "layout", "w": 0.0]]))
+        XCTAssertNil(node.clipBox)
+        XCTAssertTrue(field.superview === node)
+        XCTAssertTrue(replacement.superview === node)
+        press(replacement, up: false)
+        XCTAssertEqual(field.stringValue, "3")
+        XCTAssertEqual(heard().suffix(2), ["input 3", "change 3"])
+    }
+
     func testNoStepperWhereTheAuthorOrTheTypeSaysNone() throws {
         let (node, _, session) = fixture()
         defer { session.destroy() }

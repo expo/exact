@@ -3,9 +3,27 @@
 // cut off for its output; one that fails says the compiler's own error,
 // plain, not the colours or the trace after it.
 import { expect, test } from 'bun:test';
-import { FAILED, gist, phased } from './dev-phase.mjs';
+import { acceptModuleReply, FAILED, gist, phased } from './dev-phase.mjs';
 
 const said = () => { const lines = []; return { lines, log: (l) => lines.push(l) }; };
+
+test('module warnings are printed only for the current successful candidate', () => {
+  const { lines, log } = said();
+  const warnings = ['app.contract:4:7 warning: first', 'app.ts:11:34 warning: second'];
+  const reply = { id: 3, ok: true, receipt: {}, design: {}, warnings };
+  const accept = (value, request = { id: 3 }, run = 3) => acceptModuleReply(JSON.stringify(value), request, run, log);
+  expect(accept(reply, { id: 3 }, 4)).toBeNull();
+  expect(accept({ ...reply, ok: false, error: 'stale refusal' }, { id: 3 }, 4)).toBeNull();
+  expect(() => accept(reply, null)).toThrow('unexpected module producer response');
+  expect(() => accept({ ...reply, id: 2 })).toThrow('unexpected module producer response');
+  expect(() => accept({ ...reply, ok: false, error: 'bad source' })).toThrow('bad source');
+  expect(() => accept({ ...reply, ok: false })).toThrow('module producer refused the candidate');
+  expect(lines).toEqual([]);
+  expect(accept(reply)).toEqual(reply);
+  expect(lines).toEqual(warnings);
+  expect(accept({ ...reply, warnings: [] })).toEqual({ ...reply, warnings: [] });
+  expect(lines).toEqual(warnings);
+});
 
 test('a build that writes megabytes of diagnostics and succeeds is built', () => {
   const { lines, log } = said();

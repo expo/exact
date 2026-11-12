@@ -1,6 +1,7 @@
 # A non-finite argument reaches a Rust source on the main thread, fails it on a worker, and is refused by a TypeScript source
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Resource and send arguments contain only finite numbers, including upload contexts; unchanged NaNs and signed zeros preserve resource failures.
 **Systems:** data/src/placed.rs (argument crossing), runner (resource arguments), js/src/lib.rs, LLP 1027.002 §1, LLP 1027.001
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

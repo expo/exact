@@ -87,6 +87,14 @@ pub struct WorldSurface<G: Game, P: Executor = (), const ASSETS: bool = false, H
     interrupted: bool,
     look: look::Look<ASSETS>,
     rung: Option<crate::quality::Rung>,
+    /// Drawing stopped at rest (`Game::render_idle`); the next live frame wakes the clock.
+    resting: bool,
+    /// The tick the world was first seen idle at, while it stays idle.
+    idle_tick: Option<u64>,
+    /// The scene samples the renderer was made with (`Game::samples`).
+    samples: Option<exact_game::SceneSamples>,
+    /// This frame's timing facts (`Surface::timing`), for the hooks' `FrameView.time`.
+    timing: exact_gpu::FrameTiming,
 }
 impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, P, ASSETS, H> {
     /// Bake-owned development capability; production modules refuse live edits.
@@ -303,11 +311,20 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
     fn render_scale(&self) -> f32 {
         self.raster_scale()
     }
+    fn max_fps(&self) -> u32 {
+        let game = (self.sim.as_ref()).map_or(0, |sim| G::max_fps(sim.world(), sim.args()));
+        exact_gpu::lower_cap(game, crate::Hooks::max_fps(&self.hooks))
+    }
+    fn timing(&mut self, timing: &exact_gpu::FrameTiming) {
+        self.timing = *timing;
+    }
     fn retier(&mut self) -> bool {
         self.retier_rung()
     }
     fn clock(&mut self, seekable: bool) {
         self.seekable = seekable;
+        self.resting = false;
+        self.idle_tick = None;
         self.presentation.clock(seekable);
     }
     fn lifecycle(&mut self, event: Lifecycle) {
@@ -731,7 +748,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
                 ",\"device\":false"
             });
             let scale = G::render_scale(sim.args());
-            crate::quality::row(self.rung, G::SAMPLES, scale, &mut reply);
+            crate::quality::row(self.rung, G::samples(sim.args()), scale, &mut reply);
             self.perf.append(&mut reply);
             reply.pop();
             reply.push_str(",\"tickSpans\":");

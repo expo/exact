@@ -1,4 +1,5 @@
-// Frozen inline parser from 497acca7, used only as the equivalence oracle.
+// Recursive parser from 497acca7, with corrected emphasis boundaries, used as
+// an independent scanning oracle for the indexed parser.
 use markdown_parse::Run;
 
 /// The runs of `line`, with `bold`/`italic`/`href` inherited from the
@@ -129,6 +130,16 @@ impl<'a> Parser<'a> {
                         self.at += 1;
                     }
                 }
+                b'_' if self.text[..self.at]
+                    .chars()
+                    .next_back()
+                    .is_some_and(char::is_alphanumeric) =>
+                {
+                    while self.peek(0) == b'_' {
+                        self.pending.push('_');
+                        self.at += 1;
+                    }
+                }
                 b'*' | b'_' => {
                     if !self.emphasis(c, link) {
                         self.pending.push(c as char);
@@ -149,40 +160,22 @@ impl<'a> Parser<'a> {
 
     /// `` `code` ``, or ``` ``code with a ` in it`` ```.
     fn code_span(&mut self) -> bool {
-        let ticks = self.src[self.at..]
-            .iter()
-            .take_while(|&&c| c == b'`')
-            .count();
-        let open = self.at + ticks;
-        let fence = &self.src[self.at..open];
-        let mut at = open;
-        while at < self.src.len() {
-            if self.src[at] == b'`' {
-                let run = self.src[at..].iter().take_while(|&&c| c == b'`').count();
-                if run == ticks {
-                    let text = std::str::from_utf8(&self.src[open..at]).unwrap_or("");
-                    // CommonMark strips one leading and trailing space so
-                    // `` ` `` can be written; nothing else is touched.
-                    let text = text
-                        .strip_prefix(' ')
-                        .and_then(|t| t.strip_suffix(' '))
-                        .unwrap_or(text);
-                    self.push(Run {
-                        text: text.to_string(),
-                        code: true,
-                        href: self.style.href.clone(),
-                        ..Run::default()
-                    });
-                    self.at = at + run;
-                    return true;
-                }
-                at += run;
-                continue;
-            }
-            at += 1;
-        }
-        let _ = fence;
-        false
+        let Some((open, close, end)) = code_bounds(self.src, self.at) else {
+            return false;
+        };
+        let text = &self.text[open..close];
+        let text = text
+            .strip_prefix(' ')
+            .and_then(|t| t.strip_suffix(' '))
+            .unwrap_or(text);
+        self.push(Run {
+            text: text.to_string(),
+            code: true,
+            href: self.style.href.clone(),
+            ..Run::default()
+        });
+        self.at = end;
+        true
     }
 
     /// `[label](target)` starting `skip` bytes in (1 for an image's `!`).
@@ -241,17 +234,10 @@ impl<'a> Parser<'a> {
     /// repository's Markdown actually writes a link.
     fn bare_url(&mut self, link: &dyn Fn(&str) -> String) -> bool {
         let rest = self.rest();
-        if !rest.starts_with("http://") && !rest.starts_with("https://") {
+        let Some(len) = bare_url_len(rest) else {
             return false;
-        }
-        let end = rest
-            .find(|c: char| c.is_whitespace() || c == '<' || c == ')' || c == '"')
-            .unwrap_or(rest.len());
-        // Trailing sentence punctuation belongs to the sentence.
-        let url = rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
-        if url.len() < 12 {
-            return false;
-        }
+        };
+        let url = &rest[..len];
         self.push(Run {
             text: url.to_string(),
             href: link(url),
@@ -274,49 +260,174 @@ impl<'a> Parser<'a> {
         if after == 0 || after == b' ' || after == b'\t' {
             return false;
         }
-        if marker == b'_' && count == 1 {
-            let before = if self.at == 0 {
-                0
-            } else {
-                self.src[self.at - 1]
-            };
-            if before.is_ascii_alphanumeric() {
-                return false;
-            }
-        }
         let open = self.at + count;
-        let mut at = open;
-        while at < self.src.len() {
-            if self.src[at] == b'\\' {
-                at += 2;
+        let Some(at) = emphasis_close(self.text, self.at, marker, count) else {
+            return false;
+        };
+        let inner = &self.text[open..at];
+        let mut style = self.style.clone();
+        if count == 2 {
+            style.bold = true;
+        } else {
+            style.italic = true;
+        }
+        for mut run in runs(inner, link) {
+            run.bold |= style.bold;
+            run.italic |= style.italic;
+            if run.href.is_empty() {
+                run.href = style.href.clone();
+            }
+            self.push(run);
+        }
+        self.at = at + count;
+        true
+    }
+}
+
+fn bare_url_len(rest: &str) -> Option<usize> {
+    if !rest.starts_with("http://") && !rest.starts_with("https://") {
+        return None;
+    }
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == '<' || c == ')' || c == '"')
+        .unwrap_or(rest.len());
+    let url = rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+    (url.len() >= 12).then_some(url.len())
+}
+
+// The oracle resolves nested spans recursively and scans their content again
+// with that bound. Production uses explicit searches and memoized suffixes.
+fn emphasis_close(text: &str, start: usize, marker: u8, count: usize) -> Option<usize> {
+    let src = text.as_bytes();
+    let mut at = start + count;
+    let mut scopes = vec![(src.len(), src.len())];
+    while at < src.len() {
+        let end = scopes.last().unwrap().0;
+        if at >= end {
+            let (close, resume) = scopes.pop()?;
+            if scopes.is_empty() {
+                return None;
+            }
+            if src[close] == marker {
+                if let Some(at) = closing_marker(text, close, marker, count) {
+                    return Some(at);
+                }
+            }
+            at = resume;
+            continue;
+        }
+        let bounded = &text[..end];
+        if src[at] == b'\\' && src.get(at + 1).is_some_and(u8::is_ascii_punctuation) {
+            at += 2;
+            continue;
+        }
+        if let Some(end) = opaque_end(bounded, at) {
+            at = end;
+            continue;
+        }
+        if let Some(len) = bare_url_len(&bounded[at..]) {
+            let mut limit = at + len;
+            for (candidate, &byte) in src.iter().enumerate().take(limit).skip(at) {
+                if byte == marker {
+                    if let Some(close) = closing_marker(bounded, candidate, marker, count) {
+                        limit = close;
+                        break;
+                    }
+                }
+            }
+            if let Some(len) = bare_url_len(&text[at..limit]) {
+                at += len;
                 continue;
             }
-            if self.src[at] == marker
-                && self.src[at..].iter().take_while(|&&c| c == marker).count() >= count
-                && self.src[at - 1] != b' '
-            {
-                let inner = std::str::from_utf8(&self.src[open..at]).unwrap_or("");
-                let mut style = self.style.clone();
-                if count == 2 {
-                    style.bold = true;
-                } else {
-                    style.italic = true;
+        }
+        let c = src[at];
+        if matches!(c, b'*' | b'_') {
+            if c == marker {
+                if let Some(close) = closing_marker(bounded, at, marker, count) {
+                    return Some(close);
                 }
-                for mut run in runs(inner, link) {
-                    run.bold |= style.bold;
-                    run.italic |= style.italic;
-                    if run.href.is_empty() {
-                        run.href = style.href.clone();
-                    }
-                    self.push(run);
-                }
-                self.at = at + count;
-                return true;
             }
+            let length = src[at..end].iter().take_while(|&&b| b == c).count();
+            let width = length.min(2);
+            let intraword = c == b'_'
+                && text[..at]
+                    .chars()
+                    .next_back()
+                    .is_some_and(char::is_alphanumeric);
+            let after = src.get(at + width).copied().unwrap_or(0);
+            if !intraword
+                && at + width < end
+                && !matches!(after, b' ' | b'\t')
+                && (c != marker || width != count)
+            {
+                if let Some(close) = emphasis_close(bounded, at, c, width) {
+                    scopes.push((close, close + width));
+                    at += width;
+                    continue;
+                }
+            }
+            at += if c == marker || intraword { length } else { 1 };
+            continue;
+        }
+        at += utf8_width(c);
+    }
+    None
+}
+
+fn closing_marker(text: &str, at: usize, marker: u8, count: usize) -> Option<usize> {
+    let length = text.as_bytes()[at..]
+        .iter()
+        .take_while(|&&c| c == marker)
+        .count();
+    let intraword = marker == b'_'
+        && text[at + length..]
+            .chars()
+            .next()
+            .is_some_and(char::is_alphanumeric);
+    let close = at + usize::from(at == 0 || text.as_bytes()[at - 1] == b' ');
+    (!intraword && close + count <= at + length).then_some(close)
+}
+
+// Skip constructs whose contents cannot close the surrounding emphasis.
+// The recursive oracle scans each frame independently, without delimiter indexes.
+fn opaque_end(text: &str, at: usize) -> Option<usize> {
+    if !matches!(text.as_bytes()[at], b'`' | b'!' | b'[' | b'<') {
+        return None;
+    }
+    let mut p = Parser {
+        text: &text[at..],
+        src: &text.as_bytes()[at..],
+        at: 0,
+        runs: Vec::new(),
+        pending: String::new(),
+        style: Run::default(),
+    };
+    let found = match p.peek(0) {
+        b'`' => p.code_span(),
+        b'!' if p.peek(1) == b'[' => p.bracketed(1).is_some(),
+        b'[' => p.bracketed(0).is_some(),
+        b'<' => p.autolink(&str::to_string),
+        _ => false,
+    };
+    found.then_some(at + p.at)
+}
+
+fn code_bounds(src: &[u8], start: usize) -> Option<(usize, usize, usize)> {
+    let ticks = src[start..].iter().take_while(|&&c| c == b'`').count();
+    let open = start + ticks;
+    let mut at = open;
+    while at < src.len() {
+        if src[at] == b'`' {
+            let count = src[at..].iter().take_while(|&&c| c == b'`').count();
+            if count == ticks {
+                return Some((open, at, at + count));
+            }
+            at += count;
+        } else {
             at += 1;
         }
-        false
     }
+    None
 }
 
 /// The index of the `close` that matches the `open` at `from`, honouring

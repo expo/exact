@@ -543,11 +543,11 @@ fn main() -> ExitCode {
             // (modules.js): the build writes each extension's web
             // implementation beside the app.
             let _ = std::fs::remove_file(dir.join("modules.flag"));
-            if !plan.modules.is_empty() || !plan.views.is_empty() {
+            if !plan.package_extensions().is_empty() {
                 let sources: Vec<&str> = (plan.modules.iter())
                     .map(|m| plan.str(plan.sources[m.source.0 as usize].name))
                     .collect();
-                let flag = serde_json::json!({ "extensions": facts::extensions(&plan), "sources": sources });
+                let flag = serde_json::json!({ "extensions": plan.package_extensions(), "sources": sources });
                 let _ = std::fs::write(dir.join("modules.flag"), flag.to_string());
             }
             // `wakelock` (wakelock.js, LLP 1125 D11).

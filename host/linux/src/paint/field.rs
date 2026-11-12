@@ -548,20 +548,32 @@ impl Painter {
             let painted = material::FieldText::painted(&paragraph, (ox, oy), ts);
             self.labels.value(node.id, painted);
         }
-        if field.decorations.is_some() {
-            self.text_decorations(
-                walk.scene.kernel,
-                &paragraph,
-                &palette,
+        let decorations = field
+            .decorations
+            .as_ref()
+            .map(|_| self.text_decorations(walk.scene.kernel, &paragraph, &palette, walk.reveal));
+        if let Some(decorations) = &decorations {
+            decorations.paint(
+                self.backend.as_mut(),
+                0..palette.len(),
                 (ox, oy),
                 ts,
-                walk.reveal,
+                exact_kernel::TextDecorationLine::Underline,
             );
         }
         {
             let mut engine = self.text.borrow_mut();
             self.backend
                 .text(&mut engine, &paragraph, &palette, (ox, oy), ts);
+        }
+        if let Some(decorations) = &decorations {
+            decorations.paint(
+                self.backend.as_mut(),
+                0..palette.len(),
+                (ox, oy),
+                ts,
+                exact_kernel::TextDecorationLine::LineThrough,
+            );
         }
         if let Some(composition) = &composition {
             let line = 1. / self.scale.max(1.);

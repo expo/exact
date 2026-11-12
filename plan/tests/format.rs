@@ -1031,17 +1031,13 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
     assert_eq!(same, plan);
 }
 
-/// The `module_events` table joins the plan (LLP 1133.004 D6): a native
-/// module's event the root hears, a wake event's budget (LLP 1133.017 D5),
-/// and `currententrychange`, `navigatesuccess` and `navigateerror` the event
-/// kinds (LLP 1020.002 D2); `atompress` joins them (LLP 1045.000 D7), then
-/// `newwindow` and `download` (LLP 1020.002 D5), then `capture` (D7), then `userpromptopened` (D9), then an image's `enterpictureinpicture`, `leavepictureinpicture` and `pictureinpictureerror` (LLP 1042 §9), then `historyswipe` (LLP 1115.000 D5.5), then `swipeleft` and a scroll drag's `scrolldragstart` and `scrolldragend` (Charlie, 2026-11-10). The `tools` table joins it (LLP 1133.023 D5, LLP 1111 D2), and the roster's `sharedFiles` (LLP 1133.024 D3), then `fragment` (LLP 1153 D5); a resource row's `each` (LLP 1017.000 P4c, a resource over a list), then its `transient` (LLP 1156.005 D4), then its `gate` (LLP 1161.002 D1), and the `CurrentResource` opcode (LLP 1161.001 D1); a mutation row's `queue` flag becomes its `mode`, newest, queue or parallel (LLP 1161.000 D6). Every host needs a new binary for this plan format. The format digest is pinned: a change to `tables/format.json`, a
-/// comment included, moves it, and every host then needs a new binary (LLP
-/// 1030 D3a).
+/// Full interface identities on module, event and view rows change the plan
+/// format. Every host needs a new binary (LLP 1030 D3a). The digest covers
+/// all of `tables/format.json`, including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0xa50412ed1f611ea7,
+        FORMAT_DIGEST, 0xcb68389a9697d958,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }

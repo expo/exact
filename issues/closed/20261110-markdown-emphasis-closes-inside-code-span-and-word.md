@@ -1,6 +1,7 @@
 # The Markdown reader's parser closes emphasis at a `*` or `_` inside a code span and at an underscore inside a word
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Emphasis closes outside code spans and word-internal underscore runs, with URL recognition bounded by emphasis scopes.
 **Systems:** apps/markdown/parse (inline.rs); read by apps/markdown, apps/llp, apps/harness, apps/exact-live, apps/markdown-stress
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

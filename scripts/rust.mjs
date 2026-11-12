@@ -419,7 +419,7 @@ export function rustBundle(app, bundle, build, built) {
     {name:'rust/app.module.json',bytes:Buffer.from(JSON.stringify(receipt))},
     {name:'rust/'+receipt.module.file,bytes:variant.bytes},
   ].map(a => ({...a,sha256:hash(a.bytes)}));
-  const requires = {rustMode:mode,rustAbi:4,rustTarget:receipt.target,grantCeiling:build.compat.inputs.grantCeiling,rustGrants:rustGrants(build.compat)};
+  const requires = {rustMode:mode,rustAbi:5,rustTarget:receipt.target,grantCeiling:build.compat.inputs.grantCeiling,rustGrants:rustGrants(build.compat)};
   const artifacts = build.graph.artifacts.map(a => {
     if (a.name !== 'app.plan') return a;
     const {sources, ...rest} = a.requires;

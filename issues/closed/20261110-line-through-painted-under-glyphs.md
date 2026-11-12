@@ -1,6 +1,7 @@
 # The painting host draws `line-through` under the glyphs it strikes
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A strike paints above its declaring box's glyphs and shadows, before later siblings.
 **Systems:** host/linux/src/paint/fragments.rs, host/linux/src/paint/text_decoration.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

@@ -71,6 +71,66 @@ final class SoundMixerTests: XCTestCase {
         XCTAssertEqual(render(m, at: t + 512 / rate).filter { $0 != 0 }.count, 0)
     }
 
+    func testAnEndCanExtendASoundingVoiceAfterItsGroupCutIsRetracted() {
+        let m = mixer(frames: 12_000)
+        defer { exact_sound_mixer_free(m) }
+        let t = exact_sound_seconds(ticks(15)), speaker = t + latency
+        XCTAssertTrue(exact_sound_push(m, 1, 1, 0, speaker, 1, 1, 0))
+        XCTAssertTrue(exact_sound_push(m, 2, 1, 0, speaker + 0.1, 0, 1, 0))
+        XCTAssertTrue(exact_sound_push(m, 1, 2, 1, speaker + 0.1, 1, 1, 0))
+        _ = render(m, at: t, frames: 2400)
+        XCTAssertTrue(exact_sound_push(m, 2, 1, 0, speaker + 0.25, 0, 1, 0))
+        XCTAssertTrue(exact_sound_push(m, 2, 2, 0, speaker + 0.1, 0, 1, 0))
+        let out = render(m, at: t + 0.05, frames: 10_000)
+        XCTAssertTrue(out[..<9600].allSatisfy { $0 == 0.5 })
+        XCTAssertTrue(out[9600...].allSatisfy { $0 == 0 })
+        XCTAssertEqual(exact_sound_live(m), 0)
+    }
+
+    func testSlotReuseReadsALaterEndBeforeRetiringAVoice() {
+        for oldEndFrame in [0.0, 200.0] {
+            let m = mixer()
+            defer { exact_sound_mixer_free(m) }
+            let t = exact_sound_seconds(ticks(16)), next = t + 512 / rate
+            XCTAssertTrue(exact_sound_push(m, 1, 1, 0, t + latency, 1, 1, 0))
+            XCTAssertTrue(exact_sound_push(m, 2, 1, 0, next + latency + oldEndFrame / rate, 0, 1, 0))
+            XCTAssertTrue(exact_sound_push(m, 1, 2, 1, t + latency, 1, 1, 0))
+            XCTAssertTrue(exact_sound_push(m, 2, 2, 0, next + latency + 300 / rate, 0, 1, 0))
+            for id in 3...288 {
+                XCTAssertTrue(exact_sound_push(m, 1, UInt64(id), 0, t + 1, 0, 1, 0))
+            }
+            _ = render(m, at: t)
+            // The replacement precedes the extension in the ring. It must take voice 2's slot.
+            XCTAssertTrue(exact_sound_push(m, 1, 289, 1, next + latency + 300 / rate, 1, 1, 0))
+            XCTAssertTrue(exact_sound_push(m, 2, 1, 0, next + latency + 1000 / rate, 0, 1, 0))
+            XCTAssertTrue(render(m, at: next).allSatisfy { $0 == 0.75 })
+            XCTAssertEqual(exact_sound_dropped(m), 0)
+        }
+    }
+
+    func testSlotReuseReadsAQueuedCancellationBeforeDroppingARetainedVoice() {
+        let m = mixer(frames: 12_000)
+        defer { exact_sound_mixer_free(m) }
+        let t = exact_sound_seconds(ticks(17)), speaker = t + latency
+        XCTAssertTrue(exact_sound_push(m, 1, 1, 1, speaker + 0.1, 1, 1, 0))
+        XCTAssertTrue(exact_sound_push(m, 1, 2, 0, speaker, 1, 1, 0))
+        XCTAssertTrue(exact_sound_push(m, 2, 2, 0, speaker + 0.1, 0, 1, 0))
+        for id in 3...288 {
+            let at = id <= 33 ? speaker : speaker + Double(id)
+            XCTAssertTrue(exact_sound_push(m, 1, UInt64(id), 0, at, 0, 1, 0))
+        }
+        _ = render(m, at: t, frames: 4800)
+        XCTAssertEqual(exact_sound_live(m), 288)
+        XCTAssertTrue(exact_sound_push(m, 2, 1, 0, speaker + 0.1, 0, 1, 0))
+        XCTAssertTrue(exact_sound_push(m, 1, 289, 1, speaker + 0.1, 1, 1, 0))
+        XCTAssertTrue(exact_sound_push(m, 1, 290, 1, speaker + 0.3, 1, 1, 0))
+        XCTAssertTrue(exact_sound_push(m, 2, 2, 0, speaker + 0.25, 0, 1, 0))
+        XCTAssertTrue(exact_sound_push(m, 2, 289, 0, speaker + 0.1, 0, 1, 0))
+        XCTAssertTrue(render(m, at: t + 0.1).allSatisfy { $0 == 0.5 })
+        XCTAssertEqual(exact_sound_dropped(m), 0)
+        XCTAssertTrue(render(m, at: t + 0.3).allSatisfy { $0 == 0.25 })
+    }
+
     func testVoicesSumAndAVoiceEndsWithItsFile() {
         let m = mixer(frames: 200)
         defer { exact_sound_mixer_free(m) }

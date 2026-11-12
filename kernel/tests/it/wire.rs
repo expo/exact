@@ -23,10 +23,10 @@ fn scroll_margin_percentages_are_refused_on_the_wire() {
             StyleId::ScrollMarginLeft,
         ] {
             let mut style = StyleProps::default();
-            style.rare.scroll_margin_top = source.width;
-            style.rare.scroll_margin_right = source.width;
-            style.rare.scroll_margin_bottom = source.width;
-            style.rare.scroll_margin_left = source.width;
+            style.rare.scroll_margin_top = source.width.clone();
+            style.rare.scroll_margin_right = source.width.clone();
+            style.rare.scroll_margin_bottom = source.width.clone();
+            style.rare.scroll_margin_left = source.width.clone();
             style.mask.set(id);
             let bytes = wire::frame::encode(
                 1,

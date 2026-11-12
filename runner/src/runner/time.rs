@@ -63,20 +63,18 @@ impl<D: DataSource> Runner<D> {
         {
             return Ok(None);
         }
-        let previous = self.time;
-        self.time = time;
-        let which: Vec<usize> = (0..self.plan.resources.len())
-            .filter(|i| self.plan.str(self.plan.resources[*i].source) == SOURCE)
-            .collect();
-        let result = if which.is_empty() && !self.live_times.is_empty() {
-            self.tick_live_times()
-        } else {
-            self.recommit(which, "time")
-        };
-        if result.is_err() {
-            self.time = previous;
-        }
-        result
+        self.replace_fact(
+            |r| &mut r.time,
+            time,
+            SOURCE,
+            |r, _, readers| {
+                if readers.is_empty() && !r.live_times.is_empty() {
+                    r.tick_live_times()
+                } else {
+                    r.recommit(readers, "time")
+                }
+            },
+        )
     }
 
     /// What the host last said about the viewer and this launch.
@@ -118,38 +116,42 @@ impl<D: DataSource> Runner<D> {
             self.log(format!("place refused: {error:?}"));
             return Err(error);
         }
-        let changed = place != self.place;
-        let previous = std::mem::replace(&mut self.place, place);
-        // @ref LLP 1060 D4 — an ordinary slot write, so dependency tracking
-        // re-renders exactly the `t(...)` readers. The checkpoint the commit
-        // takes already holds the new value: a refusal restores it here.
-        let written = self.plan.locale.and_then(|slot| {
-            let i = slot.0 as usize;
-            let resolved = self.plan.resolve_locale(&self.place.locale)?;
-            let value = Value::str(resolved);
-            (self.slots[i] != value).then(|| (i, std::mem::replace(&mut self.slots[i], value)))
-        });
-        let which: Vec<usize> = (0..self.plan.resources.len())
-            .filter(|i| {
-                (changed || written.is_some())
-                    && self.plan.str(self.plan.resources[*i].source) == SOURCE
-            })
-            .collect();
-        if which.is_empty() && written.is_none() {
-            return if self.live_times.is_empty() {
-                Ok(None)
-            } else {
-                self.tick_live_times()
-            };
-        }
-        let result = self.commit_again(which, "place");
-        if result.is_err() {
-            self.place = previous;
-            if let Some((i, old)) = written {
-                self.slots[i] = old;
-            }
-        }
-        result.map(Some)
+        self.replace_fact(
+            |r| &mut r.place,
+            place,
+            SOURCE,
+            |r, _, mut readers| {
+                // The locale slot is part of this fact's commit (LLP 1060 D4).
+                let written = r.plan.locale.and_then(|slot| {
+                    let i = slot.0 as usize;
+                    let resolved = r.plan.resolve_locale(&r.place.locale)?;
+                    let value = Value::str(resolved);
+                    (r.slots[i] != value).then(|| (i, std::mem::replace(&mut r.slots[i], value)))
+                });
+                if written.is_some() && readers.is_empty() {
+                    readers = r
+                        .resource_rows()
+                        .enumerate()
+                        .filter_map(|(i, row)| (r.plan.str(row.source) == SOURCE).then_some(i))
+                        .collect();
+                }
+                let result = if readers.is_empty() && written.is_none() {
+                    if r.live_times.is_empty() {
+                        Ok(None)
+                    } else {
+                        r.tick_live_times()
+                    }
+                } else {
+                    r.commit_again(readers, "place").map(Some)
+                };
+                if result.is_err() {
+                    if let Some((i, old)) = written {
+                        r.slots[i] = old;
+                    }
+                }
+                result
+            },
+        )
     }
 
     /// Take the topics the source's native module announces (LLP 1016.002),
@@ -175,7 +177,11 @@ impl<D: DataSource> Runner<D> {
     /// that announces on its own behalf (a document watch, LLP 1069.010.000
     /// D1) must listen for after a commit.
     pub fn watched_topics(&self) -> Vec<String> {
-        let mut topics: Vec<String> = self.watching.iter().flatten().cloned().collect();
+        let mut topics: Vec<String> = crate::vm::Column::rows(&self.resources, |row| &row.watching)
+            .iter()
+            .flatten()
+            .cloned()
+            .collect();
         topics.sort();
         topics.dedup();
         topics
@@ -259,9 +265,9 @@ impl<D: DataSource> Runner<D> {
     /// however many announcements came meanwhile.
     pub fn changed(&mut self, topic: &str) -> Result<Option<CommitReceipt>, RunnerError> {
         let mut which = Vec::new();
-        for i in 0..self.watching.len() {
+        for i in 0..self.resources.len() {
             // An upload is asked once for its arguments (LLP 1016.000 D10).
-            if !self.watching[i].iter().any(|t| t == topic) || self.upload_stands(i) {
+            if !self.resources[i].watching.iter().any(|t| t == topic) || self.upload_stands(i) {
                 continue;
             }
             // A stream keeps no reply to wait for, and a refused request
@@ -293,7 +299,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     pub(super) fn time_answer(&self, i: usize) -> Result<Value, DataError> {
-        let row = &self.plan.resources[i];
+        let row = self.resource_row(i);
         if row.args.len > 0 {
             return Err(DataError::BadArguments(format!(
                 "{SOURCE} takes no arguments"

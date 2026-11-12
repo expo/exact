@@ -84,18 +84,13 @@ pub fn reserved(plan: &Plan, body: &mut String) -> Result<String, String> {
     Ok(facts + &modules(plan, body) + &crate::calls::tools(plan, body))
 }
 
-/// The extensions the plan's module names and package views belong to, each
+/// The extensions the plan's module names, events and package views belong to, each
 /// once, in order.
 pub fn extensions(plan: &Plan) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let named = plan.modules.iter().map(|m| m.extension);
-    for e in named.chain(plan.views.iter().map(|v| v.extension)) {
-        let e = plan.str(e).to_owned();
-        if !out.contains(&e) {
-            out.push(e);
-        }
-    }
-    out
+    plan.package_extensions()
+        .keys()
+        .map(|e| (*e).to_owned())
+        .collect()
 }
 
 /// A native module's sources and sends (LLP 1133.002 D13, §6), which
@@ -239,4 +234,18 @@ pub fn activation(plan: &Plan) -> String {
         runtime_kept(plan) || exact_runner::activation::wake(plan).is_none(),
         exact_runner::viewport_reads::Reads::of(plan).any()
     )
+}
+
+#[test]
+fn event_only_extensions_have_web_loaders() {
+    let mut b = exact_plan::builder::PlanBuilder::new(0, 0);
+    let body = b.code(exact_plan::asm::Asm::new());
+    let action = b.action("hear", &[], &[], body);
+    b.module_event(("bell", "@fixture/bell"), "chime", action, "emit", 4, 0);
+    let plan = b.finish().unwrap();
+    assert_eq!(extensions(&plan), ["bell"]);
+    let mut body = String::new();
+    let imports = modules(&plan, &mut body);
+    assert!(imports.contains("./modules.js"));
+    assert!(body.contains("./ext-bell.js"), "{body}");
 }

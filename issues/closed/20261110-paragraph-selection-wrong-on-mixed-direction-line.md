@@ -1,6 +1,7 @@
 # A paragraph selection on a line of both directions highlights the wrong glyphs, or none
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Apple paragraph and reader selections cover the selected glyphs of each run they reach, a run's glyphless directional marks included, and the Mac's keyboard menu and UIKit's `firstRect` enclose the selection's whole first line.
 **Systems:** host/apple/Sources/ExactCore/ParagraphGeometry.swift, paragraph text selection on macOS and iOS
 **Severity:** P2
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

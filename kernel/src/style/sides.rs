@@ -80,10 +80,10 @@ impl StyleProps {
     pub fn hit_slop(&self, env: &super::Env) -> [f32; 4] {
         let r = &self.rare;
         let sides = [
-            r.hit_slop_top,
-            r.hit_slop_right,
-            r.hit_slop_bottom,
-            r.hit_slop_left,
+            r.hit_slop_top.clone(),
+            r.hit_slop_right.clone(),
+            r.hit_slop_bottom.clone(),
+            r.hit_slop_left.clone(),
         ];
         if self.overflow_x != super::Overflow::Visible
             || self.overflow_y != super::Overflow::Visible

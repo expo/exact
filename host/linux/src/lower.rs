@@ -589,7 +589,12 @@ fn playable(n: &exact_kernel::NodeRef<'_>, props: &[Property]) -> bool {
         let point = |d: Dimension| matches!(d, Dimension::Points(_));
         // A circle's centre is a translation of its drawing, when its centre
         // is a length; not with a turn (two pivots).
-        if moves && (n.node_type != NodeType::SvgCircle || turns || !point(s.cx) || !point(s.cy)) {
+        if moves
+            && (n.node_type != NodeType::SvgCircle
+                || turns
+                || !point(s.cx.clone())
+                || !point(s.cy.clone()))
+        {
             return false;
         }
         // A radius scales the whole drawing: a fill alone. A dash offset is one

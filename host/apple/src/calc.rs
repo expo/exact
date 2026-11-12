@@ -1,47 +1,16 @@
-//! Native lengths use the kernel evaluator. Only authored expressions are
-//! interned here; each Swift style owns and releases its environment snapshot.
+//! Native lengths use the kernel evaluator. Serialized expressions are
+//! carried as text in a batch; each Swift style owns its parsed expression and environment.
 use exact_kernel::style::Comparison;
 use exact_kernel::Env;
-use std::collections::HashMap;
-use std::sync::Mutex;
-
-#[derive(Default)]
-struct Lengths {
-    trees: Vec<Comparison>,
-    handles: HashMap<Comparison, u32>,
-}
-static LENGTHS: Mutex<Option<Lengths>> = Mutex::new(None);
-
-/// A stable handle for an authored expression, independent of the viewport.
-pub fn handle(c: Comparison) -> u32 {
-    let mut lengths = LENGTHS.lock().unwrap_or_else(|e| e.into_inner());
-    let lengths = lengths.get_or_insert_with(Lengths::default);
-    if let Some(&n) = lengths.handles.get(&c) {
-        return n;
-    }
-    let n = u32::try_from(lengths.trees.len() + 1).expect("calculation handle space");
-    lengths.trees.push(c);
-    lengths.handles.insert(c, n);
-    n
-}
-fn tree(n: u32) -> Option<Comparison> {
-    let lengths = LENGTHS.lock().unwrap_or_else(|e| e.into_inner());
-    lengths
-        .as_ref()?
-        .trees
-        .get(n.checked_sub(1)? as usize)
-        .copied()
-}
-
 /// A calculation and the environment owned by its native style.
 pub struct Context {
     calculation: Comparison,
     env: Env,
 }
 impl Context {
-    /// Copy a serialized environment. See `exact_calc_create` in exact.h.
-    pub fn new(handle: u32, values: &[f64]) -> Option<Box<Self>> {
-        let calculation = tree(handle)?;
+    /// Read canonical CSS and copy its environment. See `exact_calc_create` in exact.h.
+    pub fn new(text: &str, values: &[f64]) -> Option<Box<Self>> {
+        let calculation = Comparison::from_css(text)?;
         // The layout regions' count, exactly 0 or 20, then the regions (LLP
         // 1123 D10); the title-bar area's, 0 or 4, then the area
         let regions = match values.get(8) {
@@ -116,18 +85,13 @@ pub fn write(out: &mut String, c: Comparison, env: &Env) {
     let (width, height) = env
         .screen
         .unwrap_or((env.viewport_width, env.viewport_height));
+    let mut text = String::new();
+    c.css(&mut text);
+    let text = serde_json::to_string(&text).expect("calculation text");
     let _ = write!(
         out,
         "{{\"calc\":{},\"env\":[{},{},{},{},{},{},{},{}",
-        handle(c),
-        env.top,
-        env.right,
-        env.bottom,
-        env.left,
-        width,
-        height,
-        env.cols,
-        env.rows
+        text, env.top, env.right, env.bottom, env.left, width, height, env.cols, env.rows
     );
     let regions = env.regions.as_ref().map_or(&[][..], |r| r.as_flattened());
     let _ = write!(out, ",{}", regions.len());
@@ -146,35 +110,33 @@ pub fn write(out: &mut String, c: Comparison, env: &Env) {
     out.push_str("]}");
 }
 
-/// A calculation handle for CSS text; zero for invalid or compact lengths.
-pub fn parse(text: &str) -> u32 {
-    match exact_kernel::Dimension::parse_calc(text) {
-        Some(exact_kernel::Dimension::Compare(c)) => handle(c),
-        _ => 0,
-    }
-}
-
 /// Export the calculation seam from the application's static archive.
 #[macro_export]
 macro_rules! calc_exports {
     () => {
-        /// Copy a style's calculation context; null for invalid data.
+        /// Parse a style's expression and copy its environment; null for invalid data.
         /// # Safety
-        /// `values` holds `count` aligned doubles.
+        /// `text` holds `len` bytes; `values` holds `count` aligned doubles.
         #[no_mangle]
         pub unsafe extern "C" fn exact_calc_create(
-            handle: u32,
+            text: *const u8,
+            len: usize,
             values: *const f64,
             count: usize,
         ) -> *mut ::std::ffi::c_void {
             // Eight values, the regions' count and twenty regions, the title-bar
             // area's count and its four values, then up to 255×255 segments
-            if values.is_null() || count > 9 + 20 + 1 + 4 + 4 * 255 * 255 {
+            if text.is_null() || values.is_null() || count > 9 + 20 + 1 + 4 + 4 * 255 * 255 {
                 return ::std::ptr::null_mut();
             }
             // SAFETY: the caller supplies count readable, aligned doubles.
             let values = unsafe { ::std::slice::from_raw_parts(values, count) };
-            $crate::calc::Context::new(handle, values)
+            // SAFETY: the caller supplies len readable UTF-8 bytes.
+            let bytes = unsafe { ::std::slice::from_raw_parts(text, len) };
+            let Ok(text) = ::std::str::from_utf8(bytes) else {
+                return ::std::ptr::null_mut();
+            };
+            $crate::calc::Context::new(text, values)
                 .map_or(::std::ptr::null_mut(), |c| Box::into_raw(c).cast())
         }
         /// Resolve a style's calculation context.
@@ -199,25 +161,64 @@ macro_rules! calc_exports {
                 drop(unsafe { Box::from_raw(context.cast::<$crate::calc::Context>()) });
             }
         }
-        /// Parse an authored calculation.
-        /// # Safety
-        /// `text` holds `len` bytes.
-        #[no_mangle]
-        pub unsafe extern "C" fn exact_calc_parse(text: *const u8, len: usize) -> u32 {
-            if text.is_null() {
-                return 0;
-            }
-            // SAFETY: the caller guarantees text holds len bytes.
-            let bytes = unsafe { ::std::slice::from_raw_parts(text, len) };
-            ::std::str::from_utf8(bytes).map_or(0, $crate::calc::parse)
-        }
     };
 }
 #[cfg(test)]
 mod tests {
     #[test]
+    fn released_contexts_release_calculations() {
+        use std::hash::{Hash, Hasher};
+        let identity = |c: &exact_kernel::style::Comparison| {
+            let mut hash = std::hash::DefaultHasher::new();
+            c.hash(&mut hash);
+            hash.finish()
+        };
+        // A serialized value owns its expression until a context takes its own copy.
+        let mut json = String::new();
+        let exact_kernel::Dimension::Compare(c) =
+            exact_kernel::Dimension::parse_calc("min(17px, 53%)").unwrap()
+        else {
+            unreachable!()
+        };
+        super::write(&mut json, c, &exact_kernel::Env::default());
+        let survivor = super::Context::new(
+            "min(47px, 53%)",
+            &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0.],
+        )
+        .unwrap();
+        for i in 0..16_000 {
+            let text = format!("min({i}px, 52%)");
+            let context =
+                super::Context::new(&text, &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0.]).unwrap();
+            assert_eq!(context.length(100.), f64::from((i as f32).min(52.)));
+            let old = identity(&context.calculation);
+            drop(context);
+            let exact_kernel::Dimension::Compare(c) =
+                exact_kernel::Dimension::parse_calc(&text).unwrap()
+            else {
+                unreachable!()
+            };
+            assert_ne!(
+                identity(&c),
+                old,
+                "a released context must leave no bridge owner"
+            );
+        }
+        assert_eq!(survivor.length(100.), 47.);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let context = super::Context::new(
+            value["calc"].as_str().unwrap(),
+            &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0.],
+        )
+        .unwrap();
+        drop(value);
+        drop(json);
+        assert_eq!(context.length(100.), 17.);
+    }
+
+    #[test]
     fn contexts_keep_their_own_environment_and_validate_the_wire() {
-        let n = super::parse("min(50%, 10vw + env(safe-area-inset-top))");
+        let n = "min(50%, 10vw + env(safe-area-inset-top))";
         let first = super::Context::new(n, &[3., 0., 0., 0., 300., 600., 1., 1., 0., 0.]).unwrap();
         for width in 400..1400 {
             let other =
@@ -226,7 +227,7 @@ mod tests {
             assert!((other.length(400.) - (width as f64 / 10. + 7.).min(200.)).abs() < 0.0001);
             assert_eq!(first.length(400.), 33.);
         }
-        assert!(super::Context::new(0, &[0.; 9]).is_none());
+        assert!(super::Context::new("", &[0.; 9]).is_none());
         assert!(
             super::Context::new(n, &[0.; 8]).is_none(),
             "no region count"
@@ -243,7 +244,7 @@ mod tests {
     /// snapshot carries, and the safe area without them.
     #[test]
     fn a_snapshot_carries_the_layout_regions() {
-        let n = super::parse("min(50%, env(-exact-layout-margins-inset-left))");
+        let n = "min(50%, env(-exact-layout-margins-inset-left))";
         let mut env = exact_kernel::Env::new(0., 0., 0., 3.);
         env.viewport_width = 300.;
         env.viewport_height = 600.;
@@ -255,7 +256,7 @@ mod tests {
                 panic!("expected comparison");
             };
             let mut json = String::new();
-            super::write(&mut json, c, env);
+            super::write(&mut json, c.clone(), env);
             let value: serde_json::Value = serde_json::from_str(&json).unwrap();
             value["env"]
                 .as_array()
@@ -286,7 +287,7 @@ mod tests {
     #[test]
     fn a_snapshot_carries_the_titlebar_area() {
         let text = "max(25%, calc(env(titlebar-area-x) + 4px))";
-        let n = super::parse(text);
+        let n = text;
         let exact_kernel::Dimension::Compare(c) =
             exact_kernel::Dimension::parse_calc(text).unwrap()
         else {
@@ -294,7 +295,7 @@ mod tests {
         };
         let values = |env: &exact_kernel::Env| -> Vec<f64> {
             let mut json = String::new();
-            super::write(&mut json, c, env);
+            super::write(&mut json, c.clone(), env);
             let value: serde_json::Value = serde_json::from_str(&json).unwrap();
             value["env"]
                 .as_array()
@@ -328,28 +329,63 @@ mod tests {
             panic!("expected comparison");
         };
         let mut env = exact_kernel::Env::default();
-        let first = super::handle(c);
+        let mut first = String::new();
+        c.css(&mut first);
         for width in 1..1000 {
             env.viewport_width = width as f32;
             let mut json = String::new();
-            super::write(&mut json, c, &env);
+            super::write(&mut json, c.clone(), &env);
             let value: serde_json::Value = serde_json::from_str(&json).unwrap();
             assert_eq!(value["calc"], first);
         }
     }
 
     #[test]
-    fn a_handle_resolves_against_its_basis_as_the_kernel_does() {
-        let n = super::parse("min(50%, 30px)");
-        assert_ne!(n, 0);
-        assert_eq!(
-            super::parse("min(50%, 30px)"),
-            n,
-            "an equal pair shares one"
-        );
+    fn a_context_resolves_against_its_basis_as_the_kernel_does() {
+        let n = "min(50%, 30px)";
         let context = super::Context::new(n, &[0., 0., 0., 0., 0., 0., 1., 1., 0., 0.]).unwrap();
         assert_eq!(context.length(40.0), 20.0);
         assert_eq!(context.length(200.0), 30.0);
-        assert_eq!(super::parse("10px"), 0);
+        assert!(
+            super::Context::new("10px", &[0., 0., 0., 0., 300., 600., 1., 1., 0., 0.]).is_none()
+        );
+    }
+}
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod ffi_tests {
+    extern "C" {
+        fn exact_calc_create(
+            text: *const u8,
+            len: usize,
+            values: *const f64,
+            count: usize,
+        ) -> *mut std::ffi::c_void;
+        fn exact_calc_resolve(context: *const std::ffi::c_void, basis: f64) -> f64;
+        fn exact_calc_destroy(context: *mut std::ffi::c_void);
+    }
+
+    #[test]
+    fn the_native_entry_point_owns_its_expression_and_validates_utf8() {
+        let text = b"min(47px, 53%)".to_vec();
+        let values = [0., 0., 0., 0., 300., 600., 1., 1., 0., 0.];
+        // SAFETY: both buffers remain readable for the call; create copies them.
+        let context =
+            unsafe { exact_calc_create(text.as_ptr(), text.len(), values.as_ptr(), values.len()) };
+        assert!(!context.is_null());
+        drop(text);
+        // SAFETY: context is live until the single destroy below.
+        unsafe {
+            assert_eq!(exact_calc_resolve(context, 100.), 47.);
+            exact_calc_destroy(context);
+            let invalid = [0xff];
+            assert!(
+                exact_calc_create(invalid.as_ptr(), 1, values.as_ptr(), values.len()).is_null()
+            );
+            assert!(
+                exact_calc_create(std::ptr::null(), 0, values.as_ptr(), values.len()).is_null()
+            );
+        }
     }
 }

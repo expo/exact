@@ -1,7 +1,7 @@
 //! A resource over a list (LLP 1017.000 P4c, amended 2026-11-04): `resource
 //! r = source(x) for x in list [key=k] as shape S`. The runner keeps one
 //! request for each element, keyed as a `for` row is: each element is a
-//! member, a resource row of its own appended after the plan's, that asks
+//! member, a runtime row of its own after the declared resources, that asks
 //! the source with the element as its one parameter and settles as any
 //! resource does. An element that joins adds a member; one that leaves lets
 //! only its member's request go; the others go on. `r` itself asks nothing:
@@ -16,6 +16,7 @@ use exact_plan::Value;
 /// One element's request.
 #[derive(Clone)]
 pub(super) struct Member {
+    pub(super) row: exact_plan::ResourcesRow,
     /// The resource over the list.
     pub(super) family: usize,
     /// The element's key, as [`crate::instance::key_text`] writes it.
@@ -27,27 +28,20 @@ pub(super) struct Member {
     pub(super) gone: bool,
 }
 
-/// The members, by resource row: `None` for each of the plan's own rows.
-#[derive(Clone, Default)]
-pub(super) struct Members {
-    pub(super) rows: Vec<Option<Member>>,
-}
-
 impl<D: DataSource> Runner<D> {
     /// The resource rows the plan declares; the members follow them.
     pub fn declared_resources(&self) -> &[exact_plan::ResourcesRow] {
-        let members = self.members.rows.iter().flatten().count();
-        &self.plan.resources[..self.plan.resources.len() - members]
+        &self.plan.resources
     }
 
     /// Whether row `i` is a resource over a list.
     pub(super) fn is_family(&self, i: usize) -> bool {
-        self.plan.resources[i].each.len != 0
+        self.resource_row(i).each.len != 0
     }
 
     /// Row `i`'s element, when it is a member.
     pub(super) fn member(&self, i: usize) -> Option<&Member> {
-        self.members.rows.get(i).and_then(Option::as_ref)
+        self.resources.get(i).and_then(|row| row.member.as_ref())
     }
 
     /// What row `i`'s arguments read as parameters: a member's element.
@@ -65,7 +59,7 @@ impl<D: DataSource> Runner<D> {
     ) -> Result<Result<Vec<(String, Value)>, RunnerError>, Trap> {
         let (list, key) = self
             .plan
-            .resource_each(&self.plan.resources[i])
+            .resource_each(self.resource_row(i))
             .expect("a family");
         let Value::List(items) = vm::eval(self.plan.code(list), env, &[])?.value else {
             return Err(Trap::TypeMismatch {
@@ -78,7 +72,7 @@ impl<D: DataSource> Runner<D> {
             let params = std::slice::from_ref(item);
             let key = vm::eval(self.plan.code(key), &Env { params, ..*env }, &[])?.value;
             let Some(key) = crate::instance::key_text(&key) else {
-                let resource = self.plan.str(self.plan.resources[i].name).to_string();
+                let resource = self.plan.str(self.resource_row(i).name).to_string();
                 return Ok(Err(RunnerError::ResourceKey { resource }));
             };
             out.push((key, item.clone()));
@@ -98,11 +92,12 @@ impl<D: DataSource> Runner<D> {
         let mut order = Vec::with_capacity(elements.len());
         let mut added = Vec::new();
         for (key, item) in elements {
-            let found = (self.members.rows.iter().enumerate()).find_map(|(m, row)| {
-                row.as_ref()
-                    .filter(|row| row.family == i && !row.gone && row.key == key)
-                    .map(|_| m)
-            });
+            let found =
+                (self.resources.iter().map(|row| &row.member).enumerate()).find_map(|(m, row)| {
+                    row.as_ref()
+                        .filter(|row| row.family == i && !row.gone && row.key == key)
+                        .map(|_| m)
+                });
             let m = match found {
                 Some(m) => m,
                 None => {
@@ -111,18 +106,18 @@ impl<D: DataSource> Runner<D> {
                     m
                 }
             };
-            if self.resources[m].is_none() {
+            if self.resources[m].state.is_none() {
                 self.join_member_writes(i, m);
             }
             // A repeated key reads the first element's request.
             if !order.contains(&m) {
-                if let Some(Some(row)) = self.members.rows.get_mut(m) {
+                if let Some(Some(row)) = self.resources.get_mut(m).map(|row| &mut row.member) {
                     row.item = item;
                 }
             }
             order.push(m);
         }
-        let leaving = (self.members.rows.iter().enumerate())
+        let leaving = (self.resources.iter().map(|row| &row.member).enumerate())
             .filter(|(m, row)| {
                 row.as_ref()
                     .is_some_and(|row| row.family == i && !row.gone && !order.contains(m))
@@ -139,80 +134,36 @@ impl<D: DataSource> Runner<D> {
     /// LLP 1133.007 D13), so a family keeps no more rows than the elements
     /// one settlement holds: those that stay, leave and join.
     fn add_member(&mut self, i: usize, key: String, item: Value) -> usize {
-        let free = (self.members.rows.iter().enumerate()).position(|(m, row)| {
-            row.as_ref().is_some_and(|row| row.family == i && row.gone)
-                && !self.pending.iter().any(|p| p.target == Target::Resource(m))
-        });
-        if let Some(m) = free {
-            self.members.rows[m] = Some(Member {
-                family: i,
-                key,
-                item,
-                gone: false,
+        let free =
+            (self.resources.iter().map(|row| &row.member).enumerate()).position(|(m, row)| {
+                row.as_ref().is_some_and(|row| row.family == i && row.gone)
+                    && !self.pending.iter().any(|p| p.target == Target::Resource(m))
             });
-            self.fresh_row(m);
-            return m;
-        }
-        // The inspection digest names the plan as it was built.
-        let _ = self.inspection_digest();
-        let mut row = self.plan.resources[i].clone();
+        let mut row = self.resource_row(i).clone();
         row.ty = self.plan.types[row.ty.0 as usize]
             .elem
             .expect("a list type");
         row.each = Default::default();
-        self.plan.resources.push(row);
-        let m = self.plan.resources.len() - 1;
-        self.members.rows.resize(m, None);
-        self.members.rows.push(Some(super::each::Member {
-            family: i,
-            key,
-            item,
-            gone: false,
-        }));
-        self.fit_resources();
-        m
-    }
-
-    /// Every per-resource table as long as the rows: a member's entries
-    /// start empty, as a resource's do before boot settles it.
-    pub(super) fn fit_resources(&mut self) {
-        let n = self.plan.resources.len();
-        self.resources.resize(n, None);
-        self.resource_values.resize(n, None);
-        self.failed_args.resize(n, None);
-        self.failed_why.resize(n, None);
-        self.pending_res.resize(n, false);
-        self.overlays.resize(n, None);
-        self.store_readers.resize(n, false);
-        self.entropy_readers.resize(n, false);
-        self.watching.resize(n, Vec::new());
-        self.stale.resize(n, false);
-        self.awaiting.resize(n, false);
-        self.members.rows.resize(n, None);
-        if !self.ids.work.resources.is_empty() {
-            self.ids.work.resources.resize(n, Default::default());
+        let resource = super::resources::ResourceRow {
+            member: Some(Member {
+                row,
+                family: i,
+                key,
+                item,
+                gone: false,
+            }),
+            ..Default::default()
+        };
+        if let Some(m) = free {
+            self.refresh_next.retain(|r| *r != m);
+            self.forget_resource_row(m);
+            self.resources[m] = resource;
+            m
+        } else {
+            let m = self.resources.len();
+            self.resources.push(resource);
+            m
         }
-    }
-
-    /// Row `m`'s entries as a new member's start: empty, with nothing kept
-    /// from the member whose element left it.
-    fn fresh_row(&mut self, m: usize) {
-        self.resources[m] = None;
-        self.resource_values[m] = None;
-        self.failed_args[m] = None;
-        self.failed_why[m] = None;
-        self.pending_res[m] = false;
-        self.overlays[m] = None;
-        self.store_readers[m] = false;
-        self.entropy_readers[m] = false;
-        self.watching[m].clear();
-        self.stale[m] = false;
-        self.awaiting[m] = false;
-        if let Some(work) = self.ids.work.resources.get_mut(m) {
-            *work = Default::default();
-        }
-        self.refresh_next.retain(|r| *r != m);
-        self.forget_resource_row(m);
     }
 
     /// Family `i`'s value from its members' this pass: their shown values as a
@@ -236,9 +187,11 @@ impl<D: DataSource> Runner<D> {
                 })
                 .collect(),
         );
-        let failed = order.iter().find(|&&m| self.failed_args[m].is_some());
-        self.failed_args[i] = failed.map(|_| Vec::new());
-        self.failed_why[i] = failed.and_then(|&m| self.failed_why[m].clone());
+        let failed = order
+            .iter()
+            .find(|&&m| self.resources[m].failed_args.is_some());
+        self.resources[i].failed_args = failed.map(|_| Vec::new());
+        self.resources[i].failed_why = failed.and_then(|&m| self.resources[m].failed_why.clone());
         (value, order.iter().any(|&m| pending[m]))
     }
 
@@ -247,18 +200,12 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn let_go_members(&mut self, leaving: &[usize]) {
         for &m in leaving {
             self.forget(Target::Resource(m));
-            if let Some(Some(row)) = self.members.rows.get_mut(m) {
-                row.gone = true;
-            }
-            self.resources[m] = None;
-            self.resource_values[m] = None;
-            self.failed_args[m] = None;
-            self.failed_why[m] = None;
-            self.overlays[m] = None;
-            self.store_readers[m] = false;
-            self.watching[m].clear();
-            self.stale[m] = false;
-            self.awaiting[m] = false;
+            let mut member = self.resources[m].member.take().expect("a member");
+            member.gone = true;
+            self.resources[m] = super::resources::ResourceRow {
+                member: Some(member),
+                ..Default::default()
+            };
             self.refresh_next.retain(|r| *r != m);
         }
         self.forget_member_writes(leaving);
@@ -267,29 +214,68 @@ impl<D: DataSource> Runner<D> {
 
     /// A family is pending while any of its live members is.
     pub(super) fn pending_families(&mut self) {
-        for m in 0..self.members.rows.len() {
-            if let Some(row) = self.members.rows[m].as_ref().filter(|row| !row.gone) {
+        for m in 0..self.resources.len() {
+            if let Some(row) = self.resources[m].member.as_ref().filter(|row| !row.gone) {
                 let family = row.family;
-                self.pending_res[family] |= self.pending_res[m];
+                self.resources[family].pending |= self.resources[m].pending;
             }
         }
     }
+}
 
-    /// Which members are gone, for a refused commit to put back.
-    pub(super) fn gone_members(&self) -> Vec<bool> {
-        (self.members.rows.iter())
-            .map(|row| row.as_ref().is_some_and(|row| row.gone))
-            .collect()
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Answer, DataError, Store};
+    use exact_kernel::Kernel;
+    /// `look(u)` answers at once, with `u` as the phase.
+    struct Look;
+
+    impl DataSource for Look {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+
+        fn answer(&mut self, _: &mut Store, _: &str, args: &[Value]) -> Result<Answer, DataError> {
+            Ok(Answer::Now(Value::record(vec![args[0].clone()])))
+        }
     }
 
-    /// After a refused commit: the members it let go are live again, and the
-    /// tables it put back are as long as the rows.
-    pub(super) fn restore_members(&mut self, gone: &[bool]) {
-        for (row, &gone) in self.members.rows.iter_mut().zip(gone) {
-            if let Some(row) = row {
-                row.gone = gone;
-            }
+    /// A member whose element left is a row a later element takes: a window
+    /// moved half a window at a time, many times over and back again, keeps as
+    /// many rows as one move has elements (those that stay, leave and join). The
+    /// list reads a resource declared after it, so its elements are read in a
+    /// later sweep than the members whose elements left.
+    #[test]
+    fn a_list_whose_elements_change_keeps_rows_for_the_elements_live() {
+        let plan = contract::compile(
+        "shape Got\n  phase: string\ncomponent App\n  state ids: string[] = []\n  resource got = look(u) for u in ids.filter(x => x != skip.phase) as shape Got\n  resource skip = look(\"none\") as shape Got\n  action show(xs: string[])\n    ids = xs\n  derive phases = got.map(g => g.phase).join(\",\")\n  view\n    text phases\n",
+    )
+    .unwrap();
+        let mut r = Runner::boot(
+            plan,
+            Look,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        let declared = r.declared_resources().len();
+        let mut most = 0;
+        for round in 0..300 {
+            // Pages 0, 1, 0, 1, 2, 1, 2, 3, 2…: keys leave and return.
+            let page = round / 3 + usize::from(round % 3 == 1);
+            let ids: Vec<String> = (page * 25..page * 25 + 50).map(|n| n.to_string()).collect();
+            let list = Value::list(ids.iter().map(|s| Value::str(s)).collect());
+            r.act("show", vec![list]).unwrap();
+            let phases = r.derive("phases").unwrap().as_str().unwrap().to_string();
+            assert_eq!(phases, ids.join(","), "round {round}");
+            most = most.max(r.resources.len());
         }
-        self.fit_resources();
+        assert_eq!(r.declared_resources().len(), declared);
+        assert!(
+            most <= declared + 75,
+            "{most} rows for 50 elements live and 25 joining"
+        );
     }
 }

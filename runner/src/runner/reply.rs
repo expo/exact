@@ -129,7 +129,7 @@ impl<D: DataSource> Runner<D> {
         }
         self.overrun.replied = false;
         let was_poisoned = self.poisoned;
-        let checkpoint = self.checkpoint(true);
+        let checkpoint = self.checkpoint();
         let p = self.pending.remove(pos);
         self.sync_pending_flags();
         if p.held || p.long_poll {
@@ -186,7 +186,7 @@ impl<D: DataSource> Runner<D> {
         // refused commit of this message does not undo.
         let upload = self.pending[pos].upload;
         self.pending[pos].sent |= upload;
-        let checkpoint = self.checkpoint(true);
+        let checkpoint = self.checkpoint();
         if self.pending[pos].long_poll {
             self.long_poll_replied(pos);
         }
@@ -247,7 +247,7 @@ impl<D: DataSource> Runner<D> {
         let message = p.stream.is_some() && matches!(outcome, Outcome::Message(_));
         let failed_end = matches!(outcome, Outcome::Failed { .. });
         let ty = match p.target {
-            Target::Resource(i) => self.plan.resources[i].ty,
+            Target::Resource(i) => self.resource_row(i).ty,
             Target::Mutation(m) | Target::Sent(m, _) => self.plan.mutations[m].ty,
         };
         self.store.take_topics();
@@ -273,14 +273,7 @@ impl<D: DataSource> Runner<D> {
             self.module_parse(p.target, ty, &p.source, outcome)
                 .map(Some)
         } else {
-            let parsed = self.data.parse_fetch_for(
-                p.target,
-                p.fetch,
-                &mut self.store,
-                &p.source,
-                &p.args,
-                outcome,
-            );
+            let parsed = self.parse_frame(&p, message, outcome);
             let parsed = parsed.and_then(|answer| match answer {
                 Some(answer) if p.target.mutation().is_some() => {
                     self.single_answer(p.target, Ok(answer)).map(Some)
@@ -316,15 +309,15 @@ impl<D: DataSource> Runner<D> {
             // A read in a later turn (after an `await`) makes a store reader
             // as one in the first does (LLP 1146 §2.3).
             if self.store.reads() > reads_before {
-                self.store_readers[i] = true;
+                self.resources[i].store_reader = true;
                 self.module_work.reply_reader = Some(i);
             }
             // A module's source that data code read: the answer is asked
             // again when that source's answer changes (LLP 1133.002 D14).
             let module = (p.keepable.as_ref()).and_then(|r| self.module_topic(&r.body));
             for topic in self.store.take_topics().into_iter().chain(module) {
-                if !self.watching[i].contains(&topic) {
-                    self.watching[i].push(topic);
+                if !self.resources[i].watching.contains(&topic) {
+                    self.resources[i].watching.push(topic);
                 }
             }
         }
@@ -448,10 +441,10 @@ impl<D: DataSource> Runner<D> {
         }
         match p.target {
             Target::Resource(i) => {
-                let shown = self.resources[i].take();
+                let shown = self.resources[i].state.take();
                 self.revalidated(i, shown.as_ref(), &value);
-                self.stale[i] = false;
-                self.failed_args[i] = None;
+                self.resources[i].stale = false;
+                self.resources[i].failed_args = None;
                 self.keep_answer(i, &p.args, &value);
                 // An upload's end is the answer it stands on at its arguments;
                 // one that never reached the network is an ordinary answer (D10).
@@ -463,7 +456,7 @@ impl<D: DataSource> Runner<D> {
                     self.log(super::lines::asked_again(p.ticket, &name));
                     self.force_refresh(i);
                 }
-                self.resources[i] = Some(ResourceState {
+                self.resources[i].state = Some(ResourceState {
                     inspection_generation: p.inspection_generation,
                     args: p.args,
                     value: crate::held::Held::new(value),

@@ -634,7 +634,7 @@ impl<'k> Resolver<'k, '_> {
             return None;
         }
         let origin = if style.mask.has(StyleId::TransformOrigin) {
-            style.transform_origin
+            style.transform_origin.clone()
         } else {
             TransformOrigin::SVG
         };
@@ -748,7 +748,7 @@ impl<'k> Resolver<'k, '_> {
                 self.uses.pop();
                 let b = b?;
                 let (x, y, w, h) = t.map_or(b, |t| map_rect(t.affine(), b));
-                Some((x + vp.x(style.x), y + vp.y(style.y), w, h))
+                Some((x + vp.x(style.x.clone()), y + vp.y(style.y.clone()), w, h))
             }
             _ => self.geometry(node, style, vp)?.0.bounds(),
         }
@@ -789,8 +789,8 @@ impl<'k> Resolver<'k, '_> {
         let made = if node.node_type == NodeType::SvgCircle {
             let r = self
                 .value(node.key, Property::R)
-                .map_or(vp.d(style.r), |v| v.x as f32);
-            let (cx, cy) = (vp.x(style.cx), vp.y(style.cy));
+                .map_or(vp.d(style.r.clone()), |v| v.x as f32);
+            let (cx, cy) = (vp.x(style.cx.clone()), vp.y(style.cy.clone()));
             circle(cx, cy, r).map(|p| (p, Some((cx, cy, r))))
         } else if node.node_type == NodeType::SvgPath {
             let path = super::parse_d(&self.d(node)?);
@@ -992,7 +992,7 @@ impl<'k> Resolver<'k, '_> {
         ctm: Affine,
     ) -> Option<Kind> {
         let target = self.instanced(node)?;
-        let (x, y) = (vp.x(style.x), vp.y(style.y));
+        let (x, y) = (vp.x(style.x.clone()), vp.y(style.y.clone()));
         self.uses.push(node.id as u64);
         let kind = if matches!(
             target.node_type,
@@ -1134,12 +1134,12 @@ impl<'k> Resolver<'k, '_> {
 /// 100% (SVG 2 §8.2).
 fn viewport_rect(style: &StyleProps, vp: Viewport) -> (f32, f32, f32, f32) {
     (
-        vp.x(style.x),
-        vp.y(style.y),
-        vp.resolve(style.width, vp.width)
+        vp.x(style.x.clone()),
+        vp.y(style.y.clone()),
+        vp.resolve(style.width.clone(), vp.width)
             .unwrap_or(vp.width)
             .max(0.0),
-        vp.resolve(style.height, vp.height)
+        vp.resolve(style.height.clone(), vp.height)
             .unwrap_or(vp.height)
             .max(0.0),
     )

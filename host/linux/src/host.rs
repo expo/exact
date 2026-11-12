@@ -268,7 +268,7 @@ impl<D: DataSource> Host<D> {
         #[cfg(target_os = "macos")]
         let boot_trace = exact_ink::device::apple::Trace::new(c"boot runner through first commit");
         let secret_session =
-            system::SecretSession::new(data.app_id()).map_err(HostError::Layout)?;
+            system::SecretSession::new(data.app_id(), data.grants()).map_err(HostError::Layout)?;
         secret_session.seed(
             carried
                 .map(|carried| carried.store.clone())

@@ -51,6 +51,16 @@ export function heldReply(call) { if (current(call.ticket)) Replies.set(call.tic
 export function longPollReplied(t) { if (current(t)) { HeldAsks.add(t); Replies.set(t.name, (Replies.get(t.name) ?? 0) + 1); } }
 /** A long poll's end, or its letting go: no longer held. */
 export function longPollEnded(t) { HeldAsks.delete(t); }
+/** Open streams: one whose ticket its resource or mutation let go (new arguments, `refresh`, a failure,
+ * its region ended) is closed once the commit that let it go stands, as the runner's forget path (D2). */
+export const Open = new Set();
+export function closeLetGo(inflight, say) {
+  for (const t of Open) if (!t.held() || t.r?.gone) {
+    Open.delete(t); longPollEnded(t); t.closed = true; t.ctl.abort();
+    if (t.waiting) { t.waiting = false; counted(t, inflight); }
+    say(`close stream ${t.id}: its ticket was let go`);
+  }
+}
 export function counted(t, inflight) {
   if (t.call) { t.call.recount ??= () => counted(t, inflight); t.call.ticket ??= t; } // a fetch's start and end (ts-fetch.js)
   const waits = !!t.waiting && !t.closed, candidate = waits && t.call?.held > 0;

@@ -998,12 +998,30 @@ impl Plan {
         self.hatches.push(HatchesRow { word, platforms });
     }
 
+    /// Each used extension's interface identity, including event-only packages.
+    pub fn package_extensions(&self) -> std::collections::BTreeMap<&str, &str> {
+        self.modules
+            .iter()
+            .map(|m| (m.extension, m.package))
+            .chain(self.views.iter().map(|v| (v.extension, v.package)))
+            .chain(self.module_events.iter().map(|e| (e.extension, e.package)))
+            .map(|(extension, package)| (self.str(extension), self.str(package)))
+            .collect()
+    }
+
     /// Declare a package's view, after lowering: the row comes from the
     /// package's `exact.json`, not from Contract (LLP 1133.001 D1).
-    pub fn add_view(&mut self, tag: &str, extension: &str, displayed: bool, binds: &[&str]) {
+    pub fn add_view(
+        &mut self,
+        tag: &str,
+        interface: (&str, &str),
+        displayed: bool,
+        binds: &[&str],
+    ) {
         let row = ViewsRow {
             tag: self.intern(tag),
-            extension: self.intern(extension),
+            extension: self.intern(interface.0),
+            package: self.intern(interface.1),
             displayed,
             binds: self.intern(&binds.join(" ")),
         };

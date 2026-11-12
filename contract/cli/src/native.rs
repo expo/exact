@@ -642,7 +642,7 @@ fn check_modules(file: &File, app_root: &Path) -> Result<Vec<PackageView>, Vec<C
         .and_then(|m| roster(&m))
         .map_err(|message| vec![refusal("app-manifest", message, Span::default())])?;
     let packages = crate::package_views::declared(app_root)
-        .map_err(|message| vec![refusal("bake-view-twice", message, Span::default())])?;
+        .map_err(|e| vec![refusal(e.id, e.message, Span::default())])?;
     if let Some(view) = packages.values().find(|v| roster.contains(&v.tag)) {
         return Err(vec![refusal(
             "bake-view-twice",

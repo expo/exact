@@ -10,6 +10,7 @@
 import { eq, owner, After, Before, journal, clock, data, Resources, Mutations } from "./rt.js";
 import { sourceTypes } from "./names.js";
 import { watch } from "./seam.js";
+import { resourceKey } from "./resource-inspection.js";
 
 const Sites = [];
 let Since = null;
@@ -125,7 +126,7 @@ export function reply(target, tags) {
     return { site, instances: live.get(site), live: w.created - w.retired, ...w, ...(globalThis.exact?.hatchPerf?.site(site) ?? {}) };
   });
   // Each resource whose source was asked, and how often (LLP 1146 D3), as the runner's `resources`.
-  const resources = Resources.filter(r => r.asks).map(r => ({ name: r.name, asked: r.asks }));
+  const resources = Resources.filter(r => r.asks).map(r => ({ name: r.name, ...(r.member ? { member: resourceKey(r) } : {}), asked: r.asks }));
   return { ...tags, seq: clock.epoch, plan: globalThis.exact?.plan ?? null, sites, resources, walked, truncated, work: {scope:"session", since:Since, timebase:"runner-clock-ms", counts:Object.fromEntries(["timersPrecise", "timersFrame", "timersUpdate", "timersScrollend", "timersIdle", "timersCap", "frameTasks"].flatMap((name, i) => clock.timerFirings?.[i] ? [[name, clock.timerFirings[i]]] : [])), coverage:"virtual row operations by collection site; browser layout and inherited work are unavailable"} };
 }
 

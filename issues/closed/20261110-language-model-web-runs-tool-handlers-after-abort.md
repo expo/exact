@@ -1,6 +1,7 @@
 # On the web, an aborted language-model response still runs its remaining tool handlers
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** An ended browser response ignores buffered stream output and starts no further tool handlers.
 **Systems:** packages/language-model/web/index.js
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

@@ -482,7 +482,12 @@ impl<D: DataSource> Runner<D> {
             let readers = self.extensions.readers.get(&self.key(row));
             for (i, args) in readers.into_iter().flatten() {
                 let app = !self.origin_asked(*i).is_some_and(|o| o != CallOrigin::App);
-                if !app || !self.resources.get(*i).is_some_and(Option::is_some) {
+                if !app
+                    || !self
+                        .resources
+                        .get(*i)
+                        .is_some_and(|row| row.state.is_some())
+                {
                     continue;
                 }
                 let args: Json = serde_json::from_str(args).unwrap_or_default();
@@ -530,7 +535,7 @@ impl<D: DataSource> Runner<D> {
         for key in keys {
             let resources = &self.resources;
             let readers = self.extensions.readers.entry(key.clone()).or_default();
-            readers.retain(|i, _| resources.get(*i).is_some_and(Option::is_some));
+            readers.retain(|i, _| resources.get(*i).is_some_and(|row| row.state.is_some()));
             held.extend(readers.keys().copied());
             let groups: Vec<String> = readers.values().cloned().collect();
             let samples = &mut self.extensions.samples;
@@ -705,7 +710,7 @@ impl<D: DataSource> Runner<D> {
                 let origin = self.origin_asked(*i).unwrap_or_default();
                 let cursor = self.extensions.samples.cursors.get(&Reader::Resource(*i));
                 readers.push(json!({ "name": self.plan.str(row.declared),
-                    "resource": self.plan.str(self.plan.resources[*i].name),
+                    "resource": self.plan.str(self.resource_row(*i).name),
                     "args": serde_json::from_str::<Json>(args).unwrap_or_default(),
                     "cursor": cursor, "origin": origin.word() }));
             }

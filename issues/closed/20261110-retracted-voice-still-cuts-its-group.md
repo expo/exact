@@ -1,6 +1,7 @@
 # A sequence voice taken back by an edit still cuts the sounding voice in its group
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Retractions restore pending group cuts after commands and sequence expansion, retain restorable voices under record pressure, and update output ends before slot reuse.
 **Systems:** runner/src/sound.rs, host/web-js/sounds.js
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

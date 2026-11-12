@@ -5,7 +5,7 @@
 // Translate, Search Web, Share…). All of that is a `UITextInteraction` in
 // its non-editable mode; what Exact supplies is the text and its geometry,
 // from the paragraph's own lines (`paragraphLayout`), so a selection's rects
-// are the rects of the lines the kernel broke.
+// follow its glyph runs on the lines the kernel broke.
 //
 // A selectable prose container shares one input and one touch surface across
 // its paragraphs (TextSelectionDocumentIOS). The surface sits below their ink.
@@ -130,7 +130,17 @@ final class SelectableRange: UITextRange {
 }
 final class SelectableRect: UITextSelectionRect {
     private let box: CGRect, first: Bool, last: Bool, rtl: Bool
-    init(_ box: CGRect, first: Bool, last: Bool, rtl: Bool) { self.box = box; self.first = first; self.last = last; self.rtl = rtl }
+    /// The paragraph and the line of it the rect is on. Lines in different
+    /// columns can share a band.
+    let paragraph: ObjectIdentifier?, line: Int
+    init(_ box: CGRect, first: Bool, last: Bool, rtl: Bool, paragraph: ObjectIdentifier?, line: Int) {
+        self.box = box; self.first = first; self.last = last; self.rtl = rtl; self.paragraph = paragraph; self.line = line
+    }
+    /// The rect at `box`, another view's coordinates for it. It keeps an
+    /// endpoint only where `first` or `last` allows.
+    func converted(_ box: CGRect, first: Bool = true, last: Bool = true) -> SelectableRect {
+        SelectableRect(box, first: first && self.first, last: last && self.last, rtl: rtl, paragraph: paragraph, line: line)
+    }
     override var rect: CGRect { box }
     override var writingDirection: NSWritingDirection { rtl ? .rightToLeft : .leftToRight }
     override var containsStart: Bool { first }
@@ -378,16 +388,27 @@ final class SelectableText: UIResponder, UITextInput, UITextInteractionDelegate 
         if let document { return document.rects(range).compactMap { $0 as? SelectableRect } }
         guard let (paragraph, spec, box) = layout else { return [] }
         let everywhere = CGRect(x: -1e7, y: -1e7, width: 2e7, height: 2e7)
-        let lines = paragraph.selectedLines(range, align: spec.align, in: box, dirty: everywhere)
-        return lines.enumerated().map { i, found in
-            // A line that reads right to left starts at its right edge.
-            let line = paragraph.lines[found.line], within = CTLineGetStringRange(line)
-            let lo = max(range.location, within.location), hi = min(NSMaxRange(range), within.location + within.length)
-            let rtl = CTLineGetOffsetForStringIndex(line, lo, nil) > CTLineGetOffsetForStringIndex(line, hi, nil)
+        let segments = paragraph.selectionSegments(range, align: spec.align, in: box, dirty: everywhere)
+        let id = node.map { ObjectIdentifier($0) }
+        var rects = segments.map { found in
             let baseline = paragraph.baselines[found.line]
             let shift = TextEngine.paintedBaseline(baseline, scale: node?.traitCollection.displayScale ?? 1) - baseline.rounded()
-            return SelectableRect(shown(found.rect.offsetBy(dx: 0, dy: shift), line: found.line), first: i == 0, last: i == lines.count - 1, rtl: rtl)
+            return SelectableRect(shown(found.rect.offsetBy(dx: 0, dy: shift), line: found.line), first: found.span.containsStart,
+                                  last: found.span.containsEnd, rtl: found.span.rtl, paragraph: id, line: found.line)
         }
+        // An endpoint on no shown line (one `line-clamp` hides) still needs its handle.
+        guard range.length > 0 else { return rects }
+        if !rects.contains(where: \.containsStart) { rects.insert(endpoint(at: range.location, first: true), at: 0) }
+        if !rects.contains(where: \.containsEnd) { rects.append(endpoint(at: NSMaxRange(range), first: false)) }
+        return rects
+    }
+    /// A selection endpoint that no glyph's rect carries: a rect of no
+    /// width at its caret.
+    func endpoint(at offset: Int, first: Bool) -> SelectableRect {
+        let caret = caretRect(for: SelectablePosition(offset))
+        return SelectableRect(CGRect(x: caret.midX, y: caret.minY, width: 0, height: caret.height), first: first, last: !first,
+                              rtl: node?.paragraphSpec().direction == 1, paragraph: node.map { ObjectIdentifier($0) },
+                              line: layout.map { line(of: offset, in: $0.paragraph) } ?? 0)
     }
 
     // MARK: UITextInput
@@ -444,8 +465,12 @@ final class SelectableText: UIResponder, UITextInput, UITextInteractionDelegate 
         return node?.style["direction"]?.string == "rtl" ? .rightToLeft : .leftToRight
     }
     func setBaseWritingDirection(_ writingDirection: NSWritingDirection, for range: UITextRange) {}
+    /// The range on the line where it starts. A line of both directions holds
+    /// several of its rects, ordered left to right; this encloses them all.
     func firstRect(for range: UITextRange) -> CGRect {
-        (range as? SelectableRange).flatMap { rects($0.range).first?.rect } ?? caretRect(for: range.start)
+        let rects = (range as? SelectableRange).map { self.rects($0.range) } ?? []
+        guard let first = rects.first(where: \.containsStart) ?? rects.first else { return caretRect(for: range.start) }
+        return rects.filter { $0.paragraph == first.paragraph && $0.line == first.line }.reduce(first.rect) { $0.union($1.rect) }
     }
     func caretRect(for position: UITextPosition) -> CGRect {
         if let offset = (position as? SelectablePosition)?.offset, let document { return document.caret(at: offset) }

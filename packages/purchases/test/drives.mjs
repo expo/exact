@@ -1,12 +1,16 @@
 // LLP 1133.015 §10's acceptance drives for Weatherlight+, under the agent: the implementation is its own substitute,
 // so no store is reached and each purchase is a `purchase` ticket the drive taps. Drives 1 to 9 and 11 run on macOS
 // and the iOS simulator (`ios`, the simulator EXACT_SIM names), drive 12 on the web; drive 10 is the runner's
-// (`runner/src/runner/modules/purchases_tests.rs`). The forecast is Open-Meteo's, so the drives need the network.
+// (`runner/src/runner/modules/purchases_tests.rs`). An Open-Meteo response fixture keeps the forecast independent
+// of service availability and includes unavailable values beyond the hourly and daily fields the UI needs.
 //
 // usage: bun packages/purchases/test/drives.mjs <macos|ios|web> [--only 1,2,...]
 //   Build first: `bun host/apple/build.mjs weatherlight-apple` (macOS), `--ios --sim <name>` (iOS), or
 //   `bun host/web/build.mjs weatherlight` (web).
 import { resolve } from 'node:path';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { answer as weatherAnswer } from '../../../host/web-js/conformance/net.mjs';
+import { bakeTool } from '../../../scripts/linked-plan.mjs';
 import { checker } from '../../camera/test/fixture.mjs';
 import { texts } from '../../photos/test/fixture.mjs';
 
@@ -20,8 +24,51 @@ const { open } = await import(resolve(root, 'scripts/agent.mjs'));
 const EPOCH = 1_767_225_600_000, DAY = 86_400_000;
 let stores = 0;
 
-const launch = (storage, epoch = EPOCH) => open({ host, app: 'weatherlight', storage, epoch: String(epoch) });
+const fixture = host === 'web' ? null : await forecastFixture();
+process.on('exit', () => fixture?.close());
+const launch = (storage, epoch = EPOCH) => open({ host, app: 'weatherlight', storage, epoch: String(epoch),
+  ...(fixture ? { plan: fixture.plan, failFetch: 'https://' } : {}) });
 const fresh = () => `purchases-${Date.now().toString(36)}-${stores++}`;
+
+async function forecastFixture() {
+  const common = 'temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,cloud_cover,wind_speed_10m';
+  const query = `latitude=37.7749&longitude=-122.4194&timezone=auto&forecast_days=16&current=${common}&hourly=${common},precipitation_probability&daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max`;
+  const payload = weatherAnswer('api.open-meteo.com', 'GET', `/v1/forecast?${query}`).body;
+  // Only the HTTP response is substituted. The app's parser, resources,
+  // purchase delivery, file storage and review tasks are the shipped code.
+  const fetch = `async function fetch(url: string) {
+    const params = new URL(url).searchParams;
+    // Drive 11 loses the forecast in London, then recovers in Tokyo.
+    if (params.get('longitude') === '-0.1278') return { ok: false, status: 503, json: async () => ({}) };
+    const span = Number(params.get('forecast_days'));
+    if (span !== 7 && span !== 16) throw new Error('Unexpected forecast span');
+    const data = JSON.parse(${JSON.stringify(payload)});
+    for (const key of Object.keys(data.daily)) data.daily[key] = data.daily[key].slice(0, span);
+    for (const key of ['precipitation_probability_max', 'uv_index_max']) data.daily[key].fill(null, 5);
+    for (const key of Object.keys(data.hourly)) {
+      data.hourly[key] = data.hourly[key].slice(0, span * 24);
+      if (key !== 'time') data.hourly[key].fill(null, 48);
+    }
+    return { ok: true, status: 200, json: async () => data };
+  }`;
+  const target = resolve(root, 'target');
+  mkdirSync(target, { recursive: true });
+  const scratch = mkdtempSync(resolve(target, 'purchases-drive-')), source = resolve(scratch, 'source');
+  const close = () => rmSync(scratch, { recursive: true, force: true });
+  try {
+    mkdirSync(source);
+    for (const file of ['app.contract', 'app.json', 'strings', 'store']) {
+      cpSync(resolve(root, 'apps/weatherlight', file), resolve(source, file), { recursive: true });
+    }
+    writeFileSync(resolve(source, 'app.ts'), readFileSync(resolve(root, 'apps/weatherlight/app.ts'), 'utf8') + '\n' + fetch);
+    const baked = resolve(scratch, 'baked');
+    const child = Bun.spawn([bakeTool.built, source, '--out', baked],
+      { cwd: root, stdout: 'ignore', stderr: 'pipe' });
+    const error = await new Response(child.stderr).text();
+    if (await child.exited !== 0) throw new Error(error);
+    return { plan: resolve(baked, 'app.plan'), close };
+  } catch (error) { close(); throw error; }
+}
 const lines = async (s) => (await s.logs({ all: true })).lines.join('\n');
 const ticket = async (s) => {
   for (let i = 0; i < 40; i++) {
@@ -41,6 +88,12 @@ async function buy(s, testId, choice = 'buy') {
 }
 /** The forecast's span once the forecast has arrived: `16-DAY FORECAST` or `7-DAY FORECAST`. */
 async function span(s, want, ms = 20000) {
+  if (fixture) {
+    await s.clock('+1100');
+    await s.clock('data');
+    const t = await texts(s);
+    return t.temperature === '—°' ? `Unavailable: ${t['forecast-days']} ${t.temperature}` : t['forecast-days'];
+  }
   const end = Date.now() + ms;
   let got;
   while (Date.now() < end) {
@@ -233,9 +286,36 @@ if (host === 'web') {
       const s = await launch(storage, EPOCH + day * DAY);
       try {
         await span(s);
+        const state = await s.state();
+        check(host, `drive 11: day ${day + 1} has a forecast and the persisted visit count`,
+          state.resources.outlook.ready && state.resources.visit.days === day + 1,
+          JSON.stringify({ forecast: state.resources.outlook.ready, visit: state.resources.visit }));
         for (let i = 0; i < 3; i++) { await s.clock('+1500'); await s.clock('data'); }
+        if (day === 4) {
+          for (const city of ['city-london', 'city-tokyo']) {
+            await s.tap(city);
+            await span(s);
+            check(host, `drive 11: ${city} ${city === 'city-london' ? 'loses' : 'restores'} the forecast`,
+              (await s.state()).resources.outlook.ready === (city !== 'city-london'));
+            await s.clock('+3000');
+            await s.clock('data');
+          }
+          check(host, 'drive 11: changing cities after the request keeps the review marked as asked',
+            (await s.state()).resources.visit.ask === false,
+            JSON.stringify((await s.state()).resources.visit));
+        }
         asked.push((await lines(s)).match(/requestReview: requested \(app\)/g)?.length ?? 0);
       } finally { await s.close(); }
+      if (day === 0 || day === 4) {
+        const again = await launch(storage, EPOCH + day * DAY);
+        try {
+          await span(again);
+          await again.clock('+3000');
+          await again.clock('data');
+          check(host, `drive 11: reopening day ${day + 1} neither counts it twice nor asks again`,
+            (await again.state()).resources.visit.days === day + 1 && !/requestReview: requested/.test(await lines(again)));
+        } finally { await again.close(); }
+      }
     }
     check(host, 'drive 11: one request, on the fifth day opened, from the app\'s own origin', asked.join(',') === '0,0,0,0,1,0', asked.join(','));
   }

@@ -883,10 +883,8 @@ impl<D: DataSource + Default + 'static> App<D> {
 
 impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility::Event> for App<D> {
     fn new_events(&mut self, _: &ActiveEventLoop, cause: StartCause) {
-        if matches!(cause, StartCause::ResumeTimeReached { .. }) {
-            if counters::enabled() {
-                self.service_causes |= counters::TIMER;
-            }
+        if matches!(cause, StartCause::ResumeTimeReached { .. }) && counters::enabled() {
+            self.service_causes |= counters::TIMER;
         }
         let _span = crate::probe::Span::new("run loop wake", self.service_causes);
     }

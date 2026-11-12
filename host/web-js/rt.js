@@ -3,9 +3,9 @@ import { resourceInspection } from "./resource-inspection.js"; export { canvasCo
 import { oneActivation, suppressedInvocation, imageEvent, releaseAsset as rel } from "./elements.js"; import { reloadOnGone } from "./generation-reload.js"; import { rt as Link } from "./rt-link.js";
 export { liveTime } from "./live-time.js";
 import { viewChildren, listRow, listItem, syncListItemRoles, listOwner, unwrapListItem, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, inertAncestor, sheetLeaves, liveById, renderMarkup, reportPlace, onSelection, textField, sourceField, editMenu, settleRadios, installFits, contextAt, scrollDrag } from "./navigation.js"; export { animationClocks, launchLocation } from "./navigation.js"; export { fontFamily } from './font-family.js'; // synced animations (LLP 1055.002, emit.rs `clocks`)
-import { Docs, Head, head, markDocument, projectRoots, openTabs, unopened, tp } from "./document.js"; export { Head, unopened, tp }; export { canSetStatus, statusSubject } from "./document.js"; import { conforms, eq, equal, failureCode, failureReason, loneSurrogate } from "./shape.js"; import { pointer, record } from "./pointer.js"; import { autofocus, press } from "./focus.js";
-let Paint; export function usePaint(pass) { Paint = pass; } export { conforms, eq, equal }; // the compiler installs `Paint` only when a plan can layer boxes
-import * as Ov from "./overlay.js"; import { beatAfter } from "./beat.js"; import { counted, heldAsks, heldReplies, longPollReplied, longPollEnded, trackAnswer } from "./held.js"; export { heldAsks, heldReplies }; // optimistic writes shown over answers (the runner's writes.rs)
+import { Docs, Head, head, markDocument, projectRoots, openTabs, unopened, tp } from "./document.js"; export { Head, unopened, tp }; export { canSetStatus, statusSubject } from "./document.js"; import { conforms, eq, equal, unchangedArguments, failureCode, failureReason, loneSurrogate, Refusal, Failed, checkArguments, finiteArguments } from "./shape.js"; import { pointer, record } from "./pointer.js"; import { autofocus, press } from "./focus.js";
+let Paint; export function usePaint(pass) { Paint = pass; } export { conforms, eq, equal, Refusal, Failed }; // the compiler installs `Paint` only when a plan can layer boxes
+import * as Ov from "./overlay.js"; import { beatAfter } from "./beat.js"; import { counted, heldAsks, heldReplies, longPollReplied, longPollEnded, trackAnswer, Open, closeLetGo } from "./held.js"; export { heldAsks, heldReplies }; // optimistic writes shown over answers (the runner's writes.rs)
 export const writeRecords = () => Ov.Writes.list.map(w => ({ id: w.id, mutation: w.m.name, landed: !!w.landed })); // the agent's `state.writes`
 let Media = null; export function useMedia(m) { Media = m; } let Nav = null; export function useNavigation(n) { Nav = n; } // media.js only where a plan has a `video` or `audio`; navigation.js's `navigation` (the history, the stacks, the app bar) only where a plan has routes or a back control, handed over by the router (router.js `navigationRoots`): a plan without either never links it (LLP 1047.002 D1)
 // The JS runtime is imported by name, so a bundle carries only what its generated plan uses.
@@ -139,10 +139,6 @@ function endAll(rows) {
 // force, and a count of what commits changed (an edge's no-op, runner/collection.rs).
 export { scope, end, untracked, write, onEnd };
 export const owner = () => Owner, rev = () => Rev, ticket = () => Ticket, nextTicket = () => ++Ticket, stood = f => Out.push(f), restoring = () => Restoring; // `stood`: run `f` once this commit stands (each.js)
-/** A typed refusal: the commit rolls back (LLP 1005 §6 atomicity). */
-export class Refusal extends Error {}
-/** A data or shape refusal (the runner's `RunnerError::Data` or `Shape`), carrying the source's failure details. */
-export class Failed extends Refusal { constructor(message, code = "error", reason = "") { super(message); this.code = code; this.reason = reason; } } // `code`, `reason`: failure(x)'s (shape.js `failureCode`, `failureReason`)
 let Writes = null, Commands = [], Out = [], Landed = [], Sends = [], Refresh = [], Finishes = null, Poisoned = false, Refused = null, Why = "", Sched = null; // `Why`: the step the last commit was refused in and the exception's own words, cut (`why`): a boot refusal's reason (`mount`); the journal keeps them whole
 const why = (step, m, c = [...m]) => `while ${step}: ${c.length > WHY_MAX ? `${c.slice(0, WHY_MAX).join("")}… (${c.length - WHY_MAX} more characters in the journal)` : m}`, WHY_MAX = 300; // by code point; a write's value or a source's error may be long, or private
 /** Queued sends and gated tasks (schedule.js, LLP 1092), installed by a plan that declares them; the last commit's refusal. */
@@ -211,7 +207,7 @@ export function commit(f, what = "commit", finished) {
     for (const f of finishes) f(ok);
     settled(true); if (!ok) return Sched?.scan(false), false;
     clock.epoch++; Store.persist();
-    while (sent < out.length) out[sent++](); if (Open.size) closeLetGo(); for (const c of cmds) command(...c); Sounds.apply?.(cmds); Sounds.midiApply?.(cmds); Sounds.stood?.(); if (!Booting) { autofocus(); Input?.arrive(); } // after its focus commands, as the wasm host (focus.js); then the focus follows the route (input-glue.js; LLP 1115.000 D4.2)
+    while (sent < out.length) out[sent++](); if (Open.size) closeLetGo(inflight, say); for (const c of cmds) command(...c); Sounds.apply?.(cmds); Sounds.midiApply?.(cmds); Sounds.stood?.(); if (!Booting) { autofocus(); Input?.arrive(); } // after its focus commands, as the wasm host (focus.js); then the focus follows the route (input-glue.js; LLP 1115.000 D4.2)
     // An answer's `then` is armed, due now, once however many land: the next advance runs it as its own commit (LLP 1016.001 D3).
     for (const m of landed) if (m.then) { m.due = armedAt(); if (!clock.agent) drive(); }
     Sched?.scan(true); // a free queue's waiting send is due (LLP 1092 D3)
@@ -410,6 +406,8 @@ function send(t, land) {
     const done = (o, more) => {
       if (t.closed) return;
       if (t.waiting && !(more && t.upload)) { t.waiting = false; counted(t, inflight); } // an upload is in flight until its reply
+      // A render's storage refusal starts no work and leaves the source pending for adoption (LLP 1048.000 D9).
+      if (o.refused) { t.refused = o.refused; return; }
       t.elapsed = Math.max(0, Math.round(performance.now() - started));
       if (more) { t.messages++; t.coalesced += (o.streamed ?? o).coalesced ?? 0; o.more = true; } else { Open.delete(t); longPollEnded(t); }
       say(`${more ? "message" : "reply"} ${t.id}; wall ${t.elapsed} ms`); land(o);
@@ -425,19 +423,11 @@ function send(t, land) {
     else { if (globalThis.__exactRender) trackAnswer(t); t.promise.then(v => done({ v }), e => done({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) })); }
   });
 }
-/** Open streams: one whose ticket its resource or mutation let go (new arguments, `refresh`, a failure,
- * its region ended) is closed once the commit that let it go stands, as the runner's forget path (D2). */
-const Open = new Set();
-function closeLetGo() {
-  for (const t of Open) if (!t.held() || t.r?.gone) {
-    Open.delete(t); longPollEnded(t); t.closed = true; t.ctl.abort();
-    if (t.waiting) { t.waiting = false; counted(t, inflight); }
-    say(`close stream ${t.id}: its ticket was let go`);
-  }
-}
-function ask(source, args, name, mutation = false) {
+function ask(source, args, name, mutation) {
+  checkArguments(name, args);
+  if (mutation) mutation.requests++;
   if (["startActivity", "updateActivity", "endActivity"].includes(source)) throw new Refusal(`${source} is not linked into this artifact`);
-  let a; try { a = data.reserved?.[source] ? (v => v?.then ? v : { v })(data.reserved[source](source, args, name)) : data.answer(source, args, Store, name, mutation); } catch (e) { Out.push(...(data.thrown?.() ?? [])); throw e; } // what a resource's source sent before it threw goes if the commit stands (ts-data.js)
+  let a; try { a = data.reserved?.[source] ? (v => v?.then ? v : { v })(data.reserved[source](source, args, name)) : data.answer(source, args, Store, name, !!mutation); } catch (e) { Out.push(...(data.thrown?.() ?? [])); throw e; } // what a resource's source sent before it threw goes if the commit stands (ts-data.js)
   return a && a.then ? (a.then(undefined, e => globalThis.exact?.generationGone?.(e)), { promise: a, call: a.call }) : a; // (a reaped build's lazy chunk fails here: the page loads again, generation-reload.js)
 }
 /** The reply to ticket `t` while its target `held()` it: a commit in which `f` takes the source's answer (a TypeScript
@@ -487,12 +477,19 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
   const m = memo(() => { const shown = Ov.shown(r, (() => {
     ver(); if (args.gate && !args.gate()) return asleep(); if (r.asleep) { r.asleep = false; r.forced = true; } // `when` (LLP 1161.002): closed, nothing is asked; waking asks again, forced
     const a = r.asked = args(); if (Restoring) return flag(fail, failure()), r.value; // `asked`: the overlay's arguments while a placeholder stands; a refused commit put `failed` back, and `fail` follows it there too
-    const forced = r.forced, rev = r.rev, reconciling = r.reconciling, mk = data.uploads.at(r, a); // `reconciling`: asked after a write ended, a refusal fails it (overlay.js); `mk`: an upload asked at these arguments, not asked again (LLP 1016.000 D10)
+    const forced = r.forced, rev = r.rev, reconciling = r.reconciling, mk = finiteArguments(a) ? data.uploads.at(r, a) : null; // `reconciling`: asked after a write ended, a refusal fails it (overlay.js); `mk`: an upload asked at these arguments, not asked again (LLP 1016.000 D10), and none at non-finite ones (settlement.rs `valid_args`)
     r.forced = r.rev = r.reconciling = false;
-    // A failure keeps the value for its arguments, asking nothing; `refresh` or new ones ask again (settlement.rs), but not an upload's. `fail` follows.
-    if (r.failed && (forced && !mk?.failed || !equal(a, r.failed))) { r.failed = null; r.error = r.code = r.reason = undefined; }
+    // A failure keeps the value for its arguments, including NaN; `refresh` or new ones ask again (settlement.rs), but not an upload's. `fail` follows.
+    if (r.failed && (forced && !mk?.failed || !unchangedArguments(a, r.failed))) { r.failed = null; r.error = r.code = r.reason = undefined; }
     flag(fail, failure());
-    if (r.failed || mk) return r.failed ? r.value : data.uploads.answer(r, mk, a, { take, fails, release }); // an upload answers as it ended, or goes on
+    if (r.failed) return r.value;
+    try {
+      checkArguments(name, a);
+    } catch (e) {
+      if (!reconciling) throw e;
+      return fails(a, e.message, failureCode(e), failureReason(e));
+    }
+    if (mk) return data.uploads.answer(r, mk, a, { take, fails, release }); // an upload answers as it ended, or goes on
     const baked = r.baked; r.baked = false;
     if (!forced && !rev) {
       // Reuse follows the request in flight; the displayed value may answer older arguments (LLP 1016 D5).
@@ -504,7 +501,7 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
     try { ans = ask(source, a, name); Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
     catch (e) {
       if (data.threwRead?.()) r.store = true;
-      if (e instanceof Refusal) throw e;
+      if (e instanceof Refusal && !(reconciling && e instanceof Failed)) throw e;
       if (e.refuse && !reconciling) throw new Failed(`resource ${name}: ${e.message}`);
       return fails(a, String(e?.message ?? e), failureCode(e), failureReason(e)); // its newest ask failed: an older one in flight is let go
     }
@@ -584,9 +581,8 @@ export function mut(name, slot, refreshes, type, mode) {
       if (m.wait && !own && Sched.hold(m, source, args, undo)) return;
       undo.push([fail.n, fail.n.v]); write(fail.n, null);
       let a;
-      m.requests++;
       try {
-        a = ask(source, args, name, true);
+        a = ask(source, args, name, m);
         if (!a || !("v" in a || a.req || a.promise || a.stream)) throw new Refusal(`${name}: its source is not ready`);
         if ("v" in a && type && !conforms(a.v, type, [0], m.checked)) throw new Refusal(`${name}: the answer does not conform to its shape`);
       } catch (e) {
@@ -698,6 +694,7 @@ export function P(e, name, f) {
   effect(() => {
     let v = f();
     v = rel(name, v == null ? null : typeof v === "boolean" ? String(v) : String(v)); const sandboxChanged = name === "sandbox" && e.localName === "iframe" && e.getAttribute(name) !== v;
+    if (name === "tabindex") e.exactAuthoredTabIndex = v;
     // A URL that navigates is written only if the web host's policy takes it (navigation.js `navigableURL`,
     // `frameURL`): a refused link loses its `href`, an iframe shows about:blank and keeps its source for its sandbox to decide.
     if (name === "src" && e.localName === "iframe") { e.$src = v; if (frame(e, v)) return; if (v != null && !navigable(v, e)) v = "about:blank"; } else if (name === "href" && v != null && (!navigable(v) || v === "")) v = null;

@@ -1,9 +1,37 @@
 import XCTest
+import CoreText
 @testable import ExactKit
 #if os(macOS)
 import AppKit
 
 final class InlineFrameMacTests: XCTestCase {
+    func testInlineFragmentsFollowMixedDirectionGlyphs() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "inline-direction")
+        defer { session.destroy() }
+        let presenter = session.presenter
+        presenter.apply(batchFixture(ops: [
+            ["op": "create", "id": 1, "kind": "text", "props": ["text": "abc אבג def"],
+             "style": ["font_size": 16.0]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 300, "h": 40],
+        ], timers: false, motion: false, clock: nil, error: nil))
+        let node = try XCTUnwrap(presenter.views[1])
+        let paragraph = try XCTUnwrap(node.paragraphLayout())
+        let line = try XCTUnwrap(paragraph.lines.first)
+        let origin = node.paragraphBox().minX + paragraph.origin(0, align: 0, width: 300)
+        let font = TextEngine(resolve: { _ in nil }).font(size: 16, weight: 400, family: 0, italic: false) as CTFont
+        for range in [NSRange(location: 4, length: 3), NSRange(location: 1, length: 5)] {
+            let rects = node.shapedRects(range.location, NSMaxRange(range), empty: false, font: font)
+            let expected = TextEngine.selectionSpans(line, range: range)
+            XCTAssertEqual(rects.count, expected.count)
+            for (rect, span) in zip(rects, expected) {
+                XCTAssertEqual(rect.minX, origin + span.lowerBound, accuracy: 0.001)
+                XCTAssertEqual(rect.maxX, origin + span.upperBound, accuracy: 0.001)
+            }
+        }
+    }
+
     func testEmptyRunHasAnEncodableFrameAtItsInsertionPoint() throws { try checkEdgeCase("empty") }
     func testSmallRunUsesItsOwnFontMetrics() throws { try checkEdgeCase("small") }
     func testHangingSpaceDoesNotAddAClientRect() throws { try checkEdgeCase("wrap") }

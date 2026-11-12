@@ -26,7 +26,10 @@ fn compress_image_writes_an_upright_jpeg_or_refuses_by_name() {
         include_bytes!("../../../scripts/fixtures/picker/oriented-gps.jpg"),
     )
     .unwrap();
+    assert!(m.take_storage_changed());
     let text = call(&mut m, &mut s, "compress", "4000");
+    assert_eq!(m.take_storage_changed(), cfg!(target_vendor = "apple"));
+    assert!(!m.take_storage_changed());
     let lines: Vec<&str> = text.lines().collect();
     let code = |l: &str| l.split(' ').take(2).collect::<Vec<_>>().join(" ");
     let refusals: Vec<String> = lines[1..].iter().map(|l| code(l)).collect();
@@ -110,7 +113,10 @@ fn transform_image_writes_the_edit_or_refuses_by_name() {
         include_bytes!("../../../scripts/fixtures/picker/oriented-gps.jpg"),
     )
     .unwrap();
+    assert!(!m.take_storage_changed());
     let text = call(&mut m, &mut s, "transform", "");
+    assert_eq!(m.take_storage_changed(), cfg!(target_vendor = "apple"));
+    assert!(!m.take_storage_changed());
     let lines: Vec<&str> = text.lines().collect();
     let size = |name: &str| {
         std::fs::metadata(root.0.join("data").join(name))

@@ -155,11 +155,12 @@ impl Failure {
 
 /// Resource `i`'s failure, or `None` while it has not failed: what
 /// `failure(x)` reads, so a reader is current only while this is unchanged.
-pub(crate) fn state(
-    failed: &[Option<Vec<exact_plan::Value>>],
-    why: &[Option<Failure>],
+pub(crate) fn state<'a>(
+    failed: impl Into<crate::vm::Column<'a, Option<Vec<exact_plan::Value>>>>,
+    why: impl Into<crate::vm::Column<'a, Option<Failure>>>,
     i: usize,
 ) -> Option<Failure> {
+    let (failed, why) = (failed.into(), why.into());
     failed.get(i)?.as_ref()?;
     Some(
         why.get(i)
@@ -170,9 +171,10 @@ pub(crate) fn state(
 }
 
 /// Every resource's [`state`].
-pub(crate) fn states(
-    failed: &[Option<Vec<exact_plan::Value>>],
-    why: &[Option<Failure>],
+pub(crate) fn states<'a>(
+    failed: impl Into<crate::vm::Column<'a, Option<Vec<exact_plan::Value>>>>,
+    why: impl Into<crate::vm::Column<'a, Option<Failure>>>,
 ) -> Vec<Option<Failure>> {
+    let (failed, why) = (failed.into(), why.into());
     (0..failed.len()).map(|i| state(failed, why, i)).collect()
 }

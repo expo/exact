@@ -187,7 +187,7 @@ fn a_resource_hands_over_its_set_in_order_and_is_pending_once() {
         assert!(r.holds(request.ticket));
     }
     assert!(requests.windows(2).all(|w| w[0].ticket < w[1].ticket));
-    assert_eq!(r.pending_res, [true]);
+    assert!(r.resources[0].pending);
     assert_eq!(r.outstanding().requests, ["rows"]);
     assert_eq!(r.pending().len(), 3);
     assert_eq!(r.in_flight().len(), 3);
@@ -211,7 +211,7 @@ fn replies_route_by_fetch_and_empty_turns_commit_before_the_answer_settles() {
             Some(if index == 2 { "3" } else { "1" })
         );
         assert!(r.resource_reads_store("rows"));
-        assert_eq!(r.pending_res, [true]);
+        assert!(r.resources[0].pending);
         assert!(!r.holds(requests[index].ticket));
     }
     assert_eq!(
@@ -223,7 +223,7 @@ fn replies_route_by_fetch_and_empty_turns_commit_before_the_answer_settles() {
     r.data().reply = Reply::Settle;
     r.fulfill(requests[1].ticket, response(202)).unwrap();
     assert_eq!(r.resource("rows"), Some(&Value::Number(42.)));
-    assert_eq!(r.pending_res, [false]);
+    assert!(!r.resources[0].pending);
 }
 
 #[test]
@@ -249,7 +249,7 @@ fn a_reply_adds_tickets_and_settlement_lets_the_remaining_request_go() {
     assert!(!r.holds(first[2].ticket));
     assert!(!r.has_pending());
     assert!(r.pending().is_empty());
-    assert_eq!(r.pending_res, [false]);
+    assert!(!r.resources[0].pending);
     assert!(r.data().forgotten.last().unwrap().is_empty());
     assert!(r.fulfill(first[2].ticket, response(203)).unwrap().is_none());
     assert_eq!(r.data().seen.len(), 4);
@@ -297,7 +297,10 @@ fn a_kept_request_requires_one_old_and_one_new_request_and_no_force() {
             next[0].ticket
         };
         r.fulfill(ticket, response(200)).unwrap();
-        assert_eq!(r.resources[0].as_ref().unwrap().args, [Value::Number(1.)]);
+        assert_eq!(
+            r.resources[0].state.as_ref().unwrap().args,
+            [Value::Number(1.)]
+        );
     }
     let mut source = Sets::new(1);
     source.tagged = false;
@@ -349,7 +352,7 @@ fn a_failed_reply_releases_the_set_and_keeps_effect_turn_writes() {
     assert_eq!(r.store().get("token"), Some("2"));
     assert!(r.resource_reads_store("rows"));
     assert!(first.iter().all(|p| !r.holds(p.ticket)));
-    assert_eq!(r.pending_res, [false]);
+    assert!(!r.resources[0].pending);
     assert_eq!(r.failed_resources(), [("rows", "reply failed")]);
     assert!(r.data().forgotten.last().unwrap().is_empty());
 }
@@ -363,7 +366,13 @@ fn a_refused_reask_restores_every_ticket_of_the_previous_set() {
     assert!(r.take_requests().is_empty());
     assert!(first.iter().all(|p| r.holds(p.ticket)));
     assert_eq!(r.pending().len(), 3);
-    assert_eq!(r.pending_res, [true, false]);
+    assert_eq!(
+        r.resources
+            .iter()
+            .map(|row| row.pending)
+            .collect::<Vec<_>>(),
+        [true, false]
+    );
     assert_eq!(
         r.data().forgotten.last().unwrap(),
         &vec![(Target::Resource(0), vec![Value::Number(0.)]); 3]
@@ -371,7 +380,7 @@ fn a_refused_reask_restores_every_ticket_of_the_previous_set() {
 }
 
 #[test]
-fn outstanding_lists_distinct_family_targets_even_when_their_names_match() {
+fn family_request_sets_keep_distinct_targets_and_settle_their_runtime_rows() {
     let plan = contract::compile(
         r#"component App
   resource rows = rows(n) for n in [1, 2] as shape number
@@ -388,6 +397,42 @@ fn outstanding_lists_distinct_family_targets_even_when_their_names_match() {
         "/",
     )
     .unwrap();
-    assert_eq!(r.take_requests().len(), 4);
+    let requests = r.take_requests();
+    assert_eq!(requests.len(), 4);
     assert_eq!(r.outstanding().requests, ["rows", "rows"]);
+    for request in [&requests[1], &requests[3]] {
+        r.data().reply = Reply::Settle;
+        r.fulfill(request.ticket, response(200)).unwrap();
+    }
+    assert!(!r.has_pending());
+    assert!(requests.iter().all(|request| !r.holds(request.ticket)));
+    assert_eq!(
+        r.resource("rows"),
+        Some(&Value::list(vec![Value::Number(42.); 2]))
+    );
+}
+
+#[test]
+fn inspection_started_with_a_set_in_flight_tracks_every_ticket() {
+    let mut r = boot(Sets::new(3));
+    let requests = r.take_requests();
+    r.measure(true, false);
+    let generation = r.resources[0].inspection.request;
+    assert_ne!(generation, 0);
+    assert!(r
+        .pending
+        .iter()
+        .all(|p| p.inspection_generation == generation));
+    for request in &requests[..2] {
+        r.fulfill(request.ticket, response(200)).unwrap();
+        assert!(r.resources[0].pending);
+    }
+    r.data().reply = Reply::Settle;
+    r.fulfill(requests[2].ticket, response(200)).unwrap();
+    assert!(!r.resources[0].pending);
+    assert_eq!(r.resources[0].inspection.successful, generation);
+    assert_eq!(
+        r.resources[0].state.as_ref().unwrap().inspection_generation,
+        generation
+    );
 }

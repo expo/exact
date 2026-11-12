@@ -6,9 +6,10 @@
 //! a beat after the one to its left; a glyph that stays slides to its new
 //! place. Glyphs pair by place from the right within each number, so `999` →
 //! `1,000` changes three digits and brings in `1,`. Each glyph is the
-//! paragraph drawn clipped to its advance, so every backend rolls with the
-//! clip and text it already has; the blur is the backend's where it blurs
-//! glyphs cheaply (Android's), else none. The painter samples it every frame
+//! paragraph drawn clipped to its advance in each glyph pass; decorations
+//! stay at the resting origin. Every backend uses its existing clip and text;
+//! the blur is the backend's where it blurs glyphs cheaply (Android's), else
+//! none. The painter samples it every frame
 //! until it ends; Reduce Motion, a new paragraph, more than one line or
 //! right-to-left text changes in place.
 
@@ -49,6 +50,18 @@ pub(super) struct Roll {
     rising: bool,
     /// How long it plays, ms: its last glyph's start and [`DURATION`].
     span: f64,
+}
+
+impl Roll {
+    pub(super) fn bounds(&self) -> Rect4 {
+        let size = self.to.runs().first().map_or(16.0, |r| r.size);
+        (
+            -size,
+            -size,
+            self.from.width.max(self.to.width) + 2.0 * size,
+            self.from.height.max(self.to.height) + 2.0 * size,
+        )
+    }
 }
 
 impl Numerals {
@@ -311,19 +324,21 @@ fn motions(from: &[Cell], to: &[Cell]) -> Vec<Motion> {
 type Glyph<'a> = (&'a Paragraph, &'a [RunPaint], &'a [Cell], usize);
 
 impl Painter {
-    /// `roll`, `elapsed` ms in, its paragraphs' glyphs at `origin`.
+    /// Paint glyphs at rest, or each rolling digit with its clip, offset and fade.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn roll_glyphs(
+    pub(super) fn glyph_pass(
         &mut self,
-        node: &NodeRef<'_>,
-        kernel: &Kernel,
-        (roll, elapsed): &(Roll, f64),
+        paragraph: &Paragraph,
+        roll: Option<&(Roll, f64)>,
         palette: &[RunPaint],
         origin: (f32, f32),
-        rect: Rect4,
         ts: Transform,
-        reveal: Option<ViewId>,
+        mut paint_glyphs: impl FnMut(&mut Self, &Paragraph, &[RunPaint], (f32, f32)),
     ) {
+        let Some((roll, elapsed)) = roll else {
+            paint_glyphs(self, paragraph, palette, origin);
+            return;
+        };
         let size = roll.to.runs().first().map_or(16.0, |r| r.size);
         // Down from above when the number rose: the new glyph's offset at
         // its start, the old one's at its end.
@@ -335,7 +350,7 @@ impl Painter {
             .collect();
         let (from, to) = (cells(&roll.from), cells(&roll.to));
         let reach = (size * 2.0, roll.to.width.max(roll.from.width) + size * 2.0);
-        let draw = |painter: &mut Self, glyph: Glyph<'_>, (dx, dy): (f32, f32), alpha: f32| {
+        let mut draw = |painter: &mut Self, glyph: Glyph<'_>, (dx, dy): (f32, f32), alpha: f32| {
             let (paragraph, paint, cells, i) = glyph;
             if alpha <= 0.0 || paint.len() < paragraph.runs().len() {
                 return;
@@ -369,7 +384,7 @@ impl Painter {
             // Sharp where it rests: blurred as it leaves or comes.
             painter.backend.text_blur(size * BLUR * (1.0 - alpha));
             let at = (origin.0 + dx, origin.1 + dy);
-            painter.text_paint(node, kernel, paragraph, &faded, at, rect, ts, reveal);
+            paint_glyphs(painter, paragraph, &faded, at);
             painter.backend.text_blur(0.0);
             painter.backend.pop_clip();
         };

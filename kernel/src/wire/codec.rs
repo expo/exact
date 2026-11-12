@@ -718,7 +718,7 @@ mod tests {
         // schema. The literal makes an accidental removal of that coupling a
         // test failure whenever the byte snapshot above is intentionally moved.
         // Recomputed when the schema changes; the digest test prints the value.
-        assert_eq!(SCHEMA_DIGEST, 0x75ff_78c6_cd96_8cc1);
+        assert_eq!(SCHEMA_DIGEST, 0x4c48_d8bf_3531_7830);
     }
 
     #[test]
@@ -788,7 +788,7 @@ mod tests {
             panic!("{text}");
         };
         let mut w = Writer::new();
-        w.dimension(d);
+        w.dimension(d.clone());
         let bytes = w.into_vec();
         assert_eq!(bytes[0], 24, "a comparison is kind 24");
         let mut r = Reader::new(&bytes);
@@ -998,7 +998,7 @@ mod viewport_tests {
         for unit in crate::ViewportUnit::ALL {
             let value = Dimension::Viewport(unit, 10.0);
             let mut writer = Writer::new();
-            writer.dimension(value);
+            writer.dimension(value.clone());
             let bytes = writer.into_vec();
             assert_eq!(
                 Reader::new(&bytes).dimension(StyleId::Width, true).unwrap(),

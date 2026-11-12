@@ -1,6 +1,7 @@
 # On the web, a barcode detection with `formats` unsaid rejects with a TypeError where `BarcodeDetector` reads no format
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Web barcode detection uses refreshed supported formats, returns NotSupportedError when none can be read and preserves newer scans from older failures.
 **Systems:** packages/barcode-detection/web/index.js
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

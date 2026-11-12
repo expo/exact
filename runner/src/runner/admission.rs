@@ -36,7 +36,7 @@ impl<D: DataSource> Runner<D> {
     ) -> Result<CommitReceipt, RunnerError> {
         let what = format!("{what} ({} asked again)", which.len());
         let was_poisoned = self.poisoned;
-        let checkpoint = self.checkpoint(false);
+        let checkpoint = self.checkpoint();
         self.refresh_next.extend(which);
         let result = if self.poisoned {
             Err(RunnerError::Poisoned)
@@ -63,17 +63,18 @@ impl<D: DataSource> Runner<D> {
     pub(super) fn give_up(&mut self, owed: &[usize], why: &RunnerError) {
         for &i in owed {
             self.inspect_request(i);
-            self.failed_args[i] = self.resources[i].as_ref().map(|s| s.args.clone());
+            self.resources[i].failed_args =
+                self.resources[i].state.as_ref().map(|s| s.args.clone());
             let failure = Failure::error(format!(
                 "the commit that asked it again was refused: {why:?}"
             ));
             self.count_failure(i);
             self.alert(super::lines::failed_now(
-                self.plan.str(self.plan.resources[i].name),
+                self.plan.str(self.resource_row(i).name),
                 &failure.message,
             ));
-            self.failed_why[i] = Some(failure);
-            self.awaiting[i] = false;
+            self.resources[i].failed_why = Some(failure);
+            self.resources[i].awaiting = false;
             self.refresh_next.retain(|r| *r != i);
             // An older ask still in flight would answer over the failure
             self.forget_ticket(Target::Resource(i));
@@ -319,8 +320,8 @@ impl<D: DataSource> Runner<D> {
                 if upload {
                     self.upload_over(ticket, sent, super::UploadEnd::Failed(why.clone()));
                 }
-                self.failed_args[i] = failed_args;
-                self.failed_why[i] = Some(why);
+                self.resources[i].failed_args = failed_args;
+                self.resources[i].failed_why = Some(why);
                 self.count_failure(i);
                 // Unless a watched topic changed while it was in flight: the
                 // answer may differ now, so it is asked once more, forced
@@ -520,7 +521,7 @@ mod tests {
             r.resource("value"),
             Some(&Value::some(Value::str("standing")))
         );
-        assert_eq!(r.failed_args[0], Some(vec![]));
+        assert_eq!(r.resources[0].failed_args, Some(vec![]));
         // An unrelated pump and a stale completion cannot restart it either.
         r.advance(1.).unwrap();
         assert!(r.fulfill(ticket, response(200)).unwrap().is_none());
@@ -535,7 +536,7 @@ mod tests {
         assert_eq!(request.request.method, "GET");
         refuse(&mut r, request.ticket);
         assert_failed_without_replay(&mut r, request.ticket);
-        let failure = r.failed_why[0].as_ref().unwrap();
+        let failure = r.resources[0].failed_why.as_ref().unwrap();
         assert_eq!(failure.code, FailureCode::Refused);
         assert_eq!(failure.message, "native executor admission limit reached");
         // A user refresh remains an intentional new source invocation.
@@ -572,7 +573,7 @@ mod tests {
         refuse(&mut r, request.ticket);
         assert!(!r.is_poisoned());
         assert_failed_without_replay(&mut r, request.ticket);
-        let failure = r.failed_why[0].as_ref().unwrap();
+        let failure = r.resources[0].failed_why.as_ref().unwrap();
         assert_eq!(failure.code, FailureCode::Error);
         assert!(failure.message.contains("UnwrapNone"), "{failure:?}");
     }
@@ -587,7 +588,7 @@ mod tests {
         refuse_unordered(&mut r, request.ticket);
         assert!(!r.is_poisoned());
         assert_failed_without_replay(&mut r, request.ticket);
-        let failure = r.failed_why[0].as_ref().unwrap();
+        let failure = r.resources[0].failed_why.as_ref().unwrap();
         assert!(failure.message.contains("UnwrapNone"), "{failure:?}");
     }
 
@@ -601,7 +602,7 @@ mod tests {
         assert!(r.fulfill(request.ticket, response(200)).unwrap().is_some());
         assert!(!r.is_poisoned());
         assert_failed_without_replay(&mut r, request.ticket);
-        let failure = r.failed_why[0].as_ref().unwrap();
+        let failure = r.resources[0].failed_why.as_ref().unwrap();
         assert!(failure.message.contains("UnwrapNone"), "{failure:?}");
     }
 

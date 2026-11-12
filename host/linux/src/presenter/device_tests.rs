@@ -481,3 +481,320 @@ fn a_grouped_rows_symbols_keep_the_platforms_tints() {
         "the chevron is a grey: {tail:?}"
     );
 }
+
+#[test]
+fn appearance_none_paints_select_and_date_values_without_field_chrome() {
+    let mut failures = Vec::new();
+    for (tag, value, children, label) in [
+        (
+            "select",
+            "pear",
+            "        option \"Apple\" value=\"apple\"\n        option \"Pear\" value=\"pear\"\n",
+            "Pear",
+        ),
+        ("input type=\"date\"", "2026-11-04", "", "2026-11-04"),
+    ] {
+        for direction in ["ltr", "rtl"] {
+            let source = format!(
+                r##"component App
+  view
+    column width=400 height=500 background-color="#ffffff" color="#cc0000" font-size=16 line-height="32px" direction="{direction}" align-items="flex-start"
+      {tag} value="{value}" appearance="none" width=180 height=32 padding=0 border-width=0 testId="field"
+{children}      text "{label}" width=180 height=32 testId="reference"
+"##
+            );
+            let mut p = boot(&source);
+            let rect = |p: &mut Presenter<()>, name| {
+                let k = p.host.kernel();
+                let id = k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id;
+                p.rect_of(id).unwrap()
+            };
+            let field = rect(&mut p, "field");
+            let reference = rect(&mut p, "reference");
+            let frame = p.frame();
+            let crop = |r: Rect4| {
+                (0..32)
+                    .flat_map(|y| (0..180).map(move |x| (x, y)))
+                    .map(|(x, y)| frame.pixel(r.0 as u32 + x, r.1 as u32 + y).unwrap())
+                    .collect::<Vec<_>>()
+            };
+            let expected = crop(reference);
+            assert!(
+                expected.iter().any(|c| c.green() < 200),
+                "reference has ink"
+            );
+            let actual = crop(field);
+            let ink = |pixels: &[tiny_skia::PremultipliedColorU8]| {
+                let columns: Vec<_> = pixels
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.green() < 200)
+                    .map(|(i, _)| i % 180)
+                    .collect();
+                columns
+                    .iter()
+                    .min()
+                    .zip(columns.iter().max())
+                    .map(|(a, b)| (*a, *b))
+            };
+            // Right alignment shifts glyphs on a fractional pixel grid.
+            let matches = if direction == "ltr" {
+                actual == expected
+            } else {
+                ink(&actual)
+                    .zip(ink(&expected))
+                    .is_some_and(|((a, b), (c, d))| a.abs_diff(c) <= 1 && b.abs_diff(d) <= 1)
+            };
+            if !matches {
+                failures.push(format!(
+                    "{tag} {direction}: value ink {:?}, expected {:?}",
+                    ink(&actual),
+                    ink(&expected)
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+#[test]
+fn appearance_none_measures_value_text_without_material_chrome() {
+    let mut p = boot(
+        r##"component App
+  view
+    column align-items="flex-start" font-size=16 line-height="24px"
+      select appearance="none" padding=7 border="2px solid #000000" testId="select"
+        option "Pear"
+        option "A much wider option"
+      input type="date" appearance="none" padding=7 border="2px solid #000000" value="2026-11-04" testId="date"
+"##,
+    );
+    for name in ["select", "date"] {
+        let k = p.host.kernel();
+        let id = k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id;
+        let (_, _, _, height) = p.rect_of(id).unwrap();
+        assert_eq!(
+            height, 42.0,
+            "{name}: one text line plus authored padding and border"
+        );
+    }
+}
+
+fn bare_pixels(p: &mut Presenter<()>, name: &str) -> Vec<tiny_skia::PremultipliedColorU8> {
+    let k = p.host.kernel();
+    let id = k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id;
+    let (x, y, w, h) = p.rect_of(id).unwrap();
+    let frame = p.frame();
+    (0..h as u32)
+        .flat_map(|dy| (0..w as u32).map(move |dx| (dx, dy)))
+        .map(|(dx, dy)| frame.pixel(x as u32 + dx, y as u32 + dy).unwrap())
+        .collect()
+}
+
+#[test]
+fn bare_dates_show_empty_values_and_placeholders_like_text_fields() {
+    let mut failures = Vec::new();
+    for kind in ["date", "time", "datetime-local"] {
+        for hint in ["", "Add a value"] {
+            let source = format!(
+                r##"component App
+  view
+    column width=400 height=160 background-color="#ffffff" color="#cc0000" line-height="32px"
+      input type="{kind}" value="" placeholder="{hint}" appearance="none" width=180 height=32 padding=0 border-width=0 testId="field"
+      input value="" placeholder="{hint}" appearance="none" width=180 height=32 padding=0 border-width=0 testId="reference"
+"##
+            );
+            let mut p = boot(&source);
+            if bare_pixels(&mut p, "field") != bare_pixels(&mut p, "reference") {
+                failures.push(format!("{kind}, hint={hint:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+#[test]
+fn bare_control_alignment_matches_a_bare_text_field() {
+    let mut failures = Vec::new();
+    for tag in [
+        "select",
+        "input type=\"date\"",
+        "input type=\"time\"",
+        "input type=\"datetime-local\"",
+    ] {
+        let child = if tag == "select" {
+            "        option \"2026-11-04\"\n"
+        } else {
+            ""
+        };
+        let value = if tag.contains("datetime-local") {
+            "2026-11-04T09:30"
+        } else if tag.contains("time") {
+            "09:30"
+        } else {
+            "2026-11-04"
+        };
+        for direction in ["ltr", "rtl"] {
+            for align in ["start", "center", "end", "left", "right"] {
+                let source = format!(
+                    r##"component App
+  view
+    column width=400 height=160 background-color="#ffffff" line-height="32px" direction="{direction}" text-align="{align}"
+      {tag} value="{value}" appearance="none" width=180 height=32 padding=0 border-width=0 testId="field"
+{child}      input value="{value}" appearance="none" width=180 height=32 padding=0 border-width=0 testId="reference"
+"##
+                );
+                let mut p = boot(&source);
+                let actual = bare_pixels(&mut p, "field");
+                let expected = bare_pixels(&mut p, "reference");
+                // The editable field reserves a caret at the RTL right edge;
+                // its fractional inset can also change glyph antialiasing.
+                let bounds = |pixels: &[tiny_skia::PremultipliedColorU8]| {
+                    let mut xs = pixels
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| c.red() < 200)
+                        .map(|(i, _)| i % 180);
+                    let first = xs.next()?;
+                    Some(xs.fold((first, first), |(lo, hi), x| (lo.min(x), hi.max(x))))
+                };
+                let caret_inset = direction == "rtl"
+                    && matches!(align, "start" | "right")
+                    && bounds(&actual)
+                        .zip(bounds(&expected))
+                        .is_some_and(|((a, b), (c, d))| a.abs_diff(c) <= 1 && b.abs_diff(d) <= 1);
+                if actual != expected && !caret_inset {
+                    failures.push(format!(
+                        "{tag} {direction} {align}: {:?} != {:?}",
+                        bounds(&actual),
+                        bounds(&expected)
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+#[test]
+fn bare_controls_have_a_keyboard_focus_ring_unless_outline_is_none() {
+    let mut failures = Vec::new();
+    for tag in [
+        "select",
+        "input type=\"date\"",
+        "input type=\"time\"",
+        "input type=\"datetime-local\"",
+    ] {
+        for outline in ["", "outline=\"none\""] {
+            let mut p = boot(&format!(
+                r##"component App
+  view
+    column width=400 height=160 background-color="#ffffff"
+      {tag} appearance="none" width=180 height=32 accent-color="#008800" {outline} testId="field"
+"##
+            ));
+            let before = bare_pixels(&mut p, "field");
+            let k = p.host.kernel();
+            let id = k.node_by_key(k.find_by_test_id("field")[0]).unwrap().id;
+            assert!(p.set_focus(Some(id), p.host.now()).is_none());
+            p.key_down("ArrowRight", p.host.now());
+            assert_eq!(p.focus(), Some(id));
+            let after = bare_pixels(&mut p, "field");
+            if (before != after) != outline.is_empty() {
+                failures.push(format!("{tag} {outline}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+fn bare_control_colour_matches_text(pressed: bool) {
+    let mut failures = Vec::new();
+    for tag in ["select", "input type=\"date\""] {
+        let child = if tag == "select" {
+            "          option \"2026-11-04\"\n"
+        } else {
+            ""
+        };
+        let mut p = boot(&format!(
+            r##"component App
+  state on = false
+  action toggle
+    on = !on
+  view
+    column width=400 height=240 background-color="#ffffff" line-height="32px" color=(on ? "#008800" : "#111111") transition="color 400ms linear"
+      column width=300 height=180 press=toggle testId="parent"
+        :active
+          color = "#ff0000"
+        {tag} value="2026-11-04" appearance="none" width=180 height=32 padding=0 border-width=0 testId="field"
+{child}        input value="2026-11-04" appearance="none" width=180 height=32 padding=0 border-width=0 testId="reference"
+      button "Change" press=toggle testId="toggle"
+"##
+        ));
+        let before = bare_pixels(&mut p, "reference");
+        if pressed {
+            p.pointer_down(250.0, 150.0, 0.0).unwrap();
+            p.tick(30.0);
+        } else {
+            let k = p.host.kernel();
+            let id = k.node_by_key(k.find_by_test_id("toggle")[0]).unwrap().id;
+            p.tap(id).unwrap();
+            p.tick(200.0);
+        }
+        let expected = bare_pixels(&mut p, "reference");
+        assert!(before != expected, "the reference ink must change");
+        if bare_pixels(&mut p, "field") != expected {
+            failures.push(tag);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}
+
+#[test]
+fn bare_control_values_follow_inherited_colour_transitions() {
+    bare_control_colour_matches_text(false);
+}
+
+#[test]
+fn bare_control_values_follow_an_ancestors_press_colour() {
+    bare_control_colour_matches_text(true);
+}
+
+#[test]
+fn bare_control_focus_rings_match_a_text_fields_rounded_border() {
+    let mut failures = Vec::new();
+    for tag in ["select", "input type=\"date\""] {
+        let child = if tag == "select" {
+            "        option \"2026-11-04\"\n"
+        } else {
+            ""
+        };
+        let mut p = boot(&format!(
+            r##"component App
+  view
+    column width=400 height=200 background-color="#ffffff" line-height="32px"
+      {tag} value="2026-11-04" appearance="none" width=180 height=32 padding=7 border="2px solid #000000" border-radius=8 accent-color="#008800" testId="field"
+{child}      input value="2026-11-04" appearance="none" width=180 height=32 padding=7 border="2px solid #000000" border-radius=8 accent-color="#008800" testId="reference"
+"##
+        ));
+        let mut rings = Vec::new();
+        for name in ["field", "reference"] {
+            let k = p.host.kernel();
+            let id = k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id;
+            p.set_focus(Some(id), p.host.now());
+            p.key_down("ArrowRight", p.host.now());
+            // Only green ring pixels: the editable field also paints a caret.
+            rings.push(
+                bare_pixels(&mut p, name)
+                    .into_iter()
+                    .map(|c| c.green() > c.red() && c.green() > c.blue())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        assert!(rings[1].iter().any(|&ink| ink));
+        if rings[0] != rings[1] {
+            failures.push(tag);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("; "));
+}

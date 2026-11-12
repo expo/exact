@@ -371,6 +371,23 @@ pub fn period(period_ms: f64) {
     with(|m| m.set_period(period_ms));
 }
 
+/// The host's display callback for the frames after: its raw timestamp, when
+/// it began to run and the display's fastest period, in milliseconds on the
+/// frame clock, and the thermal state's code ([`crate::ThermalState`]).
+pub fn host_frame(raw_ms: f64, callback_ms: f64, fastest_period_ms: f64, thermal: u32) {
+    let host = crate::HostTiming {
+        raw_ms,
+        callback_ms,
+        fastest_period_ms,
+    };
+    with(|m| m.set_host_timing(host, crate::ThermalState::from_code(thermal)));
+}
+
+/// Whether a canvas's next frame is due at `now_ms` under its cap ([`crate::Module::due`]).
+pub fn due(id: u32, now_ms: f64) -> bool {
+    with(|m| m.due(id, now_ms)).unwrap_or(true)
+}
+
 /// Whether a canvas has unrendered inputs.
 pub fn dirty(id: u32) -> bool {
     with(|m| m.dirty(id)).unwrap_or(false)
@@ -617,6 +634,18 @@ macro_rules! module {
         #[::wasm_bindgen::prelude::wasm_bindgen]
         pub fn gpu_period(period_ms: f64) {
             $crate::web::period(period_ms)
+        }
+
+        /// The page's frame callback, on the frame clock, and the thermal state's code (0 unknown).
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_host_frame(raw_ms: f64, callback_ms: f64, fastest_period_ms: f64, thermal: u32) {
+            $crate::web::host_frame(raw_ms, callback_ms, fastest_period_ms, thermal)
+        }
+
+        /// Whether a canvas's next frame is due at `now_ms` under its frame-rate cap.
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_due(id: u32, now_ms: f64) -> bool {
+            $crate::web::due(id, now_ms)
         }
 
         /// The page's GPU tier, told before `gpu_load` (`GpuTier::code`: 0

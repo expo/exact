@@ -1,6 +1,7 @@
 # A `switch` in an SVG image draws its first child even when that child's `systemLanguage` does not match
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** SVG images with no user languages skip systemLanguage-conditioned elements and select an unconditional switch fallback.
 **Systems:** host/svg-file/src/lower.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

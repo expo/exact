@@ -3,7 +3,7 @@
 // LAN clients can read plans, errors and generations (LLP 1023 D8); the agent
 // carrier and installer stay loopback-only. Games serve HTTP during the first build.
 import { buildingServer } from '../../game/dev.mjs';
-import { failedPhase, phased } from './dev-phase.mjs';
+import { acceptModuleReply, failedPhase, phased } from './dev-phase.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 let tuning = null;
 import { createHash, randomBytes } from 'node:crypto';
@@ -725,10 +725,6 @@ function startModuleCompiler() {
   child.stdout.on('data', chunk => {
     if (dev !== child) return;
     buffered += chunk;
-    if (buffered.length > 1024 * 1024) {
-      console.error('module producer response exceeds 1 MiB');
-      killCompiler(); process.exit(1);
-    }
     const lines = buffered.split('\n'); buffered = lines.pop();
     for (const line of lines) {
       let response = null;
@@ -736,11 +732,8 @@ function startModuleCompiler() {
       if (typeof response?.id === 'string' && scrubAsks.has(response.id)) { scrubAsks.get(response.id)(response); continue; }
       const request = active, produced = Date.now();
       try {
-        const reply = JSON.parse(line);
-        if (!request || reply.id !== request.id) throw new Error('unexpected module producer response');
-        // An edit arriving during compilation supersedes its entire candidate.
-        if (request.id !== moduleRun) continue;
-        if (!reply.ok) throw new Error(reply.error || 'module producer refused the candidate');
+        const reply = acceptModuleReply(line, request, moduleRun);
+        if (!reply) continue;
         early?.phase('typescript','ready'); contractReady(request.contract);
         const candidate = new Map(['app.plan', 'app.plan.map.json', ...Object.values(MODULE_FILES)].map(name => [name, readFileSync(resolve(request.output, name))]));
         for (const [name, body] of captureAssets(request.output)) candidate.set(name, body);

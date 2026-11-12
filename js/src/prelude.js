@@ -869,7 +869,10 @@
         unstore(at);
         if (ok) {
           storageCounts.done++;
-          if (/^(writeFile|atomicWriteFile|appendFile|mkdir|rm|rename|copyFile)$/.test(method) && [method === "copyFile" ? argv[1] : argv[0], method === "rename" ? argv[1] : null].some(function (path) {
+          var destination = method === "transformImage"
+            ? (typeof value === "string" ? value.split("\t")[3] : value.path) : argv[1];
+          if (/^(writeFile|atomicWriteFile|appendFile|mkdir|rm|rename|copyFile|compressImage|transformImage)$/.test(method)
+            && [/^(copyFile|compressImage|transformImage)$/.test(method) ? destination : argv[0], method === "rename" ? argv[1] : null].some(function (path) {
             if (typeof path !== "string" || !/^app:\//.test(path)) return false;
             path = new URL(path).href.replace(/\/$/, "");
             return String(global.exact.grants).split("\n").some(function (line) {

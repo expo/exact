@@ -229,10 +229,10 @@ impl BoxPaint {
         });
         Self {
             radii: [
-                s.border_radius_top_left,
-                s.border_radius_top_right,
-                s.border_radius_bottom_right,
-                s.border_radius_bottom_left,
+                s.border_radius_top_left.clone(),
+                s.border_radius_top_right.clone(),
+                s.border_radius_bottom_right.clone(),
+                s.border_radius_bottom_left.clone(),
             ]
             .map(|d| d.resolve(&env)),
             env: env.clone(),
@@ -279,8 +279,11 @@ impl BoxPaint {
         let pad = self.padding;
         BoxGeometry {
             inset: (pad[3] + widths[3], pad[0] + widths[0]),
-            outer: Shape::elliptical(rect, border::resolve_radii(self.radii, &self.env, w, h))
-                .with_corners(self.corners),
+            outer: Shape::elliptical(
+                rect,
+                border::resolve_radii(self.radii.clone(), &self.env, w, h),
+            )
+            .with_corners(self.corners),
             content: (
                 x + widths[3] + pad[3],
                 y + widths[0] + pad[0],
@@ -1168,7 +1171,7 @@ impl Painter {
                     control::select_label(walk.scene.kernel, node, walk.scene.chosen.get(&node.id));
                 let focused = walk.scene.focus == Some(node.id);
                 let label = label.as_deref().unwrap_or("");
-                self.field_control(node, content, focused, ts, label, true);
+                self.field_control(walk, node, content, &outer, focused, ts, label, true);
             }
             // @ref LLP 1069.001 D7 — a date control is a field showing its
             // value (`control::date_text`); `type` sets it.
@@ -1181,7 +1184,7 @@ impl Painter {
                 let chosen = walk.scene.chosen.get(&node.id);
                 let shown = control::date_text(node, chosen, self.dates.as_ref());
                 let focused = walk.scene.focus == Some(node.id);
-                self.field_control(node, content, focused, ts, &shown, false);
+                self.field_control(walk, node, content, &outer, focused, ts, &shown, false);
             }
             NodeType::Control if node.props.str(PropId::Type) == Some("range") => {
                 self.range_control(node, content, ts, walk.scene.chosen.get(&node.id))

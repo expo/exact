@@ -1,6 +1,7 @@
 # `rename-token` skips a `component` block's defaults and rewrites a kind word, then says the design does not check
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Token renames update component defaults and pair references, preserve kinds and folded values, locate unresolved defaults, and keep range checks in combined transactions.
 **Systems:** tamber/src/edit.rs (`Doc::apply`, `Op::RenameToken`), contract/cli/src/tamber_serve.rs
 **Severity:** P2
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

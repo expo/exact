@@ -26,6 +26,11 @@ final class SystemColorMacTests: XCTestCase {
         XCTAssertNotEqual(SystemColor.channels("systemRedColor", dark: false, fallback: [1, 2, 3, 255]), [1, 2, 3, 255])
     }
 
+    func testQuinaryLabelKeepsItsObjectiveCName() {
+        XCTAssertEqual(SystemColorNames.color("quinaryLabelColor"), NSColor.quinaryLabel)
+        XCTAssertNil(SystemColorNames.color("quinaryLabel"))
+    }
+
     /// Every class colour the role table names for this platform, and those
     /// the repo's apps and docs write in `-exact-platform-color()`, is on
     /// the documented list.

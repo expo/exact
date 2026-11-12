@@ -144,7 +144,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     fn said_reask(&mut self, i: usize, why: &str, after: f64, reasks: usize) {
-        let name = self.plan.str(self.plan.resources[i].name).to_string();
+        let name = self.plan.str(self.resource_row(i).name).to_string();
         let line = lines::overrun_reask(&name, why, after, reasks + 1, REASK_MS.len());
         self.log(line);
     }

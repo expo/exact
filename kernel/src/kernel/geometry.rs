@@ -400,10 +400,10 @@ impl Kernel {
         let node = self.node(id)?;
         let (env, s) = (self.arena.env(), node.style);
         let [t, r, b, l] = [
-            (s.margin_top, ROW),
-            (s.margin_right, COLUMN),
-            (s.margin_bottom, ROW),
-            (s.margin_left, COLUMN),
+            (s.margin_top.clone(), ROW),
+            (s.margin_right.clone(), COLUMN),
+            (s.margin_bottom.clone(), ROW),
+            (s.margin_left.clone(), COLUMN),
         ]
         .map(|(d, cell)| match d.spaced(env, cell) {
             d if d.has_percent() => 0.0,

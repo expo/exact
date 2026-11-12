@@ -29,6 +29,7 @@ pub use grid::{
 pub mod calc;
 mod floor;
 mod handles;
+mod intern;
 pub use calc::Comparison;
 use handles::calc_handle;
 pub(crate) use handles::{calc_handle_in, resolve_calc, tree_handle, LayoutEnv};
@@ -71,7 +72,7 @@ pub const MAX_GRID_TRACKS: usize = 10_000;
 /// viewport plus points — `env(safe-area-inset-<edge>)` and
 /// `calc(env(safe-area-inset-<edge>) + <n>px)`, resolved against the
 /// kernel's [`Env`] at layout.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum Dimension {
     /// Let the engine decide.
     #[default]
@@ -103,7 +104,7 @@ pub enum Dimension {
 
 impl Dimension {
     /// Whether the value is a finite number (or `Auto`).
-    pub fn is_finite(self) -> bool {
+    pub fn is_finite(&self) -> bool {
         match self {
             Dimension::Auto | Dimension::Compare(_) => true,
             Dimension::Points(v)
@@ -118,7 +119,7 @@ impl Dimension {
 
     /// Whether it resolves against a percentage basis: a percentage, alone
     /// or in a calculation.
-    pub fn has_percent(self) -> bool {
+    pub fn has_percent(&self) -> bool {
         match self {
             Dimension::Percent(_) | Dimension::Calc(..) => true,
             Dimension::Compare(c) => c.has_percent(),
@@ -148,9 +149,9 @@ impl Dimension {
     /// dimension unchanged. A segment length whose segment `env` does not
     /// define is `Auto` — the stand-in for the row's initial value, which
     /// [`StyleProps::to_taffy`] substitutes exactly before lowering.
-    pub fn resolve(self, env: &Env) -> Dimension {
-        match self {
-            Dimension::Env(..) | Dimension::Region(..) => env::resolve_inset(self, env),
+    pub fn resolve(&self, env: &Env) -> Dimension {
+        match self.clone() {
+            Dimension::Env(..) | Dimension::Region(..) => env::resolve_inset(self.clone(), env),
             Dimension::Viewport(unit, n) => Dimension::Points(calc::narrow(
                 f64::from(unit.basis(env)) * f64::from(n) / 100.0,
             )),
@@ -158,9 +159,9 @@ impl Dimension {
             Dimension::Compare(c) if c.undefined(env) => Dimension::Auto,
             Dimension::Compare(c) => match c.substituted(env) {
                 // A tree needs a basis only where it reads a percentage
-                Some(Dimension::Compare(t)) if t == c => {
-                    c.value(env, None).map_or(self, Dimension::Points)
-                }
+                Some(Dimension::Compare(t)) if t == c => c
+                    .value(env, None)
+                    .map_or(Dimension::Compare(c), Dimension::Points),
                 // A text substituted is the row's value it reads as
                 Some(d) => d.resolve(env),
                 None => Dimension::Auto,
@@ -173,7 +174,7 @@ impl Dimension {
     /// a fraction of, under `env`; zero for `auto` or an undefined segment.
     /// What a host that sizes a box itself (a radius, a native control's
     /// padding) reads.
-    pub fn at_basis(self, env: &Env, basis: f32) -> f32 {
+    pub fn at_basis(&self, env: &Env, basis: f32) -> f32 {
         let basis = f64::from(basis);
         match self.resolve(env) {
             Dimension::Points(v) => v,
@@ -186,15 +187,15 @@ impl Dimension {
 
     /// Whether this is a segment length `env` does not define (LLP 1078 D3),
     /// or a calculation that reads one or an undefined title-bar area.
-    fn undefined_segment(self, env: &Env) -> bool {
+    fn undefined_segment(&self, env: &Env) -> bool {
         match self {
-            Dimension::Segment(_, x, y, _) => env.segment(x, y).is_none(),
+            Dimension::Segment(_, x, y, _) => env.segment(*x, *y).is_none(),
             Dimension::Compare(c) => c.undefined(env),
             _ => false,
         }
     }
 
-    fn to_lpa(self, env: &Env) -> taffy::style::LengthPercentageAuto {
+    fn to_lpa(&self, env: &Env) -> taffy::style::LengthPercentageAuto {
         match self.resolve(env) {
             Dimension::Auto => auto(),
             Dimension::Points(v) => length(v),
@@ -209,7 +210,7 @@ impl Dimension {
 
     /// Whether a padding lowers to zero as the engine compares lengths, by
     /// bits: `auto`, or `+0` points or percent — never `-0`.
-    fn lp_is_zero(self, env: &Env) -> bool {
+    fn lp_is_zero(&self, env: &Env) -> bool {
         match self.resolve(env) {
             Dimension::Auto => true,
             Dimension::Points(v) => v.to_bits() == 0,
@@ -1185,7 +1186,10 @@ impl StyleProps {
         // A segment length the environment does not define is invalid at
         // computed-value time (CSS-ENV-1 §2.3): the row takes its initial
         // value, which is the table's default (LLP 1078 D3).
-        self.env_resolved(env).lower(node_type, env)
+        let lowering = handles::Lowering::new();
+        let mut style = self.env_resolved(env).lower(node_type, env);
+        lowering.finish(&mut style);
+        style
     }
 
     /// This style with every segment length `env` does not define replaced
@@ -1362,6 +1366,7 @@ impl StyleProps {
 /// The engine style for a live slot, its `env()` lengths resolved against
 /// the arena's environment.
 pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
+    let lowering = handles::Lowering::new();
     let mut s = arena
         .effective_style(slot)
         .to_taffy(arena.node_type(slot), arena.env());
@@ -1474,6 +1479,7 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     if arena.is_root(slot) && s.position == taffy::style::Position::Static {
         s.position = taffy::style::Position::Relative;
     }
+    lowering.finish(&mut s);
     s
 }
 

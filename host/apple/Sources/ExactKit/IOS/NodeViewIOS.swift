@@ -938,7 +938,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                     guard holder !== self, holder === child || holder.isDescendant(of: child) else { return nil }
                     let chain = sequence(first: holder, next: { $0 === child ? nil : $0.superview })
                     guard !chain.contains(where: { $0.isHidden || !$0.isUserInteractionEnabled }) else { return nil }
-                    return NodeView.hitChildren(in: holder, at: self.convert(point, to: holder), with: event)
+                    return NodeView.hitChildren(in: holder, at: self.convert(point, to: holder), with: event, visit: {
+                        ($0 as? NodeView)?.hitTest(self.convert(point, to: $0), with: event)
+                    })
                 }
                 return child.hitTest(self.convert(point, to: child), with: event)
             }) { return hit }

@@ -332,15 +332,15 @@ final class FieldCell: NSTextFieldCell {
     override func fieldEditor(for controlView: NSView) -> NSTextView? {
         // Through its delegate, the node, wherever the field is: a prompt's
         // alert holds it in its accessory view (AlertsMac.swift).
-        let node = (controlView as? NSTextField)?.delegate as? NodeView ?? controlView.superview as? NodeView
+        let node = (controlView as? NSTextField)?.delegate as? NodeView
         return node?.presenter?.fieldEditor ?? super.fieldEditor(for: controlView)
     }
     override func drawingRect(forBounds rect: NSRect) -> NSRect {
-        let node = controlView?.superview as? NodeView, appKit = super.drawingRect(forBounds: rect)
+        let node = fieldNode, appKit = super.drawingRect(forBounds: rect)
         return node?.nativeEditorRect(in: rect) ?? node?.authoredEditorRect(appKit, in: rect) ?? appKit
     }
     override func titleRect(forBounds rect: NSRect) -> NSRect {
-        let node = controlView?.superview as? NodeView, appKit = super.titleRect(forBounds: rect)
+        let node = fieldNode, appKit = super.titleRect(forBounds: rect)
         return node?.nativeEditorRect(in: rect) ?? node?.authoredEditorRect(appKit, in: rect) ?? appKit
     }
     override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
@@ -351,13 +351,13 @@ final class FieldCell: NSTextFieldCell {
     /// editor gets its line's rect, so the text and the placeholder stand
     /// where the cell draws them while it is edited too.
     override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, start selStart: Int, length selLength: Int) {
-        super.select(withFrame: (controlView.superview as? NodeView)?.authoredEditorRect(rect, in: rect) ?? rect, in: controlView, editor: textObj, delegate: delegate, start: selStart, length: selLength)
+        super.select(withFrame: fieldNode?.authoredEditorRect(rect, in: rect) ?? rect, in: controlView, editor: textObj, delegate: delegate, start: selStart, length: selLength)
     }
     override func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, event: NSEvent?) {
-        super.edit(withFrame: (controlView.superview as? NodeView)?.authoredEditorRect(rect, in: rect) ?? rect, in: controlView, editor: textObj, delegate: delegate, event: event)
+        super.edit(withFrame: fieldNode?.authoredEditorRect(rect, in: rect) ?? rect, in: controlView, editor: textObj, delegate: delegate, event: event)
     }
     override func accessibilityAttributeNames() -> [NSAccessibility.Attribute] {
-        super.accessibilityAttributeNames() + NodeView.ariaAttributes.filter { (controlView?.superview as? NodeView)?.ariaAttribute($0) != nil }.map { .init(rawValue: $0) }
+        super.accessibilityAttributeNames() + NodeView.ariaAttributes.filter { fieldNode?.ariaAttribute($0) != nil }.map { .init(rawValue: $0) }
             + (numberField != nil ? [.minValue, .maxValue] : [])
             + ((controlView as? NSTextField)?.comboOwner != nil ? [.expanded] : [])
     }
@@ -371,7 +371,7 @@ final class FieldCell: NSTextFieldCell {
             default: break
             }
         }
-        return (controlView?.superview as? NodeView)?.ariaAttribute(attribute.rawValue) ?? super.accessibilityAttributeValue(attribute)
+        return fieldNode?.ariaAttribute(attribute.rawValue) ?? super.accessibilityAttributeValue(attribute)
     }
     override func accessibilityActionNames() -> [NSAccessibility.Action] {
         super.accessibilityActionNames() + (numberField != nil ? [.increment, .decrement] : [])
@@ -387,11 +387,11 @@ final class FieldCell: NSTextFieldCell {
 /// A password field's, as `FieldCell`.
 final class SecureFieldCell: NSSecureTextFieldCell {
     override func drawingRect(forBounds rect: NSRect) -> NSRect {
-        let node = controlView?.superview as? NodeView, appKit = super.drawingRect(forBounds: rect)
+        let node = fieldNode, appKit = super.drawingRect(forBounds: rect)
         return node?.nativeEditorRect(in: rect) ?? node?.authoredEditorRect(appKit, in: rect) ?? appKit
     }
     override func titleRect(forBounds rect: NSRect) -> NSRect {
-        let node = controlView?.superview as? NodeView, appKit = super.titleRect(forBounds: rect)
+        let node = fieldNode, appKit = super.titleRect(forBounds: rect)
         return node?.nativeEditorRect(in: rect) ?? node?.authoredEditorRect(appKit, in: rect) ?? appKit
     }
     override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
@@ -399,16 +399,16 @@ final class SecureFieldCell: NSSecureTextFieldCell {
     }
     /// As `FieldCell`'s.
     override func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, start selStart: Int, length selLength: Int) {
-        super.select(withFrame: (controlView.superview as? NodeView)?.authoredEditorRect(rect, in: rect) ?? rect, in: controlView, editor: textObj, delegate: delegate, start: selStart, length: selLength)
+        super.select(withFrame: fieldNode?.authoredEditorRect(rect, in: rect) ?? rect, in: controlView, editor: textObj, delegate: delegate, start: selStart, length: selLength)
     }
     override func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, event: NSEvent?) {
-        super.edit(withFrame: (controlView.superview as? NodeView)?.authoredEditorRect(rect, in: rect) ?? rect, in: controlView, editor: textObj, delegate: delegate, event: event)
+        super.edit(withFrame: fieldNode?.authoredEditorRect(rect, in: rect) ?? rect, in: controlView, editor: textObj, delegate: delegate, event: event)
     }
     override func accessibilityAttributeNames() -> [NSAccessibility.Attribute] {
-        super.accessibilityAttributeNames() + NodeView.ariaAttributes.filter { (controlView?.superview as? NodeView)?.ariaAttribute($0) != nil }.map { .init(rawValue: $0) }
+        super.accessibilityAttributeNames() + NodeView.ariaAttributes.filter { fieldNode?.ariaAttribute($0) != nil }.map { .init(rawValue: $0) }
     }
     override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
-        (controlView?.superview as? NodeView)?.ariaAttribute(attribute.rawValue) ?? super.accessibilityAttributeValue(attribute)
+        fieldNode?.ariaAttribute(attribute.rawValue) ?? super.accessibilityAttributeValue(attribute)
     }
 }
 

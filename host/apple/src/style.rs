@@ -169,7 +169,7 @@ pub(crate) fn style_json_rows(
             // Sent as laid out: clamped at zero on a row with no negative
             // values.
             RowValue::Dimension(d) => {
-                let d = match env.map_or(d, |e| d.resolve(e)) {
+                let d = match env.map_or(d.clone(), |e| d.resolve(e)) {
                     Dimension::Points(v) | Dimension::Percent(v)
                         if v < 0.0 && exact_kernel::style::calc::nonnegative_row(id) =>
                     {
@@ -183,9 +183,9 @@ pub(crate) fn style_json_rows(
             // @ref LLP 1061 D6 — `[x, y]`, each points or `{"pct": n}`.
             RowValue::TransformOrigin(o) => {
                 out.push('[');
-                push_dimension(&mut out, o.x);
+                push_dimension(&mut out, o.x.clone());
                 out.push(',');
-                push_dimension(&mut out, o.y);
+                push_dimension(&mut out, o.y.clone());
                 out.push(']');
                 true
             }
@@ -493,7 +493,7 @@ pub(crate) fn style_json_rows(
     (out, skipped)
 }
 
-/// A length row: a calculation tree with its handle and environment, which
+/// A length row: calculation text with its environment, which
 /// Swift resolves against its basis by the kernel's evaluator
 /// (`exact_calc_resolve`, LLP 1116 D5); anything else as [`push_dimension`]
 /// writes it.

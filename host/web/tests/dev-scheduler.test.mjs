@@ -10,6 +10,7 @@ import {runInNewContext} from 'node:vm';
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:http';
 import {watchStaticTrees} from '../serve.mjs';
+import {acceptModuleReply} from '../dev-phase.mjs';
 import {cdpBrowser, chromium} from '../../../scripts/agent-launch.mjs';
 import {need} from '../../../scripts/coverage.mjs';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +19,49 @@ const {unavailable}=chromium();
 // times back, so a later test's build-freshness check is not tripped.
 const keepTimes = paths => { const kept = paths.map(p => [p, statSync(p)]); return () => { for (const [p, st] of kept) utimesSync(p, st.atime, st.mtime); }; };
 const source = readFileSync(process.env.E2B_DEV_SOURCE || new URL('../dev.mjs', import.meta.url), 'utf8');
+
+test('large module warning replies keep the producer alive and discard superseded diagnostics', () => {
+  const begin = source.indexOf("  child.stdout.on('data', chunk => {", source.indexOf('function startModuleCompiler()'));
+  const end = source.indexOf("\n  child.on('error'", begin);
+  let receive, retries = 0, killed = 0;
+  const said = [], published = [];
+  const child = { stdout: { on(event, callback) { assert.equal(event, 'data'); receive = callback; } } };
+  const request = id => ({ id, saved: Date.now(), started: Date.now(), stage: `stage-${id}`, output: `generation-${id}`, design: '', contract: '' });
+  const context = {
+    child, dev: child, buffered: '', active: request(1), moduleRun: 2, scrubAsks: new Map(),
+    console: { error: line => said.push(line), log() {} },
+    killCompiler: () => { killed++; }, process: { exit: code => { throw new Error(`dev loop exited ${code}`); } },
+    acceptModuleReply: (line, active, run) => acceptModuleReply(line, active, run, warning => said.push(warning)),
+    early: null, contractReady() {}, readFileSync: path => Buffer.from(path), resolve,
+    MODULE_FILES: { native: 'app.hbc', web: 'app.js' }, captureAssets: () => new Map(),
+    currentModule: null, assetCards: () => [], isEntryFile: () => false,
+    moduleDesign: null, moduleScrubbed: null, moduleReleased: false,
+    designBytes: () => '', designSource: null, designSnapshot: null, tamber: null,
+    app: { id: 'test.warnings' }, moduleCards() {}, seq: 0, captureGeneration() {}, pending: new Map(), sayReady() {},
+    announcement: () => ({ seq: context.seq }), push: message => published.push(message),
+    watchPackages() {}, rmSync() {}, moduleStage: null, produce: () => { retries++; },
+  };
+  runInNewContext(source.slice(begin, end), context);
+  const warnings = Array.from({ length: 3000 }, (_, i) => `app.ts:${i + 1}:1 warning: ${'detail '.repeat(60)}`);
+  const reply = id => JSON.stringify({ id, ok: true, receipt: {}, design: {}, warnings }) + '\n';
+  const stale = reply(1);
+  assert.ok(Buffer.byteLength(stale) > 1024 * 1024);
+  for (let offset = 0; offset < stale.length; offset += 65536) receive(Buffer.from(stale.slice(offset, offset + 65536)));
+  assert.deepEqual(said, []);
+  assert.deepEqual(published, []);
+  assert.equal(retries, 1, 'a superseded reply requests the latest candidate');
+  context.active = request(2);
+  receive(Buffer.from(reply(2)));
+  assert.deepEqual(said, warnings);
+  assert.deepEqual(published, [{ seq: 1 }]);
+  context.active = request(3); context.moduleRun = 3;
+  receive(Buffer.from(JSON.stringify({ id: 3, ok: true, receipt: {}, design: {}, warnings: [] }) + '\n'));
+  assert.deepEqual(said, warnings, 'a clean edit adds no diagnostics');
+  assert.deepEqual(published, [{ seq: 1 }, { seq: 2 }]);
+  assert.equal(context.buffered, '');
+  assert.equal(context.active, null);
+  assert.equal(killed, 0);
+});
 
 test('the JS dev loop carries state by built logic revision and refreshes host facts', async () => {
   // RealWorld has routes and text fields but no GPU surface. Keep this proof

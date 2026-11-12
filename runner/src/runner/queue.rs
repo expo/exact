@@ -202,7 +202,7 @@ impl<D: DataSource> Runner<D> {
             && basis
                 .resources
                 .iter()
-                .zip(&self.resource_values)
+                .zip(crate::vm::Column::rows(&self.resources, |row| &row.value))
                 .all(|(a, b)| held(a, b)))
     }
 
@@ -225,7 +225,7 @@ impl<D: DataSource> Runner<D> {
         self.queues.next_due[m] = f64::INFINITY;
         let name = self.plan.str(self.plan.mutations[m].name).to_string();
         let was_poisoned = self.poisoned;
-        let checkpoint = self.checkpoint(false);
+        let checkpoint = self.checkpoint();
         let (origin, id) = self.queues.waiting[m]
             .front()
             .map_or((CallOrigin::App, 0), |w| (w.origin, w.id));
@@ -245,8 +245,8 @@ impl<D: DataSource> Runner<D> {
                 self.log_outcome(&format!("{name} next"), &result, was_poisoned);
             } else if let Some(NextRefusal::Ask) = refusal {
                 let was = self.pending_mut[m];
-                self.queues.waiting[m].pop_front();
-                let shown = self.end_write(Target::Mutation(m), None);
+                let head = self.queues.waiting[m].pop_front().expect("restored head");
+                let shown = self.end_waiting(m, head);
                 self.sync_pending_flags();
                 self.log(format!("{name} queued send refused: {e:?}"));
                 // Nothing waits behind it and nothing is in flight: the
@@ -259,7 +259,7 @@ impl<D: DataSource> Runner<D> {
                 self.queues.stalled[m] = Some(Rc::new(Basis {
                     slots: self.slots.clone(),
                     derives: self.derives.clone(),
-                    resources: self.resource_values.clone(),
+                    resources: crate::vm::Column::rows(&self.resources, |row| &row.value).to_vec(),
                 }));
                 self.log(format!("{name} next refused ({e:?}); waits for a change"));
             }
@@ -284,7 +284,7 @@ impl<D: DataSource> Runner<D> {
         self.log(format!("{name} next ({waiting} waiting)"));
         // Inside next's checkpoint: a refused settlement restores the old failure.
         self.failed_mut[m] = None;
-        let later = match self.ask_send(Target::Mutation(m), &head.source, &head.args) {
+        let later = match self.ask_send(Target::Mutation(m), &head.source, &head.args, head.write) {
             Ok(Asked::Now(slot, value)) => {
                 self.slots[slot] = value;
                 self.landed.push(m);
@@ -327,6 +327,11 @@ impl<D: DataSource> Runner<D> {
         self.update().map_err(other)
     }
 
+    fn end_waiting(&mut self, m: usize, send: Waiting) -> bool {
+        send.write
+            .is_some_and(|id| self.end_write(Target::Mutation(m), Some(id)))
+    }
+
     /// Whether a send of invocation `id` waits its turn.
     pub(super) fn queued_of(&self, id: u64) -> bool {
         id != 0 && (self.queues.waiting.iter()).any(|w| w.iter().any(|s| s.id == id))
@@ -344,17 +349,17 @@ impl<D: DataSource> Runner<D> {
                 self.queues.stalled[m] = None;
                 self.queues.next_due[m] = f64::INFINITY;
             }
-            let writes: Vec<u64> = self.queues.waiting[m]
-                .iter()
-                .filter(|s| s.id == id)
-                .filter_map(|s| s.write)
-                .collect();
-            let before = self.queues.waiting[m].len();
-            self.queues.waiting[m].retain(|s| s.id != id);
-            for write in writes {
-                self.end_write(Target::Mutation(m), Some(write));
+            let mut kept = VecDeque::new();
+            let mut n = 0;
+            while let Some(send) = self.queues.waiting[m].pop_front() {
+                if send.id == id {
+                    self.end_waiting(m, send);
+                    n += 1;
+                } else {
+                    kept.push_back(send);
+                }
             }
-            let n = before - self.queues.waiting[m].len();
+            self.queues.waiting[m] = kept;
             if n > 0 {
                 dropped = true;
                 let name = self.plan.str(self.plan.mutations[m].name).to_string();
@@ -370,7 +375,11 @@ impl<D: DataSource> Runner<D> {
     /// journal line per mutation.
     pub(super) fn forget_waiting(&mut self) {
         for m in 0..self.queues.waiting.len() {
-            let n = std::mem::take(&mut self.queues.waiting[m]).len();
+            let waiting = std::mem::take(&mut self.queues.waiting[m]);
+            let n = waiting.len();
+            for send in waiting {
+                self.end_waiting(m, send);
+            }
             self.queues.next_due[m] = f64::INFINITY;
             self.queues.stalled[m] = None;
             if n > 0 {
@@ -417,12 +426,14 @@ impl<D: DataSource> Runner<D> {
         target: Target,
         source: &str,
         args: &[Value],
+        write: Option<u64>,
     ) -> Result<Asked, RunnerError> {
         let m = target
             .mutation()
             .expect("a send's target names its mutation");
         let ty = self.plan.mutations[m].ty;
         let name = |plan: &Plan| plan.str(plan.mutations[m].name).to_string();
+        self.check_send_arguments(m, args)?;
         self.snapshot_sockets();
         self.store.set_clock_ms(self.now_ms);
         self.mutation_requests += 1;
@@ -432,7 +443,7 @@ impl<D: DataSource> Runner<D> {
             // A native module's send (LLP 1133.002 D13): the runner's substitute.
             self.module_send(target, source, args)
         } else {
-            let answer = self.data.answer_for(target, &mut self.store, source, args);
+            let answer = self.answer_mutation(target, source, args);
             let answer = self.single_answer(target, answer);
             self.refuse_locked(answer)
         };
@@ -456,7 +467,7 @@ impl<D: DataSource> Runner<D> {
                 });
             }
             self.alert(super::lines::send_failed_now(&name(&self.plan), why));
-            self.end_write(target, None);
+            self.end_write(target, write);
             return Ok(Asked::Failed);
         }
         let answer = answer.map_err(|error| RunnerError::Data {
@@ -470,18 +481,18 @@ impl<D: DataSource> Runner<D> {
                 }
                 if let Err(why) = self.stage_sockets(m, staged) {
                     self.alert(super::lines::send_failed_now(&name(&self.plan), &why));
-                    self.end_write(target, None);
+                    self.end_write(target, write);
                     return Ok(Asked::Failed);
                 }
                 let slot = self.mutation_slot(m)?;
                 self.conclude_send(target);
-                self.land_write(target, None, &v);
+                self.land_write(target, write, &v);
                 Ok(Asked::Now(slot, Value::some(v)))
             }
             Answer::Later(_) if !staged.is_empty() => {
                 let why = "a socket mutation must answer synchronously";
                 self.alert(super::lines::send_failed_now(&name(&self.plan), why));
-                self.end_write(target, None);
+                self.end_write(target, write);
                 Ok(Asked::Failed)
             }
             Answer::Later(request) => Ok(Asked::Later(request)),

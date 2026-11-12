@@ -687,7 +687,7 @@ impl PlanBuilder {
     pub fn module(
         &mut self,
         source: SourcesId,
-        extension: &str,
+        interface: (&str, &str),
         declared: &str,
         send: bool,
         live: bool,
@@ -697,7 +697,8 @@ impl PlanBuilder {
     ) {
         let row = ModulesRow {
             source,
-            extension: self.str(extension),
+            extension: self.str(interface.0),
+            package: self.str(interface.1),
             declared: self.str(declared),
             send,
             live,
@@ -712,7 +713,7 @@ impl PlanBuilder {
     /// runs with its arguments.
     pub fn module_event(
         &mut self,
-        extension: &str,
+        interface: (&str, &str),
         declared: &str,
         action: ActionsId,
         raised: &str,
@@ -720,7 +721,8 @@ impl PlanBuilder {
         budget: u32,
     ) {
         let row = ModuleEventsRow {
-            extension: self.str(extension),
+            extension: self.str(interface.0),
+            package: self.str(interface.1),
             declared: self.str(declared),
             action,
             raised: self.str(raised),

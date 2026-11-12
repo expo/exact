@@ -1,7 +1,7 @@
 # The native bake finds `overlay`, `tools`, `draw` and `surfaces` by matching `app.ts`'s text, so it drops ones the web runs and fails on a commented-out one
 
-**Status:** Open
-**Progress:** `overlay` and `tools` are read from the module's namespace in both generated entries (the native bake's `OPTIONAL_ENTRY` in `js/bake/src/lib.rs`, the web build's type-check entry), so every export form reaches the host and a commented-out one builds. What is left: `draw` and `surfaces` are still matched by text. Whether a module draws must be known at build time (it picks ABI 2, bundles the recorder and adds the canvas types), so reading it at load would bundle the recorder into every app; the fix needs the module's real exports before the entry is written, from a parse that follows re-exports or from the type checker.
+**Status:** Closed
+**Resolution:** Native and web builds resolve drawing exports through the module namespace, ignore comments, and generate the same canvas declarations.
 **Systems:** js/bake/src/lib.rs (`exports`, `bake_in`), host/web-js/build.mjs
 **Severity:** P2
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

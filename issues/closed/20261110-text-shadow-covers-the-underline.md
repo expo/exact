@@ -1,6 +1,7 @@
 # A text shadow is painted over the text's underline, and the underline casts none
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Decorations cast their declaring box's shadow in sibling order, below that box's text and decorations.
 **Systems:** host/linux/src/paint/fragments.rs, host/linux/src/paint/text_shadow.rs, host/linux/src/paint/text_decoration.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

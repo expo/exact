@@ -3,6 +3,18 @@ import Foundation
 import CoreText
 
 extension TextEngine {
+    package static func selectionSegments(_ line: CTLine, range: NSRange) -> [TextSelectionSpan] {
+        TextSelectionRun.segments(range, runs: TextSelectionRun.capture(line)) {
+            CTLineGetOffsetForStringIndex(line, $0, nil)
+        }
+    }
+
+    package static func selectionSpans(_ line: CTLine, range: NSRange) -> [ClosedRange<CGFloat>] {
+        TextSelectionRun.spans(range, runs: TextSelectionRun.capture(line)) {
+            CTLineGetOffsetForStringIndex(line, $0, nil)
+        }
+    }
+
     /// A broken line as CSS finishes it, for every Apple path that makes one
     /// from a range (layout, rasters, regions). A line that ends at a soft
     /// hyphen (U+00AD) shows a hyphen there, as the browser does; CoreText
@@ -68,6 +80,102 @@ extension TextEngine {
             $0.properties.generalCategory == .spaceSeparator || $0.properties.isIdeographic
         }) else { return line }
         return CTLineCreateJustifiedLine(line, 1.0, width) ?? line
+    }
+}
+
+package struct TextSelectionSpan {
+    package let extent: ClosedRange<CGFloat>
+    package let rtl: Bool
+    package let containsStart: Bool
+    package let containsEnd: Bool
+}
+
+/// A bidi boundary has two carets. A selection takes the edge of the run it
+/// reaches; interior carets retain CoreText's placement within ligatures.
+/// Only numeric geometry crosses from a reader worker to its snapshot.
+package struct TextSelectionRun: Sendable {
+    private let range: NSRange
+    private let start: CGFloat
+    private let end: CGFloat
+    private let rtl: Bool
+    /// The string indices of the run's first and last glyphs, and the extent
+    /// of the glyphs at the last. A run's string range can hold characters
+    /// with no glyph before or after them (a U+200F that ends a word), and
+    /// CoreText places their carets elsewhere on the line.
+    private let glyphs: ClosedRange<Int>
+    private let last: ClosedRange<CGFloat>
+
+    package static func capture(_ line: CTLine) -> [Self] {
+        (CTLineGetGlyphRuns(line) as! [CTRun]).compactMap { run in
+            let count = CTRunGetGlyphCount(run)
+            guard count > 0 else { return nil }
+            let range = CTRunGetStringRange(run)
+            var indices = [CFIndex](repeating: 0, count: count)
+            var positions = [CGPoint](repeating: .zero, count: count)
+            var advances = [CGSize](repeating: .zero, count: count)
+            CTRunGetStringIndices(run, CFRange(), &indices)
+            CTRunGetPositions(run, CFRange(), &positions)
+            CTRunGetAdvances(run, CFRange(), &advances)
+            let first = indices.min()!, final = indices.max()!
+            var left = CGFloat.infinity, right = -CGFloat.infinity
+            var lastLeft = CGFloat.infinity, lastRight = -CGFloat.infinity
+            // Cursive attachment and combining marks can advance backwards.
+            for i in 0..<count {
+                let a = positions[i].x, b = a + advances[i].width
+                left = min(left, a, b); right = max(right, a, b)
+                if indices[i] == final { lastLeft = min(lastLeft, a, b); lastRight = max(lastRight, a, b) }
+            }
+            let rtl = CTRunGetStatus(run).contains(.rightToLeft)
+            return Self(range: NSRange(location: range.location, length: range.length),
+                        start: rtl ? right : left, end: rtl ? left : right, rtl: rtl,
+                        glyphs: first...final, last: lastLeft...lastRight)
+        }
+    }
+
+    /// One piece for each run the selection reaches. A piece of characters
+    /// with no glyph paints nothing and is dropped unless every piece is one;
+    /// a selection endpoint in it moves to the nearest piece that paints.
+    package static func segments(_ selection: NSRange, runs: [Self], offset: (Int) -> CGFloat) -> [TextSelectionSpan] {
+        var pieces: [(lo: Int, hi: Int, extent: ClosedRange<CGFloat>, rtl: Bool)] = []
+        for run in runs {
+            let lo = max(selection.location, run.range.location)
+            let hi = min(NSMaxRange(selection), NSMaxRange(run.range))
+            guard hi > lo else { continue }
+            let a = run.offset(at: lo, caret: offset)
+            let b = run.offset(at: hi, caret: offset)
+            pieces.append((lo, hi, min(a, b)...max(a, b), run.rtl))
+        }
+        let painted = pieces.filter { $0.extent.upperBound > $0.extent.lowerBound }
+        let kept = painted.isEmpty ? pieces : painted
+        let starts = pieces.contains { $0.lo == selection.location }, first = kept.map(\.lo).min()
+        let ends = pieces.contains { $0.hi == NSMaxRange(selection) }, last = kept.map(\.hi).max()
+        return kept.map {
+            TextSelectionSpan(extent: $0.extent, rtl: $0.rtl, containsStart: starts && $0.lo == first, containsEnd: ends && $0.hi == last)
+        }.sorted { $0.extent.lowerBound < $1.extent.lowerBound }
+    }
+
+    private func offset(at index: Int, caret: (Int) -> CGFloat) -> CGFloat {
+        if index <= glyphs.lowerBound { return start }
+        if index == NSMaxRange(range) { return end }
+        let x = caret(index)
+        // Past the last glyph's first character only a ligature's own caret
+        // falls inside that glyph; anything else has only glyphless
+        // characters after it in the run.
+        if index > glyphs.upperBound, !(x > last.lowerBound && x < last.upperBound) { return end }
+        // An invisible directional control can belong to this run's string
+        // range while CoreText places its caret across a neighbouring run.
+        return min(max(x, min(start, end)), max(start, end))
+    }
+
+    package static func spans(_ selection: NSRange, runs: [Self], offset: (Int) -> CGFloat) -> [ClosedRange<CGFloat>] {
+        var merged: [ClosedRange<CGFloat>] = []
+        for segment in segments(selection, runs: runs, offset: offset) {
+            let piece = segment.extent
+            if let last = merged.last, piece.lowerBound <= last.upperBound {
+                merged[merged.count - 1] = last.lowerBound...max(last.upperBound, piece.upperBound)
+            } else { merged.append(piece) }
+        }
+        return merged
     }
 }
 
@@ -215,6 +323,27 @@ extension Paragraph {
     /// `selectionRects`, each with the line it is on: what paints a
     /// selection's glyphs as well as its fill.
     package func selectedLines(_ range: NSRange, align: Int, in bounds: CGRect, dirty: CGRect) -> [(line: Int, rect: CGRect)] {
+        selectionBands(range, align: align, in: bounds, dirty: dirty).flatMap { band in
+            TextEngine.selectionSpans(lines[band.line], range: range).map { span in
+                (band.line, CGRect(x: band.rect.minX + span.lowerBound, y: band.rect.minY,
+                                   width: max(1, span.upperBound - span.lowerBound), height: band.rect.height))
+            }
+        }
+    }
+
+    /// UIKit needs each run's direction and logical endpoints, even where
+    /// adjacent highlights merge into one painted rectangle.
+    package func selectionSegments(_ range: NSRange, align: Int, in bounds: CGRect, dirty: CGRect)
+        -> [(line: Int, rect: CGRect, span: TextSelectionSpan)] {
+        selectionBands(range, align: align, in: bounds, dirty: dirty).flatMap { band in
+            TextEngine.selectionSegments(lines[band.line], range: range).map { span in
+                (band.line, CGRect(x: band.rect.minX + span.extent.lowerBound, y: band.rect.minY,
+                                   width: max(1, span.extent.upperBound - span.extent.lowerBound), height: band.rect.height), span)
+            }
+        }
+    }
+
+    private func selectionBands(_ range: NSRange, align: Int, in bounds: CGRect, dirty: CGRect) -> [(line: Int, rect: CGRect)] {
         guard range.location >= 0, range.length > 0 else { return [] }
         var rects: [(line: Int, rect: CGRect)] = []
         for i in lines.indices {
@@ -226,8 +355,7 @@ extension Paragraph {
             let y = bounds.minY + (baselines[i] * lineScale).rounded() / lineScale
             guard y + below >= dirty.minY, y - above <= dirty.maxY else { continue }
             let x = bounds.minX + origin(i, align: align, width: bounds.width)
-            let x0 = CTLineGetOffsetForStringIndex(line, lo, nil), x1 = CTLineGetOffsetForStringIndex(line, hi, nil)
-            rects.append((i, CGRect(x: x + min(x0, x1), y: y - above, width: max(1, abs(x1 - x0)), height: above + below)))
+            rects.append((i, CGRect(x: x, y: y - above, width: 0, height: above + below)))
         }
         return rects
     }

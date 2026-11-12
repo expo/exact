@@ -1,6 +1,7 @@
 # `state.failed`, `state.failures` and `state.resourceStatus` repeat a resource over a list as a key for each of its elements
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** State names each declared resource once and keeps a list's failure count across member reuse.
 **Systems:** runner/src/runner.rs, runner/src/runner/perf.rs, runner/src/runner/resource_inspection.rs, runner/src/runner/each.rs, runner/src/agent.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

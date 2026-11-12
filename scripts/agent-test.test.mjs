@@ -675,6 +675,8 @@ test('expect perf reads a resource\'s asks and a component\'s or a view\'s work'
   expect(at('built', 'Ghost', '==', 0)).toContain('names no component');
   expect(perfExpectation(null, { subject: 'query', target: 'a', compare: '==', value: 0 })).toContain('no `perf` block');
   expect(perfExpectation({ ...measured, whole: { sites: [] } }, { subject: 'query', target: 'a', compare: '==', value: 0 })).toContain('counts no resource asks');
+  measured.whole.resources = [1, 5].map((asked, i) => ({ name: 'channelList', member: `channelList[${i + 1}]`, asked }));
+  expect(at('query', 'channelList', '==', 6)).toBeNull();
 });
 
 test('a test scoped on macos runs under the mac alias and the sample host too', () => {

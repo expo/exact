@@ -49,7 +49,7 @@ pub fn lower(events: Vec<Event>) -> Result<Document, Error> {
                     ));
                 }
                 let natural = Natural::read(attrs);
-                let id = l.element(&events, &mut i, None, 0, 400)?;
+                let (id, _) = l.element(&events, &mut i, None, 0, 400)?;
                 root = Some((id, natural));
             }
             Event::End { line, .. } => return Err(Error::at(*line, "an end tag at the root")),
@@ -209,7 +209,7 @@ impl Lowerer {
     }
 
     /// Lower the element whose start event is at `*i`, leaving `*i` past
-    /// its end; its node id.
+    /// its end; its node id and whether its conditions pass.
     fn element(
         &mut self,
         events: &[Event],
@@ -217,7 +217,7 @@ impl Lowerer {
         parent: Option<&str>,
         depth: usize,
         inherited_weight: u16,
-    ) -> Result<u32, Error> {
+    ) -> Result<(u32, bool), Error> {
         let Event::Start {
             name,
             attrs,
@@ -249,12 +249,49 @@ impl Lowerer {
                     self.warnings.push(format!("line {line}: `<{name}>` {why}"));
                 }
                 Self::skip(events, i);
-                return Ok(0);
+                return Ok((0, false));
             }
         };
+        // No user languages reach this loader, so `systemLanguage` cannot match.
+        let conditional = matches!(
+            node_type,
+            NodeType::Svg
+                | NodeType::SvgViewport
+                | NodeType::SvgGroup
+                | NodeType::SvgPath
+                | NodeType::SvgPolyline
+                | NodeType::SvgPolygon
+                | NodeType::SvgCircle
+                | NodeType::SvgEllipse
+                | NodeType::SvgLine
+                | NodeType::SvgRect
+                | NodeType::SvgText
+                | NodeType::SvgTSpan
+                | NodeType::SvgDefs
+                | NodeType::SvgUse
+                | NodeType::SvgMask
+                | NodeType::SvgPattern
+                | NodeType::SvgSymbol
+        );
+        let excluded = conditional
+            && attrs
+                .iter()
+                .any(|(name, _)| matches!(name.as_str(), "requiredExtensions" | "systemLanguage"));
         let id = self.next;
         self.next += 1;
+        // Keep excluded subtrees as definitions so their descendants remain
+        // reference targets without inheriting the ancestor's condition.
+        let node_type = if excluded && parent.is_some() {
+            NodeType::SvgDefs
+        } else {
+            node_type
+        };
         self.ops.push(Op::CreateView { id, node_type });
+        if excluded && parent.is_none() {
+            // Nothing in this image can draw, but its natural size still applies.
+            Self::skip(events, i);
+            return Ok((id, false));
+        }
         if tag == "text" || tag == "tspan" {
             self.text = true;
         }
@@ -289,12 +326,10 @@ impl Lowerer {
                     }
                     Event::Start { attrs, .. } => {
                         // `switch`: the first child whose conditions pass
-                        // draws; the rest are not read (SVG 2 §5.8).
+                        // draws (SVG 2 §5.6). Feature requirements cannot be
+                        // evaluated here, so they select the fallback.
                         if switched
-                            && (taken
-                                || attrs.iter().any(|(k, _)| {
-                                    k == "requiredExtensions" || k == "requiredFeatures"
-                                }))
+                            && (taken || attrs.iter().any(|(name, _)| name == "requiredFeatures"))
                         {
                             Self::skip(events, i);
                             continue;
@@ -302,10 +337,11 @@ impl Lowerer {
                         if !text.is_empty() {
                             children.push(self.text_child(std::mem::take(&mut text), *line)?);
                         }
-                        let child = self.element(events, i, Some(&tag), depth + 1, weight)?;
+                        let (child, passes) =
+                            self.element(events, i, Some(&tag), depth + 1, weight)?;
                         if child != 0 {
                             children.push(child);
-                            taken = true;
+                            taken |= passes;
                         }
                     }
                 }
@@ -325,7 +361,7 @@ impl Lowerer {
         if !children.is_empty() {
             self.ops.push(Op::SetChildren { id, children });
         }
-        Ok(id)
+        Ok((id, !excluded))
     }
 
     fn text_child(&mut self, text: String, line: usize) -> Result<u32, Error> {

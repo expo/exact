@@ -324,11 +324,10 @@ extension Agent {
     }
 
     /// `tap <scroller> drag <dx> <dy>` without real touches (LLP 1116.003; r5
-    /// weather, mood journal): what a finger's drag on a scroller ends with,
-    /// its content moved with the finger — up 300 points for a drag of
-    /// -300 — as far as its range allows, lifted with no fling, and its bars
-    /// as the finger leaves them (`rest`); pulled far enough past the top, its
-    /// pull to refresh started (`refreshed`). Only on a
+    /// weather, mood journal): the content follows the finger over `ms`
+    /// milliseconds — up 300 points for a drag of -300 — within its range.
+    /// The lift leaves no fling and settles the bars (`rest`). A pull far
+    /// enough past the top starts pull to refresh (`refreshed`). Only on a
     /// node that scrolls itself (a scroll container, a grouped list), where
     /// the scroll view's pan is what takes the drag; a finger there must
     /// land on it. A drag on anything else reaches whatever UIKit's
@@ -337,6 +336,8 @@ extension Agent {
     func scrollDrag(_ req: [String: Any]) -> [String: Any] {
         guard let v = view(req), let win = v.window else { return miss(req) }
         guard let delta = req["scrollDrag"] as? [Double], delta.count == 2, delta.allSatisfy(\.isFinite) else { return ["error": "drag: dx and dy must be finite"] }
+        let ms = (req["ms"] as? Double) ?? 0
+        guard ms.isFinite, ms >= 0, ms <= 2000 else { return ["error": "drag: duration must be 0–2000 ms"] }
         if v.scrollDormant { v.needScroll() }
         let list = presenter.groupedLists?.scroller(for: v.id).flatMap { $0.superview === v ? $0 : nil }
         guard let sv = list ?? v.scroll, sv.isScrollEnabled else {
@@ -353,12 +354,35 @@ extension Agent {
         let o = sv.contentOffset
         // A drag ends a smooth correction, as a wheel does (LLP 1070.000 §11).
         if let owner = sv.superview as? NodeView, presenter.collections.animating.contains(owner.id) { presenter.collections.animationEnded(owner.id, dragging: true) }
-        // The content follows the finger, within the range; past it UIKit's bounce brings it back inside, here at once
-        Agent.rest(sv, at: CGPoint(x: o.x - CGFloat(delta[0]), y: o.y - CGFloat(delta[1])), x: scrollsX, y: scrollsY)
+        let held = HeldNode(v), generation = session.generation
+        // Recognized scrolling has no UIKit touch to hold its end at a bound.
+        let end = v.scrollEnd ?? ScrollEnd()
+        v.scrollEnd = end
+        end.live = true
+        end.hold()
+        let began = CACurrentMediaTime(), duration = ms / 1000
+        var cancelled = false
+        while duration > 0, delta[0] != 0 || delta[1] != 0 {
+            guard session.state != .destroyed, session.generation == generation, held.live(in: presenter) === v,
+                  v.window === win, sv.window === win, sv.isScrollEnabled, list != nil ? list?.superview === v : v.scroll === sv else {
+                cancelled = true
+                break
+            }
+            let elapsed = CACurrentMediaTime() - began
+            if elapsed >= duration { break }
+            let progress = CGFloat(elapsed / duration)
+            Agent.place(sv, at: CGPoint(x: o.x - CGFloat(delta[0]) * progress, y: o.y - CGFloat(delta[1]) * progress), x: scrollsX, y: scrollsY)
+            // Let UIKit commit frames and service observations between samples. Use elapsed time so a delayed turn
+            // does not lengthen the gesture; title snapping belongs only to the lift.
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: min(1 / 60, max(0, duration - (CACurrentMediaTime() - began)))))
+        }
+        if !cancelled {
+            Agent.rest(sv, at: CGPoint(x: o.x - CGFloat(delta[0]), y: o.y - CGFloat(delta[1])), x: scrollsX, y: scrollsY)
+        }
         let by = sv.contentOffset
         // A finger's drag shows the indicators, which fade once it lifts; an
         // offset written directly shows none.
-        if by != o { sv.flashScrollIndicators() }
+        if !cancelled, by != o { sv.flashScrollIndicators() }
         // A finger pulled far enough past the top starts the refresh
         // control as it lifts. Measured with real touches (iOS 27
         // simulator, Shelf's discover list): 200 points past the top
@@ -366,15 +390,24 @@ extension Agent {
         var refreshed = false
         #if os(iOS)
         let pull = CGFloat(delta[1]) - (o.y + sv.adjustedContentInset.top)
-        if scrollsY, pull >= 200, let control = sv.refreshControl, control.isEnabled, !control.isRefreshing {
+        if !cancelled, scrollsY, pull >= 200, let control = sv.refreshControl, control.isEnabled, !control.isRefreshing {
             control.beginRefreshing()
             control.sendActions(for: .valueChanged)
             refreshed = true
         }
         #endif
-        presenter.settlePump()
-        return ["tapped": Int(v.id), "at": [Agent.r2(start.x), Agent.r2(start.y)], "scrolledBy": [Agent.r2(by.x - o.x), Agent.r2(by.y - o.y)],
-                "delivery": "recognized", "native": "scroll", "refreshed": refreshed]
+        if v.incarnation == held.incarnation, v.scrollEnd === end {
+            end.live = false
+            if session.state != .destroyed, session.generation == generation, held.live(in: presenter) === v, v.scrollView === sv {
+                v.scrollMayHaveEnded(sv)
+            }
+        }
+        session.timerAdmissions.check()
+        if !cancelled { presenter.settlePump() }
+        var reply: [String: Any] = ["tapped": Int(held.id), "at": [Agent.r2(start.x), Agent.r2(start.y)], "scrolledBy": [Agent.r2(by.x - o.x), Agent.r2(by.y - o.y)],
+                                   "delivery": "recognized", "native": "scroll", "refreshed": refreshed]
+        if cancelled { reply["cancelled"] = true }
+        return reply
     }
 
     /// Leaves `sv` where a person's scroll to `want` leaves it, on the axes

@@ -5,6 +5,28 @@ use super::{lines, DataError, DataSource, Runner, RunnerError};
 use crate::request::Answer;
 use exact_plan::Value;
 
+/// Every executor must be able to carry an argument (LLP 1027 D2).
+pub(super) fn check_arguments(name: &str, args: &[Value]) -> Result<(), RunnerError> {
+    fn finite(value: &Value) -> bool {
+        match value {
+            Value::Number(n) => n.is_finite(),
+            Value::Option(Some(value)) => finite(value),
+            Value::List(items) | Value::Record(items) => items.iter().all(finite),
+            _ => true,
+        }
+    }
+    if let Some(i) = args.iter().position(|arg| !finite(arg)) {
+        return Err(RunnerError::Data {
+            resource: name.to_string(),
+            error: DataError::BadArguments(format!(
+                "argument {} contains a non-finite number",
+                i + 1
+            )),
+        });
+    }
+    Ok(())
+}
+
 /// Asks of one resource made by answers' commits, each with arguments unlike
 /// the last, within a second, that say an argument moves on every answer.
 const CHURN_ASKS: u32 = 50;
@@ -23,10 +45,15 @@ pub(super) struct Churn {
 }
 
 impl<D: DataSource> Runner<D> {
+    pub(super) fn check_send_arguments(&self, m: usize, args: &[Value]) -> Result<(), RunnerError> {
+        check_arguments(self.plan.str(self.plan.mutations[m].name), args)
+    }
+
     pub(super) fn query(&mut self, i: usize, args: &[Value]) -> Result<Answer, RunnerError> {
-        let row = &self.plan.resources[i];
+        let row = self.resource_row(i);
         let source = self.plan.str(row.source).to_string();
         let resource = self.plan.str(row.name).to_string();
+        check_arguments(&resource, args)?;
         // Delivery is the runner's own (LLP 1030 D7): the data seam never
         // sees it, and a data crate could not answer it if it did.
         if source == "exactActivities" {
@@ -259,20 +286,20 @@ mod tests {
             vec![("r", "storage is not ready")]
         );
         assert_eq!(
-            failed.failed_why[0].as_ref().map(|f| f.code),
+            failed.resources[0].failed_why.as_ref().map(|f| f.code),
             Some(crate::failure::FailureCode::Storage)
         );
-        assert!(!failed.pending_res[0]);
+        assert!(!failed.resources[0].pending);
         for pending in [Some(DataError::DeferredAtBake("at bake".into())), None] {
-            assert!(boot(pending).unwrap().pending_res[0]);
+            assert!(boot(pending).unwrap().resources[0].pending);
         }
         let mut overrun = boot(Some(DataError::Overrun("over budget".into()))).unwrap();
-        assert!(overrun.pending_res[0] && overrun.failed_resources().is_empty());
+        assert!(overrun.resources[0].pending && overrun.failed_resources().is_empty());
         let t0 = overrun.now_ms();
         overrun.advance(t0 + 250.).unwrap();
-        assert!(overrun.pending_res[0] && overrun.failed_resources().is_empty());
+        assert!(overrun.resources[0].pending && overrun.failed_resources().is_empty());
         overrun.advance(t0 + 1250.).unwrap();
-        assert!(!overrun.pending_res[0]);
+        assert!(!overrun.resources[0].pending);
         assert_eq!(overrun.failed_resources(), vec![("r", "over budget")]);
         // The same plan with `r` as `s`'s `else source()` row: each of the
         // kinds that booted above refuses, `Failed` and `Overrun` as `r`'s,

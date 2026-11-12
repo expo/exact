@@ -145,7 +145,12 @@ impl NodeArena {
                         let mut runs = Vec::new();
                         self.text_runs(child, &mut runs);
                         let text: String = runs.iter().map(|r| &*r.text).collect();
-                        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let white_space = self
+                            .computed_source(child, StyleId::WhiteSpace)
+                            .white_space
+                            .model();
+                        let text = exact_textflow::collapse(&[text.as_str()], white_space)
+                            .map_or(text, |collapsed| collapsed.runs.concat());
                         let text = (!text.is_empty()).then_some(text);
                         if texts == 1 {
                             face.title = text;

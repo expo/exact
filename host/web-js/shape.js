@@ -1,3 +1,16 @@
+/** A typed refusal: the commit rolls back (LLP 1005 §6 atomicity). */
+export class Refusal extends Error {}
+/** A data or shape refusal (the runner's `RunnerError::Data` or `Shape`), carrying the source's failure details. */
+export class Failed extends Refusal { constructor(message, code = "error", reason = "") { super(message); this.code = code; this.reason = reason; } } // `code`, `reason`: failure(x)'s (shape.js `failureCode`, `failureReason`)
+/** Contract records and lists are arrays; a present option is its value. */
+const finiteValue = v => typeof v === "number" ? Number.isFinite(v) : !Array.isArray(v) || v.every(finiteValue);
+/** Whether no argument holds a non-finite number (`checkArguments` refuses the others). */
+export const finiteArguments = args => args.every(finiteValue);
+export function checkArguments(name, args) {
+  const i = args.findIndex(v => !finiteValue(v));
+  if (i >= 0) throw new Failed(`${name}: argument ${i + 1} contains a non-finite number`);
+}
+
 // A value's shape check by the plan's type codes (LLP 1005 §3), for rt.js.
 /** Whether `v` conforms to type code `t` (`n N b s u ?T [T {T…}`), from `i`;
  * numbers are finite (`N`: any number), as the runner's checks require. `o` is a value
@@ -35,6 +48,13 @@ export function equal(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b)) return a === b;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (!equal(a[i], b[i])) return false;
+  return true;
+}
+/** Resource failures follow argument equality, with NaNs unchanged too. */
+export function unchangedArguments(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return a === b || typeof a === "number" && typeof b === "number" && Number.isNaN(a) && Number.isNaN(b);
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (!unchangedArguments(a[i], b[i])) return false;
   return true;
 }
 /** Plan value identity, for change detection (an equal value keeps its old

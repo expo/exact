@@ -112,8 +112,8 @@ export function packageKeys(bound, target) {
  * `{ extension, key, value }`), whether or not the app grants a device: each `"plistKeys"` key, and each `"plist"`
  * dictionary, keyed by the strings keys the app passes and valued by their base text (LLP 1133.002 D10). A key two
  * packages declare is written once. */
-export const modulePlist = (app, reach, target) => {
-  const bound = appleImplementations(app.dir, target);
+export const modulePlist = (app, reach, target, extensions, contractSources = []) => {
+  const bound = appleImplementations(app.dir, target, extensions, contractSources);
   const dictionaries = bound.flatMap((p) => p.plist.map((d) => ({ ...d, extension: p.extension })));
   const packages = packageKeys(bound, target).filter((k, i, all) => all.findIndex((o) => o.key === k.key) === i);
   if (dictionaries.length) {

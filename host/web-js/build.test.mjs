@@ -188,7 +188,9 @@ export const answer = ${ids === null ? "() => 'Hello'" : "(source: string, [id]:
     const state = await browser.state();
     expect(state.resources).toEqual({ title: 'Hello', ...(ids === null ? {} : { each: ids.map(id => ({ text: itemText(id) })) }) });
     expect(state.resourceStatus.title.resource).toBe(titleFirst ? 0 : 1);
-    if (ids?.length) expect(state.resourceStatus.each.resource).toBe(titleFirst ? 1 : 0);
+    const members = Object.entries(state.resourceStatus).filter(([name]) => name.startsWith('each['));
+    expect(members).toHaveLength(ids?.length ?? 0);
+    for (const [, status] of members) expect(status.resource).toBe(titleFirst ? 1 : 0);
     expect(await browser.carrier.evaluate('document.querySelector("[data-testid=title]").textContent')).toBe('Hello');
     for (const id of ids ?? []) expect(await browser.carrier.evaluate('document.getElementById("exact-root").textContent')).toContain(itemText(id));
   } finally {
@@ -214,14 +216,14 @@ test.each([
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 1024, bytes = [];
   const u32 = n => bytes.push(n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255);
   const string = s => { const b = new TextEncoder().encode(s); u32(b.length); bytes.push(...b); };
-  u32(4); bytes.push(0); string('test.grants'); string(grants);
+  u32(5); bytes.push(0); string('test.grants'); string(grants);
   new Uint8Array(memory.buffer, out, bytes.length).set(bytes);
   const output = mock(() => out);
   const instantiate = spyOn(WebAssembly, 'instantiate').mockResolvedValue({ instance: { exports: {
-    memory, exact_logic_abi: () => 4, exact_logic_create: () => 1, exact_logic_alloc: () => 0,
+    memory, exact_logic_abi: () => 5, exact_logic_create: () => 1, exact_logic_alloc: () => 0,
     exact_logic_call(_session, pointer, length) {
       const request = new DataView(memory.buffer, pointer, length);
-      return length === 5 && request.getUint32(0, true) === 4 && request.getUint8(4) === 0 ? 0 : 1;
+      return length === 5 && request.getUint32(0, true) === 5 && request.getUint8(4) === 0 ? 0 : 1;
     },
     exact_logic_output: output, exact_logic_output_len: () => bytes.length,
   } } });
@@ -261,12 +263,11 @@ export const answer = () => value as never;
     const stderr = result.stderr.replace(/\x1b\[[0-9;]*m/g, '');
     if (authored) {
       for (const name of ['kept', 'overlay', 'other']) {
-        expect(stderr).toContain(`BuildMessage: Import "${name}" will always be undefined`);
         expect(stderr).toContain(`[IMPORT_IS_UNDEFINED] Import \`${name}\` will always be undefined`);
       }
       expect(stderr).toContain('.gen/typescript/ts-data.js:');
       expect(stderr).not.toContain('.gen/ts-data.js:');
-      expect(stderr.match(/BuildMessage: Import /g)).toHaveLength(3);
+      expect(stderr.match(/\[IMPORT_IS_UNDEFINED\] Import /g)).toHaveLength(6);
     } else {
       expect(stderr).not.toContain('IMPORT_IS_UNDEFINED');
       expect(stderr).not.toContain('will always be undefined');
@@ -275,6 +276,107 @@ export const answer = () => value as never;
     rmSync(dir, { recursive: true, force: true });
   }
 }, 30000);
+
+test('web validation drops unused package exports before refusing their environment reads', () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/web-unused-exports-'));
+  const pkg = resolve(dir, 'node_modules/debug-helper'), out = resolve(dir, 'dist');
+  try {
+    mkdirSync(pkg, { recursive: true });
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Unused', app: { id: 'test.unused', name: 'Unused' } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'component App\n  resource message = message() as shape string\n  view\n    column\n      text message\n      canvas surface=spark() width=10 height=10\n');
+    writeFileSync(resolve(pkg, 'package.json'), JSON.stringify({ name: 'debug-helper', version: '1.0.0', type: 'module', exports: './index.js', types: './index.d.ts' }));
+    writeFileSync(resolve(pkg, 'index.js'), 'export const debug = () => import.meta.env.DEBUG;\n');
+    writeFileSync(resolve(pkg, 'index.d.ts'), 'export declare const debug: () => string;\n');
+    const build = () => spawnSync(process.execPath, ['host/web-js/build.mjs', dir, '--out', out, '--render', 'none'],
+      { cwd: root, encoding: 'utf8', env: { ...process.env, EXACT_APP_DIR: dir } });
+    const base = "export const grants = '';\nexport const surfaces = { spark: 0 };\nexport const draw = () => false;\n";
+    writeFileSync(resolve(dir, 'app.ts'), base + "export const answer = () => 'ready';\nexport { debug } from 'debug-helper';\n");
+    const built = build();
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    expect(readFileSync(resolve(out, 'app.js'), 'utf8')).not.toContain('import.meta.env');
+    for (const source of [
+      base + 'export const answer = () => debug();\n',
+      base.replace('() => false', '() => !!debug()') + "export const answer = () => 'ready';\n",
+    ]) {
+      writeFileSync(resolve(dir, 'app.ts'), "import { debug } from 'debug-helper';\n" + source);
+      const refused = build();
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain('debug-helper@1.0.0 (index.js:1:28) reads import.meta.env');
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 30000);
+
+test('the web build resolves drawing exports through the module graph', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..');
+  const dir = mkdtempSync(resolve(root, 'target/web-js-exports-')), out = resolve(dir, 'dist');
+  const base = "export const grants = '';\nexport const answer = () => 'answer';\n";
+  const contract = 'component App\n  resource message = message() as shape string\n  view\n    column\n      text message\n';
+  const optional = "import type { Draw } from './app.contract.d.ts';\n"
+    + "export const surfaces = { spark: 0 };\nexport const draw: Draw = (_surface, _args, ctx) => { ctx.fillRect(0, 0, 1, 1); return false; };\n";
+  const build = () => spawnSync(process.execPath, ['host/web-js/build.mjs', dir, '--out', out, '--render', 'none'],
+    { cwd: root, encoding: 'utf8', env: { ...process.env, EXACT_APP_DIR: dir } });
+  let browser, server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Optional', app: { id: 'test.optional', name: 'Optional' }, rust: false }));
+    writeFileSync(resolve(dir, 'app.contract'), contract + '      canvas surface=spark() width=10 height=10\n');
+    writeFileSync(resolve(dir, 'optional.ts'), optional);
+    writeFileSync(resolve(dir, 'drawing.cjs'), "exports.surfaces = { spark: 0 }; exports.draw = (_surface, _args, ctx) => { ctx.fillRect(0, 0, 1, 1); return false; };");
+    for (const declaration of [
+      "export * from './optional';",
+      "export { draw, surfaces } from './optional';",
+      "import * as made from './optional'; export var draw = made.draw, surfaces = made.surfaces;",
+      "import * as made from './optional'; export const { draw, surfaces } = made;",
+      "export\n{ draw, surfaces } from './optional';",
+      "export { draw } from './drawing.cjs'; export * from './drawing.cjs';",
+    ]) {
+      writeFileSync(resolve(dir, 'app.ts'), base + declaration);
+      const built = build();
+      expect(built.status, declaration + '\n' + built.stdout + built.stderr).toBe(0);
+      expect(readFileSync(resolve(out, '.gen/draw.js'), 'utf8')).toContain("export { drawer }");
+    }
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      return new Response(Bun.file(resolve(out, path === '/' ? 'index.html' : path.slice(1))));
+    } });
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    await page.waitForFunction(() => {
+      const canvas = document.querySelector('canvas');
+      return canvas?.getContext('2d').getImageData(0, 0, 1, 1).data[3] === 255;
+    });
+    expect(await page.locator('body').innerText()).toContain('answer');
+    writeFileSync(resolve(dir, 'app.contract'), contract);
+    writeFileSync(resolve(dir, 'helper.cjs'), 'exports.helper = 1;');
+    for (const declaration of [
+      "/* export function draw() {} */\n// export const surfaces = {};\n",
+      "export * from './helper.cjs';",
+      "export type { draw, surfaces } from './optional';",
+    ]) {
+      writeFileSync(resolve(dir, 'app.ts'), base + declaration);
+      const absent = build();
+      expect(absent.status, absent.stdout + absent.stderr).toBe(0);
+      expect(readFileSync(resolve(out, '.gen/draw.js'), 'utf8')).toContain('drawer = null');
+    }
+    for (const declaration of ["export { draw } from './optional';", "export { surfaces } from './optional';"]) {
+      writeFileSync(resolve(dir, 'app.ts'), base + declaration);
+      const refused = build();
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain('exports `draw` and `surfaces` together');
+    }
+    // A `draw` that is not a function fails the type check, as the native bake's seam does.
+    writeFileSync(resolve(dir, 'app.contract'), contract + '      canvas surface=spark() width=10 height=10\n');
+    writeFileSync(resolve(dir, 'number.ts'), 'export const surfaces = { spark: 0 };\nexport const draw = 42;\n');
+    for (const declaration of ['export var draw = 42; export var surfaces = { spark: 0 };', "export * from './number';"]) {
+      writeFileSync(resolve(dir, 'app.ts'), base + declaration);
+      const refused = build();
+      expect(refused.status, declaration + '\n' + refused.stdout + refused.stderr).toBe(1);
+      expect(refused.stderr).toContain('not assignable');
+    }
+  } finally { await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true }); }
+}, 60000);
 
 test('a mount whose own tsconfig.json extends a file outside it builds for the web', () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
@@ -767,7 +869,7 @@ test("compiled Markdown goes before the shell's own entry, whatever the head's s
 test('a page rendered at build runs no code from a string, by any name or through a function\'s constructor', () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-site-strings-')), app = resolve(dir, 'site'), out = resolve(app, 'dist');
+  const dir = mkdtempSync(resolve(root, 'target/site-strings-')), app = resolve(dir, 'site'), out = resolve(app, 'dist');
   try {
     site(app, 'shape Note\n  text: string\n\nroutes nav\n  home "/" render=build\n\ncomponent App\n  resource note = note("x") as shape Note\n  view\n    column\n      text note.text\n');
     // A module that names only `eval`, never `globalThis`: its `eval` is the stand-in all the same (build.mjs `scopedModule`).
@@ -775,21 +877,152 @@ test('a page rendered at build runs no code from a string, by any name or throug
     writeFileSync(resolve(app, 'evals.ts'), "export const direct = () => eval('6*7'), indirect = () => (0, eval)('6*7');\n"
       + "export function captured(globalThis: { eval(source: string): unknown }) { return eval('1'); }\n"
       + "export function probe(globalThis: null) { return typeof eval; }\n");
-    writeFileSync(resolve(app, 'app.ts'), "import type { Answer, Result, Sources } from './app.contract.d.ts';\nimport { captured, direct, indirect, probe } from './evals';\nexport const appId = 'test.site';\nexport const grants = '';\n"
+    // CommonJS permits a binding named `eval`; its call must stay local.
+    const local = resolve(app, 'node_modules/local-eval');
+    mkdirSync(local, { recursive: true });
+    writeFileSync(resolve(local, 'package.json'), JSON.stringify({ name: 'local-eval', version: '1.0.0', main: 'index.cjs', types: 'index.d.ts' }));
+    writeFileSync(resolve(local, 'index.cjs'), `exports.probe = function(eval) { return eval('1'); };`);
+    writeFileSync(resolve(local, 'index.d.ts'), 'export function probe(evaluate: (source: string) => number): number;\n');
+    writeFileSync(resolve(app, 'app.ts'), "import type { Answer, Result, Sources } from './app.contract.d.ts';\nimport { captured, direct, indirect, probe } from './evals';\nimport { probe as local } from 'local-eval';\nexport const appId = 'test.site';\nexport const grants = '';\n"
       + "const tried = (f: () => unknown) => { try { return `ran ${String(f())}`; } catch (e) { return (e as Error).name; } };\n"
       + "const F = Function;\n"
       + "const sources: Sources = { note: (): Result<'note'> => ({ text: [tried(() => new Function('return 1')()), tried(() => new F('return 1')()), tried(() => Reflect.construct(Function, ['return 1'])), tried(() => globalThis.Function('return 1')),\n"
       + "  tried(direct), tried(indirect), tried(() => globalThis.eval('1')), tried(() => captured({ eval: () => 1 })), String(Function instanceof Function), String(eval instanceof Function),\n"
-      + "  tried(() => probe(null)),\n"
+      + "  tried(() => probe(null)), tried(() => local(() => 42)),\n"
 
       + "  tried(() => new ((function () {}).constructor as FunctionConstructor)('return 1')())].join(' ') }) };\n"
       + 'export const answer: Answer = (source, args, store, storage, native) => sources[source](args, store, storage, native);\n');
     const built = spawnSync(process.execPath, ['host/web/build.mjs', app, '--out', out], { cwd: root, env: { ...process.env, EXACT_APP_DIR: app }, encoding: 'utf8' });
     expect(built.status, built.stdout + built.stderr).toBe(0);
-    // Each spelling of `Function` and `eval` is the module's stand-in, through the build's own bindings (`scopedModule`).
-    expect(readFileSync(resolve(out, 'index.html'), 'utf8')).toContain(`>${Array(8).fill('SyntaxError').join(' ')} true true ran function EvalError<`);
+    // Free uses of `Function` and `eval` reach the module's stand-ins; a bound `eval` stays local.
+    expect(readFileSync(resolve(out, 'index.html'), 'utf8')).toContain(`>${Array(8).fill('SyntaxError').join(' ')} true true ran function ran 42 EvalError<`);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 300_000);
+
+test('authored names cannot capture the eval stand-in in rendered pages or the page bundle', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/eval-bindings-'));
+  const app = resolve(dir, 'site'), out = resolve(app, 'dist');
+  let browser, server;
+  try {
+    site(app, `shape Note
+  text: string
+
+routes nav
+  home "/" render=build
+
+component App
+  state phase: string = "build"
+  resource note = note(phase) as shape Note
+  action probe
+    phase = "page"
+  view
+    column
+      text note.text testId="result"
+      button "Probe" press=probe testId="probe"
+`);
+    const probes = {
+      'parameter.js': `export function probe(__exact_eval) { try { return eval('1'); } catch { return -1; } }`,
+      'module.js': `const __exact_eval = () => 42;
+export function probe() { try { return eval('1'); } catch { return -1; } }`,
+      'nested.js': `export function probe() {
+  const __exact_eval = () => 42;
+  return ((__exact_eval1) => {
+    const __exact_eval2 = () => 44;
+    try { return (0, eval)('1'); } catch { return -1; }
+  })(() => 43);
+}`,
+      'escaped.js': `export function probe(\\u005f_exact_eval, \\u005f_exact_eval1) {
+  try { return eval('1'); } catch { return -1; }
+}`,
+      'reference.js': `export function probe() {
+  try { eval('1'); } catch {}
+  return typeof __exact_eval;
+}`,
+      'jsx-member.jsx': `/** @jsx createElement */
+/** @jsxRuntime classic */
+const createElement = type => typeof type;
+export function probe(__exact_eval) {
+  try { eval('1'); } catch {}
+  try { return <__exact_eval1.Child />; } catch (e) { return e.name; }
+}`,
+      'jsx-bare.jsx': `/** @jsx createElement */
+/** @jsxRuntime classic */
+const createElement = type => typeof type;
+export function probe(__exact_eval) {
+  try { eval('1'); } catch {}
+  try { return <__exact_eval1 />; } catch (e) { return e.name; }
+}`,
+      'jsx-unsuffixed.jsx': `/** @jsx createElement */
+/** @jsxRuntime classic */
+const createElement = type => typeof type;
+export function probe() {
+  try { eval('1'); } catch {}
+  try { return <__exact_eval.Child />; } catch (e) { return e.name; }
+}`,
+      'jsx-factory.jsx': `/** @jsx __exact_eval1 */
+/** @jsxRuntime classic */
+export function probe(__exact_eval) {
+  try { return <div />; } catch (e) { return e.name; }
+}`,
+      'jsx-fragment.jsx': `/** @jsx createElement */
+/** @jsxFrag __exact_eval1 */
+/** @jsxRuntime classic */
+const createElement = type => typeof type;
+export function probe(__exact_eval) {
+  try { return <></>; } catch (e) { return e.name; }
+}`,
+    };
+    for (const [name, code] of Object.entries(probes)) {
+      if (!name.endsWith('.jsx')) { writeFileSync(resolve(app, name), code); continue; }
+      const pkg = name.slice(0, -4), at = resolve(app, 'node_modules', pkg);
+      mkdirSync(at, { recursive: true });
+      writeFileSync(resolve(at, 'package.json'), JSON.stringify({ name: pkg, version: '1.0.0', main: 'index.jsx', types: 'index.d.ts' }));
+      writeFileSync(resolve(at, 'index.jsx'), code);
+      writeFileSync(resolve(at, 'index.d.ts'), 'export function probe(evaluate?: () => number): string;\n');
+    }
+    writeFileSync(resolve(app, 'app.ts'), `import type { Answer } from './app.contract.d.ts';
+import { probe as parameter } from './parameter.js';
+import { probe as module } from './module.js';
+import { probe as nested } from './nested.js';
+import { probe as escaped } from './escaped.js';
+import { probe as reference } from './reference.js';
+import { probe as jsxMember } from 'jsx-member';
+import { probe as jsxBare } from 'jsx-bare';
+import { probe as jsxUnsuffixed } from 'jsx-unsuffixed';
+import { probe as jsxFactory } from 'jsx-factory';
+import { probe as jsxFragment } from 'jsx-fragment';
+export const appId = 'test.site';
+export const grants = '';
+export const answer: Answer = (_source, [phase]) => ({ text: [phase, parameter(() => 42), module(), nested(),
+  escaped(() => 42, () => 43), reference(), jsxMember(() => 42), jsxBare(() => 42), jsxUnsuffixed(),
+  jsxFactory(() => 42), jsxFragment(() => 42)].join(' ') });
+`);
+    const built = spawnSync(process.execPath, ['host/web-js/build.mjs', app, '--out', out], {
+      cwd: root, env: { ...process.env, EXACT_APP_DIR: app }, encoding: 'utf8',
+    });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    const result = '-1 -1 -1 -1 undefined ReferenceError ReferenceError ReferenceError ReferenceError ReferenceError';
+    const html = readFileSync(resolve(out, 'index.html'), 'utf8');
+    expect(/data-testid="result"[^>]*>([^<]*)</.exec(html)?.[1]).toBe(`build ${result}`);
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      return new Response(Bun.file(resolve(out, path === '/' ? 'index.html' : path.slice(1))));
+    } });
+    browser = await suiteBrowser();
+    const page = await browser.newPage(), errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(server.url.href + '?agent=1');
+    await page.waitForFunction(() => globalThis.exact?.ready);
+    await page.evaluate(async () => { await exact.ready; });
+    expect(errors).toEqual([]);
+    await page.getByTestId('probe').click();
+    await page.waitForFunction(expected => document.querySelector('[data-testid=result]')?.textContent === expected, `page ${result}`);
+    expect(errors).toEqual([]);
+  } finally {
+    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
+  }
+}, 60000);
 
 function site(app, source) {
   mkdirSync(app, { recursive: true });

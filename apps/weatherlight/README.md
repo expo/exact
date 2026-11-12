@@ -4,6 +4,8 @@ A weather app in Exact2: one Contract view, a TypeScript provider using the host
 network bindings, and a separately loaded WebGPU sky. The sky follows the selected
 hour's cloud cover, precipitation, wind, daylight, and city-local time. Forecast
 exploration and Celsius/Fahrenheit conversion reuse the loaded data.
+Unavailable daily rain probability and UV readings show “—”; gaps beyond the
+24 displayed hours do not discard the forecast.
 
 Run from the repository root:
 

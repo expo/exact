@@ -447,6 +447,19 @@ impl Request {
         }
     }
 
+    /// A two-way WebSocket to a `ws:` or `wss:` URL (LLP 1016.003 D1): a
+    /// stream whose `parse` receives `open`, each frame in order and the
+    /// close, and whose mapper and the module's mutations send on it through
+    /// [`crate::Socket`]. Answer it with `Answer::Later`.
+    pub fn socket(url: &str) -> Request {
+        let request = Request {
+            stream: true,
+            socket: true,
+            ..Request::get(url)
+        };
+        request.independent_http(1 << 20)
+    }
+
     /// A `POST` of a JSON text.
     pub fn post_json(url: &str, json: &str) -> Request {
         Request {

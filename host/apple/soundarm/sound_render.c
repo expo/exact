@@ -163,6 +163,16 @@ static bool mix(ExactMixer *m, Voice *v, double speaker, uint32_t frames, AudioB
     return true;
 }
 
+/// The last end queued for a voice before the next stop-all; whether that stop-all silences it.
+static bool pending_end(ExactMixer *m, Voice *v, uint32_t next, uint32_t tail) {
+    for (uint32_t j = next; j != tail; j++) {
+        const Op *later = &m->ring[j % EXACT_SOUND_RING];
+        if (later->kind == 3) return true;
+        if (later->kind == 2 && later->id == v->id) v->end = later->at;
+    }
+    return false;
+}
+
 /// A slot whose voice ends inside this buffer (an End's or before), its
 /// remaining frames mixed now, so a Play can take it: mixing is a sum, so
 /// a voice mixed early sounds as it would have. Retriggers that cut voices
@@ -170,21 +180,19 @@ static bool mix(ExactMixer *m, Voice *v, double speaker, uint32_t frames, AudioB
 /// runner's bounds.
 ///
 /// The ops still behind the Play in this apply, `[next, tail)`, are read
-/// first: an End there that cuts the voice earlier moves its end before it
-/// is mixed, and a stop-all there means it never sounds in this buffer. The
+/// first: the last End there replaces its end before it is mixed or its slot
+/// reused, and a stop-all there means it never sounds in this buffer. The
 /// scan stops at that stop-all, since ids after it are the next boot's.
 static Voice *steal(ExactMixer *m, double speaker, uint32_t frames, AudioBufferList *out, bool interleaved, bool *sounded,
                     uint32_t next, uint32_t tail) {
     for (int i = 0; i < EXACT_SOUND_SLOTS; i++) {
         Voice *v = &m->slots[i];
-        if (!v->live || !isfinite(v->end) || llround((v->end - speaker) * m->rate) > (int64_t)frames) continue;
-        bool silenced = false;
-        for (uint32_t j = next; j != tail; j++) {
-            const Op *later = &m->ring[j % EXACT_SOUND_RING];
-            if (later->kind == 3) { silenced = true; break; }
-            if (later->kind == 2 && later->id == v->id && later->at < v->end) v->end = later->at;
+        if (!v->live) continue;
+        bool silenced = pending_end(m, v, next, tail);
+        if (!silenced) {
+            if (!isfinite(v->end) || llround((v->end - speaker) * m->rate) > (int64_t)frames) continue;
+            mix(m, v, speaker, frames, out, interleaved, sounded);
         }
-        if (!silenced) mix(m, v, speaker, frames, out, interleaved, sounded);
         v->live = false;
         return v;
     }
@@ -200,7 +208,11 @@ static void apply(ExactMixer *m, double speaker, uint32_t frames, AudioBufferLis
         Op op = m->ring[head % EXACT_SOUND_RING];
         if (op.kind == 1) {
             Voice *free_slot = NULL;
-            for (int i = 0; i < EXACT_SOUND_SLOTS && !free_slot; i++) if (over(&m->slots[i], speaker)) free_slot = &m->slots[i];
+            for (int i = 0; i < EXACT_SOUND_SLOTS && !free_slot; i++) {
+                Voice *v = &m->slots[i];
+                if (v->live && pending_end(m, v, head + 1, tail)) v->live = false;
+                if (over(v, speaker)) free_slot = v;
+            }
             if (!free_slot) free_slot = steal(m, speaker, frames, out, interleaved, sounded, head + 1, tail);
             if (!free_slot || op.sound >= m->count || !m->sounds[op.sound].planes) {
                 atomic_fetch_add_explicit(&m->dropped, 1, memory_order_relaxed);
@@ -223,7 +235,7 @@ static void apply(ExactMixer *m, double speaker, uint32_t frames, AudioBufferLis
         } else if (op.kind == 2) {
             for (int i = 0; i < EXACT_SOUND_SLOTS; i++) {
                 Voice *v = &m->slots[i];
-                if (v->live && v->id == op.id && op.at < v->end) v->end = op.at;
+                if (v->live && v->id == op.id) v->end = op.at;
                 // Retracted before it sounded (an edit, a stop): its slot is free now, not at its start.
                 if (v->live && v->id == op.id && !v->started && op.at <= v->start) v->live = false;
             }

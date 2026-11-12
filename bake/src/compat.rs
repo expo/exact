@@ -34,7 +34,7 @@ pub const GPU_MODULE_ABI: u32 = 1;
 /// long poll's result tag 10 (LLP 1016.000 D8; theme2's Q-RUSTABI ruling: the
 /// plan can't say which Rust sources poll, so every Rust app's id moves once,
 /// and an older binary is never offered a module that may send one).
-pub(crate) const RUST_ABI: u32 = 4;
+pub(crate) const RUST_ABI: u32 = 5;
 /// The data-module runtime a TypeScript bundle may rely on in the binary's
 /// own prelude (`js/src/prelude.js`, compiled into the host): moved when the
 /// prelude learns something a bundle cannot do without and an older prelude

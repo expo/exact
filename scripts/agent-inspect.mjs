@@ -145,7 +145,7 @@ export function sourceMapReaders(locators) {
 export function identifyResources(reply, maps) {
   const digest = reply.planDigest, map = maps?.get(digest);
   for (const [name, row] of Object.entries(reply.resourceStatus ?? {})) {
-    const at = map?.resources?.[name];
+    const at = map?.resources?.[name.replace(/\[\d+\]$/, '')];
     const valid = sourceLocation(at);
     row.declaration = valid
       ? {status:'compatible', digest, file:at.file, line:at.line, col:at.col, end_col:at.end_col, component:at.component}
@@ -645,8 +645,8 @@ export function perfDelta(a, b) {
     counted[key] = {...after, counts};
   }
   // Each resource's asks between the reads (LLP 1146 D3); a host that counts none has no `resources`.
-  const asked = new Map((a.resources ?? []).map(r => [r.name, r.asked]));
-  const resources = b.resources?.map(r => ({ ...r, asked: r.asked - (asked.get(r.name) ?? 0) })).filter(r => r.asked > 0);
+  const asked = new Map((a.resources ?? []).map(r => [r.member ?? r.name, r.asked]));
+  const resources = b.resources?.map(r => ({ ...r, asked: r.asked - (asked.get(r.member ?? r.name) ?? 0) })).filter(r => r.asked > 0);
   return { ...b, ...counted, sites, handlers, ...(resources ? { resources } : {}), from: { seq: a.seq, clock: a.clock } };
 }
 

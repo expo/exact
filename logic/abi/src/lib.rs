@@ -7,13 +7,14 @@ use exact_plan::{
 };
 use exact_runner::{
     Answer, DataError, DataSource, FailureKind, HttpScheduling, LongPoll, Outcome, Overlaid,
-    Redirect, Request, Response, Store, SurfaceOutcome, SurfaceRequest, Write,
+    Redirect, Request, Response, Socket, SocketCall, SocketOp, Store, SurfaceOutcome,
+    SurfaceRequest, Write,
 };
 
 pub mod draw;
 
 /// Seam version, independent of the plan format version.
-pub const ABI: u32 = 4;
+pub const ABI: u32 = 5;
 /// Maximum request or response bytes, enforced on both sides.
 pub const MAX_MESSAGE: usize = exact_runner::MAX_HOST_WORK_BYTES;
 
@@ -123,7 +124,117 @@ pub fn call_request(
     if let Some(outcome) = outcome {
         encode_outcome(&mut w, outcome);
     }
+    encode_socket_turn(&mut w, store);
     finish(w)
+}
+
+/// The call's socket turn (LLP 1016.003 D5): which sockets it may send on,
+/// and each open socket's resource, ticket and buffered bytes.
+fn encode_socket_turn(w: &mut Writer, store: &Store) {
+    match store.socket_call() {
+        SocketCall::None => w.u8(0),
+        SocketCall::Mutation => w.u8(1),
+        SocketCall::Mapper(own) => {
+            w.u8(2);
+            w.u32(own.resource() as u32);
+            w.u64(own.ticket());
+        }
+    }
+    let open = store.socket_open();
+    w.u32(open.len() as u32);
+    for &(resource, ticket) in open {
+        let buffered = (store.socket_buffered().iter())
+            .find(|(i, _)| *i == resource)
+            .map_or(0, |(_, n)| *n);
+        w.u32(resource as u32);
+        w.u64(ticket);
+        w.u64(buffered);
+    }
+}
+fn read_socket_turn(r: &mut Reader<'_>, store: &mut Store) -> Result<(), String> {
+    let call = match r.u8().map_err(error)? {
+        0 => SocketCall::None,
+        1 => SocketCall::Mutation,
+        2 => {
+            let resource = r.u32().map_err(error)? as usize;
+            SocketCall::Mapper(Socket::new(resource, r.u64().map_err(error)?))
+        }
+        _ => return Err("invalid socket call".into()),
+    };
+    let n = r.count().map_err(error)?;
+    let (mut open, mut buffered) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    for _ in 0..n {
+        let resource = r.u32().map_err(error)? as usize;
+        open.push((resource, r.u64().map_err(error)?));
+        buffered.push((resource, r.u64().map_err(error)?));
+    }
+    store.set_socket_call(call);
+    store.set_socket_open(open);
+    store.set_socket_buffered(buffered);
+    Ok(())
+}
+
+/// What a call staged on sockets, by resource, and a mapper's overload.
+fn encode_socket_ops(w: &mut Writer, store: &mut Store) {
+    // A socket handle stages nothing else (`Socket::send`); an operation a
+    // source staged itself on the store's lower door fails the call.
+    let (ops, other): (Vec<_>, Vec<_>) = (store.take_sockets().into_iter()).partition(|(_, op)| {
+        matches!(
+            op,
+            SocketOp::Text(_) | SocketOp::Binary(_) | SocketOp::Close { .. }
+        )
+    });
+    if !other.is_empty() {
+        store.note_socket_overload(
+            "a Rust module's socket operation is text, binary or a close".into(),
+        );
+    }
+    w.u32(ops.len() as u32);
+    for (resource, op) in ops {
+        w.u32(resource as u32);
+        match op {
+            SocketOp::Text(text) => {
+                w.u8(0);
+                w.string(&text);
+            }
+            SocketOp::Binary(data) => {
+                w.u8(1);
+                bytes(w, &data);
+            }
+            SocketOp::Close { code, reason } => {
+                w.u8(2);
+                w.u16(code);
+                w.string(&reason);
+            }
+            _ => unreachable!("partitioned above"),
+        }
+    }
+    w.u8(u8::from(store.socket_overload().is_some()));
+    w.string(store.socket_overload().unwrap_or(""));
+}
+#[allow(clippy::type_complexity)]
+fn read_socket_ops(r: &mut Reader<'_>) -> Result<(Vec<(usize, SocketOp)>, Option<String>), String> {
+    let n = r.count().map_err(error)?;
+    let mut ops = Vec::with_capacity(n);
+    for _ in 0..n {
+        let resource = r.u32().map_err(error)? as usize;
+        let op = match r.u8().map_err(error)? {
+            0 => SocketOp::Text(r.string().map_err(error)?),
+            1 => SocketOp::Binary(read_bytes(r)?.to_vec()),
+            2 => SocketOp::Close {
+                code: r.u16().map_err(error)?,
+                reason: r.string().map_err(error)?,
+            },
+            _ => return Err("invalid socket operation".into()),
+        };
+        ops.push((resource, op));
+    }
+    let overload = match (r.u8().map_err(error)?, r.string().map_err(error)?) {
+        (0, _) => None,
+        (1, why) => Some(why),
+        _ => return Err("invalid socket overload".into()),
+    };
+    Ok((ops, overload))
 }
 
 /// Encode an overlay operation (additive, as later outcome tags were): the
@@ -201,22 +312,27 @@ fn encode_outcome(w: &mut Writer, outcome: &Outcome) {
             pairs(w, &r.headers);
             bytes(w, &r.body);
         }
-        // One message of a stream (LLP 1016.000); additive, as tag 6 was.
+        // One message of a stream (LLP 1016.000): tag 8, or 12 for a
+        // socket's binary frame (LLP 1016.003 D5).
         Outcome::Message(m) => {
-            w.u8(8);
+            w.u8(if m.binary.is_some() { 12 } else { 8 });
             w.string(&m.event);
             w.string(&m.id);
-            w.string(&m.data);
+            match &m.binary {
+                Some(data) => bytes(w, data),
+                None => w.string(&m.data),
+            }
             w.u32(m.coalesced);
         }
-        // A Rust module's stream only listens (LLP 1016.000 D7): a two-way
-        // socket's end crosses as the listener's end, worded as natively.
-        Outcome::Closed { code, reason, .. } => {
-            w.u8(1);
-            w.string(&match reason.is_empty() {
-                true => format!("the socket closed ({code})"),
-                false => format!("the socket closed ({code}: {reason})"),
-            });
+        Outcome::Closed {
+            code,
+            reason,
+            was_clean,
+        } => {
+            w.u8(11);
+            w.u16(*code);
+            w.string(reason);
+            w.u8(u8::from(*was_clean));
         }
         Outcome::Failed { kind, message } => {
             w.u8(match kind {
@@ -253,14 +369,30 @@ fn read_outcome(r: &mut Reader<'_>) -> Result<Outcome, String> {
     if tag == 7 {
         return Ok(Outcome::Surface(SurfaceOutcome::Restored));
     }
-    if tag == 8 {
+    if tag == 8 || tag == 12 {
+        let (event, id) = (r.string().map_err(error)?, r.string().map_err(error)?);
+        let (data, binary) = match tag {
+            8 => (r.string().map_err(error)?, None),
+            _ => (String::new(), Some(read_bytes(r)?.to_vec())),
+        };
         return Ok(Outcome::Message(exact_runner::Message {
-            event: r.string().map_err(error)?,
-            id: r.string().map_err(error)?,
-            data: r.string().map_err(error)?,
+            event,
+            id,
+            data,
             coalesced: r.u32().map_err(error)?,
-            binary: None,
+            binary,
         }));
+    }
+    if tag == 11 {
+        return Ok(Outcome::Closed {
+            code: r.u16().map_err(error)?,
+            reason: r.string().map_err(error)?,
+            was_clean: match r.u8().map_err(error)? {
+                0 => false,
+                1 => true,
+                _ => return Err("invalid close".into()),
+            },
+        });
     }
     let kind = match tag {
         1 => FailureKind::Network,
@@ -346,6 +478,15 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                 "exactBodyTo cannot cross the Rust module seam".into(),
             )),
         ),
+        // A two-way socket crosses as a WebSocket alone (LLP 1016.003 D5).
+        Ok(Answer::Later(r)) if r.socket && (!r.stream || r.listen.is_some() || r.is_process()) => {
+            encode_result(
+                w,
+                Err(DataError::Unavailable(
+                    "a listener's or a child's socket cannot cross the Rust module seam".into(),
+                )),
+            )
+        }
         Ok(Answer::Now(v)) => {
             w.u8(0);
             v.encode(w);
@@ -398,13 +539,15 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
             // Additive HTTP result kind. Older hosts reject tag 6 before
             // executing effects; it must never silently decode as ordered.
             // A stream (tag 9) is always independent (LLP 1016.000); a long
-            // poll (tag 10, D8) is a stream with its terms after the body.
+            // poll (tag 10, D8) is a stream with its terms after the body; a
+            // two-way socket (tag 11, LLP 1016.003) is a stream.
             let poll = r.long_poll.as_ref().filter(|_| r.stream);
             match r.http {
                 HttpScheduling::Ordered => w.u8(1),
                 HttpScheduling::Independent { max_response_bytes } => {
                     w.u8(match (r.stream, poll) {
                         (true, Some(_)) => 10,
+                        (true, None) if r.socket => 11,
                         (true, None) => 9,
                         _ => 6,
                     });
@@ -457,7 +600,7 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
     let tag = r.u8().map_err(error)?;
     Ok(match tag {
         0 => Ok(Answer::Now(Value::decode(r).map_err(error)?)),
-        1 | 6 | 9 | 10 => Ok(Answer::Later(read_http(r, tag)?)),
+        1 | 6 | 9..=11 => Ok(Answer::Later(read_http(r, tag)?)),
         5 => {
             let payload = read_bytes(r)?.to_vec();
             let present = r.u8().map_err(error)?;
@@ -497,12 +640,12 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
     })
 }
 
-/// An HTTP result's request (tags 1, 6, 9 and 10): a stream's, a long poll's
-/// terms after its body (LLP 1016.000 D8).
+/// An HTTP result's request (tags 1, 6 and 9–11): a stream's, a long poll's
+/// terms after its body (LLP 1016.000 D8), a two-way socket's (LLP 1016.003).
 fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
     let mut request = Request {
         stream: tag >= 9,
-        socket: false,
+        socket: tag == 11,
         bytes: false,
         upload_progress: false,
         long_poll: None,
@@ -613,11 +756,12 @@ pub fn call_reply(data: &[u8], store: &mut Store) -> Result<Answer, DataError> {
             };
             writes.push((name, value));
         }
+        let sockets = read_socket_ops(&mut r)?;
         let result = read_result(&mut r)?;
         end(&r)?;
-        Ok((observed, writes, result))
+        Ok((observed, writes, sockets, result))
     };
-    let (observed, writes, result) = decode().map_err(DataError::Unavailable)?;
+    let (observed, writes, (ops, overload), result) = decode().map_err(DataError::Unavailable)?;
     if observed {
         store.observe_external_read();
     }
@@ -626,6 +770,16 @@ pub fn call_reply(data: &[u8], store: &mut Store) -> Result<Answer, DataError> {
             Some(value) => store.set(&name, &value)?,
             None => store.forget(&name)?,
         };
+    }
+    // What the module staged, through the same checks on the turn the
+    // runner set (LLP 1016.003 D5); a socket it named is open here too.
+    for (resource, op) in ops {
+        let open = store.socket_open().iter().find(|(i, _)| *i == resource);
+        let ticket = open.map_or(u64::MAX, |(_, t)| *t);
+        Socket::new(resource, ticket).send(store, op)?;
+    }
+    if let Some(why) = overload {
+        store.note_socket_overload(why);
     }
     result
 }
@@ -688,6 +842,7 @@ impl<D: DataSource> Session<D> {
                 } else {
                     None
                 };
+                read_socket_turn(&mut r, &mut store)?;
                 end(&r)?;
                 let result = if let Some(outcome) = outcome {
                     self.data.parse(&mut store, &source, &args, outcome)
@@ -710,6 +865,7 @@ impl<D: DataSource> Session<D> {
                         store_value(&mut w, &value);
                     }
                 }
+                encode_socket_ops(&mut w, &mut store);
                 encode_result(&mut w, result);
             }
             5 => {
@@ -858,5 +1014,7 @@ macro_rules! export {
     };
 }
 
+#[cfg(test)]
+mod socket_tests;
 #[cfg(test)]
 mod tests;

@@ -129,18 +129,12 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         delivery: Delivery,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
-        if delivery == self.delivery {
-            return Ok(None);
-        }
-        let previous = std::mem::replace(&mut self.delivery, delivery);
-        let which: Vec<usize> = (0..self.plan.resources.len())
-            .filter(|i| self.plan.str(self.plan.resources[*i].source) == SOURCE)
-            .collect();
-        let result = self.recommit(which, "delivery");
-        if result.is_err() {
-            self.delivery = previous;
-        }
-        result
+        self.replace_fact(
+            |r| &mut r.delivery,
+            delivery,
+            SOURCE,
+            |r, _, readers| r.recommit(readers, "delivery"),
+        )
     }
 
     /// [`Runner::set_delivery`] with the binary's own three facts read out
@@ -159,7 +153,7 @@ impl<D: DataSource> Runner<D> {
     /// shape names its fields. A field the runner does not know is a
     /// refusal — bake catches it first, as `bake-delivery-field`.
     pub(super) fn delivery_answer(&self, i: usize) -> Result<Value, DataError> {
-        let row = &self.plan.resources[i];
+        let row = self.resource_row(i);
         if row.args.len > 0 {
             return Err(DataError::BadArguments(format!(
                 "{SOURCE} takes no arguments"

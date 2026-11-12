@@ -1,6 +1,7 @@
 # The runner keeps a resource, a queued send and a host fact each in parts that every path must pair by hand
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Runtime resources own their state outside the plan, queued sends end their own writes, and host facts restore on refusal.
 **Systems:** runner/src/runner.rs, runner/src/runner/each.rs, runner/src/runner/queue.rs, runner/src/runner/writes.rs, runner/src/runner/delivery.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

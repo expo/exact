@@ -434,10 +434,10 @@ impl<D: DataSource> Presenter<D> {
             .map(|n| {
                 let r = &n.style.rare;
                 [
-                    r.scroll_margin_top,
-                    r.scroll_margin_right,
-                    r.scroll_margin_bottom,
-                    r.scroll_margin_left,
+                    r.scroll_margin_top.clone(),
+                    r.scroll_margin_right.clone(),
+                    r.scroll_margin_bottom.clone(),
+                    r.scroll_margin_left.clone(),
                 ]
                 .map(|d| d.at_basis(kernel.arena().env(), 0.0))
             })
@@ -459,10 +459,10 @@ impl<D: DataSource> Presenter<D> {
             if scrolls(ox) || scrolls(oy) {
                 let r = &node.style.rare;
                 let padding = [
-                    r.scroll_padding_top,
-                    r.scroll_padding_right,
-                    r.scroll_padding_bottom,
-                    r.scroll_padding_left,
+                    r.scroll_padding_top.clone(),
+                    r.scroll_padding_right.clone(),
+                    r.scroll_padding_bottom.clone(),
+                    r.scroll_padding_left.clone(),
                 ];
                 scrollers.push((
                     a,

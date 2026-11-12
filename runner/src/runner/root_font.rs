@@ -14,7 +14,7 @@ use exact_plan::Value;
 
 /// The app's `setRootFontSize` and the host's size beneath it, which the
 /// host keeps setting while the app's stands and which `"medium"` restores.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub(crate) struct RootFont {
     app: Option<AppSize>,
     host: f64,
@@ -25,7 +25,7 @@ pub(crate) struct RootFont {
 
 /// The app's size: px, which stands over the host's, or a percentage of
 /// the host's (`"125%"`, CSS's percentage of `medium`), which follows it.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 enum AppSize {
     Px(f64),
     Of(f64),
@@ -150,53 +150,38 @@ impl<D: DataSource> Runner<D> {
         }
         // A step across the accessibility sizes re-answers the viewport's
         // readers in the same commit: the fact before this size is told.
-        let told = self.root_font.told;
         let was = self.accessibility_text_size();
-        let host = self.root_font.host;
-        if self.root_font.app.is_some() {
-            self.root_font.host = px;
+        let mut next = self.root_font;
+        if next.app.is_some() {
+            next.host = px;
         }
-        self.root_font.told = Some(px);
-        let which: Vec<usize> = if was == self.accessibility_text_size() {
-            Vec::new()
-        } else {
-            (0..self.plan.resources.len())
-                .filter(|i| {
-                    self.plan.str(self.plan.resources[*i].source) == crate::viewport::SOURCE
-                })
-                .collect()
-        };
-        if let Some(AppSize::Px(_)) = self.root_font.app {
-            let result = self.recommit(which, "root font size");
-            if result.is_err() {
-                self.root_font.told = told;
-            }
-            return result;
-        }
-        let px = root;
-        let previous = self.kernel.root_font_size();
-        if !self
-            .kernel
-            .set_root_font_size(px as f32)
-            .map_err(RunnerError::Kernel)?
-        {
-            // The layout's size already (one primed before boot): the fact
-            // may still have stepped.
-            let result = self.recommit(which, "root font size");
-            if result.is_err() {
-                self.root_font.told = told;
-            }
-            return result;
-        }
-        let result = self.commit_again(which, "root font size");
-        if result.is_err() {
-            // The kernel applies the size with the next commit; put back
-            // the one the tree was laid out at.
-            let _ = self.kernel.set_root_font_size(previous);
-            self.root_font.host = host;
-            self.root_font.told = told;
-        }
-        result.map(Some)
+        next.told = Some(px);
+        self.replace_fact(
+            |r| &mut r.root_font,
+            next,
+            crate::viewport::SOURCE,
+            |r, _, mut readers| {
+                if was == r.accessibility_text_size() {
+                    readers.clear();
+                }
+                if let Some(AppSize::Px(_)) = r.root_font.app {
+                    return r.recommit(readers, "root font size");
+                }
+                let previous = r.kernel.root_font_size();
+                if !r
+                    .kernel
+                    .set_root_font_size(root as f32)
+                    .map_err(RunnerError::Kernel)?
+                {
+                    return r.recommit(readers, "root font size");
+                }
+                let result = r.commit_again(readers, "root font size");
+                if result.is_err() {
+                    let _ = r.kernel.set_root_font_size(previous);
+                }
+                result.map(Some)
+            },
+        )
     }
 
     /// Whether the person's text size is one of the accessibility sizes, as

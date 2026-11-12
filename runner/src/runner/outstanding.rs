@@ -82,7 +82,7 @@ impl<D: DataSource> Runner<D> {
             poisoned: self.poisoned,
             ..Outstanding::default()
         };
-        let mut listed = vec![false; self.plan.resources.len()];
+        let mut listed = vec![false; self.resources.len()];
         for p in &self.pending {
             if !p.in_flight() || self.device_holds.iter().any(|h| h.ticket == p.ticket) {
                 continue;
@@ -90,7 +90,7 @@ impl<D: DataSource> Runner<D> {
             let Target::Resource(i) = p.target else {
                 continue;
             };
-            if matches!(&self.resources[i], Some(s) if !s.placeholder) {
+            if matches!(&self.resources[i].state, Some(s) if !s.placeholder) {
                 continue;
             }
             if std::mem::replace(&mut listed[i], true) {
@@ -103,12 +103,12 @@ impl<D: DataSource> Runner<D> {
                 out.requests.push(name);
             }
         }
-        for i in 0..self.plan.resources.len() {
-            let name = || self.plan.str(self.plan.resources[i].name).to_string();
-            if matches!((&self.failed_args[i], &self.resources[i]), (Some(f), Some(s)) if f == &s.args)
+        for i in 0..self.resources.len() {
+            let name = || self.plan.str(self.resource_row(i).name).to_string();
+            if matches!((&self.resources[i].failed_args, &self.resources[i].state), (Some(f), Some(s)) if f == &s.args)
             {
                 out.failed.push(name());
-            } else if self.awaiting[i] {
+            } else if self.resources[i].awaiting {
                 out.awaiting.push(name());
             }
         }

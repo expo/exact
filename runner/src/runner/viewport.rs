@@ -33,8 +33,8 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// The user's display preferences changed (LLP 1061 D4): re-answer
-    /// every viewport resource in one commit; the same preferences again, or
-    /// no reader, commit nothing.
+    /// every viewport resource in one commit. A Bold Text change also commits
+    /// when no resource reads the preferences, since it changes font metrics.
     pub fn set_preferences(
         &mut self,
         preferences: Preferences,
@@ -43,22 +43,25 @@ impl<D: DataSource> Runner<D> {
             preferences,
             ..self.viewport
         };
-        // Bold Text is the kernel's, no resource's (LLP 1115.000 D12.3): a
-        // change commits, whether or not a resource reads the rest.
         let bold = self.kernel.set_bold_text(preferences.bold_text);
-        let result = self.replace_viewport(viewport, "preferences");
-        if bold && result.is_err() {
-            // Refused: the setting waits for the next one, not the next commit.
-            let _ = self.kernel.set_bold_text(!preferences.bold_text);
-        }
-        if !bold || !matches!(result, Ok(None)) {
-            return result;
-        }
-        let result = self.commit_again(Vec::new(), "bold text");
-        if result.is_err() {
-            let _ = self.kernel.set_bold_text(!preferences.bold_text);
-        }
-        result.map(Some)
+        self.replace_fact(
+            |r| &mut r.viewport,
+            viewport,
+            SOURCE,
+            |r, _, readers| {
+                let result = r.recommit(readers, "preferences").and_then(|receipt| {
+                    if bold && receipt.is_none() {
+                        r.commit_again(Vec::new(), "bold text").map(Some)
+                    } else {
+                        Ok(receipt)
+                    }
+                });
+                if bold && result.is_err() {
+                    let _ = r.kernel.set_bold_text(!preferences.bold_text);
+                }
+                result
+            },
+        )
     }
 
     /// The device's posture or the segments a fold makes changed (LLP 1078
@@ -79,23 +82,16 @@ impl<D: DataSource> Runner<D> {
         viewport: Viewport,
         why: &str,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
-        if viewport == self.viewport {
-            return Ok(None);
-        }
-        let previous = self.viewport;
-        self.viewport = viewport;
-        let which = (0..self.plan.resources.len())
-            .filter(|i| self.plan.str(self.plan.resources[*i].source) == SOURCE)
-            .collect();
-        let result = self.recommit(which, why);
-        if result.is_err() {
-            self.viewport = previous;
-        }
-        result
+        self.replace_fact(
+            |r| &mut r.viewport,
+            viewport,
+            SOURCE,
+            |r, _, readers| r.recommit(readers, why),
+        )
     }
 
     pub(super) fn viewport_answer(&self, i: usize) -> Result<Value, DataError> {
-        let row = &self.plan.resources[i];
+        let row = self.resource_row(i);
         if row.args.len > 0 {
             return Err(DataError::BadArguments(format!(
                 "{SOURCE} takes no arguments"

@@ -478,6 +478,16 @@ impl Module {
         self
     }
 
+    /// The module's ABI, read by the bake for its receipt.
+    pub fn abi(&mut self) -> Result<u32, String> {
+        self.load()?;
+        let engine = self.engine.as_ref().expect("loaded");
+        engine
+            .string("abi")?
+            .parse()
+            .map_err(|e| format!("exact-js: invalid ABI: {e}"))
+    }
+
     /// The Canvas 2D roster: name and arity.
     pub fn canvas_roster(&self) -> &[(String, usize)] {
         &self.canvas_surfaces

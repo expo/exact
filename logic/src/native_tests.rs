@@ -26,6 +26,10 @@ fn native_library_uses_copied_buffers_and_keeps_existing_sessions_alive() {
     encoded.u8(2);
     encoded.u8(0);
     encoded.u32(0);
+    // No socket operation, no overload (LLP 1016.003 D5).
+    encoded.u32(0);
+    encoded.u8(0);
+    encoded.string("");
     encoded.u8(0);
     Value::Number(99.).encode(&mut encoded);
     let answer = encoded.into_vec();

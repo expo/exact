@@ -132,7 +132,10 @@ impl<D: DataSource> Runner<D> {
         let readers = self.extensions.readers.get(&self.key(row));
         readers.into_iter().flatten().any(|(i, group)| {
             groups.contains(group)
-                && self.resources.get(*i).is_some_and(Option::is_some)
+                && self
+                    .resources
+                    .get(*i)
+                    .is_some_and(|row| row.state.is_some())
                 && self.origin_asked(*i).is_none_or(|o| o == CallOrigin::App)
         })
     }

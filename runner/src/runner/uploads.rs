@@ -196,14 +196,14 @@ impl<D: DataSource> Runner<D> {
     /// Resource `i`'s identifying arguments among `args`: its `with`
     /// context reaches the source but does not identify the upload.
     pub(super) fn upload_identity<'a>(&self, i: usize, args: &'a [Value]) -> &'a [Value] {
-        let row = &self.plan.resources[i];
+        let row = self.resource_row(i);
         let n = (row.args.len as usize).saturating_sub(usize::from(row.context));
         &args[..n.min(args.len())]
     }
 
     /// How resource `i`'s upload asked at `args` stands, if it was asked.
     pub(super) fn upload_at(&self, i: usize, args: &[Value]) -> Option<&UploadEnd> {
-        let row = &self.plan.resources[i];
+        let row = self.resource_row(i);
         let (name, source) = (self.plan.str(row.name), self.plan.str(row.source));
         self.uploads.at(name, source, self.upload_identity(i, args))
     }
@@ -215,7 +215,7 @@ impl<D: DataSource> Runner<D> {
 
     /// Whether resource `i`'s failure is an upload's, at the arguments it holds.
     pub(super) fn upload_failed(&self, i: usize) -> bool {
-        (self.failed_args[i].as_ref())
+        (self.resources[i].failed_args.as_ref())
             .is_some_and(|a| matches!(self.upload_at(i, a), Some(UploadEnd::Failed(_))))
     }
 
@@ -223,14 +223,15 @@ impl<D: DataSource> Runner<D> {
     /// failed: nothing asks it again at its arguments (D10).
     pub(super) fn upload_stands(&self, i: usize) -> bool {
         self.uploading(i)
-            || (self.resources[i].as_ref()).is_some_and(|s| self.upload_at(i, &s.args).is_some())
+            || (self.resources[i].state.as_ref())
+                .is_some_and(|s| self.upload_at(i, &s.args).is_some())
             || self.upload_failed(i)
     }
 
     /// `target` asked an upload at `args`, handed to its host as `ticket`.
     pub(super) fn upload_sent(&mut self, target: Target, args: &[Value], ticket: u64) {
         let Target::Resource(i) = target else { return };
-        let row = &self.plan.resources[i];
+        let row = self.resource_row(i);
         let (name, source) = (self.plan.str(row.name), self.plan.str(row.source));
         let identity = self.upload_identity(i, args).to_vec();
         self.uploads.sent(name, source, &identity, ticket);
@@ -270,9 +271,9 @@ impl<D: DataSource> Runner<D> {
                 .map(|m| (m.resource.clone(), m.args.clone()))
                 .collect();
             self.uploads.unmark(ticket);
-            for i in 0..self.plan.resources.len() {
-                let name = self.plan.str(self.plan.resources[i].name);
-                let shows = (self.failed_args[i].as_ref()).is_some_and(|failed| {
+            for i in 0..self.resources.len() {
+                let name = self.plan.str(self.resource_row(i).name);
+                let shows = (self.resources[i].failed_args.as_ref()).is_some_and(|failed| {
                     let identity = self.upload_identity(i, failed);
                     left.iter()
                         .any(|(r, args)| r == name && args[..] == *identity)
@@ -294,7 +295,7 @@ impl<D: DataSource> Runner<D> {
     ) -> Option<Result<crate::Answer, super::RunnerError>> {
         let failed = |f: &Failure| {
             Err(super::RunnerError::Data {
-                resource: self.plan.str(self.plan.resources[i].name).to_string(),
+                resource: self.plan.str(self.resource_row(i).name).to_string(),
                 error: super::DataError::Failed(f.code, f.message.clone(), f.reason.clone()),
             })
         };

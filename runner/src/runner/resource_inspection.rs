@@ -25,21 +25,29 @@ impl<D: DataSource> Runner<D> {
     }
 
     pub(super) fn begin_resource_inspection(&mut self) {
-        if self.ids.work.sites.is_empty() || !self.ids.work.resources.is_empty() {
+        if self.ids.work.sites.is_empty() || self.ids.work.resource_inspection {
             return;
         }
         self.ids.work.resources_since = self.now_ms;
-        self.ids.work.resources = vec![ResourceWork::default(); self.plan.resources.len()];
+        self.ids.work.resource_inspection = true;
+        for row in &mut self.resources {
+            row.inspection = ResourceWork::default();
+        }
         // Existing live answers and tickets have provenance even when observation
         // starts after boot. Seeds have no request in this runner and stay unknown.
         for i in 0..self.resources.len() {
             if self.resources[i]
+                .state
                 .as_ref()
                 .is_some_and(|s| s.origin > 0 && !s.placeholder)
             {
                 let generation = self.inspection_id();
-                self.resources[i].as_mut().unwrap().inspection_generation = generation;
-                self.ids.work.resources[i] = ResourceWork {
+                self.resources[i]
+                    .state
+                    .as_mut()
+                    .unwrap()
+                    .inspection_generation = generation;
+                self.resources[i].inspection = ResourceWork {
                     request: generation,
                     successful: generation,
                 };
@@ -50,10 +58,15 @@ impl<D: DataSource> Runner<D> {
                 .position(|p| p.target == Target::Resource(i))
             {
                 let same = self.resources[i]
+                    .state
                     .as_ref()
                     .is_some_and(|s| s.origin > 0 && s.origin == self.pending[at].origin);
                 let generation = if same {
-                    self.resources[i].as_ref().unwrap().inspection_generation
+                    self.resources[i]
+                        .state
+                        .as_ref()
+                        .unwrap()
+                        .inspection_generation
                 } else {
                     self.inspection_id()
                 };
@@ -64,33 +77,36 @@ impl<D: DataSource> Runner<D> {
                 {
                     p.inspection_generation = generation;
                 }
-                self.ids.work.resources[i].request = generation;
-            } else if self.failed_args[i].is_some() {
-                self.ids.work.resources[i].request = self.inspection_id();
+                self.resources[i].inspection.request = generation;
+            } else if self.resources[i].failed_args.is_some() {
+                self.resources[i].inspection.request = self.inspection_id();
             }
         }
     }
 
     pub(super) fn inspect_request(&mut self, i: usize) {
-        if !self.ids.work.resources.is_empty() {
-            self.ids.work.resources[i].request = self.inspection_id();
+        if self.ids.work.resource_inspection {
+            self.resources[i].inspection.request = self.inspection_id();
         }
     }
 
     pub(super) fn inspected_request(&self, i: usize) -> u64 {
-        self.ids.work.resources.get(i).map_or(0, |w| w.request)
+        self.resources
+            .get(i)
+            .map(|row| &row.inspection)
+            .map_or(0, |w| w.request)
     }
 
     pub(super) fn inspected_success(&mut self, i: usize, generation: u64) {
         if generation > 0 {
-            if let Some(w) = self.ids.work.resources.get_mut(i) {
+            if let Some(w) = self.resources.get_mut(i).map(|row| &mut row.inspection) {
                 w.successful = generation;
             }
         }
     }
 
     pub(crate) fn resource_inspection(&self, out: &mut String) {
-        if self.ids.work.resources.is_empty() {
+        if !self.ids.work.resource_inspection {
             return;
         }
         out.push_str(",\"planDigest\":");
@@ -101,15 +117,21 @@ impl<D: DataSource> Runner<D> {
             ",\"resourcesMeasuredFrom\":{},\"resourceStatus\":{{",
             num(self.ids.work.resources_since)
         );
-        for (i, w) in self.ids.work.resources.iter().enumerate() {
+        for (i, w) in self
+            .resources
+            .iter()
+            .take(self.plan.resources.len())
+            .map(|row| &row.inspection)
+            .enumerate()
+        {
             if i > 0 {
                 out.push(',');
             }
-            let row = &self.plan.resources[i];
+            let row = self.resource_row(i);
             quote(self.plan.str(row.name), out);
             let _ = write!(out, ":{{\"resource\":{i},\"source\":");
             quote(self.plan.str(row.source), out);
-            let state = self.resources[i].as_ref();
+            let state = self.resources[i].state.as_ref();
             let displayed = state.map_or(0, |s| s.inspection_generation);
             let fallback =
                 state.is_none_or(|s| s.placeholder || s.origin == 0 && s.value.is_compiled());
@@ -133,7 +155,7 @@ impl<D: DataSource> Runner<D> {
                 })
                 .map_or("null", |equal| if equal { "true" } else { "false" });
             let _ = write!(out, ",\"requestGeneration\":{},\"lastSuccessfulGeneration\":{},\"displayedGeneration\":{},\"pending\":{},\"displayed\":\"{status}\",\"argumentsEqual\":{equal},\"placeholder\":{},\"keptSeed\":{},\"keptSeedSupported\":true}}",
-                generation(w.request), generation(w.successful), generation(displayed), self.pending_res[i], state.is_some_and(|s| s.placeholder), state.is_some_and(|s| s.kept_seed));
+                generation(w.request), generation(w.successful), generation(displayed), self.resources[i].pending, state.is_some_and(|s| s.placeholder), state.is_some_and(|s| s.kept_seed));
         }
         out.push('}');
     }

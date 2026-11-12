@@ -182,7 +182,7 @@ impl<D: DataSource> Runner<D> {
         outcome: Outcome,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
         let was_poisoned = self.poisoned;
-        let checkpoint = self.checkpoint(true);
+        let checkpoint = self.checkpoint();
         let pos =
             (self.pending.iter().position(|p| p.ticket == stream)).expect("found by turn_stream");
         let p = self.pending[pos].clone();

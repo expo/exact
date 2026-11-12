@@ -415,10 +415,20 @@ impl Resolver<'_, '_> {
         let coord = |d, default, obb, basis| vp.coord(d, default, if obb { 1.0 } else { basis });
         let row = |n: &NodeRef<'_>, s: StyleId, d: Dimension| n.style.mask.has(s).then_some(d);
         let raw = (
-            coord(row(f, StyleId::X, f.style.x), -0.1, obb, vp.width),
-            coord(row(f, StyleId::Y, f.style.y), -0.1, obb, vp.height),
-            coord(row(f, StyleId::Width, f.style.width), 1.2, obb, vp.width),
-            coord(row(f, StyleId::Height, f.style.height), 1.2, obb, vp.height),
+            coord(row(f, StyleId::X, f.style.x.clone()), -0.1, obb, vp.width),
+            coord(row(f, StyleId::Y, f.style.y.clone()), -0.1, obb, vp.height),
+            coord(
+                row(f, StyleId::Width, f.style.width.clone()),
+                1.2,
+                obb,
+                vp.width,
+            ),
+            coord(
+                row(f, StyleId::Height, f.style.height.clone()),
+                1.2,
+                obb,
+                vp.height,
+            ),
         );
         let region = match (obb, bx) {
             (true, Some(b)) => (
@@ -722,11 +732,11 @@ impl Resolver<'_, '_> {
                         }
                     })
                 };
-                let x = len(StyleId::X, p.style.x, vp.width, b.0, b.2).unwrap_or(region.0);
-                let y = len(StyleId::Y, p.style.y, vp.height, b.1, b.3).unwrap_or(region.1);
-                let w = len(StyleId::Width, p.style.width, vp.width, 0.0, b.2)
+                let x = len(StyleId::X, p.style.x.clone(), vp.width, b.0, b.2).unwrap_or(region.0);
+                let y = len(StyleId::Y, p.style.y.clone(), vp.height, b.1, b.3).unwrap_or(region.1);
+                let w = len(StyleId::Width, p.style.width.clone(), vp.width, 0.0, b.2)
                     .unwrap_or(region.0 + region.2 - x);
-                let h = len(StyleId::Height, p.style.height, vp.height, 0.0, b.3)
+                let h = len(StyleId::Height, p.style.height.clone(), vp.height, 0.0, b.3)
                     .unwrap_or(region.1 + region.3 - y);
                 let x0 = x.max(region.0);
                 let y0 = y.max(region.1);
