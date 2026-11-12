@@ -658,7 +658,7 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     writeFileSync(resolve(out, 'index.md'), '# Home\n');
     writeFileSync(resolve(out, 'live.md'), '# Live\n');
     for (const [path, accept, type, body] of [['/', 'text/markdown', 'text/markdown', '# Home\n'], ['/live', 'text/markdown, text/html;q=0.9', 'text/markdown', '# Live\n'],
-      ['/live', 'text/html, text/markdown;q=0.5', 'text/html', null], ['/item/7', 'text/markdown, text/html;q=0.9', 'text/html', null], ['/live', 'text/markdown;q=0.5, text/*', 'text/html', null], ['/', 'text/markdown, */*;q=0.1', 'text/markdown', '# Home\n']]) {
+      ['/live', 'text/html, text/markdown;q=0.5', 'text/html', null], ['/item/7', 'text/markdown, text/html;q=0.9', 'text/html', null], ['/live', 'text/markdown;q=0.5, text/html', 'text/html', null], ['/', 'text/markdown, */*;q=0.1', 'text/markdown', '# Home\n']]) {
       const r = await fetch(url(path), { headers: { accept } });
       expect([path, accept, r.status, r.headers.get('content-type').split(';')[0], r.headers.get('vary')]).toEqual([path, accept, 200, type, 'Accept']);
       if (body) expect(await r.text()).toBe(body);
