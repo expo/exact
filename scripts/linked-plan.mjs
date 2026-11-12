@@ -15,17 +15,42 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cargoEnvironment, developmentBuildEnv } from './app.mjs';
 import { webOnly } from './app-cli.mjs';
+import { appleCargo } from './cargo-check.mjs';
 import { cargoInputPaths, packageDirectories } from './cargo-dep-info.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const TOOL_TARGET = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : resolve(ROOT, 'target');
 
-/** The bake tool (`exact-js-bake`), built once in this checkout's target and
- * shared by every app built from it: the command that builds it (a no-op when
- * built), and where it is. */
+/** The bake command (`exact-js-bake`) a plan override runs (scripts/agent-build.mjs), built once in this
+ * checkout's target and shared by every app built from it: the command that builds it (a no-op when built), and
+ * where it is. An Apple build bakes with `appleBakeTool`. */
 export const bakeTool = { command: 'cargo', args: ['build', '-q', '--profile', 'host-dev', '-p', 'exact-js-bake'], built: resolve(TOOL_TARGET, 'host-dev/exact-js-bake'),
-  // Built with the build's own Mac deployment target when one asks (`bakeOutside`), as its host side shares the target directory.
+  // Built with a build's own Mac deployment target when one is named, as its host side shares the target directory.
   options: (build = {}) => ({ cwd: ROOT, env: { ...developmentBuildEnv(), ...(build.MACOSX_DEPLOYMENT_TARGET ? { MACOSX_DEPLOYMENT_TARGET: build.MACOSX_DEPLOYMENT_TARGET } : {}), EXACT_UPDATE_TRUST: 'development', CARGO_TARGET_DIR: TOOL_TARGET } }) };
+
+/** The Cargo arguments that build `appleBakeTool` on `host` with the app's profile arguments. */
+export const appleBakeToolArgs = (host, cargoArgs = ['--profile', 'host-dev']) => ['build', ...cargoArgs, '-p', 'exact-js-bake-tool', '--target', host];
+
+/** The bake tool an Apple build runs before Cargo (`bakeOutside`): `exact-js-bake-tool`'s build script, which runs
+ * the `exact-js-bake` command. A build script's dependencies compile as the app crate's build dependency on
+ * exact-js-bake does (the profile's build override, the build side's features). Built with the app's profile
+ * arguments, its environment and an explicit target (Cargo then leaves RUSTFLAGS off the host's units, as in the
+ * app's build), every unit of the tool is one the app's build then finds built. Built as a binary, most were others,
+ * and a Rust change under the bake compiled twice for the host. The environment must be the app build's: a shared
+ * build script runs again when a variable it reads differs (cc's `CXXFLAGS`, the deployment targets). The
+ * executable. */
+export function appleBakeTool(env, cargoArgs) {
+  const host = /^host: (\S+)$/m.exec(spawnSync('rustc', ['-vV'], { encoding: 'utf8' }).stdout ?? '')?.[1];
+  if (!host) throw new Error('rustc did not report its host target');
+  const args = [...appleBakeToolArgs(host, cargoArgs), '-q', '--message-format=json-render-diagnostics'];
+  const built = spawnSync(...appleCargo('cargo', args, { cwd: ROOT, env: { ...cargoEnvironment(env), CARGO_TARGET_DIR: TOOL_TARGET }, stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
+  if (built.status !== 0) throw new Error(`the bake tool did not build (cargo ${args.join(' ')})`);
+  const manifest = resolve(ROOT, 'js/bake/tool/Cargo.toml');
+  const script = (built.stdout ?? '').split('\n').filter(line => line.startsWith('{')).map(line => JSON.parse(line))
+    .find(m => m.reason === 'compiler-artifact' && m.manifest_path === manifest && m.target.kind.includes('custom-build'));
+  if (!script?.filenames?.[0]) throw new Error(`cargo ${args.join(' ')} named no build script for exact-js-bake-tool`);
+  return script.filenames[0];
+}
 
 /** The Apple build script `exact new` writes: it names the platform and
  * bakes, and does nothing else a bake made before Cargo would miss. */
@@ -158,12 +183,14 @@ function fresh(record, dir, env, tool) {
 /** Bakes `app` for `platform` and `target` into its linked bake directory,
  * unless the bake there is fresh; the directory. A bake that fails throws
  * what it said, as the build script's failure ends a build. `prepareRust`
- * refreshes the compiled baker through Cargo before it reads new inputs.
+ * refreshes the compiled baker through Cargo before it reads new inputs;
+ * `cargoArgs`, the app's profile arguments, build a TypeScript app's tool
+ * (`appleBakeTool`).
  * The caller holds the app's build claim (host/apple/build.mjs `appleBuildLock`), the one
  * writer of the directory. */
-export function bakeOutside(app, platform, target, env, prepareRust) {
+export function bakeOutside(app, platform, target, env, prepareRust, { cargoArgs } = {}) {
   const dir = linkedBakeDir(env, platform, target), at = resolve(dir, 'inputs.json');
-  let executable = bakeTool.built, args = [app.dir, '--cargo', platform, target, dir], cwd = app.dir, runEnv = cargoEnvironment(env);
+  let executable, args = [app.dir, '--cargo', platform, target, dir], cwd = app.dir, runEnv = cargoEnvironment(env);
   const rust = existsSync(resolve(app.dir, 'data/Cargo.toml'));
   if (rust) {
     prepareRust?.(dir);
@@ -175,10 +202,7 @@ export function bakeOutside(app, platform, target, env, prepareRust) {
     if (!existsSync(baker.executable)) return dir;
     executable = baker.executable; args = []; cwd = baker.cwd;
     runEnv = { ...runEnv, ...baker.env, OUT_DIR: dir, EXACT_BAKED: dir, EXACT_RUST_BAKE: '1' };
-  } else {
-    const built = spawnSync(bakeTool.command, bakeTool.args, { ...bakeTool.options(env), stdio: ['ignore', 'inherit', 'inherit'] });
-    if (built.status !== 0) throw new Error(`the bake tool did not build (${bakeTool.command} ${bakeTool.args.join(' ')})`);
-  }
+  } else executable = appleBakeTool(env, cargoArgs);
   const tool = `${executable} ${statSync(executable).mtimeMs}`;
   // Its warnings are said on every build, as Cargo replays a build script's: the SF Symbols only the web draws blank
   // one line where the first was, as `contract build` says them (18 of them every euxy build).

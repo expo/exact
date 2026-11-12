@@ -6,6 +6,7 @@
 
 mod android;
 mod beside;
+pub mod cli;
 mod icon;
 mod library;
 mod linked;

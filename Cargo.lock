@@ -1626,6 +1626,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "exact-js-bake-tool"
+version = "0.1.0"
+dependencies = [
+ "exact-js-bake",
+]
+
+[[package]]
 name = "exact-js-value"
 version = "0.1.0"
 dependencies = [

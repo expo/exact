@@ -1302,7 +1302,7 @@ export function buildBake(app, platform, target, options = {}) {
     if (archive && options.link && !env.EXACT_RUST_BUNDLE && linkable(app,pkg)) {
       env.EXACT_BAKED = bakeOutside(app,platform,target,env,dir => {
         buildCommand('cargo',['build',...args.slice(3)],app,{...env,EXACT_BAKED:dir},'inherit');
-      });
+      },{cargoArgs:[...whole,'--profile',profile]});
     } else delete env.EXACT_BAKED;
     const recordInputs = pkg.id === graph.root.id ? cargoBakeInputs(pkg,target,profile,env,platform === 'windows' ? app : null) : () => {};
     // Cargo compiles a TypeScript app's linked bake from a content-addressed copy (linked-plan.mjs compiledBakeDir), so an identity, grants or Canvas roster change leaves its archive fresh; a Rust data crate's bake registers its build script in its own directory and keeps it.
