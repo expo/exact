@@ -62,7 +62,7 @@ fn an_enumerated_node_lowers_to_one_class_write() {
     // The rows are `style_row`'s own statements, on the arm's literals.
     assert!(!js.contains("S(e1,"), "{js}");
     assert!(
-        js.contains("S($e,\"color\",\"\",()=>($cm)(blank((()=>$b[0])())))"),
+        js.contains("S($e,\"color\",\"\",()=>mapped((()=>$b[0])(),$cm,\"unset\"))"),
         "{js}"
     );
 }
@@ -444,9 +444,9 @@ fn names_are_padded_and_revert_layer_is_a_token() {
     assert!(!lower::safe_text("a revert-layer"));
 }
 
-/// A `none` arm and a blank one write nothing there, as `S` removes the row.
+/// A `none` arm and a blank font-family arm can both lower.
 #[test]
 fn a_none_and_a_blank_arm_lower() {
     let js = lowered("text \"x\" font-weight=(s == \"a\" ? none : 700) font-family=(s == \"b\" ? \"\" : \"serif\")");
-    assert!(js.contains("[[null,4],[700,null],[700,4]]"), "{js}");
+    assert!(js.contains("[[null,4],[700,\"\"],[700,4]]"), "{js}");
 }

@@ -1,5 +1,6 @@
 //! A rendered document as a page (LLP 1048.000 D3, D6, D7): the one place a
 //! page is composed, for the build's `dist/` and the server alike.
+use crate::serve::deferred::{self, Checkpoints};
 use crate::Rendered;
 
 /// The capture script (LLP 1048.000 D6, 1048.001 D5): host code, inline in
@@ -26,8 +27,16 @@ pub fn capture() -> &'static str {
 /// built); an interaction page's are removed: it fetches nothing before a
 /// handler's intent. Refuses a shell that no longer has those places.
 pub fn page(shell: &str, rendered: &Rendered) -> Result<String, String> {
+    page_at(shell, rendered, None)
+}
+
+pub(crate) fn page_at(
+    shell: &str,
+    rendered: &Rendered,
+    checkpoints: Option<&Checkpoints>,
+) -> Result<String, String> {
     if is_js(shell) {
-        return page_js(shell, rendered);
+        return Ok(page_with(shell, &Js::of(shell)?, rendered, checkpoints));
     }
     let mut html = shell.to_string();
     // From `start` through the first `end` after it.
@@ -87,9 +96,10 @@ pub fn page(shell: &str, rendered: &Rendered) -> Result<String, String> {
     } else {
         glue
     };
+    let (src, body) = deferred::checkpoint(&rendered.checkpoint, rendered.activate, checkpoints);
     let checkpoint = format!(
-        "<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"{}\"{build}>{}</script>\n{entry}",
-        rendered.digest, rendered.activate.name(), rendered.checkpoint
+        "<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"{}\"{build}{src}>{body}</script>\n{entry}",
+        rendered.digest, rendered.activate.name()
     );
     cut(&mut html, glue, glue, &checkpoint)?;
     // Counted outside script elements ([`blanked`]) and before the shell's
@@ -169,21 +179,19 @@ pub(crate) fn preloads_early(plan: &exact_plan::Plan, location: &str) -> bool {
     }
 }
 
-/// [`page`] over the JavaScript runtime's shell (exact2's JS web target,
-/// LLP 1071): [`head_js`], then [`body_js`] — the page a server streams in
-/// those two parts is these bytes.
-fn page_js(shell: &str, rendered: &Rendered) -> Result<String, String> {
-    Ok(page_with(shell, &Js::of(shell)?, rendered))
-}
-
-/// [`page_js`] over a shell already read, with the build's analyzed sheet
+/// [`page`] over a shell already read, with the build's analyzed sheet
 /// when [`Js::with_rules`] gave it.
-pub(crate) fn page_with(shell: &str, js: &Js, rendered: &Rendered) -> String {
+pub(crate) fn page_with(
+    shell: &str,
+    js: &Js,
+    rendered: &Rendered,
+    checkpoints: Option<&Checkpoints>,
+) -> String {
     let preload = activate_js(rendered.activate) != "interaction";
     let document = &rendered.document;
     let scroll = document.scroll_document;
     head_js(shell, js, &document.lang, &document.dir, preload, scroll)
-        + &body_js(shell, js, rendered, false, scroll)
+        + &body_js(shell, js, rendered, false, scroll, checkpoints)
 }
 
 /// [`page`] with the build's analyzed sheet (`.gen/page-style.json`), so
@@ -197,6 +205,7 @@ pub fn page_with_rules(shell: &str, rules: &str, rendered: &Rendered) -> Result<
         shell,
         &Js::of(shell)?.with_rules(rules),
         rendered,
+        None,
     ))
 }
 
@@ -426,8 +435,9 @@ pub(crate) fn body_js(
     rendered: &Rendered,
     late: bool,
     marked: bool,
+    checkpoints: Option<&Checkpoints>,
 ) -> String {
-    body_after_boot_js(shell, js, rendered, late, marked, None)
+    body_after_boot_js(shell, js, rendered, late, marked, None, checkpoints)
 }
 
 pub(crate) fn body_after_boot_js(
@@ -437,6 +447,7 @@ pub(crate) fn body_after_boot_js(
     late: bool,
     marked: bool,
     boot: Option<&crate::direct::Boot>,
+    checkpoints: Option<&Checkpoints>,
 ) -> String {
     let document = &rendered.document;
     let mut html = std::borrow::Cow::Borrowed(document.root.as_str());
@@ -482,6 +493,7 @@ pub(crate) fn body_after_boot_js(
         rendered.activate,
         &rendered.wake,
         &rendered.checkpoint,
+        checkpoints,
     );
     out.push_str(&crate::direct::close_after_boot(close, boot.is_some()));
     out
@@ -570,7 +582,9 @@ pub(crate) fn body_close_js(
     activate: exact_plan::ActivatePolicy,
     wake: &str,
     checkpoint: &str,
+    checkpoints: Option<&Checkpoints>,
 ) -> String {
+    let (src, checkpoint) = deferred::checkpoint(checkpoint, activate, checkpoints);
     let at = &js.at;
     let mut out = String::with_capacity(shell.len() - at.root + checkpoint.len() + 256);
     out.push_str("</div>");
@@ -589,7 +603,7 @@ pub(crate) fn body_close_js(
     let _ = std::fmt::Write::write_fmt(
         &mut out,
         format_args!(
-            "<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"{}\"{}>{}</script>",
+            "<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"{}\"{}{src}>{}</script>",
             digest,
             activate_js(activate),
             wake,
@@ -1096,11 +1110,11 @@ mod tests {
         let head = head_js(shell, &js, "en", "ltr", true, false);
         assert!(head.contains("<html lang=\"en\" dir=\"ltr\">"), "{head}");
         let mark = format!("<script>{}</script>", scroll_document_js());
-        let rest = body_js(shell, &js, &rendered, false, false);
+        let rest = body_js(shell, &js, &rendered, false, false, None);
         assert!(rest.find(&mark).unwrap() < rest.find("<div id=\"exact-root\">").unwrap());
-        assert!(!body_js(shell, &js, &rendered, false, true).contains(&mark));
+        assert!(!body_js(shell, &js, &rendered, false, true, None).contains(&mark));
         rendered.document.scroll_document = false;
-        assert!(!body_js(shell, &js, &rendered, false, false).contains(&mark));
+        assert!(!body_js(shell, &js, &rendered, false, false, None).contains(&mark));
     }
 
     /// LLP 1048.000 D3: the app's `host.web.head`, which the build writes
@@ -1172,7 +1186,7 @@ mod tests {
                 runtime_form: false,
             };
             let page = head_js(&shell, &js, "en", "ltr", false, false)
-                + &body_js(&shell, &js, &rendered, false, false);
+                + &body_js(&shell, &js, &rendered, false, false, None);
             for script in [head, after].into_iter().filter(|s| !s.is_empty()) {
                 assert_eq!(page.matches(script).count(), 1, "{page}");
             }

@@ -1,6 +1,51 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { resolve } from 'node:path';
 import { formControlsSmoke, isDeckURL } from './smoke-inspect.mjs';
+
+test('Apple keyboard smokes use the resolved app name while drives keep the app selector', () => {
+  const root = resolve(import.meta.dir, '..');
+  for (const [host, selector, inherited, name] of [
+    ['ios', 'apps/messages', undefined, 'messages'],
+    ['macos', 'messages-apple', undefined, 'messages'],
+    ['ios', undefined, 'apps/messages', 'messages'],
+    ['ios', 'apps/messages-stress', undefined, 'messages-stress'],
+    ['ios', 'apps/exact-live', undefined, 'exact-live'],
+  ]) {
+    // Module mocks stay in a child so other tests retain the real driver and smoke helpers.
+    const script = `
+      import assert from 'node:assert/strict';
+      import { mock } from 'bun:test';
+      import * as agent from './scripts/agent.mjs';
+      import * as inspect from './scripts/smoke-inspect.mjs';
+      const selector = ${JSON.stringify(selector) ?? 'undefined'}, seen = [], done = new Error('keyboard route checked');
+      const session = {
+        tree: async () => ({ roots: [1], nodes: [{ id: 1, props: {} }] }),
+        layout: async () => ({ viewport: { w: 400, h: 800 }, nodes: [{ id: 1 }] }),
+        close: async () => { throw done; },
+      };
+      mock.module('./scripts/agent.mjs', () => ({ ...agent,
+        open: async (options) => { assert.equal(options.app, selector); return session; },
+      }));
+      mock.module('./scripts/smoke-inspect.mjs', () => ({ ...inspect,
+        agree: async () => {},
+        messageKeys: async (s, options) => { assert.equal(s, session); seen.push(options.app); throw done; },
+      }));
+      delete process.env.EXACT_APP_DIR;
+      const inherited = ${JSON.stringify(inherited) ?? 'undefined'};
+      if (inherited) process.env.EXACT_APP_DIR = inherited;
+      process.argv = [process.execPath, './scripts/smoke.mjs', ${JSON.stringify(host)},
+        ...(selector ? ['--app', selector] : []), '--app-only'];
+      try { await import('./scripts/smoke.mjs'); assert.fail('did not reach keyboard route'); }
+      catch (error) { assert.equal(error, done); }
+      assert.deepEqual(seen, [${JSON.stringify(name)}]);
+      assert.equal(process.env.EXACT_APP_DIR, inherited);
+    `;
+    const r = spawnSync(process.execPath, ['-e', script], { cwd: root, encoding: 'utf8', timeout: 20_000 });
+    assert.equal(r.status, 0, `${host} ${selector ?? inherited}: ${r.stdout}${r.stderr}${r.error ?? ''}`);
+  }
+}, 120_000);
 
 test('the deck smoke resolves frame URLs within the document base', () => {
   assert.equal(isDeckURL('/deck/index.html', null), true);

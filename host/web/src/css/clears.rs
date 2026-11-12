@@ -24,10 +24,32 @@ pub(super) fn push(out: &mut String, id: StyleId, press: bool) -> bool {
         // No pressed paint is no declaration: the glue and the shell's
         // dim read one's presence (LLP 1061 D7).
         PressOpacity | PressOpacityTo | PressBackgroundColor | PressColor => {}
+        // Both spellings, as a value writes them (css.rs, LLP 1019 D12).
+        FontSmoothing => {
+            out.push_str("-webkit-font-smoothing:unset;-moz-osx-font-smoothing:unset;")
+        }
         _ => {
             property(out, id);
             out.push_str(":unset;");
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use exact_kernel::{StyleId, StyleProps};
+
+    /// A cleared row unsets every property its value writes, so neither
+    /// spelling of an authored class's font smoothing paints.
+    #[test]
+    fn a_cleared_font_smoothing_unsets_both_spellings() {
+        let mut style = StyleProps::default();
+        style.written.set(StyleId::FontSmoothing);
+        let css = super::super::css_text(&style, &[]).0;
+        assert!(
+            css.contains("-webkit-font-smoothing:unset;-moz-osx-font-smoothing:unset;"),
+            "{css}"
+        );
+    }
 }

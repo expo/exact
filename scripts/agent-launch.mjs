@@ -853,7 +853,11 @@ export function bakedPlans(linuxBin, bakeDir) {
  * left — where the live driver looks. */
 export function traceLocators(appName) {
   const out = [process.env.EXACT_DEV_PLAN, resolve(webDist(), 'app.plan')].filter(Boolean);
-  try { const a = resolveApp(appName); out.push(...bakedPlans(process.env.EXACT_LINUX_BIN ?? linuxBinary(a), bakeOutput(a))); } catch {}
+  try {
+    const a = resolveApp(appName);
+    if (a.outside) out.push(resolve(webDist(a), 'app.plan'));
+    out.push(...bakedPlans(process.env.EXACT_LINUX_BIN ?? linuxBinary(a), bakeOutput(a)));
+  } catch {}
   return out;
 }
 

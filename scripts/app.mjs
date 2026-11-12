@@ -413,13 +413,13 @@ function checkoutOf(dir) {
 }
 
 /** The web build's output directory: `EXACT_WEB_DIST` when set; for an app
- * outside this repository, its own `target/web-dist` — a checkout's
+ * selected by path or `EXACT_APP_DIR`, its own `target/web-dist` — a checkout's
  * `host/web/dist` is one slot every in-repo build writes (the checks rebuild
  * Caltrain into it), and an outside app served from it silently became
  * Caltrain (LLP 1054 O5); otherwise `host/web/dist`. */
-export function webDist() {
+export function webDist(app) {
   if (process.env.EXACT_WEB_DIST) return resolve(process.env.EXACT_WEB_DIST);
-  if (process.env.EXACT_APP_DIR) return resolve(resolveApp().target, 'web-dist');
+  if (app ? app.outside : process.env.EXACT_APP_DIR) return resolve((app ?? resolveApp()).target, 'web-dist');
   return resolve(ROOT, 'host/web/dist');
 }
 
@@ -428,7 +428,7 @@ export function webDist() {
 export function webBuildCommand(app, dist, flags = '', otherwise = null) {
   const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
   const own = app.dir ? resolve(app.dir, 'exact.mjs') : null;
-  if (own && process.env.EXACT_APP_DIR && !process.env.EXACT_WEB_DIST && existsSync(own) && !own.startsWith(`${ROOT}/`))
+  if (own && app.outside && !process.env.EXACT_WEB_DIST && existsSync(own) && !own.startsWith(`${ROOT}/`))
     return `cd ${quote(app.dir)} && bun exact.mjs web-build${flags}`;
   return otherwise ?? `EXACT_APP_DIR=${quote(app.dir)} EXACT_WEB_DIST=${quote(resolve(dist))} bun host/web/build.mjs ${app.crate('web')}${flags}`;
 }
@@ -460,16 +460,16 @@ export function moduleDirectory(dir, platform) {
 
 /** The app `nameOrCrate` names (`caltrain`, `caltrain-web`, …; `EXACT_APP_DIR`'s basename when unset): its directory, cargo workspace, target directory, crate names, and manifest. */
 export function resolveApp(nameOrCrate) {
-  // A path (`--app ../my-app`, `--app /abs/app`, `--app .`) names an app as
-  // EXACT_APP_DIR does, which the processes it starts inherit: its name is
-  // its directory's, so nothing built from the name (a crate, a target
-  // subdirectory) lands in the app's own directory.
-  if (nameOrCrate && /[\\/]|^\.\.?$/.test(String(nameOrCrate))) {
-    process.env.EXACT_APP_DIR = resolve(String(nameOrCrate));
-    nameOrCrate = undefined;
-  }
-  const outside = process.env.EXACT_APP_DIR ? resolve(process.env.EXACT_APP_DIR) : null;
+  const path = nameOrCrate && /[\\/]|^\.\.?$/.test(String(nameOrCrate)) ? resolve(String(nameOrCrate)) : null;
+  const outside = path ?? (process.env.EXACT_APP_DIR ? resolve(process.env.EXACT_APP_DIR) : null);
+  if (path) nameOrCrate = undefined;
   let name = nameOrCrate ? String(nameOrCrate).replace(/-(web|apple|ios|macos|linux|windows|gpu)$/, '') : outside ? basename(outside) : 'caltrain';
+  // What selects this app again, by name and directory, here and in a child
+  // that inherits this environment: the path given, else the name, which an
+  // unchanged `EXACT_APP_DIR` places as it did now. The directory alone would
+  // rename an app `EXACT_APP_DIR` holds under another name (`--app original`
+  // with `EXACT_APP_DIR=…/copy`); a game's name below is its crate's.
+  const selector = path ?? name;
   let dir = outside ?? resolve(ROOT, 'apps', name);
   if (!outside && !existsSync(resolve(dir, 'app.contract')) && existsSync(resolve(ROOT, 'game/games', name, 'app.contract'))) dir = resolve(ROOT, 'game/games', name);
   if (!existsSync(resolve(dir, 'app.contract'))) throw new Error(`no app at ${dir} (no app.contract)${outside ? '' : '; set EXACT_APP_DIR for an app outside this repo'}`);
@@ -550,7 +550,8 @@ export function resolveApp(nameOrCrate) {
     return packages.find(pkg => pkg.name === crate(kind));
   };
   return {
-    name, dir, target, crate, generated, rust,
+    name, dir, target, crate, generated, rust, outside: !!outside,
+    selector,
     get workspace() { return rust(); },
     cargoPackage, prepare,
     get hasGpu() {

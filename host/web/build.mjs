@@ -97,7 +97,7 @@ if (target !== '--wasm' && !game && !bakeOnly) {
   // An app outside apps/ reaches it through EXACT_APP_DIR, as here. It builds in a stage of its own beside the
   // output, which replaces the output only when complete (`replaceBuild`), so builds run at once never mix, and the
   // build replaced is kept by its generation while a page `serve` sent may still ask for its files.
-  const dist = outRoot || webDist();
+  const dist = outRoot || webDist(app);
   // The JS build runs Cargo in an authored workspace in two cases (LLP 1153 D2.1): a web crate whose build script is
   // the author's, and pages rendered by the app's own render entry (`--render rust`, the default when it has one).
   // Its lock is checked before either, as every other build's is.
@@ -159,7 +159,7 @@ const kib = (n) => `${(n / 1024).toFixed(0)} KiB`;
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 // `EXACT_WEB_DIST` names another output directory: `exact deploy` bakes into a
 // run-specific one and never publishes from the dev server's shared dist/.
-const dist = webDist();
+const dist = webDist(app);
 const previous = `${dist}.previous`;
 // A hard stop can land after dist moved aside but before the completed stage
 // took its place. Restore the prior complete build before doing slow work;

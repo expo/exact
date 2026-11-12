@@ -943,6 +943,9 @@ pub fn style_fallback(name: &str) -> String {
 /// css.rs writes no declaration for the row's empty value.
 const NONE: &str = "v=>v==null||/^\\s*none\\s*$/i.test(v)?null:v";
 
+pub(super) const TIMELINE_PLAY_STATE: &str =
+    "v=>v==null||/^\\s*(unset|auto|(-exact-)?clock\\(.*\\))?\\s*$/i.test(v)?null:\"paused\"";
+
 /// A bound corner's map: a list (white space outside parentheses, or a
 /// `/`) is the elliptical radius no row holds, refused whole with the
 /// journal line rt.js `css` writes for a value a row does not take, as the
@@ -1018,6 +1021,38 @@ fn one(name: impl Into<String>, unit: impl Into<String>) -> Vec<Write> {
         unit: unit.into(),
         map: None,
     }]
+}
+
+/// A blank's declarations come from the wasm serializer, including companion
+/// properties. A property absent here keeps its map's internal absence rule.
+pub(super) fn clear_css(id: StyleId, press: bool) -> String {
+    let mut style = exact_kernel::StyleProps::default();
+    style.written.set(id);
+    if press {
+        style
+            .set_dynamic(StyleId::PressScale, &exact_kernel::StyleValue::Number(0.9))
+            .expect("a press scale");
+    }
+    exact_web::css::css_text(&style, &[]).0
+}
+
+/// The value a clear's declarations (`clear_css`) give the write of
+/// `property`: the stroke shorthand takes its longhands' `unset`, and a bare
+/// button's copy of its padding (sides.rs) the padding's, as button_css.rs
+/// `face` copies the clear.
+pub(super) fn cleared<'a>(clear_css: &'a str, property: &str) -> Option<&'a str> {
+    let property = property
+        .strip_prefix("--exact-")
+        .filter(|p| p.starts_with("padding-"))
+        .unwrap_or(property);
+    clear_css
+        .split(';')
+        .filter_map(|d| d.split_once(':'))
+        .find(|(p, _)| {
+            *p == property
+                || property == "-webkit-text-stroke" && p.starts_with("-webkit-text-stroke-")
+        })
+        .map(|(_, v)| v)
 }
 
 /// A dynamic style row's writes (see [`style_row`]), with what css.rs
@@ -1122,7 +1157,7 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
         StyleId::AnimationTimeline => vec![
             with(
                 "--exact-animation-timeline",
-                "v=>v==null||/^\\s*(auto|(-exact-)?clock\\(.*\\))\\s*$/i.test(v)?null:v",
+                "v=>v==null||/^\\s*(unset|auto|(-exact-)?clock\\(.*\\))\\s*$/i.test(v)?null:v",
             ),
             with(
                 "--exact-animation-clock",
@@ -1130,7 +1165,7 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
             ),
             with(
                 "animation-play-state",
-                "v=>v==null||/^\\s*(auto|(-exact-)?clock\\(.*\\))\\s*$/i.test(v)?null:\"paused\"",
+                TIMELINE_PLAY_STATE,
             ),
         ],
         StyleId::AnimationRange => vec![with(
@@ -1393,12 +1428,16 @@ pub(crate) fn other_side(id: StyleId) -> Option<StyleId> {
 }
 
 /// Right to left, a side its author binds keeps the sheet's other side
-/// physical in the class (`static_tree`) while it has a value. Unset, neither
+/// physical in the class (`static_tree`) while it is declared. Absent, neither
 /// side is the author's and the sheet's pair mirrors, as the kernel's
 /// `mirror_unsaid` has it: inline logical sides, which outrank the class's
 /// physical ones, say the pair as css.rs would. The writes for the bound side
 /// `id`, given its class's `css`; none when the sheet sets no other side.
-pub(crate) fn unset_mirrors(id: StyleId, css: &str) -> Vec<(String, String, Option<String>)> {
+pub(crate) fn unset_mirrors(
+    id: StyleId,
+    css: &str,
+    absent: &str,
+) -> Vec<(String, String, Option<String>)> {
     let sheet = |row: StyleId| {
         let name = format!("{}:", css_property(row));
         css.split(';')
@@ -1417,7 +1456,7 @@ pub(crate) fn unset_mirrors(id: StyleId, css: &str) -> Vec<(String, String, Opti
     [("start", start), ("end", end)]
         .into_iter()
         .map(|(edge, value)| {
-            let map = format!("v=>v==null?{value:?}:null");
+            let map = format!("v=>{absent}?{value:?}:null");
             (format!("{side}-inline-{edge}"), String::new(), Some(map))
         })
         .collect()

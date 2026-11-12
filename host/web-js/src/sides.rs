@@ -1,6 +1,6 @@
 //! Right to left, a padding or margin pair whose two sides different hands
 //! say: a side its author binds keeps the sheet's other side physical while
-//! it has a value, and unset, neither side is the author's and the sheet's
+//! it is declared, and absent, neither side is the author's and the sheet's
 //! pair mirrors, as the kernel's `mirror_unsaid` and css.rs's `unsaid_side`
 //! have it. Logical sides, inline, outrank the class's physical ones.
 
@@ -16,9 +16,9 @@ type Write = (String, String, Option<String>);
 impl Em<'_> {
     /// What binding `b`, a side of a pair, writes beside its own `writes`:
     /// an author's side beside the sheet's static other side (in `css`, the
-    /// class) mirrors that pair while it is unset; a side only the sheet
+    /// class) mirrors that pair while it is absent; a side only the sheet
     /// binds, beside an author's bound other side, is physical while the
-    /// author's has a value and logical while it is unset.
+    /// author's is declared and logical while it is absent.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn side_writes(
         &mut self,
@@ -39,14 +39,19 @@ impl Em<'_> {
         let fixed = |o: &BindingsRow| style::literal(plan, plan.code(o.expr)).is_some();
         'pair: {
             if b.written && other.is_none_or(fixed) {
-                writes.extend(style::unset_mirrors(id, css));
+                let getter = self.bound(i, e, b, scope)?;
+                writes.extend(style::unset_mirrors(
+                    id,
+                    css,
+                    &format!("({getter})()==null"),
+                ));
                 break 'pair;
             }
             let Some(theirs) = other.filter(|o| !b.written && o.written && !fixed(o)) else {
                 break 'pair;
             };
             let getter = self.bound(i, e, theirs, scope)?;
-            let unset = format!("{}(({getter})())==null", self.uses.rt("blank"));
+            let unset = format!("({getter})()==null");
             let gate = |map: Option<String>, shown: bool| {
                 let inner = map.unwrap_or_else(|| "v=>v".into());
                 let (on, off) = if shown {

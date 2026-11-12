@@ -26,8 +26,6 @@ test('an authored test waits for a socket state past its first message, the cloc
     timers.push(setTimeout(() => { for (const ws of identified) ws.send('ready'); sent.push(performance.now()); }, 1000));
   };
   const url = `ws://127.0.0.1:${peer.port}`;
-  // runTests names the app in EXACT_APP_DIR (scripts/app.mjs resolveApp): put back as found, so a later test file in
-  // the same run (agent-modal) resolves its own app.
   const appDir = process.env.EXACT_APP_DIR;
   let page;
   try {
@@ -95,8 +93,6 @@ test "a miss fails with the last value"
     page?.stop(true);
     peer.stop(true);
     rmSync(dir, { recursive: true, force: true });
-    if (appDir === undefined) delete process.env.EXACT_APP_DIR;
-    else process.env.EXACT_APP_DIR = appDir;
   }
   expect(process.env.EXACT_APP_DIR).toBe(appDir);
 }, 180_000);

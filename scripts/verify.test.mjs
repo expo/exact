@@ -1410,3 +1410,41 @@ test('scrolling: the scrub and a carousel join the summary; their hitches and th
   const along = findings(feel({ along: 'bad' }));
   assert.deepEqual(along.map((f) => [f.metric, f.value, f.owner]), [['carousel: a mostly-vertical drag', '0.95, 40', 'exact']]);
 });
+
+test('every drive after the build, and the run recorded, select the app the caller named, under EXACT_APP_DIR of another basename', () => {
+  // `EXACT_APP_DIR=…/copy verify web --app original` (a staged design tool's): its drives and its record are
+  // `original`'s, whose crates are `original-*`, never `copy`'s. The build, server, drives and record are stubbed.
+  const root = mkdtempSync(resolve(tmpdir(), 'exact-verify-selector-')), dir = resolve(root, 'copy');
+  mkdirSync(dir);
+  writeFileSync(resolve(dir, 'app.contract'), 'component App\n  view\n    text "Test"\n');
+  writeFileSync(resolve(dir, 'app.test.contract'), 'test "a"\n  expect text "Test" == "Test"\n');
+  const seen = resolve(root, 'seen.jsonl'), preload = resolve(root, 'stub.mjs'), scripts = import.meta.dir;
+  writeFileSync(preload, `
+    import { mock } from 'bun:test';
+    import { appendFileSync } from 'node:fs';
+    const scripts = ${JSON.stringify(scripts)}, at = (p) => scripts + '/' + p;
+    // Before the first await: verify.mjs imports it statically, and Bun runs the entry once this file awaits.
+    mock.module(at('verify-semantics.mjs'), () => ({ contractVerify: () => ({ stop() {}, done: Promise.resolve({ exit: 0, output: '', errors: '' }) }), semanticsSummary: () => [] }));
+    const { resolveApp } = await import(at('app.mjs'));
+    const note = (by, selector) => { const a = resolveApp(selector); appendFileSync(${JSON.stringify(seen)}, JSON.stringify([by, a.name, a.dir, a.crate('gpu')]) + '\\n'); };
+    const real = async (p) => ({ ...(await import(at(p))) });
+    const launch = await real('agent-launch.mjs'), serve = await real('../host/web/serve.mjs'), web = await real('../host/web-js/module.mjs'), driven = await real('agent-test.mjs');
+    mock.module(at('../host/web/serve.mjs'), () => ({ ...serve, builtAppMatches: async () => true, jsTargetBuild: () => true }));
+    mock.module(at('../host/web-js/module.mjs'), () => ({ ...web, fresh: () => true }));
+    mock.module(at('agent-launch.mjs'), () => ({ ...launch, webChanges: () => ({ all: [], app: [] }), driveStore: () => ({ base: ${JSON.stringify(root)}, profile: ${JSON.stringify(root)} }), removeBrowserProfile: async () => {} }));
+    mock.module(at('agent-test.mjs'), () => ({ ...driven, sweepTestStores() {}, runTests: async ({ app }) => {
+      note('runTests', app);
+      return { passed: 1, failed: 0, results: [{ name: 'a', failures: [], store: 'test', end: { ops: 1, resources: {} } }] };
+    } }));
+    mock.module(at('agent.mjs'), () => ({ open: async ({ app }) => { note('open', app); throw new Error('stubbed drive'); } }));
+    mock.module(at('evidence.mjs'), () => ({ recordRun: (app) => note('recordRun', app) }));
+  `);
+  try {
+    const r = spawnSync(process.execPath, ['--preload', preload, resolve(scripts, 'verify.mjs'), 'web', '--app', 'original', '--json'],
+      { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8', timeout: 30_000 });
+    const lines = existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : [];
+    // The tests and the tour; a first screen at each width; the relaunch on the test's store; the run.
+    assert.deepEqual(lines.map(([by]) => by).sort(), ['open', 'open', 'open', 'recordRun', 'runTests', 'runTests'], r.stdout + r.stderr);
+    for (const [, name, at, gpu] of lines) assert.deepEqual([name, at, gpu], ['original', realpathSync(dir), 'original-gpu']);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}, 60_000);

@@ -1329,10 +1329,10 @@ impl<'a> Lowerer<'a> {
                     }
                     let stacks = self.family_stacks(&a.value)?;
                     let (code, ty) = self.typed_code(&stacks, scope, locals)?;
-                    // Literal families are stack numbers, an empty one `none`.
+                    // Validated literal choices contain stack ids or string clears.
                     let literal = Self::literal_family_arms(&a.value);
                     if ty != Ty::String
-                        && !(literal && matches!(ty, Ty::Number | Ty::Option(_)))
+                        && !(literal && matches!(ty, Ty::Number | Ty::Unknown))
                         && !matches!(ty, Ty::Option(ref inner) if **inner == Ty::String)
                     {
                         return err("lower-attr-type", "`font-family` needs a string", a.span);

@@ -1091,8 +1091,13 @@ fn a_bound_side_stays_its_authors_right_to_left_and_the_sheets_mirror() {
     );
     assert!(!out.css.contains("padding-inline-"), "{}", out.css);
     for (side, value) in [("start", "16px"), ("end", "0px")] {
-        let write = format!("\"padding-inline-{side}\",\"\",()=>(v=>v==null?\"{value}\":null)");
-        assert!(out.js.contains(&write), "{write}: {}", out.js);
+        let property = format!("\"padding-inline-{side}\",\"\",()=>mapped(");
+        let at = out.js.find(&property).unwrap();
+        let write = out.js[at..].split(";S").next().unwrap();
+        assert!(
+            write.contains(&format!("==null?\"{value}\":null)")),
+            "{write}"
+        );
     }
 }
 

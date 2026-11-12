@@ -406,7 +406,7 @@ export async function withAppServer(dir, fn, { verb = 'api-test', optional = fal
  * null when fresh, else `{ ms, code, warnings, output }`. */
 async function webBuild(app) {
   const [{ webDist }, { builtAppMatches, jsTargetBuild }, { webChanges }] = await Promise.all([import('./app.mjs'), import('../host/web/serve.mjs'), import('./agent-launch.mjs')]);
-  const dist = webDist();
+  const dist = webDist(app);
   if (await builtAppMatches(dist, app) && jsTargetBuild(dist) && !webChanges(dist, app).all.length) return null;
   const started = Date.now();
   const r = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.name], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 << 20, env: { ...process.env, EXACT_APP_DIR: app.dir } });
@@ -858,7 +858,7 @@ async function tests(host, app, shots) {
   for (const [i, file] of files.entries()) {
     const first = out.results.length;
     try {
-      const r = await runTests({ host, file, app: app.name, atEnd: (s, t) => atEnd(s, { ...t, index: first + t.index }), ...(i ? { storage: `test${i}` } : {}), ...hostOpen(host, app) });
+      const r = await runTests({ host, file, app: app.selector, atEnd: (s, t) => atEnd(s, { ...t, index: first + t.index }), ...(i ? { storage: `test${i}` } : {}), ...hostOpen(host, app) });
       out.passed += r.passed; out.failed += r.failed;
       // A failure the test did not arrange is a finding (LLP 1146 D4): `runTests` says it in a note.
       out.results.push(...r.results.map(({ name, failures, notes = [], end, store, shots }) => ({ name, file: basename(file), failures, unarranged: notes.filter((n) => n.startsWith('unarranged: ')).map((n) => n.slice(12)), ...(shots ? { shots } : {}), ...(end ? { end } : {}), ...(store ? { store } : {}) })));
@@ -892,7 +892,7 @@ async function largeTour(app) {
   };
   for (const file of authoredTests(app.dir)) {
     if (spent()) break;
-    try { await runTests({ host: 'web', file, app: app.name, size: WEB_SIZES[0], storage: 'verify-tour', atStep }); }
+    try { await runTests({ host: 'web', file, app: app.selector, size: WEB_SIZES[0], storage: 'verify-tour', atStep }); }
     catch { /* the tests' own run says what does not compile */ }
   }
   return read;
@@ -913,7 +913,7 @@ export function tourNews(visited, toured) {
 async function checkAt(host, app, size, store, shots) {
   const [{ open }, { driveStore, removeBrowserProfile }] = await Promise.all([import('./agent.mjs'), import('./agent-launch.mjs')]);
   const fresh = { EXACT_AGENT_STORAGE_FRESH: '1' };
-  const s = await open({ host, app: app.name, storage: store, env: fresh, ...(size ? { size } : hostOpen(host, app)) });
+  const s = await open({ host, app: app.selector, storage: store, env: fresh, ...(size ? { size } : hostOpen(host, app)) });
   try {
     await s.clock('data');
     await s.clock('settle');
@@ -1012,7 +1012,7 @@ async function scrolling(app, shots, { key = null, force = false } = {}) {
     rmSync(out, { recursive: true, force: true });
     mkdirSync(out, { recursive: true });
     writeFileSync(tracePath, '');
-    const s = await open({ host: 'ios', app: app.name, storage: 'verify', env: { EXACT_AGENT_STORAGE_FRESH: '1', ...feel.recorderEnv(tracePath) }, chrome: 'platform', timing: 'platform', touch: 'drag' });
+    const s = await open({ host: 'ios', app: app.selector, storage: 'verify', env: { EXACT_AGENT_STORAGE_FRESH: '1', ...feel.recorderEnv(tracePath) }, chrome: 'platform', timing: 'platform', touch: 'drag' });
     let played;
     try {
       await Bun.sleep(2500); // its first loads, on real time; the accessibility runtime the touch runner turns on
@@ -1083,7 +1083,7 @@ export function pinnedLaunch(test, defaults) {
 /** What a fresh launch shows under `launch`'s facts on an empty scratch store, for `seen`'s comparison. */
 async function freshUnder(host, app, launch, store) {
   const [{ open }, { driveStore, removeBrowserProfile }] = await Promise.all([import('./agent.mjs'), import('./agent-launch.mjs')]);
-  const s = await open({ host, app: app.name, storage: store, env: { EXACT_AGENT_STORAGE_FRESH: '1' }, ...launchOf(launch), ...(host === 'web' ? { size: WEB_SIZES[0] } : hostOpen(host, app)) });
+  const s = await open({ host, app: app.selector, storage: store, env: { EXACT_AGENT_STORAGE_FRESH: '1' }, ...launchOf(launch), ...(host === 'web' ? { size: WEB_SIZES[0] } : hostOpen(host, app)) });
   try {
     for (const [name, value] of Object.entries(launch?.media ?? {})) await s.prefer({ [name]: value });
     await s.clock('data');
@@ -1101,7 +1101,7 @@ async function freshUnder(host, app, launch, store) {
  * end; then `check both` (the web: at both widths, one capture kept). */
 async function relaunch(host, app, test, fresh, shots) {
   const [{ open }, { driveStore, removeBrowserProfile }] = await Promise.all([import('./agent.mjs'), import('./agent-launch.mjs')]);
-  const s = await open({ host, app: app.name, storage: test.store, ...launchOf(relaunchFacts(test)), ...(host === 'web' ? { size: WEB_SIZES[0], ...(test.end.port ? { port: test.end.port } : {}) } : hostOpen(host, app)) });
+  const s = await open({ host, app: app.selector, storage: test.store, ...launchOf(relaunchFacts(test)), ...(host === 'web' ? { size: WEB_SIZES[0], ...(test.end.port ? { port: test.end.port } : {}) } : hostOpen(host, app)) });
   try {
     for (const [name, value] of Object.entries(test.end?.launch?.media ?? {})) await s.prefer({ [name]: value });
     const started = performance.now(), b = (st) => (st.background?.queued ?? 0) + (st.background?.inFlight ?? 0);
@@ -1468,7 +1468,7 @@ async function deviceMain(argv, emitJSON, declined, ended) {
     emitJSON({ host, built: built && { ms: built.ms, said: built.said ?? [], warnings: built.warnings }, compiler, ...(serverSaid ? { server: serverSaid } : {}), refused: refusedList, tests: testsOut, checks, reloads, large, fixed, relaunch: relaunchOut, ...(scrolled ? { scrolling: scrollingOut(scrolled) } : {}), ...(desktop ? { window: desktop } : {}), screenshots: kept, problems: r.problems, exit: r.exit, ms: Date.now() - started });
   } else { say(r.lines.slice(0, -1)); ended(r.lines.at(-1)); }
   // The run, against the build it used (LLP 1146 D2: `bun scripts/evidence.mjs`).
-  (await import('./evidence.mjs')).recordRun(app.name, { host, what: 'verify', result: r.problems ? `${r.problems} problem${r.problems === 1 ? '' : 's'}${tested?.failed ? `, ${tested.failed} failed test${tested.failed === 1 ? '' : 's'}` : ''}` : 'clean', timing: 'agent', sim });
+  (await import('./evidence.mjs')).recordRun(app.selector, { host, what: 'verify', result: r.problems ? `${r.problems} problem${r.problems === 1 ? '' : 's'}${tested?.failed ? `, ${tested.failed} failed test${tested.failed === 1 ? '' : 's'}` : ''}` : 'clean', timing: 'agent', sim });
   return r.exit;
 }
 

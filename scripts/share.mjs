@@ -123,9 +123,9 @@ async function main(argv) {
   say(`share: building ${app.displayName ?? app.name} for iPhone (build ${revision + 1}); the first build takes minutes.`);
   // An app with an update store starts its own stream: this build is a tester's, not a release in one.
   const streamed = app.manifest.deploy?.store?.ios !== '0';
-  const built = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), '--device', `${name}-apple`, '--archive', ipa, '--unsigned'], {
+  const built = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), '--device', app.crate('apple'), '--archive', ipa, '--unsigned'], {
     cwd: ROOT, stdio: ['ignore', 2, 2],
-    env: { ...process.env, EXACT_BUILD_NUMBER: String(revision + 1), ...(streamed ? { EXACT_UPDATE_GENESIS: '1' } : {}) },
+    env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_BUILD_NUMBER: String(revision + 1), ...(streamed ? { EXACT_UPDATE_GENESIS: '1' } : {}) },
   });
   if (built.status !== 0 || !existsSync(ipa)) return fail('build_failed', `share: the iPhone build failed (${built.error?.message ?? `exit ${built.status}`}); its errors are above.`);
 

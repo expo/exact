@@ -23,10 +23,11 @@ export function halves(v) {
 }
 
 /** The root's bound background `v` when the browser reads it as a colour opaque in both schemes, which makes it the
- * page's canvas (canvas.rs); else null, and the shell's canvas stays. */
+ * page's canvas (canvas.rs); else null, and the shell's canvas stays. A clear reads back as a CSS-wide keyword, which
+ * names no colour. */
 export function canvasColor(v) {
   const t = v == null ? "" : normal("background-color", String(v));
-  return t && (halves(t) ?? [t]).every(h => alpha(h.trim()) >= 1) ? v : null;
+  return t && !/^\s*(unset|initial|inherit|revert|revert-layer)\s*$/i.test(t) && (halves(t) ?? [t]).every(h => alpha(h.trim()) >= 1) ? v : null;
 }
 function sayFill(e) {
   const v = e.style.getPropertyValue('background-color');

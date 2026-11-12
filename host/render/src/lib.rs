@@ -103,7 +103,7 @@ pub struct Rendered {
     pub document: Document,
     /// What `<head>` holds after the shell's charset and base.
     pub head: String,
-    /// The checkpoint, as the page carries it.
+    /// The encoded checkpoint, carried inline or named by the page.
     pub checkpoint: String,
     /// The document's digest (LLP 1048.000 D6), which the page carries
     /// beside the checkpoint for the runtime to match.

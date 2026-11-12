@@ -1274,8 +1274,11 @@ each interpolation part of one value that also holds text, outside parentheses
 a concatenation, a `fn` that returns one) is refused
 (`lower-css-shorthand`): write the longhands, each of which may be computed. A computed
 single value (`padding=pad`) is every side's.
-An empty string on any style row declares nothing, as CSSOM's `setProperty(p, "")`:
-the row is unset (`background-color=dot` with `dot` `""`).
+An empty or whitespace-only string explicitly clears a style row: it keeps the
+author's declaration without an own value (inherited on inherited rows, otherwise
+initial). For example, `background-color=dot` with `dot` `""` overrides class and
+platform fills with a transparent background. An absent optional value (`none`)
+removes the binding's declaration and exposes those lower-priority values.
 `border-style` and each `border-<side>-style` accept `none`, `hidden`, `solid`,
 `inset`, `dotted` and `dashed`. The two patterned styles keep their authored
 border widths in layout. AppKit, UIKit and Linux paint their dots and dashes;

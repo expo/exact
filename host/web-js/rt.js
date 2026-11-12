@@ -801,7 +801,7 @@ export function nm(e) {
     .then(h => h.attach(e), err => { st.state = "unavailable"; st.error = String(err?.message ?? err); say(`native ${st.name} #${id}: unavailable: ${st.error}`); })
     .finally(() => setTimeout(() => inflight.n--));
 }
-export const blank = v => typeof v === "string" && !v.trim() ? null : v;
+export const mapped = (v, map, clear) => typeof v === "string" && !v.trim() ? clear === undefined ? map(null) : clear : map(v);
 export function S(e, prop, unit, f) { let rendered = Adopt; effect(() => { css(e, prop, unit, f(), rendered); rendered = false; }); }
 let Scratch = null;
 const Normal = new Map(), same = v => v.replace(/\btransparent\b/g, "rgba(0, 0, 0, 0)");
@@ -812,8 +812,8 @@ export function normal(prop, t) {
   return v;
 }
 export { gridValue } from "./grid.js"; export { Pc } from "./lower.js";
-// A row's CSS text: authored blanks declare nothing; internal custom properties may carry an empty token (text-style presence); `auto` on a maximum is CSS's unbounded `none` (LLP 1102 §3.11); a bound `-exact-hairline` is the sheet's one device pixel, as css.rs writes a literal one (LLP 1115.000 D10.3); a layout region is its safe area (LLP 1123 D10).
-import { regions } from "./regions.js"; import "./said.js"; export const cssText = (prop, unit, v) => { const t = v == null ? null : typeof v === "number" ? v + unit : !String(v).trim() && !prop.startsWith("--") ? null : /^\s*-exact-hairline\s*$/i.test(v) ? "var(--exact-hairline, 1px)" : regions(String(v)); return t === "auto" && (prop === "max-width" || prop === "max-height") ? "none" : t; };
+// A row's CSS text: authored blanks explicitly clear (LLP 1115.000 D2); internal custom properties may carry an empty token (text-style presence); `auto` on a maximum is CSS's unbounded `none` (LLP 1102 §3.11); a bound `-exact-hairline` is the sheet's one device pixel, as css.rs writes a literal one (LLP 1115.000 D10.3); a layout region is its safe area (LLP 1123 D10).
+import { regions } from "./regions.js"; import "./said.js"; export const cssText = (prop, unit, v) => { const t = v == null ? null : typeof v === "number" ? v + unit : !String(v).trim() && !prop.startsWith("--") ? "unset" : /^\s*-exact-hairline\s*$/i.test(v) ? "var(--exact-hairline, 1px)" : regions(String(v)); return t === "auto" && (prop === "max-width" || prop === "max-height") ? "none" : t; };
 export function css(e, prop, unit, v, rendered) {
   // The value this binding last wrote: the same again writes nothing (a write restyles and repaints the node, for every dynamic row a list update touched).
   const last = e.$css ??= {}, t = cssText(prop, unit, v);
@@ -827,8 +827,8 @@ export function css(e, prop, unit, v, rendered) {
     if (t == null ? !now : same(now) === (normal(prop, t) || "unset")) return;
   }
   if (t == null) return e.style.removeProperty(prop);
-  // A value the browser took before (`Normal`, read back after its first write) is written once; one it refused falls to `unset` at once. Only a value not yet seen pays the remove before the write that lets the read-back tell a refusal from an earlier value (LLP 1071.001 A8).
-  const k = prop + "\0" + t, known = prop.startsWith("--") || Normal.get(k);
+  // A value the browser took before (`Normal`, read back after its first write) is written once; one it refused falls to `unset` at once. Only a value not yet seen pays the remove before the write that lets the read-back tell a refusal from an earlier value (LLP 1071.001 A8). Every property takes `unset`: one that reads back empty is a property this browser does not have (Chrome's `-moz-osx-font-smoothing`), not a refusal.
+  const k = prop + "\0" + t, known = prop.startsWith("--") || t === "unset" || Normal.get(k);
   if (known) return e.style.setProperty(prop, t);
   if (known === undefined) { e.style.removeProperty(prop); e.style.setProperty(prop, t); const got = same(e.style.getPropertyValue(prop)); Normal.set(k, got); if (Normal.size > 4096) Normal.clear(); if (got) return; }
   e.style.setProperty(prop, "unset"); say(`unset ${prop}: ${JSON.stringify(v)} is not a value it takes`);

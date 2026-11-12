@@ -174,7 +174,8 @@ export function logged(command, args, log, { cwd, env, append = false, say = nul
   });
 }
 /** host/apple/build.mjs with `args`, its output into `log`; its exit code and output. */
-const appleBuild = (args, log, say) => logged(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), ...args], log, { say });
+const appleBuild = (args, log, say, app) => logged(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), ...args], log,
+  { say, env: { ...process.env, ...(app.outside ? { EXACT_APP_DIR: app.dir } : {}) } });
 
 // ---------------------------------------------------------------- a plan-only edit (LLP 1116.003)
 
@@ -398,7 +399,7 @@ export async function buildFirst(host, app, { say = line => console.error(line),
   rmSync(overrideDir(host, app), { recursive: true, force: true }); // the build supersedes it
   const log = resolve(app.dir, '.exact', `${host}-build.log`);
   say(`building for ${label(host)}: ${reason}; its log: ${shown(log)}`);
-  const { code, output } = await build(buildArgs(host, app), log, say);
+  const { code, output } = await build(buildArgs(host, app), log, say, app);
   // Another build took the claim between the check and this one (two started together): wait for it, then decide again.
   if (code && retries > 0 && /Apple build busy for/.test(output)) return buildFirst(host, app, { say, build, wait, bake, retries: retries - 1 });
   if (code) say(failureSummary(output, { host, code, log: shown(log) }));

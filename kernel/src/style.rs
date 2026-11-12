@@ -329,10 +329,11 @@ pub enum StyleValue<'a> {
 
 impl StyleValue<'_> {
     /// Whether this value leaves row `style` unset — inherited, else
-    /// initial — which is what clearing the row does: an empty string, which
-    /// declares nothing (CSSOM's `setProperty(p, "")`), `unset`, and `inherit`
+    /// initial — which is what clearing the row does: an empty string,
+    /// `unset`, and `inherit`
     /// on an inherited row (`color: currentcolor` is `inherit`). `inherit` on
     /// any other row needs its parent's value, which no row holds, so it stays refused (feed F1).
+    /// An authored clear keeps its written bit; an absent binding removes it.
     pub fn unsets(&self, style: StyleId) -> bool {
         let StyleValue::Text(t) = self else {
             return false;

@@ -6,8 +6,8 @@ const journal = [], effects = [];
 let Adopting = false;
 mock.module('./rt.js', () => ({
   adopting: () => Adopting, effect: f => { effects.push(f); f(); }, say: l => journal.push(l),
-  // As rt.js's: a number takes its unit, a blank declares nothing.
-  cssText: (prop, unit, v) => v == null ? null : typeof v === 'number' ? v + unit : String(v).trim() ? String(v) : null,
+  // As rt.js's: a number takes its unit, a blank explicitly clears.
+  cssText: (prop, unit, v) => v == null ? null : typeof v === 'number' ? v + unit : !String(v).trim() && !prop.startsWith('--') ? 'unset' : String(v),
   normal: (prop, t) => t === 'bogus' ? '' : t,
   css: (e, prop, unit, v) => { if (v == null) e.style.removeProperty(prop); else e.style.setProperty(prop, typeof v === 'number' ? v + unit : v); },
 }));

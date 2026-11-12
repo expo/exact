@@ -38,8 +38,8 @@ let selectedWebDist = null;
 let fixtureWebDist = null; // the router sweep's wasm build, linking every capability (LLP 1047 D7)
 const device = argv.includes('--device');
 const phone = argv.includes('--phone') ? argv[argv.indexOf('--phone') + 1] : undefined;
-const open = (options) => openAgent({ device, phone, ...options, app: options.app ?? app.name, webDist: options.webDist ?? selectedWebDist }); // a plan: its JS build (`--plan`)
-const runTests = (options) => runAgentTests({ device, phone, ...options, app: options.app ?? app.name, webDist: options.webDist ?? selectedWebDist });
+const open = (options) => openAgent({ device, phone, ...options, app: options.app ?? appName, webDist: options.webDist ?? selectedWebDist }); // a plan: its JS build (`--plan`)
+const runTests = (options) => runAgentTests({ device, phone, ...options, app: options.app ?? appName, webDist: options.webDist ?? selectedWebDist });
 
 // 0. The transcript form (LLP 1012 §7): the one text rendering of the
 // replies, pinned by a fixture — `scripts/fixtures/transcript.json` rendered
@@ -508,11 +508,11 @@ if (host === 'web') {
   const webBuild = mkdtempSync(resolve(tmpdir(), 'exact-smoke-web-'));
   selectedWebDist = resolve(webBuild, 'dist');
   process.on('exit', () => rmSync(webBuild, { recursive: true, force: true }));
-  const built = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web')], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EXACT_WEB_DIST: selectedWebDist } });
+  const built = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web')], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_WEB_DIST: selectedWebDist } });
   if (built.status !== 0) process.exit(built.status ?? 1);
   if (!argv.includes('--app-only')) { // the router sweep swaps plans into a page: the wasm runner's
     fixtureWebDist = resolve(webBuild, 'fixtures');
-    const fixtures = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web'), '--wasm'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EXACT_WEB_DIST: fixtureWebDist, EXACT_WEB_LINK: 'all' } });
+    const fixtures = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web'), '--wasm'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_WEB_DIST: fixtureWebDist, EXACT_WEB_LINK: 'all' } });
     if (fixtures.status !== 0) process.exit(fixtures.status ?? 1);
   }
 }
