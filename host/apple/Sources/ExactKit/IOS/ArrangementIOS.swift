@@ -169,9 +169,14 @@ final class ArrangementHost {
             guard !touching.isEmpty, holders.allSatisfy({ holder in
                 touching.contains { $0 === holder } || (top ? holder.view.safeAreaInsets.top : holder.view.safeAreaInsets.bottom) < 1
             }), touching.allSatisfy({ holder in
+                // Compare the pane with the block it was last told, not with UIKit's allocation: when a cover's answer
+                // resizes the arrangement, UIKit resizes the allocation a layout before the pane follows, and a pane
+                // measured against it then gives up the edge, which pads the route and resizes the allocation back.
+                // The top needs no block, since the pane sits at its allocation's origin.
                 let pane = holder.node, frame = pane.convert(pane.bounds, to: holder.view)
+                guard case .size(let height)? = presenter.owners.told[pane.id]?.block.height else { return false }
                 return pane.scrollView != nil && pane.scrollsVertically && pane.transform.isIdentity && pane.clipPath == nil && NavigationHost.inFlow(pane)
-                    && abs(top ? frame.minY : holder.view.bounds.maxY - frame.maxY) < 1
+                    && abs(top ? frame.minY : height - frame.maxY) < 1
             }) else { return [] }
             return touching.map(\.node)
         }

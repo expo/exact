@@ -481,6 +481,16 @@ final class ContentOwnersIOSTests: XCTestCase {
         XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: true).isEmpty, "authored spacing above the arrangement keeps its clearance")
         wrapper.applyKernelContentBox(wrapperBox, padding: wrapperPadding)
         XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: true).count, 2)
+        // A cover's answer grows UIKit's allocations a layout before the panes are laid out in them; grown upward, they
+        // still reach the arrangement's bottom
+        let frames = holders.map { $0.view.frame }
+        for holder in holders { holder.view.frame = holder.view.frame.inset(by: UIEdgeInsets(top: -25, left: 0, bottom: 0, right: 0)) }
+        XCTAssertEqual(p.arrangements.scrollers(in: route.node, top: false).count, 2, "panes yet to fill their grown allocations keep the route's bottom edge")
+        for (holder, frame) in zip(holders, frames) { holder.view.frame = frame }
+        let secondFrame = second.frame
+        second.frame.size.height -= 25
+        XCTAssertTrue(p.arrangements.scrollers(in: route.node, top: false).isEmpty, "a pane shorter than its block gives up the route's bottom edge")
+        second.frame = secondFrame
         let frame = holders[1].view.frame, paneFrame = second.frame
         holders[1].view.frame = frame.insetBy(dx: 0, dy: 16)
         second.frame = holders[1].view.bounds
