@@ -141,6 +141,8 @@ struct GroupedListModel: Equatable {
         /// Whether the rows sit on a card; false for a transparent group
         /// (`section background-color="transparent"`): clear cells, no separators.
         var card = true
+        /// The node that is its card, whose corners and `box-shadow` it takes.
+        var cardView: UInt32?
         /// The space above it when the author changed a margin there (the
         /// web's, collapsed); nil keeps UIKit's gap (`Kernel::grouped_list`).
         var spaceAbove: CGFloat?
@@ -182,7 +184,7 @@ struct GroupedListModel: Equatable {
             }
             return Section(view: view, header: s["header"] as? String, footer: s["footer"] as? String,
                            headerLook: Look(json: s["headerLook"]), footerLook: Look(json: s["footerLook"]), rows: rows,
-                           card: s["card"] as? Bool ?? true,
+                           card: s["card"] as? Bool ?? true, cardView: id(s["cardView"]),
                            spaceAbove: (s["spaceAbove"] as? NSNumber).map { CGFloat($0.doubleValue) })
         }
         spaceBelow = (o["spaceBelow"] as? NSNumber).map { CGFloat($0.doubleValue) }
@@ -545,6 +547,9 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         self.owner = owner; self.host = host
         collection = GroupedCollectionView(frame: owner.bounds, collectionViewLayout: UICollectionViewFlowLayout())
         super.init()
+        (collection as? GroupedCollectionView)?.card = { [weak self] index in
+            self?.section(at: index)?.cardView.flatMap { self?.host.presenter.views[$0] }
+        }
         collection.setCollectionViewLayout(layout(), animated: false)
         collection.delegate = self
         collection.accessibilityIdentifier = owner.props["testId"]
@@ -1432,38 +1437,6 @@ final class GroupedListView: NSObject, UICollectionViewDelegate {
         if let cell = cell as? GroupedCell, !unavailable, !cell.markedNotEnabled { return }
         if unavailable { cell.accessibilityTraits.insert(.notEnabled) } else { cell.accessibilityTraits.remove(.notEnabled) }
         (cell as? GroupedCell)?.markedNotEnabled = unavailable
-    }
-}
-
-/// A grouped list's collection view, by type, for the agent's wheel.
-final class GroupedCollectionView: UICollectionView, GroupedScroller {
-    /// The offset, which UIKit itself also sets (keeping the list at its
-    /// start as a safe area reaches it and insets it): inside an animation
-    /// UIKit has open it moves only if the last frame showed the list's node,
-    /// as a `ScrollView`'s does (`Presenter.moveOrPlace`).
-    override var bounds: CGRect {
-        get { super.bounds }
-        set {
-            guard UIView.inheritedAnimationDuration > 0, let node = superview as? NodeView, let presenter = node.presenter else { return super.bounds = newValue }
-            presenter.moveOrPlace(node) { super.bounds = newValue }
-        }
-    }
-    /// The safe area at the sides the collection reaches over (`sideReach`):
-    /// the window's, which the host keeps from the views it lays out (LLP
-    /// 1123), or a fold's half band. UIKit insets the cards from it, as in a
-    /// hand-built list.
-    var sideSafeArea: (left: CGFloat, right: CGFloat) = (0, 0) {
-        didSet {
-            guard sideSafeArea != oldValue else { return }
-            safeAreaInsetsDidChange()
-            collectionViewLayout.invalidateLayout()
-        }
-    }
-    override var safeAreaInsets: UIEdgeInsets {
-        var insets = super.safeAreaInsets
-        insets.left = max(insets.left, sideSafeArea.left)
-        insets.right = max(insets.right, sideSafeArea.right)
-        return insets
     }
 }
 

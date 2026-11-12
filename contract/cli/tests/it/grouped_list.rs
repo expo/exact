@@ -8,7 +8,7 @@ use exact_kernel::{
 };
 use exact_runner::{DataError, DataSource, Runner, Value};
 
-struct NoData;
+pub(super) struct NoData;
 impl DataSource for NoData {
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
         Err(DataError::UnknownSource(source.into()))
@@ -26,7 +26,7 @@ fn app(body: &str) -> String {
     )
 }
 
-fn boot(body: &str) -> Runner<NoData> {
+pub(super) fn boot(body: &str) -> Runner<NoData> {
     boot_source(&app(body))
 }
 
@@ -51,7 +51,7 @@ fn boot_source(source: &str) -> Runner<NoData> {
     r
 }
 
-fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
+pub(super) fn id(r: &Runner<NoData>, test_id: &str) -> u32 {
     let k = r.kernel();
     k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id
 }
@@ -64,7 +64,7 @@ fn content_x(r: &Runner<NoData>, test_id: &str) -> f32 {
     node.frame.x + k.resolved_padding(node.key).unwrap().0
 }
 
-fn refused(body: &str) -> String {
+pub(super) fn refused(body: &str) -> String {
     let e = contract::compile(&app(body)).unwrap_err();
     assert_eq!(e.id, "lower-grouped-list", "{}", e.message);
     e.message

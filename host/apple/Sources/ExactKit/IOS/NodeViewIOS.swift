@@ -1420,7 +1420,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     func cornerRadii(in rect: CGRect, inset: CGFloat = 0) -> [CGFloat] {
         cornerSizes(in: rect, inset: inset).map { $0.width }
     }
-    func roundedPath(in rect: CGRect, inset: CGFloat = 0) -> UIBezierPath {
+    package func roundedPath(in rect: CGRect, inset: CGFloat = 0) -> UIBezierPath {
         UIBezierPath(cgPath: BorderPaint.roundedRect(rect, cornerSizes(in: rect, inset: inset), shape: CornerShape(style["corner_shape"])))
     }
 

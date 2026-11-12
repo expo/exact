@@ -549,6 +549,13 @@ fn section(
                 c.span,
             );
         }
+        if let Some(c) = attrs.iter().find(|a| a.name == "box-shadow") {
+            return err(
+                "lower-grouped-list",
+                "a section without its card takes no `box-shadow`: a section's shadow is its card's",
+                c.span,
+            );
+        }
     }
     // The platform lays a section out: UIKit's list draws its rows one
     // under another across the card, whatever the kernel would make of a
@@ -578,7 +585,7 @@ fn section(
     sheet.extend(
         attrs
             .iter()
-            .filter(|a| a.name != "background-color")
+            .filter(|a| a.name != "background-color" && a.name != "box-shadow")
             .cloned(),
     );
     let label = |node: &Node, footer: bool| -> Node {
@@ -685,6 +692,8 @@ fn section(
         group.push(m("row-gap", "separator-gap", span));
     }
     group.push(s("overflow", "hidden", span));
+    // A section's shadow is its card's, cast around the rows as one shape.
+    group.extend(attrs.iter().filter(|a| a.name == "box-shadow").cloned());
     let mut styled = |n: &Node| {
         Ok(swipe_rows::grouped(n, &|n, swiped| {
             row(n, !cardless, swiped)

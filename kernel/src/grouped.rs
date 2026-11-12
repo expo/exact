@@ -48,6 +48,9 @@ pub struct GroupedSection {
     /// Whether its rows sit on a card: false when the section's group has a
     /// transparent background (`section background-color="transparent"`).
     pub card: bool,
+    /// The node that is its card: the group holding its rows, which carries
+    /// the card's corners and its author's `box-shadow`.
+    pub card_view: ViewId,
     /// The space above it, in points, when the author wrote a margin at
     /// that boundary (its `margin-top`, or the previous section's
     /// `margin-bottom`): the web's, the two margins collapsed. `None` keeps
@@ -329,6 +332,7 @@ impl Kernel {
                                 .map_or((None, TextLook::default()), |(t, l)| (Some(t), l))
                         }
                         _ => {
+                            out.card_view = part.id;
                             out.card = part.style.background_color.is_none_or(|c| {
                                 c.resolve(false).a() != 0 || c.resolve(true).a() != 0
                             });

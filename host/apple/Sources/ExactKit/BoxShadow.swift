@@ -21,12 +21,12 @@ import AppKit
 #endif
 
 /// One shadow of a `box-shadow` list, resolved for an appearance.
-struct BoxShadowSpec: Equatable {
-    var color: CGColor
-    var offset: CGSize
-    var blur: CGFloat
-    var spread: CGFloat
-    var inset: Bool
+package struct BoxShadowSpec: Equatable {
+    package var color: CGColor
+    package var offset: CGSize
+    package var blur: CGFloat
+    package var spread: CGFloat
+    package var inset: Bool
 
     /// The row's list (`style.rs`), the colours for `dark`; transparent
     /// shadows left out.
@@ -190,7 +190,7 @@ extension BoxShadowSpec {
 extension NodeView {
     /// The `box-shadow` list resolved for the view's appearance; a popover's
     /// default surface's shadow where its author wrote none (`defaultSurface`).
-    var boxShadows: [BoxShadowSpec] {
+    package var boxShadows: [BoxShadowSpec] {
         let list = BoxShadowSpec.list(style["box_shadow"], dark: drawsDark, contrast: drawsHighContrast, elevated: drawsElevated, tint: ownTint(for: style["box_shadow"]))
         return list.isEmpty ? defaultSurfaceShadow.map { [$0] } ?? [] : list
     }
