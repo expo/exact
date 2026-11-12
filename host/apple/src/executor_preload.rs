@@ -43,6 +43,8 @@ pub enum Event {
     Cancelled,
     /// A write invalidated the request URL.
     DroppedByWrite,
+    /// A refresh replaced the request.
+    DroppedByRefresh,
     /// A write changed a secret the definition used.
     DroppedBySecret,
     /// The reply exceeded the cache entry limit.
@@ -62,9 +64,14 @@ pub struct Fact {
 
 struct Ready {
     response: Response,
+    visited: Vec<String>,
     completed: Instant,
     bytes: usize,
     used: usize,
+}
+struct Answered {
+    at: Instant,
+    visited: Vec<String>,
 }
 enum ReplyState {
     Pending {
@@ -80,7 +87,7 @@ pub(super) struct Held {
     reply: ReplyState,
     taken: bool,
     started: Instant,
-    answered_at: Arc<Mutex<Option<Instant>>>,
+    answered_at: Arc<Mutex<Option<Answered>>>,
     observer: Option<Observer>,
 }
 #[derive(Default, PartialEq, Eq)]
@@ -487,6 +494,9 @@ fn settle(cache: &mut cache::Cache, r: &RequestOut) -> Option<(Outcome, Completi
     if !matches!(cache.preloads[i].reply, ReplyState::Ready(_)) {
         return None;
     }
+    if !can_take(cache, &r.request, i) {
+        return None;
+    }
     let checked = reach::admit_cached(&r.request);
     let (_, _, limit) = reads::reservation(&r.request, true).ok()?;
     let outcome = match checked {
@@ -550,16 +560,29 @@ fn matching(cache: &cache::Cache, request: &Request, equal_body: bool) -> Option
             }
     })
 }
+// A read must be allowed every hop its preload followed (LLP 1162.000 D1).
+fn can_take(cache: &cache::Cache, request: &Request, i: usize) -> bool {
+    match &cache.preloads[i].reply {
+        ReplyState::Ready(ready) => ready
+            .visited
+            .iter()
+            .all(|url| cache::granted_url(&cache.grants, request, url).is_ok()),
+        ReplyState::Pending { .. } => true,
+        ReplyState::Gone => false,
+    }
+}
 pub(super) fn matches(cache: Option<&cache::Cache>, r: &RequestOut, work: bool) -> bool {
     eligible(&r.request, r.class, r.forced, work)
-        && cache.is_some_and(|c| c.preload_starting || find(c, &r.request).is_some())
+        && cache.is_some_and(|c| {
+            c.preload_starting || find(c, &r.request).is_some_and(|i| can_take(c, &r.request, i))
+        })
 }
 pub(super) fn waiting(state: &State, job: &Job) -> bool {
     eligible(&job.request, job.class, job.forced, job.work.is_some())
-        && state
-            .cache
-            .as_ref()
-            .is_some_and(|c| c.preload_starting || find(c, &job.request).is_some())
+        && state.cache.as_ref().is_some_and(|c| {
+            c.preload_starting
+                || find(c, &job.request).is_some_and(|i| can_take(c, &job.request, i))
+        })
 }
 // The earliest queued request keeps room to finish before later replies
 // can fill its lane. A preload failure still needs that room (D1).
@@ -592,7 +615,9 @@ pub(super) fn effect_count(state: &State) -> usize {
     effects
         - state.jobs[0]
             .iter()
-            .filter(|job| waiting(state, job))
+            .filter(|job| {
+                waiting(state, job) && reads::safe_read(&job.request, job.work.is_some(), job.class)
+            })
             .count()
 }
 
@@ -631,6 +656,10 @@ pub(super) fn serve_ready(state: &mut State) {
             index += 1;
             continue;
         };
+        if !can_take(cache, &job.request, i) {
+            index += 1;
+            continue;
+        }
         let outcome = match cache::granted(&cache.grants, &job.request) {
             Err(outcome) => outcome,
             Ok(()) => {
@@ -726,7 +755,8 @@ pub(super) fn expire(cache: &mut cache::Cache) {
                         .answered_at
                         .lock()
                         .unwrap()
-                        .is_none_or(|at| at >= *due) =>
+                        .as_ref()
+                        .is_none_or(|answer| answer.at >= *due) =>
             {
                 drop_held(cache, i, Event::Cancelled)
             }
@@ -741,6 +771,26 @@ pub(super) fn drop_urls(cache: &mut cache::Cache, urls: &[String]) {
     for i in 0..cache.preloads.len() {
         if urls.contains(&cache.preloads[i].key.url) {
             drop_held(cache, i, Event::DroppedByWrite);
+        }
+    }
+}
+pub(super) fn refresh(cache: &mut cache::Cache, r: &RequestOut) {
+    if r.class != RequestClass::Read
+        || !r.request.is_plain_http()
+        || !(r.forced
+            || matches!(
+                r.request.cache,
+                exact_runner::CacheMode::Reload | exact_runner::CacheMode::NoCache
+            ))
+    {
+        return;
+    }
+    let key = Equal::of(&r.request);
+    for i in 0..cache.preloads.len() {
+        if cache.preloads[i].key == key
+            && cache.preloads[i].definition.request.body == r.request.body
+        {
+            drop_held(cache, i, Event::DroppedByRefresh);
         }
     }
 }
@@ -769,13 +819,17 @@ struct Events {
     send: mpsc::Sender<Message>,
     index: usize,
     clock: Arc<dyn Fn() -> Instant + Send + Sync>,
-    answered_at: Arc<Mutex<Option<Instant>>>,
+    answered_at: Arc<Mutex<Option<Answered>>>,
     observed: Option<(String, Observer)>,
+    visited: Mutex<Vec<String>>,
 }
 impl FetchEvents for Events {
     fn outcome(&self, result: Result<Collected, HostError>) {
         let at = (self.clock)();
-        *self.answered_at.lock().unwrap() = Some(at);
+        *self.answered_at.lock().unwrap() = Some(Answered {
+            at,
+            visited: std::mem::take(&mut *self.visited.lock().unwrap()),
+        });
         if result.is_ok() {
             if let Some((name, observer)) = &self.observed {
                 observer(name, Observation::Complete);
@@ -783,7 +837,8 @@ impl FetchEvents for Events {
         }
         let _ = self.send.send(Message::Reply(self.index, result, at));
     }
-    fn next_hop(&self, _url: &str, start: Box<dyn FnOnce() + Send>) {
+    fn next_hop(&self, url: &str, start: Box<dyn FnOnce() + Send>) {
+        self.visited.lock().unwrap().push(url.into());
         let _ = self.send.send(Message::Hop(start));
     }
 }
@@ -813,6 +868,15 @@ fn finish(
             return;
         }
     };
+    let visited = std::mem::take(
+        &mut held
+            .answered_at
+            .lock()
+            .unwrap()
+            .as_mut()
+            .expect("completed exchange")
+            .visited,
+    );
     let started = held.started;
     let request = held.definition.request.clone();
     let mut response = Response {
@@ -821,6 +885,8 @@ fn finish(
         body: reply.body,
     };
     let bytes = response_bytes(&response)
+        + visited.capacity() * std::mem::size_of::<String>()
+        + visited.iter().map(String::capacity).sum::<usize>()
         + std::mem::size_of::<Held>()
         + held.key.method.len()
         + held.key.url.len()
@@ -838,6 +904,7 @@ fn finish(
     let used = cache.touch();
     cache.preloads[index].reply = ReplyState::Ready(Ready {
         response: response.clone(),
+        visited,
         completed,
         bytes,
         used,
@@ -956,6 +1023,7 @@ fn start_indices(
             .expect("checked grants");
         let fetch = reach::gate_fetch(host().endow(grants).fetch, request.reach);
         let transport = Arc::new(fetch.blocking_adapter(workers.clone()));
+        let visited = Mutex::new(vec![request.url.clone()]);
         let mut req = fetch_request(request, false);
         req.max_body = Some(cache::MAX_ENTRY);
         // A preload is asked for by nobody yet: Low Data Mode refuses it (LLP 1162.000 D4).
@@ -978,6 +1046,7 @@ fn start_indices(
                 clock,
                 answered_at,
                 observed,
+                visited,
             }),
         );
     }
