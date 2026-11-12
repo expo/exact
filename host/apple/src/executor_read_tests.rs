@@ -87,7 +87,10 @@ impl Server {
             .1
             .wait_timeout_while(state, HANG, |s| !until(s))
             .unwrap();
-        assert!(until(&state), "server saw {:?}", state.seen);
+        // Released first: a failure here must not poison the lock `Drop` takes.
+        let (met, seen) = (until(&state), format!("{:?}", state.seen));
+        drop(state);
+        assert!(met, "server saw {seen}");
     }
 
     fn seen(&self, tickets: &[u64]) {
@@ -524,7 +527,8 @@ fn a_read_that_times_out_delivers_failure_in_its_ordered_place() {
     let mut r = read_job(&server, 2);
     r.request = r.request.timeout(500);
     core.run(r, None).unwrap();
-    server.seen(&[1, 2]);
+    // Its deadline may pass before the transport has sent it.
+    server.seen(&[1]);
     completed(&core, 2);
     assert!(core.drain().is_empty());
     server.reply(1, b"first");
