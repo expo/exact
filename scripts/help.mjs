@@ -240,7 +240,7 @@ Ports    none to choose: test's and agent's (headless Chrome over a pipe; a simu
     example: 'bun exact.mjs verify            # bun exact.mjs verify ios once at the end, for an iPhone app',
   },
   ios: {
-    line: 'build for an iOS simulator; on macOS also install it (--run launches it)',
+    line: 'build for an iOS simulator; macOS installs it (--run launches)',
     usage: 'bun exact.mjs ios [--run|--prebuild|--no-install] [--json] [--release] [--sim <udid|name>] [--device [--phone <udid|name>]] [--url <url>] [--optimize speed|size]',
     common: ['ios [--run] [--sim <name>]    build for a simulator; --run launches it'],
     flags: [
