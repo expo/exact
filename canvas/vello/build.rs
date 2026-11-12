@@ -53,6 +53,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=metal.rs");
     println!("cargo:rerun-if-changed=shaders");
+    println!("cargo:rerun-if-env-changed=EXACT_APPLE_METAL_REQUIRED");
     println!("cargo:rustc-check-cfg=cfg(exact_no_metal_toolchain)");
     let target = std::env::var("TARGET").unwrap();
     // Off Apple the crate is empty (`src/lib.rs`): nothing to compile.
