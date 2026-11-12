@@ -584,7 +584,7 @@ fn an_inset_scroller_keeps_the_box_its_sizes_give_it() {
     // definite sizes give it. Under `content-box`: a height (an arranged pane
     // fills its allocation with `height: 100%`), a minimum, a maximum, a flex
     // basis, and a share of the column, which Taffy floors at the box's
-    // padding and border (insets laid out as padding take 525, not 438).
+    // padding and border.
     // Under both sizings: a height too small for the padding and the insets,
     // whose box stays with an empty content box, and the width an aspect
     // ratio gives.
@@ -691,8 +691,8 @@ fn an_inset_scroller_keeps_the_box_its_sizes_give_it() {
 fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
     let n = StyleValue::Number;
     let text = |t: &'static str| StyleValue::Text(t.into());
-    // A two-column list (4) whose rows (5, then 20 to 25) are 100 and 20
-    // points tall
+    // A two-column list (4) with one 100-point row (5), or replacement
+    // 20-point rows starting at 20.
     let columns = |extra: &[(StyleId, StyleValue)], rows: u32| {
         let mut kernel = scroller(false);
         let mut list = vec![
@@ -758,11 +758,55 @@ fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
             first.0
         };
         assert_eq!(edge, start, "{direction}: the first column's start");
+        let records = &kernel.columns(kernel.node(4).unwrap().key).unwrap().columns;
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].x, first.0, "{direction}: column and child align");
+        assert_eq!(records[0].width, 179.5);
+        assert_eq!(
+            records[1].x,
+            if direction == "rtl" { 15.0 } else { 195.5 },
+            "{direction}: the last column clears the gutter"
+        );
         assert_eq!(
             kernel.node(4).unwrap().content.0,
             right,
             "{direction}: the client box's right edge"
         );
+        kernel
+            .apply(
+                3,
+                4,
+                &[Op::SetChildren {
+                    id: 4,
+                    children: vec![],
+                }],
+            )
+            .unwrap();
+        frame(&mut kernel, 4);
+        assert!(kernel
+            .columns(kernel.node(4).unwrap().key)
+            .unwrap()
+            .columns
+            .iter()
+            .all(|c| !c.holds));
+        assert_eq!(
+            kernel.node(4).unwrap().content.0,
+            right,
+            "{direction}: an empty client box"
+        );
+
+        let mut paired = columns(&[full[0].clone(), (StyleId::Direction, text(direction))], 2);
+        paired
+            .set_host_cover(4, Some(HostCover::Gutter([15.0, 0.0])))
+            .unwrap();
+        let first = frame(&mut paired, 20);
+        let second = frame(&mut paired, 21);
+        let records = paired.columns(paired.node(4).unwrap().key).unwrap();
+        assert_eq!(records.columns.len(), 2);
+        assert!(records.columns.iter().all(|c| c.holds));
+        assert_eq!(records.columns[0].x, first.0);
+        assert_eq!(records.columns[1].x, second.0);
+        assert_eq!((first.0 - second.0).abs() - first.2, records.gap);
     }
     // Six 20-point rows under an 80-point cap: the columns end above the
     // bottom gutter, 33 points tall, so each holds one row and they run on
