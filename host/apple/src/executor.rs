@@ -54,17 +54,35 @@ impl Executor {
         wake: Option<(WakeFn, *mut c_void)>,
         launch: Launch,
     ) -> Self {
+        Self::start_with(wake, launch, |wake| {
+            core::Core::start_switched(bindings, grants, wake)
+        })
+    }
+    /// [`Executor::start`] with every owner's transport made by `host`. A
+    /// read runs on a shared owner (LLP 1162 D1), so a transport given only
+    /// to the ordered owner's `bindings` would not see it.
+    pub fn start_on(
+        bindings: Option<ibex2::host::Bindings>,
+        grants: &str,
+        wake: Option<(WakeFn, *mut c_void)>,
+        host: impl Fn() -> ibex2::host::Host + Send + Sync + 'static,
+    ) -> Self {
+        Self::start_with(wake, Launch::here(), |wake| {
+            core::Core::start_on(bindings, grants, wake, std::sync::Arc::new(host))
+        })
+    }
+    fn start_with(
+        wake: Option<(WakeFn, *mut c_void)>,
+        launch: Launch,
+        core: impl FnOnce(Box<dyn Fn() + Send + Sync>) -> core::Core,
+    ) -> Self {
         exact_runner::local_network::launch_once(local_network_prompts);
         let wake = wake.map(|(f, ctx)| (f, ctx as usize));
-        let core = core::Core::start_switched(
-            bindings,
-            grants,
-            Box::new(move || {
-                if let Some((f, ctx)) = wake {
-                    f(ctx as *mut c_void);
-                }
-            }),
-        );
+        let core = core(Box::new(move || {
+            if let Some((f, ctx)) = wake {
+                f(ctx as *mut c_void);
+            }
+        }));
         // The Mac starts programs for data code; iOS and tvOS do not (LLP
         // 1133.007 §8). There `bundle:/` is the trees the app declared and
         // `home:` is absent (D6).

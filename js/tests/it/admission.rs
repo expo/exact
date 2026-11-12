@@ -87,15 +87,17 @@ fn endow(_: &str, _: &str, _: bool) -> Endowed {
     Endowed::none()
 }
 
-/// The platform executor, its ordered owner over the scripted transport.
+/// The platform executor, every owner over the scripted transport: a
+/// resource's read runs on a shared owner (LLP 1162 D1).
 fn start(
     _: Option<ibex2::host::Bindings>,
     grants: &str,
     wake: Option<(WakeFn, *mut c_void)>,
 ) -> Box<dyn Io> {
-    let bindings = ibex2::host::Host::with_transport(Box::new(Scripted))
-        .endow(ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants)).unwrap());
-    Box::new(Executor::start(Some(bindings), grants, wake))
+    let host = || ibex2::host::Host::with_transport(Box::new(Scripted));
+    let bindings =
+        host().endow(ibex2::grant::GrantSet::parse(&exact_runner::io_grants(grants)).unwrap());
+    Box::new(Executor::start_on(Some(bindings), grants, wake, host))
 }
 
 extern "C" fn woke(_: *mut c_void) {
