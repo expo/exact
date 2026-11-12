@@ -636,3 +636,45 @@ test("the ask made when the source becomes ready is not a refresh, and a refresh
     expect(observed).toEqual({ launch: ['default', 'reload'], later: ['reload'] });
   } finally { await browser.close(); server.stop(true); }
 });
+
+test("a refused refresh while waiting leaves the launch's ask ordinary, and a failed launch ask leaves a later refresh one", async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const observed = await page.evaluate(async () => {
+      globalThis.__exactRender = true;
+      const sent = [], callbacks = [];
+      globalThis.fetch = async (_input, init) => { sent.push(init.cache ?? 'default'); return new Response('reply'); };
+      const rt = await import('/host/web-js/rt.js');
+      const { createRequestExecutor, setAppGrantSet, appGrantSet } = await import('/host/web-js/admission.js');
+      setAppGrantSet();
+      rt.clock.agent = true;
+      rt.data.fetch = createRequestExecutor('test.launch', appGrantSet());
+      rt.data.parse = () => ({ v: 'reply' });
+      let ready = false, down = true;
+      rt.data.answer = name => {
+        if (!ready) return null;
+        if (name === 'f' && down) { down = false; throw new Error('down'); }
+        return { req: { method: 'GET', url: '/assets/cache.txt', headers: [] } };
+      };
+      rt.data.ready = f => callbacks.push(f);
+      const b = rt.sig(1);
+      let a, c, f;
+      rt.mount(root => {
+        a = rt.res('a', 'a', () => [], undefined, undefined, 's', '');
+        c = rt.res('c', 'c', () => [1 / b()], undefined, undefined, 's', '');
+        f = rt.res('f', 'f', () => [], undefined, undefined, 's', '');
+        rt.hd(root, { headTitle: () => a() + c() + f() });
+      });
+      const committed = rt.commit(() => { rt.R(a); rt.W(b, 0); }); // refused: `c`'s argument is not finite
+      ready = true;
+      for (const g of callbacks) g();
+      while (rt.inflight.n) await new Promise(resolve => setTimeout(resolve, 0));
+      const launch = sent.splice(0);
+      rt.commit(() => rt.R(f));
+      while (rt.inflight.n) await new Promise(resolve => setTimeout(resolve, 0));
+      return { committed, launch, failed: sent };
+    });
+    expect(observed).toEqual({ committed: false, launch: ['default', 'default'], failed: ['reload'] });
+  } finally { await browser.close(); server.stop(true); }
+});

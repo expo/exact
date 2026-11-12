@@ -950,8 +950,8 @@ impl<D: DataSource> Runner<D> {
         if ready && device_state {
             // … and asked now when it can answer, showing the rendered
             // answer until it does.
-            for i in 0..seeded.len() {
-                if seeded[i] && runner.plan.resources[i].reader {
+            for (i, &kept) in seeded.iter().enumerate() {
+                if kept && runner.plan.resources[i].reader {
                     runner.ask_at_launch(i);
                 }
             }
