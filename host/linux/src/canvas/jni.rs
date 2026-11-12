@@ -297,6 +297,7 @@ macro_rules! canvas_jni {
                 tv: jboolean,
                 touch_slop: jfloat,
                 dates: jstring,
+                format_locale: jstring,
             ) {
                 let device = $crate::presenter::Device {
                     night: night == JNI_TRUE,
@@ -311,6 +312,7 @@ macro_rules! canvas_jni {
                     tv: tv == JNI_TRUE,
                     touch_slop,
                     dates: string(env, dates),
+                    format_locale: string(env, format_locale),
                 };
                 $crate::canvas::configure(&device);
                 // What a hosted field measured was under the old settings.

@@ -561,6 +561,7 @@ fn the_largest_font_scale_clips_neither_bar() {
         tv: false,
         touch_slop: 8.0,
         dates: String::new(),
+        format_locale: String::new(),
     };
     assert_eq!(p.set_device(&device), None);
     assert_eq!(p.fit_window(), None);
@@ -665,6 +666,7 @@ fn tv() -> Device {
         tv: true,
         touch_slop: 0.0,
         dates: String::new(),
+        format_locale: String::new(),
     }
 }
 

@@ -86,6 +86,7 @@ fn prefer(p: &mut Presenter<()>, bold_text: bool) {
         tv: false,
         touch_slop: 0.,
         dates: String::new(),
+        format_locale: String::new(),
     };
     assert!(p.set_device(&device).is_none());
     p.frame();

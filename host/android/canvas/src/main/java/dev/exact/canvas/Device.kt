@@ -35,9 +35,12 @@ internal data class Device(
     val touchSlop: Float,
     /** How the device writes a date and a time: what a date control shows ([dates]). */
     val dates: String,
+    /** The device's locale with the person's forced hour cycle as its `hc` keyword where it is not the
+     * region's own ([formatLocale]), as `formatLocale` tells it; empty for the locale's own. */
+    val formatLocale: String,
 ) {
     /** Tell exact2: on the thread that holds the host, or on any before it boots. */
-    fun tell() = Native.configure(night, fontScale, locale, rtl, hour24, noAnimations, boldText, highContrast, touch, tv, touchSlop, dates)
+    fun tell() = Native.configure(night, fontScale, locale, rtl, hour24, noAnimations, boldText, highContrast, touch, tv, touchSlop, dates, formatLocale)
 
     companion object {
         fun read(context: Context): Device {
@@ -59,6 +62,7 @@ internal data class Device(
                 tv = tv(context),
                 touchSlop = android.view.ViewConfiguration.get(context).scaledTouchSlop / scale(context),
                 dates = dates(config.locales[0], android.text.format.DateFormat.is24HourFormat(context)),
+                formatLocale = formatLocale(context, config.locales[0]),
             )
         }
 
@@ -77,6 +81,28 @@ internal data class Device(
         }
 
         private const val TV_HEIGHT = 1080f
+
+        /**
+         * The device's BCP 47 tag with the hour cycle the person forces (`Settings.System.TIME_12_24`,
+         * the read `DateFormat.is24HourFormat` makes) as its `hc` keyword — `-u-hc-h12` or `-u-hc-h23` —
+         * where that differs from the region's own, and empty where it does not or none is forced. As
+         * Apple's `SessionFacts.currentFormatLocale` tells it; a tag over 64 characters is told empty,
+         * the bound the runner holds a place to.
+         */
+        private fun formatLocale(context: Context, device: java.util.Locale): String {
+            val forced12 = when (android.provider.Settings.System.getString(context.contentResolver, android.provider.Settings.System.TIME_12_24)) {
+                "12" -> true
+                "24" -> false
+                else -> return ""
+            }
+            // The pattern's hour letter outside a quoted literal (fr-CA's `HH 'h'`): h or K is the
+            // 12-hour cycle, as Apple's `forcedHourCycle` reads it.
+            val regional = android.text.format.DateFormat.getBestDateTimePattern(device, "j")
+            val twelve = regional.split('\'').filterIndexed { i, _ -> i % 2 == 0 }.any { s -> s.any { it == 'h' || it == 'K' } }
+            if (regional.isEmpty() || forced12 == twelve) return ""
+            val tag = java.util.Locale.Builder().setLocale(device).setUnicodeLocaleKeyword("hc", if (forced12) "h12" else "h23").build().toLanguageTag()
+            return if (tag.length <= 64) tag else ""
+        }
 
         /**
          * The lines `host/linux/src/paint/dates.rs` reads: the patterns Android's formatter picks for the locale for a

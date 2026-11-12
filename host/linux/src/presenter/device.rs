@@ -35,6 +35,9 @@ pub struct Device {
     /// How the device writes a date and a time, in lines
     /// (`paint::dates::Dates::from_lines`); empty where the shell tells none.
     pub dates: String,
+    /// The regional format locale (`time::Place::format_locale`), empty where
+    /// the shell reports none apart from `locale`.
+    pub format_locale: String,
 }
 
 /// The root font size at a font scale of 1: CSS's `medium`.
@@ -102,12 +105,13 @@ impl<D: DataSource> Presenter<D> {
             (false, true) => (exact_runner::Pointer::Coarse, exact_runner::Hover::None),
             (false, false) => (exact_runner::Pointer::Fine, exact_runner::Hover::Hover),
         };
-        // The device's locale, and no regional format apart from it: the
-        // shell reports none yet (`Locale.Category.FORMAT`), so
-        // `formatLocale` answers this locale, not the process's launch one.
+        // The device's locale, and the regional format the shell reports
+        // (its forced hour cycle, where it forces one), or the locale again
+        // where it reports none (`Locale.Category.FORMAT`): `formatLocale`
+        // answers this place's, not the process's launch one.
         let place = exact_runner::time::Place {
             locale: device.locale.clone(),
-            format_locale: String::new(),
+            format_locale: device.format_locale.clone(),
             ..runner.place().clone()
         };
         let mut error = self.set_preferences(preferences);

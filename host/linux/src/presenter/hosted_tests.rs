@@ -241,6 +241,7 @@ fn a_hosted_field_is_measured_by_the_shell_during_layout() {
         tv: false,
         touch_slop: 8.0,
         dates: String::new(),
+        format_locale: String::new(),
     };
     assert_eq!(p.set_device(&device), None);
     settle(&mut p);
