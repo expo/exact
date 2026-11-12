@@ -223,6 +223,30 @@ fn check(entries: Vec<(String, Value)>, grants: Option<&str>) -> Result<Value, S
             string("url")?.ok_or_else(|| fail("url", "required"))?,
         )?;
         let target = placeholder(&url);
+        if let Some(first) = url.iter().position(|part| part[0] == "secret") {
+            let clean = |text: &str| -> String {
+                text.chars()
+                    .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+                    .collect()
+            };
+            let cleaned = clean(&target);
+            let cleaned = cleaned.trim_start_matches(|c| c <= ' ');
+            let prefix = clean(&placeholder(&url[..first]));
+            let prefix = prefix.trim_start_matches(|c| c <= ' ');
+            let authority_end = cleaned.split_once(':').map_or(cleaned.len(), |(_, tail)| {
+                let authority = tail.trim_start_matches(['/', '\\']);
+                cleaned.len() - authority.len()
+                    + authority
+                        .find(['/', '\\', '?', '#'])
+                        .unwrap_or(authority.len())
+            });
+            if prefix.len() < authority_end {
+                return Err(fail(
+                    "url",
+                    "secret references are allowed only in the URL path or query",
+                ));
+            }
+        }
         let parsed = url::parse(&target, None)
             .map_err(|_| fail("url", "expected an absolute http: or https: URL"))?;
         if !["http:", "https:"].contains(&parsed.protocol.as_str()) || parsed.hostname.is_empty() {

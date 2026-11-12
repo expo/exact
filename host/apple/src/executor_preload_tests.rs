@@ -993,3 +993,56 @@ fn refresh_admission_leaves_preloads_with_a_different_method_url_header_or_body(
         }
     }
 }
+
+#[test]
+fn an_empty_set_starts_no_preload_thread_or_workers_and_does_not_hold_reads() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let set = launch(&server, Vec::new());
+        let location = set.destination.clone();
+        assert_eq!(*location.threads.lock().unwrap(), 0);
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        server.plan("/ordinary", Plan::new(200, &[], b"ordinary"));
+        assert!(!read(&core, &woke, &server, 1, "/ordinary").1);
+        assert_eq!(*location.threads.lock().unwrap(), 0);
+    }
+}
+
+#[test]
+fn definitions_arriving_after_the_wait_bound_still_hold_their_replies() {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let (set, clock) = fresh_clock(&server, Vec::new());
+        let control = set.control();
+        control.definitions_pending(true);
+        let (core, woke) = server.core(asynchronous, true);
+        adopt(&core, set);
+        server.plan("/late", Plan::new(200, &[], b"network"));
+        core.run(job(1, server.request("/late")), None).unwrap();
+        {
+            let state = core.shared.state.lock().unwrap();
+            assert_eq!(state.jobs[0].len(), 1);
+            assert!(state.running.is_empty());
+        }
+        *clock.lock().unwrap() += DEFINITIONS_WAIT;
+        if let Some(machine) = &core.machine {
+            machine.timer.expire((0, 0));
+        } else {
+            core.shared.ready.notify_all();
+        }
+        assert!(!collect(&core, &woke).2.cached);
+        server.plan("/late", Plan::new(200, &[], b"preload"));
+        control.extend(
+            vec![definition(&server, "/late")],
+            &format!("net.fetch http://{}", server.address),
+            Arc::new(|_, _| {}),
+        );
+        control.definitions_pending(false);
+        ready(&core, 1);
+        let (reply, cached) = read(&core, &woke, &server, 2, "/late");
+        assert!(cached);
+        assert_eq!(reply.body, b"preload");
+        assert_eq!(server.count(), 2);
+    }
+}

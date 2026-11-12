@@ -364,7 +364,8 @@ requests share that hold's original deadline. SIGKILL cannot run this cleanup.
 method?: string, headers?: { [name]: string }, body?: string,
 timeoutMs?: integer, when?: "start" | "foreground" }` (LLP 1162.000 D2).
 `method` defaults to `GET`, `when` to `"start"`. URL, header values and body may
-reference a kept secret as `{secret:NAME}`; write `{{` for a literal brace.
+reference a kept secret as `{secret:NAME}`, except in a URL’s scheme or authority;
+write `{{` for a literal brace.
 The bake checks at most eight entries against fetch and `secret.keep` grants.
 Hosts that support preloads send them at process start.
 

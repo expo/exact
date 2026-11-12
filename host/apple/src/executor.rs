@@ -77,6 +77,17 @@ impl Executor {
             core::Core::start_on(bindings, grants, wake, std::sync::Arc::new(host))
         })
     }
+    #[cfg(test)]
+    pub(crate) fn test_start(
+        asynchronous: bool,
+        bindings: Option<ibex2::host::Bindings>,
+        grants: &str,
+        wake: Option<(WakeFn, *mut c_void)>,
+    ) -> Self {
+        Self::start_with(wake, Launch::here(), |wake| {
+            core::Core::test_start(asynchronous, bindings, grants, wake)
+        })
+    }
     fn start_with(
         wake: Option<(WakeFn, *mut c_void)>,
         launch: Launch,

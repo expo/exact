@@ -1367,6 +1367,12 @@ impl<D: DataSource> Runner<D> {
             }
             // The flags follow the tickets and what awaits its source.
             self.sync_pending_flags();
+            // The launch exemption ends with its ask, even without a request (LLP 1162.000 D1).
+            for i in refreshing {
+                if !force.contains(&i) {
+                    self.resources[i].launch_ask = false;
+                }
+            }
             // A forced resource not asked in this settlement (an argument
             // still pending, a source not ready) is forced at the next one
             // that can ask it (LLP 1054.000.000 D2).

@@ -5,6 +5,7 @@ use ibex2::stdlib::fetch_async::{Collected, FetchEvents, HeaderCaps};
 use std::sync::{mpsc, Weak};
 use std::time::{Duration, Instant};
 
+pub(super) const DEFINITIONS_WAIT: Duration = Duration::from_secs(1);
 pub(super) const HOLD: Duration = Duration::from_secs(10);
 const DEFAULT_DEADLINE: Duration = Duration::from_secs(60);
 const MAX_PRELOADS: usize = 8;
@@ -181,9 +182,15 @@ enum Message {
     Stop,
 }
 
+struct Startup {
+    receive: mpsc::Receiver<Message>,
+    host: StreamHost,
+}
+
 /// Owns the launch work until adoption. Dropping it cancels every exchange;
 /// the launch thread never needs to join a transport (D4).
 pub struct Preloads {
+    startup: Arc<Mutex<Option<Startup>>>,
     destination: Arc<Location>,
     send: mpsc::Sender<Message>,
 }
@@ -244,21 +251,13 @@ impl Preloads {
         });
         let (send, receive) = mpsc::channel();
         let set = Self {
-            destination: destination.clone(),
-            send: send.clone(),
+            startup: Arc::new(Mutex::new(Some(Startup { receive, host }))),
+            destination,
+            send,
         };
-        #[cfg(test)]
-        let thread_guard = ThreadGuard::new(&destination);
-        let launch_grants = grants.to_owned();
-        let spawned = std::thread::Builder::new()
-            .name("exact-preload".into())
-            .spawn(move || {
-                #[cfg(test)]
-                let _guard = thread_guard;
-                run(&destination, &send, receive, &host, &launch_grants, count)
-            });
-        if spawned.is_err() {
-            update(&set.destination, cancel_all);
+        if count > 0 {
+            set.control().start_worker();
+            let _ = set.send.send(Message::Start(0..count, grants.into()));
         }
         set
     }
@@ -278,6 +277,7 @@ impl Preloads {
 /// A launch's control remains usable after the executor adopts its owner.
 #[derive(Clone)]
 pub struct Control {
+    startup: Arc<Mutex<Option<Startup>>>,
     destination: Arc<Location>,
     send: mpsc::Sender<Message>,
 }
@@ -285,17 +285,53 @@ impl Preloads {
     /// Keep cancellation, settlement and late foreground starts across adoption.
     pub fn control(&self) -> Control {
         Control {
+            startup: self.startup.clone(),
             destination: self.destination.clone(),
             send: self.send.clone(),
         }
     }
 }
 impl Control {
+    fn start_worker(&self) {
+        let Some(Startup { receive, host }) = self.startup.lock().unwrap().take() else {
+            return;
+        };
+        let destination = self.destination.clone();
+        let send = self.send.clone();
+        #[cfg(test)]
+        let thread_guard = ThreadGuard::new(&destination);
+        let spawned = std::thread::Builder::new()
+            .name("exact-preload".into())
+            .spawn(move || {
+                #[cfg(test)]
+                let _guard = thread_guard;
+                run(&destination, &send, receive, &host)
+            });
+        if spawned.is_err() {
+            update(&self.destination, cancel_all);
+        }
+    }
     /// A boot can dispatch before its launch thread has read the definitions;
-    /// hold those reads without delaying its first batch (LLP 1162.000 D4).
+    /// hold those reads for at most one second without delaying its first batch
+    /// (LLP 1162.000 D4).
     pub fn definitions_pending(&self, pending: bool) {
-        update(&self.destination, |cache| cache.preload_starting = pending);
+        update(&self.destination, |cache| {
+            cache.preload_starting = pending;
+            cache.preload_definitions_due = pending.then(|| (cache.clock)() + DEFINITIONS_WAIT);
+        });
         let _ = self.send.send(Message::Tick);
+    }
+    #[cfg(test)]
+    pub(crate) fn test_clock(&self, clock: Arc<dyn Fn() -> Instant + Send + Sync>) {
+        update(&self.destination, |cache| cache.clock = clock);
+    }
+    #[cfg(test)]
+    pub(crate) fn test_tick(&self) {
+        update(&self.destination, expire);
+    }
+    #[cfg(test)]
+    pub(crate) fn thread_count(&self) -> usize {
+        *self.destination.threads.lock().unwrap()
     }
     #[cfg(test)]
     pub(crate) fn wait_definitions(&self) {
@@ -350,7 +386,8 @@ impl Control {
             }
             first..cache.preloads.len()
         });
-        if let Some(range) = range {
+        if let Some(range) = range.filter(|range| !range.is_empty()) {
+            self.start_worker();
             if self
                 .send
                 .send(Message::Start(range, grants.into()))
@@ -435,6 +472,17 @@ impl Core {
             return Err(set);
         };
         cache.grants = self.grants.clone();
+        if let (Some(machine), Some(due)) = (&self.machine, cache.preload_definitions_due) {
+            let destination = Arc::downgrade(&set.destination);
+            machine.timer.arm_callback(
+                due.saturating_duration_since((cache.clock)()),
+                Box::new(move || {
+                    if let Some(destination) = destination.upgrade() {
+                        update(&destination, expire);
+                    }
+                }),
+            );
+        }
         state.cache = Some(*cache);
         *destination = Destination::Adopted(Arc::downgrade(&self.shared));
         drop(destination);
@@ -459,8 +507,8 @@ impl Core {
             .map(|cache| std::mem::take(&mut cache.journal))
             .unwrap_or_default()
     }
-    /// Boot may fulfil a complete equal reply before its first commit. It
-    /// waits for neither the launch request nor any earlier ticket (D4).
+    /// Boot may fulfil complete replies from its initial requests, in ticket
+    /// order, until the first unresolved request (LLP 1162.000 D1, D4).
     pub(in super::super) fn settle_preload(
         &self,
         r: &RequestOut,
@@ -747,6 +795,10 @@ pub(super) fn drop_held(cache: &mut cache::Cache, i: usize, event: Event) {
 // Completion wins over a later timer observation (LLP 1162.000 D1).
 pub(super) fn expire(cache: &mut cache::Cache) {
     let now = (cache.clock)();
+    if cache.preload_definitions_due.is_some_and(|due| now >= due) {
+        cache.preload_starting = false;
+        cache.preload_definitions_due = None;
+    }
     for i in 0..cache.preloads.len() {
         match &cache.preloads[i].reply {
             ReplyState::Pending { due, .. }
@@ -918,8 +970,6 @@ fn run(
     send: &mpsc::Sender<Message>,
     receive: mpsc::Receiver<Message>,
     host: &StreamHost,
-    launch_grants: &str,
-    count: usize,
 ) {
     // Adapt the binding itself so every host honours its supplied transport (D4).
     #[cfg(test)]
@@ -938,7 +988,6 @@ fn run(
             return;
         }
     };
-    start_indices(destination, send, host, launch_grants, &workers, 0..count);
     loop {
         let delay = update(destination, |cache| {
             expire(cache);

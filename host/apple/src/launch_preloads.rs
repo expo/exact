@@ -273,32 +273,35 @@ impl LaunchPreloads {
         let mut pending = Vec::new();
         let mut fulfilled = Vec::new();
         let mut requests = runner.take_requests();
-        while !requests.is_empty() {
-            for request in requests {
-                if !runner.holds(request.ticket) {
-                    continue;
-                }
-                if let Some((outcome, timing)) = request
-                    .request
-                    .continuation
-                    .is_none()
-                    .then(|| set.control.settle(&request))
-                    .flatten()
-                {
-                    let name = self.fulfilled(request.ticket);
-                    if runner
-                        .fulfill_measured(request.ticket, outcome, Some(timing))
-                        .map_err(crate::host::HostError::Runner)?
-                        .is_some()
-                    {
-                        fulfilled.extend(name);
-                    }
-                } else {
-                    pending.push(request);
-                }
+        requests.sort_by_key(|request| request.ticket);
+        let mut requests = requests.into_iter();
+        while let Some(request) = requests.next() {
+            if !runner.holds(request.ticket) {
+                continue;
             }
-            requests = runner.take_requests();
+            if let Some((outcome, timing)) = request
+                .request
+                .continuation
+                .is_none()
+                .then(|| set.control.settle(&request))
+                .flatten()
+            {
+                let name = self.fulfilled(request.ticket);
+                if runner
+                    .fulfill_measured(request.ticket, outcome, Some(timing))
+                    .map_err(crate::host::HostError::Runner)?
+                    .is_some()
+                {
+                    fulfilled.extend(name);
+                }
+            } else {
+                pending.push(request);
+                pending.extend(requests);
+                break;
+            }
         }
+        pending.extend(runner.take_requests());
+        pending.sort_by_key(|request| request.ticket);
         pending.retain(|request| runner.holds(request.ticket));
         Ok((pending, fulfilled))
     }
