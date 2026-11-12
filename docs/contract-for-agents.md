@@ -2758,6 +2758,11 @@ proposed constraints, including text wrapping and resolved pane margins.
 Content and margin changes update the measure; the allocated pane size remains
 UIKit's. Automatic, absolute and fractional dimensions use UIKit's sizing rules.
 
+Each pane is laid out as a root in the space UIKit gives it: an automatic width fills
+that space and an automatic height is the content's, so a pane scroller without a
+height or a maximum height does not scroll. Give a pane that should fill its
+allocation a height such as `height="100%"`.
+
 Use a bounded scroller in each child for independent scrolling. The first visible
 vertical scroller is the default title and scroll-to-top target; `navigationScroll`
 can name another. UIKit owns bar minimization, safe-area changes, each pane's
