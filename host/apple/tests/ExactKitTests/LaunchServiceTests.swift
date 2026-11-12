@@ -7,6 +7,27 @@ import UIKit
 
 final class LaunchServiceTests: XCTestCase {
     #if os(iOS)
+    func testAnEarlyWorldPresentationIsKeptUntilTheTreePresents() throws {
+        let launch = ExactLaunch()
+        let session = ExactApp.shared.makeSession(label: "early-world-presentation")
+        defer { launch.link?.invalidate(); session.destroy() }
+        launch.delegateInit()
+        launch.didFinishLaunching()
+        launch.bootEntered(session)
+        launch.treeApplied(session, path: "/")
+        // The GPU's completed drawable can be reported before UIKit draws the root.
+        launch.worldPresented()
+        XCTAssertNil(launch.marks[.world])
+        launch.drawn(session)
+        launch.link?.isPaused = true
+        let commit = try XCTUnwrap(launch.marks[.commit])
+        launch.frame(Vsync(at: commit, interval: 1.0 / 60))
+        let present = try XCTUnwrap(launch.marks[.present])
+        XCTAssertEqual(launch.marks[.world], present)
+        launch.worldPresented()
+        XCTAssertEqual(launch.marks[.world], present, "later frames keep the first mark")
+    }
+
     func testAnInterruptedCommitKeepsWatchingUntilItsPresentation() {
         let launch = ExactLaunch()
         let session = ExactApp.shared.makeSession(label: "interrupted-launch")
