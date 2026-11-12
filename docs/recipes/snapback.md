@@ -1,5 +1,9 @@
 # Recipe: a Snapback backend (shared server data)
 
+This needs the Snapback client at `<exact2>/snapback4/`, which the exact2
+repository does not include; in a checkout without it, `exact new --snapback`
+and `bun exact.mjs snapback` refuse, naming the missing client.
+
 For shared server data, `bun <exact2>/scripts/exact.mjs new app --snapback
 [--port <n>]` from the backend’s directory writes a guestbook and wires its
 driver, generated operations and device. The origin defaults to 4400.

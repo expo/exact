@@ -790,13 +790,16 @@ export function profileMisfit(p, udid, like = null) {
 /** Every `.mobileprovision` or `.provisionprofile` Xcode or a download installed, decoded once per process (a hundred of them is two seconds). */
 let decoded = null;
 export function installedProfiles() {
-  const dirs = ['Library/Developer/Xcode/UserData/Provisioning Profiles', 'Library/MobileDevice/Provisioning Profiles'].map((d) => resolve(homedir(), d)).filter(existsSync);
+  const dirs = [...(process.env.EXACT_PROFILE_DIR ? [resolve(process.env.EXACT_PROFILE_DIR)] : []), ...['Library/Developer/Xcode/UserData/Provisioning Profiles', 'Library/MobileDevice/Provisioning Profiles'].map((d) => resolve(homedir(), d))].filter(existsSync);
   return decoded ??= dirs.flatMap((d) => readdirSync(d).filter((f) => /\.(mobileprovision|provisionprofile)$/.test(f)).map((f) => decodeProfile(resolve(d, f))));
 }
 
 /** The fields of a `.mobileprovision` this script reads (it is a CMS-signed XML plist). */
-export function decodeProfile(path) {
-  const xml = read('security', ['cms', '-D', '-i', path]).stdout ?? '';
+export function decodeProfile(path, os = process.platform) {
+  const result = os === 'linux' ? read('openssl', ['smime', '-verify', '-inform', 'DER', '-in', path, '-noverify'])
+    : read('security', ['cms', '-D', '-i', path]);
+  if (os === 'linux' && result.status !== 0) throw new Error(`host/apple: cannot decode provisioning profile ${path}: ${result.stderr || result.error?.message}`);
+  const xml = result.stdout ?? '';
   const str = (key) => new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(xml)?.[1];
   const strings = (key) => [...(new RegExp(`<key>${key}</key>\\s*<array>([\\s\\S]*?)</array>`).exec(xml)?.[1] ?? '').matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1]);
   const team = /<key>TeamIdentifier<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(xml)?.[1];

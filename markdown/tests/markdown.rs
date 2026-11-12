@@ -410,10 +410,6 @@ fn the_defects_astra_traced_are_fixed() {
         run("say |a ``b`` c|", Command::Code),
         "say ```|a ``b`` c|```"
     );
-    // An excerpt never cuts a construct open.
-    let long = format!("[ok](https://e/{}) tail", "x".repeat(2000));
-    assert_eq!(excerpt(&long, 4), "ok…");
-    assert_eq!(excerpt(&long, 8), "ok tail");
 }
 
 #[test]
@@ -724,20 +720,6 @@ fn a_limit_cuts_text_between_blocks_and_never_inside_a_fence() {
         .map(|p| if let Segment::Text(t) = p { t.len() } else { 0 })
         .sum();
     assert_eq!(joined + 4, source.len());
-}
-
-#[test]
-fn excerpts_are_one_plain_line() {
-    let source = "# A **Title**\n\nThe first paragraph has [a link](https://example.com) and `code`.\n\n- a list\n";
-    assert_eq!(
-        excerpt(source, 200),
-        "A Title The first paragraph has a link and code. • a list"
-    );
-    assert_eq!(excerpt(source, 24), "A Title The first…");
-    assert_eq!(excerpt("", 10), "");
-    assert_eq!(excerpt("Supercalifragilistic", 5), "Super…");
-    let long = "word ".repeat(10_000);
-    assert_eq!(excerpt(&long, 9), "word word…");
 }
 
 /// Every document in this repository styles, edits and segments without a

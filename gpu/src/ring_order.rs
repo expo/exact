@@ -88,6 +88,12 @@ impl Order {
     pub(crate) fn latest(&self) -> Option<(usize, u32)> {
         Some((self.latest?, self.serial))
     }
+
+    /// Whether a complete frame has not been published yet: on the GPU, or
+    /// finished and waiting for [`Order::take`].
+    pub(crate) fn unpublished(&self) -> bool {
+        !self.done.is_empty() || self.pending.iter().any(|&(_, _, publish)| publish)
+    }
 }
 
 #[cfg(test)]
@@ -126,6 +132,52 @@ mod tests {
         complete.store(true, Ordering::Release);
         o.settle();
         assert_eq!(o.take(), Some((incomplete, 1)));
+    }
+
+    /// A complete frame is unpublished from its submit until a `take`
+    /// publishes it, through any number of calls before the GPU finishes;
+    /// an incomplete one never is.
+    #[test]
+    fn a_complete_frame_is_unpublished_until_taken() {
+        let mut o = Order::default();
+        assert!(!o.unpublished());
+        let slot = o.target().unwrap();
+        let gpu = Arc::new(AtomicBool::new(false));
+        o.submitted(slot, gpu.clone(), true);
+        for _ in 0..3 {
+            o.settle();
+            assert_eq!(o.take(), None, "published before the GPU finished");
+            assert!(o.unpublished(), "on the GPU");
+        }
+        gpu.store(true, Ordering::Release);
+        o.settle();
+        assert!(o.unpublished(), "finished and waiting");
+        assert_eq!(o.take(), Some((slot, 1)));
+        assert!(!o.unpublished());
+
+        let slot = o.target().unwrap();
+        let gpu = Arc::new(AtomicBool::new(false));
+        o.submitted(slot, gpu.clone(), false);
+        assert!(!o.unpublished(), "an incomplete frame is never published");
+        gpu.store(true, Ordering::Release);
+        o.settle();
+        assert!(!o.unpublished());
+    }
+
+    /// Two frames finished in one display frame are published one a turn:
+    /// the second stays unpublished after the first is taken.
+    #[test]
+    fn a_second_finished_frame_waits_for_the_next_take() {
+        let mut o = Order::default();
+        for _ in 0..2 {
+            let slot = o.target().unwrap();
+            o.submitted(slot, Arc::new(AtomicBool::new(true)), true);
+        }
+        o.settle();
+        assert!(o.take().is_some());
+        assert!(o.unpublished());
+        assert!(o.take().is_some());
+        assert!(!o.unpublished());
     }
 
     /// With every slot on the GPU or shown there is no slot to render into,

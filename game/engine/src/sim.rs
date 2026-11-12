@@ -6,6 +6,8 @@ mod assets;
 mod diagnostics;
 mod origin;
 mod pads;
+mod pointer;
+pub use pointer::PointerSample;
 mod paranoid;
 mod queue;
 mod snapshot;
@@ -161,6 +163,8 @@ pub enum Clock {
 }
 #[derive(Clone, Default, Data)]
 struct Queued {
+    #[data(skip)]
+    host_sample: bool,
     host_us: i64,
     world_us: Option<i64>,
     event: InputEvent,
@@ -259,6 +263,7 @@ pub struct Sim<G: Game> {
     lookahead_us_hz: i128,
     // The last tick's pointer motion, for presentation between ticks only.
     last_motion: crate::Vec2,
+    pointer_samples: Vec<PointerSample>,
     paranoid: Option<fn(&mut Self)>,
     pub(crate) paranoid_mode: Paranoid,
     pub(crate) paranoid_checked: u64,
@@ -456,6 +461,7 @@ impl<G: Game> Sim<G> {
             paused_clock: false,
             lookahead_us_hz: 0,
             last_motion: crate::Vec2::ZERO,
+            pointer_samples: Vec::new(),
             ready_hint: None,
             paranoid: Self::reconstruction(Paranoid::environment()),
             paranoid_mode: Paranoid::environment(),
@@ -547,6 +553,7 @@ impl<G: Game> Sim<G> {
             self.live_time = None;
             self.lookahead_us_hz = 0;
             self.queue.clear();
+            self.pointer_samples.clear();
             let viewport = self.input.viewport;
             self.input = Input::new(G::actions());
             self.input.viewport = viewport;
@@ -805,6 +812,7 @@ impl<G: Game> Sim<G> {
             self.world.spans.borrow_mut().begin(self.world.tick() + 1);
             self.world.begin_tick();
             self.input.clear_edges();
+            self.retain_pointer_samples();
             self.sync_input();
             self.world.deliver_events(&mut self.input);
             let end = (self.world.tick() as u128 + 1) * 1_000_000;
@@ -816,6 +824,7 @@ impl<G: Game> Sim<G> {
                 })
             }) {
                 let e = self.queue.pop_front().unwrap();
+                self.sample_delivered_pointer(&e.event, e.host_sample);
                 let edit = matches!(&e.event, InputEvent::Message { text, .. }
                     if crate::world::edit::command(text).is_some()
                         && self.world.apply_set(text, self.development_edits));

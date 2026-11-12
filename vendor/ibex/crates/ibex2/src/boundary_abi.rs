@@ -559,7 +559,10 @@ pub unsafe extern "C" fn ibex2_host_call(
             return fail(out, &format!("Intl is unavailable: {reason}"));
         }
     }
-    #[cfg(all(feature = "intl", any(target_os = "linux", windows)))]
+    #[cfg(all(
+        feature = "intl",
+        any(target_os = "linux", ibex2_android_intl, windows)
+    ))]
     if let Some(result) = crate::stdlib::intl::dispatch(op, &args, state.as_deref()) {
         return match result {
             Ok(value) => {
@@ -569,7 +572,10 @@ pub unsafe extern "C" fn ibex2_host_call(
             Err(err) => fail(out, &err.to_string()),
         };
     }
-    #[cfg(all(feature = "intl", any(target_os = "linux", windows)))]
+    #[cfg(all(
+        feature = "intl",
+        any(target_os = "linux", ibex2_android_intl, windows)
+    ))]
     if let Some(result) = crate::stdlib::intl_datetime::dispatch(op, &args, state.as_deref()) {
         return match result {
             Ok(value) => {
@@ -579,7 +585,10 @@ pub unsafe extern "C" fn ibex2_host_call(
             Err(err) => fail(out, &err.to_string()),
         };
     }
-    #[cfg(all(feature = "intl", any(target_os = "linux", windows)))]
+    #[cfg(all(
+        feature = "intl",
+        any(target_os = "linux", ibex2_android_intl, windows)
+    ))]
     if let Some(result) = crate::stdlib::intl_case::dispatch(op, &args) {
         return match result {
             Ok(value) => {

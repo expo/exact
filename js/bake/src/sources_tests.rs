@@ -511,7 +511,7 @@ fn a_package_declaring_native_writes_the_factory_and_a_second_refuses() {
     assert!(
         linux.contains(&format!("#[path = {:?}]\n", root.display().to_string()))
             && linux.contains("mod exact_native_shim;")
-            && linux.contains("pub fn exact_native(_grants: &str) -> Box<dyn exact_js::NativeModule> {\n    Box::new(exact_native_shim::Vault::new(APP))\n}"),
+            && linux.contains("pub fn exact_native(_grants: &str) -> Box<dyn exact_js::NativeModule> {\n    Box::new(exact_native_shim::Vault::new(&APP))\n}"),
         "{linux}"
     );
     let web = super::module_constants(

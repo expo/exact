@@ -22,8 +22,10 @@ pub(super) fn library_dir() -> Option<PathBuf> {
     std::env::var_os("EXACT_NATIVE_LIBS").map(|d| PathBuf::from(d).join("app"))
 }
 
-/// Load `abi` with a device and register the app's shaders.
-pub(super) fn load(abi: &Abi) -> Result<(), String> {
+/// Load `abi` with a device and, for the primary module, register the app's
+/// shaders. The shader pack is the primary's (LLP 1030 D8), as on Linux: a
+/// named module (LLP 1009 D6) refuses a shader its Rust does not bind.
+pub(super) fn load(abi: &Abi, primary: bool) -> Result<(), String> {
     agent_tier(abi);
     if unsafe { abi.symbol::<unsafe extern "C" fn() -> u32>(b"gpu_load")() } != 0 {
         return Err(abi.error().unwrap_or_else(|| "gpu_load failed".into()));
@@ -39,7 +41,8 @@ pub(super) fn load(abi: &Abi) -> Result<(), String> {
     let shader = unsafe {
         abi.symbol::<unsafe extern "C" fn(*const u8, usize, *const u8, usize) -> u32>(b"gpu_shader")
     };
-    if let Ok(dir) = std::fs::read_dir(root.join("shaders")) {
+    let pack = primary.then(|| std::fs::read_dir(root.join("shaders")).ok());
+    if let Some(dir) = pack.flatten() {
         for entry in dir.flatten() {
             let path = entry.path();
             let (Some(name), Some("wgsl")) = (
@@ -295,8 +298,12 @@ impl Surfaces {
     }
 
     /// Each buffered canvas's newest finished frame, where a reader on
-    /// another thread finds it ([`buffer_frame`]).
-    fn publish_buffers(&mut self, only: Option<&BTreeSet<u32>>) {
+    /// another thread finds it ([`buffer_frame`]). Whether one still has a
+    /// complete frame to publish: the GPU finishes a frame after the turn
+    /// that submitted it, so a canvas that asked for no further frame needs
+    /// turns that only publish until it is out.
+    fn publish_buffers(&mut self, only: Option<&BTreeSet<u32>>) -> bool {
+        let mut owed = false;
         for (view, w) in &self.windows {
             if !w.attached || only.is_some_and(|views| !views.contains(view)) {
                 continue;
@@ -322,6 +329,7 @@ impl Surfaces {
                     b"gpu_buffer",
                 )(c.id, words.as_mut_ptr())
             };
+            owed |= unsafe { abi.symbol::<Read>(b"gpu_unpublished")(c.id) } != 0;
             if buffer.is_null() {
                 continue;
             }
@@ -343,6 +351,7 @@ impl Surfaces {
                 }),
             );
         }
+        owed
     }
 
     fn detach(&mut self, view: u32) {
@@ -535,7 +544,7 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         }
-        self.surfaces.publish_buffers(retry.then_some(&recorded));
-        wants
+        let owed = self.surfaces.publish_buffers(retry.then_some(&recorded));
+        wants || owed
     }
 }

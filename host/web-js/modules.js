@@ -1015,7 +1015,7 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
         const names = Object.keys(e.permissions ?? {});
         if (names.length === 1) e.permission = e.permissions[names[0]]; else delete e.permission;
         if (preferred.has(row.key)) e.preferred[declared] = preferred.get(row.key);
-        if (!row.send) e.readers[declared] = [...new Set([...Resources.filter(r => r.source === row.source || r.watches?.includes(row.key)).map(r => r.name), ...(globalThis.exact?.moduleReaders?.(row.key) ?? [])])];
+        if (!row.send) e.readers[declared] = [...new Set([...Resources.filter(r => r.source === row.source || r.watches?.has(row.key)).map(r => r.name), ...(globalThis.exact?.moduleReaders?.(row.key) ?? [])])];
         for (const h of held.filter(h => h.row === row && !h.queued)) e.held.push({ ticket: h.ticket, name: declared, origin: "app", waits: h.waits });
         for (const h of effects.filter(h => h.row === row)) e.held.push({ ticket: h.ticket, name: declared, origin: "app", waits: "permission" });
       }

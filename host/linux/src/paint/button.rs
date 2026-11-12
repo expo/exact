@@ -222,6 +222,9 @@ pub(super) fn face_layout(
     if !symbol_style.mask.has(StyleId::FontWeight) {
         symbol_style.font_weight = title_style.font_weight;
     }
+    if let Some((_, size)) = rows.neutral_bar_symbol {
+        symbol_style.font_size = size;
+    }
     let mut column = matches!(
         face.placement,
         ButtonImagePlacement::Top | ButtonImagePlacement::Bottom
@@ -437,10 +440,11 @@ pub(super) fn face_layout(
         .max(subtitle.as_ref().map_or(0.0, |p| p.width));
     let tw = room.filter(|w| *w > 0.0).unwrap_or(extent);
     let th = title.as_ref().map_or(0.0, |p| p.height) + subtitle.as_ref().map_or(0.0, |p| p.height);
+    let symbol_space = rows.neutral_bar_symbol.map_or(symbol, |(body, _)| body);
     let (w, h) = if column {
-        (tw.max(symbol), th + symbol + gap)
+        (tw.max(symbol_space), th + symbol_space + gap)
     } else {
-        (tw + symbol + gap, th.max(symbol))
+        (tw + symbol_space + gap, th.max(symbol_space))
     };
     let w = w + check;
     FaceLayout {
@@ -885,7 +889,9 @@ impl Painter {
         let room = check.unwrap_or(0.0);
         // The content (a line, or a stack in a column) and the check beside
         // it, in one horizontal line.
-        let (stack, ch) = if layout.column {
+        let (stack, ch) = if let Some((body, _)) = rows.neutral_bar_symbol {
+            (body, body)
+        } else if layout.column {
             (
                 layout.text.0.max(layout.symbol),
                 layout.text.1 + layout.symbol + layout.gap,
@@ -959,6 +965,12 @@ impl Painter {
                 },
                 by + (ch - layout.symbol) / 2.0,
             )
+        };
+        let (sx, sy) = if let Some((body, _)) = rows.neutral_bar_symbol {
+            let margin = (body - layout.symbol) / 2.0;
+            (bx + margin, by + margin)
+        } else {
+            (sx, sy)
         };
         let fade_face =
             neutral && look == "text" && !disabled && !menu_row && self.presses(node.id);
@@ -1094,6 +1106,7 @@ mod tests {
             },
             style: ButtonFaceStyle {
                 root_font_size: 16.0,
+                neutral_bar_symbol: None,
                 neutral_tab_root: None,
                 neutral_role_floor: false,
                 title: StyleProps::default(),

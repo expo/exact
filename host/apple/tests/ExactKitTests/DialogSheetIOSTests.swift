@@ -1305,15 +1305,23 @@ final class DialogSheetIOSTests: XCTestCase {
         XCTAssertEqual(sheet.box.height, 300, accuracy: 0.01)
     }
 
-    /// A popover over a dialog's sheet is outside the sheet's scroller: it
-    /// moves with its button as the sheet scrolls, not at the next batch.
-    func testAPopoverOverASheetFollowsItsButtonAsTheSheetScrolls() throws {
+    /// Automatic dialog height stops at the sheet while its flat child's
+    /// overflow remains scrollable. A popover follows its button outside
+    /// the sheet's scroller.
+    func testATallDialogScrollsToItsBottomAndItsPopoverFollowsItsButton() throws {
         guard Self.scene else { throw missing("scene", "a sheet's scroll and its popovers") }
         let session = try boot(planKey: "EXACT_DIALOG_SHEET_READS_PLAN"), p = session.presenter
         p.dialogCommand("showModal", "tall")
         settle { !p.menus.inTransition }
         let sheet = try sheet(XCTUnwrap(window?.rootViewController))
         let scroller = sheet.scroller
+        let dialog = try XCTUnwrap(p.views.values.first { $0.props["id"] == "tall" })
+        let content = try XCTUnwrap(p.flats.leaves.values.first { $0.parent == dialog.id })
+        XCTAssertEqual(content.layout.width, 300, accuracy: 0.01)
+        XCTAssertEqual(content.layout.height, 2000, accuracy: 0.01)
+        XCTAssertEqual(sheet.box.height, try XCTUnwrap(sheet.availableHeight), accuracy: 0.01)
+        XCTAssertLessThan(sheet.box.height, content.layout.height)
+        XCTAssertEqual(scroller.contentSize.height, content.layout.maxY, accuracy: 0.01)
         p.menus.action("showPopover", ["tall-tip", "tall-tip-button"])
         let tip = try XCTUnwrap(p.views.values.first { $0.props["id"] == "tall-tip" })
         let button = try XCTUnwrap(p.views.values.first { $0.props["id"] == "tall-tip-button" })
@@ -1321,6 +1329,11 @@ final class DialogSheetIOSTests: XCTestCase {
         let before = gap()
         scroller.contentOffset.y += 40
         XCTAssertEqual(gap(), before, accuracy: 0.5, "the popover keeps its place by its button")
+        let bottom = scroller.contentSize.height - scroller.bounds.height + scroller.adjustedContentInset.bottom
+        scroller.setContentOffset(CGPoint(x: 0, y: bottom), animated: false)
+        let visibleBottom = scroller.bounds.maxY - scroller.adjustedContentInset.bottom
+        XCTAssertEqual(dialog.convert(content.frame, to: scroller).maxY, visibleBottom, accuracy: 0.5)
+        XCTAssertGreaterThan(scroller.contentOffset.y, 0)
     }
 
     func testAPercentageSheetKeepsThePresentationContainersHeightBasis() throws {

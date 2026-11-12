@@ -9,8 +9,8 @@ use crate::grid::{CellRect, Grid, Rgb, Style};
 use crate::measure::{columns, wrap, Glyph, Line};
 use exact_kernel::style::cells::{COLUMN, ROW};
 use exact_kernel::{
-    Color, ColorValue, Dimension, Display, Kernel, NodeRef, NodeType, Overflow, PropId,
-    TextDecorationLine, TextOverflow, ViewId, Visibility,
+    BorderStyle, Color, ColorValue, Dimension, Display, Kernel, NodeRef, NodeType, Overflow,
+    PropId, TextDecorationLine, TextOverflow, ViewId, Visibility,
 };
 use std::collections::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -228,7 +228,7 @@ fn node(
             } else {
                 Rgb(228, 228, 228)
             };
-            out.grid.fill(rect, clip, fill);
+            out.grid.fill(rect, clip, Some(fill));
         }
         if let Some(bg) = n
             .style
@@ -236,24 +236,19 @@ fn node(
             .map(|c| c.resolve(scene.dark))
             .and_then(rgb)
         {
-            out.grid.fill(rect, clip, bg);
+            out.grid.fill(rect, clip, Some(bg));
+        } else if layer && !n.style.mask.has(exact_kernel::StyleId::BackgroundColor) {
+            // An open layer the author gave no background is the
+            // platform's opaque surface (the web's `dialog` is `Canvas`):
+            // the terminal's own ground, not the page beneath.
+            out.grid.fill(rect, clip, None);
         }
         border(scene, out, &n, rect, clip, current);
         grouped::separator(scene, out, &n, clip, dx, dy);
     }
     let [bt, br, bb, bl] = n.style.border_widths_in(&scene.env);
-    let (pl, pt, pr, pb) = kernel.resolved_padding(n.key).unwrap_or_default();
-    let content = n.field_content_rect().map_or_else(
-        || {
-            cells(
-                f.x - dx + bl + pl,
-                f.y - dy + bt + pt,
-                f.width - bl - br - pl - pr,
-                f.height - bt - bb - pt - pb,
-            )
-        },
-        |c| cells(f.x - dx + c.x, f.y - dy + c.y, c.width, c.height),
-    );
+    let (pl, _, pr, _) = kernel.resolved_padding(n.key).unwrap_or_default();
+    let content = content_cells(kernel, &scene.env, &n, dx, dy);
     let seen = rect.intersect(clip);
     if visible && seen.w > 0 && seen.h > 0 {
         out.shown.push(id);
@@ -294,6 +289,7 @@ fn node(
         h: if clips_y { clipped.h } else { clip.h },
     };
     let mut child_dy = dy;
+    let mut indicator = None;
     if scrolls {
         let reach = (n.content.1 - (f.height - bt - bb)).max(0.0);
         let offset = scene
@@ -304,29 +300,8 @@ fn node(
             .clamp(0.0, reach);
         child_dy += offset;
         out.scrollers.push((id, inner.intersect(clip), reach));
-        // A one-column indicator at the inner right edge (LLP 1101 §4).
         if reach > 0.0 && n.style.scrollbar_width != exact_kernel::ScrollbarWidth::None {
-            let track = inner.h.max(1);
-            let thumb = ((track as f32) * (f.height / (f.height + reach)))
-                .ceil()
-                .max(1.0) as i32;
-            let top = ((track - thumb) as f32 * (offset / reach)).round() as i32;
-            let x = inner.x + inner.w - 1;
-            for i in 0..track {
-                let on = i >= top && i < top + thumb;
-                let style = Style {
-                    faint: !on,
-                    ..Style::default()
-                };
-                out.grid.put(
-                    x,
-                    inner.y + i,
-                    if on { "┃" } else { "│" },
-                    1,
-                    style,
-                    child_clip,
-                );
-            }
+            indicator = Some((f.height / (f.height + reach), offset / reach));
         }
     }
     if n.node_type != NodeType::Text && !native_button {
@@ -334,9 +309,62 @@ fn node(
             node(scene, out, child, child_clip, dx, child_dy, false);
         }
     }
+    // A one-column indicator at the inner right edge (LLP 1101 §4), over
+    // the rows: layout reserves no column for it.
+    if let Some((shown, scrolled)) = indicator {
+        let track = inner.h.max(1);
+        let thumb = ((track as f32) * shown).ceil().max(1.0) as i32;
+        let top = ((track - thumb) as f32 * scrolled).round() as i32;
+        let x = inner.x + inner.w - 1;
+        for i in 0..track {
+            let on = i >= top && i < top + thumb;
+            let style = Style {
+                faint: !on,
+                ..Style::default()
+            };
+            out.grid.put(
+                x,
+                inner.y + i,
+                if on { "┃" } else { "│" },
+                1,
+                style,
+                child_clip,
+            );
+        }
+    }
     if visible && scene.focus == Some(id) && n.node_type != NodeType::TextInput && !native_button {
         out.grid.reverse(rect, clip);
     }
+}
+
+/// A node's content box in cells, less the offsets above it: inside its
+/// borders and padding, or a field's own text rectangle. A textarea's
+/// lines are this wide for the painter and for the arrow keys alike.
+pub(crate) fn content_cells(
+    kernel: &Kernel,
+    env: &exact_kernel::Env,
+    n: &NodeRef<'_>,
+    dx: f32,
+    dy: f32,
+) -> CellRect {
+    let f = n.frame;
+    if let Some(c) = n.field_content_rect() {
+        return cells(f.x - dx + c.x, f.y - dy + c.y, c.width, c.height);
+    }
+    let [bt, br, bb, bl] = n.style.border_widths_in(env);
+    let (pl, pt, pr, pb) = kernel.resolved_padding(n.key).unwrap_or_default();
+    cells(
+        f.x - dx + bl + pl,
+        f.y - dy + bt + pt,
+        f.width - bl - br - pl - pr,
+        f.height - bt - bb - pt - pb,
+    )
+}
+
+/// Whether a textarea's cluster of `cols` at `col` starts a new visual
+/// line in `width` columns: one that does not fit, unless the line is empty.
+pub(crate) fn wraps_before(col: usize, cols: usize, width: usize) -> bool {
+    col > 0 && col + cols > width
 }
 
 /// A determinate `progress` (LLP 1116 D8).
@@ -456,10 +484,31 @@ fn border(
         ]
         .iter()
         .any(|d| matches!(d.resolve(&env), Dimension::Points(p) if p > 0.0));
-    let (h, v) = if heavy {
-        ("━", "┃")
-    } else {
-        ("─", "│")
+    // Each side its own line (LLP 1101 §4): light `─│`, dashed `┄┆`,
+    // dotted `┈┊`, each in its heavy form for a heavy border. The corners
+    // have no dashed or dotted forms, so they stay solid.
+    let styles = [
+        s.border_style_top,
+        s.border_style_right,
+        s.border_style_bottom,
+        s.border_style_left,
+    ];
+    let line = |i: usize| {
+        let across = matches!(i, 0 | 2);
+        match (styles[i], heavy, across) {
+            (BorderStyle::Dashed, false, true) => "┄",
+            (BorderStyle::Dashed, false, false) => "┆",
+            (BorderStyle::Dashed, true, true) => "┅",
+            (BorderStyle::Dashed, true, false) => "┇",
+            (BorderStyle::Dotted, false, true) => "┈",
+            (BorderStyle::Dotted, false, false) => "┊",
+            (BorderStyle::Dotted, true, true) => "┉",
+            (BorderStyle::Dotted, true, false) => "┋",
+            (_, false, true) => "─",
+            (_, false, false) => "│",
+            (_, true, true) => "━",
+            (_, true, false) => "┃",
+        }
     };
     let (tl, tr, br, bl) = match (heavy, round) {
         (true, _) => ("┏", "┓", "┛", "┗"),
@@ -474,18 +523,18 @@ fn border(
     };
     for x in r.x..=x1 {
         if top {
-            out.grid.put(x, r.y, h, 1, style(0), clip);
+            out.grid.put(x, r.y, line(0), 1, style(0), clip);
         }
         if bottom {
-            out.grid.put(x, y1, h, 1, style(2), clip);
+            out.grid.put(x, y1, line(2), 1, style(2), clip);
         }
     }
     for y in r.y..=y1 {
         if left {
-            out.grid.put(r.x, y, v, 1, style(3), clip);
+            out.grid.put(r.x, y, line(3), 1, style(3), clip);
         }
         if right {
-            out.grid.put(x1, y, v, 1, style(1), clip);
+            out.grid.put(x1, y, line(1), 1, style(1), clip);
         }
     }
     if top && left {
@@ -867,7 +916,10 @@ fn field(
             }
             continue;
         }
-        if multiline && col + cols > width {
+        if *cols == 0 {
+            continue;
+        }
+        if multiline && wraps_before(col, *cols, width) {
             row += 1;
             col = 0;
         }
@@ -904,7 +956,7 @@ fn field(
     }
 }
 
-fn clusters(s: &str) -> Vec<(String, usize)> {
+pub(crate) fn clusters(s: &str) -> Vec<(String, usize)> {
     s.graphemes(true)
         .map(|g| {
             if g == "\n" || g == "\r\n" {
@@ -912,7 +964,8 @@ fn clusters(s: &str) -> Vec<(String, usize)> {
             } else if g.chars().any(char::is_control) {
                 ("\u{fffd}".to_string(), 1)
             } else {
-                (g.to_string(), g.width().max(1))
+                // A zero-width cluster takes no column, as text's does.
+                (g.to_string(), g.width())
             }
         })
         .collect()

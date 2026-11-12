@@ -67,6 +67,7 @@ struct App<D: DataSource> {
     pads: crate::pad_poll::Pads,
     pads_active: bool,
     caret: crate::caret::Caret,
+    tooltip: crate::tooltip::Tooltip,
     edit_menu: Option<exact_linux::presenter::edit_menu::EditMenu>,
     ime: crate::ime::InputMethod,
     appearance: crate::appearance::Changes,
@@ -86,6 +87,7 @@ impl<D: DataSource> Drop for App<D> {
         // The module's GPU swapchain must release its HWND before the window.
         self.presenter.take();
         self.caret.clear();
+        self.tooltip = Default::default();
     }
 }
 
@@ -214,7 +216,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         return 1;
     }
     if !config.windowed() {
-        return app::run_config::<D>(&mut config, started);
+        return crate::clipboard::run_headless::<D>(&mut config, started);
     }
     boot_phase("config-ready");
     if std::env::var_os("EXACT_SIZE").is_none() {
@@ -299,6 +301,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         pads: Default::default(),
         pads_active: false,
         caret: Default::default(),
+        tooltip: Default::default(),
         edit_menu: None,
         ime,
         appearance: Default::default(),
@@ -944,9 +947,15 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 }
                 if let Ok(handle) = window.window_handle() {
                     if let RawWindowHandle::Win32(handle) = handle.as_raw() {
-                        p.set_clipboard(Box::new(crate::clipboard::Clipboard(handle.hwnd.get())));
+                        p.set_clipboard(Box::new(crate::clipboard::Clipboard::new(
+                            handle.hwnd.get(),
+                        )));
                         let hwnd = handle.hwnd.get();
                         p.set_url_opener(move |url| crate::url::open(hwnd, url));
+                        let proxy = self.proxy.clone();
+                        p.set_window_closer(move || {
+                            let _ = proxy.send_event(crate::accessibility::Event::Close);
+                        });
                     }
                 }
                 p.surface_lifecycle(self.minimized || self.occluded, !self.focused);
@@ -989,6 +998,12 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
     }
     fn user_event(&mut self, events: &ActiveEventLoop, event: crate::accessibility::Event) {
         let _span = crate::probe::Span::new("user event", 0);
+        if matches!(event, crate::accessibility::Event::Close) {
+            if let Some(window) = &self.window {
+                self.window_event(events, window.id(), WindowEvent::CloseRequested);
+            }
+            return;
+        }
         if let crate::accessibility::Event::Timer(fired) = event {
             if counters::enabled() {
                 self.service_causes |= counters::TIMER;
@@ -1054,6 +1069,12 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
             if let Some(p) = &mut self.presenter {
                 p.reset_painter_present_deadline();
             }
+        }
+        if matches!(
+            event,
+            WindowEvent::Focused(false) | WindowEvent::KeyboardInput { .. }
+        ) {
+            self.tooltip.clear();
         }
         if matches!(event, WindowEvent::CloseRequested) {
             // The window is going: its hatch, then the app's, ends.
@@ -1147,8 +1168,17 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 );
                 p.set_pointer_kind(PointerKind::Mouse);
                 let _ = p.pointer_move(self.pointer.0, self.pointer.1, now);
+                if let Some(window) = &self.window {
+                    self.tooltip.update(
+                        p,
+                        window,
+                        (self.focused && self.buttons == 0).then_some(self.pointer),
+                        true,
+                    );
+                }
             }
             WindowEvent::CursorLeft { .. } => {
+                self.tooltip.clear();
                 self.pointer_inside = false;
                 // Windows captures pressed buttons. Preserve the drag until its
                 // captured mouse-up, even outside the window; blur cancels it.
@@ -1157,6 +1187,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                self.tooltip.clear();
                 let (x, y) = if let Some((px, py)) = button_position {
                     self.pointer = (px as f32 / self.scale as f32, py as f32 / self.scale as f32);
                     self.pointer_inside = self.window.as_ref().is_some_and(|window| {
@@ -1216,12 +1247,14 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 }
             }
             WindowEvent::Touch(touch) => {
+                self.tooltip.clear();
                 self.clicks.clear();
                 if self.touches.event(p, touch, self.scale, now) {
                     self.caret.activity(Instant::now());
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
+                self.tooltip.clear();
                 self.clicks.clear();
                 crate::wheel::dispatch(p, (x, y), delta, self.scale);
             }
@@ -1337,6 +1370,15 @@ impl<D: DataSource + Default + 'static> App<D> {
                 eprintln!("exact-windows: {e}");
             }
             p.run_commands(D::default);
+            if let Some(window) = &self.window {
+                self.tooltip.update(
+                    p,
+                    window,
+                    (self.pointer_inside && self.focused && self.buttons == 0)
+                        .then_some(self.pointer),
+                    false,
+                );
+            }
             crate::orientation::apply(p);
             p.hatch_turn();
             if let Some(e) = p.admit_idle_timer(self.started.elapsed().as_secs_f64() * 1000.0) {

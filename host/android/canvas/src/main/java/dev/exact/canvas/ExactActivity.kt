@@ -402,7 +402,8 @@ open class ExactActivity : Activity() {
 
     /** What the host says to draw around the page ([Native.chrome]): the page's place in the window (x, y, width and
      * height in pixels), where the view and the hosted views under it are put; the colour behind the page and in the
-     * edges it keeps out of, which is the window's background; and the two bars' icon appearances (LLP 1105 D7). */
+     * edges it keeps out of, which is the window's background; the two bars' icon appearances; and whether the bars
+     * give way to the page (LLP 1105 D7). */
     private fun chrome(c: IntArray) {
         for (child in listOfNotNull<View>(view, natives ?: return, fields)) {
             child.layoutParams = FrameLayout.LayoutParams(c[2], c[3]).apply {
@@ -412,12 +413,29 @@ open class ExactActivity : Activity() {
         }
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(c[4]))
         val bars = barAppearance(c[5])
-        if (Build.VERSION.SDK_INT < 30) { Legacy.lightBars(window, bars.statusLight, bars.navigationLight); return }
+        val hide = bars.hidden.takeIf { it != barsHidden }
+        barsHidden = bars.hidden
+        if (Build.VERSION.SDK_INT < 30) {
+            Legacy.lightBars(window, bars.statusLight, bars.navigationLight)
+            hide?.let { Legacy.hideBars(window, it) }
+            return
+        }
+        val controller = window.insetsController ?: return
         val status = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
         val navigation = android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-        window.insetsController?.setSystemBarsAppearance(
+        controller.setSystemBarsAppearance(
             (if (bars.statusLight) status else 0) or (if (bars.navigationLight) navigation else 0), status or navigation)
+        // Immersive mode as a hand-built app asks for it: both bars go, and a swipe from an edge shows them over the
+        // page for a moment. Only a change is applied, so a chrome that moves the page does not hide bars the person
+        // has just swiped in.
+        if (hide == true) {
+            controller.systemBarsBehavior = android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller.hide(android.view.WindowInsets.Type.systemBars())
+        } else if (hide == false) controller.show(android.view.WindowInsets.Type.systemBars())
     }
+
+    /** Whether [chrome] last hid the system bars; null before the first. */
+    private var barsHidden: Boolean? = null
 
     /** The device's settings as the host was last told them. */
     private var told: Device? = null
@@ -472,6 +490,11 @@ open class ExactActivity : Activity() {
         configure()
         view.running(true)
         Exact.hidden(false)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus && reads()) pads.background()
     }
 
     override fun onStop() {

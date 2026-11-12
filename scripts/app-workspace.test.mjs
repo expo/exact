@@ -45,7 +45,7 @@ async function fixture(body) {
   try {
     // These fixtures assert the workspaces' default target paths.
     delete process.env.CARGO_TARGET_DIR;
-    for (const path of ['scripts/app.mjs','scripts/app-icons.mjs','scripts/png.mjs','host/web/beside.mjs','scripts/bun.mjs','js/bake/src/__exact_env.mjs','scripts/contract-diagnosis.mjs','scripts/filesystem.mjs','scripts/cargo-check.mjs','scripts/app-shells.mjs','scripts/document-utis.mjs','scripts/web-head.mjs','scripts/share-target.mjs','scripts/rust.mjs','scripts/origin.mjs','scripts/install-page.mjs','scripts/sweep.mjs','scripts/app.schema.json','host/web/stages.mjs','host/web/build-lock.mjs','host/web/look.mjs','host/web-js/glue.mjs','host/web-js/route-pattern.js','host/apple/assets.mjs','host/apple/buildinfo.mjs','game/app/shells.mjs','game/app/crates.mjs','game/.cargo/config.toml','scripts/cargo-dep-info.mjs','scripts/package-libraries.mjs','scripts/linked-plan.mjs','scripts/app-cli.mjs','scripts/rustc/exact-rustc']) {
+    for (const path of ['scripts/app.mjs','scripts/app-icons.mjs','scripts/png.mjs','host/web/beside.mjs','scripts/bun.mjs','js/bake/src/__exact_env.mjs','scripts/contract-diagnosis.mjs','scripts/filesystem.mjs','scripts/cargo-check.mjs','scripts/app-shells.mjs','scripts/document-utis.mjs','scripts/web-head.mjs','scripts/share-target.mjs','scripts/rust.mjs','scripts/origin.mjs','scripts/install-page.mjs','scripts/sweep.mjs','scripts/app.schema.json','host/web/stages.mjs','host/web/build-lock.mjs','host/web/look.mjs','host/web-js/glue.mjs','host/web-js/route-pattern.js','host/apple/assets.mjs','host/apple/buildinfo.mjs','host/apple/toolchain.mjs','host/apple/plist.mjs','host/apple/link.mjs','game/app/shells.mjs','game/app/crates.mjs','game/.cargo/config.toml','scripts/cargo-dep-info.mjs','scripts/package-libraries.mjs','scripts/linked-plan.mjs','scripts/app-cli.mjs','scripts/rustc/exact-rustc','js/bake/src/__exact_portable.mjs','js/bake/src/__exact_binding.mjs','js/bake/src/typescript.mjs','host/apple/image.mjs','host/apple/metal.mjs']) {
       write(path, readFileSync(resolve(import.meta.dir,'..',path)));
     }
     // The rustc wrapper the scripts' cargo calls run on a Mac (`withHostDeployment`), found beside the copied scripts.
@@ -80,6 +80,32 @@ test('shell fixture includes Apple build info', () => fixture(({root}) => {
   assert.ok(existsSync(resolve(root, 'host/apple/buildinfo.mjs')));
 }), 60_000);
 
+test('the Hermes installer owns its workspace in ordinary and nested checkouts', () => {
+  const root = resolve(import.meta.dir, '..'), scratch = resolve(root, 'target');
+  mkdirSync(scratch, {recursive:true});
+  const outer = realpathSync(mkdtempSync(resolve(scratch, 'hermes-workspace-')));
+  const installer = 'vendor/ibex/crates/hermes-lean-sys-installer';
+  try {
+    const nested = resolve(outer, '.claude/worktrees/lane');
+    mkdirSync(resolve(nested, installer, 'src'), {recursive:true});
+    writeFileSync(resolve(outer, 'Cargo.toml'), '[workspace]\nmembers=[]\n');
+    writeFileSync(resolve(nested, 'Cargo.toml'), '[workspace]\nmembers=[]\nexclude=["vendor"]\n');
+    for (const file of ['Cargo.toml', 'Cargo.lock', 'src/main.rs']) {
+      writeFileSync(resolve(nested, installer, file), readFileSync(resolve(root, installer, file)));
+    }
+    for (const checkout of [root, nested]) {
+      const manifest = resolve(checkout, installer, 'Cargo.toml');
+      const result = spawnSync('cargo', ['metadata', '--offline', '--locked', '--no-deps',
+        '--format-version', '1', '--manifest-path', manifest], {cwd:checkout, encoding:'utf8', timeout:60000});
+      assert.equal(result.status, 0, result.stderr);
+      const metadata = JSON.parse(result.stdout);
+      assert.equal(metadata.workspace_root, dirname(manifest));
+      assert.deepEqual(metadata.packages.map(p => p.manifest_path), [manifest]);
+      assert.deepEqual(metadata.workspace_members, [metadata.packages[0].id]);
+    }
+  } finally { rmSync(outer, {recursive:true, force:true}); }
+}, 60_000);
+
 test('shell repair replaces half-written members before metadata', () => fixture(({app}) => {
   const before = app(), path = before.cargoPackage('gpu').manifest_path;
   rmSync(resolve(dirname(path),'src'),{recursive:true});
@@ -102,6 +128,17 @@ test('in-repo app members can own a separate locked workspace without EXACT_APP_
   pkg('apps/separate/linux', 'separate-linux');
   write('apps/separate/linux/Cargo.toml', '[package]\nworkspace="../../.."\nname="separate-linux"\nversion="0.1.0"\nedition="2021"\n');
   assert.throws(() => app('separate'), /different Cargo workspaces/);
+}), 60_000);
+
+test('in-repo declarative apps select generated native hosts without eagerly writing a Cargo workspace', () => fixture(({ app, root, write }) => {
+  delete process.env.EXACT_APP_DIR;
+  write('apps/plain/app.contract', 'component App\n  view\n');
+  write('apps/plain/app.json', JSON.stringify({ name: 'Plain', app: { id: 'com.exact.plain', name: 'Plain' }, host: { ios: {} } }));
+  const resolved = app('plain');
+  assert.equal(resolved.generated, true);
+  assert.equal(resolved.crate('ios'), 'plain-apple');
+  assert.equal(resolved.target, resolve(root, 'apps/plain/target'));
+  assert.equal(existsSync(resolve(root, 'apps/plain/.exact/shells/Cargo.toml')), false);
 }), 60_000);
 
 test('copied app identities keep separate Cargo graphs and generated hosts', () => fixture(({app, dir, game, write}) => {

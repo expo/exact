@@ -224,8 +224,8 @@ impl<D: DataSource> Runner<D> {
     /// Set the display's scale, which a hairline (`-exact-hairline`) is one
     /// device pixel of: the host's fact, told as the root font size is and
     /// again when the window moves to another display. Hairlines and borders
-    /// snapped by the host relayout in one commit. Without those, or for the
-    /// same scale, it commits nothing; future lengths resolve against it.
+    /// snapped by the host and viewport readers update in one commit. Without
+    /// either, or for the same scale, it commits nothing.
     /// A scale that is not finite and positive is journaled and refused,
     /// changing nothing.
     pub fn set_display_scale(&mut self, scale: f64) -> Result<Option<CommitReceipt>, RunnerError> {
@@ -236,19 +236,31 @@ impl<D: DataSource> Runner<D> {
             ));
             return Err(RunnerError::Kernel(LayoutError::InvalidDisplayScale.into()));
         }
-        let previous = self.kernel.display_scale();
-        let changed = self
-            .kernel
-            .set_display_scale(scale as f32)
-            .map_err(RunnerError::Kernel)?;
-        if !changed || !self.kernel.has_display_lengths() {
-            return Ok(None);
-        }
-        let result = self.commit_again(Vec::new(), "display scale");
-        if result.is_err() {
-            let _ = self.kernel.set_display_scale(previous);
-        }
-        result.map(Some)
+        let viewport = crate::Viewport {
+            device_pixel_ratio: Some(scale),
+            ..self.viewport
+        };
+        self.replace_fact(
+            |r| &mut r.viewport,
+            viewport,
+            crate::viewport::SOURCE,
+            |r, _, readers| {
+                let previous = r.kernel.reported_display_scale();
+                let changed = r
+                    .kernel
+                    .set_display_scale(scale as f32)
+                    .map_err(RunnerError::Kernel)?;
+                let result = if changed && r.kernel.has_display_lengths() {
+                    r.commit_again(readers, "display scale").map(Some)
+                } else {
+                    r.recommit(readers, "display scale")
+                };
+                if result.is_err() {
+                    let _ = r.kernel.restore_display_scale_report(previous);
+                }
+                result
+            },
+        )
     }
 
     /// The app's own size set aside for the host's (a development host

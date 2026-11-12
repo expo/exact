@@ -128,6 +128,36 @@ final class KeptDocumentsMacTests: XCTestCase {
         XCTAssertEqual(controller.recentDocumentURLs, [])
     }
 
+    /// Open Recent ▸ Clear Menu is dimmed while there is nothing to clear,
+    /// as `NSDocumentController` refuses `clearRecentDocuments:` then.
+    func testClearMenuIsEnabledOnlyWithSomethingToClear() throws {
+        _ = NSApplication.shared
+        let controller = NSDocumentController.shared
+        func listed(_ want: [String]) -> [String] {
+            let end = Date().addingTimeInterval(3)
+            while controller.recentDocumentURLs.map(\.lastPathComponent) != want, Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+            return controller.recentDocumentURLs.map(\.lastPathComponent)
+        }
+        let saved = controller.recentDocumentURLs
+        defer {
+            KeptDocuments.clear(); _ = listed([])
+            saved.reversed().forEach(controller.noteNewRecentDocumentURL)
+        }
+        let recent = RecentMenu(), menu = NSMenu()
+        menu.delegate = recent
+        func clearMenu() throws -> NSMenuItem {
+            recent.menuNeedsUpdate(menu)
+            menu.update()
+            return try XCTUnwrap(menu.items.last { $0.action == #selector(RecentMenu.clear(_:)) })
+        }
+        KeptDocuments.clear()
+        XCTAssertEqual(listed([]), [])
+        XCTAssertFalse(try clearMenu().isEnabled, "nothing to clear")
+        controller.noteNewRecentDocumentURL(try write("a.md", "a"))
+        try XCTSkipUnless(listed(["a.md"]) == ["a.md"], "this test host keeps no recent documents")
+        XCTAssertTrue(try clearMenu().isEnabled)
+    }
+
     /// A clear that lands after the 2 s fallback took what it noted: noted
     /// again once it lands (`watchLate`), and never past a real Clear Menu.
     /// The late clear is made by hand: the fallback runs on a list it

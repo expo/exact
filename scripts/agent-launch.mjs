@@ -3,6 +3,7 @@ export {gameNonInput} from '../game/inputs.mjs';
 import {readStatus, formatStatus} from '../game/status.mjs';
 // Session setup shared by the agent CLI and its programmatic driver.
 import { widgetArguments, validateWidget } from './agent-widget.mjs';
+import { missingValue } from './help.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -17,6 +18,8 @@ import { besidePattern } from '../host/web/beside.mjs';
 import { chooseSimulator, phone } from '../host/apple/devices.mjs';
 import { androidDevice } from './agent-android.mjs';
 import { bakeOutput, gpuModules, linuxBinary, moduleDirectory, pendingBuildInputs, resolveApp, windowsFile, shaderWatchRoots, webDist } from './app.mjs';
+import { directoryInputSnapshot, packageTests } from './cargo-dep-info.mjs';
+import { HOST_CRATES } from './cargo-check.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
@@ -496,13 +499,20 @@ export function parseFlags(argv) {
   const rest = [];
   // Only this drive's flags say what a child is (LLP 1133.007 §7), never an inherited environment.
   for (const key of ['EXACT_AGENT_PROCESS', 'EXACT_AGENT_LOGIN_ENV', 'EXACT_AGENT_HOME']) delete process.env[key];
-  for (let i = 0; i < argv.length; i++) {
+  // A flag's value, refused by the flag's name when it is absent or another flag: the reader of an absent value takes
+  // the default, so `--url` last drove this checkout's build and `--app` last the default app.
+  let i;
+  const value = () => {
+    if (missingValue(argv[i + 1])) throw new Error(`${argv[i]} needs a value`);
+    return argv[++i];
+  };
+  for (i = 0; i < argv.length; i++) {
     if (argv[i] === '--json') flags.json = true;
-    else if (argv[i] === '--world') flags.world = resolve(argv[++i]);
-    else if (argv[i] === '--plan') flags.plan = resolve(argv[++i]);
+    else if (argv[i] === '--world') flags.world = resolve(value());
+    else if (argv[i] === '--plan') flags.plan = resolve(value());
     else if (argv[i] === '--backend') { const value = argv[++i]; if (!value || value.startsWith('--')) throw new Error('--backend <url>: name the backend origin'); process.env.EXACT_BACKEND_ORIGIN = value; }
-    else if (argv[i] === '--app') flags.app = argv[++i];
-    else if (argv[i] === '--browser') flags.browser = argv[++i];
+    else if (argv[i] === '--app') flags.app = value();
+    else if (argv[i] === '--browser') flags.browser = value();
     else if (argv[i] === '--size') {
       const size = argv[++i] ?? '';
       if (!/^\d+(?:\.\d+)?x\d+(?:\.\d+)?$/.test(size) || !size.split('x').every(v => Number(v) > 0 && Number.isFinite(Number(v)))) throw new Error('--size: expected positive <w>x<h>; large|xxxl needs widget <entry>');
@@ -510,44 +520,44 @@ export function parseFlags(argv) {
     }
     // A number, or what was typed, which `open` refuses by name (`--scale 1x`, a missing value).
     else if (argv[i] === '--scale') { const v = argv[++i] ?? ''; flags.scale = v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : v; }
-    else if (argv[i] === '--test') flags.test = argv[++i];
-    else if (argv[i] === '--session') flags.session = argv[++i];
-    else if (argv[i] === '--open') (flags.open ??= []).push(resolve(argv[++i]));
-    else if (argv[i] === '--url') flags.url = argv[++i];
+    else if (argv[i] === '--test') flags.test = value();
+    else if (argv[i] === '--session') flags.session = value();
+    else if (argv[i] === '--open') (flags.open ??= []).push(resolve(value()));
+    else if (argv[i] === '--url') flags.url = value();
     else if (argv[i] === '--device') flags.device = true;
     // Android: the app on the Canvas reader (its APK), not the Linux host headless. Said as the variable
     // `agent-android.mjs` reads, as `--sim` is said as EXACT_SIM: the driver's own file is at its line cap.
     else if (argv[i] === '--reader') { flags.reader = true; process.env.EXACT_ANDROID_READER = '1'; }
     // `--headless`: the Linux host under adb shell, which an `exact new` app's `agent android` asks for with it (app-cli.mjs).
     else if (argv[i] === '--headless') { flags.reader = false; delete process.env.EXACT_ANDROID_READER; }
-    else if (argv[i] === '--seed') flags.seed = Number(argv[++i]);
-    else if (argv[i] === '--locale') flags.locale = argv[++i];
-    else if (argv[i] === '--format-locale') flags.formatLocale = argv[++i];
-    else if (argv[i] === '--time-zone') flags.timeZone = argv[++i];
-    else if (argv[i] === '--epoch') flags.epoch = argv[++i];
-    else if (argv[i] === '--timing') flags.timing = argv[++i];
-    else if (argv[i] === '--touch') flags.touch = argv[++i];
-    else if (argv[i] === '--chrome') flags.chrome = argv[++i];
-    else if (argv[i] === '--phone') flags.phone = argv[++i];
-    else if (argv[i] === '--sim') flags.sim = argv[++i];
-    else if (argv[i] === '--storage') flags.storage = argv[++i];
+    else if (argv[i] === '--seed') flags.seed = Number(value());
+    else if (argv[i] === '--locale') flags.locale = value();
+    else if (argv[i] === '--format-locale') flags.formatLocale = value();
+    else if (argv[i] === '--time-zone') flags.timeZone = value();
+    else if (argv[i] === '--epoch') flags.epoch = value();
+    else if (argv[i] === '--timing') flags.timing = value();
+    else if (argv[i] === '--touch') flags.touch = value();
+    else if (argv[i] === '--chrome') flags.chrome = value();
+    else if (argv[i] === '--phone') flags.phone = value();
+    else if (argv[i] === '--sim') flags.sim = value();
+    else if (argv[i] === '--storage') flags.storage = value();
     else if (argv[i] === '--keep-storage') flags.keepStorage = true;
     else if (argv[i] === '--reset-storage') flags.resetStorage = true;
-    else if (argv[i] === '--port') flags.port = argv[++i];
+    else if (argv[i] === '--port') flags.port = value();
     // `trace --pid <pid>` asks a running development app for its trace; `trace --out <file>` writes it with its map joined (LLP 1142 D2, D5).
-    else if (argv[i] === '--pid') flags.pid = argv[++i];
-    else if (argv[i] === '--out') flags.out = resolve(argv[++i]);
+    else if (argv[i] === '--pid') flags.pid = value();
+    else if (argv[i] === '--out') flags.out = resolve(value());
     // A driver fault armed before the app's first data load (LLP 1103 D3): every fetch whose URL starts with it fails.
-    else if (argv[i] === '--fail-fetch') flags.failFetch = [flags.failFetch, argv[++i]].filter(Boolean).join('\n');
+    else if (argv[i] === '--fail-fetch') flags.failFetch = [flags.failFetch, value()].filter(Boolean).join('\n');
     // A module's permission as the drive starts (LLP 1133.002 §6): `--permission geolocation=granted`, a `prefer` before the first op.
-    else if (argv[i] === '--permission') { const [name, state] = String(argv[++i]).split('='); (flags.permission ??= {})[`permission.${name}`] = state; }
+    else if (argv[i] === '--permission') { const [name, state] = value().split('='); (flags.permission ??= {})[`permission.${name}`] = state; }
     // A relaunch whose platform hands it a listed entry (LLP 1133.004 §7): `--notification '<entry>'`, the
     // entry as `state.notifications` printed it, delivered as its tap would be before the first op.
-    else if (argv[i] === '--notification') (flags.launchEntries ??= []).push({ launch: 'notification', entry: argv[++i] });
+    else if (argv[i] === '--notification') (flags.launchEntries ??= []).push({ launch: 'notification', entry: value() });
     // A cold wake (LLP 1133.017 §10): `--wake '<entry>'`, a registration as `state` printed it, raised before the first op.
-    else if (argv[i] === '--wake') (flags.launchEntries ??= []).push({ launch: 'wake', entry: argv[++i] });
+    else if (argv[i] === '--wake') (flags.launchEntries ??= []).push({ launch: 'wake', entry: value() });
     // A cold tool call (LLP 1133.023 §10): `--call '<tool> <json>'`, delivered once the data module is ready, as a system's call that started the app.
-    else if (argv[i] === '--call') (flags.launchEntries ??= []).push({ launch: 'call', entry: argv[++i] });
+    else if (argv[i] === '--call') (flags.launchEntries ??= []).push({ launch: 'call', entry: value() });
     // A launch the login item made (LLP 1133.025 D2, D6): `--login`, or `--login hidden` for one registered to open with
     // no window. The runner answers `launchedAtLogin`; the macOS host leaves the window unshown for a hidden one.
     else if (argv[i] === '--login') {
@@ -555,7 +565,7 @@ export function parseFlags(argv) {
       (flags.launchEntries ??= []).push({ launch: 'login', entry: flags.login });
     }
     // A module answered by its implementation, not the substitute (LLP 1133.001 D7's behaviour tests; Apple, Android).
-    else if (argv[i] === '--bind') flags.bind = [flags.bind, argv[++i]].filter(Boolean).join(',');
+    else if (argv[i] === '--bind') flags.bind = [flags.bind, value()].filter(Boolean).join(',');
     // What a child process is under the agent (LLP 1133.007 §7), said to a native host in the variables its executor reads:
     // `--process <target>=<file>|script:<file.json>|real` (`all=real` every target), `--login-env NAME=value`, `--home <dir>`.
     else if (argv[i] === '--process' || argv[i] === '--login-env') {
@@ -565,7 +575,7 @@ export function parseFlags(argv) {
       const line = argv[i - 1] === '--process' && spec !== 'real' ? `${name}=${spec.startsWith('script:') ? 'script:' : ''}${resolve(file)}` : `${name}=${spec}`;
       process.env[key] = [process.env[key], line].filter(Boolean).join('\n');
     }
-    else if (argv[i] === '--home') process.env.EXACT_AGENT_HOME = resolve(argv[++i] ?? '.');
+    else if (argv[i] === '--home') process.env.EXACT_AGENT_HOME = resolve(value());
     else rest.push(argv[i]);
   }
   if ((flags.widget || flags.activity) && !argv.some(arg => arg === '--help' || arg === '-h')) validateWidget(flags, rest);
@@ -735,25 +745,31 @@ export function depInfoInputs(bin, info = `${bin}.d`, base = process.cwd()) {
 // themselves, so they, not the output, decide. A bake made before Cargo for a
 // linked plan (`….baked/`, scripts/linked-plan.mjs) names its own in its record.
 const GENERATED = /\/build\/[^/]+\/out\/|\.baked\//;
-// A build script watches directories an app may not have (`../assets`, `../data`,
-// `../gpu/shaders`: apps/svg-gallery has no assets); Cargo's dep-info names the
-// watch whether or not the directory exists, and a directory that never existed
-// is not a change. A file that is gone is: it was read when the build ran.
+// Bare dep-info records optional directories even while absent and carries no
+// entry types. A receipt's inventory distinguishes a deleted extensionless file.
 const DIRECTORY_WATCH = /\/[^./]+$/;
-/** Dep-info's inputs modified after `since`, or gone, generated outputs and never-present watched directories aside. */
-export function depInfoNewer(since, bin, info, base) {
-  return watchedNewer(since, depInfoInputs(bin, info, base).filter(p => !GENERATED.test(p)));
+/** Dep-info's inputs modified after `since`, or gone, generated outputs and absent optional directories aside. */
+export function depInfoNewer(since, bin, info, base, directories = []) {
+  const files = new Set(directories.flatMap(({path, entries}) => (entries ?? []).filter(e => !e.directory).map(e => resolve(path, e.name))));
+  const paths = depInfoInputs(bin, info, base).filter(p => !GENERATED.test(p)
+    && (existsSync(p) || !DIRECTORY_WATCH.test(p) || files.has(p)));
+  return watchedNewer(since, paths, directories);
 }
 
 /** Of `paths`, files and the directories a build script watches whole, those modified after `since`, or gone. */
-export function watchedNewer(since, paths) {
+export function watchedNewer(since, paths, directories = []) {
   const skips = new Map();
-  // What no build reads: a build's output, installed packages (their declarations are inputs of their own) and a
-  // hidden tree; within an app, also what its other freshness checks pass over (`notBuildInput`, and the names
-  // `newerThan` skips, a README or a test), each outside the trees a build takes files from.
+  const inventory = new Map(directories.map(snapshot => [snapshot.path, snapshot]));
+  // Directory scans omit output, installed packages and hidden trees, and a package's top-level tests.
+  // Within an app they also omit what its other freshness checks skip (`notBuildInput` and `newerThan`),
+  // outside the trees a build takes files from. An explicitly listed file remains an input.
   const skipFor = dir => {
     let app = dir;
-    while (!existsSync(resolve(app, 'app.json')) && dirname(app) !== app) app = dirname(app);
+    while (!existsSync(resolve(app, 'app.json')) && !existsSync(resolve(app, 'package.json')) && dirname(app) !== app) app = dirname(app);
+    if (!existsSync(resolve(app, 'app.json')) && existsSync(resolve(app, 'package.json'))) {
+      const tests = packageTests(dir);
+      return (path, isDir) => isDir && (UNWATCHED_TREE.test(basename(path)) || path === tests);
+    }
     if (!existsSync(resolve(app, 'app.json'))) return (path, isDir) => isDir && UNWATCHED_TREE.test(basename(path));
     if (!skips.has(app)) {
       const ignored = notBuildInput(app);
@@ -764,23 +780,33 @@ export function watchedNewer(since, paths) {
   };
   return [...new Set(paths.flatMap(p => {
     let stat;
-    try { stat = statSync(p); } catch { return DIRECTORY_WATCH.test(p) ? [] : [shown(p)]; }
+    try { stat = statSync(p); } catch { return [shown(p)]; }
     if (!stat.isDirectory()) return stat.mtimeMs > since ? [shown(p)] : [];
     const dir = resolve(p);
-    return watchedChanges(since, dir, skipFor(dir));
+    return watchedChanges(since, dir, skipFor(dir), inventory, Boolean(packageTests(dir)));
   }))];
 }
 
 const UNWATCHED_TREE = /^(target|node_modules|\..*)$/;
-/** A directory in dep-info is a build script's watch, which Cargo scans recursively. It changed when a file under it
- * that a build reads was modified after `since`, or when a directory in it was (an entry created, removed or renamed)
- * after `since` and not by the creation of an entry no build reads: the JS build creates `app.contract.d.ts` in the
- * app directory after a native build, which moves the directory's mtime to that file's birth and is no change to
+/** Package directories compare filtered entry inventories, so creating or deleting tests cannot mask a production
+ * entry change. Without an inventory their directory mtimes are conservative. App watches also excuse a generated
+ * entry's birth: writing `app.contract.d.ts` after a native build moves the app directory's mtime without changing
  * that build. A later write to such an entry explains nothing; a filesystem without birth times excuses nothing. */
-function watchedChanges(since, dir, skip) {
+function watchedChanges(since, dir, skip, inventory, packaged) {
   const out = [];
   const walk = at => {
-    let entries; try { entries = readdirSync(at, { withFileTypes: true }); } catch { return; }
+    const previous = inventory.get(at);
+    let entries;
+    if (previous) {
+      const current = directoryInputSnapshot(at);
+      const filtered = snapshot => ({...snapshot,
+        entries:snapshot.entries?.filter(({name, directory}) => !skip(resolve(at, name), directory)) ?? null});
+      if (JSON.stringify(filtered(current)) !== JSON.stringify(filtered(previous))) out.push(shown(at));
+      entries = current.entries;
+      if (!entries) return;
+    } else {
+      try { entries = readdirSync(at, {withFileTypes:true}); } catch { return; }
+    }
     let created = -Infinity;
     for (const e of entries) {
       const path = resolve(at, e.name);
@@ -792,7 +818,7 @@ function watchedChanges(since, dir, skip) {
     }
     // The directory's mtime lands a few microseconds after the entry's birth.
     const mtime = statSync(at).mtimeMs;
-    if (mtime > since && mtime > created + 1) out.push(shown(at));
+    if (!previous && mtime > since && (packaged || mtime > created + 1)) out.push(shown(at));
   };
   walk(dir);
   return out;
@@ -987,6 +1013,14 @@ export function notBuildInput(dir, keep = []) {
   };
 }
 
+/** A skip for what beside app.json only other hosts' builds read: their crates, all but `kept`, and Android's Gradle
+ * lock and checksums unless `kept` names `android`. */
+export function otherHosts(app, kept = []) {
+  const names = [...HOST_CRATES.filter(host => !kept.includes(host)), ...(kept.includes('android') ? [] : ['gradle.lockfile', 'gradle-verification.xml'])];
+  const paths = new Set(names.map(name => resolve(app.dir, name)));
+  return path => paths.has(path);
+}
+
 const fileDigest = path => { try { return createHash('sha256').update(readFileSync(path)).digest('hex'); } catch { return null; } };
 /** An Apple build's receipt: its Rust and Swift inputs by digest, then by mtime the app's own files the receipt leaves out on purpose (the root build script's watches: the contract, app.json, data, shaders, assets — what the baked plan and bundle are made from). */
 export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hashed`: this drive compared its inputs' bytes already
@@ -1000,7 +1034,9 @@ export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hash
   // (game/proof.mjs shares gameNonInput). A non-game keeps every real source.
   const game = path => Boolean(app.manifest?.game) && gameNonInput(relative(app.dir, path));
   const skip = path => ignored(path) || game(path);
-  const own = newerThan(since, [app.dir], path => /\/(apple|ios|macos|linux|web)$/.test(path) && path.startsWith(app.dir + '/') || skip(path));
+  // The Apple crates are read by digest below; every other host's are no input.
+  const hosts = otherHosts(app);
+  const own = newerThan(since, [app.dir], path => hosts(path) || skip(path));
   // Platform-local modules live under the host crate directory skipped above,
   // but their separate dylib's sources are absent from the binary receipt.
   const platform = target.includes('-ios') ? 'ios' : 'macos';
@@ -1019,14 +1055,30 @@ export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hash
   const products = new Map((build?.products ?? []).map(p => [resolve(p.path), p.sha256]));
   const inputs = info ? depInfoInputs(null, info, app.workspace) : [];
   const replaced = inputs.filter(path => products.has(path) && fileDigest(path) !== products.get(path)).map(shown);
-  // A linked plan's bake ran before Cargo: the dep-info names what it wrote, its record what it read.
-  // A record gone or unreadable says nothing of what it read: the build is stale.
-  let baked = [], unread = [];
-  if (build?.linkedPlan) { const at = resolve(build.linkedPlan, 'inputs.json'); try { baked = JSON.parse(readFileSync(at, 'utf8')).paths; if (!Array.isArray(baked)) throw new Error(); } catch { baked = []; unread = [shown(at)]; } }
-  // A watched path absent when the build ran (`binary.missing`) and absent now is unchanged; one that has appeared is
-  // a change, which `pendingBuildInputs` reports.
-  const absent = new Set(build?.binary?.missing ?? []), stillAbsent = path => { const at = resolve(ROOT, path); return absent.has(at) && !existsSync(at); };
-  const tools = info ? [...depInfoNewer(since, null, info, app.workspace), ...watchedNewer(since, baked)].filter(path => !skipped(path) && !products.has(resolve(ROOT, path)) && !stillAbsent(path)) : [];
+  // A linked plan's bake ran before Cargo: the dep-info names what it wrote, the receipt's copy of its record
+  // (`linkedInputs`) what it read. Its `inputs.json` is the latest bake's, which may be a later, failed build's.
+  // A receipt without that copy says nothing of what its bake read: the build is stale.
+  let baked = [], missing = [], unread = [], directories = build?.watchedDirectories ?? [];
+  if (build?.linkedPlan) {
+    const record = build.linkedInputs;
+    if (record) {
+      ({paths:baked, missing} = record);
+      directories = [...directories, ...record.watchedDirectories];
+      unread = missing.filter(existsSync).map(shown);
+    } else unread = [shown(resolve(build.linkedPlan, 'inputs.json'))];
+  }
+  // Absence recorded by Cargo or the linked bake is unchanged while absent; first creation counts even at an old mtime.
+  const absent = new Set([...(build?.binary?.missing ?? []), ...missing]), stillAbsent = path => { const at = resolve(ROOT, path); return absent.has(at) && !existsSync(at); };
+  // gameShells and GPU reflection create these during a cold build. Only the owned outputs lose the mtime
+  // bound; authored sources keep it, and the receipt still checks the generated Rust's recorded bytes.
+  const shells = app.manifest?.game && app.workspace === resolve(app.dir, '.shells') ? app.workspace : null;
+  const captured = new Set(shells ? (build?.binary?.inputs ?? []).map(input => resolve(input.path)) : []);
+  const generatedShell = path => {
+    const at = resolve(ROOT, path), name = shells && relative(shells, at).replaceAll('\\', '/');
+    return name && existsSync(at) && (/^(app|keys|surfaces)\.json$/.test(name)
+      || /^apple\/(build\.rs|src\/lib\.rs)$/.test(name) && captured.has(at));
+  };
+  const tools = info ? [...depInfoNewer(since, null, info, app.workspace, directories), ...watchedNewer(since, baked, directories)].filter(path => !skipped(path) && !products.has(resolve(ROOT, path)) && !stillAbsent(path) && !generatedShell(path)) : [];
   return [...new Set([...(build?.binary && !hashed ? pendingBuildInputs(build) : []), ...own, ...tools, ...unread, ...replaced])];
 }
 
@@ -1049,7 +1101,8 @@ export function webInputs(app, js, since = -Infinity) {
   const ignored = notBuildInput(app.dir, shaderWatchRoots(app));
   const notInput = path => Boolean(app.manifest?.game) && gameNonInput(relative(app.dir, path));
   const backend = resolve(app.dir, '.exact/backend-origin');
-  const appFiles = newerThan(since, [app.dir], path => /\/(apple|ios|macos|linux)$/.test(path) && path.startsWith(app.dir + '/') || ignored(path) || notInput(path));
+  const hosts = otherHosts(app, ['web']);
+  const appFiles = newerThan(since, [app.dir], path => hosts(path) || ignored(path) || notInput(path));
   const shared = newerThan(since, roots.map(r => typeof r === 'string' ? resolve(ROOT, r) : { shallow: resolve(ROOT, r.shallow) }));
   // Absence is an input too: removing a selection must invalidate its bake.
   appFiles.push(backend);

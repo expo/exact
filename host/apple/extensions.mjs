@@ -8,11 +8,41 @@ import { stripProductionExecutable } from './link.mjs';
 import { appleActivationRule, appleShareMembers } from '../../scripts/share-target.mjs';
 import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
+/** The Clang module cache every extension compile shares (widget, Live Activity, share, intents): a cache per build
+ * directory rebuilt the system frameworks' modules for each, about two minutes for one alarm extension. Clang keys
+ * its entries by compiler, SDK and flags, and writes them safely across concurrent builds. */
+export const extensionModuleCache = resolve(root, 'target', 'apple-extension-module-cache');
 
 /** An extension executable's link: application-extension API only, entered at `NSExtensionMain`. A bundle with an
  * `@main` (WidgetKit's) keeps its `main` with `keepMain`. */
 export const appexArgs = ['-application-extension', '-Xlinker', '-e', '-Xlinker', '_NSExtensionMain'];
 export const keepMain = ['-Xlinker', '-u', '-Xlinker', '_main'];
+
+/** The kinds of app extension `--extensions` chooses among: what an iOS build packages from app.json beside the app
+ * (the watch app is `--watchos`'s). Widgets and Live Activities share one appex; an alarm's countdown is drawn by it too. */
+export const EXTENSION_KINDS = ['widgets', 'activities', 'intents', 'alarms'];
+/** The kinds `--extensions <all|none|kind,…>` keeps; every kind without the flag. An unknown kind is refused, so a
+ * typo never builds more (or less) than was asked. */
+export function extensionKinds(args) {
+  const at = args.indexOf('--extensions');
+  if (at < 0) return new Set(EXTENSION_KINDS);
+  const value = args[at + 1];
+  if (value === undefined || value.startsWith('--')) throw new Error(`--extensions takes all, none or a comma-separated list of ${EXTENSION_KINDS.join(', ')}`);
+  if (value === 'all') return new Set(EXTENSION_KINDS);
+  if (value === 'none') return new Set();
+  const kinds = value.split(',').map(kind => kind.trim()).filter(Boolean), unknown = kinds.filter(kind => !EXTENSION_KINDS.includes(kind));
+  if (unknown.length || !kinds.length) throw new Error(`--extensions: unknown kind ${unknown.join(', ') || '(empty)'}; it takes all, none or a comma-separated list of ${EXTENSION_KINDS.join(', ')}`);
+  return new Set(kinds);
+}
+/** The manifest an `--extensions` build packages from: the entries of a kind it leaves out are dropped, so nothing gated
+ * on them (the widget extension, the shared framework, the App Group, `ExactWidgetKinds`, the ActivityKit arm,
+ * `NSSupportsLiveActivities`) is built. The app's own code is unchanged; at runtime its calls find no extension and refuse. */
+export function withoutExtensions(manifest, kinds) {
+  const dropped = { ...manifest };
+  if (!kinds.has('widgets') && manifest.widgets) dropped.widgets = [];
+  if (!kinds.has('activities') && manifest.live_activities) dropped.live_activities = [];
+  return dropped;
+}
 
 export const shareId = app => `${app.id}.share`;
 
@@ -50,7 +80,7 @@ export function packageShareExtension({ app, bundle, directory, sdk, triple, dev
   const entitlementPath = resolve(directory, 'share-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
   runApple('xcrun', ['--sdk', mac ? 'macosx' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-O', ...(production ? ['-g'] : []), ...appexArgs,
-    '-module-name', 'ExactShare', '-target', triple, '-sdk', sdk, '-module-cache-path', resolve(directory, 'cache'),
+    '-module-name', 'ExactShare', '-target', triple, '-sdk', sdk, '-module-cache-path', extensionModuleCache,
     ...(!device && !mac ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
     resolve(root, 'host/apple/share/ShareInbox.swift'), resolve(root, 'host/apple/share/ShareViewController.swift'), '-o', binary]);
   stripProductionExecutable(binary, { production, dsym: resolve(symbols, 'ExactShare.appex.dSYM'), sourceDsym: `${binary}.dSYM` });

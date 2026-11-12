@@ -950,8 +950,8 @@ fn clock_until_state_takes_a_path_a_json_literal_and_a_bound() {
             "a string, a number, true, false or null",
         ),
         ("clock until state g within 10", "=="),
-        (huge.as_str(), "a string, a number"),
-        (positive.as_str(), "a string, a number"),
+        (huge.as_str(), "too large for a number"),
+        (positive.as_str(), "too large for a number"),
     ] {
         let e = contract::tests(&format!("test \"t\"\n  {bad}\n")).unwrap_err();
         assert!(format!("{e:?}").contains(says), "{bad}: {e:?}");

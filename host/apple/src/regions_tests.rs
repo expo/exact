@@ -149,3 +149,66 @@ fn the_view_told_at_once_is_laid_out_as_told_one_by_one() {
         apart.runner().kernel().env()
     );
 }
+
+#[test]
+fn numeric_safe_area_and_css_environment_move_together_and_rollback() {
+    let source = r#"shape Viewport
+  safeAreaLeft: number
+component App
+  resource viewport = exactViewport() as shape Viewport
+  derive quotient = 1 / (24 - viewport.safeAreaLeft)
+  view
+    column
+      column testId="margins" width="100%" padding-left="env(safe-area-inset-left)"
+        column testId="margins-child" height=10
+      column testId="numeric" width=viewport.safeAreaLeft height=10
+      text `${quotient}`
+"#;
+    let plan = contract::compile(source).unwrap().encode();
+    let (mut h, _) = Host::boot(
+        &plan,
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        400.,
+        800.,
+    )
+    .unwrap();
+    let width = |h: &Host<NoData>| {
+        let k = h.runner().kernel();
+        k.node_by_key(k.find_by_test_id("numeric")[0])
+            .unwrap()
+            .frame
+            .width
+    };
+    h.set_insets(0., 0., 0., 12.);
+    assert_eq!(padding_left(&h, "margins"), 12.);
+    assert_eq!(width(&h), 12.);
+    let refused = h.set_insets(0., 0., 0., 24.);
+    assert!(refused.contains("viewport geometry"), "{refused}");
+    assert_eq!(padding_left(&h, "margins"), 12.);
+    assert_eq!(width(&h), 12.);
+    let refused = h.set_view(
+        None,
+        Some([0., 0., 0., 24.]),
+        None,
+        Some((500., 900.)),
+        None,
+    );
+    assert!(refused.contains("viewport:"), "{refused}");
+    assert_eq!(padding_left(&h, "margins"), 12.);
+    assert_eq!(width(&h), 12.);
+    let before = h.runner().kernel().env();
+    let viewport = h.runner().viewport();
+    for (insets, size) in [
+        (Some([0., 0., 0., 18.]), Some((f32::NAN, 900.))),
+        (Some([f32::NAN, 0., 0., 18.]), Some((500., 900.))),
+    ] {
+        let refused = h.set_view(None, insets, None, size, None);
+        assert!(refused.contains("error"), "{refused}");
+        assert_eq!(h.runner().kernel().env(), before);
+        assert_eq!(h.runner().viewport(), viewport);
+    }
+    h.set_view(None, Some([0., 0., 0., 16.]), None, None, None);
+    assert_eq!(padding_left(&h, "margins"), 16.);
+    assert_eq!(width(&h), 16.);
+}

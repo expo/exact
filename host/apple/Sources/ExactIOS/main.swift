@@ -79,6 +79,8 @@ final class Adapter: ExactSessionDelegate {
         case "focus": session.log("focus window: unsupported: an iOS app is in front or not running")
         // A scene's full screen and opacity are the system's (LLP 1069.010).
         case "exitFullscreen", "setWindowOpacity": session.log("\(name): unsupported: iOS has no window an app fades or takes out of full screen")
+        // An app cannot put its own scene away and keep running (LLP 1133.025 D4).
+        case "hideWindow": session.log("hideWindow: unsupported: iOS has no window an app hides")
         default: FileHandle.standardError.write(Data("exact: unknown command \(name)\n".utf8))
         }
     }
@@ -114,18 +116,7 @@ func watchPlan() {
         return
     }
     devPlanPath = planPath
-    let candidate = ExactDevelopmentPlan(planPath)
-    var last = candidate.hasModule ? [] : candidate.revision
-    let t = DispatchSource.makeTimerSource(queue: .main)
-    t.schedule(deadline: .now() + 0.1, repeating: 0.1)
-    t.setEventHandler {
-        let revision = candidate.revision
-        guard revision != last else { return }
-        last = revision
-        candidate.apply(to: exact)
-    }
-    t.resume()
-    planWatch = t
+    planWatch = ExactDevelopmentPlan(planPath).watch(exact)
 }
 
 /// Announce `ready` after the driver connects and the first frame is applied.

@@ -88,8 +88,18 @@ public final class ExactPackageContext {
     public let session: String
     /// The host's own id for the session, which what the host keeps for it
     /// is named by: under the agent, the private pasteboard its `copyText`
-    /// and @exact/clipboard write (LLP 1133.006 §7).
+    /// and @exact/clipboard write (LLP 1133.006 §7). New at each launch.
     public let hostSession: String
+    /// The session's label, the same at every launch: what the embedder
+    /// named it (`makeSession(label:)`; the sample host's `a` and `b`); in
+    /// an app, `main`, and on the Mac a later window `window-2`, `window-3`
+    /// in the order they open. What a package keeps for one session across
+    /// launches is keyed by it: the sessions of one app share `data`.
+    public let label: String
+    /// The session's directories behind `app:/data`, `app:/cache` and
+    /// `app:/tmp`: the app's own, or under the agent its drive's store (a
+    /// named one, `EXACT_AGENT_STORAGE`, kept across the drive's launches).
+    public let data: URL, cache: URL, temporary: URL
     /// Who made the call being answered now (`app`, `tool`, `wake`): set by
     /// the host before each `later`, read by an implementation at its entry,
     /// as a capture's first lease is refused to a tool's read (LLP 1133.009 D6).
@@ -134,7 +144,8 @@ public final class ExactPackageContext {
     /// 1133.004 §9 P3).
     public let push: ExactPushRegistration
 
-    public init(agent: Bool, session: String, hostSession: String = "", changed: @escaping (String) -> Void,
+    public init(agent: Bool, session: String, hostSession: String = "", label: String? = nil,
+                data: URL? = nil, cache: URL? = nil, temporary: URL? = nil, changed: @escaping (String) -> Void,
                 log: @escaping (String) -> Void, now: @escaping () -> Double,
                 tracks: ExactTracks = ExactTracks(), file: @escaping (String) -> URL? = { _ in nil },
                 audioSession: ExactAudioSession = ExactAudioSession { _, _, _, _ in nil },
@@ -157,7 +168,9 @@ public final class ExactPackageContext {
                 push: ExactPushRegistration = ExactPushRegistration { nil },
                 expireWake: @escaping (String) -> Void = { _ in },
                 state: @escaping ([String: Any]) -> Void = { _ in }) {
-        self.agent = agent; self.session = session; self.hostSession = hostSession
+        self.agent = agent; self.session = session; self.hostSession = hostSession; self.label = label ?? session
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        self.data = data ?? scratch; self.cache = cache ?? scratch; self.temporary = temporary ?? scratch
         changedFn = changed; logFn = log; nowFn = now
         self.tracks = tracks; fileFn = file; self.audioSession = audioSession; pictureFn = picture
         self.surfaces = surfaces; orientationFn = orientation; viewFn = view; invokeFn = invoke

@@ -560,6 +560,7 @@ impl Emitter<'_> {
                 TaskKind::Every => ".every",
                 TaskKind::After => ".after",
                 TaskKind::Frame => ".frame",
+                TaskKind::Change => ".change",
             };
             // A gated task's gate and key (LLP 1092 D12), as D9 lowers them.
             let mut gate = String::new();

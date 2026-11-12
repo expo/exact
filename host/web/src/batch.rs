@@ -34,6 +34,12 @@ pub(crate) fn request_refusal(request: &exact_runner::Request) -> Option<&'stati
             return Some("only HTTP may opt into independent transport");
         }
     }
+    // This host's sockets only listen (LLP 1016.000 D7): a Rust source's
+    // two-way socket is refused, never opened to only listen (LLP 1016.003).
+    // A TypeScript socket here asks for none.
+    if request.socket && request.listen.is_none() && !request.is_process() {
+        return Some("Request::socket is unavailable on the web's wasm host");
+    }
     // This host's sockets carry no idle timeout (LLP 1016.000 D11).
     if request.idle_timeout_ms.is_some() {
         return Some("an idle timeout is unavailable on the web's wasm host");
@@ -264,44 +270,21 @@ impl Batch {
     }
 
     /// `{"op":"create","id":…,"tag":…,"props":{…},"css":…,"handlers":[…]}`,
-    /// plus `"ns":"http://www.w3.org/2000/svg"` for an SVG element (LLP 1055 D4).
+    /// plus `"ns":"http://www.w3.org/2000/svg"` when `svg`, an SVG node by its
+    /// type (LLP 1055 D4). The tag cannot say: a module's custom element may
+    /// be named `felt-haptics` (LLP 1024 D1).
     pub fn create(
         &mut self,
         id: u32,
         tag: &str,
+        svg: bool,
         props: &[(&str, String)],
         css: &str,
         handlers: &[&str],
     ) {
         let mut s = text!("{{\"op\":\"create\",\"id\":{},\"tag\":", id);
         quote(tag, &mut s);
-        if matches!(
-            tag,
-            "svg"
-                | "g"
-                | "path"
-                | "polyline"
-                | "polygon"
-                | "circle"
-                | "ellipse"
-                | "line"
-                | "rect"
-                | "defs"
-                | "linearGradient"
-                | "radialGradient"
-                | "stop"
-                | "use"
-                | "symbol"
-                | "clipPath"
-                | "marker"
-                | "mask"
-                | "pattern"
-                | "foreignObject"
-                | "filter"
-                | "text"
-                | "tspan"
-        ) || tag.starts_with("fe")
-        {
+        if svg {
             s.push_str(",\"ns\":\"http://www.w3.org/2000/svg\"");
         }
         s.push_str(",\"props\":");
@@ -376,6 +359,14 @@ impl Batch {
         quote(css, &mut s);
         s.push('}');
         self.ops.push(s);
+    }
+
+    /// The large-title size at the runner's root, for the bar's reserved line.
+    pub fn large_title(&mut self, size: f32) {
+        self.ops.push(text!(
+            "{{\"op\":\"large-title\",\"size\":{}}}",
+            Shortest(f64::from(size))
+        ));
     }
 
     /// `{"op":"looks","id":…,"css":…}`: a view's state-look rules for the

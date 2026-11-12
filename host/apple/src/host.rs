@@ -35,6 +35,8 @@ mod arrange_group_tests;
 mod arrange_tests;
 #[path = "canvas2d.rs"]
 pub(crate) mod canvas2d;
+#[path = "canvas_performance.rs"]
+mod canvas_performance;
 #[path = "colors.rs"]
 mod colors;
 #[path = "content_region/host.rs"]
@@ -1149,31 +1151,6 @@ impl<D: DataSource> Host<D> {
         }
     }
 
-    /// The viewport's change into `batch`, after what it holds (`set_view`).
-    fn resize_inner(
-        &mut self,
-        width: f32,
-        height: f32,
-        mut batch: Batch,
-        error: Option<String>,
-    ) -> String {
-        let _roles = self.runner.bind_roles(); // Its own (LLP 1121 stage 5).
-                                               // @ref LLP 1039 D2 — merge re-answer and relayout, once.
-        let receipt = match self.runner.set_viewport(width as f64, height as f64) {
-            Ok(receipt) => receipt,
-            Err(e) => return self.finish(batch, error.or(Some(format!("viewport: {e:?}")))),
-        };
-        self.viewport = (width, height);
-        self.height_targets_dirty = true;
-        self.presence.snap = true;
-        if let Some(receipt) = receipt {
-            let at_ms = self.now_ms;
-            return self.commit_into(&[Timed { at_ms, receipt }], error, batch);
-        }
-        let laid_out = self.layout(&mut batch).err();
-        self.finish(batch, error.or(laid_out))
-    }
-
     /// Content has settled: the tree and the motion engine give back what
     /// they hold beyond the live nodes ([`exact_kernel::Kernel::trim`]).
     pub fn trim(&mut self) {
@@ -1203,7 +1180,15 @@ impl<D: DataSource> Host<D> {
         }
     }
 
-    fn finish(&mut self, batch: Batch, error: Option<String>) -> String {
+    fn finish(&mut self, mut batch: Batch, error: Option<String>) -> String {
+        // A host's fact laid out again (a native control's measured size, an
+        // inset, the text size): a box already moving was retargeted from where
+        // it shows, and its new frame and offset go in one batch. Without the
+        // offset the presenter showed the new frame with the old offset until
+        // the next tick, which then put the box back where it started (#134).
+        if self.presence.unauthored {
+            self.present(&mut batch, false);
+        }
         // Clear the mark first: the resize handlers below commit the app's own moves
         self.presence.unauthored = false;
         let _roles = self.runner.bind_roles(); // Its own, crossing (LLP 1121 stage 5).
@@ -1312,6 +1297,7 @@ impl<D: DataSource> Host<D> {
             let seek = self.engine.advance(self.engine_time(t.at_ms));
             debug_assert!(seek.is_ok(), "the clock never runs backwards here");
             let mut sync = self.runner.kernel().motion_sync(&t.receipt);
+            self.presence.looks.apply(self.runner.kernel(), &mut sync);
             self.spare_exits(&mut sync);
             let applied = sync.apply(&mut self.engine);
             debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");

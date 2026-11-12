@@ -22,7 +22,7 @@ pub struct ListTextPosition<'a> {
 }
 
 impl<D: DataSource> Runner<D> {
-    /// Nearest unmounted row snap area in a horizontal collection, using its
+    /// Nearest unmounted row snap area along a collection's axis, using its
     /// measured sizes or current estimates. At most 64 local rows are evaluated;
     /// no row is mounted. `distance` bounds the search by the nearest mounted
     /// target, or infinity when there is none.

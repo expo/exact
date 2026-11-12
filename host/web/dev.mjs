@@ -8,7 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 let tuning = null;
 import { createHash, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { canonicalBytes, classifyArtifacts, cohortReceipt } from '../../scripts/deploy.mjs';
+import { canonicalBytes, classifyArtifacts, cohortReceipt, sealEnvelope } from '../../scripts/deploy.mjs';
 import { filesystem } from '../../scripts/filesystem.mjs';
 import { allowHostArgs, developmentGate, installBrowserOrigins, LOCAL_IOS_INSTALL_ENDPOINT } from '../../scripts/install-page.mjs';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, unwatchFile, watch, watchFile, writeSync } from 'node:fs';
@@ -472,7 +472,7 @@ function captureGeneration(reuseCurrentAssets = false, tableUpdate = null) {
       if (fromProducer(asset.name)) continue;
       const body = tableUpdate?.get(asset.name) ?? current.files.get(asset.name);
       files.set(asset.name, body);
-      assets.push({ name: asset.name, sha256: tableUpdate?.has(asset.name) ? createHash('sha256').update(body).digest('hex') : asset.sha256, bytes: body.length });
+      assets.push({ name: asset.name, url: `./${asset.name}`, sha256: tableUpdate?.has(asset.name) ? createHash('sha256').update(body).digest('hex') : asset.sha256, bytes: body.length });
     }
   } else {
     const captured = new Map([...captureAssets(dist)].filter(([name]) => !fromProducer(name)));
@@ -498,10 +498,9 @@ function captureGeneration(reuseCurrentAssets = false, tableUpdate = null) {
   envelope.plan.url = prefix + 'app.plan';
   if (rust) envelope.rust = Object.fromEntries(Object.entries(rust).map(([kind, variant]) => [kind, { ...variant, receipt:{...variant.receipt,url:prefix+variant.receipt.url},module:{...variant.module,url:prefix+variant.module.url} }]));
   if (module) envelope.module = Object.fromEntries(Object.entries(module).map(([key, card]) => [key, { ...card, url: prefix + MODULE_FILES[key] }]));
-  for (const asset of envelope.assets) asset.url = prefix + asset.name.split('/').map(encodeURIComponent).join('/');
-  const envelopeBytes = Buffer.from(JSON.stringify(envelope) + '\n');
-  if (envelopeBytes.length > 64 * 1024) throw new Error('generation envelope exceeds 64 KiB');
-  files.set('exact.json', envelopeBytes);
+  const sealed = sealEnvelope(envelope, prefix + 'assets.json');
+  if (sealed.index) files.set('assets.json', sealed.index);
+  files.set('exact.json', sealed.bytes);
   if (tableUpdate) {
     // Table edits retain immutable bytes in this session; no filesystem helper is launched.
     tableGenerations.set(prefix, files);

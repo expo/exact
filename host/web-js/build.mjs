@@ -498,6 +498,7 @@ writeFileSync(resolve(gen, 'main.js'), [
   // `views`: media-glue.js; `viewId`: navigation.js; `After`: motion.js); the agent adapter, inspect and the dev
   // loop read the rest, so a development page names them too.
   `import { data, journal, clock, commit, inflight, Views, viewId, After, Clocked, R, resolvedLocale, Resources, agentMode${production ? '' : ', advance, heldAsks, heldReplies, Mutations, writeRecords, goTo'} } from './rt.js';`,
+  `data.keepSurfaceAnswers = ${!tsGrantSet.keepsNoAnswers && !rustGrantSet.keepsNoAnswers};`,
   ...(production ? [] : ["import { develop } from './perf.js';"]),
   // A data module's answers, watched from before the app asks (seam.js).
   ...(production || !asks ? [] : ["import { seam } from './perf.js';", 'seam();']),
@@ -608,6 +609,8 @@ const emptyGrantAdmission = () => {
     admittingGrant: '() => null', admitsNetwork: '() => false', admitsSecret: '() => false', coversPath: '() => false',
     // Scoped to any source name, the empty set declares what it declares whole: nothing.
     sameGrantDeclaration: "(set, source) => typeof source === 'string'",
+    // No grant admits a WebSocket stream, so no protocol is ever offered to one.
+    socketProtocols: "(value) => { if (value === undefined) return []; throw new TypeError('exactProtocols: no grant admits a WebSocket stream'); }",
   };
   const missing = grantNames.filter(name => !(name in answers));
   if (missing.length) throw new Error(`host/web/grant-admission.js: admission exports ${missing.join(', ')}, which build.mjs's empty-set admission does not answer`);
@@ -924,7 +927,7 @@ if (production && !opt('--plan')) {
   const bake = dirname(resolve(opt('--plan')));
   const links = readFileSync(resolve(bake, 'index.html'), 'utf8').match(/^<(?:link rel="(?:alternate|manifest)"|meta name="theme-color")[^>]*>$/gm) ?? [];
   writeFileSync(resolve(out, 'index.html'), readFileSync(resolve(out, 'index.html'), 'utf8').replace(/(<meta name="viewport"[^>]*>\n)/, `$1${links.map(l => l + '\n').join('')}`)); // its `<html lang>` is already the manifest's, as the bake's is
-  for (const f of ['exact.json', 'manifest.json', 'robots.txt', 'sitemap.xml', '.well-known', '.exact', 'rust', 'plans', 'activities']) if (existsSync(resolve(bake, f))) cpSync(resolve(bake, f), resolve(out, f), { recursive: true });
+  for (const f of ['exact.json', 'assets.json', 'manifest.json', 'robots.txt', 'sitemap.xml', '.well-known', '.exact', 'rust', 'plans', 'activities']) if (existsSync(resolve(bake, f))) cpSync(resolve(bake, f), resolve(out, f), { recursive: true });
   // What the envelope names beside the plan and assets, for a native client
   // following the page's link (LLP 1023 D1): the Rust module's files (above,
   // the bytes this page loads) and a TypeScript module's, under `module/`,

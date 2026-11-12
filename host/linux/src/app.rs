@@ -859,7 +859,7 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
     }
     show_neutral_look();
     if config.headless() {
-        return headless::<D>(config, started);
+        return run_headless::<D>(config, started, None);
     }
     #[cfg(target_os = "linux")]
     {
@@ -871,7 +871,13 @@ pub fn run_config<D: DataSource + Default>(config: &mut Config, started: Instant
     }
 }
 
-fn headless<D: DataSource + Default>(config: &mut Config, started: Instant) -> i32 {
+/// Run the shared headless startup and agent loop with the carrier's clipboard.
+/// The adapter lives on this thread until the session ends.
+pub fn run_headless<D: DataSource + Default>(
+    config: &mut Config,
+    started: Instant,
+    clipboard: Option<Box<dyn crate::presenter::clipboard::Clipboard>>,
+) -> i32 {
     let t_boot = Instant::now();
     let size = config.size;
     let (mut p, error) = match boot_presenter::<D>(config, size) {
@@ -881,6 +887,9 @@ fn headless<D: DataSource + Default>(config: &mut Config, started: Instant) -> i
             return 1;
         }
     };
+    if let Some(clipboard) = clipboard {
+        p.set_clipboard(clipboard);
+    }
     let runner_ms = t_boot.elapsed().as_secs_f64() * 1000.0;
     // Local files decode in a moment; a first frame with the pictures in
     // it is what a smoke, a screenshot, and an agent's first `layout` want.

@@ -336,3 +336,30 @@ impl Reader<'_> {
         }
     }
 }
+
+/// Structural identity of a kept public record, shared with the web target.
+pub fn keep_signature(plan: &Plan, ty: TypesId) -> Option<Value> {
+    fn walk(plan: &Plan, ty: TypesId, depth: usize, fields: &mut Vec<Value>) -> Option<()> {
+        if depth > 32 {
+            return None;
+        }
+        let row = plan.type_(ty);
+        fields.push(Value::Number(row.kind as u8 as f64));
+        fields.push(Value::str(plan.str(row.name)));
+        fields.push(Value::Bool(row.elem.is_some()));
+        if let Some(elem) = row.elem {
+            walk(plan, elem, depth + 1, fields)?;
+        }
+        fields.push(Value::Number(row.fields.len as f64));
+        for f in row.fields.iter() {
+            let f = plan.field(f);
+            fields.push(Value::str(plan.str(f.name)));
+            walk(plan, f.ty, depth + 1, fields)?;
+        }
+        Some(())
+    }
+    // Flatten the type tree so metadata does not consume the value decoder's depth budget.
+    let mut fields = Vec::new();
+    walk(plan, ty, 0, &mut fields)?;
+    Some(Value::list(fields))
+}

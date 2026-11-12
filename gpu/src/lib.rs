@@ -46,6 +46,7 @@ mod frame;
 mod hdr_tests;
 mod input;
 mod pace;
+mod performance;
 pub use pace::{lower_cap, FrameTiming, HostTiming, ThermalState};
 #[cfg(not(target_arch = "wasm32"))]
 mod readback;
@@ -364,6 +365,15 @@ pub trait Surface {
     fn published(&mut self) -> Option<String> {
         None
     }
+    /// Enable bounded, read-only performance collection for an authored HUD.
+    /// Disabled by default; collection must not affect saved state or replay.
+    fn set_performance_reporting(&mut self, _enabled: bool) {}
+    /// The latest performance snapshot as a JSON object. Omit unavailable metrics.
+    /// Called only while enabled and no more than once per second.
+    /// `now_ms` is the host's monotonic clock, including polls while rendering is idle.
+    fn take_performance(&mut self, _now_ms: f64) -> Option<String> {
+        None
+    }
     /// An agent request and reply as JSON objects; the host adds clock and size (S3).
     fn agent(&mut self, _request: &str) -> Option<String> {
         None
@@ -507,6 +517,7 @@ struct Instance {
     surface: Box<dyn Surface>,
     messages: Vec<String>,
     published: Option<String>,
+    performance: performance::Reporting,
     /// An acquired image retained while the surface prepares a complete
     /// frame: it drops before `presentation`, its surface ([`release`]).
     held: Option<wgpu::SurfaceTexture>,
@@ -528,6 +539,8 @@ struct Instance {
     outstanding: BTreeSet<String>,
     answered: BTreeSet<String>,
     bound: bool,
+    /// The inputs its last accepted bind gave its surface ([`Module::bind_changed_json`]).
+    inputs: Vec<Value>,
     dirty: bool,
     /// Its first frame has been handed to the compositor (`Module::seen`);
     /// shared with the callback that says so.
@@ -917,6 +930,16 @@ impl Module {
         ring.take()
     }
 
+    /// Whether a canvas with buffers has a complete frame [`Module::buffer`]
+    /// has not published yet.
+    #[cfg(target_os = "android")]
+    pub fn unpublished(&self, id: u32) -> bool {
+        self.instances
+            .get(&id)
+            .and_then(|i| i.ring.as_ref())
+            .is_some_and(|r| r.unpublished())
+    }
+
     /// Create surface ownership without a device, target, or registered shaders.
     pub fn create_headless(&mut self, name: &str) -> Option<u32> {
         let Some((_, _, factory)) = self.registry.surfaces.iter().find(|(n, _, _)| *n == name)
@@ -946,6 +969,7 @@ impl Module {
                 surface,
                 messages: Vec::new(),
                 published: None,
+                performance: performance::Reporting::default(),
                 presentation,
                 config,
                 held: None,
@@ -962,6 +986,7 @@ impl Module {
                 outstanding: BTreeSet::new(),
                 answered: BTreeSet::new(),
                 bound: false,
+                inputs: Vec::new(),
                 dirty: false,
                 seen: Default::default(),
                 children: None,
@@ -1093,6 +1118,7 @@ impl Module {
             Ok(()) => {
                 inst.drain();
                 inst.bound = true;
+                inst.inputs = inputs.to_vec();
                 inst.dirty = true;
                 true
             }

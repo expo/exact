@@ -30,6 +30,7 @@ impl App {
             "exact.json",
             "apple/exact.json",
             "web/exact.json",
+            "windows/exact.json",
         ] {
             std::fs::create_dir_all(package.join(file).parent().unwrap()).unwrap();
             std::fs::copy(source.join(file), package.join(file)).unwrap();

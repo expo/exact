@@ -465,6 +465,20 @@ extension NodeView {
     var bandInset: UIEdgeInsets { extras?.bandInset ?? .zero }
     var bandOver: Int64? { get { extras?.bandOver } set { if newValue != nil || extras != nil { more.bandOver = newValue } } }
     var edgeInteraction: AnyObject? { get { extras?.edgeInteraction } set { if newValue != nil || extras != nil { more.edgeInteraction = newValue } } }
+    /// Whether a touch at `point` can reach this box's children. Overflow
+    /// that is not visible clips them at the padding edge (CSS Overflow 3
+    /// §3), so a touch on the border is the box's own, as a browser hit-tests
+    /// it. A scroller's border is its scroll view's, which takes the touch
+    /// for its pan.
+    func reachesChildren(at point: CGPoint) -> Bool {
+        let x = (style["overflow_x"]?.string ?? "visible") != "visible", y = (style["overflow_y"]?.string ?? "visible") != "visible"
+        guard x || y, scrollView == nil else { return true }
+        let uniform = number("border_width")
+        let widths = ["top", "right", "bottom", "left"].map { number("border_width_" + $0, uniform) }
+        if x && y { return innerOutline(widths, in: bounds).contains(point) }
+        return x ? point.x >= bounds.minX + widths[3] && point.x <= bounds.maxX - widths[1]
+            : point.y >= bounds.minY + widths[0] && point.y <= bounds.maxY - widths[2]
+    }
     /// Its scroll view's frame: its bounds, and the band past them.
     package var scrollFrame: CGRect { bounds.inset(by: UIEdgeInsets(top: -pageBand.top, left: 0, bottom: -pageBand.bottom, right: 0)) }
     /// Native padding and footer space are content, unlike a bar or keyboard.

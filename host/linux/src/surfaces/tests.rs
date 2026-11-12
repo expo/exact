@@ -100,6 +100,7 @@ fn surface_work_scope_is_refused_before_presenter_effects() {
 fn deferred_restore_keeps_bytes_until_commit_and_late_refusal_is_once() {
     for refused in [true, false] {
         let mut c = Canvas {
+            performance: false,
             id: 1,
             name: "world".into(),
             artifact: String::new(),
@@ -228,6 +229,14 @@ uint32_t gpu_presentation_flags(uint32_t id) { return 0; }
 uint32_t gpu_assets(void) { return 0; }
 bool gpu_asset(void) { return true; }
 uint32_t gpu_published(void) { return 268435457; }
+static bool reporting;
+static uint32_t performance_reads;
+bool gpu_performance_reporting(uint32_t id, bool enabled) { reporting = enabled; return true; }
+uint32_t test_performance_reads(void) { return performance_reads; }
+uint32_t gpu_performance(uint32_t id, double now) {
+  performance_reads++; if (!reporting) return UINT32_MAX;
+  output = "{\"frames\":0,\"fps\":0}"; return strlen(output);
+}
 uint32_t gpu_messages(void) { return 268435457; }
 uint32_t gpu_carry(void) { return 268435457; }
 uint32_t gpu_restore(void) { return 1; }
@@ -315,6 +324,7 @@ fn cpu_canvas_pick_is_forwarded_without_a_device() {
     p.surfaces.canvases.insert(
         1,
         Canvas {
+            performance: false,
             id: 1,
             name: "world".into(),
             artifact: String::new(),
@@ -384,6 +394,7 @@ fn controls_own_release_and_focus_and_placed_siblings_cover() {
     p.surfaces.canvases.insert(
         canvas,
         Canvas {
+            performance: false,
             id: 1,
             name: "world".into(),
             artifact: String::new(),
@@ -465,6 +476,7 @@ fn controls_own_release_and_focus_and_placed_siblings_cover() {
     p.surfaces.canvases.insert(
         canvas,
         Canvas {
+            performance: false,
             id: 1,
             name: "world".into(),
             artifact: String::new(),
@@ -621,6 +633,7 @@ fn rendered_lifecycle_preserves_both_causes_and_initializes_replacements() {
     surfaces.canvases.insert(
         7,
         Canvas {
+            performance: false,
             id: 41,
             name: "world".into(),
             artifact: String::new(),
@@ -775,6 +788,67 @@ fn a_reload_that_renumbers_the_tree_gives_the_canvas_its_own_surface() {
         (&"world".into(), true, Some(canvas))
     );
     assert_ne!(after[0].0, before[0].0, "the plan moved the canvas");
+    drop(p);
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn opted_in_idle_canvas_reports_on_a_wake_without_a_render() {
+    let (path, compat) = fixture();
+    let source = r#"shape Metrics
+  frames: option<number>
+  fps: option<number>
+component App
+  resource metrics = exactCanvasPerformance("world") as shape Metrics
+  view
+    canvas surface=world width=50 height=50
+"#;
+    let plan = contract::compile(source).unwrap().encode();
+    let (mut p, _) =
+        Presenter::boot(&plan, (), (100., 100.), 1., path.parent().unwrap().into()).unwrap();
+    p.surfaces
+        .abis
+        .insert(String::new(), Abi::open_path(&path, &compat, "").unwrap());
+    p.surfaces.attempted.insert(String::new());
+    p.compat = compat.to_string();
+    assert_eq!(p.surfaces.performance_due_in_ms(), None);
+    p.sync_surfaces();
+    let reads = unsafe {
+        p.surfaces.abis[""].symbol::<unsafe extern "C" fn() -> u32>(b"test_performance_reads")
+    };
+    assert_eq!(unsafe { reads() }, 0);
+    assert_eq!(p.surfaces.performance_due_in_ms(), Some(0.));
+    assert!(p.wake_due_ms().is_some());
+    assert!(p.pump(0.).is_none());
+    assert_eq!(unsafe { reads() }, 1);
+    assert_eq!(
+        p.host.runner().resource("metrics"),
+        Some(&exact_plan::Value::record(vec![
+            exact_plan::Value::some(
+                exact_plan::Value::Number(0.)
+            );
+            2
+        ]))
+    );
+    assert!(p.pump(0.).is_none());
+    assert_eq!(
+        unsafe { reads() },
+        1,
+        "another turn before the deadline does not sample"
+    );
+    p.surfaces.performance_due = Some(std::time::Instant::now());
+    p.surfaces.hidden = true;
+    assert_eq!(p.surfaces.performance_due_in_ms(), None);
+    assert!(p.pump(0.).is_none());
+    assert_eq!(unsafe { reads() }, 1);
+    p.surfaces.hidden = false;
+    assert!(p.pump(0.).is_none());
+    assert_eq!(unsafe { reads() }, 2);
+    let view = *p.surfaces.canvases.keys().next().unwrap();
+    p.surfaces.retire(view, &mut p.host);
+    assert_eq!(p.surfaces.performance_due_in_ms(), None);
+    assert!(p.pump(0.).is_none());
+    assert_eq!(unsafe { reads() }, 2);
     drop(p);
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }

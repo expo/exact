@@ -523,7 +523,10 @@ extension NavigationHost {
     /// authored source changed, then run the route hatch — before UIKit lays
     /// the stack out (LLP 1075.003 §3.2, §3.5 "projected defaults"). A plain
     /// tab (PlainTabIOS) has no bar: its route's header is its content.
-    func prepareRoutes(_ routes: [RouteController], in stack: UIViewController) {
+    /// Whether a header it lifted keeps its room until the batch being
+    /// applied ends (`coverLifted`).
+    @discardableResult
+    func prepareRoutes(_ routes: [RouteController], in stack: UIViewController) -> Bool {
         let nav = stack as? UINavigationController
         if let nav {
             hatchNavigation(nav)
@@ -600,12 +603,13 @@ extension NavigationHost {
             c.hatched = true
             c.ownedScroll = scroller
         }
-        coverLifted(routes)
+        let waits = coverLifted(routes)
         // A route's header shown or hidden in place; a push or pop sets the
         // bar in `willShow` instead, with UIKit's transition.
         if let nav, nav.transitionCoordinator == nil, let top = nav.topViewController as? RouteController, routes.contains(top) {
             showBar(nav, animated: nav.view.window != nil)
         }
+        return waits
     }
 
     /// The header shape and the bar a route shows in its stack
@@ -636,7 +640,11 @@ extension NavigationHost {
     /// layout with `reportCovers`, after the push had begun, so a pushed
     /// route's scroller was still below its header's height then, and every
     /// pushed level-1 title arrived inline and expanded only on a pull.
-    private func coverLifted(_ routes: [RouteController]) {
+    /// Covers reach the runtime outside a batch, after its scroll positions
+    /// are restored; lifted while one is applied, the cover and the runtime's
+    /// answer come after it, and true says so: `sync` then gives UIKit the
+    /// stack after them (`syncAfterBatch`).
+    private func coverLifted(_ routes: [RouteController]) -> Bool {
         var lifted = false
         for c in routes {
             for node in (c.lifted.map({ [$0] }) ?? c.barNodes) + [c.scoped].compactMap({ $0 }) where covers[node.id] != .whole {
@@ -644,8 +652,9 @@ extension NavigationHost {
                 lifted = true
             }
         }
-        guard lifted else { return }
+        guard lifted else { return false }
         presenter.afterBatch { [weak self] in self?.deliverCovers() }
+        return presenter.applying
     }
 
     /// Write the defaults an authored header gives a navigation item, and
@@ -1009,7 +1018,8 @@ extension NavigationHost {
     /// UIKit insets the scroller (`reportCovers`, `scroller_insets_bottom`),
     /// so an absolutely positioned footer still rests on the bars. A footer under
     /// the scroller keeps the cover; so does a page under `viewport-fit=cover`,
-    /// whose own `env()` insets would be added to UIKit's, though not a
+    /// whose own `env()` insets would be added to UIKit's (its scroller is drawn
+    /// on under the bars by its band instead, `controlBands`), though not a
     /// sheet's route, which is covered for the sheet's whole safe area
     /// whatever the document's fit (`reportCovers`); and so does a
     /// transparent bar's scroller, which UIKit insets nothing (`collapse`).

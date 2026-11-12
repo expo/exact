@@ -1,6 +1,6 @@
 //! Rust argument defaults and atomic timed binding for world surfaces, and
 //! the quality ladder's rung the first binding resolves (LLP 1139.003 D3).
-use super::{observer, Clock, Executor, Game, Perf, Sim, SurfaceError, Value, WorldSurface};
+use super::{observer, Clock, Executor, Game, Sim, SurfaceError, Value, WorldSurface};
 use exact_game::Args;
 
 impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, P, ASSETS, H> {
@@ -116,7 +116,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                 if let Some((_, feed)) = &mut self.render {
                     feed.reset();
                 }
-                self.perf = Perf::default();
+                self.perf.restart();
                 self.gpu_timing = None;
             }
         } else {

@@ -204,7 +204,7 @@ export function commit(f, what = "commit", finished) {
     if (!(e instanceof Refusal)) console.error(e);
     Restoring = true; try { settle(); } catch {} finally { Restoring = false; }
   }
-  const [out, cmds, landed, finishes] = [Out, Commands, Landed, Finishes];
+  const [out, cmds, landed, finishes] = [Out, Commands, Landed, Finishes], changed = Sched?.changed(queued);
   // A key handler's preventDefault/stopPropagation act on its event before the dispatch ends, a tree update a view transition defers too (review C3).
   if (KeyEvent || Propagating) for (const c of cmds.filter(c => c[0] === "preventDefault" || c[0] === "stopPropagation")) { cmds.splice(cmds.indexOf(c), 1); command(...c); }
   Writes = Finishes = null; unpark();
@@ -222,7 +222,7 @@ export function commit(f, what = "commit", finished) {
     while (sent < out.length) out[sent++](); if (Open.size) closeLetGo(inflight, say); for (const c of cmds) command(...c); Sounds.apply?.(cmds); Sounds.midiApply?.(cmds); Sounds.stood?.(); if (!Booting) { autofocus(); Input?.arrive(); } // after its focus commands, as the wasm host (focus.js); then the focus follows the route (input-glue.js; LLP 1115.000 D4.2)
     // An answer's `then` is armed, due now, once however many land: the next advance runs it as its own commit (LLP 1016.001 D3).
     for (const m of landed) if (m.then) { m.due = armedAt(); if (!clock.agent) drive(); }
-    Sched?.scan(true); // a free queue's waiting send is due (LLP 1092 D3)
+    Sched?.scan(true, changed); // a free queue's waiting send is due (LLP 1092 D3)
     return true;
   };
   return Sh && ok && !Nav?.traversing ? Sh.commit(tail, Queue, inflight, After) : tail(); // a history traversal lands at once (navigation.js `traversing`)
@@ -318,32 +318,32 @@ export function frames(action, name) {
 }
 /** Move the clock to `to`, firing each due timer and armed `then` at its own time, in order; a seek fires frame
  * tasks' virtual frames too, the wall clock's (`wall`) none. `stop()`, asked after each, ends it there (the agent's:
- * one that sent a request): true. A refusal, or 4096 commits (TIMER_FIRE_LIMIT), stops it at that time, and a
+ * one that sent a request): true. A change receipt boundary also yields true; resume toward the same `to`. A refusal or 4096 commits stops there; a
  * non-finite `to` (NonFiniteClock) leaves the clock where it was: its journal line, as the runner's error. Under the
- * agent the journal gets the runner's line for an advance that fired. `timers` false fires none: the armed `then`s
- * alone, at `to` = now, as an agent's input ends (Runner::land_then; trivia F3). */
+ * agent the journal gets the runner's line for an advance that fired. `timers` false runs only armed `then`s
+ * and change actions, at `to` = now, as an agent's input ends (Runner::land_then; trivia F3). */
 export function advance(to, wall, stop, timers = true) {
   if (!Number.isFinite(to)) return say(`refused advance: NonFiniteClock (${to})`), journal.at(-1);
   if (Poisoned) return say("refused advance: Poisoned"), journal.at(-1); to = Link.timerWait?.cutoff(to, wall) ?? to; let fired = 0, stopped = false;
   for (;;) {
-    let next = null, then = null, head = null; const execution = t => Link.timerWait?.execution(t, wall) ?? t.due, priority = t => t.hatch || t.data ? 2 : t.wait === 4 ? 1 : 0;
+    let next = null, then = null, head = null; const execution = t => t.change ? Math.max(t.due, clock.now) : Link.timerWait?.execution(t, wall) ?? t.due, priority = t => t.hatch || t.data ? 2 : t.wait === 4 ? 1 : 0;
     // Run authored tasks before hatch and data callbacks due at the same time
-    if (timers && !clock.stopped) for (const t of clock.timers) if (execution(t) <= to && !(wall && t.frame) && (!next || execution(t) < execution(next) || execution(t) === execution(next) && (priority(t) < priority(next) || priority(t) === priority(next) && t.due < next.due))) next = t;
+    if (!clock.stopped) for (const t of clock.timers) if ((timers || t.change) && (!t.change || t.ready) && execution(t) <= to && !(wall && t.frame) && (!next || execution(t) < execution(next) || execution(t) === execution(next) && (priority(t) < priority(next) || priority(t) === priority(next) && t.due < next.due))) next = t;
     // An answer's `then` goes before a timer due at the same time: the answer landed first; a queue's `next` between them (LLP 1092 D3).
     for (const m of Mutations) if (m.due <= to && (!then || m.due < then.due) && (!next || m.due <= execution(next))) then = m;
     for (const m of Mutations) if (m.next <= to && (!head || m.next < head.next) && (!next || m.next <= execution(next)) && (!then || m.next < then.due)) head = m;
     if (head) then = null;
-    if (!next && !then && !head) break;
+    if (!next && !then && !head) break; if (next?.change && !then && !head && fired) return true;
     if (fired === 4096) return say("refused advance: 4096 commits in one advance (TIMER_FIRE_LIMIT)"), journal.at(-1);
     // On the wall clock (the timers RFC, D2, D3) a repeat that missed beats fires once, its firing consumed first; each callback observes the clock as it runs and as it ends, and what it arms takes its place; a repeat's next beat is the first of its phase after the end, unless its callback dropped it, or re-armed it (a gate's step) from there.
     const at = head ? head.next : then ? then.due : next.due, repeat = (wall || next?.wait) && !head && !then && !next.once && !next.frame && !next.hatch, gen = next?.gen;
     if (head) clock.now = Math.max(clock.now, head.next);
     else if (then) { clock.now = Math.max(clock.now, then.due); then.due = Infinity; }
     else { clock.now = wall ? Math.max(clock.now, execution(next)) : execution(next); if (next.once) clock.timers.splice(clock.timers.indexOf(next), 1); else if (!next.hatch) next.due = next.frame ? vf(next.base, ++next.k) : repeat ? beatAfter(at, next.ms, Math.max(clock.now, wall ? to : clock.now)) : next.due + next.ms; }
-    if (!head && !then && !next.hatch && !next.data) { const counts = clock.timerFirings ??= Array(7).fill(0); counts[next.frame ? 6 : wall && next.wait ? 5 : next.wait ?? 0]++; } const due = next?.due, sample = () => { if (wall) clock.now = Math.max(clock.now, performance.now() - start); }; sample(); Instant = wall ? (next?.wait ? clock.now : at) : null; const ok = fire(head ? () => Sched.next(head) : then ? () => commit(then.then, `${then.name} then`) : next.action); Instant = null; sample();
+    if (!head && !then && !next.hatch && !next.data) { const counts = clock.timerFirings ??= Array(7).fill(0); counts[next.frame ? 6 : wall && next.wait ? 5 : next.wait ?? 0]++; } const due = next?.due, sample = () => { if (wall) clock.now = Math.max(clock.now, performance.now() - start); }; sample(); Instant = wall ? (next?.wait || next?.change ? clock.now : at) : null; const ok = fire(head ? () => Sched.next(head) : then ? () => commit(then.then, `${then.name} then`) : next.action); Instant = null; sample();
     if (repeat && clock.timers.includes(next)) next.due = next.gen === gen && next.due === due ? beatAfter(at, next.ms, Math.max(clock.now, wall ? to : clock.now)) : clock.now + next.ms; if (ok !== true) return journal.at(-1);
     if (head || then || !next.hatch && !next.data) { fired++; } // Hatch and data callbacks have their own limits
-    if (stop?.()) { stopped = true; break; }
+    if (!head && !then && next.change) return true; if (stop?.()) { stopped = true; break; }
   }
   if (!stopped) clock.now = Math.max(clock.now, to);
   for (const f of Clocked) f();
@@ -356,7 +356,7 @@ let driving = 0, start = 0, painting = 0;
 export function drive() {
   clearTimeout(driving); if (clock.agent || Poisoned) return;
   let next = Infinity;
-  for (const t of [...(clock.stopped ? [] : clock.timers), ...Mutations]) if (!t.frame) next = Math.min(next, Link.timerWait?.wake(t) ?? t.due + (t.tolerance ?? 0)); // no timer while a wake runs unseen (wakes.js)
+  for (const t of [...(clock.stopped ? [] : clock.timers), ...Mutations]) if (!t.frame && (!t.change || t.ready)) next = Math.min(next, Link.timerWait?.wake(t) ?? t.due + (t.tolerance ?? 0)); // no timer while a wake runs unseen (wakes.js)
   for (const m of Mutations) if (m.next < next) next = m.next;
   if (!isFinite(next)) return;
   const token = Link.timerWait?.generation(); driving = setTimeout(() => { if (clock.agent || token !== Link.timerWait?.generation()) return; advance(performance.now() - start, true); Link.timerWait?.check(); drive(); }, Math.min(2147483647, Math.max(0, next - (performance.now() - start))));
@@ -433,7 +433,7 @@ function reply(t, name, source, held, f, next, gone) {
       let p;
       try { if (o.error !== undefined) throw new Failed(o.error, o.code, o.reason); p = o.v !== undefined ? { v: o.v } : data.parse(source, t.args, o, Store); }
       catch (e) { throw e instanceof Failed ? e : new Failed(String(e?.message ?? e), failureCode(e), failureReason(e)); }
-      f(p, o); Out.push(...(o.effects ?? [])); // a socket frame's replies from its mapper, sent once this commit stands (LLP 1016.000 D7)
+      Out.push(...(p.effects ?? [])); f(p, o); Out.push(...(o.effects ?? [])); // a socket frame's replies from its mapper (a Rust parse's, a TypeScript stream's), sent once this commit stands (LLP 1016.000 D7)
     }, `${o.more ? "message" : "reply"} ${name}; wall ${t.elapsed} ms`) !== false || !held()) return;
     const failed = `request ${t.id} (${name}) failed and is no longer pending: ${next}: ${Refused?.message ?? Refused}`; say(failed); if (DEVELOPMENT_STORE) console.error(`exact: ${failed}`); // why, on the line a test failure quotes (sb4 farm wave 6, E3: a mutation's refused reply named nowhere); a development page's console too (LLP 1142 D4)
     gone(Refused.message, Refused.code, Refused.reason); recommit(() => { if (t.r) again(t); }, "a failed request");
@@ -504,13 +504,13 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
     const refresh = forced && waited !== true; // the launch's own ask is sent as an ordinary one (LLP 1162.000 D1; `Runner::launch` in the runner)
     try { ans = ask(source, a, name, false, refresh); Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
     catch (e) {
-      if (data.threwRead?.()) r.store = true;
+      if (data.threwRead?.()) r.store = true; for (const t of data.threwWatches?.() ?? []) (r.watches ??= new Set()).add(t); // a failed ask watched what it read, the shown answer's topics kept
       if (e instanceof Refusal && !(reconciling && e instanceof Failed)) throw e;
       if (e.refuse && !reconciling) throw new Failed(`resource ${name}: ${e.message}`);
       if (globalThis.__exactRender) hold();
       return fails(a, String(e?.message ?? e), failureCode(e), failureReason(e)); // its newest ask failed: an older one in flight is let go
     }
-    if (ans && ans.store) r.store = true;
+    if (ans && ans.store) r.store = true; r.watches = ans?.watches; // a fresh answer's topics replace the last's (LLP 1016.002 D2), a later turn's joining them
     if (ans && "v" in ans) {
       if (baked) say(revalidated(name, eq(ans.v, r.value)));
       try { take(ans.v, a, Ov.tick()); }
@@ -540,8 +540,8 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
     return r.value;
   })(), r.settled ?? r.asked, r.origin); flag(cur, !r.placeholder && !r.slept && r.settled !== undefined && r.asked !== undefined && equal(id(r.settled), id(r.asked))); return shown; }, type);
   Object.assign(r, {
-    save: () => [r.value, r.settled, r.ticket, r.ticket?.args, r.store, r.failed, r.baked, r.error, r.ticket?.again, r.code, r.origin, r.forced, r.reconciling, r.rev, r.reason, r.inspection && { ...r.inspection }, r.ticket?.generation, r.marks, r.placeholder, pend.n.v, r.asleep, r.slept, r.launch],
-    restore: x => { [r.value, r.settled, r.ticket] = x; if (r.ticket) { r.ticket.args = x[3]; r.ticket.again = x[8]; r.ticket.generation = x[16]; } r.store = x[4]; r.failed = x[5]; r.baked = x[6]; r.error = x[7]; r.code = x[9]; r.origin = x[10]; r.forced = x[11]; r.reconciling = x[12]; r.rev = x[13]; r.reason = x[14]; r.inspection = x[15]; r.marks = x[17]; r.placeholder = x[18]; r.asleep = x[20]; r.slept = x[21]; r.launch = x[22]; write(pend.n, x[19]); write(ver.n, ver.n.v + 1); }, // and what it shows is read again, from what was put back
+    save: () => [r.value, r.settled, r.ticket, r.ticket?.args, r.store, r.failed, r.baked, r.error, r.ticket?.again, r.code, r.origin, r.forced, r.reconciling, r.rev, r.reason, r.inspection && { ...r.inspection }, r.ticket?.generation, r.marks, r.placeholder, pend.n.v, r.asleep, r.slept, r.watches, r.launch],
+    restore: x => { [r.value, r.settled, r.ticket] = x; if (r.ticket) { r.ticket.args = x[3]; r.ticket.again = x[8]; r.ticket.generation = x[16]; } r.store = x[4]; r.failed = x[5]; r.baked = x[6]; r.error = x[7]; r.code = x[9]; r.origin = x[10]; r.forced = x[11]; r.reconciling = x[12]; r.rev = x[13]; r.reason = x[14]; r.inspection = x[15]; r.marks = x[17]; r.placeholder = x[18]; r.asleep = x[20]; r.slept = x[21]; r.watches = x[22]; r.launch = x[23]; write(pend.n, x[19]); write(ver.n, ver.n.v + 1); }, // and what it shows is read again, from what was put back
     force: undo => { r.forced = true; r.launch = false; flag(ver, ver.n.v + 1, undo); },
     touch: undo => flag(ver, ver.n.v + 1, undo), // its writes changed: what it shows is laid over again
     reconcile: undo => { r.forced = r.reconciling = true; r.launch = false; flag(ver, ver.n.v + 1, undo); },
@@ -708,7 +708,7 @@ export function P(e, name, f) {
     if (PropHooks[name]?.(e, v)) return; if (NOT_DOM.test(name)) return void (e["$" + name] = v);
     if (e.$media && Media.mediaProp(e, name, v)) return; // media.js: `paused`, `volume`, `currentTime` … are the glue's; an `app:/` source its own
     if (name === "text") { e.$unset = v == null; if (!e.childElementCount && e.textContent !== (v ?? "")) e.textContent = v ?? ""; } // `$unset`: no text, as the runner's cleared row, not an empty one (difftest's drive.mjs)
-    else if (name === "value") { if (e.localName === "select") { Selects.add(e); e.$value = v ?? ""; e.$set = true; } writeValue(e, v ?? ""); e.exactDecorations?.sync(); }
+    else if (name === "value") { if (e.localName === "select") { Selects.add(e); e.$value = v ?? ""; e.$set = true; } if (v == null && e.localName === "option") e.removeAttribute("value"); else writeValue(e, v ?? ""); e.exactDecorations?.sync(); } // a cleared option's value is its label again
     else if (name === "scrollTop" || name === "scrollLeft") { if (v != null) (Scrolls.get(e) ?? Scrolls.set(e, {}).get(e))[name] = Number(v); }
     else if (BOOL.test(name)) { if (name === "inert") e.authoredInert = v === "true"; e.toggleAttribute(name, v === "true"); if (name === "disabled" && v === "true" && document.activeElement === e && e.matches(":disabled")) e.blur(); /* HTML focus fixup, now, for a control only (glue.js) */ if (name === "checked") e.checked = e.$checked = v === "true"; if (name === "muted") e.muted = v === "true"; if (name === "autofocus") { if (v === "true") e.removeAttribute("data-autofocus"); else e.setAttribute("data-autofocus", "false"); } }
     else if (v == null) { if (e.hasAttribute(name) || suppressedInvocation(e, name)) { e.removeAttribute(name); if (name.startsWith("data-exact-")) Paint?.facts(e); } }
@@ -748,12 +748,12 @@ export function gs(e, name, values) {
     if (queued) queued.values = v; else pending.push({ id, name, values: v, generation: 0 });
     if (!Gpu && typeof requestAnimationFrame === "function" && !globalThis.__exactRender) {
       x.views = Views; x.generation = 0; x.devAssets = null; x.root = document.getElementById("exact-root"); x.assetURL = v => rel("src", v); // a release's asset path, as the wasm glue's `localAssetURL` (LLP 1098 D6)
-      // A surface's published record (LLP 1009 D6), as the glue hands it to
-      // the wasm host: `name` or `name\0json`, to `exactSurface` readers
-      // (facts.js); dropped where no resource reads one.
+      // The GPU glue's name NUL JSON wire reaches the reserved readers in facts.js.
       let written = "";
       x.writeIn ??= t => { written = t; return 0; };
       (x.wasm ??= {}).exact_surface_record ??= () => { const at = written.indexOf("\0"); x.surfaceRecord?.(at < 0 ? written : written.slice(0, at), at < 0 ? null : written.slice(at + 1)); return 0; };
+      x.wasm.exact_canvas_performance_requested ??= () => x.canvasPerformanceRequested?.(written) ? 1 : 0;
+      x.wasm.exact_canvas_performance_record ??= () => { const at = written.indexOf("\0"); x.canvasPerformanceRecord?.(at < 0 ? written : written.slice(0, at), at < 0 ? null : written.slice(at + 1)); return 0; };
       x.send ??= () => {};
       // A surface's `message` to its canvas's `message=` handler (gpu-glue.js `messages`), as the wasm glue's `message` dispatches it.
       x.message ??= (el, text) => el?.dispatchEvent(new CustomEvent("exact-native", { detail: { kind: "message", value: text } }));
@@ -963,7 +963,7 @@ export const onSelectionChange = (e, kind, f, l) => { return sourceField(e) ? l(
 let Pres = null, Presence = null, Present = null, Leave = null, Sh = null; // Sh: shared.js, loaded with presence-glue.js, runs the commits that hand on a shared element's name in a view transition (LLP 1013.000 D7)
 /** The after-paint pieces on their way (the agent waits for them before an
  * operation, as glue.js's `agentSettled` waits for `pieces.pending()`). */
-export const pieces = () => Promise.all([Motion, Inputs, Presence, Flow, Native, Media?.mediaPiece(), OnHooks.loading].filter(Boolean)).then(() => {}, () => {});
+export const pieces = () => Promise.all([Motion, Inputs, Presence, Flow, Native, Media?.mediaPiece(), decorationPiece(), OnHooks.loading].filter(Boolean)).then(() => {}, () => {});
 const EXIT = "--exact-exit-animation"; export const exitOf = n => (n.$exit ?? n.style.getPropertyValue(EXIT)).trim(); // an element's exit: a bound one's value from the commit's start (presence-bindings.js `px`), else its style's
 /** A virtualized list's row wrapper `el` leaves with the exit its row's `root` declares (list.js): whether it stays,
  * leaving, for presence-glue.js to remove. */
@@ -1008,7 +1008,7 @@ function motion(f) {
   Motion.then(() => Mo && f(Mo));
 }
 /** A node the motion engine follows (the kernel's motion seam): `f` gives
- * its `translate`, `scale`, `rotate`, `opacity` and `transition` as the
+ * its `translate`, `scale`, `rotate`, `opacity`, `transition` and release velocity as the
  * plan binds them, told the engine at every commit that changes them. */
 export function mo(e, f) {
   const id = viewId(e);
@@ -1089,7 +1089,7 @@ function geoRead(op, id) {
 export const x_frame = id => geoRead(0, id), x_measure = id => geoRead(1, id);
 export const x_rangeFrame = (id, start, end) => { const out = new Float64Array(4), bits = Geo ? Geo.range(liveById(id), start, end, out) : 0;
   return bits & 1 ? [...out, !!(bits & 2), false] : [0, 0, 0, 0, false, true]; };
-export { decorationRecord, atomFacesRecord } from './shape.js'; import { startDecoration } from './editor.js';
+export { decorationRecord, atomFacesRecord } from './shape.js'; import { startDecoration, decorationPiece } from './editor.js';
 export const decorate = e => startDecoration(e, {own:Owner, onEnd, inflight, say});
 /** `elementFromPoint(x,y)` (LLP 1094 D10): nearest front-most untransformed id at a viewport point; none before loading. `elementsFromPoint` returns every one. */
 export const x_elementFromPoint = (x, y) => { const root = document.getElementById("exact-root"), n = Geo?.point(x, y)?.closest('[id]:not([id=""])'); return n && n !== root && root.contains(n) && n.id || null; };

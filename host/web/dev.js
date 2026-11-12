@@ -97,7 +97,7 @@ async function fetchGeneration(message, signal, first = false) {
   const { envelope, url } = await readEnvelope(message.envelope, signal);
   const identity = envelope.dev;
   if (envelope.exact !== 1 || !validIdentity(identity) || identity.epoch !== message.epoch
-      || identity.seq !== message.seq || identity.generation !== message.generation || identity.program !== message.program || !Array.isArray(envelope.assets)) throw new Error("the fetched envelope does not name the announced generation");
+      || identity.seq !== message.seq || identity.generation !== message.generation || identity.program !== message.program) throw new Error("the fetched envelope does not name the announced generation");
   // The page's first generation is fetched inside glue's boot, compat known.
   if (!first) await globalThis.exact.ready;
   if (envelope.app?.id !== globalThis.exact.compat?.inputs?.app) throw new Error("the dev generation names another app");
@@ -109,6 +109,15 @@ async function fetchGeneration(message, signal, first = false) {
     if (bytes.length !== card.bytes || await digest(bytes) !== card.sha256) throw new Error(`payload integrity failed: ${name}`);
     return { bytes, url: path, sha256: card.sha256 };
   };
+  // The asset cards are in the index the envelope names, at most 4 MiB
+  // (update/src/envelope.rs); a generation with no assets names none.
+  const index = envelope.assets;
+  if (index !== undefined && (!Number.isSafeInteger(index?.count) || index.bytes > 4 * 1024 * 1024)) throw new Error("invalid or oversized asset index card");
+  const listed = index ? await load(index, "assets.json") : null;
+  envelope.assets = listed ? JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(listed.bytes)).assets : [];
+  if (!Array.isArray(envelope.assets) || envelope.assets.length !== (index?.count ?? 0)) throw new Error("the asset index does not hold the cards its envelope counts");
+  // Its cards resolve against its own URL.
+  if (listed) envelope.assets = envelope.assets.map((card) => ({ ...card, url: new URL(card?.url, listed.url).href }));
   for (const card of envelope.assets) {
     if (!validName(card.name) || names.has(card.name)) throw new Error("invalid or duplicate asset name");
     names.add(card.name);

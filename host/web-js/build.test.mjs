@@ -794,10 +794,18 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     const next = await get('/live'), old = await fetch(`http://127.0.0.1:${serve.port}/.exact/gen/${id}/app.js`);
     expect([generationIn(next.body) === id, next.body.includes('Changed again.'), old.status, Buffer.from(await old.arrayBuffer()).equals(runtime)]).toEqual([false, true, 200, true]);
     // A source changed since the build: serve builds the site again before it answers a navigation, and answers a
-    // build that fails with its output (LLP 1153.001 D3).
+    // build that fails with its output (LLP 1153.001 D3). A source is one however deep in the app it is.
+    const deep = resolve(app, 'a/b/c/d/e/part.ts'), rebuilds = (text) => text.split('a source changed since the build: building it again').length - 1;
+    mkdirSync(dirname(deep), { recursive: true });
+    writeFileSync(deep, "export const part = 'one';\n");
     writeFileSync(resolve(app, 'app.contract'), source.replace('text note.text\n', 'text note.text\n      text "Edited."\n'));
     await new Promise(ok => setTimeout(ok, 350));
     expect((await get('/live')).body).toContain('Edited.');
+    await heard((text) => rebuilds(text) === 1);
+    writeFileSync(deep, "export const part = 'two';\n");
+    await new Promise(ok => setTimeout(ok, 350));
+    expect((await get('/live')).status).toBe(200);
+    await heard((text) => rebuilds(text) === 2);
     writeFileSync(resolve(app, 'app.contract'), source.replace('text note.text\n', 'text note.text\n      nosuchtag "x"\n'));
     await new Promise(ok => setTimeout(ok, 350));
     const broken = await get('/live');

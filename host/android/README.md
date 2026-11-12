@@ -54,20 +54,20 @@ NDK (`ANDROID_NDK_HOME`, else the newest under the SDK), a JDK (17 or newer) and
    crate::exact_hatches())`, with a build script that bakes the plan and calls `contract::native::android_entry`,
    which writes the app's hatches' install (`hatches.rs`) and the plan's uses (`uses.txt`) beside it; `apps/caltrain/android` is the one to copy for an app whose data is Rust and
    `apps/shelf/android` for one whose data is TypeScript (three files each, and a line in the root `Cargo.toml`'s
-   `members`). A game's is generated in its `.shells/` (`game/app/shells.mjs`). An app with a GPU module (LLP 1009;
-   every game) is built as a Linux bake is (`buildBake`): the module first, then the crate, whose bake records the
+   `members`). A game's is generated in its `.shells/` (`game/app/shells.mjs`). An app with GPU modules (LLP 1009;
+   every game) is built as a Linux bake is (`buildBake`): the modules first, then the crate, whose bake records each
    module's product digest. The shared Linux/Android loader checks baked cards against that digest: on
    macOS, signed 64-bit Mach-O code omits the signature and normalizes its three size fields, matching
    the definition in `update/src/gpu.rs` through a parity-tested host copy; other files hash whole. Completed development receipts always
    bind the whole file. Both the process cache and Android's persistent cache distinguish these digests;
-3. copies the library to `app/build/<app>/rust/jniLibs/arm64-v8a/libexactcanvas.so`, the GPU module beside it under
-   its own name, the app's `assets/` to `app/build/<app>/rust/assets/app/assets/`, and a GPU module's shaders
+3. copies the library to `app/build/<app>/rust/jniLibs/arm64-v8a/libexactcanvas.so`, the GPU module and each of
+   `gpu.modules` beside it under its own name, the app's `assets/` to `app/build/<app>/rust/assets/app/assets/`, and a GPU module's shaders
    (`gpu/shaders/*.wgsl`, as a Linux bake packs them) to `app/build/<app>/rust/assets/app/shaders/`, where the host
    registers them from before a canvas is made;
 4. runs `./gradlew :app:assembleRelease -Papp=<app> -PappDir=<the app's directory>` here (a game's `.shells/`, whose
    `app.json` is resolved), with `-PappIcon` and `-PappBanner` naming the icon and banner it wrote, with
-   `-PgpuModule=<file>` for a module: the APK then extracts its libraries and leaves
-   the module unstripped, since the host opens it by path and checks its digest; with `-Pcompose=1` when the plan's
+   `-PgpuModules=<file>,<file>…` naming the GPU modules: the APK then extracts its libraries and leaves
+   the modules unstripped, since the host opens each by path and checks its digest; with `-Pcompose=1` when the plan's
    uses name `dates` (a date or time control), which links Compose Material 3 for its pickers; and with the Kotlin
    in the app's `modules/android`, its hatches and module roster, compiled in,
 
@@ -176,8 +176,20 @@ journal to logcat as the host comes to hold each line, with the milliseconds sin
 above were read (`adb logcat -v time`, from ActivityManager's "Start proc" line). Without it nothing is read or
 written.
 
-Not there: `Intl` in a module (the bundle has ICU's Unicode and no Intl, LLP 1107 §4.1), and a picture from a URL
-(below, "Not done").
+The published v5 Hermes bundle has ICU Unicode support but no `Intl` (LLP 1107 §4.1).
+An Intl-enabled bundle with receipt-bound English ICU data enables Ibex's
+`NumberFormat` and `DateTimeFormat` and Hermes's ICU `Collator`. Build one with
+`IBEX_DIR=/path/to/patched/ibex bun scripts/hermes-android.mjs build --intl`;
+the Ibex builder must support `IBEX_ANDROID_INTL=true` and the ICU data tiers.
+The local build targets API 29. Before `build` or `install` changes the current
+bundle, the Rust resolver checks the receipt schema, all listed archives and
+headers, the bundled compiler and ICU filters against their digests, even when
+Intl is disabled. JSI, Boost and base ICU archives must be listed. The candidate’s bytecode
+version must match the cached host compiler.
+Run `exact setup` first to install that compiler. The published bundle continues
+to build without Intl; the bake does not warn about a top-level Intl use.
+
+Not there: a picture from a URL (below, "Not done").
 
 ## Driving the reader (LLP 1107 D1)
 
@@ -525,7 +537,8 @@ group's does, `dispose(ids)` for the handles of a reply the runner dropped, `for
 the foreground or leaves it, `preferred(values)` for the agent's values, and `resumed()` when the activity is in front
 again, which is where it reads again what the person changed in Settings, since Android sends no event for it. Its
 `ExtensionContext` gives the application, the activity in front, `agent`, `now()` (the session's clock, the agent's
-under the agent), `foreground`, `changed(topic)`, which asks the topic's readers again, `wake(event, args, id,
+under the agent), `label` (`main`, the same at every launch), `data`, `cache` and `temporary` (the directories behind
+`app:/data`, `app:/cache` and `app:/tmp`, the drive's store under the agent), `foreground`, `changed(topic)`, which asks the topic's readers again, `wake(event, args, id,
 ended)`, which raises one of the interface's wake events and hears its outcome (LLP 1133.017 D8; `woke(id, outcome)`
 too), and
 `requestPermissions(permissions, done)`: one platform request, answered by `onRequestPermissionsResult`, or by the
@@ -1293,7 +1306,17 @@ The cut was the smallest one. Left in the reader:
     view's scope. There is no native sheet detent, compact-width trait or zoom presentation to consult:
     iOS leaves the bar to the screen behind a medium sheet or an iPad sheet.
     There is also no native navigation/presentation transition completion to wait for, so the request changes
-    with committed state. `status-bar-animation` and `system-bars-hidden` are not applied on Android.
+    with committed state. `status-bar-animation` is not applied on Android.
+
+    `system-bars-hidden` resolves by the same walk, apart from the style: `false` is a declaration, so a
+    descendant's `false` shows the bars its ancestor hides, and a covering page that declares nothing shows them.
+    Bit 2 of the sixth chrome word carries it. `ExactActivity` hides the status and navigation bars with
+    `WindowInsetsController.hide(systemBars())` and `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`, as a hand-built
+    immersive screen does (API 29: `Legacy`'s sticky immersive flags), and shows them again when no declaration
+    hides them; it acts on a change only, so a chrome that moves the page does not hide bars a swipe has just
+    shown. The insets are the system's: hidden bars report none, so the safe area keeps only the display cutout's
+    and the page grows into the space the bars left (API 29's stable insets keep the bars'). `layout.statusBar`
+    reports `hidden` and `hiddenSource` beside the style.
 
     The software keyboard ends the page at its top, and the field being edited stays in view (once the page has been painted in the
     viewport the keyboard left: the boxes a reveal goes by are the last paint's). The keyboard's own slide is not followed

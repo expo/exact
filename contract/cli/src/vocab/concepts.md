@@ -905,7 +905,7 @@ along the gradient line. `background-attachment` takes `scroll` or `fixed`;
 hatch on separate rows does not establish one pattern across the list.
 
 ## menu: a pull-down menu of actions, and a long-press one
-names: menus, popover, dropdown, pulldown, pull-down, popupmenu, menu at the click, popup at point, contextPopover, UIMenu, context menu, context-menu, contextMenu, UIContextMenuInteraction, menuitemradio, menuitemcheckbox, checkmark, menuOrder, preferredMenuElementOrder, menu order, reversed menu
+names: menus, popover, dropdown, pulldown, pull-down, popupmenu, menu at the click, popup at point, contextPopover, UIMenu, context menu, context-menu, contextMenu, UIContextMenuInteraction, menuitemradio, menuitemcheckbox, checkmark, menuOrder, preferredMenuElementOrder, menu order, reversed menu, menu section, section title, displayInline, sectionHeader
 
 A menu is HTML's: a `column popover="auto" role="menu"` of `button`s, opened by a button's
 `popovertarget` (on iOS a `UIMenu`; in a `header`, the bar item's pull-down). A long-press
@@ -945,6 +945,12 @@ component App
 - A row's second `text`, under the first (a block `button`, or `flex-direction="column"`), is
   its grey subtitle: `text "Name"` then `text "A to Z"`. Side by side they stay one title.
 - An `hr` between rows starts a section; `destructive=true` paints a row red.
+- A titled section is a `column role="group" aria-label="Your presets"` holding its rows, as
+  WAI-ARIA groups a menu's items: iOS shows the title over the section
+  (`UIMenu(title:options: .displayInline)`), the Mac a section header, Android, Linux and
+  Windows a title row. The web draws the group as written, so to show the title there too,
+  write it inside as `text "Your presets" id="mine"` and name it with `aria-labelledby="mine"`
+  in place of `aria-label`: the native menus take that text as the title, not as a row.
 - iOS puts the first row nearest the finger, so a menu opening upward from near the bottom
   of the screen shows its rows last first. `menuOrder="fixed"` on the trigger keeps them as
   written; `"priority"` always puts the first row nearest the finger.
@@ -1122,14 +1128,16 @@ component App
   a child (a `text`, an `image`).
 
 ## glass: Liquid Glass, a material or a blur behind a box
-names: Liquid Glass, liquid-glass, liquidGlass, material, materials, vibrancy, blur, frosted, UIVisualEffectView, UIGlassEffect, BlurView, GlassView, expo-blur, expo-glass-effect, tintColor, glass tint, tinted glass, isInteractive
+names: Liquid Glass, liquid-glass, liquidGlass, material, materials, vibrancy, blur, frosted, UIVisualEffectView, UIGlassEffect, BlurView, GlassView, expo-blur, expo-glass-effect, tintColor, glass tint, tinted glass, isInteractive, UIBlurEffect, dark blur, blur tint, blur intensity, intensity
 
 Bars, tab bars, sheets and menus are the platform's, glass included: leave them unsaid. A
 surface of your own takes `backgroundMaterial`: `"glass"` or `"glass-clear"` is
 `UIGlassEffect` on iOS 26 and `NSGlassEffectView` on macOS 26; `"ultra-thin"`, `"thin"`,
-`"material"`, `"thick"` and `"chrome"` (each with `-light` and `-dark`) are UIKit's blurs,
-and `"sidebar"`, `"menu"`, `"popover"`, `"hud-window"` the Mac's. The web and Linux draw a
-blur that approximates each. A glass button is `buttonStyle="glass"` or
+`"material"`, `"thick"` and `"chrome"` (each with `-light` and `-dark`) are UIKit's materials,
+`"dark"`, `"light"`, `"extra-light"`, `"regular"` and `"prominent"` its plain blurs (`UIBlurEffect`
+`.dark` and so on: no material's grey wash, as expo-blur's `tint="dark"`), and `"sidebar"`,
+`"menu"`, `"popover"`, `"hud-window"` the Mac's. The web and Linux draw a blur that
+approximates each. A glass button is `buttonStyle="glass"` or
 `"prominent-glass"`, and `glassGroup=<points>` on a box merges the glass inside it as
 SwiftUI's `GlassEffectContainer` does.
 
@@ -1146,6 +1154,15 @@ component App
 - CSS's `backdrop-filter="blur(12px) saturate(1.8)"` blurs what is behind on the web, macOS
   and Linux; iOS draws a fixed light material for it, so a surface meant for iPhone says
   `backgroundMaterial`, which wins when both are written.
+- A material's strength is the platform's: UIKit's blurs take no radius or intensity, so there
+  is no "dark at 40%" (expo-blur's `intensity` holds a paused animation part way). To darken
+  the blurred result, put the content in one child that fills the box and paints the colour,
+  as each host draws a material under the box's children:
+  `column backgroundMaterial="dark" border-radius=16` holding
+  `column flex=1 border-radius=16 padding=12 background-color="rgba(14,16,21,0.5)"`. The
+  box's own `background-color` is no way to do it, as each host differs: iOS paints it under
+  the blur, so it colours what is blurred; the Mac's material covers it; the web and Linux
+  paint it in place of the material's tint.
 - A navigation bar's buttons share one glass capsule on iOS 26; `buttonStyle="glass"` on
   each gives it a capsule of its own (`contract vocab bar-buttons`).
 - `-exact-glass-tint="rgba(10,12,16,0.55)"` tints the glass itself (`UIGlassEffect.tintColor`);
@@ -1213,7 +1230,7 @@ component App
       text `${n}`
 ```
 
-## status-bar: the phone's status bar icons, and hiding them on iOS
+## status-bar: the phone's status bar icons, and hiding the system bars
 names: status bar, statusbar, setStatusBarStyle, UIStatusBarStyle, preferredStatusBarStyle, expo-status-bar, system-bars-hidden, statusBarHidden, prefersStatusBarHidden, prefersHomeIndicatorAutoHidden, autoHideHomeIndicator, immersive
 
 `status-bar-style="light-content"` (light text, for a dark surface), `"dark-content"` or
@@ -1225,10 +1242,11 @@ pages, with no native sheet detent or transition completion; see host/android/RE
 Edge to edge. `status-bar-animation="fade"` fades a change on iOS alone. Other hosts ignore
 both properties.
 
-On iOS, `system-bars-hidden=true` (or `=toyOpen`) hides the status bar and auto-hides the home
-indicator while that node's screen is under them, resolved the same way: a `fullscreen`
-route's wins over the stack, a `medium` sheet's does not, and a descendant's `false` shows
-them again.
+`system-bars-hidden=true` (or `=toyOpen`) hides the status bar and auto-hides the home
+indicator on iOS, and hides the status and navigation bars on Android (a swipe from the edge
+shows them for a moment), while that node's screen is under them, resolved the same way: a
+`fullscreen` route's wins over the stack, a `medium` sheet's does not (iOS), and a
+descendant's `false` shows them again.
 
 More: docs/contract-for-agents.md (`status-bar-style`, `system-bars-hidden`)
 

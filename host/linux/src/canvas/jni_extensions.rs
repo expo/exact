@@ -137,6 +137,20 @@ macro_rules! canvas_jni_extensions {
             }
         }
 
+        /// The app's directory `index` names (0 `data`, 1 `cache`, 2
+        /// `tmp`), for `ExtensionContext.data`, `cache` and `temporary`.
+        #[no_mangle]
+        pub unsafe extern "system" fn Java_dev_exact_canvas_Native_appRoot(
+            env: *mut JNIEnv,
+            _class: jclass,
+            index: jint,
+        ) -> jstring {
+            match $crate::picker::roots().get(index as usize) {
+                Some(root) => $crate::canvas::field::java(env, &root.to_string_lossy()),
+                None => std::ptr::null_mut(),
+            }
+        }
+
         /// Whether extension `name` is told it runs under the agent.
         #[no_mangle]
         pub unsafe extern "system" fn Java_dev_exact_canvas_Native_underAgent(

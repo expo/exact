@@ -76,6 +76,7 @@ pub(crate) struct Held {
 /// (`:focus-visible`), and the state held beside them.
 #[derive(Default)]
 pub(crate) struct Shown {
+    pub(crate) motion: exact_kernel::motion::LookMotion,
     pub hover: Vec<ViewId>,
     pub focus: Option<ViewId>,
     pub held: Option<Held>,
@@ -207,6 +208,20 @@ pub(crate) fn scale(to: f32, progress: f32) -> f32 {
 }
 
 impl<D: DataSource> Host<D> {
+    pub(crate) fn look_motion(&mut self, view: ViewId) {
+        let Some(node) = self.runner.kernel().node(view) else {
+            return;
+        };
+        let [hover, focus] = self.looks_shown.on(view);
+        let states = u8::from(hover) | (u8::from(focus) << 1);
+        let result = self
+            .looks_shown
+            .motion
+            .observe(&node, states, &mut self.engine);
+        debug_assert!(result.is_ok());
+        self.present();
+    }
+
     /// The value a sample replaces, before hover, focus and press feedback.
     pub(crate) fn kept_presented(&self, view: ViewId) -> Presented {
         self.presented

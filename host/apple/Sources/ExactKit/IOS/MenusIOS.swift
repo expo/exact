@@ -411,12 +411,16 @@ final class MenuHost {
     /// about 10 pt lower. A bar item's pull-down is a hand-built bar item's
     /// `UIMenu(title:)`, taller header and all (LLP 1021, amended 2026-10-16).
     func pullDown(of v: NodeView, titled heading: String, inBar: Bool = false) -> UIMenu {
-        let rows = rows(of: v, inBar: inBar)
+        let rows = rows(of: v, inBar: inBar, heading: heading)
         if heading.isEmpty { return UIMenu(children: [rows]) }
         return inBar ? UIMenu(title: heading, children: [rows]) : UIMenu(children: [UIMenu(title: heading, options: .displayInline, children: [rows])])
     }
-    private func rows(of v: NodeView, inBar: Bool) -> UIDeferredMenuElement {
-        UIDeferredMenuElement.uncached { [weak self, weak v, token = v.incarnation] completion in
+    /// A `heading` outside a bar is an inline section's, whose title UIKit
+    /// draws only over rows of its own: the first untitled section's rows
+    /// are its rows, and the other sections follow it.
+    private func rows(of v: NodeView, inBar: Bool, heading: String = "") -> UIDeferredMenuElement {
+        let headed = !heading.isEmpty && !inBar
+        return UIDeferredMenuElement.uncached { [weak self, weak v, token = v.incarnation] completion in
             func current() -> NodeView? {
                 guard let v, v.incarnation == token, self?.presenter?.views[v.id] === v, self?.eligible(v, inBar: inBar) == true else { return nil }
                 return v
@@ -433,7 +437,10 @@ final class MenuHost {
                 }
                 return
             }
-            completion(self.items(of: invocation.target, opener: invoker))
+            let items = self.items(of: invocation.target, opener: invoker)
+            if self.recordsGiven, !heading.isEmpty { self.givenHeaders[invocation.target.id, default: []].insert(heading) }
+            guard headed, let first = items.first as? UIMenu, first.options.contains(.displayInline), first.title.isEmpty else { return completion(items) }
+            completion(first.children + items.dropFirst())
         }
     }
     func eligible(_ node: NodeView, contextMenu: Bool = false, inertBoundary: UIView? = nil, inBar: Bool = false) -> Bool {
@@ -974,7 +981,15 @@ final class MenuHost {
         guard let pop = holding.first(where: { inner in !holding.contains { $0 !== inner && $0.isDescendant(of: inner) } }) else { return nil }
         var at: UIView = node
         while let up = at.superview, up !== pop.container { at = up }
-        guard let row = at as? NodeView, row.superview === pop.container, row.props["popover"] == nil else { return nil }
+        guard var row = at as? NodeView, row.superview === pop.container, row.props["popover"] == nil else { return nil }
+        if row.isMenuSection {
+            // A row of a section (D3): the section's own child.
+            let section = row
+            at = node
+            while let up = at.superview, up !== section.container { at = up }
+            guard let inner = at as? NodeView, inner.superview === section.container else { return nil }
+            row = inner
+        }
         return (pop, row)
     }
     /// For `node`, a row (an action or the cancel) of the confirmation UIKit
@@ -1002,6 +1017,14 @@ final class MenuHost {
     /// shows (`Agent.shownRow`). UIKit puts no identifier of an action on
     /// the element it shows, so a row is its place among these.
     var given: [UInt32: [GivenRow]] = [:]
+    /// Whether menus record what they give UIKit (`given`, `givenHeaders`,
+    /// `presentedMenu`): under the agent, which aims at what UIKit shows.
+    var recordsGiven = ExactEnv.agentMode
+    /// Under the agent, the titles each popover's menu was last given as
+    /// headers (its sections', and the heading of a pull-down's rows):
+    /// UIKit shows each as a labelled element among the rows, which
+    /// `Agent.runs` passes over.
+    var givenHeaders: [UInt32: Set<String>] = [:]
     /// Under the agent, the popovers (by id, with their incarnations) of
     /// the menu UIKit was last given to present: the one a menu opened
     /// with, and its submenus. A row of any other popover is not in the menu
@@ -1391,7 +1414,8 @@ final class MenuHost {
     /// LLP 1021 §5: the sheet's side of its invoker, from its popover's
     /// `position-area`; `none` keeps UIKit's defaults. UIKit places a popover
     /// by the arrow directions it permits — `.down` puts it above its source,
-    /// `.up` below, `.left` to its right (`right span-bottom`) — centred on
+    /// `.up` below, `.left` to its right (`right span-bottom`), `.right` to
+    /// its left (`left`) — centred on
     /// the source where it fits. `center` (the invoker's own cell) permits
     /// no arrow and may cover it: UIKit centres it across the invoker and
     /// picks its vertical position.
@@ -1401,7 +1425,7 @@ final class MenuHost {
             presentation.permittedArrowDirections = []
             presentation.canOverlapSourceViewRect = true
         } else {
-            presentation.permittedArrowDirections = area.hasPrefix("top") ? .down : area.hasPrefix("right") ? .left : .up
+            presentation.permittedArrowDirections = area.hasPrefix("top") ? .down : area.hasPrefix("right") ? .left : area.hasPrefix("left") ? .right : .up
             presentation.canOverlapSourceViewRect = false
         }
     }

@@ -27,7 +27,7 @@ import { closeSync, createWriteStream, existsSync, linkSync, mkdirSync, openSync
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
-import { compilerWarnings, warningLines, CONFIG_JSON, DECLARATIONS, depInfoInputs, moduleGraph, newerThan, notBuildInput, packagedBuildChanges, receiptChanges, refuseStale } from './agent-launch.mjs';
+import { compilerWarnings, warningLines, CONFIG_JSON, DECLARATIONS, depInfoInputs, moduleGraph, newerThan, notBuildInput, otherHosts, packagedBuildChanges, receiptChanges, refuseStale } from './agent-launch.mjs';
 import { bakeOutput, bakeTarget, claimLive, developmentBuildEnv, executableName, linuxBuild, resolveApp, shaderWatchRoots } from './app.mjs';
 import { bakeTool, linkedBakeDir } from './linked-plan.mjs';
 
@@ -203,7 +203,8 @@ export function planSource(path, app, graph = graphOf(app)) {
  * from the directories app.json's `typescript.sources` mounts. */
 export function planSources(app, graph = graphOf(app)) {
   const skip = notBuildInput(app.dir, shaderWatchRoots(app));
-  const own = newerThan(-Infinity, [app.dir], path => /\/(apple|ios|macos|linux|web)$/.test(path) && path.startsWith(`${app.dir}/`) || skip(path))
+  const hosts = otherHosts(app);
+  const own = newerThan(-Infinity, [app.dir], path => hosts(path) || skip(path))
     .filter(path => planSource(path, app, graph));
   const mounts = Object.values(app.manifest?.typescript?.sources ?? {}).map(path => resolve(app.dir, String(path)));
   const mounted = graph ? [...graph].filter(path => !path.startsWith(`${app.dir}/`)) : newerThan(-Infinity, mounts).filter(path => /\.tsx?$/.test(path));

@@ -6,6 +6,7 @@ fn sim(seed: u64) -> Sim<Beacons> {
         seed,
         paused: false,
         restart: false,
+        ..Options::default()
     })
     .unwrap();
     tables(&mut sim);
@@ -78,6 +79,95 @@ fn rust_defaults_and_positional_binding_have_identical_bytes() {
     omitted.assert_pin(include_str!("../../pins.json"));
 }
 
+#[test]
+fn preferences_seed_new_games_and_restored_saves_keep_their_bindings() {
+    use exact_game::{Args, Bindings};
+    let new_game = |bindings: &str| {
+        let mut s = Sim::<Beacons>::new(Options {
+            seed: 7,
+            bindings: bindings.into(),
+            ..Options::default()
+        })
+        .unwrap();
+        tables(&mut s);
+        s
+    };
+    let jumps = |s: &mut Sim<Beacons>, key: &str| {
+        if key == "GamepadSouth" {
+            s.pad_button(0, key, 1.);
+            s.pad_button(0, key, 0.);
+        } else {
+            s.tap(key);
+        }
+        s.run(100.);
+        let airborne = s.get::<Transform>("player").unwrap().position.y > 0.9;
+        s.run(1500.);
+        airborne
+    };
+    for (saved_binding, preference, saved_key, new_key) in [
+        ("", "jump KeyJ GamepadSouth", "Space", "KeyJ"),
+        ("jump KeyJ GamepadSouth", "", "KeyJ", "Space"),
+    ] {
+        let mut existing = new_game(saved_binding);
+        existing.hold("KeyW", 500.);
+        let before = existing.world().hash();
+        let values = Options {
+            seed: 7,
+            bindings: preference.into(),
+            ..Options::default()
+        }
+        .values();
+        existing.bind(&values, None).unwrap();
+        assert_eq!(
+            existing.world().hash(),
+            before,
+            "a preference is live, not a restart or rebind"
+        );
+        let saved = existing.save().unwrap();
+        let mut restored = new_game(preference);
+        restored.restore_bound(&saved).unwrap();
+        assert_eq!(restored.args().bindings, preference);
+        assert_eq!(restored.world().hash(), before);
+        assert_eq!(
+            restored
+                .world()
+                .try_resource::<Bindings>()
+                .map(|b| b.actions.clone()),
+            existing
+                .world()
+                .try_resource::<Bindings>()
+                .map(|b| b.actions.clone()),
+        );
+        assert!(!jumps(&mut restored, new_key));
+        assert!(jumps(&mut restored, saved_key));
+        assert!(!jumps(&mut existing, new_key));
+        assert!(jumps(&mut existing, saved_key));
+
+        let mut fresh = new_game(preference);
+        assert!(!jumps(&mut fresh, saved_key));
+        assert!(jumps(&mut fresh, new_key));
+        assert!(
+            jumps(&mut fresh, "GamepadSouth"),
+            "the pad binding is retained"
+        );
+        existing
+            .bind(
+                &Options {
+                    seed: 7,
+                    bindings: preference.into(),
+                    restart: true,
+                    ..Options::default()
+                }
+                .values(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(existing.world().tick(), 0);
+        assert!(!jumps(&mut existing, saved_key));
+        assert!(jumps(&mut existing, new_key));
+    }
+}
+
 /// Sprint released, or its pad gone, while paused: the player walks on
 /// resume, slowing from the first tick.
 #[test]
@@ -88,6 +178,7 @@ fn a_sprint_ended_while_paused_walks_on_resume() {
             seed: 7,
             paused,
             restart: false,
+            ..Options::default()
         };
         s.bind(&args.values(), None).unwrap();
     };

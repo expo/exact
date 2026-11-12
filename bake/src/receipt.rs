@@ -46,6 +46,7 @@ pub(crate) fn emit(
     entries: &std::collections::BTreeMap<String, contract::snapshot::Entry>,
 ) -> Result<(), String> {
     let (platform, target) = destination;
+    crate::widgets::check_watch_sources(app, out, target, entries)?;
     for name in [
         "EXACT_UPDATE_RECEIPT",
         "EXACT_UPDATE_GENESIS",
@@ -239,11 +240,8 @@ fn asset_cards(app: &Path, out: &Path, manifest: &Manifest) -> Result<Vec<Value>
         const app={dir:process.argv[2],manifest:JSON.parse(process.argv[3])};
         const cards=[];
         for (const [source,prefix] of [['assets','assets'],['deck','deck']]) {
-            const tree=filesystem({op:'tree',root:resolve(process.argv[2],source),optionalRoot:true});
-            for (const [name,base64] of Object.entries(tree??{})) {
-                const bytes=Buffer.from(base64,'base64');
-                cards.push({name:`${prefix}/${name}`,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length});
-            }
+            const tree=filesystem({op:'inventory',root:resolve(process.argv[2],source),optionalRoot:true});
+            for (const [name,card] of Object.entries(tree??{})) cards.push({name:`${prefix}/${name}`,...card});
         }
         for (const [name,bytes] of shaderFiles(app)) cards.push({name:`shaders/${name}`,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length});
         process.stdout.write(JSON.stringify({cards:cards.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0),roots:[...shaderRoots(app),...shaderPreludeFiles(app)]}));
@@ -815,8 +813,15 @@ pub fn write_development_artifacts(plan: &exact_plan::Plan) -> Result<(), String
 fn apply_release(compat: &mut Compat, bytes: &[u8], plan: &[u8]) -> Result<(), String> {
     let receipt: Value =
         serde_json::from_slice(bytes).map_err(|e| format!("publisher receipt is not JSON: {e}"))?;
-    let envelope =
+    let mut envelope =
         Envelope::parse(&serde_json::to_vec(&receipt["envelope"]).map_err(|e| e.to_string())?)?;
+    if envelope.index.is_some() {
+        // The record carries the asset index as JSON; its blob is that
+        // value's canonical bytes, which the signed head names by digest.
+        let index = exact_update::canonical_bytes(&receipt["assets"].to_string())
+            .map_err(|e| format!("publisher receipt's asset index: {e}"))?;
+        envelope.read_index(&index)?;
+    }
     let baked = Baked::from_compat(&compat.to_json(), plan)?;
     envelope.verify(&baked.embedded.verification_keys)?;
     if envelope.app_id != baked.embedded.app_id
@@ -841,7 +846,7 @@ fn apply_release(compat: &mut Compat, bytes: &[u8], plan: &[u8]) -> Result<(), S
         return Err("publisher receipt does not name the exact embedded plan bytes".into());
     }
     let mut named = envelope
-        .assets
+        .assets()?
         .iter()
         .map(|a| json!({"name":a.name,"sha256":a.sha256,"bytes":a.bytes}))
         .collect::<Vec<_>>();

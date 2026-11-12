@@ -298,6 +298,34 @@ impl Lexer {
                     while pos < bytes.len() && (bytes[pos] as char).is_ascii_digit() {
                         pos += 1;
                     }
+                    if c == '0' && pos > start + 1 {
+                        // MIDI test steps spell bytes as two hex digits, including `00`.
+                        let line_start = out
+                            .iter()
+                            .rposition(|t| {
+                                matches!(
+                                    t.kind,
+                                    TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent
+                                )
+                            })
+                            .map_or(0, |i| i + 1);
+                        let midi_bytes = match &out[line_start..] {
+                            [Token { kind: TokenKind::Ident(op), .. }, Token { kind: TokenKind::Ident(midi), .. }, rest @ ..]
+                                if midi == "midi" && matches!(op.as_str(), "tap" | "expect") =>
+                            {
+                                rest.iter().any(|t| matches!(t.kind, TokenKind::Str(_)))
+                                    && !rest.iter().any(|t| matches!(&t.kind, TokenKind::Ident(s) if s == "at" || s == "clock"))
+                            }
+                            _ => false,
+                        };
+                        if !midi_bytes {
+                            return Err(LexError {
+                                id: "syntax-bad-number",
+                                message: "a decimal number cannot have leading zeroes; write the decimal value without leading zeroes (10 for decimal ten, 8 for octal 010)".into(),
+                                span,
+                            });
+                        }
+                    }
                     // A dot is the decimal point only when a digit follows, so
                     // `rows.0.steps` is an index and then a field, not the
                     // number `0.` (drums R7).
@@ -315,15 +343,13 @@ impl Lexer {
                     // `2.5E-3`, `4e+2`): `e` or `E`, an optional sign and at
                     // least one digit. Without the digit the `e` is not part of
                     // the number, so a unit written against it (`2em`) is still
-                    // the unquoted length it was. One that overflows is no number.
-                    let mut exponent = false;
+                    // the unquoted length it was.
                     if matches!(bytes.get(pos), Some(b'e' | b'E')) {
                         let sign = usize::from(matches!(bytes.get(pos + 1), Some(b'+' | b'-')));
                         if bytes
                             .get(pos + 1 + sign)
                             .is_some_and(|n| (*n as char).is_ascii_digit())
                         {
-                            exponent = true;
                             pos += 1 + sign;
                             while pos < bytes.len() && (bytes[pos] as char).is_ascii_digit() {
                                 pos += 1;
@@ -331,15 +357,21 @@ impl Lexer {
                         }
                     }
                     let text = &trimmed[start..pos];
-                    let n: f64 = text
-                        .parse()
-                        .ok()
-                        .filter(|n: &f64| n.is_finite() || !exponent)
-                        .ok_or(LexError {
+                    // A literal past the largest double, with an exponent or
+                    // without, parses to infinity, which no host takes as a value.
+                    let n: f64 = text.parse().ok().filter(|n: &f64| n.is_finite()).ok_or_else(|| {
+                        let shown = match text.get(..24) {
+                            Some(head) if text.len() > 24 => format!("{head}…"),
+                            _ => text.to_string(),
+                        };
+                        LexError {
                             id: "syntax-bad-number",
-                            message: format!("`{text}` is not a number"),
+                            message: format!(
+                                "`{shown}` is too large for a number, whose largest is about 1.8e308"
+                            ),
                             span,
-                        })?;
+                        }
+                    })?;
                     out.push(Token {
                         kind: TokenKind::Number(n),
                         span: Span {

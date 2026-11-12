@@ -4,14 +4,14 @@ import { afterEach, beforeEach, test, expect } from 'bun:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
-import { moduleGraph, notBuildInput } from './agent-launch.mjs';
+import { moduleGraph, notBuildInput, receiptChanges } from './agent-launch.mjs';
 import { buildArgs, buildFirst, buildReason, childFailure, failureSummary, linuxRebuild, lockHolder, logged, nativeBuild, overrideDir, planOverride, planSource, planSources, ownVerb, prebuild, rebuildCommand, refuseBuild } from './agent-build.mjs';
 import { openStdio } from './agent-stdio.mjs';
-import { linuxBinary, resolveApp, PINNED_RUST } from './app.mjs';
+import { hermesBundle, hermesTarget, linuxBinary, resolveApp, PINNED_RUST } from './app.mjs';
 
 test('Mac drives use the assembled app bundle even without catalogs or widgets', () => {
   const { dir } = scratchApp('ats-drive');
@@ -409,6 +409,54 @@ test('a product the build wrote and then read is judged by its recorded bytes; a
     if (targetDir !== undefined) process.env.CARGO_TARGET_DIR = targetDir;
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('a cold game build owns its generated shell outputs, while authored inputs and binary hashes stay checked', () => {
+  const { dir, write } = scratchApp('shell-output');
+  try {
+    const workspace = resolve(dir, '.shells'), target = resolve(dir, 'target');
+    const app = { dir, workspace, target, manifest: { game: {} }, crate: () => 'shell-output-apple' };
+    const before = new Date(Date.now() - 60_000), started = new Date(+before + 20_000), generated = new Date(+started + 10_000);
+    const stamp = (path, at) => utimesSync(resolve(dir, path), at, at);
+    const outputs = ['app.json', 'keys.json', 'surfaces.json', 'apple/build.rs', 'apple/src/lib.rs'].map(path => `.shells/${path}`);
+    write('.shells/Cargo.toml', '[workspace]');
+    write('logic/src/lib.rs', 'pub struct Game;');
+    write('.shells/apple/src/extra.rs', 'pub const EXTRA: u32 = 1;');
+    for (const path of outputs) write(path, path.endsWith('.json') ? '{}' : '// generated shell');
+    for (const path of ['app.json', 'app.contract', 'exact.mjs', 'apple/Cargo.toml', 'web/Cargo.toml', '.shells/Cargo.toml', 'logic/src/lib.rs', '.shells/apple/src/extra.rs']) stamp(path, before);
+    for (const path of outputs) stamp(path, generated);
+    const sources = [...outputs, 'app.contract', 'logic/src/lib.rs', '.shells/apple/src/extra.rs'];
+    write('target/aarch64-apple-ios-sim/host-dev/libshell_output_apple.d', `archive: ${sources.map(path => resolve(dir, path)).join(' ')}\n`);
+    const inputs = ['.shells/apple/build.rs', '.shells/apple/src/lib.rs', 'logic/src/lib.rs'].map(path => ({
+      path: resolve(dir, path), name: resolve(dir, path), sha256: createHash('sha256').update(readFileSync(resolve(dir, path))).digest('hex'),
+    }));
+    const receipt = resolve(target, 'receipt.json');
+    write('target/receipt.json', JSON.stringify({ target: 'aarch64-apple-ios-sim', started: started.toISOString(), build: {
+      binary: { inputs, missing: [], directories: [] }, products: [],
+    } }));
+    const changed = (candidate = app) => receiptChanges(receipt, candidate).map(path => resolve(path)).sort();
+    assert.deepEqual(changed(), [], 'files produced during the cold build are not later source edits');
+    for (const path of ['app.json', 'app.contract', 'logic/src/lib.rs', '.shells/apple/src/extra.rs']) {
+      stamp(path, generated);
+      assert.ok(changed().includes(resolve(dir, path)), `mtime still checks ${path}`);
+      stamp(path, before);
+    }
+    for (const path of ['.shells/apple/build.rs', '.shells/apple/src/lib.rs', 'logic/src/lib.rs']) {
+      const previous = readFileSync(resolve(dir, path));
+      write(path, 'changed bytes'); stamp(path, before);
+      assert.ok(changed().includes(resolve(dir, path)), `the binary digest still checks ${path}`);
+      write(path, previous); stamp(path, before);
+    }
+    for (const path of outputs) stamp(path, generated);
+    assert.deepEqual(changed({ ...app, manifest: {} }), outputs.map(path => resolve(dir, path)).sort(), 'a non-game does not own these outputs');
+    assert.deepEqual(changed({ ...app, workspace: dir }), outputs.map(path => resolve(dir, path)).sort(), 'only the game generated workspace owns them');
+    const unrecorded = JSON.parse(readFileSync(receipt, 'utf8'));
+    unrecorded.build.binary.inputs = inputs.filter(input => !input.path.startsWith(workspace + '/'));
+    writeFileSync(receipt, JSON.stringify(unrecorded));
+    assert.deepEqual(changed(), outputs.filter(path => path.endsWith('.rs')).map(path => resolve(dir, path)).sort(), 'generated Rust needs its recorded digest');
+    rmSync(resolve(dir, '.shells/surfaces.json'));
+    assert.ok(changed().includes(resolve(dir, '.shells/surfaces.json')), 'a missing declaration still needs a build');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('a build already running ends before the check: the drive neither races it nor is refused as busy', async () => {
@@ -819,6 +867,166 @@ exit 17
     expect(readFileSync(resolve(dir, 'api'), 'utf8')).toBe('29');
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+function androidHermesFixture(dir, intl) {
+  const bundle = resolve(dir, 'bundle');
+  for (const path of ['lib', 'include', 'bin', 'share/icu']) mkdirSync(resolve(bundle, path), { recursive: true });
+  const receipt = JSON.parse(readFileSync('vendor/ibex/crates/hermes-lean-sys/testdata/receipt-v2-valid.json', 'utf8'));
+  receipt.target = 'aarch64-linux-android';
+  receipt.build.flags = [`-DHERMES_ENABLE_INTL=${intl}`, '-DANDROID_PLATFORM=android-29'];
+  const digest = path => `sha256-${createHash('sha256').update(readFileSync(resolve(bundle, path))).digest('hex')}`;
+  const archives = ['hermesvm_a', 'hermesvmlean_a', 'jsi', 'boost_context', 'icui18n', 'icuuc', 'icudata', ...(intl ? ['icudata-en', 'icudata-full'] : [])]
+    .map(name => `lib/lib${name}.a`).sort();
+  for (const path of [...archives, 'bin/hermesc', 'include/sentinel.h']) writeFileSync(resolve(bundle, path), path);
+  receipt.archives = archives.map(path => ({ path, digest: digest(path) }));
+  receipt.engine.binaryDigest = digest(receipt.engine.binary);
+  receipt.compiler.digest = digest('bin/hermesc');
+  receipt.headers = [{ path: 'include/sentinel.h', digest: digest('include/sentinel.h') }];
+  if (intl) {
+    const filter = (name, source) => {
+      const path = `share/icu/${name}.json`;
+      writeFileSync(resolve(bundle, path), readFileSync(`vendor/ibex/scripts/${source}.json`));
+      return { path, digest: digest(path) };
+    };
+    receipt.icu = {
+      upstream: { artifact: 'unicode-org/icu', sourceCommit: '2d029329c82c7792b985024b2bdab5fc7278fbc8', sourceRef: 'release-74-2', sourceVersion: '74.2' },
+      codeArchives: ['lib/libicui18n.a', 'lib/libicuuc.a'],
+      data: {
+        trimmed: { archive: 'lib/libicudata.a', filter: filter('filters-root-en', 'icu74-filter-root-en') },
+        en: { archive: 'lib/libicudata-en.a', filter: filter('filters-en-intl', 'icu74-filter-en-intl') },
+        full: { archive: 'lib/libicudata-full.a' },
+      },
+    };
+  }
+  return receipt;
+}
+
+// --check-dir pairs candidates with the pinned host compiler, never an override.
+const hostHermesTarget = hermesTarget();
+const hasHostHermes = hostHermesTarget && existsSync(hermesBundle(hostHermesTarget, { ...process.env, HERMES_LEAN_SYS_DIR: undefined }).hermesc);
+const hermesBundleTest = test.skipIf(!hasHostHermes);
+if (!hasHostHermes) console.warn('Skipping local Hermes bundle tests: pinned host compiler is absent; run exact setup.');
+
+hermesBundleTest('the local Hermes builder requests and validates complete Intl and non-Intl bundles', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-hermes-intl-'));
+  try {
+    mkdirSync(resolve(dir, 'scripts'));
+    writeFileSync(resolve(dir, 'scripts/build-hermes-vanilla-release.sh'), `#!/bin/sh
+# aarch64-linux-android)
+printf '%s' "$IBEX_ANDROID_INTL" > intl
+tar -czf "$2" -C bundle .
+`);
+    for (const intl of [false, true]) {
+      const receipt = androidHermesFixture(dir, intl);
+      writeFileSync(resolve(dir, 'bundle/hermes-input-receipt.json'), JSON.stringify(receipt));
+      const built = spawnSync(process.execPath, ['scripts/hermes-android.mjs', 'build', ...(intl ? ['--intl'] : [])], {
+        encoding: 'utf8', env: { ...process.env, IBEX_DIR: dir, EXACT_HERMES_ANDROID_CACHE: resolve(dir, 'cache') },
+      });
+      expect(built.status, built.stderr).toBe(0);
+      expect(readFileSync(resolve(dir, 'intl'), 'utf8')).toBe(String(intl));
+      expect(JSON.parse(readFileSync(resolve(built.stdout.trim(), 'hermes-input-receipt.json'), 'utf8'))).toEqual(receipt);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 30_000);
+
+for (const [name, mutate] of [
+  ['disabled Intl', receipt => { receipt.build.flags = ['-DHERMES_ENABLE_INTL=false']; }],
+  ['missing English metadata', receipt => { delete receipt.icu; }],
+  ['empty English metadata', receipt => { receipt.icu.data.en = {}; }],
+  ['missing English archive', (receipt, bundle) => rmSync(resolve(bundle, 'lib/libicudata-en.a'))],
+  ['changed English archive', (receipt, bundle) => writeFileSync(resolve(bundle, 'lib/libicudata-en.a'), 'changed')],
+  ['missing full archive', (receipt, bundle) => rmSync(resolve(bundle, 'lib/libicudata-full.a'))],
+  ['wrong schema', receipt => { receipt.schema = 'invalid'; }],
+  ['malformed JSON', () => '{'],
+]) hermesBundleTest(`the local Hermes builder rejects ${name} without replacing the installed bundle`, () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-hermes-reject-'));
+  try {
+    mkdirSync(resolve(dir, 'scripts'));
+    writeFileSync(resolve(dir, 'scripts/build-hermes-vanilla-release.sh'), `#!/bin/sh
+# aarch64-linux-android)
+tar -czf "$2" -C bundle .
+`);
+    const bundle = resolve(dir, 'bundle'), receiptPath = resolve(bundle, 'hermes-input-receipt.json');
+    const previous = JSON.stringify(androidHermesFixture(dir, false));
+    writeFileSync(receiptPath, previous);
+    const env = { ...process.env, IBEX_DIR: dir, EXACT_HERMES_ANDROID_CACHE: resolve(dir, 'cache') };
+    const run = args => spawnSync(process.execPath, ['scripts/hermes-android.mjs', ...args], { encoding: 'utf8', env });
+    const installed = run(['build']);
+    expect(installed.status, installed.stderr).toBe(0);
+    const current = resolve(dir, 'cache/current'), before = realpathSync(current);
+    const receipt = androidHermesFixture(dir, true);
+    const json = mutate(receipt, bundle);
+    writeFileSync(receiptPath, typeof json === 'string' ? json : JSON.stringify(receipt));
+    const rejected = run(['build', '--intl']);
+    expect(rejected.status, rejected.stderr).toBe(1);
+    expect(realpathSync(current)).toBe(before);
+    expect(readFileSync(resolve(current, 'hermes-input-receipt.json'), 'utf8')).toBe(previous);
+    // Installing an archive directly must validate the same candidate too.
+    if (name !== 'disabled Intl') {
+      const archive = resolve(dir, 'candidate.tar.gz');
+      expect(spawnSync('tar', ['-czf', archive, '-C', bundle, '.']).status).toBe(0);
+      expect(run(['install', archive]).status).toBe(1);
+      expect(realpathSync(current)).toBe(before);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 30_000);
+
+
+for (const intl of [false, true]) hermesBundleTest(`the local Hermes installer authenticates every receipt file with Intl ${intl}`, () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-hermes-manifest-'));
+  try {
+    const bundle = resolve(dir, 'bundle'), receiptPath = resolve(bundle, 'hermes-input-receipt.json');
+    const archive = resolve(dir, 'candidate.tar.gz'), current = resolve(dir, 'cache/current');
+    const env = { ...process.env, EXACT_HERMES_ANDROID_CACHE: resolve(dir, 'cache') };
+    const install = timeout => {
+      expect(spawnSync('tar', ['-czf', archive, '-C', bundle, '.']).status).toBe(0);
+      return spawnSync(process.execPath, ['scripts/hermes-android.mjs', 'install', archive], { encoding: 'utf8', env, timeout });
+    };
+    const writeReceipt = receipt => writeFileSync(receiptPath, JSON.stringify(receipt));
+    const snapshot = () => readdirSync(current, { recursive: true, withFileTypes: true })
+      .filter(entry => entry.isFile()).map(entry => {
+        const path = resolve(entry.parentPath, entry.name);
+        return [relative(current, path), createHash('sha256').update(readFileSync(path)).digest('hex')];
+      }).sort();
+    const complete = androidHermesFixture(dir, true);
+    complete.build.flags[0] = `-DHERMES_ENABLE_INTL=${intl}`;
+    writeReceipt(complete);
+    const installed = install();
+    expect(installed.status, installed.stderr).toBe(0);
+    const before = realpathSync(current), contents = snapshot();
+    const files = [...complete.archives, ...complete.headers, complete.compiler,
+      complete.icu.data.trimmed.filter, complete.icu.data.en.filter].map(entry => entry.path ?? entry.binary);
+    const failures = [];
+    for (const [path, mutation] of [
+      ...files.flatMap(path => ['missing', 'changed'].map(mutation => [path, mutation])),
+      ...(process.platform === 'win32' ? [] : ['hermes-input-receipt.json', 'include/sentinel.h'].map(path => [path, 'fifo'])),
+      ...['jsi', 'boost_context', 'icui18n', 'icuuc', 'icudata'].map(name => [`lib/lib${name}.a`, 'unlisted']),
+    ]) {
+      const receipt = androidHermesFixture(dir, true);
+      receipt.build.flags[0] = `-DHERMES_ENABLE_INTL=${intl}`;
+      if (mutation === 'missing') rmSync(resolve(bundle, path));
+      else if (mutation === 'changed') writeFileSync(resolve(bundle, path), 'changed');
+      else if (mutation === 'unlisted') {
+        receipt.archives = receipt.archives.filter(entry => entry.path !== path);
+        if (!intl) delete receipt.icu;
+      }
+      writeReceipt(receipt);
+      if (mutation === 'fifo') {
+        rmSync(resolve(bundle, path));
+        expect(spawnSync('mkfifo', [resolve(bundle, path)]).status).toBe(0);
+      }
+      const rejected = install(mutation === 'fifo' ? 30000 : undefined);
+      if (mutation === 'fifo') rmSync(resolve(bundle, path));
+      try {
+        expect(rejected.status, `${mutation} ${path}: ${rejected.stderr}`).toBe(1);
+        expect(realpathSync(current), `${mutation} ${path}`).toBe(before);
+        expect(snapshot(), `${mutation} ${path}`).toEqual(contents);
+      } catch (error) { failures.push(`${mutation} ${path}: ${error.message}`); }
+    }
+    expect(failures).toEqual([]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 180_000);
+
 
 for (const [form, dependencies, api, bundleApi = 30] of [
   ['API-29 Hermes', '[dependencies.exact-js]\npath = "../js"', 29, 29],

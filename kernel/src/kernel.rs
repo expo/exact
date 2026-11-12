@@ -909,6 +909,7 @@ impl Kernel {
             return Err(LayoutError::InvalidDisplayScale.into());
         }
         if self.display_scale() == scale {
+            self.arena.display_scale_next = Some(scale);
             return Ok(false);
         }
         self.arena.display_scale_next = Some(scale);
@@ -932,6 +933,11 @@ impl Kernel {
             .display_scale_next
             .or(arena.display_scale)
             .unwrap_or(1.0)
+    }
+
+    /// The display scale the host reported, without the layout fallback.
+    pub fn reported_display_scale(&self) -> Option<f32> {
+        self.arena.display_scale_next.or(self.arena.display_scale)
     }
 
     /// The EXNODE envelope for `root`, or for every root when `None`.

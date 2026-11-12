@@ -581,8 +581,8 @@ impl StyleValue<'_> {
     pub(crate) fn vec2(&self, style: StyleId) -> Result<Vec2, StyleValueError> {
         match self {
             StyleValue::Vec2(x, y) if x.is_finite() && y.is_finite() => Ok(Vec2 { x: *x, y: *y }),
-            // @ref LLP 1077 D8 — the one `translate` text sets its lengths,
-            // its percentages (chess diary #4) and its z, each row its part.
+            StyleValue::Text(t) if style == StyleId::TranslateVelocity => space::velocity(t),
+            // @ref LLP 1077 D8 — each row sets its part of translate (lengths, percentages, z).
             StyleValue::Text(t)
                 if style == StyleId::Translate || style == StyleId::TranslatePercent =>
             {
@@ -1372,6 +1372,7 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
         .effective_style(slot)
         .to_taffy(arena.node_type(slot), arena.env());
     arena.alert_layout(slot, &mut s);
+    arena.bar_symbol_layout(slot, &mut s);
     // HTML's button layout, which Exact's reset of a `<button>` keeps: its
     // automatic inline size is shrink-to-fit, and a block button's content
     // sits in an anonymous flow-root box centred safely in the block axis,

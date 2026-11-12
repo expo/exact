@@ -64,10 +64,18 @@ pub extern "C" fn m_observe(
     scale: f64,
     rotate: f64,
     opacity: f64,
+    supplied: u32,
+    vx: f64,
+    vy: f64,
     now: f64,
 ) -> u32 {
     state()
-        .observe(node as u64, [x, y, px, py, scale, rotate, opacity], now)
+        .observe(
+            node as u64,
+            [x, y, px, py, scale, rotate, opacity],
+            (supplied != 0).then(|| Value::new(vx, vy)),
+            now,
+        )
         .is_ok() as u32
 }
 

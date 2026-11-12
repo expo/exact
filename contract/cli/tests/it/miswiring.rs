@@ -603,3 +603,89 @@ fn a_template_location_names_its_path() {
         );
     }
 }
+
+const GEOMETRY: &str = "lower-geometry-id";
+
+/// An app whose `probe` action reads `read`, with `view` under its root column.
+fn geometry(read: &str, view: &str) -> String {
+    let view: String = view.lines().map(|l| format!("      {l}\n")).collect();
+    format!("component App\n  state h = 0\n  action probe\n    h = {read}.height\n  view\n    column\n{view}      button press=probe\n        text \"Probe\"\n")
+}
+
+/// #301: a geometry read whose literal id no element has answers
+/// `unavailable` on every host; the build says so, and names the `testId` an
+/// author most likely meant.
+#[test]
+fn a_geometry_read_of_an_id_no_element_has_is_named() {
+    let view = "column testId=\"root\" width=\"100%\"\n  text \"Body\"";
+    for read in [
+        "frame(\"root\")",
+        "measure(\"root\")",
+        "rangeFrame(\"root\", 0, 1)",
+    ] {
+        let src = geometry(read, view);
+        assert_eq!(warned(&src), [(GEOMETRY.to_string(), 4)], "{read}");
+        let name = &read[..read.find('(').unwrap()];
+        let m = &messages(&src)[0];
+        assert!(
+            m.starts_with(&format!(
+                "`{name}(\"root\")` names no element: nothing in the view has `id=\"root\"`"
+            )),
+            "{m}"
+        );
+        assert!(
+            m.contains("`testId=\"root\"` names an element for tests"),
+            "{m}"
+        );
+        // The repair the warning names silences it.
+        let repaired = src.replace("testId=\"root\"", "testId=\"root\" id=\"root\"");
+        assert_eq!(warned(&repaired), [], "{repaired}");
+    }
+    // A misspelling of an id the view has is named.
+    let src = geometry("frame(\"bya\")", "column id=\"bay\"");
+    assert_eq!(warned(&src), [(GEOMETRY.to_string(), 4)]);
+    assert!(messages(&src)[0].contains("did you mean `frame(\"bay\")`?"));
+    // Nothing near: the repair alone.
+    let src = geometry("frame(\"nowhere\")", "column id=\"bay\"");
+    assert!(messages(&src)[0].ends_with("give the element to read `id=\"nowhere\"`"));
+}
+
+/// What the compiler cannot see through is given the benefit of the doubt: a
+/// computed id anywhere, a computed read, a prop a caller fills.
+#[test]
+fn a_geometry_read_that_might_name_an_element_is_not_named() {
+    for (read, view) in [
+        ("frame(\"bay\")", "column id=\"bay\""),
+        (
+            "frame(\"row-a\")",
+            "for k in [\"a\", \"b\"] key=k\n  row id=`row-${k}`\n    text k",
+        ),
+        (
+            "frame(\"other\")",
+            "for k in [\"a\", \"b\"] key=k\n  row id=k\n    text k",
+        ),
+        ("frame(`row-${h}`)", "column id=\"bay\""),
+        (
+            "frame(\"later\")",
+            "if h > 0\n  column id=\"later\"\nelse\n  text \"none\"",
+        ),
+    ] {
+        let src = geometry(read, view);
+        assert_eq!(warned(&src), [], "{src}");
+    }
+}
+
+/// The view is the expanded one: an id a child's view writes counts, and a
+/// child's literal read is checked once however often the child is used. The
+/// id a caller passes is a computed argument in the child's action.
+#[test]
+fn a_geometry_read_in_a_child_is_checked_against_the_whole_view() {
+    let app = |read: &str| {
+        format!("component App\n  view\n    column\n      Panel()\n      Probe(target=\"pane\")\n      Probe(target=\"pane\")\n\ncomponent Probe\n  props\n    target: string\n  state h = 0\n  action probe\n    h = {read}.height\n  view\n    button press=probe\n      text \"Probe\"\n\ncomponent Panel\n  view\n    column id=\"panel\"\n")
+    };
+    assert_eq!(warned(&app("frame(\"panel\")")), []);
+    assert_eq!(warned(&app("frame(target)")), []);
+    let src = app("frame(\"pane\")");
+    assert_eq!(warned(&src), [(GEOMETRY.to_string(), 13)]);
+    assert!(messages(&src)[0].contains("did you mean `frame(\"panel\")`?"));
+}

@@ -21,6 +21,7 @@ use std::{
 mod android;
 #[cfg(any(target_os = "android", test))]
 mod fingers;
+mod performance;
 #[cfg(any(target_os = "android", test))]
 mod retry;
 #[cfg(target_os = "android")]
@@ -129,6 +130,8 @@ impl Abi {
                 "gpu_wants_input",
                 "gpu_presentation_flags",
                 "gpu_published",
+                "gpu_performance_reporting",
+                "gpu_performance",
                 "gpu_assets",
                 "gpu_asset",
                 "gpu_messages",
@@ -176,7 +179,7 @@ impl Abi {
         }
         #[cfg(target_os = "android")]
         if load {
-            android::load(&abi)?;
+            android::load(&abi, artifact.is_empty())?;
         }
         #[cfg(not(target_os = "android"))]
         let _ = load;
@@ -381,6 +384,7 @@ struct Canvas {
     /// The artifact that created it (LLP 1009 D6): "" the primary.
     artifact: String,
     owner: bool,
+    performance: bool,
     since: u64,
     held: BTreeSet<String>,
     restored_controls: Option<Vec<Value>>,
@@ -442,6 +446,7 @@ pub(crate) struct Surfaces {
     abis: BTreeMap<String, Abi>,
     attempted: BTreeSet<String>,
     canvases: BTreeMap<u32, Canvas>,
+    performance_due: Option<std::time::Instant>,
     edits_admitted: bool,
     restore: Option<Result<Vec<u8>, String>>,
     restore_read: bool,
@@ -640,6 +645,12 @@ impl Surfaces {
                 }
                 self.initial_lifecycle(abi, id);
                 let owner = !self.canvases.values().any(|c| c.name == update.name);
+                let performance = owner && host.runner().wants_canvas_performance(&update.name);
+                if performance {
+                    abi.enable_performance(id);
+                    self.performance_due
+                        .get_or_insert_with(std::time::Instant::now);
+                }
                 if !owner {
                     host.log(format!(
                         "surface {}: duplicate canvas cannot publish",
@@ -653,6 +664,7 @@ impl Surfaces {
                         name: update.name.clone(),
                         artifact,
                         owner,
+                        performance,
                         since: 0,
                         held: BTreeSet::new(),
                         restored_controls: None,

@@ -298,6 +298,8 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("dynamic-range-limit", "css CSS Color HDR 1", AttrTarget::Styles(&[StyleId::DynamicRangeLimit])),
     // @ref LLP 1034 §8 — a subtree's colour scheme.
     ("color-scheme", "css CSS Color Adjustment 1", AttrTarget::Styles(&[StyleId::ColorScheme])),
+    // Issue #152: authored release velocity enters LLP 1002’s spring input.
+    ("-exact-translate-velocity", "exact LLP 1002", AttrTarget::Styles(&[StyleId::TranslateVelocity])),
     // @ref LLP 1061 D1 — host-owned press feedback; not a motion target.
     ("-exact-press-scale", "exact LLP 1061", AttrTarget::Styles(&[StyleId::PressScale])),
     // @ref LLP 1061 D7 — the author's pressed paint, host-owned as the scale is.

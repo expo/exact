@@ -306,7 +306,35 @@ extension CanvasesHost {
     func releasePublisher(_ e: Entry) {
         guard publishers[e.name] === e else { return }
         publishers.removeValue(forKey: e.name)
+        updatePerformanceTimer()
         surfaceRecord(e.name, nil)
+        if e.performance { session?.canvasPerformanceRecord(e.name, nil) }
+    }
+
+    func updatePerformanceTimer() {
+        guard visible, session?.clock == nil, publishers.values.contains(where: { $0.performance && $0.id != 0 }) else {
+            performanceTimer?.invalidate(); performanceTimer = nil; return
+        }
+        guard performanceTimer == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            self.updatePerformanceTimer()
+            guard self.performanceTimer != nil else { return }
+            for e in Array(self.publishers.values) { self.performanceRecord(e) }
+        }
+        timer.tolerance = 0.1
+        performanceTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    func performanceRecord(_ e: Entry) {
+        if e.performance, live(e.view.id) === e, publishers[e.name] === e, let m = e.module, let take = m.performance {
+            if performanceTimer == nil { updatePerformanceTimer() }
+            let length = take(e.id, ProcessInfo.processInfo.systemUptime * 1000)
+            if length != UInt32.max, length <= 16 * 1024, let data = m.output(length) {
+                session?.canvasPerformanceRecord(e.name, String(decoding: data, as: UTF8.self))
+            }
+        }
     }
 
     func surfaceRecord(_ name: String, _ json: String?) {
@@ -364,6 +392,7 @@ extension CanvasesHost {
                 surfaceRecord(e.name, String(decoding: data, as: UTF8.self))
             }
         }
+        performanceRecord(e)
         guard live(e.view.id) === e, let m = e.module, let take = m.messages else { return }
         let length = take(e.id)
         guard length != UInt32.max, let data = m.output(length) else { return }
@@ -678,6 +707,7 @@ final class CanvasLifecycle: NSObject {
         AppBackground.invalidate()
         #endif
         let next = !(owner?.visible ?? false)
+        owner?.updatePerformanceTimer()
         let becameVisible = hidden && !next
         if next { CanvasAudio.active = false }
         if next != hidden { hidden = next; send(hidden ? 0 : 1, excluding: id) }

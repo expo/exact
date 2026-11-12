@@ -475,7 +475,7 @@ pub(super) fn infer_owned_state_initializers(
             if let Some(e) = super::component::initializer_scope(c, i, &scope, &types.shapes) {
                 return Err(e);
             }
-            ct.slots[i] = infer(&state.expr, &scope, &types.shapes)?;
+            ct.slots[i] = super::component::state_type(state, &scope, &types.shapes)?;
         }
         base.push_name_at(
             1,
@@ -880,7 +880,7 @@ pub(super) fn check_command(
                 "`{name}` is an action of `{owner}`, not in `{component}`'s scope; pass it as an `action` prop or `provide` it"
             ),
             None if matches!(name, "showNotification" | "closeNotification" | "setAppBadge" | "clearAppBadge") => format!(
-                "`{name}` is `@exact/notifications`' (LLP 1133.004): `exact add notifications`, then `use {name} from \"@exact/notifications\"` (`closeNotification` takes `tag=`)"
+                "`{name}` is `@exact/notifications`' (LLP 1133.004): `bun exact.mjs add notifications`, then `use {name} from \"@exact/notifications\"` (`closeNotification` takes `tag=`)"
             ),
             _ => format!(
                 "`{name}` is not a host command; the hosts answer {}",
@@ -926,6 +926,13 @@ pub(super) fn check_command(
         return err(
             "type-window-opacity",
             "`setWindowOpacity(opacity)` takes the window's opacity as a number from 0 (unseen) to 1 (opaque)",
+            span,
+        );
+    }
+    if name == "hideWindow" && !args.is_empty() {
+        return err(
+            "type-hide-window",
+            "`hideWindow()` takes no arguments: the session's window is put away and the app keeps running, as when the person closes it under `keepRunning`; bare `focus()` shows it again",
             span,
         );
     }

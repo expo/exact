@@ -172,6 +172,10 @@ pub fn mime_for(name: &str) -> &'static str {
         "mov" => "video/quicktime",
         "m4v" => "video/x-m4v",
         "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
+        "ogg" => "audio/ogg",
         "pdf" => "application/pdf",
         "json" => "application/json",
         "md" | "markdown" => "text/markdown",
@@ -179,6 +183,7 @@ pub fn mime_for(name: &str) -> &'static str {
         "csv" => "text/csv",
         "tsv" => "text/tab-separated-values",
         "html" | "htm" => "text/html",
+        "xhtml" => "application/xhtml+xml",
         "css" => "text/css",
         "xml" => "application/xml",
         "yaml" | "yml" => "application/yaml",
@@ -372,6 +377,21 @@ mod tests {
                 assert!(runner.device_holds().is_empty());
             }
         }
+    }
+
+    #[test]
+    fn audio_picks_have_their_mime_types_and_meet_audio_accepts() {
+        for (name, mime) in [
+            ("song.mp3", "audio/mpeg"),
+            ("take.WAV", "audio/wav"),
+            ("voice.m4a", "audio/mp4"),
+            ("clip.ogg", "audio/ogg"),
+        ] {
+            assert_eq!(mime_for(name), mime, "{name}");
+            assert!(accepts(&["audio/*".into()], name, mime_for(name)), "{name}");
+            assert!(accepts(&[mime.into()], name, mime_for(name)), "{name}");
+        }
+        assert_eq!(mime_for("page.xhtml"), "application/xhtml+xml");
     }
 
     #[test]

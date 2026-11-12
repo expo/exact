@@ -11,8 +11,7 @@ mod appearance;
 mod caret;
 #[cfg(windows)]
 mod clicks;
-#[cfg(windows)]
-mod clipboard;
+pub mod clipboard;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod desktop;
 #[cfg(windows)]
@@ -39,6 +38,8 @@ mod placement;
 mod probe;
 #[cfg(windows)]
 mod timers;
+#[cfg(windows)]
+mod tooltip;
 #[cfg(any(windows, test))]
 mod touch;
 #[cfg(windows)]
@@ -163,7 +164,60 @@ fn refuse() -> i32 {
 }
 
 #[cfg(test)]
+extern crate self as exact_windows;
+
+#[cfg(test)]
+mod clipboard_package {
+    include!("../../../packages/clipboard/windows/lib.rs");
+
+    mod tests {
+        include!("../../../packages/clipboard/test/windows.rs");
+    }
+}
+
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn a_bare_close_reaches_the_window_but_a_dialog_close_does_not() {
+        super::on_desktop_stack(|| {
+            use std::{cell::Cell, rc::Rc};
+            let plan = contract::compile(
+                r#"component App
+  action leave
+    close()
+  action dismiss
+    close("dialog")
+  view
+    column
+      button "Close window" press=leave testId="window"
+      button "Close dialog" press=dismiss testId="dialog"
+"#,
+            )
+            .unwrap()
+            .encode();
+            let (mut p, error) = exact_linux::Presenter::boot_with(
+                &plan,
+                (),
+                (400., 300.),
+                1.,
+                Default::default(),
+                exact_linux::presenter::PainterChoice::Cpu,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            let closed = Rc::new(Cell::new(0));
+            let count = closed.clone();
+            p.set_window_closer(move || count.set(count.get() + 1));
+            for (target, expected) in [("dialog", 0), ("window", 1), ("window", 2)] {
+                let key = p.host().kernel().find_by_test_id(target)[0];
+                let id = p.host().kernel().node_by_key(key).unwrap().id;
+                p.tap(id).unwrap();
+                p.run_commands(|| ());
+                assert_eq!(closed.get(), expected, "{target}");
+            }
+        });
+    }
+
     /// Keep 6 MiB of frames live: beyond the default Windows main stack
     /// and Rust test stack. Reading each frame after recursion prevents
     /// an optimized test build from turning the recursion into a loop.

@@ -73,7 +73,9 @@ fn decode(outcome: Outcome) -> Result<Json, String> {
         Outcome::Failed { kind, .. } => Err(format!("Transport {kind:?}")),
         Outcome::Surface(_) => Err("Unexpected surface response".into()),
         Outcome::Storage(_) => Err("Unexpected storage response".into()),
-        Outcome::Message(_) | Outcome::Closed { .. } => Err("Unexpected stream message".into()),
+        Outcome::Message(_) | Outcome::Messages(_) | Outcome::Closed { .. } => {
+            Err("Unexpected stream message".into())
+        }
     }
 }
 

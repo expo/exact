@@ -127,9 +127,14 @@ fn index_value(
         .filter_map(|e| e.search(&query).map(|hits| (e, hits)))
         .collect();
     if newest {
-        // Reversed whole, so a sub-document still follows its parent: the
-        // nesting is the point of the order, not the direction.
-        shown.reverse();
+        // The documents of each top-level number reverse as a group, so a
+        // sub-document still follows its parent: the nesting is the point
+        // of the order, not the direction.
+        let mut groups: Vec<_> = shown
+            .chunk_by(|a, b| a.0.number.split('.').next() == b.0.number.split('.').next())
+            .collect();
+        groups.reverse();
+        shown = groups.concat();
     }
     Value::record(vec![
         Value::str(root),

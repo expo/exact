@@ -97,6 +97,65 @@ const WIDE_WIDTH = 900, WIDE = `(min-width: ${WIDE_WIDTH}px)`, wide = () => {
 let splitLists = new WeakMap(), rowOf = new WeakMap(), actionRows = new WeakMap(), visits = new Map();
 const activationRequired = new WeakSet(), activated = new WeakSet();
 const sheet = (route) => ["modal", "fullscreen"].includes(route?.getAttribute("navigationPresentation"));
+// @ref LLP 1115.000 D4.8 (amended 2026-11-12) — a narrow sheet opens at the height iOS opens it at: the detent
+// `navigationInitialDetent` names, else the first, among the detents UIKit keeps (ModalIOS.swift `keptDetents`: a
+// word it cannot read, and one out of order, are dropped). neutral.css sizes it from `data-exact-detent` and
+// `--exact-sheet-detent`: `medium` is half the tallest sheet and a percentage that share, as UIKit's are, a point
+// height that many pixels, `fit-content` the route's content; `large`, or no detent, is the tallest. The detent is
+// chosen as the sheet is presented and when its detents change, as UIKit selects one, so a change to the initial
+// detent alone does not move an open sheet; it is written again at every projection, since the wasm target's
+// style op replaces a route's whole inline style.
+const sheetDetents = new WeakMap(), TALLEST = "(100% - env(safe-area-inset-top, 0px) - 12px - env(safe-area-inset-bottom, 0px))";
+function keptDetents(said) {
+  const kept = [];
+  for (const word of said.split(" ").filter(Boolean)) {
+    const share = word.endsWith("%") ? Number(word.slice(0, -1)) : NaN, points = Number(word);
+    const [kind, height] = word === "large" ? ["large", 100] : word === "medium" ? ["share", 50] : word === "fit-content" ? ["content", 0]
+      : word.endsWith("%") ? share > 0 && share <= 100 ? share === 100 ? ["large", 100] : ["share", share] : []
+      : Number.isFinite(points) && points > 0 ? ["points", points] : [];
+    const last = kept.at(-1);
+    if (kind && !(last && (last.kind === "large" || kind !== "large" && (last.kind !== kind || height <= last.height)))) {
+      kept.push({ word, kind, height });
+    }
+  }
+  return kept;
+}
+function selectedDetent(route) {
+  const said = route.getAttribute("data-navigationdetent") ?? "";
+  let chosen = sheetDetents.get(route);
+  if (chosen?.said !== said) {
+    const kept = keptDetents(said), initial = route.getAttribute("data-navigationinitialdetent");
+    const { kind = "large", height = 100, word } = kept.find((d) => d.word === initial) ?? kept[0] ?? {};
+    const css = kind === "share" ? `calc(${TALLEST} * ${word === "medium" ? ".5" : height / 100})` : kind === "points" ? `${height}px` : "";
+    sheetDetents.set(route, chosen = { said, kind: kind === "content" ? "fit-content" : css ? "height" : null, css });
+  }
+  return chosen;
+}
+// The route a route shows in as a sheet: itself, or the sheet it was pushed over, since a push inside a sheet stays in
+// it at its height, as a UINavigationController's in a presented sheet does; -1 for none (a full-screen route or the
+// stack's root ends the search).
+const sheetAt = (routes, i) => {
+  for (let j = i; j > 0; j--) {
+    const p = routes[j].getAttribute("navigationPresentation");
+    if (p === "modal" || p === "fullscreen") {
+      return p === "modal" ? j : -1;
+    }
+  }
+  return -1;
+};
+// A route's sheet frame: its own detent, or its sheet's when it was pushed inside one; written only where it changed.
+function sheetFrame(route, host, pushed) {
+  const chosen = host ? selectedDetent(host) : null;
+  if (route.hasAttribute("data-exact-in-sheet") !== pushed) {
+    route.toggleAttribute("data-exact-in-sheet", pushed);
+  }
+  if ((route.getAttribute("data-exact-detent") ?? null) !== (chosen?.kind ?? null)) {
+    chosen?.kind ? route.setAttribute("data-exact-detent", chosen.kind) : route.removeAttribute("data-exact-detent");
+  }
+  if (route.style.getPropertyValue("--exact-sheet-detent") !== (chosen?.css ?? "")) {
+    route.style.setProperty("--exact-sheet-detent", chosen?.css ?? "");
+  }
+}
 export const overPage = (route) => {
   const p = route?.getAttribute("navigationPresentation");
   if (p !== "fullscreen") {
@@ -948,30 +1007,40 @@ export const navigation = {
             }
           }
         }
-        const found = splitOf(routes), split = found.width, live = split && !sheet(routes[selected]);
-        const modal = overPage(routes[selected]), beneath = routes.findLastIndex((r, i) => i < selected && !overPage(r));
+        // A route pushed inside a sheet is presented as that sheet is: what the sheet covers shows beneath it.
+        const host = sheetAt(routes, selected), presented = host >= 0 ? host : selected;
+        const found = splitOf(routes), split = found.width, live = split && !sheet(routes[presented]);
+        const modal = overPage(routes[presented]), beneath = routes.findLastIndex((r, i) => i < presented && !overPage(r));
         detailRows(routes, found);
         if (stack === at && list) {
-          setInert(list, sheet(routes[selected]) || !!list.authoredInert);
+          setInert(list, sheet(routes[presented]) || !!list.authoredInert);
         }
         // a sheet is modal: the root's tab bar is inert beneath it, as the route it covers is (LLP 1115.000 D4.5)
         // A split's detail shown is the top, or the route a sheet covers; its row is the one whose press pushed it, or pushed a route beneath it in its column, else (a detail the app opened itself, at launch or after Back) the row the app says is current.
-        const detail = split ? routes.findLastIndex((r, i) => i > 0 && i <= selected && !sheet(r)) : -1;
+        const detail = split ? routes.findLastIndex((r, i) => i > 0 && i <= selected && !sheet(r) && sheetAt(routes, i) < 0) : -1;
+        // The sheet each route shows in, and the sheets something shown is in.
+        const shownIn = routes.map((r, i) => sheetAt(routes, i));
+        const inUse = new Set(shownIn.filter((s, i) => s >= 0 && (i === selected || live && i === 0 || modal && (i >= beneath && i < presented || split > 0 && i === 0))));
         for (const [index, route] of routes.entries()) {
           const active = index === selected || live && index === 0;
           if (!active && route.contains(document.activeElement)) {
             document.activeElement.blur();
           }
-          const covered = modal && (index >= beneath && index < selected || split > 0 && index === 0);
+          const covered = modal && (index >= beneath && index < presented || split > 0 && index === 0);
           // a sheet shows what it sits over: the page (in the strip above a narrow sheet) and any sheets between, which only the top one dims
           route.style.visibility = active || covered ? "" : "hidden";
           route.toggleAttribute("data-exact-covered", covered);
           setInert(route, !active || !!route.authoredInert);
-          const column = !split ? null : index === 0 ? "list" : sheet(route) ? null : "detail";
+          const column = !split ? null : index === 0 ? "list" : sheet(route) || shownIn[index] >= 0 ? null : "detail";
           if (route.getAttribute("data-exact-split") !== column) {
             column ? route.setAttribute("data-exact-split", column) : route.removeAttribute("data-exact-split");
           }
           route.style.setProperty("--exact-split", column ? `${split}px` : "");
+          // A sheet nothing shown is in forgets its detent, so its next presentation chooses it again.
+          if (shownIn[index] === index && !inUse.has(index)) {
+            sheetDetents.delete(route);
+          }
+          sheetFrame(route, inUse.has(shownIn[index]) ? routes[shownIn[index]] : null, shownIn[index] >= 0 && shownIn[index] !== index);
           appBarBack(nav, routes, index, split > 0, active || covered);
           if (stack === at && index === selected) {
             freshPath(route);

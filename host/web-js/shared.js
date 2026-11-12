@@ -43,9 +43,10 @@ function leavers(queue) {
 
 /** A `-exact-layout-transition` as the group's duration, delay and timing
  * function. The row is carried as the host writes it: times in
- * milliseconds without a unit (`300 0 ease`), or with one as authored. */
+ * milliseconds without a unit (`300 0 ease`), or with one as authored, its
+ * words in any ASCII case (motion/src/word.rs). */
 export function curve(el) {
-  const text = el?.style.getPropertyValue('--exact-layout-transition').trim();
+  const text = el?.style.getPropertyValue('--exact-layout-transition').trim().replace(/[A-Z]+/g, c => c.toLowerCase());
   if (!text || text === 'none') return null;
   const decl = text.split(/,(?![^(]*\))/).pop().trim(); // the last declaration; a spring's commas are inside it
   const times = [];

@@ -2,7 +2,7 @@
 use super::super::{
     async_tests::{core, upload, Files, Script},
     tests::{job, one_at_a_time},
-    Core, RequestClass, LIVE_WORKERS,
+    worker_budget, Core, RequestClass,
 };
 use super::*;
 use std::sync::mpsc::{channel, Receiver};
@@ -430,17 +430,7 @@ impl ibex2::stdlib::fetch::Transport for Held {
 
 #[test]
 fn retained_handles_keep_no_machine_thread_or_permit_after_retirement() {
-    const CHILD: &str = "EXACT_RETIREMENT_CHILD";
-    if std::env::var_os(CHILD).is_none() {
-        let name = std::thread::current().name().unwrap().to_owned();
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([&name, "--exact", "--nocapture", "--test-threads=1"])
-            .env(CHILD, "1")
-            .status()
-            .unwrap();
-        assert!(status.success());
-        return;
-    }
+    let live_workers = worker_budget();
     let (entered, started) = channel();
     let release = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
     let owners = (0..2)
@@ -491,7 +481,7 @@ fn retained_handles_keep_no_machine_thread_or_permit_after_retirement() {
     *release.0.lock().unwrap() = true;
     release.1.notify_all();
     let bound = Instant::now() + HANG;
-    while LIVE_WORKERS.load(Ordering::Acquire) != 0 {
+    while live_workers.load(Ordering::Acquire) != 0 {
         assert!(
             Instant::now() < bound,
             "retained handles kept worker permits"

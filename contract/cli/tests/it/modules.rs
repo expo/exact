@@ -958,3 +958,59 @@ fn a_modules_shapes_may_take_names_rust_predefines() {
         assert_eq!(unqualified, 0, "bare `{bare}` in:\n{rust}");
     }
 }
+
+/// A package written into `app`'s `node_modules` as `@scratch/<name>`.
+fn scratch_package(app: &App, name: &str, declaration: &str) {
+    let package = app.0.join("node_modules/@scratch").join(name);
+    std::fs::create_dir_all(&package).unwrap();
+    let manifest = format!(
+        r#"{{"name": "@scratch/{name}", "version": "1.0.0", "exports": {{".": "./exact.json"}}}}"#
+    );
+    std::fs::write(package.join("package.json"), manifest).unwrap();
+    std::fs::write(package.join("exact.json"), declaration).unwrap();
+}
+
+#[test]
+fn a_value_passed_whole_as_json_may_be_a_list_and_binds_in_rust_as_json() {
+    // `json<T>` holds any JSON value's type a declaration may name (#316).
+    let app = App::new("rust-json");
+    let declaration = |records: &str| {
+        format!(
+            r#"{{
+  "kind": "interface", "name": "@scratch/cloud", "version": "1.0.0",
+  "shapes": {{ "CloudRecordWrite": {{ "key": "string" }}, "Done": {{ "ok": "bool" }} }},
+  "names": [
+    {{ "send": "write", "request": true, "contract": false, "answers": "json<CloudRecordWrite[]>",
+       "options": {{ "records": "{records}", "extra": "option<json<CloudRecordWrite>[]>" }} }},
+    {{ "send": "flush", "request": true, "answers": "Done" }}
+  ]
+}}"#
+        )
+    };
+    scratch_package(&app, "cloud", &declaration("json<CloudRecordWrite[]>"));
+    let source = "use flush, Done from \"@scratch/cloud\"\ncomponent App\n  mutation done as shape Done\n  action go\n    send done = flush()\n  view\n    text \"x\"\n";
+    std::fs::write(app.0.join("app.contract"), source).unwrap();
+    let (plan, _) = contract::compile_path_for_rust(&app.0.join("app.contract"))
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    let rust = contract::module_rust(&plan).unwrap();
+    for expected in [
+        "pub records: ::exact_data::modules::serde_json::Value,",
+        "pub extra: ::core::option::Option<::std::vec::Vec<::exact_data::modules::serde_json::Value>>,",
+        // The body carries the value as `put` encodes it: a JSON null as null
+        // (exact-data's `a_json_null_is_sent_and_an_absent_option_is_omitted`).
+        "::exact_data::modules::put(&mut o, \"records\", &self.records)?;",
+    ] {
+        assert!(rust.contains(expected), "{expected}\n---\n{rust}");
+    }
+    // What JSON cannot carry is refused, naming what `json<T>` holds.
+    for refused in ["json<bytes>", "json<handle<file>>", "json<json<Done>>"] {
+        scratch_package(&app, "cloud", &declaration(refused));
+        let errors = contract::compile_path_for_rust(&app.0.join("app.contract")).unwrap_err();
+        let text = format!("{errors:?}");
+        assert!(
+            text.contains(&format!("`{refused}` is not a JSON value's type"))
+                && text.contains("`option<T>` or `T[]` of one"),
+            "{refused}: {text}"
+        );
+    }
+}

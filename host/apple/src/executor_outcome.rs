@@ -34,12 +34,15 @@ pub(super) fn retained(outcome: &Outcome) -> usize {
                     .sum::<usize>(),
             ),
         Outcome::Storage(b) => b.capacity(),
-        Outcome::Message(m) => m
-            .data
-            .capacity()
-            .saturating_add(m.event.capacity())
-            .saturating_add(m.id.capacity())
-            .saturating_add(m.binary.as_ref().map_or(0, Vec::capacity)),
+        Outcome::Message(_) | Outcome::Messages(_) => (outcome.messages().iter())
+            .map(|m| {
+                m.data
+                    .capacity()
+                    .saturating_add(m.event.capacity())
+                    .saturating_add(m.id.capacity())
+                    .saturating_add(m.binary.as_ref().map_or(0, Vec::capacity))
+            })
+            .fold(0, usize::saturating_add),
         Outcome::Closed { reason, .. } => reason.capacity(),
         Outcome::Surface(exact_runner::SurfaceOutcome::Captured(b)) => b.capacity(),
         Outcome::Surface(exact_runner::SurfaceOutcome::Restored) => 0,

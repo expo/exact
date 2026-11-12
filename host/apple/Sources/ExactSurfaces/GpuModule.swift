@@ -153,6 +153,10 @@ final class GpuModule {
     var carry: WantsFn?
     var restore: RestoreFn?
     let published: WantsFn?
+    typealias PerformanceReportingFn = @convention(c) (UInt32, Bool) -> Bool
+    typealias PerformanceFn = @convention(c) (UInt32, Double) -> UInt32
+    var performanceReporting: PerformanceReportingFn?
+    var performance: PerformanceFn?
     let messages: WantsFn?
     let agent: BindFn?
     private let outPtr: ErrorPtrFn?
@@ -305,6 +309,8 @@ final class GpuModule {
             return .failure(GpuLoadError(message: "\(path) is not an exact GPU module (missing exports)"))
         }
         let module = GpuModule(create: create, bind: bind, render: render, dirty: dirty, destroy: destroy, texture: texture, textureMetal: sym("gpu_texture_metal", TextureMetalFn.self), sync: sym("gpu_sync", SyncFn.self), childrenMode: childrenMode, readback: readback, child: child, childrenCount: childrenCount, placement: placement, shader: sym("gpu_shader", ShaderFn.self), validateShader: sym("gpu_shader_validate", ShaderFn.self), clearShaders: sym("gpu_shaders_clear", ClearShadersFn.self), errorLen: errorLen, errorPtr: errorPtr, wantsInput: sym("gpu_wants_input", WantsFn.self), input: sym("gpu_input", BindFn.self), messages: sym("gpu_messages", WantsFn.self), published: sym("gpu_published", WantsFn.self), agent: sym("gpu_agent", BindFn.self), outPtr: sym("gpu_out_ptr", ErrorPtrFn.self))
+        module.performanceReporting = sym("gpu_performance_reporting", PerformanceReportingFn.self)
+        module.performance = sym("gpu_performance", PerformanceFn.self)
         module.flushFn = flush
         // The GPU tier (LLP 1139.003 D2): the drive's, told before the device
         // is made, under the agent; else the module's own from its device.

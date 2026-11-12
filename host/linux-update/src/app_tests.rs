@@ -52,17 +52,24 @@ fn checked(
             })
         })
         .collect();
-    let head = serde_json::to_vec(&serde_json::json!({
-            "exact": 1,
-            "app": { "id": "com.exact.fixture", "name": "Fixture" },
-            "plan": { "url": "./app.plan", "sha256": sha256_hex(plan), "bytes": plan.len() },
-            "assets": cards,
-            "stream": { "app": "com.exact.fixture", "channel": "prod", "compatibilityId": "fixture00000000", "seq": 1 }
-        }))
-        .unwrap();
+    // The cards are in the asset index the head names, beside it.
+    let index = serde_json::to_vec(&serde_json::json!({ "assets": cards })).unwrap();
+    let index_url = head_url.replace("exact.json", "assets.json");
+    let mut head = serde_json::json!({
+        "exact": 1,
+        "app": { "id": "com.exact.fixture", "name": "Fixture" },
+        "plan": { "url": "./app.plan", "sha256": sha256_hex(plan), "bytes": plan.len() },
+        "stream": { "app": "com.exact.fixture", "channel": "prod", "compatibilityId": "fixture00000000", "seq": 1 }
+    });
+    if !assets.is_empty() {
+        head["assets"] = serde_json::json!({ "url": "./assets.json", "sha256": sha256_hex(&index), "bytes": index.len(), "count": assets.len() });
+    }
+    let head = serde_json::to_vec(&head).unwrap();
     let mut fetch = |url: &str| {
         if url == head_url {
             Ok(head.clone())
+        } else if url == index_url {
+            Ok(index.clone())
         } else if url == plan_url {
             Ok(plan.to_vec())
         } else if let Some((_, bytes)) = assets
@@ -210,7 +217,6 @@ fn a_partial_initial_dev_plan_falls_back_without_counting_the_store() {
             "exact": 1,
             "app": { "id": "com.exact.fixture", "name": "Fixture" },
             "plan": { "url": "./app.plan", "sha256": sha256_hex(&update), "bytes": update.len() },
-            "assets": [],
             "stream": { "app": "com.exact.fixture", "channel": "prod", "compatibilityId": "fixture00000000", "seq": 1 }
         }))
         .unwrap();

@@ -342,6 +342,23 @@ impl Engine {
         }
     }
 
+    /// Whether the current declaration drives this property as a physical spring.
+    pub fn has_spring_transition(&self, node: u64, property: Property) -> bool {
+        let row = if property == Property::Layout {
+            self.layout.get(&node)
+        } else {
+            self.transitions
+                .get(&node)
+                .and_then(|t| t.matching(property))
+        };
+        row.is_some_and(|t| {
+            matches!(
+                t.governing(property).timing,
+                crate::TimingFunction::Spring(_)
+            )
+        })
+    }
+
     /// Set a node's `transition` row. Governs changes observed from now on;
     /// a transition already running keeps its own declaration.
     pub fn set_transitions(
@@ -528,7 +545,12 @@ impl Engine {
 
         // An unchanged settled slot (most of a touched node's) changes
         // nothing; asking for it mutably would make an entry of a bit.
-        let unchanged = |slot: &Slot| slot.live.is_none() && slot.target == change.value;
+        let released = change.velocity.is_some_and(|v| v != Value::ZERO)
+            && declaration
+                .as_ref()
+                .is_some_and(|t| matches!(t.timing, crate::TimingFunction::Spring(_)));
+        let unchanged =
+            |slot: &Slot| !released && slot.live.is_none() && slot.target == change.value;
         if self.slots.get(&key).is_some_and(unchanged) {
             self.played.remove(&key);
             return Ok(());
@@ -549,7 +571,7 @@ impl Engine {
         }
         match slot.take_running() {
             None => {
-                if after == slot.target {
+                if after == slot.target && !released {
                     return Ok(());
                 }
                 slot.set_owner(None);
@@ -582,14 +604,18 @@ impl Engine {
                 slot.set_owner(None);
                 let current = running.sample(now);
                 slot.set_target(after);
-                let Some(declaration) = declaration.filter(|_| current.value != after) else {
+                let inherited = change.velocity.unwrap_or(current.velocity);
+                let Some(declaration) = declaration.filter(|t| {
+                    current.value != after
+                        || inherited != Value::ZERO
+                            && matches!(t.timing, crate::TimingFunction::Spring(_))
+                }) else {
                     slot.set_presented(after);
                     self.running.remove(&key);
                     self.pending.remove(&key);
                     self.dirty.insert(key);
                     return Ok(());
                 };
-                let inherited = change.velocity.unwrap_or(current.velocity);
                 let is_easing = matches!(
                     declaration.timing,
                     crate::transition::TimingFunction::Easing(_)

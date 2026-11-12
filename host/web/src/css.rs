@@ -88,6 +88,14 @@ fn css_text_in(
         }
         let value = style.get(id);
         match (id, &value) {
+            (StyleId::TranslateVelocity, RowValue::Vec2(v)) => {
+                push_text!(
+                    &mut out,
+                    "--exact-translate-velocity:{} {};",
+                    num(v.x),
+                    num(v.y)
+                );
+            }
             (StyleId::Transition, RowValue::Transitions(t)) => {
                 let (mut text, spring_skipped) = transition_css(t);
                 if press {

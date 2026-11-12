@@ -411,8 +411,8 @@ extension Agent {
     }
 
     /// Leaves `sv` where a person's scroll to `want` leaves it, on the axes
-    /// `x` and `y`: as `place` does, then, under a large title, at one of the
-    /// title's two rests. A person's scroll does not stop with the content
+    /// `x` and `y`: at its authored snap, or under a large title, at one of the
+    /// title's two rests. Without a snap area, a person's scroll does not stop with the content
     /// partway under a large title: as the finger lifts, UIKit eases it to the
     /// title's open rest or its closed one, whichever is nearer (iOS 27, a
     /// 52-point title alone in its bar: 23 and 25 points in went back open, 28
@@ -422,8 +422,10 @@ extension Agent {
     /// (`HeavyLeaves.hideFar`). A bar with a search field, whose rests were
     /// not measured, is left as `place` leaves it.
     static func rest(_ sv: UIScrollView, at want: CGPoint, x: Bool, y: Bool) {
-        let target = x ? (sv.superview as? NodeView)?.snappedOffset(want, in: sv) ?? want : want
-        place(sv, at: target, x: x, y: y)
+        let node = sv.superview as? NodeView
+        let snap = node?.snapTarget(want, in: sv)
+        place(sv, at: snap ?? want, x: x, y: y)
+        if snap != nil && node?.style["scroll_snap_type"]?.string == "y mandatory" { return }
         // tvOS has no large titles.
         #if os(iOS)
         let o = sv.contentOffset, top = -sv.adjustedContentInset.top, reach = min(sv.bounds.height, sv.window?.bounds.height ?? 0) / 2

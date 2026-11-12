@@ -8,6 +8,8 @@ pub struct Options {
     pub paused: bool,
     #[restart]
     pub restart: bool,
+    #[live]
+    pub bindings: String,
 }
 #[derive(Default, Component)]
 pub struct Beacon {
@@ -40,6 +42,9 @@ impl Game for Beacons {
             .hold("sprint", &["ShiftLeft", "GamepadL1"], 0.2)
             // E lights a beacon only within reach of one.
             .context("beacon", |a| a.button("light", &["KeyE", "GamepadWest"]))
+    }
+    fn bindings(args: &Options) -> String {
+        args.bindings.clone()
     }
     fn setup(w: &mut World, args: &Options) {
         w.reseed(args.seed);

@@ -286,10 +286,12 @@ export class HttpsOrigin {
 
   describe() { return this.url; }
 
-  /** The body at `rel`, or null on 404. Any other failure is an error naming the URL. */
+  /** The body at `rel`, or null on 404. Any other failure is an error naming the URL.
+   * A stream head is read within its 64 KiB bound; the web root's pointer,
+   * which lists every file of the root, is not a head. */
   async get(rel) {
     const url = `${this.url}/${safeRelative(rel)}`;
-    const { response, bytes } = await publisherFetch(url, { headers: { 'cache-control': 'no-cache' } }, /(?:^|\/)exact\.json$/i.test(rel) ? 64 << 10 : 64 << 20);
+    const { response, bytes } = await publisherFetch(url, { headers: { 'cache-control': 'no-cache' } }, /(?:^|\/)exact\.json$/i.test(rel) && rel !== webRootPath ? 64 << 10 : 64 << 20);
     if (response.status === 404) return null;
     if (!response.ok) throw new OriginUnavailable(`${url}: HTTP ${response.status}`);
     return bytes;

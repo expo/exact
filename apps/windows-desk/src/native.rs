@@ -101,6 +101,7 @@ struct App {
     editor_font: HFONT,
     dpi: f32,
     path: Option<PathBuf>,
+    sample: isize,
 }
 
 impl App {
@@ -122,6 +123,7 @@ impl App {
             editor_font: null_mut(),
             dpi: 1.,
             path: None,
+            sample: 0,
         }
     }
 
@@ -517,6 +519,16 @@ impl App {
                         Event::Press,
                     );
                     self.path = None;
+                    self.sample = selected;
+                } else {
+                    unsafe {
+                        SendMessageW(
+                            self.controls["samples"].hwnd,
+                            LB_SETCURSEL,
+                            self.sample as usize,
+                            0,
+                        )
+                    };
                 }
             }
             Some("font") if notification == CBN_SELCHANGE as usize => unsafe {
@@ -600,6 +612,45 @@ impl App {
     }
 
     unsafe fn smoke(&mut self) {
+        let samples = self.controls["samples"].hwnd;
+        let changed = self.controls["samples"].command | ((LBN_SELCHANGE as usize) << 16);
+        for previous in [0, 2] {
+            unsafe {
+                SendMessageW(samples, LB_SETCURSEL, previous, 0);
+                self.command(changed, samples as isize, None);
+            }
+            self.input("body", "Keep this unsaved document".into());
+            let title = self.text("title");
+            let owner = self.hwnd as usize;
+            let cancel = std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while std::time::Instant::now() < deadline {
+                    let popup = unsafe { GetLastActivePopup(owner as HWND) };
+                    if !popup.is_null() && popup != owner as HWND {
+                        unsafe { PostMessageW(popup, WM_COMMAND, IDCANCEL as usize, 0) };
+                        return true;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                false
+            });
+            unsafe {
+                SendMessageW(samples, LB_SETCURSEL, 1, 0);
+                self.command(changed, samples as isize, None);
+            }
+            assert!(
+                cancel.join().unwrap(),
+                "the unsaved-changes dialog did not open"
+            );
+            assert_eq!(self.text("title"), title);
+            assert_eq!(self.text("body"), "Keep this unsaved document");
+            assert!(self.dirty());
+            assert_eq!(
+                unsafe { SendMessageW(samples, LB_GETCURSEL, 0, 0) },
+                previous as isize
+            );
+            self.event("save", Event::Press);
+        }
         // Exercise actual HWND notifications through the same queue as a user.
         unsafe {
             SetActiveWindow(self.hwnd);

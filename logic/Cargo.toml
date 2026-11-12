@@ -20,6 +20,14 @@ wasmparser = { version = "0.228", default-features = false, features = ["std", "
 [target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows", target_os = "android"))'.dependencies]
 libloading = "0.8"
 
+# wasmi's parts at their defaults, as the Apple host pins its graph's crates
+# (host/apple/Cargo.toml). wasmi and wasmparser themselves are not pinned: their
+# defaults change the interpreter's dispatch and bring crates the graph lacks.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+wasmi_core = "2.0"
+wasmi_ir = "2.0"
+wasmi_collections = "2.0"
+
 [dev-dependencies]
 wat = "1.0"
 

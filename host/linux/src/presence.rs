@@ -79,7 +79,7 @@ impl<D: DataSource> Host<D> {
             let a = self.runner.advance_until_request(step);
             // A commit that sent stops the jump: the next send would drop
             // its reply (LLP 1016 D5).
-            let stopped = a.error.is_some() || a.stopped_on_request || step >= to;
+            let stopped = a.error.is_some() || a.stopped_on_request || a.needs_apply || step >= to;
             error = error.or(self.advanced(a).0);
             if stopped || self.presence.layout.is_empty() {
                 break;

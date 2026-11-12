@@ -154,25 +154,34 @@ def advanceTrace (p : Program) (o : Oracle) (c : Config) (t : F64) : (Config × 
       match due c with
       | .none => finish c
       | .some (tm, i) =>
+        if tm.change && n + 1 < timerFireLimit then ((c, .ok), []) else
         let timers := c.timers.set i tm.fired
-        let c := { c with timers, now := tm.next }
+        let c := { c with timers, now := if tm.change && tm.next < c.now then c.now else tm.next }
         match runAction p o c tm.action [] [] with
         | (c, .ok) =>
-          let (result, ran) := go n c
+          let (result, ran) := if tm.change then ((c, .ok), []) else go n c
           (result, ⟨"task", tm.action, .ok⟩ :: ran)
         | (c, out) => ((c, out), [⟨"task", tm.action, out⟩])
   if t < c.now then ((c, .ok), []) else go timerFireLimit c
 
 /-- Land the armed `then`s and queued sends at the current clock, without timers. -/
 def land (p : Program) (o : Oracle) (c : Config) : (Config × Outcome) × List Ran :=
+  let due (c : Config) : Option (Timer × Nat) :=
+    (c.timers.zipIdx).foldl (fun best (tm, i) =>
+      if tm.change && tm.next ≤ c.now then
+        match best with
+        | .none => some (tm, i)
+        | .some (b, j) => if tm.precedes b then some (tm, i) else some (b, j)
+      else best) none
+  let pick (c : Config) := clockPick p c c.now ((due c).map (·.1.next))
   let rec go : Nat → Config → (Config × Outcome) × List Ran
     | 0, c =>
-      match clockPick p c c.now .none with
+      match pick c with
       | .none => ((c, .ok), [])
       | .some _ => ((c, .refused (.refused "too many timer fires")), [])
     | n + 1, c =>
       if c.poisoned then ((c, .refused (.refused "poisoned")), []) else
-      match clockPick p c c.now .none with
+      match pick c with
       | .some (.next m _) =>
         let c := { c with nexts := c.nexts.filter (·.1 != m) }
         match nextCommit p o c m with
@@ -187,7 +196,14 @@ def land (p : Program) (o : Oracle) (c : Config) : (Config × Outcome) × List R
           let (result, ran) := go n c
           (result, ⟨"then", a, .ok⟩ :: ran)
         | (c, out) => ((c.armNexts p, out), [⟨"then", a, out⟩])
-      | .none => ((c, .ok), [])
+      | .none =>
+        match due c with
+        | .none => ((c, .ok), [])
+        | .some (tm, i) =>
+          if n + 1 < timerFireLimit then ((c, .ok), []) else
+          let c := { c with timers := c.timers.set i tm.fired, now := if tm.change && tm.next < c.now then c.now else tm.next }
+          let (c, out) := runAction p o c tm.action [] []
+          ((c, out), [⟨"task", tm.action, out⟩])
   go timerFireLimit c
 
 /-- A commit's outcome uses the same reasons as the step's. -/

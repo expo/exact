@@ -1,4 +1,4 @@
-//! Logical row snap areas, queried at release rather than copied into every frame.
+//! Logical row snap areas on either axis (LLP 1008), queried only at release.
 use super::*;
 use exact_kernel::{Dimension, Display, PositionType, ScrollSnapAlign, StyleId};
 
@@ -24,15 +24,16 @@ impl Tree {
         ) else {
             return Ok(None);
         };
-        if list.axis != ListAxis::Horizontal || list.index.len() == 0 {
+        if list.index.len() == 0 {
             return Ok(None);
         }
+        let horizontal = list.axis == ListAxis::Horizontal;
         let origin = kernel
             .node(view)
             .and_then(|n| {
-                let (padding, _, _, _) = kernel.resolved_padding(n.key)?;
-                let (border, _, _, _) = kernel.resolved_border(n.key)?;
-                Some(f64::from(padding + border))
+                let (pl, pt, _, _) = kernel.resolved_padding(n.key)?;
+                let (bl, bt, _, _) = kernel.resolved_border(n.key)?;
+                Some(f64::from(if horizontal { pl + bl } else { pt + bt }))
             })
             .unwrap_or(0.0);
         let row_at = |offset: f64| {
@@ -45,7 +46,7 @@ impl Tree {
         // UIKit calls this synchronously at drag end. Search the index for a
         // viewport beyond each edge of the projected port, capped at 32 rows
         // before/including `at` and 32 after it. This covers ordinary card
-        // strips while tiny/zero-width rows cannot turn a release into O(N).
+        // strips while tiny/zero-size rows cannot turn a release into O(N).
         let first_row = row_at(proposed - port)?.max(at.saturating_sub(31));
         let end_row = (row_at(proposed + 2.0 * port)? + 1).min(at.saturating_add(33));
         let mut best: Option<f64> = None;
@@ -108,19 +109,34 @@ impl Tree {
                     _ => None,
                 }
             };
-            let (Some(left), Some(right), Some(leading), Some(trailing)) = (
-                absolute(StyleId::Left, style.left.clone()),
-                absolute(StyleId::Right, style.right.clone()),
-                absolute(StyleId::MarginLeft, style.margin_left.clone()),
-                absolute(StyleId::MarginRight, style.margin_right.clone()),
+            let (before, after, margin_before, margin_after) = if horizontal {
+                (
+                    (StyleId::Left, &style.left),
+                    (StyleId::Right, &style.right),
+                    (StyleId::MarginLeft, &style.margin_left),
+                    (StyleId::MarginRight, &style.margin_right),
+                )
+            } else {
+                (
+                    (StyleId::Top, &style.top),
+                    (StyleId::Bottom, &style.bottom),
+                    (StyleId::MarginTop, &style.margin_top),
+                    (StyleId::MarginBottom, &style.margin_bottom),
+                )
+            };
+            let (Some(before_value), Some(after_value), Some(leading), Some(trailing)) = (
+                absolute(before.0, before.1.clone()),
+                absolute(after.0, after.1.clone()),
+                absolute(margin_before.0, margin_before.1.clone()),
+                absolute(margin_after.0, margin_after.1.clone()),
             ) else {
                 continue;
             };
             let shift = if style.position_type == PositionType::Relative {
-                if style.left == Dimension::Auto {
-                    -right
+                if *before.1 == Dimension::Auto {
+                    -after_value
                 } else {
-                    left
+                    before_value
                 }
             } else {
                 0.0
@@ -130,10 +146,11 @@ impl Tree {
             let lo = start + leading + shift;
             let hi = lo + border;
             let wide = hi - lo >= port;
-            let first = if style.scroll_snap_align == ScrollSnapAlign::End && !wide {
-                hi - port
-            } else {
-                lo
+            let first = match style.scroll_snap_align {
+                _ if wide => lo,
+                ScrollSnapAlign::End => hi - port,
+                ScrollSnapAlign::Center => (lo + hi - port) / 2.0,
+                _ => lo,
             };
             let first = first.clamp(0.0, maximum);
             let last = if wide {

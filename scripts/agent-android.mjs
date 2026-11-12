@@ -37,7 +37,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameS
 import { createConnection } from 'node:net';
 import { homedir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
-import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, injectedProfiles, linuxBuild, mavenProblems, resolveApp, wholeProgram } from './app.mjs';
+import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, gpuModules, injectedProfiles, linuxBuild, mavenProblems, resolveApp, wholeProgram } from './app.mjs';
 import { ANDROID_MIN_API, hermesAndroidBundle } from './hermes-android.mjs';
 import { ANDROID_PAGE_SIZE, androidCargo } from './cargo-check.mjs';
 import { guardFlags, reportBuilt } from './help.mjs';
@@ -775,11 +775,29 @@ export function androidReleaseEnvironment(env = process.env, bundle = false) {
     ...(env.EXACT_KEYSTORE ? { EXACT_KEYSTORE: resolve(env.EXACT_KEYSTORE) } : {}) };
 }
 
+/** Whether an APK carries GPU libraries beside the app's (LLP 1009 D6): the primary module or a `gpu.modules` entry. */
+export const carriesGpu = (app) => app.hasGpu || gpuModules(app.manifest).length > 0;
+
+/** The app baked for the phone (`buildBake`), the GPU modules first, and each GPU library the bake built, at the
+ * path Cargo gave it: a crate's `[lib] name` names the file, and the bake records that name for the host to open. */
+export function bakeGpuLibraries(app, options, bake = buildBake) {
+  const libraries = [];
+  bake(app, 'linux', ANDROID_TARGET, { ...options, kind: 'android', prepareGpu: (product) => { libraries.push(product); return product; } });
+  return libraries;
+}
+
+/** Each GPU library copied into `jniLibs` under the name its bake recorded, where the host opens it, and the Gradle
+ * argument that has the APK extract them and keep their symbols: the host checks each against its baked digest. */
+export function stageGpuLibraries(libraries, jniLibs) {
+  for (const library of libraries) copyFileSync(library, resolve(jniLibs, basename(library)));
+  return libraries.length ? [`-PgpuModules=${libraries.map((library) => basename(library)).join(',')}`] : [];
+}
+
 /** The app on the Canvas reader, as an APK: its `android/` crate (a cdylib over `exact_linux::canvas_jni!`; a game's
  * is generated under `.shells/`) built for the phone's ABI and put, with the app's assets and its icon and banner
  * (`androidIcons`), where the Gradle shell packages them (host/android/app), then `:app:assembleRelease`. An app with
- * a GPU module (LLP 1009) is built as a Linux bake is (`buildBake`): the module first, then the library with the
- * module's digest baked in, so the module ships beside it and must reach the device byte for byte (the Gradle shell extracts it and keeps its symbols).
+ * GPU modules (LLP 1009) is built as a Linux bake is (`buildBake`): the modules first, then the library with their
+ * digests baked in, so each ships beside it and must reach the device byte for byte (`stageGpuLibraries`).
  * Gradle wants a JDK (17 or newer) and the SDK's platform. The APK's path, or null. */
 export function buildApk(app, env, profile, writeLocks = false, bundle = false) {
   env = androidReleaseEnvironment(env, bundle);
@@ -794,11 +812,10 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
   try { icons = androidIcons(app.manifest, app.dir, resolve(dirs.app, 'icons/res')); }
   catch (error) { for (const line of error.message.split('\n')) console.error(`${app.name}: ${line}`); return null; }
   const built = (name) => resolve(app.target, ANDROID_TARGET, profile, `lib${name.replaceAll('-', '_')}.so`);
-  let gpu = null, out = null;
-  if (app.manifest.game || app.hasGpu) {
-    try { buildBake(app, 'linux', ANDROID_TARGET, { profile, env, kind: 'android' }); }
+  let gpu = [], out = null;
+  if (carriesGpu(app)) {
+    try { gpu = bakeGpuLibraries(app, { profile, env }); }
     catch (error) { console.error(error.message); return null; }
-    gpu = built(app.crate('gpu'));
     out = bakedOut(resolve(app.target, ANDROID_TARGET, profile, 'build'), crate);
   } else {
     // JSON on stdout, for the crate's build-script output directory; the compiler's own messages still on stderr.
@@ -815,7 +832,7 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
   const uses = planUses(out);
   // The page-size argument is in every rustflags source the build makes or Cargo was handed (`androidCargo`), but a
   // table in the app's Cargo configuration takes precedence over the build's own and can leave it out.
-  for (const library of [built(crate), gpu].filter(Boolean)) {
+  for (const library of [built(crate), ...gpu]) {
     const alignment = loadAlignment(library);
     if (alignment < 16384) {
       console.error(`${basename(library)} is ${alignment / 1024} KB aligned, so a device with 16 KB pages runs it in page-size compatibility mode: a rustflags table in the app's Cargo configuration ([target.aarch64-linux-android] or [target.'cfg(…)']) replaced the build's flags; add "${ANDROID_PAGE_SIZE}" to its rustflags`);
@@ -827,11 +844,10 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
   mkdirSync(resolve(staged, 'jniLibs/arm64-v8a'), { recursive: true });
   // The reader loads one name whatever the app; the plan names `assets/…` under the APK's `app/`.
   copyFileSync(built(crate), resolve(staged, 'jniLibs/arm64-v8a/libexactcanvas.so'));
-  // The host opens the module by the name its bake recorded, in the APK's extracted library directory.
-  if (gpu) copyFileSync(gpu, resolve(staged, 'jniLibs/arm64-v8a', basename(gpu)));
+  const gpuArgs = stageGpuLibraries(gpu, resolve(staged, 'jniLibs/arm64-v8a'));
   copyStaticTreeIfPresent(resolve(app.dir, 'assets'), resolve(staged, 'assets/app/assets'));
-  // The module's shader text (LLP 1030 D8), which the host registers from `shaders/` under the asset root.
-  if (gpu) copyShaders(app, resolve(staged, 'assets/app/shaders'));
+  // The modules' shader text (LLP 1030 D8), which the host registers from `shaders/` under the asset root.
+  if (gpu.length) copyShaders(app, resolve(staged, 'assets/app/shaders'));
   // A game's resolved manifest (with its `app` identity) is the one its shells were generated with.
   // A date or time control's picker is Compose Material 3's, linked only for a plan that has one (LLP 1115.001.000 D2).
   const compose = uses.includes('dates') ? ['-Pcompose=1'] : [];
@@ -847,7 +863,7 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
     assembled = runGradle(['--no-watch-fs', ...(env.CI ? ['--no-daemon'] : []), bundle ? ':app:bundleRelease' : ':app:assembleRelease', `-Papp=${app.name}`, `-PappDir=${app.manifest.game ? app.workspace : app.dir}`,
       `-PexactDevelopment=${development ? '1' : '0'}`,
       `-PappBuildDir=${dirs.app}`, `-PcanvasBuildDir=${dirs.canvas}`, `-PndkPath=${env.ANDROID_NDK_HOME}`, '--project-cache-dir', dirs.cache, `-Pkotlin.project.persistent.dir=${dirs.kotlin}`,
-      ...(gpu ? [`-PgpuModule=${basename(gpu)}`] : []), ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env) } });
+      ...gpuArgs, ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env) } });
     if (assembled) graph.kept();
   } finally {
     graph.done();

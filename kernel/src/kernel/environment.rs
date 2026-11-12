@@ -2,6 +2,17 @@
 use super::*;
 
 impl Kernel {
+    /// Restore the host's previous scale report after a refused update, including
+    /// its absence. An absent report uses the layout default of one.
+    pub fn restore_display_scale_report(&mut self, scale: Option<f32>) -> Result<(), KernelError> {
+        self.set_display_scale(scale.unwrap_or(1.0))?;
+        if scale.is_none() {
+            self.arena.display_scale = None;
+            self.arena.display_scale_next = None;
+        }
+        Ok(())
+    }
+
     /// Format an instant with the same host that measures its reserved width.
     pub fn format_time(&mut self, request: &crate::time::TimeRequest<'_>) -> Option<String> {
         self.measurer.format_time(request)

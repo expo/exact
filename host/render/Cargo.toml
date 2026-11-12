@@ -42,12 +42,11 @@ libc = "0.2"
 windows-sys = { version = "0.61.2", features = ["Win32_Networking_WinSock"] }
 
 [features]
-# Integration tests only: a new executor waits for a native-worker slot
-# (src/executor.rs `WAIT_FOR_SLOT`), turned on by the dev-dependency below.
-test-wait = []
+# Integration tests only: each test thread owns its executor worker budget.
+test-budget = []
 
 [dev-dependencies]
 # The listener the shared executor's tests install (LLP 1133.005).
 exact-listen = { path = "../listen" }
-exact-render = { path = ".", features = ["test-wait"] }
+exact-render = { path = ".", features = ["test-budget"] }
 contract = { path = "../../contract/cli" }

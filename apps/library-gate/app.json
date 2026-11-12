@@ -28,5 +28,10 @@
         "minHeight": 420
       }
     }
+  },
+  "deploy": {
+    "store": {
+      "ios": "0"
+    }
   }
 }

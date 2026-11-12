@@ -1,5 +1,29 @@
 # Vendored Ibex split crates — Exact integration ledger
 
+## Android 10 and Intl
+
+Android selects Intl from the validated bundle receipt. The published v5
+bundle builds without it. A receipt enabling Hermes Intl must authenticate the
+base, English and full ICU data tiers, as on Linux. `hermes-lean-sys` exports
+that availability to both the Ibex installer and Exact's Rust/C++ script lists.
+Only the selected data archive links; Exact selects English. The link directives
+keep the receipt’s VM, ICU, then platform-runtime order. Ibex supplies
+NumberFormat and DateTimeFormat; Hermes's ICU backend supplies Collator.
+Stub builds emit empty Intl bytecode beside the other binding placeholders.
+
+The release pin remains v5. A rebuilt bundle can be selected through
+`HERMES_LEAN_SYS_DIR_aarch64_linux_android`; the upstream Android builder must
+support `IBEX_ANDROID_INTL=true` and target API 29. Publishing and authenticating
+its successor is separate from this integration.
+
+The installer’s `--check-dir <directory> <rust-triple>` validates a local cross
+bundle with the build resolver and cached host compiler, without installing or
+downloading it. `scripts/hermes-android.mjs` checks each extracted candidate
+before publishing it or changing `current`. Cross-bundle admission verifies every
+receipt-listed archive, header, compiler and ICU filter against its digest,
+independently of the selected Intl data tier. Android’s JSI, Boost and base ICU archives
+must be present in the manifest.
+
 ## Portable event-stream timeouts
 
 `transport/rustls_http.rs` removes implicit read deadlines after a successful
@@ -259,16 +283,19 @@ remains available.
 
 ## Remaining consumer integration seams
 
-`ibex2`, `ibex2-sqlite` and `hermes-lean-sys` declare empty workspaces. This stops
-Cargo from discovering an enclosing checkout when `cargo fmt --all` visits these
-excluded path dependencies in a nested worktree. Preserve these boundaries when
-refreshing the vendored crates.
+`ibex2`, `ibex2-sqlite`, `hermes-lean-sys` and `hermes-lean-sys-installer`
+declare empty workspaces. This stops Cargo from discovering an enclosing checkout
+when formatting excluded path dependencies or running the printed installer command
+in a nested worktree. Preserve these boundaries when refreshing the vendored crates.
+`scripts/app-workspace.test.mjs` checks the installer's workspace with locked,
+offline Cargo metadata in ordinary and nested checkout layouts.
 
-`ibex2/build.rs` emits empty binding bytecode and hardening metadata only when
-`EXACT_JS_ENGINE=stub`. `hermes-lean-sys/build.rs` recognizes that same explicit
-configuration and emits empty engine/compiler metadata with no native link.
-Normal builds still validate and link the receipted lean VM. These remain
-Exact-only; paired `HERMESC_PATH` export is now generic upstream support.
+`ibex2/build.rs` emits empty binding bytecode and hardening metadata with
+`EXACT_JS_ENGINE=stub` or for watchOS. `hermes-lean-sys/build.rs` selects the
+same engine-free composition, with no native link. The watch bake refuses
+entries reaching TypeScript until LLP 1126.001 §5 Q3 passes; host-side bakers
+still validate and link the receipted lean VM. These remain Exact-only;
+paired `HERMESC_PATH` export is now generic upstream support.
 
 `secrets/darwin_keychain.mm` selects the bundle's
 `ExactKeychainAccessGroup` only when `ExactAppIdentifier` equals the Keychain
@@ -459,6 +486,8 @@ database's home directory and login shell, and a wait at the process's
 exit (`wait_at_exit`). It moves the child's descriptors above 2 before
 putting them in place, and `fork` runs with every signal blocked until the
 child's handlers are defaults. A `PATH` lookup skips relative entries.
+On macOS a group's member list uses libproc's PID count to size its buffer
+and retries a full buffer, so growth cannot silently truncate the list.
 `stdlib/fs.rs` resolves `home:/` and `bundle:/` (the namespaces `grant.rs`
 reads) against roots the host sets (`set_roots`), the bundle read only,
 each path admitted as spelt and run from its root's retained descriptor

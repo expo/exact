@@ -381,6 +381,7 @@ function agentReply(request) {
         };
         st.atoms = globalThis.exact.atoms?.state(idOf) ?? [];
         // LLP 1045.000 D9 (atoms.js)
+        st.decorations = globalThis.exact.decorations?.state(views) ?? [];
         st.navigation = navigation.observation(root);
         st.window = { title: document.title };
         if (host.page) {

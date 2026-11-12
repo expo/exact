@@ -201,6 +201,12 @@ impl Ring {
         self.order.in_flight()
     }
 
+    /// Whether a complete frame has not been published yet
+    /// ([`Order::unpublished`]).
+    pub(crate) fn unpublished(&self) -> bool {
+        self.order.unpublished()
+    }
+
     /// Take the frames the GPU has finished ([`Order::settle`]).
     pub(crate) fn settle(&mut self) {
         self.order.settle();

@@ -158,9 +158,10 @@ class ExactPicker internal constructor(
             return try { LocalTime.of(h.toInt(), mi.toInt(), sec.ifEmpty { "0" }.toInt(), nanos) } catch (e: DateTimeException) { null }
         }
 
-        /** The day and time a valid local date and time string names, else null. */
+        /** The day and time a valid local date and time string names (the two joined by `T` or a space, as HTML's
+         * grammar has them), else null. */
         fun parseDateTime(s: String): LocalDateTime? {
-            val t = s.indexOf('T').takeIf { it >= 0 } ?: return null
+            val t = s.indexOfFirst { it == 'T' || it == ' ' }.takeIf { it >= 0 } ?: return null
             val day = parseDay(s.substring(0, t)) ?: return null
             return parseTime(s.substring(t + 1))?.atDate(day)
         }

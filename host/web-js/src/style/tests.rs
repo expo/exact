@@ -509,6 +509,10 @@ pub(crate) fn assert_spring_transitions(map: &str) {
         "color 0.25s ease 0s, color -exact-spring()",
         "all -exact-spring(), color 0.25s ease 0s",
         "translate -exact-spring(), scale -exact-spring(), rotate -exact-spring(), opacity -exact-spring(), height -exact-spring()",
+        // #49: in any ASCII case, as motion reads it.
+        "COLOR -EXACT-SPRING(100, 20, 1)",
+        "All -Exact-Spring() 0S 100MS",
+        "Background-Color -exact-spring(250, 3, 0.01), Opacity 0.25S Ease 0S",
     ];
     let actual = run(map, &values);
     for (i, value) in values.iter().enumerate() {

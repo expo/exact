@@ -1,6 +1,7 @@
 mod args;
 mod input;
 mod look;
+pub(crate) mod performance;
 mod render;
 mod textures;
 
@@ -172,7 +173,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         self.dirty = true;
         self.error = None;
         self.reported = false;
-        self.perf = Perf::default();
+        self.perf.restart();
         self.gpu_timing = None;
         Ok(())
     }
@@ -267,6 +268,9 @@ fn observer<'a, const ASSETS: bool>(
             if left < 240 {
                 let ms = start.elapsed();
                 perf.tick.push(ms);
+                if let Some(report) = &mut perf.reporting {
+                    report.phases[0].push(ms);
+                }
                 if let Some(trace) = trace {
                     trace.times[0] += ms;
                 }
@@ -292,6 +296,9 @@ fn observer<'a, const ASSETS: bool>(
                 if let Some(upload) = upload {
                     let ms = upload.elapsed();
                     perf.feed.push(ms);
+                    if let Some(report) = &mut perf.reporting {
+                        report.phases[1].push(ms);
+                    }
                     if let Some(trace) = trace {
                         trace.times[1] += ms;
                     }
@@ -323,6 +330,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
     }
     fn clock(&mut self, seekable: bool) {
         self.seekable = seekable;
+        if let Some(report) = &mut self.perf.reporting {
+            report.clock(seekable);
+        }
         self.resting = false;
         self.idle_tick = None;
         self.presentation.clock(seekable);
@@ -538,6 +548,14 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
         self.perf.rendering = true;
         let wants = self.render_frame(frame, device, queue, encoder, target, format);
         self.perf.rendering = false;
+        if self.encoded.is_some() && self.perf.reporting.is_some() {
+            let scale = self.raster_scale();
+            let samples = self.samples.map_or(1, exact_game::SceneSamples::count);
+            let cap = self.max_fps();
+            if let Some(report) = &mut self.perf.reporting {
+                report.encoded(frame, &self.timing, scale, samples, self.perf.stats, cap);
+            }
+        }
         drop(timing);
         self.perf.pipeline_pending += crate::perf::pipeline_ms();
         wants
@@ -610,6 +628,21 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
             return;
         }
         sim.input(e);
+    }
+    fn set_performance_reporting(&mut self, enabled: bool) {
+        if enabled {
+            self.perf
+                .reporting
+                .get_or_insert_with(Default::default)
+                .clock(self.seekable);
+        } else {
+            self.perf.reporting = None;
+        }
+    }
+    fn take_performance(&mut self, now_ms: f64) -> Option<String> {
+        let report = self.perf.reporting.as_mut()?;
+        report.clock(self.seekable);
+        report.take(now_ms)
     }
     fn published(&mut self) -> Option<String> {
         self.sim.as_mut().and_then(Sim::take_published)

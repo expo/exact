@@ -1,4 +1,4 @@
-# wgpu-hal 30.0.1 — fourteen local patches: five in Metal, nine in Vulkan
+# wgpu-hal 30.0.1 — fifteen local patches: six in Metal, nine in Vulkan
 
 Complete crates.io archive, including the upstream MIT/Apache licenses and
 `.cargo_vcs_info.json`. No dependency upgrade. Patch 11 offers an explicit native arithmetic-only f16 opt-in. Every changed
@@ -77,7 +77,7 @@ submit and alone — what `gpu/tests/it/frame.rs` holds patches 1 and 2 to
 others once).
 
 `Cargo.toml` and `build.rs`: the package has `links = "exact_wgpu_hal"` and
-its build script prints `cargo::metadata=patches=12`, so `exact-gpu`'s build
+its build script prints `cargo::metadata=patches=15`, so `exact-gpu`'s build
 script sees `DEP_EXACT_WGPU_HAL_PATCHES`. Cargo applies `[patch.crates-io]`
 only from the workspace root: an app in a workspace of its own that lacks the
 line would link the published crate. `gpu/build.rs` refuses that build and
@@ -232,7 +232,7 @@ This avoids another public feature bit and a fork of wgpu-core/types. It is an
 Exact-native policy, not an upstreamable WebGPU feature grant. An upstream fix
 should separate arithmetic from uniform storage and make Naga declare only
 capabilities its output uses. `gpu/build.rs` requires the patch count in the
-crate's metadata (now 12) on Android as well as Apple, and Android names the
+crate's metadata (now 15) on Android as well as Apple, and Android names the
 direct HAL dependency so Cargo supplies that metadata.
 
 ## 12. A lost device's swapchain lets go of a held image (Vulkan)
@@ -274,6 +274,22 @@ requires at least 2^30, so the adapter's `max_buffer_size` limit was 0 and
 A value below 2^30 is now read as not reported, as on a driver without
 maintenance4: the memory allocation limit and the platform cap still bound
 it. A conformant driver is unaffected. Upstreamable.
+
+## 15. Optional persistent Metal pipelines
+
+`src/metal/binary_archive.rs`, `device.rs`, `adapter.rs`, `mod.rs`.
+`Device::install_binary_archive` installs an optional device-owned binary archive.
+Standard render and compute pipeline creation first tries the archive with
+`FailOnBinaryArchiveMiss`, then adds a missing pipeline and compiles normally.
+A mutex excludes additions and snapshots from each other; every cache error leaves
+the ordinary compilation path available. `BinaryArchive::data` serializes through
+a private temporary directory because Metal accepts a file URL, not bytes.
+The caller owns the persistent envelope, identity and atomic file replacement.
+Mesh pipelines keep their existing path. The metadata revision is 15.
+
+This follows Apple's [binary archive workflow](https://developer.apple.com/documentation/metal/creating-binary-archives-from-device-built-pipeline-state-objects).
+The seam stays outside wgpu's portable `PipelineCache`, whose core header validates
+only Vulkan adapters in version 30. No dependency version or public feature changes.
 
 ## Updating
 

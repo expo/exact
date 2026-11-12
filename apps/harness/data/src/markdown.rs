@@ -5,7 +5,7 @@
 
 use crate::highlight::highlight;
 use crate::state::{Block, Line, Run};
-use markdown_parse::{parse, Kind};
+use markdown_parse::{parse_with, Html, Kind};
 
 /// Inline code's colour.
 pub const CODE: &str = "#e5c07b";
@@ -47,7 +47,11 @@ pub(super) fn streaming_blocks(source: &str) -> Vec<Block> {
 }
 
 fn blocks_with(source: &str, compact_code: bool) -> Vec<Block> {
-    let doc = parse(source, &|href| href.to_string());
+    // Raw HTML as written: a terminal draws no image, and image markup is
+    // read across lines and blocks, which a reply settled block by block
+    // (`settle`) cannot follow.
+    let doc =
+        parse_with(source, &|href| href.to_string(), &|| false, Html::LITERAL).unwrap_or_default();
     // The parsed block vector can have spare capacity for much larger rows.
     // Move its contents into exactly the number of transcript blocks needed.
     let mut out = Vec::with_capacity(doc.blocks.len());

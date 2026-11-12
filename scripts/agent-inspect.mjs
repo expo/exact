@@ -285,7 +285,8 @@ export function render(op, r, how = {}) {
     case 'state': {
       if (!r || typeof r !== 'object') return q(r);
       if (Array.isArray(r)) return stateCap(q(r), r, how);
-      if (r.draws || r.visible || r.look) return renderLook(r);
+      // Routed by what was asked: a world's `perf` has a `draws` (the last frame's count) and a `look` too.
+      if (how.look) return renderLook(r);
       // One line a section: pretty-printing cost an app's state more than half again its JSON (Caltrain, 2026-10-09).
       const { epoch, incarnation, clock, ...rest } = r, app = 'slots' in r;
       const head = [epoch != null && `epoch ${epoch}`, incarnation != null && `incarnation ${incarnation}`, clock != null && `clock ${clock} ms`].filter(Boolean).join(' · ');
@@ -1091,6 +1092,9 @@ function renderAgreement(a) {
   return out.join('\n');
 }
 
+/** The second words of `state` that read a world's look frame. */
+export const LOOK_READS = ['draws', 'visible', 'look'];
+
 /** The `state` op's words (LLP 1116.007 D3.9). `state` is the whole record; `state <target>` a world's own (a game's
  * `world:*` or `world:entity`: its entities; `state <canvas> input` its world's input); a name that is a state, derive or resource, or a field of the record
  * (`mediaSession`), reads that, down a dotted path (`groceries.0.done`) as an authored `expect state` does. Any other
@@ -1098,7 +1102,7 @@ function renderAgreement(a) {
  * or text (a sequencer's `transport` bar and the record's `transport`). */
 export async function stateOp(s, args) {
   // `state <canvas> draws`, `state <canvas>:<entity> visible` and `state <canvas> look` are a world's look frame (LLP 1127.000 D1, D4).
-  const look = ['draws', 'visible', 'look'].includes(args[1]) ? { [args[1]]: true, world: true } : {};
+  const look = LOOK_READS.includes(args[1]) ? { [args[1]]: true, world: true } : {};
   const page = { ...look, ...(args[1] === 'events' ? {world:true, events:true, ...(args[2] ? {event_type:args[2]} : {})} : {}), ...(args.includes('from') ? { from: Number(args[args.indexOf('from') + 1]) } : {}), ...(args.includes('limit') ? { limit: Number(args[args.indexOf('limit') + 1]) } : {}), ...(args.includes('resources') ? { resources: true } : {}) };
   const read = (target) => s.state(target, args[1] === 'under' ? args[2] : undefined, args[1] === 'pose', args[1] === 'busy', page);
   if (args[0] == null) return read();

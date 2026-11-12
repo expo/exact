@@ -826,6 +826,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         // dismissal, so its editor can accept the batch's focus handoff.
         let primary: UIViewController? = primaryPlain ?? primaryNavigation
         let owners = [primary].compactMap { $0 } + presentedNavigations
+        var held = false
         for index in 0...common where index < owners.count {
             let stack = Array(wanted[parts[index]])
             // Show the router's tab's route when it is a plain tab (PlainTabIOS)
@@ -834,10 +835,16 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
                 owners[index].view.layoutIfNeeded()
                 continue
             }
-            prepareRoutes(stack, in: nav)
+            let waits = prepareRoutes(stack, in: nav)
             // Compare and write only the routes: under More, UIKit's list stays before them (`stackFront`)
             let routes = nav.stackRoutes
             if !routes.elementsEqual(stack, by: ===) {
+                // UIKit lays an arriving route out as it is given the stack: a header
+                // lifted in this batch must have left the layout by then (`coverLifted`).
+                if waits {
+                    held = true
+                    continue
+                }
                 // @ref LLP 1038 D6 — a tab change swaps immediately. A replacement within one stack
                 // whose new top was not on it (a finished screen giving way to its result) arrives
                 // as UIKit's own push, rather than cutting.
@@ -858,7 +865,11 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
             recordOwned(nav)
             ApplyProfile.time("nav.layout") { nav.view.layoutIfNeeded() }
         }
-        unanimated = false
+        if held {
+            syncAfterBatch()
+        } else {
+            unanimated = false
+        }
         if mounted.count > common {
             pendingSync = true
             presenter.modals.closeTop()
@@ -1003,6 +1014,18 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         if pendingPress !== press { pendingPress?.pending = false; pendingPress?.settle() }
         press.pending = true
         pendingPress = press
+    }
+
+    /// Sync again once the batch being applied and the covers it lifted have
+    /// been applied. The runtime's answer to the covers syncs first when it
+    /// moves anything, and this sync is then owed nothing.
+    private func syncAfterBatch() {
+        pendingSync = true
+        presenter.afterBatch { [weak self] in
+            guard let self, pendingSync, !syncing else { return }
+            pendingSync = false
+            sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+        }
     }
 
     func modalDidDismiss() {

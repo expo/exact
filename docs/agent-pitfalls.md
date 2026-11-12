@@ -13,6 +13,12 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 ## Layout
 
+- **A search field pushes a header button off a phone.** Under `--chrome agent`,
+  the authored header lays out in the page. A search field with no width constraint
+  can keep its intrinsic width even when the heading has `flex=1`. Give the field
+  `flex=1 min-width=0` so it takes the space left by the heading and buttons.
+  (Agents, 402-point iOS simulator, 2026-11-12.)
+
 - **A layout-region inset is not a page gutter.** The web can report zero
   for `env(-exact-readable-content-corners-inset-left)` and its right-edge equivalent. Give reading
   content ordinary padding inside the safe region, and bound a full-width
@@ -196,6 +202,14 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `<n> 1 0%`; `contract vocab flex`). Fix: `flex="none"` (`0 0 auto`: the width
   is the size), or no `flex` and `flex-shrink=0`. (Stocks DIARY, about 15
   minutes; reproduced on the web and macOS, 2026-10-04.)
+
+- **A package view with `height=44` can shrink to zero in a crowded column.**
+  CSS's default `flex-shrink: 1` lets an overfull fixed-height column compress
+  its children, and `min-height: auto` holds a box only at its content's size:
+  a native leaf such as `exact-sign-in-button` has none, so it goes to 0, as an
+  empty `<div>` does on the web. Put the content in an auto-height column
+  inside a viewport-sized `scroll`, or give the leaf `flex-shrink=0`.
+  (Auth Fixture's provider buttons, iOS simulator, 2026-11-12.)
 
 - **A one-edge border draws a frame, and a drawer closed to `height=0` stays open
   a few pixels.** `border-top-width=1 border-style="solid"` on a 60 × 20 box drew a
@@ -437,9 +451,10 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   the scroller right after the route's `header`. Fix: a `scroll flex=1 min-height=0`
   right after the `header`. It is the bar's scroller with nothing written, and
   `navigationScroll="id"` on the route names a different one
-  (docs/contract-for-agents.md, "Routes and web documents"). A pushed route's large
-  title opens collapsed over its scroller and expands on a pull (QUEUE.md); keep
-  large titles for a stack's first screen. The compiler refuses a name nothing in the
+  (docs/contract-for-agents.md, "Routes and web documents"). A pushed route whose
+  content is a plain `list` (its rows built in slices) still opens its large title
+  collapsed (issues/20261112-pushed-screen-large-title-bar-is-54-points.md).
+  The compiler refuses a name nothing in the
   route carries, or one on a box that never scrolls (`lower-route-scroll`). **Candidate diagnostics:** the
   compiler could refuse a named scroller that is not right after the `header` (an
   iOS-only rule today, so not refused); the hosts could journal a route whose
@@ -565,7 +580,12 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 - **With `viewport-fit="cover"`, route content goes under the native bar.** Cause:
   the bar's cover is added to the route's padding, but a cover-fit root has no top
   safe area. Fix: put `env(safe-area-inset-top)` on the route column, not on each
-  authored header. (Signal Clone, build 5.)
+  authored header. (Signal Clone, build 5.) At the bottom the route keeps the tab bar's
+  cover, so its in-flow content ends above the bar; on iOS 26 a route's last scroller with
+  nothing under it is drawn on under the bar, inset by it, so a list or a full-bleed image
+  runs behind the glass while its end rests above it. Pad the route or the scroller with
+  `env(safe-area-inset-bottom)` for the home indicator: padding on a box between them keeps
+  the scroller above the bar.
 - **A banner at the root of a tabbed app stays under the status bar on iOS.** A
   root-level `position="absolute" top=0` box padded with `env(safe-area-inset-top)`
   is drawn at y 0, and one at `top="calc(env(safe-area-inset-top) + 8px)"` at y 8.
@@ -926,6 +946,36 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   (`agent macos --seed 7 …`), or drive against the stand-in
   (`bun exact.mjs docs convex live queries`). A launch outside the driver draws
   the system's entropy. (LLP 1157 §6, 2026-11-10.)
+
+- **A sign-out that also fetches leaves Convex signed in.** `cx.setAuth(undefined)`
+  and then a `fetch` (an auth provider's sign-out) in one synchronous mutation
+  source: the runner refuses it (`a mutation cannot both send on a socket and
+  fetch`), so its `Authenticate` never leaves and the socket stays the
+  person's. Cause: `setAuth` sends on the socket. Fix: an `async` source that
+  awaits the fetch, then calls `setAuth`. The module gives no answer and runs
+  no mutation as the wrong person meanwhile (`bun exact.mjs docs convex live
+  queries`). (expo/exact#54, 2026-11-12.)
+
+- **An upload of a picked file under the agent fails only when it runs.** The
+  `pick` succeeds, and the upload's `exactBodyFrom app:/…` fails with `storage
+  is unavailable in agent mode unless the drive names a scratch store`: a
+  picked file is a copy in app storage, which a web drive has only with
+  `--storage <name>`. Fix: name one on any drive that uploads what it picks.
+  (expo/exact#54, 2026-11-12.)
+
+- **A helper action does not see what its caller just assigned.** `sel = next`
+  then `follow()`, with `follow` reading `sel`, would read the old `sel`: a call
+  is its callee's statements in the caller's one commit, and every statement
+  reads the state the action started with (LLP 1089 D2). The compiler warns of
+  the read (`analyze-read-after-assign`, naming both lines; a warning since LLP
+  1035.005.002 C2, as the same read in the action's own body is). Fix: pass the
+  value the helper should see, `follow(next)`, or a `let` bound before the
+  assignment for the old one. (Spreadsheet F21 and Files F27 diaries, where a
+  copied block was the workaround.) In the action's own body the same read is
+  the same warning: `now = performanceNow()` then `if now >= endsAt`
+  tests the last tick's time (focus-timer's phases changed 250 ms late in two
+  bake-off rounds). Fix: `let stamp = performanceNow()`, `now = stamp`, and read
+  `stamp`.
 
 - **A delete or save is lost when the page reloads right after it.** An action that
   `send`s a write and navigates away in the same commit passes every test, but a
@@ -2002,6 +2052,14 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   (#115, 2026-11-11.)
 
 ## Games
+
+- **`exact new --game` refuses `--name` and `--bundle-id`.** Those flags name an app.
+  Create the game with `exact new <path> --game`, then set `app.name` and `app.id`
+  in its generated `app.json` before the first build. (Camera fixture, 2026-11-12.)
+
+- **Game wrappers under `.shells/` are regenerated.** Edit the root `app.json`,
+  `app.contract` and `logic/`, or an authored `render/` crate. Put added logic
+  dependencies in `logic/Cargo.toml`, not `.shells/logic/Cargo.toml`.
 
 A game's pitfalls (the world and its saves, game input, its tests, proof and setup)
 are in [Pitfalls when writing exact2 games](game-pitfalls.md).

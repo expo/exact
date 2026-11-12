@@ -187,6 +187,8 @@ pub struct ButtonFaceStyle {
     /// Root font size for the neutral control size's rem typography. Host-only
     /// context shared by measurement and paint, not an authored style row.
     pub root_font_size: f32,
+    /// The neutral bar's body and symbol sizes: the image overhangs its body-sized place.
+    pub neutral_bar_symbol: Option<(f32, f32)>,
     /// Root font size for an admitted Neutral narrow tab. Host-only geometry
     /// context shared by measurement and paint, not an authored style row.
     pub neutral_tab_root: Option<f32>,

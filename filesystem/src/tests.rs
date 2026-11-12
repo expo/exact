@@ -62,7 +62,7 @@ fn static_trees_omit_finder_metadata_and_keep_other_dotfiles() {
         "mark.DS_Store",
         "mark.png",
     ];
-    for op in ["names", "tree"] {
+    for op in ["names", "tree", "inventory"] {
         let entries = operate(&root, &json!({"op":op}), None).unwrap();
         assert_eq!(
             entries.as_object().unwrap().keys().collect::<Vec<_>>(),
@@ -72,6 +72,8 @@ fn static_trees_omit_finder_metadata_and_keep_other_dotfiles() {
         for name in names {
             let expected = if op == "tree" {
                 json!(STANDARD.encode(name))
+            } else if op == "inventory" {
+                json!({"sha256": format!("{:x}", Sha256::digest(name.as_bytes())), "bytes": name.len()})
             } else {
                 Value::Null
             };
@@ -102,8 +104,10 @@ fn a_static_inventory_refuses_a_fifo() {
     let path = std::ffi::CString::new(fixture.path("assets/pipe").to_str().unwrap()).unwrap();
     // SAFETY: path is a live, NUL-terminated name in this test's private directory.
     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
-    let error = operate(&root, &json!({"op":"tree"}), None).unwrap_err();
-    assert!(error.to_string().contains("regular files"), "{error}");
+    for op in ["tree", "inventory"] {
+        let error = operate(&root, &json!({"op":op}), None).unwrap_err();
+        assert!(error.to_string().contains("regular files"), "{error}");
+    }
 }
 
 #[test]

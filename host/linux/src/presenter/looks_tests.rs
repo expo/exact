@@ -272,3 +272,36 @@ fn a_target_appearing_during_a_stationary_press_is_painted() {
         pixel(&mut p, x, y)
     );
 }
+
+#[test]
+fn hover_scale_moves_paint_and_hits_without_moving_layout() {
+    let source = r##"component App
+  state presses = 0
+  action go
+    presses = presses + 1
+  view
+    column padding=50 width=400 height=400
+      box testId="card" press=go width=100 height=100 background-color="#ff0000" transition="scale 150ms linear"
+        :hover
+          scale=1.2
+"##;
+    let mut p = boot_with(source);
+    let k = p.host().kernel();
+    let card = k.node_by_key(k.find_by_test_id("card")[0]).unwrap().id;
+    let frame = p.host.kernel().node(card).unwrap().frame;
+    p.pointer_move(100., 100., 0.).unwrap();
+    p.clock(75.);
+    assert!((p.host.presented(card).scale - 1.1).abs() < 1e-5);
+    assert_eq!(p.host.kernel().node(card).unwrap().frame, frame);
+    p.clock(150.);
+    assert_eq!(
+        p.hit(45., 100.),
+        Some(card),
+        "the grown paint is the hit target"
+    );
+    assert_eq!(pixel(&mut p, 45., 100.), [255, 0, 0]);
+    p.pointer_move(390., 390., 150.).unwrap();
+    p.clock(300.);
+    assert!((p.host.presented(card).scale - 1.).abs() < 1e-5);
+    assert_ne!(p.hit(45., 100.), Some(card));
+}

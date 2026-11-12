@@ -329,6 +329,11 @@ fn encode_outcome(w: &mut Writer, outcome: &Outcome) {
             w.u32(m.coalesced);
             w.string(&m.protocol);
         }
+        // The runner parses a batch one message at a time: none crosses.
+        Outcome::Messages(_) => {
+            w.u8(3);
+            w.string("a source parses a stream's messages one at a time");
+        }
         Outcome::Closed {
             code,
             reason,

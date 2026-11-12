@@ -49,6 +49,60 @@ final class FaceSymbolTests: XCTestCase {
         XCTAssertEqual(json(["button": true, "symbol": "", "symbolPath": Self.square, "symbolIcon": "icon.reply"]).symbolIcon, "icon.reply")
     }
 
+    /// The repository's root, from this file's place in it.
+    static let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("../../../..").standardizedFileURL
+    /// The portable roles, `[role, Apple name, path]`: the declaration's own rows (`kernel/tables/schema.json`).
+    static func roles() throws -> [[String]] {
+        let schema = repository.appendingPathComponent("kernel/tables/schema.json")
+        let table = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: schema)) as? [String: Any])
+        return try XCTUnwrap(table["symbols"] as? [[String]])
+    }
+
+    /// Every portable role's Apple name is an SF Symbol this OS draws (LLP
+    /// 1035.004 D1): an unknown name draws nothing and says nothing (D3).
+    func testEveryPortableRoleIsAnSFSymbolThisOSDraws() throws {
+        let rows = try Self.roles()
+        XCTAssertGreaterThan(rows.count, 90)
+        let blank = rows.filter { FaceSymbol.image($0[1]) == nil }.map { "\($0[0]) (\($0[1]))" }
+        XCTAssertEqual(blank, [], "roles whose SF Symbol this OS does not draw")
+    }
+
+    #if os(macOS)
+    /// Every portable role's Apple name is an SF Symbol on the oldest OS the
+    /// hosts run on (`Package.swift`'s `platforms`), not only this one: a name
+    /// a newer SF Symbols release added is blank there. CoreGlyphs dates each
+    /// name by its release year and maps a year to the OS versions that ship it.
+    func testEveryPortableRoleIsAnSFSymbolAtTheDeploymentFloor() throws {
+        let package = try String(contentsOf: Self.repository.appendingPathComponent("host/apple/Package.swift"), encoding: .utf8)
+        func floor(_ platform: String) throws -> [Int] {
+            let pattern = try NSRegularExpression(pattern: "\\.\(platform)\\(\\.v(\\d+)(?:_(\\d+))?\\)")
+            let match = try XCTUnwrap(pattern.firstMatch(in: package, range: NSRange(package.startIndex..., in: package)), "Package.swift names no \(platform) floor")
+            return (1..<match.numberOfRanges).compactMap { Range(match.range(at: $0), in: package).flatMap { Int(package[$0]) } }
+        }
+        let floors = ["iOS": try floor("iOS"), "macOS": try floor("macOS")]
+        let availability = URL(fileURLWithPath: "/System/Library/CoreServices/CoreGlyphs.bundle/Contents/Resources/name_availability.plist")
+        let plist = try XCTUnwrap(PropertyListSerialization.propertyList(from: Data(contentsOf: availability), format: nil) as? [String: Any])
+        let years = try XCTUnwrap(plist["symbols"] as? [String: String])
+        let releases = try XCTUnwrap(plist["year_to_release"] as? [String: [String: String]])
+        let version = { (text: String) in text.split(separator: ".").compactMap { Int($0) } }
+        let later = { (a: [Int], b: [Int]) in
+            for i in 0..<max(a.count, b.count) where (i < a.count ? a[i] : 0) != (i < b.count ? b[i] : 0) {
+                return (i < a.count ? a[i] : 0) > (i < b.count ? b[i] : 0)
+            }
+            return false
+        }
+        var late: [String] = []
+        for row in try Self.roles() {
+            guard let year = years[row[1]], let release = releases[year] else { late.append("\(row[0]) (\(row[1])): undated"); continue }
+            for (platform, oldest) in floors where later(version(release[platform] ?? "999"), oldest) {
+                late.append("\(row[0]) (\(row[1])): \(platform) \(release[platform] ?? "?")")
+            }
+        }
+        XCTAssertEqual(late, [], "roles whose SF Symbol is newer than the deployment floor \(floors)")
+    }
+    #endif
+
     /// Stage 14 C2: an even-odd icon's token says its rule and draws it; a
     /// nonzero icon's token is as it was, so its equality and caches hold.
     func testAnEvenOddFacesTokenCarriesItsRule() throws {
@@ -105,6 +159,22 @@ final class FaceSymbolTests: XCTestCase {
         NSGraphicsContext.restoreGraphicsState()
         let c = try XCTUnwrap(rep.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
         return [c.redComponent, c.greenComponent, c.blueComponent, c.alphaComponent]
+    }
+
+    /// A bar item's badge draws a path's glyph in its ink, the colour on its
+    /// image node, as a palette colour draws an SF Symbol's.
+    func testABadgesPathIsDrawnInItsInk() throws {
+        for symbol in [["symbolName": "square.fill"], ["symbolName": "", "symbolPath": Self.square, "symbolViewBox": "0 0 24 24"]] {
+            let p = Presenter()
+            p.apply(wireBatch([
+                ["op": "create", "id": 1, "kind": "view", "style": ["background_color": [0, 0, 255, 255]]],
+                ["op": "create", "id": 2, "kind": "image", "props": symbol, "style": ["text_color": [255, 255, 255, 255]]],
+                ["op": "children", "id": 1, "ids": [2]], ["op": "roots", "ids": [1]],
+            ]))
+            let face = try XCTUnwrap(BadgeFace(box: try XCTUnwrap(p.views[1])))
+            let ink = try middle(face.image)
+            for (channel, want) in zip(ink, [1.0, 1.0, 1.0, 1.0]) { XCTAssertEqual(channel, want, accuracy: 0.02, "\(symbol): \(ink)") }
+        }
     }
 
     @MainActor func testAToolbarItemsPathIsItsInstalledTemplateImage() throws {

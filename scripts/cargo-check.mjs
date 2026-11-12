@@ -64,8 +64,10 @@ export function rememberWorkspace(dir, outside, manifests, workspace, check) {
 /** The generated native workspace of an app that authored none (LLP 1153 D1): under its `.exact/`, which is ignored. */
 export const shellsDir = (dir) => resolve(dir, '.exact/shells');
 const readToml = (path) => { try { return Bun.TOML.parse(readFileSync(path, 'utf8')); } catch { return null; } };
+/** The host crates an app writes beside app.json: each one only its host's build reads. */
+export const HOST_CRATES = ['apple', 'ios', 'macos', 'linux', 'web', 'windows', 'android'];
 /** The crates an app writes beside app.json. */
-export const APP_CRATES = ['apple', 'ios', 'macos', 'linux', 'web', 'windows', 'android', 'data', 'gpu'];
+export const APP_CRATES = [...HOST_CRATES, 'data', 'gpu'];
 /** How an app with Rust of its own gets the workspace it needs (LLP 1153 D1.4: the generated one, copied up). */
 export const NO_WORKSPACE = 'An app with Rust of its own (a gpu/ or data/ crate) copies the generated workspace up from .exact/shells/, which a native verb writes only while no such crate is there: `bun exact.mjs contract vocab gpu-module` says how.';
 /** Whether the workspace at `root` owns the package at `path`, as Cargo reads it: a `members` glob names it, or a
@@ -119,6 +121,38 @@ export function authoredWorkspace(dir) {
   return dir;
 }
 
+/** The Cargo configuration files a build in `cwd` reads, lowest precedence first: `$CARGO_HOME`'s, then each `.cargo/`
+ * from the root down to `cwd`, `config` before `config.toml` in each
+ * (https://doc.rust-lang.org/cargo/reference/config.html#hierarchical-structure). Each `{ path, configuration }`;
+ * an invalid one is refused, saying it could not `purpose`. */
+function cargoConfigurations(cwd, env, purpose) {
+  const directories = [];
+  for (let at = resolve(cwd); ; at = dirname(at)) {
+    directories.push(at);
+    if (at === dirname(at)) break;
+  }
+  const home = env.CARGO_HOME ?? resolve(homedir(), '.cargo');
+  return [...new Set([home, ...directories.reverse().map(at => resolve(at, '.cargo'))])].flatMap(directory => {
+    const path = ['config', 'config.toml'].map(name => resolve(directory, name)).find(existsSync);
+    if (!path) return [];
+    try { return [{ path, configuration: Bun.TOML.parse(readFileSync(path, 'utf8')) }]; }
+    catch { throw new Error(`Cannot ${purpose} because Cargo configuration ${path} is unreadable or invalid. Fix its TOML before building.`); }
+  });
+}
+
+/** The `--config` that gives `target` the rustflags `flags` beside those its Cargo configuration gives it. A TOML array
+ * keeps an argument with a space whole, and Cargo appends it to a configured array. Cargo refuses to merge an array
+ * into a configured string ("expected string, but found array"), so over a string the flags are one string, the
+ * configured flags first, which replaces it; a flag with a space cannot join one. */
+export function targetRustflags(target, flags, { cwd = process.cwd(), env = process.env } = {}) {
+  const configured = cargoConfigurations(cwd, env, `pass ${target}'s rustflags`).findLast(({ configuration }) => configuration.target?.[target]?.rustflags !== undefined);
+  const value = configured?.configuration.target[target].rustflags;
+  if (typeof value !== 'string') return ['--config', `target.${target}.rustflags=${JSON.stringify(flags)}`];
+  const spaced = flags.find(flag => /\s/.test(flag));
+  if (spaced) throw new Error(`${configured.path}: [target.${target}] rustflags is a string, which Cargo splits at whitespace, so the build cannot add ${spaced} to it; write it as an array, rustflags = ${JSON.stringify(value.trim().split(/\s+/).filter(Boolean))}`);
+  return ['--config', `target.${target}.rustflags=${JSON.stringify([value.trim(), ...flags].filter(Boolean).join(' '))}`];
+}
+
 /** Make Apple's deployment environment part of every target unit's Cargo hash. Add to each existing flags source
  * so Cargo keeps choosing and merging flags itself; introducing a target table would hide `build.rustflags`. */
 export function appleCargo(command, arguments_, options = {}) {
@@ -126,24 +160,13 @@ export function appleCargo(command, arguments_, options = {}) {
   const apple = command === 'cargo' && (targets.some(value => value.includes('-apple-')) ||
     !targets.length && process.platform === 'darwin' && ['build', 'rustc', 'check', 'test', 'clippy'].includes(arguments_[0]));
   if (!apple) return [command, arguments_, options];
-  const environment = { ...(options.env ?? process.env) }, directories = [];
+  const environment = { ...(options.env ?? process.env) };
   // No SDKROOT, whatever the caller inherited: rustc and cc-rs ask xcrun for each target's own SDK. One left here
   // reaches the build scripts' C and C++ compiles for the Mac too, where cc-rs passes no -isysroot and clang takes
   // SDKROOT: an iOS SDK there fails `-Werror` (aws-lc-sys's probes) on -Wincompatible-sysroot.
   delete environment.SDKROOT;
-  for (let at = resolve(options.cwd ?? process.cwd()); ; at = dirname(at)) {
-    directories.push(at);
-    if (at === dirname(at)) break;
-  }
-  const home = environment.CARGO_HOME ?? resolve(homedir(), '.cargo');
-  const configurations = new Set([home, ...directories.reverse().map(at => resolve(at, '.cargo'))]);
   const sources = new Map(), configuredEnvironment = new Map();
-  for (const directory of configurations) {
-    const path = ['config', 'config.toml'].map(name => resolve(directory, name)).find(existsSync);
-    if (!path) continue;
-    let configuration;
-    try { configuration = Bun.TOML.parse(readFileSync(path, 'utf8')); }
-    catch { throw new Error(`Cannot track Apple deployment targets because Cargo configuration ${path} is unreadable or invalid. Fix its TOML before building.`); }
+  for (const { path, configuration } of cargoConfigurations(options.cwd ?? process.cwd(), environment, 'track Apple deployment targets')) {
     if (configuration.build?.rustflags !== undefined) sources.set('build.rustflags', configuration.build.rustflags);
     for (const [selector, target] of Object.entries(configuration.target ?? {})) {
       if (target.rustflags !== undefined) sources.set(`target.${JSON.stringify(selector)}.rustflags`, target.rustflags);

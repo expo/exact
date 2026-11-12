@@ -8,10 +8,10 @@ publish = false
 [dependencies]
 contract = { path = "../../contract/cli" }
 exact-bake = { path = "../../bake" }
+serde_json = "1"
 
 [dev-dependencies]
 exact-runner = { path = "../../runner" }
-serde_json = "1"
 exact-gpu = { path = "../../gpu" }
 exact-plan = { path = "../../plan" }
 exact-kernel = { path = "../../kernel" }

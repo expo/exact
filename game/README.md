@@ -118,7 +118,7 @@ A bare name (`bun game/new.mjs my-game`) creates `game/games/my-game`; a path ch
 the directory. From an empty directory, `bun /path/to/exact2/game/new.mjs .` works too.
 A game outside this checkout — `bun scripts/exact.mjs new ../my-game --game` makes
 one, as `exact new` makes an app — also gets an app's `exact.mjs` and `AGENTS.md`:
-`bun exact.mjs test-rust` (the hostless tests), `web`, `web-build`, `test web`
+`bun exact.mjs test-rust` (Rust tests), `web`, `web-build`, `test web`
 (each `*.test.contract`; also `macos`, `ios`), `agent`, `mac`, `ios`, `windows`, `contract`,
 `prove` and `feedback`, with the exact2 checkout named once (LLP 1086).
 Generation resolves the generated workspace offline against the current SDK lock, so
@@ -139,7 +139,10 @@ The crate is `<Game::ID>-logic` and the bundle id `com.exact.<Game::ID>`; the ti
 follows the directory name. Run the Rust tests with
 `bun game/app/shells.mjs ./my-game --test` — in a fresh clone too, with no bake and
 no environment variables. It generates `.shells/`, resolves offline and locked, runs
-the determinism lints and then `cargo test` on the game's crates.
+the determinism lints and then `cargo test` on the game's crates. Tests in
+`linux/tests/*.rs` are copied beside the generated Linux shell and run as Cargo
+integration tests after building the game's GPU module. They can drive the
+production presenter and the game's surface without a window or a GPU device.
 The generated workspace carries the SDK's Rust toolchain pin, including for games
 outside the SDK. Explicit `cargo +toolchain` and `RUSTUP_TOOLCHAIN` overrides still
 apply. Run direct Cargo commands from the game's `.shells/` directory so they also load its deterministic compiler
@@ -447,7 +450,7 @@ pushed as far, the lower index); a button is down while any pad holds it. Per ho
 |---|---|---|
 | Web | the Gamepad API, polled each frame while a pad is connected; a pad without the standard mapping is reported (`pad 1 connected unmapped` in the journal) and delivers nothing | as the browser exposes pads |
 | macOS, iOS, tvOS | GameController's extended gamepad, on each change, and every pad as it is now when a canvas or a control in it takes or gives up the focus, when the app becomes active, and on the Mac when a window becomes or stops being key | a controller without the extended profile (the Siri Remote) is unmapped; on iPadOS with several windows the pads go to the earliest-made canvas holding the focus in any of them, not to the key window's |
-| Android | gamepad keys and joystick axes; each trigger with an axis (LTRIGGER or BRAKE for the left, RTRIGGER or GAS for the right) reports its travel, one without its key | every pad is reported standard; the host reads no pad's state on its return from the background, so a pad reports itself with its next event, and a button held through the background reads up until pressed again |
+| Android | gamepad keys and joystick axes; each trigger with an axis (LTRIGGER or BRAKE for the left, RTRIGGER or GAS for the right) reports its travel, one without its key; releases readings when the reader's window loses focus or the activity stops, keeping slots | every pad is reported standard; the host reads no pad's state on focus gain, so a pad reports itself with its next event, and a button held while unfocused reads up until pressed again |
 | Linux | evdev, at each report, stamped with the report's time moved into the host's clock by one origin per read and kept when that report moves the pads to a canvas, so readings buffered in one read keep their spacing and several pads' arrive in the order they happened (ties by index, then as read); in the kernel's gamepad layout (Xbox drivers' letters read as their positions); a pad's state is read when it opens and delivered ahead of the reports buffered since | pads present at launch only; every pad is reported standard |
 | Windows | XInput's four slots, every 8 ms while one is connected and every 250 ms otherwise, while the window has focus, and all four at once when it regains focus, so a pad unplugged meanwhile reads gone | `GamepadHome` is never down (XInput does not report the guide button); a reading is stamped at its poll |
 
@@ -1160,7 +1163,7 @@ bun app/shells.mjs --test
 ```
 
 The last command checks the SDK lock, then lints and tests every in-tree game's
-crates in its own workspace. Generated adapters are products, not empty test harnesses.
+crates in its own workspace, including any `linux/tests/*.rs`.
 Pass an app directory to test only that app: `bun app/shells.mjs /path/to/my-game --test`.
 Run the affected game's real-host proof too. Device lifecycle tests are opt-in:
 `cargo test -p exact-game-render surface_lifecycle -- --ignored` on a GPU host.

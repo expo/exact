@@ -362,7 +362,7 @@ pub(super) fn timed_out(end: Outcome, passed: bool, ms: u32) -> Outcome {
 
 /// An upload's hooks: each count of the body's bytes sent that the
 /// transport reports is a message, which a newer one replaces while the
-/// runner has not taken it (D4). Its start, when the hop loop has admitted
+/// runner has not taken it (D10). Its start, when the hop loop has admitted
 /// it, goes out only while `signal` has not aborted, and is then recorded
 /// here and a message no other replaces (`exact:sending`). The check and
 /// the record share the lock the host reads them under, after it aborts
@@ -372,7 +372,7 @@ pub(super) fn progress(shared: &Arc<Shared>, ticket: u64, signal: AbortSignal) -
     let (sending, shared) = (shared.clone(), shared.clone());
     Sent(
         Arc::new(move |loaded, total| {
-            super::message(&shared, ticket, Message::upload_progress(loaded, total));
+            super::message(&shared, ticket, Message::upload_progress(loaded, total), 0);
         }),
         Some(Arc::new(move || {
             {
@@ -382,7 +382,7 @@ pub(super) fn progress(shared: &Arc<Shared>, ticket: u64, signal: AbortSignal) -
                 }
                 budget.started.insert(ticket);
             }
-            super::message(&sending, ticket, Message::upload_start());
+            super::message(&sending, ticket, Message::upload_start(), 0);
             true
         })),
     )

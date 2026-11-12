@@ -80,6 +80,20 @@ class SvgHitTests: XCTestCase {
         svg.reset()
     }
 
+    func testHitsFollowThePaintsTheSceneSaysTakeThem() {
+        let host = CALayer(), svg = SvgScene()
+        host.addSublayer(svg.root)
+        // An empty gradient: the fill draws nothing but is set.
+        apply([shape(["f": NSNull(), "hp": [1, 0]])], to: svg)
+        XCTAssertEqual(svg.target(at: CGPoint(x: 60, y: 30)), 7, "a set fill that draws nothing")
+        apply([shape(["hp": [0, 1]])], to: svg)
+        XCTAssertNil(svg.target(at: CGPoint(x: 60, y: 30)), "visibleStroke: not the fill")
+        XCTAssertEqual(svg.target(at: CGPoint(x: 12, y: 30)), 7, "visibleStroke: the stroke, unpainted")
+        apply([shape(["hp": [0, 0]])], to: svg)
+        XCTAssertNil(svg.target(at: CGPoint(x: 60, y: 30)), "hidden")
+        svg.reset()
+    }
+
     func testMasksIgnoreCoverageButKeepIntersectingClips() {
         let host = CALayer(), svg = SvgScene()
         host.addSublayer(svg.root)

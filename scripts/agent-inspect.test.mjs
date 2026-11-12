@@ -432,3 +432,11 @@ test("tree shows Exact's picture-in-picture window on the floating image's row (
   const text = render('tree', { epoch: 1, incarnation: 1, clock: 0, nodes: [{ id: 7, depth: 0, type: 'Image', props: { testId: 'pip' }, pictureInPicture: window }] });
   expect(text.split('\n')[1]).toBe('Image#7 [pip] pictureInPicture{window "t3code://app" open at 1051,683,284,178 controls minimize,back,close shown}');
 });
+
+test("a world's perf prints its counters; only `state <canvas> draws` is a draw list (#207)", () => {
+  // `state world.0.perf`: there `draws` is the last frame's draw count.
+  const perf = { wallClock: true, pixels: [1280, 720], draws: 15, instances: 11, triangles: 5425 };
+  expect(render('state', perf, { name: 'world.0.perf' }).split('\n')).toEqual(['wallClock true', 'pixels [1280,720]', 'draws 15', 'instances 11', 'triangles 5425']);
+  const draws = { tick: 4, hash: '0x1', draws: [{ pass: 'opaque', draw: 'mesh', winding: 'ccw', writes: 'color' }] };
+  expect(render('state', draws, { name: 'world', look: true })).toBe('tick 4 · hash 0x1\nopaque        · mesh · ccw · writes color');
+});

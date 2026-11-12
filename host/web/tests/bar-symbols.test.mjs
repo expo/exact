@@ -28,7 +28,7 @@ const wrench = 'M160-880H800V-80H160Z';
 const icon = (id, sf, font, attributes = '') => `<img id="${id}" data-font="${sf ? font * scale : font}" data-symbol-source="symbol:icon|${sf}|0 -960 960 960|${wrench}|icons/wrench.svg" data-symbol-path="${wrench}" data-symbol-fill data-symbol-nonzero data-symbol-viewbox="0 -960 960 960" ${attributes}>`;
 const role = (id, name, font, css = '') => `<img id="${id}" data-font="${font * scale}" data-symbol-source="symbol:${name}" data-symbol-path="${roles[name]}" style="${css}">`;
 const item = (id, inner, attributes = '') => `<button type="button" id="${id}" data-exact-on="press" ${attributes}>${inner}</button>`;
-const native = (id, inner) => `<button type="button" id="${id}" data-native data-button-style="bordered" style="display:grid">${inner}</button>`;
+const native = (id, inner, attributes = '') => `<button type="button" id="${id}" data-native data-button-style="bordered" style="display:grid" ${attributes}>${inner}</button>`;
 // The JS target writes an author's rows as classes under the root (rows.rs), the wasm runtime inline (glue.js).
 const authored = '<style>#exact-root#exact-root { & .sized { font-size: 17px; width: 22px; height: 20px; object-fit: scale-down; --exact-symbol-size-authored: 1; } }</style>';
 // A navigation root of one route, whose header holds `heading` (a heading text, as the hosts write one) and `items`.
@@ -36,14 +36,19 @@ const route = (id, items, { attributes = '', header = '', heading = '<h2 role="h
   <div navigationKey="1" id="${id}" ${attributes}><header ${header} style="display:flex;flex-wrap:wrap;align-items:center;gap:4px">${heading}${items}</header></div>
 </main>`;
 const back = (id) => item(`${id}-back`, role(`${id}-i`, 'back', 17, 'font-size:17px;width:20px;height:20px'));
-const content = `${authored}<div style="display:flex;flex-direction:column;align-items:flex-start;gap:16px">
+const content = (root) => `${authored}<div style="display:flex;flex-direction:column;align-items:flex-start;gap:16px">
   ${route('bar', `
     ${item('sf', icon('sf-i', 'wrench.and.screwdriver', 17, 'class="sized"'))}${item('sf-free', icon('sf-free-i', 'wrench.and.screwdriver', 16))}
     ${item('own', icon('own-i', '', 17, 'class="sized"'))}${item('own-free', icon('own-free-i', '', 16))}
+    ${item('blank', '<img id="blank-i" data-font="13" data-symbol-source="symbol:sf/airpodsmax" data-symbol-path="" style="font-size:13px;width:22px;height:20px">')}
     ${item('loose', role('loose-i', 'circle', 17, 'font-size:17px;width:20px;height:20px'))}${item('loose-free', role('loose-free-i', 'circle', 16))}
     ${item('fonted', role('fonted-i', 'circle', 13), 'style="font-size:13px"')}
+    ${item('status', role('status-i', 'circle', 13, 'font-size:13px;width:22px;height:20px'), 'role="status"')}
+    ${item('relative', role('relative-i', 'circle', 40, 'font-size:40px;min-width:1em;min-height:1em'))}
+    ${item('constrained', role('constrained-i', 'circle', 40, 'font-size:40px;max-width:.5em;max-height:.5em;padding:.25em'))}
     ${item('bell', role('bell-i', 'add', 15, 'font-size:15px'))}${item('counted', role('counted-i', 'add', 15, 'font-size:15px') + '<span data-exact-text>3</span>')}
     ${native('native', role('native-i', 'share', 13, 'font-size:13px;--exact-symbol-size-authored:1'))}${native('native-free', role('native-free-i', 'share', 16))}${native('worded', '<span data-exact-text>Edit</span>')}
+    ${native('native-command', role('native-command-i', 'share', 13, 'font-size:13px'), 'command="show-modal" commandfor="layer-dialog"')}
     ${item('nested', `<div>${role('nested-i', 'share', 16, 'width:20px;height:20px')}</div>`)}
     <div id="outer" data-exact-on="press"><span data-exact-text>Outer</span><div id="inner" data-exact-on="press">${role('inner-i', 'add', 15, 'font-size:15px')}</div></div>
     <div role="tablist">${item('tab', role('tab-i', 'add', 16, 'width:20px;height:20px'), 'role="tab"')}</div>`)}
@@ -52,8 +57,15 @@ const content = `${authored}<div style="display:flex;flex-direction:column;align
   ${route('headless', back('headless'), { heading: '' })}
   ${route('row', back('row'), { heading: '<div role="heading" aria-level="1"><span data-exact-text>Login</span></div>' })}
   ${route('own-bar', back('own-bar'), { header: 'data-exact-said="appearance"' })}
-  ${item('page', role('page-i', 'add', 16))}${role('sized', 'circle', 17, 'font-size:17px;width:20px;height:20px')}
-  <header>${item('unrouted', role('unrouted-i', 'add', 16))}</header>
+  ${route('readout', '', { heading: `<div role="status"><h2 role="heading" data-exact-text>Readout</h2>${back('readout')}</div>` })}
+  ${route('site-nav', back('site-nav') + '<nav></nav>')}
+  ${route('site-links', back('site-links') + '<a href="/one">One</a><a href="/two">Two</a>')}
+  ${route('site-menu', back('site-menu') + '<div popover><nav></nav></div>')}
+  ${route('app-menu', back('app-menu') + '<a href="/one">One</a><div popover><a href="/two">Two</a></div>')}
+  <div id="layer-popover" popover="auto">${route('popover-route', item('popover-item', role('popover-i', 'circle', 13, 'font-size:13px;width:22px;height:20px')))}</div>
+  <dialog id="layer-dialog">${route('dialog-route', item('dialog-item', role('dialog-i', 'circle', 13, 'font-size:13px;width:22px;height:20px')))}</dialog>
+  ${item('page', role('page-i', 'add', root))}${role('sized', 'circle', 17, 'font-size:17px;width:20px;height:20px')}
+  <header>${item('unrouted', role('unrouted-i', 'add', root))}</header>
 </div>`;
 // Each runtime's painter, its module's other parts stood in for.
 const RUNTIMES = {
@@ -85,11 +97,11 @@ for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`symbol
   } finally { await suite.close(); }
 }, 30000);
 
-for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`${engine}: a bar item's symbol is the bar's size (${file})`, async () => {
+for (const root of [16, 20, 24]) for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand, names, run]] of Object.entries(RUNTIMES)) test(`${engine}: a bar item's symbol is the bar's size at ${root}px (${file})`, async () => {
   const source = readFileSync(resolve(ROOT, file), 'utf8');
   const style = symbolSheet(source);
   const html = withLook(readFileSync(resolve(ROOT, 'host/web/index.html'), 'utf8'))
-    .replace('<div id="exact-root"></div>', () => `<style>${style} #exact-root img { --exact-tint: rgb(255, 0, 0) !important; }</style><div id="exact-root">${content}</div>`)
+    .replace('<div id="exact-root"></div>', () => `<style>html { font-size: ${root}px; } ${style} #exact-root img { --exact-tint: rgb(255, 0, 0) !important; }</style><div id="exact-root">${content(root)}</div>`)
     .replace('<script type="module" src="./glue.js"></script>', () => `<script>${stand} ${glueDeclarations(source, names)} globalThis.paint = () => { ${run} };</script>
       <script type="module">${readFileSync(resolve(ROOT, 'host/web/navigation.js'), 'utf8')}
         const shell = document.getElementById('exact-root'); navigation.connect(shell, () => false, () => {}); globalThis.project = () => navigation.project(shell, () => {});</script>`);
@@ -104,10 +116,10 @@ for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand
       await page.waitForFunction(() => [...document.images].every((e) => e.complete));
       await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
     };
-    // The glue marks the one header iOS makes a bar of. Then nothing moves when the painter runs on the page, whose
+    // The glue marks headers iOS makes bars of. Nothing moves when the painter runs on the page, whose
     // symbols have the source document.rs writes (which writes the mark too, `document.rs`'s own test).
     await page.evaluate(() => globalThis.project());
-    expect(await page.evaluate(() => [...document.querySelectorAll('header[data-exact-bar]')].map((h) => h.parentElement.id))).toEqual(['bar', 'titled']);
+    expect(await page.evaluate(() => [...document.querySelectorAll('header[data-exact-bar]')].map((h) => h.parentElement.id))).toEqual(['bar', 'titled', 'readout', 'app-menu', 'popover-route', 'dialog-route']);
     const boxes = () => page.evaluate(() => [...document.querySelectorAll('#exact-root [id]')].map((e) => [e.id, ...Object.values(e.getBoundingClientRect().toJSON()).slice(0, 4)]));
     await page.evaluate(() => {
       for (const e of document.querySelectorAll('#exact-root img')) e.src = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${e.dataset.font}' height='${e.dataset.font}'/%3E`;
@@ -136,20 +148,24 @@ for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand
         return [(right - left + 1) / 4, (bottom - top + 1) / 4];
       }, png.toString('base64'));
     };
-    // A symbol on a bar item's face is the bar's size, 22/17 of the 16 px body, in a box `symbol-scale` times that for
+    // A symbol on a bar item's face is the bar's size, 22/17 of the root's font, in a box `symbol-scale` times that for
     // a symbol drawn for an SF Symbol (a native button's face included) and its em for an icon of the app's own, and is
     // drawn at it: whatever size is written on it or on its item, as the same symbol with nothing written (its ink to
     // within a pixel, which Chrome rasterizes a little differently at another place).
-    const bar = 16 * parseFloat(barSize), near = (a, b, within) => a.every((v, i) => Math.abs(v - b[i]) <= within);
+    const bar = root * parseFloat(barSize), near = (a, b, within) => a.every((v, i) => Math.abs(v - b[i]) <= within);
     const point = (id) => page.evaluate((id) => parseFloat(decodeURIComponent(document.getElementById(id).symbolMask).match(/width="([\d.]+)"/)[1]), id);
     const items = [];
-    for (const [id, times, free = `${id}-free-i`] of [['sf', scale], ['own', 1], ['loose', scale], ['fonted', scale, 'loose-free-i'], ['native', scale]]) {
+    for (const [id, times, free = `${id}-free-i`] of [['sf', scale], ['own', 1], ['loose', scale], ['fonted', scale, 'loose-free-i'], ['native', scale], ['native-command', scale, 'native-free-i'], ['status', scale, 'loose-free-i'], ['relative', scale, 'loose-free-i']]) {
       const [box, drawn, unwritten, at] = [await size(`${id}-i`), await ink(`${id}-i`), await ink(free), await point(`${id}-i`)];
       items.push([id, box, at, drawn, unwritten, near(box, [bar * times, bar * times], 0.06) && Math.abs(at - bar * times) <= 0.06 && near(drawn, unwritten, 1)]);
     }
     expect(items).toEqual(items.map((row) => [...row.slice(0, -1), true]));
+    expect(near(await size('blank-i'), [bar, bar], 0.06)).toBe(true);
+    expect(near(await size('constrained-i'), [bar, bar], 0.06)).toBe(true);
+    expect(near(await size('app-menu-i'), [bar * scale, bar * scale], 0.06)).toBe(true);
     // A native button with a symbol alone is as tall as one with a word beside it.
-    expect([(await size('native'))[1], (await size('native-free'))[1]]).toEqual([(await size('worded'))[1], (await size('worded'))[1]]);
+    expect(await Promise.all(['native', 'native-free', 'native-command'].map(async id => (await size(id))[1])))
+      .toEqual(Array(3).fill((await size('worded'))[1]));
     // An item inside the title's pressable is an item; one inside another item is not, as the kernel's walk has them.
     // Beside words (a bell that gains a count, the title's chevron), inside a box of the item's or another item, in a
     // bar's tablist, in a header iOS makes no bar of (a route with no bar, a header with no heading text, one whose
@@ -157,7 +173,24 @@ for (const engine of ['chromium', 'firefox', 'webkit']) for (const [file, [stand
     // its size.
     expect([await size('bell-i'), await size('tapped-i')]).toEqual([await size('loose-i'), await size('loose-i')]);
     expect(await Promise.all(['counted-i', 'title-i', 'inner-i', 'nested-i', 'tab-i', 'full-i', 'headless-i', 'row-i', 'own-bar-i', 'unrouted-i', 'page-i', 'sized'].map(size)))
-      .toEqual([[15 * scale, 15 * scale], [11 * scale, 11 * scale], [15 * scale, 15 * scale], [20, 20], [20, 20], [20, 20], [20, 20], [20, 20], [20, 20], [16 * scale, 16 * scale], [16 * scale, 16 * scale], [20, 20]].map((box) => box.map(round)));
+      .toEqual([[15 * scale, 15 * scale], [11 * scale, 11 * scale], [15 * scale, 15 * scale], [20, 20], [20, 20], [20, 20], [20, 20], [20, 20], [20, 20], [root * scale, root * scale], [root * scale, root * scale], [20, 20]].map((box) => box.map(round)));
+    expect(await Promise.all(['readout-i', 'site-nav-i', 'site-links-i', 'site-menu-i'].map(size))).toEqual([[20, 20], [20, 20], [20, 20], [20, 20]]);
+    await page.evaluate(() => document.getElementById('relative').insertAdjacentHTML('beforeend', '<span data-exact-text>3</span>'));
+    await settled();
+    expect(await size('relative-i')).toEqual([40, 40]);
+    for (const layer of ['popover', 'dialog']) {
+      await page.evaluate(layer => {
+        const el = document.getElementById(`layer-${layer}`);
+        if (layer === 'popover') el.showPopover(); else el.showModal();
+      }, layer);
+      await settled();
+      expect(await size(`${layer}-i`)).toEqual([22, 20]);
+      expect(Math.abs(await point(`${layer}-i`) - 13 * scale)).toBeLessThan(0.06);
+      await page.evaluate(layer => {
+        const el = document.getElementById(`layer-${layer}`);
+        if (layer === 'popover') el.hidePopover(); else el.close();
+      }, layer);
+    }
     expect(errors).toEqual([]);
   } finally {
     await suite.close();

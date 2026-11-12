@@ -547,6 +547,83 @@ mod seams {
     }
 }
 
+/// A full bind gives each argument it omits its default; a changed bind gives
+/// it the value of the last accepted bind, so a host sends only what changed.
+#[test]
+fn a_changed_bind_keeps_the_arguments_it_omits_at_their_last_accepted_values() {
+    use exact_gpu::{wgpu, Frame, Surface, SurfaceError, Value};
+    #[derive(Default)]
+    struct Probe(Vec<Value>);
+    impl Surface for Probe {
+        fn arguments(&self) -> Vec<(&'static str, Value)> {
+            vec![
+                ("saved", Value::str("")),
+                ("count", Value::Number(0.)),
+                ("on", Value::Bool(false)),
+            ]
+        }
+        fn bind(&mut self, values: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
+            if values[1] == Value::Number(-1.) {
+                return Err(SurfaceError("count: negative".into()));
+            }
+            self.0 = values.to_vec();
+            Ok(())
+        }
+        fn render(
+            &mut self,
+            _: &Frame,
+            _: &wgpu::Device,
+            _: &wgpu::Queue,
+            _: &mut wgpu::CommandEncoder,
+            _: &wgpu::TextureView,
+            _: wgpu::TextureFormat,
+        ) -> bool {
+            false
+        }
+        fn agent(&mut self, _: &str) -> Option<String> {
+            Some(format!("{:?}", self.0))
+        }
+    }
+    static REGISTRY: Registry = Registry {
+        surfaces: &[("probe", 0, || Box::new(Probe::default()))],
+        shaders: &[],
+    };
+    let mut m = Module::new(&REGISTRY);
+    let id = m.create_headless("probe").unwrap();
+    let bound = |m: &mut Module| m.agent(id, "").unwrap();
+    assert!(!m.bind_changed_json(id, r#"{"count":1}"#, None));
+    assert_eq!(m.take_error(), "a changed bind follows an accepted bind");
+    assert!(m.bind_json(id, r#"{"saved":"big","count":1,"on":true}"#, None));
+    let full = bound(&mut m);
+    assert!(m.bind_changed_json(id, r#"{"count":2}"#, Some(5.)));
+    assert_eq!(bound(&mut m), full.replace("Number(1.0)", "Number(2.0)"));
+    assert!(m.bind_changed_json(id, "{}", Some(6.)));
+    assert_eq!(bound(&mut m), full.replace("Number(1.0)", "Number(2.0)"));
+    // Refused, by the module or the surface: what was bound stays the baseline.
+    assert!(!m.bind_changed_json(id, "[3]", None));
+    assert_eq!(m.take_error(), "a changed bind names its arguments");
+    assert!(!m.bind_changed_json(id, r#"{"nope":3}"#, None));
+    assert_eq!(m.take_error(), "unknown surface argument `nope`");
+    assert!(!m.bind_changed_json(id, r#"{"count":-1}"#, None));
+    assert_eq!(m.take_error(), "count: negative");
+    assert!(m.bind_changed_json(id, r#"{"on":false}"#, None));
+    assert_eq!(
+        bound(&mut m),
+        full.replace("Number(1.0)", "Number(2.0)")
+            .replace("Bool(true)", "Bool(false)")
+    );
+    // A full bind still resets what it omits.
+    assert!(m.bind_json(id, r#"{"count":3}"#, None));
+    assert!(m.bind_changed_json(id, r#"{"on":true}"#, None));
+    assert_eq!(
+        bound(&mut m),
+        format!(
+            "{:?}",
+            [Value::str(""), Value::Number(3.), Value::Bool(true)]
+        )
+    );
+}
+
 #[test]
 fn empty_null_carry_and_oversized_length_are_distinct() {
     // SAFETY: zero-length ranges require no backing allocation.

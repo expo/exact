@@ -13,7 +13,7 @@
 //! with no cursor, an event stream, a body past the ceiling. Forgetting the
 //! ticket aborts the request in flight and any wait.
 use super::super::{check_headers, failed, fetch_failure, fetch_request, Shared};
-use super::{message, reply};
+use super::{message, reply, Delivered};
 use exact_runner::{FailureKind, LongPoll, Message, Outcome, Request, Response, Retrying};
 use ibex2::stdlib::abort::AbortController;
 use std::sync::{Arc, Condvar, Mutex};
@@ -113,8 +113,17 @@ pub(super) fn run(
                         data,
                         ..Message::default()
                     };
-                    if !message(shared, ticket, m) {
-                        return failed(FailureKind::Aborted, "the stream was let go");
+                    match message(shared, ticket, m, limit) {
+                        Delivered::Queued => {}
+                        Delivered::Gone => {
+                            return failed(FailureKind::Aborted, "the stream was let go")
+                        }
+                        Delivered::Overflow => {
+                            return failed(
+                                FailureKind::Refused,
+                                "long poll receive queue exceeds 4096 replies or 1 MiB",
+                            )
+                        }
                     }
                     url = with_query_value(&url, &terms.cursor, &next);
                     continue;

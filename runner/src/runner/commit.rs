@@ -156,6 +156,7 @@ impl<D: DataSource> Runner<D> {
                 // A spent reply's turn read the store: its failure stands, and so does the read.
                 if let Some(i) = self.module_work.reply_reader.take() {
                     self.resources[i].store_reader = true;
+                    self.resources[i].contents_reader = true;
                 }
                 self.uploads = c.uploads;
                 self.failed_mut = c.failed_mut;

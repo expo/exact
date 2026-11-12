@@ -139,7 +139,7 @@ impl ControlKind {
             ControlKind::Date => date_value(value),
             ControlKind::Time => time_value(value),
             ControlKind::DateTimeLocal => {
-                let (date, time) = value.split_once('T')?;
+                let (date, time) = value.split_once(['T', ' '])?;
                 Some(date_value(date)? + time_value(time)?)
             }
             _ => None,
@@ -688,6 +688,8 @@ mod tests {
             (Time, "14:30:15"),
             (Time, "14:30:15.5"),
             (DateTimeLocal, "2026-09-27T14:30"),
+            (DateTimeLocal, "2026-09-27 14:30"),
+            (DateTimeLocal, "2026-09-27T14:30:45.500"),
         ] {
             assert!(kind.valid_value(ok), "{kind:?} {ok}");
         }
@@ -699,7 +701,7 @@ mod tests {
             (Time, "24:00"),
             (Time, "9:30"),
             (Time, "14:30:15."),
-            (DateTimeLocal, "2026-09-27 14:30"),
+            (DateTimeLocal, "2026-09-27  14:30"),
             (DateTimeLocal, "2026-09-27"),
         ] {
             assert!(!kind.valid_value(bad), "{kind:?} {bad}");

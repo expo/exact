@@ -93,9 +93,11 @@ final class CanvasText {
         if f.letterSpacing != 0 { attrs[NSAttributedString.Key(kCTTrackingAttributeName as String)] = f.letterSpacing }
         s.setAttributes(attrs, range: all)
         if f.wordSpacing != 0 {
+            // A space takes both spacings (CSS Text 3 §7.2), as tracking:
+            // Core Text ignores a kern on a glyph that also has tracking.
             let ns = text as NSString
             for i in 0..<ns.length where ns.character(at: i) == 0x20 {
-                s.addAttribute(NSAttributedString.Key(kCTKernAttributeName as String), value: f.wordSpacing + f.letterSpacing,
+                s.addAttribute(NSAttributedString.Key(kCTTrackingAttributeName as String), value: f.wordSpacing + f.letterSpacing,
                                range: NSRange(location: i, length: 1))
             }
         }

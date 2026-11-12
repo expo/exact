@@ -20,6 +20,7 @@ use winit::{
 
 pub(super) enum Event {
     Wake,
+    Close,
     ModalWake,
     Timer(std::sync::Arc<crate::timers::Fired>),
     Access(accesskit_winit::Event),

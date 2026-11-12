@@ -142,6 +142,100 @@ impl NodeArena {
         false
     }
 
+    /// The neutral sheet's large-title line belongs to level-1 text in
+    /// the route's first header, outside any dialog or popover.
+    pub(crate) fn neutral_header_title(&self, slot: u32) -> bool {
+        if metrics::column() != Column::Neutral
+            || self.node_type(slot) != NodeType::Text
+            || self.props(slot).str(PropId::AccessibilityRole) != Some("heading")
+            || self.props(slot).get(PropId::AccessibilityHeadingLevel) != Some(&PropValue::Int(1))
+        {
+            return false;
+        }
+        let mut at = Some(slot);
+        let mut header = None;
+        while let Some(s) = at {
+            let props = self.props(s);
+            if props.get(PropId::Popover).is_some()
+                || props.str(PropId::SemanticTag) == Some("dialog")
+            {
+                return false;
+            }
+            if header.is_none() && self.is_neutral_header(s) {
+                header = Some(s);
+            }
+            at = self.parent(s);
+        }
+        let Some(header) = header else { return false };
+        let style = self.style(header);
+        if style.appearance == crate::Appearance::None && style.written.has(StyleId::Appearance) {
+            return false;
+        }
+        // A site's navigation is authored chrome, as on the web
+        // (`host/web/src/document_bars.rs`, `site_header`).
+        fn site(arena: &NodeArena, slot: u32, menu: bool, links: &mut u32) -> bool {
+            arena.children(slot).iter().any(|&child| {
+                let props = arena.props(child);
+                let tag = props.str(PropId::SemanticTag);
+                let menu = menu || props.get(PropId::Popover).is_some() || tag == Some("dialog");
+                if !menu
+                    && (props.get(PropId::Href).is_some()
+                        || props.str(PropId::AccessibilityRole) == Some("link"))
+                {
+                    *links += 1;
+                }
+                tag == Some("nav") || *links > 1 || site(arena, child, menu, links)
+            })
+        }
+        if site(self, header, false, &mut 0) {
+            return false;
+        }
+        let route = self.parent(header).expect("route header");
+        if self.children(route).first() != Some(&header) {
+            return false;
+        }
+        let presented = |r| {
+            matches!(
+                self.props(r).str(PropId::NavigationPresentation),
+                Some("modal" | "fullscreen")
+            )
+        };
+        !presented(route)
+            && !self.parent(route).is_some_and(|stack| {
+                self.children(stack)
+                    .iter()
+                    .take_while(|&&r| r != route)
+                    .any(|&r| presented(r))
+            })
+    }
+
+    pub(crate) fn neutral_title_layout(
+        &self,
+        slot: u32,
+        line: f32,
+        style: &mut taffy::style::Style,
+    ) {
+        let own = self.style(slot).mask.union(self.style(slot).written);
+        // The web scales the 16px text-style row in rem. Its bar never
+        // collapses, but keeps iOS's large-title leading (neutral.css).
+        let large = crate::TEXT_STYLES
+            .iter()
+            .position(|s| s.name == "large-title")
+            .expect("large-title text style") as u8;
+        let large_line =
+            crate::style::relative::text_style_size(large, 16.) * self.root_font_size() / 16. * 1.2;
+        let margin = ((large_line - line) / 2.).max(0.);
+        if !own.has(StyleId::MinHeight) {
+            style.min_size.height = taffy::style::LengthPercentageAuto::length(line);
+        }
+        if !own.has(StyleId::MarginTop) {
+            style.margin.top = taffy::style::LengthPercentageAuto::length(margin);
+        }
+        if !own.has(StyleId::MarginBottom) {
+            style.margin.bottom = taffy::style::LengthPercentageAuto::length(margin);
+        }
+    }
+
     pub(crate) fn is_neutral_tab_bar(&self, slot: u32) -> bool {
         metrics::column() == Column::Neutral
             && self.props(slot).str(PropId::AccessibilityRole) == Some("tablist")
@@ -230,6 +324,7 @@ impl NodeArena {
                 out.to_mut().copy_rows(start, defaults);
             }
         }
+        self.bar_symbol_style(slot, &mut out);
         out
     }
 

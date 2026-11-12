@@ -9,6 +9,11 @@ use exact_plan::EventKind;
 use exact_runner::{DataSource, Event};
 
 impl<D: DataSource> Presenter<D> {
+    /// Close the carrier's window for a bare `close()`, without asking `beforeunload` again.
+    pub fn set_window_closer(&mut self, close: impl Fn() + 'static) {
+        self.window_closer = Some(Box::new(close));
+    }
+
     /// Run the last commits' commands (LLP 1005 §3): delivery belongs to the
     /// store (LLP 1030 D7); `setScheme` chooses this painter's `light-dark()`
     /// appearance (LLP 1034 D2); anything else is named.
@@ -161,6 +166,7 @@ impl<D: DataSource> Presenter<D> {
                 "close" if !c.args.is_empty() => self
                     .host
                     .log("close refused: dialogs unsupported on the headless/DRM host"),
+                "close" if self.window_closer.is_some() => self.window_closer.as_ref().unwrap()(),
                 // The shell's clipboard, and its browser, mail app and dialer.
                 "copyText" if self.clipboard.is_some() || self.has_shell() => self.copy_text(&c.args),
                 "openURL" if self.has_shell() || self.url_opener.is_some() => self.open_url(&c.args),
@@ -183,6 +189,11 @@ impl<D: DataSource> Presenter<D> {
                 name @ ("exitFullscreen" | "setWindowOpacity") => self
                     .host
                     .log(format!("{name} refused: the window's full screen and opacity are on the Mac host only")),
+                // A window put away with the app still running is the Mac's
+                // so far: Windows' waits for its `keepRunning` (LLP 1133.025 D4).
+                "hideWindow" => self.host.log(
+                    "hideWindow refused: a window that hides while the app keeps running is on the Mac host only",
+                ),
                 // A page zoom is the Mac's so far (LLP 1021 §5.3.1).
                 "setPageZoom" => self
                     .host

@@ -37,7 +37,7 @@ const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 const glue = readFileSync(resolve(WEB, 'glue.js'), 'utf8');
 const children = glueCase(glue, 'children');
-const resize = glueDeclarations(glue, ['mediaChanged']);
+const resize = glueDeclarations(glue, ['mediaChanged', 'pageChanged']);
 const page = `<style>
   body { margin:0 } #exact-root { position:relative; padding:20px }
   #card { width:100px; height:40px; background:red; --exact-layout-transition:1000 0 linear }
@@ -84,7 +84,9 @@ const page = `<style>
   window.ready = true;
 </script>`;
 
-let server, suite, evaluate;
+// Register the shared browser's cleanup in the file, outside the beforeAll hook.
+const suite = unavailable ? null : await cdpBrowser({ args: ['--window-size=500,500'] });
+let server, evaluate;
 beforeAll(async () => {
   if (unavailable) return;
   server = createServer((req, res) => {
@@ -99,7 +101,6 @@ beforeAll(async () => {
     res.end(req.url === '/' ? page : readFileSync(req.url.startsWith('/js/') && existsSync(js) ? js : resolve(WEB, path)));
   });
   await new Promise(ok => server.listen(0, '127.0.0.1', ok));
-  suite = await cdpBrowser({ args: ['--window-size=500,500'] });
   const { cdp } = suite, { sessionId } = await suite.page();
   const call = (method, params) => cdp.send(method, params, sessionId);
   evaluate = async expression => {

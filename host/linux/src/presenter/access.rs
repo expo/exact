@@ -49,7 +49,7 @@ mod walk;
 
 use super::requests::string;
 use super::scrollers::Scroller;
-use super::top::shape::Plan;
+use super::top::shape::{Entry, Plan};
 use super::*;
 use exact_kernel::{ControlKind, Display, Kernel, NodeRef};
 use std::collections::BTreeSet;

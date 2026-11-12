@@ -1798,7 +1798,7 @@
       "id": 300,
       "name": "systemBarsHidden",
       "kind": "bool",
-      "_comment": "@ref LLP 1105 D1: `system-bars-hidden`, bound to state: the system's bars give way to this node's screen. iOS hides the status bar and auto-hides the home indicator, resolving the declaration that wins as for `statusBarStyle` (D2, D3; `false` is a declaration too); `statusBarAnimation` on the winning node fades the status bar's hiding and showing. Other hosts ignore it."
+      "_comment": "@ref LLP 1105 D1: `system-bars-hidden`, bound to state: the system's bars give way to this node's screen. iOS hides the status bar and auto-hides the home indicator, and Android hides the status and navigation bars (a swipe from the edge shows them for a moment), resolving the declaration that wins as for `statusBarStyle` (D2, D3, D7; `false` is a declaration too); on iOS `statusBarAnimation` on the winning node fades the status bar's hiding and showing. Other hosts ignore it."
     },
     {
       "id": 301,
@@ -2352,7 +2352,8 @@
     "ScrollSnapType": {
       "values": [
         "none",
-        "x mandatory"
+        "x mandatory",
+        "y mandatory"
       ],
       "default": "none"
     },
@@ -2360,7 +2361,8 @@
       "values": [
         "none",
         "start",
-        "end"
+        "end",
+        "center"
       ],
       "default": "none"
     },
@@ -3481,7 +3483,8 @@
       "bit": 81,
       "field": "scroll_snap_type",
       "codec": "enum:ScrollSnapType",
-      "cold": true
+      "cold": true,
+      "_comment": "LLP 1008 §9: x or y mandatory snapping to the nearest projected rest; UIKit owns the motion; the web executes CSS."
     },
     {
       "bit": 82,
@@ -4683,6 +4686,14 @@
       "codec": "color",
       "default": 0,
       "_comment": "Not CSS: `-exact-glass-tint`, the colour that tints the glass of a box whose `backgroundMaterial` is glass or glass-clear, resolved in the box's colour scheme: `UIGlassEffect.tintColor` on iOS and tvOS 26, `NSGlassEffectView.tintColor` on macOS 26, and on the web and Linux the material's background colour in place of the table's tint. An unset mask (the default, 0, is never read) is untinted glass. Not inherited."
+    },
+    {
+      "bit": 235,
+      "field": "translate_velocity",
+      "codec": "vec2",
+      "default": [0, 0],
+      "cold": true,
+      "_comment": "Not CSS: -exact-translate-velocity supplies the x/y initial velocity in CSS pixels per second when a translate target changes under a spring or a spring is enabled after dragging without a transition. Omitted, the engine preserves the running spring's velocity. An explicit zero pair stops inherited velocity. Changing this row alone never restarts a transition; while set, it applies to each subsequent translate target change or newly enabled spring."
     }
   ],
   "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",
@@ -5188,6 +5199,36 @@
       "translate",
       "character.bubble",
       "m5 8 6 6m-7 0 6-6 2-3M2 5h12M7 2h1m14 20-5-10-5 10m2-4h6"
+    ],
+    [
+      "bag",
+      "bag",
+      "M5 8h14v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8ZM9 8V6.5a3 3 0 0 1 6 0V8"
+    ],
+    [
+      "bag-fill",
+      "bag.fill",
+      "M4 8h16v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8ZM8 8V6.5a4 4 0 0 1 8 0V8h-2V6.5a2 2 0 0 0-4 0V8Z"
+    ],
+    [
+      "phone",
+      "phone",
+      "M5 4h3.5l1.5 4-2 1.5a11 11 0 0 0 6.5 6.5l1.5-2 4 1.5V19a1 1 0 0 1-1 1A16 16 0 0 1 4 5a1 1 0 0 1 1-1Z"
+    ],
+    [
+      "smartphone",
+      "iphone",
+      "M8 2h8a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2ZM10.5 5h3"
+    ],
+    [
+      "article",
+      "doc.plaintext",
+      "M6 3h12a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1ZM8.5 8h7M8.5 12h7M8.5 16h4"
+    ],
+    [
+      "radio",
+      "radio",
+      "M4 9h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM6 9l12-5M10.5 14.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0ZM14 13h4M14 16h4"
     ]
   ],
   "symbolAliases": [
@@ -5434,6 +5475,30 @@
     [
       "smiley",
       "emoji"
+    ],
+    [
+      "shopping-bag",
+      "bag"
+    ],
+    [
+      "local-mall",
+      "bag"
+    ],
+    [
+      "call",
+      "phone"
+    ],
+    [
+      "local-phone",
+      "phone"
+    ],
+    [
+      "phone-iphone",
+      "smartphone"
+    ],
+    [
+      "phone-android",
+      "smartphone"
     ]
   ],
   "symbolGlyphs": [
@@ -6514,6 +6579,7 @@
     ["sheet-height", "length", "45rem"],
     ["sheet-margin", "length", 64],
     ["sheet-top", "length", 12],
+    ["sheet-compact-height", "length", 480],
     ["sheet-padding", "length", 24],
     ["sheet-gap", "length", 12],
     ["sheet-action-gap", "length", 8],

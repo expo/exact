@@ -146,7 +146,7 @@ structs! {
     Sequence { name, gate, key, tracks, options, ended, span }
     Persist { name, span }
     Binding { name, expr, span }
-    ResourceDecl { name, source, args, identity, shape, placeholder, each, transient, gate, span }
+    ResourceDecl { name, source, args, identity, shape, placeholder, each, transient, keep, gate, span }
     ResourceEach { item, list, key, span }
     Placeholder { source, args, span }
     MutationDecl { name, shape, mode, refreshes, then, span }

@@ -226,6 +226,11 @@ observed session. `pinSave` also checks the saved marker and retained input queu
 that a pin should accept in the authored files. Arguments tune settings a save
 should not carry.
 
+`Camera::shift` moves the projected image in normalized device coordinates,
+without changing the camera pose or perspective: `(0., 0.25)` moves every depth
+up by one eighth of the viewport height. It defaults to zero and applies to
+perspective and orthographic cameras, rendered frames, layout and picking.
+
 ## Movement, animation and sound
 
 `w.character("player").step(direction, jump)` moves a `Character` and reports its
@@ -509,6 +514,40 @@ non-finite values are ignored, and roughness/metallic still multiply texture
 channels. A zero coat removes it. Unlit and custom materials ignore these factors. `World::drawn(e)` is the displayed
 pose and opacity, in the same walk as `World::is_visible`. Picking, layout, physics
 and gameplay use the simulated pose.
+
+For a camera translated directly by a touch, `PointerPan` presents the newest
+received position without waiting for its simulation tick. Each tick applies
+the chosen contact's `delta` to the camera in world units. In `Game::present`,
+write that contact's `id`, `position` and that tick's `delta` to `PointerPan`,
+with `horizontal` and `vertical` giving the same world-space translation per
+canvas point. Keep the mapping fixed during the drag. Include the contact's
+release tick, and set `delta` to zero on later ticks with no movement. For example,
+the tick and presentation can share `horizontal = Vec3::X * 0.02` and
+`vertical = Vec3::Z * 0.02`; a ten-point horizontal move translates the eye and
+everything parented under it by 0.2 world units. Panning the eye preserves its
+direction, so a separately stored target must receive that same tick translation.
+This seam describes a direct pan, without clamping, inertia, rotation or a locked
+mouse. It adds no spring and predicts no future sample.
+
+The stock `WorldSurface` supplies the frame sample automatically. A custom
+renderer can call `Sim::frame_pointer(id)` and pass the result to
+`Feed::pointer_sample` before each frame. The snapshot retains the newest host
+input timestamp in `at_ms`; it is not world time. `current_contact` is false
+while a new Down has not reached a tick, so an old anchor cannot follow a reused
+pointer id. A late event older than an already delivered sample also invalidates
+that anchor until a newer sample reaches a tick. Movement after release or
+cancellation cannot reuse the ended contact's anchor. Read contact edges from `Input::pointer_events`, not the snapshot's
+last phase. Reads and camera compensation change neither hashes nor saves;
+restore discards host samples, including the absolute timestamps of queued input.
+The camera trace reports the compensated camera and projection. Its stride is 37:
+the first 32 slots retain their meanings, and slots 32–36 are sample-present (0 or
+1), pointer x and y in canvas points, `at_ms`, and `current_contact` (0 or 1).
+An absent sample writes five zeroes. The sample timestamp and frame time at slot 0
+share the host input clock; their difference is sample age, not display latency.
+`Sim::pick` and spatial reads keep using the simulation camera, as they do with
+`MouseLook`; a frame-time visual query must use that frame's view and projection.
+Measure native input and presented frames together on a device before making a
+physical latency claim.
 
 `NodeOffsets` moves marked model nodes after clips, layers and IK. Save a gait's
 phase and amplitude, then derive its rows without collecting entities:

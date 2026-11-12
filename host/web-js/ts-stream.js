@@ -9,7 +9,7 @@ import { failureCode, failureReason } from './shape.js';
 import { bodyFromRefusal, methodOf, readBodyFile } from './ts-body-from.js';
 import { refuseStreamBody } from './uploads.js';
 
-const KINDS = ['Response', 'Network', 'Refused', 'Unsupported', 'Aborted', , , , , , 'Timeout'], said = new TextDecoder();
+const KINDS = ['Response', 'Network', 'Refused', 'Unsupported', 'Aborted', , , , , , 'Timeout'], said = new TextDecoder(), utf8 = new TextEncoder();
 // Hermes's checks and words on `init` (js/src/prelude.js `fetch`): a
 // refusal ends the stream with that message, which fails the answer.
 function request(input, init, redirect, protocols) {
@@ -229,8 +229,37 @@ export function open({ input, init, redirect, protocols }, conv, grantSet, deliv
   // (`exact:sending`), which, as any bytes sent, says it reached the network (rt.js); its bytes sent are a `progress`
   // event, as XMLHttpRequest's.
   const event = m => req.upload && m.event === 'exact:progress' ? { type: 'progress', ...JSON.parse(m.data), lengthComputable: true, data: '', lastEventId: '', coalesced: m.coalesced } : { type: m.event || 'message', data: m.data, lastEventId: m.id, coalesced: m.coalesced, protocol: m.protocol };
-  const message = m => (controller.sent ||= !!req.upload, req.longPoll && m.event === 'exact:reply' || req.upload && m.event === 'exact:sending')
-    ? undefined : void inOrder(() => settled(value(event(m), true), r => deliver({ ...r, coalesced: m.coalesced })));
+  // Messages that arrive together (`more`, http-body.js) are mapped one by one, each after the last one's promise,
+  // and their last value commits once (LLP 1016.000 D4); a failure ends them there. A mapper that answers now is
+  // called in a loop, so a read of any number of events takes no stack.
+  let batch = [];
+  const each = (ms, i = 0) => {
+    for (;; i++) {
+      const r = value(event(ms[i]), true), at = i, last = r => r.error !== undefined || at === ms.length - 1;
+      const done = r => last(r) ? deliver({ ...r, coalesced: ms[at].coalesced, messages: at + 1 }) : each(ms, at + 1);
+      if (r && typeof r.then === 'function') return r.then(done);
+      if (last(r)) return done(r);
+    }
+  };
+  // What waits behind a mapper that awaits, as natively (mapper_turns.rs): at most 4096 messages, or 64 MiB of
+  // their data; one more ends the stream (D4: never queue without limit).
+  let held = 0, heldBytes = 0, fellBehind = false;
+  const bytesOf = m => typeof m.data === 'string' ? utf8.encode(m.data).length : m.data.byteLength;
+  const message = m => {
+    controller.sent ||= !!req.upload;
+    if (fellBehind || req.longPoll && m.event === 'exact:reply' || req.upload && m.event === 'exact:sending') return;
+    batch.push(m);
+    if (m.more) return;
+    const ms = batch; batch = [];
+    if (!behind) return void inOrder(() => each(ms));
+    const bytes = ms.reduce((n, m) => n + bytesOf(m), 0);
+    if (held + ms.length > 4096 || heldBytes + bytes > 64 << 20) {
+      fellBehind = true;
+      return void deliver({ error: `the stream's mapper fell behind: ${held} messages (${heldBytes} bytes) waited for its turns, and ${ms.length} more arrived`, code: 'error' });
+    }
+    held += ms.length; heldBytes += bytes;
+    inOrder(() => { held -= ms.length; heldBytes -= bytes; return each(ms); });
+  };
   const timed = m => {
     const g = gate();
     if (!g) return message(m);

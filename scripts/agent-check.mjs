@@ -50,7 +50,8 @@ function backdrop(png, scale, it) {
 
 /** The contrast a text needs (WCAG 1.4.3, and LLP 1115's platform answers): 4.5:1; 3:1 for large text (24 px, or 18.66 px bold), for a
  *  control's label on its own fill (D3's ink rule), for ink the platform chose (a tab bar's item) and for text in a platform colour (the
- *  secondary label, system red: the platform's palette, as a hand-built app draws it), and for text on an accent fill (LLP 1116.020 D7: a sent
+ *  secondary label, system red: the platform's palette, as a hand-built app draws it) or on a fill in a system hue (the same pair
+ *  turned over: iOS's badge, white on its red), and for text on an accent fill (LLP 1116.020 D7: a sent
  *  bubble's white is a filled button's label; a pale accent still fails). The platform's tertiary and quaternary labels and its placeholders are its own and not judged,
  *  nor is a disabled control's label (WCAG's inactive component), nor a tinted button's label in a system hue: UIKit draws the hue on
  *  a pale fill of itself (the Clock's green Start, 1.9:1 in light; `RoundButton`'s, LLP 1116.019 D3), and Increase Contrast darkens it. */
@@ -60,6 +61,7 @@ function floor(it, scheme, palette) {
   if (r && /^(tertiary|quaternary)-label$|^placeholder$|^GrayText$/.test(r)) return null;
   if (it.tinted && r && /^system-/.test(r)) return null;
   if (it.size >= 24 || (it.size >= 18.66 && it.weight >= 700) || it.label || it.platformInk || it.onAccentFill || (r && /^secondary-label$|^system-|^link$|^LinkText$|^AccentColor$|^ButtonText$/.test(r))) return 3;
+  if (/^system-/.test(drawnRole(it.bg, scheme, palette) ?? '')) return 3;
   return 4.5;
 }
 /** The platform role an ink is, by its value in this scheme as its host draws it (`paletteOf`): UIKit's own labels carry

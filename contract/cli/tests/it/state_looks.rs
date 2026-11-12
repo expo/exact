@@ -323,3 +323,15 @@ fn a_looks_color_is_a_token_in_both_schemes() {
         "ffffffff"
     );
 }
+
+#[test]
+fn hover_scale_is_a_presentation_row_and_leaves_the_base_unchanged() {
+    let source = "component App\n  view\n    button appearance=\"none\" scale=1 transition=\"scale 150ms ease\" testId=\"card\"\n      :hover\n        scale=1.08\n      text \"Hide controls\"\n";
+    let r = booted(contract::compile(source).unwrap());
+    let k = r.kernel();
+    let node = k.node_by_key(k.find_by_test_id("card")[0]).unwrap();
+    assert_eq!(node.style.scale, 1.);
+    let look = &node.looks()[0].1;
+    assert!(look.mask.has(exact_kernel::StyleId::Scale));
+    assert!((look.scale - 1.08).abs() < 1e-6);
+}

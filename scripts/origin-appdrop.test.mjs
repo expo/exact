@@ -3,7 +3,7 @@
 // real server is expo/appdrop's web/worker/exactUpdates.ts.
 import { afterAll, expect, test } from 'bun:test';
 import { createPublicKey, generateKeyPairSync, sign, verify } from 'node:crypto';
-import { AppDropOrigin, HttpsOrigin, DirectoryOrigin, appdropOrigin, channelOrigin, openOrigin, sha256 } from './origin.mjs';
+import { AppDropOrigin, HttpsOrigin, DirectoryOrigin, appdropOrigin, channelOrigin, openOrigin, sha256, webRootPath } from './origin.mjs';
 
 const SHELF = '/dF36/m50wjVH0iDogmQB4FTDF6bx+qwAyD0seHMV70=';
 const manifest = (channels) => ({ deploy: { channels, signing: { key: 'shelf', keys: { shelf: SHELF } } } });
@@ -79,6 +79,7 @@ test('publisher refuses redirects for reads and signed writes and caps streamed 
       start(controller) { controller.enqueue(new Uint8Array((64 << 10) + 1)); controller.close(); },
     }));
     if (path.includes('/direct/')) return Response.json({ exact: 1 });
+    if (path === `/${webRootPath}`) return new Response(new Uint8Array((64 << 10) + 1));
     return new Response(null, { status: 307, headers: { location: '/must-not-follow' } });
   } });
   try {
@@ -92,6 +93,8 @@ test('publisher refuses redirects for reads and signed writes and caps streamed 
     expect(seen.some(([, path]) => path === '/must-not-follow')).toBe(false);
     await expect(new HttpsOrigin(base).get('large/exact.json')).rejects.toThrow('exceeds');
     expect(JSON.parse(await new HttpsOrigin(base).get('direct/exact.json'))).toEqual({ exact: 1 });
+    // The web root's pointer lists every file of the root, so it is not held to a head's bound.
+    expect((await new HttpsOrigin(base).get(webRootPath)).length).toBe((64 << 10) + 1);
   } finally { fixture.stop(true); }
 });
 

@@ -108,16 +108,15 @@ chrono-tz = "0.10"
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_System_Com"] }
 
 [features]
-# Integration tests only: a new executor waits for a native-worker slot
-# (src/executor.rs `WAIT_FOR_SLOT`), turned on by the dev-dependency below.
-test-wait = []
+# Integration tests only: each test thread owns its executor worker budget.
+test-budget = []
 
 [dev-dependencies]
 des = "0.8"
 exact-js = { path = "../../js" }
 messages-stress-data = { path = "../../apps/messages-stress/data" }
 exact-update = { path = "../../update" }
-exact-linux = { path = ".", features = ["test-wait"] }
+exact-linux = { path = ".", features = ["test-budget"] }
 cc = "1"
 caltrain = { path = "../../apps/caltrain" }
 caltrain-data = { path = "../../apps/caltrain/data" }

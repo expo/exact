@@ -146,6 +146,14 @@ impl<D: DataSource> Host<D> {
     }
 
     fn layout_anchored(&mut self) -> Result<bool, String> {
+        if crate::paint::look::neutral() {
+            let handlers = self.runner.handlers();
+            self.runner.kernel_mut().project_bar_symbols(&|id| {
+                handlers
+                    .get(&id)
+                    .is_some_and(|kinds| kinds.contains(&exact_plan::EventKind::Press))
+            });
+        }
         if let Some((text, installed)) = self.font_sync.as_mut() {
             if self.runner.runtime_font_count() != *installed {
                 text.borrow_mut().install_runtime(
