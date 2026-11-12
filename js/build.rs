@@ -209,6 +209,7 @@ fn main() {
         "heap",
         "snapshot",
         "context",
+        "network",
         "walk",
         "presence",
         "timers",

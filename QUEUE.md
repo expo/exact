@@ -1,5 +1,9 @@
 # Queue
 
+- **The photo-upload executor test can miss the uploads it must feed** (2026-11-11). `a_burst_of_photo_uploads_goes_three_at_a_time_and_leaves_other_streams_their_places` gathers open uploads before feeding them; uploads that open after that gather get no feed, and the test waits five seconds for an outcome that needs one. It failed 7 of 12 runs of the unchanged executor on a 96-core Linux machine.
+- **The executor's quit test fails under a parallel run** (2026-11-11). `a_quit_ends_every_group` fails intermittently on the 96-core Linux machine.
+- **The incremental runner test fails for geofence-fixture on Linux** (2026-11-11). `runner/tests/it/incremental.rs` fails for `geofence-fixture` at `18b358e0`.
+
 - **Virtualized iOS snap geometry (#219):** unmounted rows do not contribute a target on a descendant of the row root, a root displaced by a transform, a root with a font-relative or percentage inset or margin, or a target farther than the bounded window from the projection. The synchronous drag-end query examines at most 64 rows; with sparse targets, the nearest one can lie outside that window.
 
 - **Android loses scroll travel before a delayed hit reply** (#233). A first fix exists on `wave18/android-scroll` (`6de28f5c`), not landed: it claims a hosted text field's gesture before the field receives it; a pending release can start a fling after the activity stops; net travel loses a reversal at a scroll limit; a lifted tracked pointer can leave a drag with no finger; an UP sample moves the content before flinging and counts that travel twice. Qualification needs a device, hosted fields, nested scrollers, multi-touch and lifecycle transitions.

@@ -22,6 +22,7 @@ mod listen;
 mod mapper;
 mod native_later;
 mod native_storage;
+mod network;
 mod no_store;
 mod nul;
 mod outlive;

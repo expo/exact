@@ -1138,18 +1138,32 @@ can also hide the response and yield `Network`. Exact API grants do not
 sandbox page code: it can call browser `fetch` directly, subject to the
 rendered page's CSP where one is served.
 
-On native hosts, ordinary ordered `GET`/`HEAD` reads wait in the same FIFO as
-writes: up to 128 queued, running and unconsumed requests, with at most 64 MiB
-of waiting request buffers. Other ordered work retains a 16-request admission
-bound. A full queue rejects explicitly; the runtime never restarts the whole
-source on that refusal, since earlier turns may have written already. For
-example, 20 resources fetching once beside one source fetching 20 times can
-all wait and answer. A failed resource keeps its last value; `refresh` asks
-again. See LLP 1041 §8.4 for the byte reservations and cancellation policy.
+On native hosts, a resource's plain HTTP requests overlap, up to six at a
+time, and their replies are delivered in the order asked (LLP 1162 D1, D2).
+A TypeScript resource's answer hands over every request it has made, so
+`Promise.all` overlaps too. Reads wait for earlier sends, storage steps and
+native continuations; those wait for the reads before them. In the sequence,
+requests with `exactBodyFrom` or `exactBodyTo` still run one at a time.
 
-That queue runs one request at a time, so a screen that reads twenty feeds
-waits for each in turn. A read whose request and reply may both be handled
-out of order can leave it: `fetch(url, { exactIndependentHttp:
+Resource `GET`/`HEAD` reads retain the bound of 128 queued, running and
+unconsumed requests, with at most 64 MiB of waiting request buffers. A
+resource's other methods, including a GraphQL `POST`, overlap too, but count
+against the 16-request effect bound and wait when it is full. They are never
+aborted when their answer is let go. Other ordered work retains that
+16-request admission bound and rejects explicitly when full; the runtime
+never restarts the whole source on that refusal, since earlier turns may have
+written already. For example, 20 resources fetching once beside one resource
+fetching 20 times can all wait and answer. A failed resource keeps its last
+value; `refresh` asks again. See LLP 1041 §8.4 for the byte reservations and
+cancellation policy.
+
+A mutation's answer hands over one request at a time, in order. Sends of the
+same `parallel` mutation overlap, up to three at a time on the six shared
+workers. They wait for everything before them except the other sends of
+their mutation; later work waits for them. Replies retain the order asked.
+
+A read whose request and reply may both be handled out of order can leave
+the sequence altogether: `fetch(url, { exactIndependentHttp:
 { maxResponseBytes: 4194304 } })` in TypeScript, or
 `Request::get(url).independent_http(4 << 20)` from a Rust source. A native app
 then runs up to six such reads at once, within their own budget of 128
@@ -1163,10 +1177,10 @@ only the 1 MiB it can hold, whatever its ceiling. A browser has no lanes and sch
 there only the ceiling applies. On every host a reply larger than
 `maxResponseBytes` fails as `refused`. The ceiling is 1 byte to 64 MiB (1 GiB
 with `exactBodyTo`), and anything else is a `TypeError`. A `GET` is
-not independent by default, because a source may depend on its replies
-arriving in order. Leave writes, and any read whose parse depends on an
-earlier reply, in the queue. Storage steps and native continuations cannot
-opt out of it.
+not independent by default: ordinary resource reads already overlap, while
+an independent reply settles as it arrives. Leave writes, and any read whose
+parse depends on an earlier reply, in the queue. Storage steps and native
+continuations cannot opt out of it.
 
 On Hermes each turn of an answer has 100 ms of wall clock: its call, or its
 resumption after a `fetch`, storage step or yield it awaited, until it awaits
