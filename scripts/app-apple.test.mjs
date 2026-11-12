@@ -236,7 +236,7 @@ test('unsigned device builds and archives refuse incompatible options before bui
   assert.match(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned', '--development'], { EXACT_UPDATE_TRUST: 'production' }, 'darwin'), /takes neither --release/);
   const result = spawnSync(process.execPath, ['host/apple/build.mjs', '--device', '--unsigned', '--run', 'no-such-app'], { encoding: 'utf8' });
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /--unsigned takes no --run/);
+  assert.match(result.stderr, process.platform === 'linux' ? /--run needs an iOS simulator/ : /--unsigned takes no --run/);
   assert.doesNotMatch(result.stderr, /no app at/);
 });
 
