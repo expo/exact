@@ -208,33 +208,26 @@ fn gpu_card(
     }
 }
 
-// The same directory-owned gate used by copying, including direct Cargo
-// bakes. This tooling process does not link Unix filesystem code into a wasm
-// consumer of `contract`; its Cargo cache is distinct from the calling build.
+// LLP 1030.002 D1: inventory one file at a time through the copy gate's
+// owned-directory walk. Only shader discovery needs the JavaScript tooling.
 fn asset_cards(app: &Path, out: &Path, manifest: &Manifest) -> Result<Vec<Value>, String> {
     let gate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/filesystem.mjs");
     println!("cargo:rerun-if-changed={}", gate.display());
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/app.mjs");
+    println!("cargo:rerun-if-changed={}", script.display());
     let code = r#"
         import {pathToFileURL} from 'node:url';
         import {resolve} from 'node:path';
         import {createHash} from 'node:crypto';
-        const {filesystem} = await import(pathToFileURL(process.argv[1]));
-        const {shaderFiles,shaderRoots,shaderPreludeFiles} = await import(pathToFileURL(resolve(process.argv[1],'../app.mjs')));
-        const app={dir:process.argv[2],manifest:JSON.parse(process.argv[3])};
+        const {shaderFiles,shaderRoots,shaderPreludeFiles} = await import(pathToFileURL(process.argv[1]));
+        const app={dir:resolve(process.argv[2]),manifest:JSON.parse(process.argv[3])};
         const cards=[];
-        for (const [source,prefix] of [['assets','assets'],['deck','deck']]) {
-            const tree=filesystem({op:'tree',root:resolve(process.argv[2],source),optionalRoot:true});
-            for (const [name,base64] of Object.entries(tree??{})) {
-                const bytes=Buffer.from(base64,'base64');
-                cards.push({name:`${prefix}/${name}`,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length});
-            }
-        }
         for (const [name,bytes] of shaderFiles(app)) cards.push({name:`shaders/${name}`,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length});
-        process.stdout.write(JSON.stringify({cards:cards.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0),roots:[...shaderRoots(app),...shaderPreludeFiles(app)]}));
+        process.stdout.write(JSON.stringify({dir:app.dir,cards,roots:[...shaderRoots(app),...shaderPreludeFiles(app)]}));
     "#;
     let output = crate::bun()
         .args(["--input-type=module", "-e", code])
-        .arg(gate)
+        .arg(script)
         .arg(app)
         .arg(manifest.json.to_string())
         .output()
@@ -247,10 +240,32 @@ fn asset_cards(app: &Path, out: &Path, manifest: &Manifest) -> Result<Vec<Value>
     }
     let inventory: Value =
         serde_json::from_slice(&output.stdout).map_err(|e| format!("bake asset inventory: {e}"))?;
-    let cards = inventory["cards"]
+    let mut cards = inventory["cards"]
         .as_array()
         .ok_or("missing bake cards")?
         .clone();
+    let root = inventory["dir"]
+        .as_str()
+        .ok_or("missing bake app directory")?;
+    for prefix in ["assets", "deck"] {
+        let path = Path::new(root).join(prefix);
+        let refuse = |e| format!("bake asset gate: {}: {e}", path.display());
+        let dir = match exact_filesystem::Directory::root(
+            path.to_str().ok_or("bake asset gate: non-UTF8 path")?,
+            false,
+        ) {
+            Ok(dir) => dir,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(refuse(e)),
+        };
+        dir.visit_files(&format!("{prefix}/"), &mut |name, parent, leaf| {
+            let bytes = parent.read(leaf)?;
+            cards.push(json!({"name":name,"sha256":hash(&bytes),"bytes":bytes.len()}));
+            Ok(())
+        })
+        .map_err(refuse)?;
+    }
+    cards.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     // Every client must stage these as distinct files, APFS included; the
     // publisher and every client parse refuse the same names.
     exact_update::check_asset_names(cards.iter().filter_map(|c| c["name"].as_str()))
