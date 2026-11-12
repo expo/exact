@@ -95,8 +95,14 @@ struct Running {
     generation: u64,
     /// Who claimed the terminal transition: only its outcome settles it.
     claim: asynch::Claim,
+    cached: bool,
+    cache_exchange: Option<cache::Exchange>,
+    cache_barrier: bool,
+    cache_replacing: Option<cache::Key>,
+    invalidates: Option<(String, bool)>,
 }
 struct Completed {
+    cached: bool,
     elapsed_ms: u64,
     finished_at: std::time::Instant,
     ticket: u64,
@@ -134,6 +140,7 @@ impl Fenced {
 }
 #[derive(Default)]
 struct State {
+    cache: Option<cache::Cache>,
     jobs: [VecDeque<Job>; 2],
     running: Vec<Running>,
     completed: [VecDeque<Completed>; 2],
@@ -507,6 +514,7 @@ impl Core {
             .remove(index)
             .expect("ready completion");
         let timing = CompletionTiming {
+            cached: done.cached,
             elapsed_ms: done.elapsed_ms,
             delivery_wait_ms: now()
                 .saturating_duration_since(done.finished_at)
@@ -530,6 +538,7 @@ impl Core {
         rouse(&self.shared, &state);
         self.shared.processes.drained.notify_all();
         place_waiting(&mut state);
+        cache::serve_ready(&mut state);
         if has_ready(&state) {
             wake(&mut state);
         }
@@ -601,6 +610,10 @@ impl Core {
         {
             let mut state = self.shared.state.lock().unwrap();
             state.retired = true;
+            state.cache = None;
+            for run in &mut state.running {
+                run.cache_exchange = None;
+            }
             // Synchronizes with all wake callbacks. None can start after this
             // returns; platform callbacks must only enqueue onto their UI loop.
             state.wake = None;
@@ -700,6 +713,7 @@ fn settle_again(state: &mut State, ticket: u64) -> bool {
     state.agains += 1;
     state.bytes[0] += AGAIN_BYTES;
     state.completed[0].push_back(Completed {
+        cached: false,
         elapsed_ms: 0,
         finished_at: std::time::Instant::now(),
         ticket,
@@ -758,6 +772,7 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
     };
     let run = state.running.swap_remove(at);
     let outcome = bounded_outcome(outcome, run.limit);
+    cache::invalidate(&mut state, run.invalidates.as_ref(), &outcome);
     let lane = run.lane;
     // A completion frees ordered bytes a waiting job may need.
     rouse(shared, &state);
@@ -765,6 +780,7 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
         state.counts[lane] -= usize::from(!run.waiting);
         state.streams -= usize::from(run.stream);
         state.bytes[lane] -= run.charge;
+        cache::serve_ready(&mut state);
         // The lane going idle can let a retained ordered refusal settle,
         // and the work held behind it go: the host needs a pump for that.
         if lane == 0 && (state.counts[0] == 0 || !state.fenced.is_empty()) {
@@ -790,6 +806,7 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
     // A finished read holds no effect slot while it waits to be drained.
     state.light += usize::from(run.read);
     state.completed[lane].push_back(Completed {
+        cached: run.cached,
         elapsed_ms: finished_at
             .duration_since(run.started)
             .as_millis()
@@ -804,6 +821,7 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
         again: false,
         reply: false,
     });
+    cache::serve_ready(&mut state);
     if has_ready(&state) || (run.read && !state.ordered_barrier && !state.fenced.is_empty()) {
         wake(&mut state);
     }
@@ -1028,6 +1046,7 @@ fn worker(
                     &abort,
                     &files,
                     overlap && class == RequestClass::Read,
+                    (&shared, ticket, class),
                 ),
                 None => execute(
                     bindings.as_ref().ok_or(unbound.as_str()),
@@ -1037,6 +1056,7 @@ fn worker(
                     &abort,
                     &files,
                     overlap && class == RequestClass::Read,
+                    (&shared, ticket, class),
                 ),
             }
         }))
@@ -1077,6 +1097,7 @@ struct Files<'a> {
     grants: &'a str,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute(
     bindings: Result<&ibex2::host::Bindings, &str>,
     mut request: Request,
@@ -1085,6 +1106,7 @@ fn execute(
     abort: &AbortController,
     files: &Files<'_>,
     overlap: bool,
+    cache_job: (&Arc<Shared>, u64, RequestClass),
 ) -> Outcome {
     if abort.signal().aborted() {
         return failed(FailureKind::Aborted, "native request aborted");
@@ -1157,23 +1179,54 @@ fn execute(
     if let Some(outcome) = ended() {
         return outcome;
     }
+    if let Some(outcome) =
+        cache::prepare(cache_job.0, cache_job.1, &mut request, cache_job.2, forced)
+            .or_else(|| cache::missing(&request, forced))
+    {
+        return outcome;
+    }
     let mut req = fetch_request(request, forced);
+    cache::observe(cache_job.0, &mut req);
     req.max_body = Some(limit);
     // The platform's idle timeout (URLSession's, 60 s by default) follows
     // the deadline a second later: it never ends a request before the
     // deadline does (so the reply says Timeout, not a network error), and a
     // deadline over 60 s is not cut short by it.
     req.timeout = timeout.map(|ms| std::time::Duration::from_millis(u64::from(ms) + 1_000));
-    let result = fetch
-        .stream(req, &abort.signal())
-        .and_then(check_headers)
-        .and_then(|r| body_to::receive(r, staged, limit, within));
+    let retry = cache::retry_request(cache_job.0, cache_job.1, &req);
+    let result = fetch.stream(req, &abort.signal()).and_then(check_headers);
+    let redirected_conditional = result.as_ref().is_ok_and(|r| {
+        cache::retry(
+            &mut cache_job.0.state.lock().unwrap(),
+            cache_job.1,
+            r.status,
+            r.redirected,
+        )
+    });
+    let result = if redirected_conditional {
+        drop(result);
+        fetch
+            .stream(retry.expect("a cache conditional"), &abort.signal())
+            .and_then(check_headers)
+    } else {
+        result
+    }
+    .and_then(|r| body_to::receive(r, staged, limit, within));
     match result {
-        Ok(r) => Outcome::Response(Response {
-            status: r.status,
-            headers: r.headers.entries().to_vec(),
-            body: r.body,
-        }),
+        Ok(r) => {
+            let mut response = Response {
+                status: r.status,
+                headers: r.headers.entries().to_vec(),
+                body: r.body,
+            };
+            cache::response(
+                &mut cache_job.0.state.lock().unwrap(),
+                cache_job.1,
+                &mut response,
+                r.redirected,
+            );
+            Outcome::Response(response)
+        }
         Err(_) if deadline.as_ref().is_some_and(Deadline::passed) => failed(
             FailureKind::Timeout,
             format!("the request timed out after {} ms", timeout.unwrap_or(0)),
@@ -1227,6 +1280,8 @@ mod body_to;
 
 #[path = "executor_admission.rs"]
 mod admission;
+#[path = "executor_cache.rs"]
+mod cache;
 #[path = "executor_reads.rs"]
 mod reads;
 

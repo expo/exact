@@ -315,6 +315,8 @@ test('the wasm early GET follows a return chain and is claimed at the granted fi
   try {
     const op = { method: 'GET', url: `${origin.url}start`, headers: [], scope };
     const source = scopedGrantSet(app, scope);
+    for (const cache of ['no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached'])
+      expect(fetchEarly({ ...op, cache }, source)).toBe(null);
     expect(fetchEarly(op, source)).toBeFunction();
     const response = await request(op, { grantSet: app, controllers: new Set(), moduleLoader: { claim } });
     expect([response.kind, new TextDecoder().decode(response.body), middleHits, finalHits]).toEqual([0, 'accepted', 1, 1]);
@@ -594,4 +596,18 @@ test('a render upload keeps HTTP error replies and enforces its byte ceiling, ab
     globalThis.fetch = saved.fetch;
     if (saved.render) Object.defineProperty(globalThis, '__exactRender', saved.render); else delete globalThis.__exactRender;
   }
+});
+
+test('a cache-only upload fails without constructing an XMLHttpRequest or telling sending', async () => {
+  const saved = globalThis.XMLHttpRequest, messages = [], controllers = new Set();
+  let made = 0;
+  globalThis.XMLHttpRequest = class { constructor() { made++; throw new Error('upload contacted the network'); } };
+  try {
+    const outcome = await request({ method: 'POST', url: 'https://example.test/upload', headers: [], body: btoa('bytes'), stream: true, upload: true, cache: 'only-if-cached' },
+      { grantSet: normalized('net.fetch https://example.test'), controllers, message: m => messages.push(m) });
+    assert.equal(outcome.kind, 1);
+    assert.equal(made, 0);
+    assert.deepEqual(messages, []);
+    assert.equal(controllers.size, 0);
+  } finally { globalThis.XMLHttpRequest = saved; }
 });

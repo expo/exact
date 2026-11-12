@@ -82,7 +82,7 @@ export const signalDeadline = { arm: null };
 // `origin`: who asked it (LLP 1133.036 D6); a tool's, a wake's or the device's reach to a less public space is checked.
 // `decided`: `fetchOf` has already armed the signal's deadline before the file work, or found the request has none
 // (ts-fetch.js), so it is not weighed again.
-export async function fetchWith(set, input, init = {}, expires = null, redirect = redirectOf(input, init), read = within, origin = 'app', decided = false) {
+export async function fetchWith(set, input, init = {}, expires = null, redirect = redirectOf(input, init), read = within, origin = 'app', decided = false, forced = false) {
   let value, asset, deadline, signal, own, armed;
   init ??= {};
   deadline = deadlineOf(init);
@@ -103,7 +103,13 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
   if (unreached) throw new FetchError('Refused', `NotAllowedError: ${unreached}`);
   redirect = redirectFor(origin, redirect);
   try {
-    const rest = ownWithout(init, ['exactTimeout', 'exactIndependentHttp', 'redirect', 'signal']);
+    const rest = ownWithout(init, ['exactTimeout', 'exactIndependentHttp', 'redirect', 'signal', 'cache', 'mode']);
+    const givenCache = init.cache;
+    const cache = givenCache !== undefined ? givenCache : typeof Request === 'function' && input instanceof Request ? input.cache : undefined;
+    if (cache !== undefined || forced) rest.cache = forced && cache !== 'no-store' ? 'reload' : cache;
+    const mode = init.mode;
+    if (mode !== undefined) rest.mode = mode;
+    else if (rest.cache === 'only-if-cached') rest.mode = 'same-origin';
     // The caller's signal, read once by name, as `fetch` reads its init's members (an inherited one too), else the
     // input `Request`'s (`null` clears the Request's, `undefined` keeps it, as `fetch` has them).
     const given = init.signal;
@@ -173,7 +179,7 @@ export function createRequestExecutor(appId, sourceSet, readBody = response => r
     }
     try {
       // Its ceiling bounds the read inside `fetchWith` too, so an oversized body that never ends is refused, not awaited.
-      const response = await fetchWith(admitted, req.url, { method: req.method, headers: req.headers, body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.raw,
+      const response = await fetchWith(admitted, req.url, { method: req.method, headers: req.headers, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.raw,
         ...(req.maxResponseBytes != null ? { exactIndependentHttp: { maxResponseBytes: req.maxResponseBytes } } : {}) });
       return { status: response.status, headers: [...response.headers], body: new Uint8Array(await readBody(response, req.maxResponseBytes)) };
     } catch (error) {

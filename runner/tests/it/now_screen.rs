@@ -250,6 +250,7 @@ fn a_timers_send_lands_only_if_its_reply_beats_the_next_tick() {
             first,
             exact_runner::Outcome::Storage(b"three".to_vec()),
             Some(exact_runner::CompletionTiming {
+                cached: false,
                 elapsed_ms: 17,
                 delivery_wait_ms: 0,
             }),
@@ -270,6 +271,7 @@ fn a_timers_send_lands_only_if_its_reply_beats_the_next_tick() {
             last,
             exact_runner::Outcome::Storage(b"four".to_vec()),
             Some(exact_runner::CompletionTiming {
+                cached: true,
                 elapsed_ms: 212,
                 delivery_wait_ms: 37
             })
@@ -278,7 +280,7 @@ fn a_timers_send_lands_only_if_its_reply_beats_the_next_tick() {
         .is_some());
     assert_eq!(r.slot("result"), Some(&Value::some(Value::str("four"))));
     assert!(r.journal().any(|line| line.starts_with("t=1200 fulfil ")
-        && line.contains("wall 212 ms; delivery wait 37 ms")));
+        && line.contains("; HTTP cache; wall 212 ms; delivery wait 37 ms")));
 }
 
 fn style_id(name: &str) -> u16 {

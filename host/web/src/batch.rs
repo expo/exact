@@ -703,9 +703,18 @@ impl Batch {
         }
         s.push_str(",\"body\":\"");
         s.push_str(&exact_runner::agent::base64(&r.request.body));
-        s.push_str("\",\"cache\":\"");
-        s.push_str(if r.forced { "reload" } else { "default" });
         s.push('"');
+        if r.forced || r.request.cache != exact_runner::CacheMode::Unspecified {
+            s.push_str(",\"cache\":\"");
+            s.push_str(
+                if r.forced && r.request.cache != exact_runner::CacheMode::NoStore {
+                    "reload"
+                } else {
+                    r.request.cache.name()
+                },
+            );
+            s.push('"');
+        }
         // An answer that keeps coming (LLP 1016.000): the page reads the
         // body as events and delivers each as a message (kind 8).
         if r.request.stream {

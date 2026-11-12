@@ -520,14 +520,7 @@
   fixed(global, "scheduler", Object.freeze({ yield: yieldTurn, postTask: function () { throw new Error("scheduler.postTask() is unavailable in data sources; split long work with await scheduler.yield()"); } }));
   var responses = binary.responses(), Response = responses.Response, hostReply = responses.reply;
 
-  function FetchError(f) {
-    Object.defineProperties(this, {
-      name: { value: "FetchError", configurable: true },
-      message: { value: String(f.message), configurable: true },
-      kind: { value: String(f.kind), configurable: true },
-    });
-  }
-  FetchError.prototype = Object.create(Error.prototype);
+  var FetchError = binary.FetchError;
 
   // A mutation does one kind of effect, socket operations or a fetch: whichever
   // comes second refuses, and the mutation with it, before either leaves.
@@ -633,6 +626,7 @@
     var idle = init ? init.exactIdleTimeout : undefined, idleWhy = idleRefusal(idle, !!stream && !upload && !listen && !own && init.exactLongPoll === undefined && /^wss?:/i.test(url)); // a quiet WebSocket ends as a Timeout (LLP 1016.000 D11)
     if (idleWhy) return optionRefused(new TypeError(idleWhy));
     if ((held !== undefined && held !== true && held !== false) || (held && stream)) return optionRefused(new TypeError(held === true ? "exactHeld: a stream is never held; it stops counting at its first message" : "exactHeld is true or false")); var poll = longPollOf(init, stream, method, url); if (typeof poll === "string") return optionRefused(new TypeError(poll)); // `exactHeld`: the server may hold the reply, and no clock waits on it (LLP 1016.000 D9); `exactLongPoll` (D8): the host asks again with each reply's cursor (binary.js `longPollOf`)
+    var cache; try { cache = binary.cacheMode(init); } catch (e) { return optionRefused(e); }
     // `redirect` (Fetch §5.4, the Request constructor): read and checked once,
     // before the signal, and a throw rejects. Rust follows redirects, checking
     // each hop's grant, so "manual" answers with the 3xx and its Location.
@@ -657,7 +651,7 @@
     var ticket = nextTicket++;
     // A WebSocket stream owns a two-way socket (LLP 1016.000 D7); an HTTP one's body that is not events is bytes.
     var socket = stream && (!!listen || !!own || /^wss?:/i.test(String(url)));
-    var wire = JSON.stringify({ method: method, url: String(url), headers: Array.from(headers.entries()), body: body, body_base64: bytes ? toBase64(bytes) : undefined, max_response_bytes: ceiling, stream: stream ? true : undefined, socket: socket ? true : undefined, bytes: stream && !socket && !poll && !upload ? true : undefined, upload_progress: upload ? true : undefined, long_poll: poll, timeout_ms: timeout, idle_timeout_ms: idle, body_from: bodyFrom, body_to: bodyTo, redirect: redirect, held: held ? true : undefined, listen: listen });
+    var wire = JSON.stringify({ method: method, url: String(url), headers: Array.from(headers.entries()), body: body, body_base64: bytes ? toBase64(bytes) : undefined, max_response_bytes: ceiling, stream: stream ? true : undefined, socket: socket ? true : undefined, bytes: stream && !socket && !poll && !upload ? true : undefined, upload_progress: upload ? true : undefined, long_poll: poll, timeout_ms: timeout, idle_timeout_ms: idle, body_from: bodyFrom, body_to: bodyTo, redirect: redirect, cache: cache, held: held ? true : undefined, listen: listen });
     var error; try { error = host(1, String(ticket), wire); } catch (e) { throw mark(e); } // only the door's own refusal, never what building the request threw
     if (error !== undefined) return optionRefused(new Error(error));
     call.tickets.push(ticket);

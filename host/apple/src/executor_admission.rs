@@ -191,6 +191,11 @@ impl Core {
                 blocking: false,
                 generation: 0,
                 claim: asynch::Claim::None,
+                cached: false,
+                cache_exchange: None,
+                cache_replacing: cache::replacing(&r.request, r.class, r.forced, work.is_some()),
+                cache_barrier: cache::barrier(&r.request, r.class, work.is_some()),
+                invalidates: cache::invalidates(&r.request, work.is_some()),
             });
             rouse(&self.shared, &state);
             drop(state);
@@ -230,6 +235,7 @@ impl Core {
             overlap,
             class: r.class,
         });
+        cache::serve_ready(&mut state);
         #[cfg(test)]
         self.shared
             .worker_notifications

@@ -568,3 +568,35 @@ test.each([
     expect(await page.locator('#exact-root').textContent()).toBe(`10,20 settled ${100 / 3}`);
   } finally { await browser.close(); server.stop(true); }
 }, 30000);
+
+
+test("refresh carries a Rust request's forced cache mode through runtime dispatch", async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const observed = await page.evaluate(async () => {
+      globalThis.__exactRender = true;
+      const sent = [];
+      globalThis.fetch = async (_input, init) => { sent.push(init.cache); return new Response('reply'); };
+      const rt = await import('/host/web-js/rt.js');
+      const { createRequestExecutor, setAppGrantSet, appGrantSet } = await import('/host/web-js/admission.js');
+      setAppGrantSet();
+      rt.clock.agent = true;
+      rt.data.fetch = createRequestExecutor('test.refresh', appGrantSet());
+      rt.data.parse = () => ({ v: 'reply' });
+      const modes = ['force-cache', 'no-store'];
+      rt.data.answer = name => ({ req: { method: 'GET', url: '/assets/cache.txt', headers: [], cache: modes[name === 'a' ? 0 : 1] } });
+      let a, b;
+      rt.mount(root => {
+        a = rt.res('a', 'a', () => [], undefined, undefined, 's', '');
+        b = rt.res('b', 'b', () => [], undefined, undefined, 's', '');
+        rt.hd(root, { headTitle: () => a() + b() });
+      });
+      while (rt.inflight.n) await new Promise(resolve => setTimeout(resolve, 0));
+      rt.commit(() => { rt.R(a); rt.R(b); });
+      while (rt.inflight.n) await new Promise(resolve => setTimeout(resolve, 0));
+      return sent;
+    });
+    expect(observed).toEqual(['force-cache', 'no-store', 'reload', 'no-store']);
+  } finally { await browser.close(); server.stop(true); }
+});

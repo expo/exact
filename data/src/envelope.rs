@@ -5,7 +5,7 @@
 use exact_plan::Value;
 use exact_runner::failure::FailureCode;
 use exact_runner::{
-    Answer, DataError, HttpScheduling, Outcome, Redirect, Request, Response, Store,
+    Answer, CacheMode, DataError, HttpScheduling, Outcome, Redirect, Request, Response, Store,
 };
 use serde_json::{json, Value as Json};
 
@@ -222,6 +222,7 @@ fn request_json(request: &Request) -> Json {
         "body_from": request.body_from,
         "body_to": request.body_to,
         "redirect": (request.redirect != Redirect::Follow).then(|| request.redirect.name()),
+        "cache": (request.cache != CacheMode::Unspecified).then(|| request.cache.name()),
         "held": request.held.then_some(true),
         "due_ms": request.due_ms,
         "wake_ms": request.wake_ms,
@@ -339,6 +340,8 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         },
         redirect: Redirect::parse(json["redirect"].as_str())
             .map_err(|_| unavailable("turn reply: an invalid redirect mode"))?,
+        cache: CacheMode::parse(json["cache"].as_str())
+            .map_err(|_| unavailable("turn reply: an invalid cache mode"))?,
         held: json["held"].as_bool().unwrap_or(false),
         due_ms: json["due_ms"].as_u64(),
         wake_ms: json["wake_ms"].as_u64(),
@@ -367,6 +370,28 @@ pub fn unbase64(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_cache_mode_crosses_a_module_turn() {
+        for word in [
+            "unspecified",
+            "default",
+            "no-store",
+            "reload",
+            "no-cache",
+            "force-cache",
+            "only-if-cached",
+        ] {
+            let request = Request::get("https://example.test")
+                .cache(CacheMode::parse((word != "unspecified").then_some(word)).unwrap());
+            let wire = request_json(&request);
+            assert_eq!(
+                wire["cache"].as_str(),
+                (word != "unspecified").then_some(word)
+            );
+            assert_eq!(request_from(&wire).unwrap(), request);
+        }
+    }
 
     #[test]
     fn a_turn_round_trips_its_value_writes_reads_and_yields() {

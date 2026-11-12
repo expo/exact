@@ -6,15 +6,15 @@ use exact_plan::{
     Plan, Value,
 };
 use exact_runner::{
-    Answer, DataError, DataSource, FailureKind, HttpScheduling, LongPoll, Outcome, Overlaid,
-    Redirect, Request, Response, Socket, SocketCall, SocketOp, Store, SurfaceOutcome,
+    Answer, CacheMode, DataError, DataSource, FailureKind, HttpScheduling, LongPoll, Outcome,
+    Overlaid, Redirect, Request, Response, Socket, SocketCall, SocketOp, Store, SurfaceOutcome,
     SurfaceRequest, Write,
 };
 
 pub mod draw;
 
 /// Seam version, independent of the plan format version.
-pub const ABI: u32 = 6;
+pub const ABI: u32 = 7;
 /// Maximum request or response bytes, enforced on both sides.
 pub const MAX_MESSAGE: usize = exact_runner::MAX_HOST_WORK_BYTES;
 
@@ -545,6 +545,10 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
             // A stream (tag 9) is always independent (LLP 1016.000); a long
             // poll (tag 10, D8) is a stream with its terms after the body; a
             // two-way socket (tag 11, LLP 1016.003) is a stream.
+            if !r.socket && r.cache != CacheMode::Unspecified {
+                w.u8(12);
+                w.string(r.cache.name());
+            }
             let poll = r.long_poll.as_ref().filter(|_| r.stream);
             match r.http {
                 HttpScheduling::Ordered => w.u8(1),
@@ -605,6 +609,16 @@ fn read_result(r: &mut Reader<'_>) -> Result<Result<Answer, DataError>, String> 
     Ok(match tag {
         0 => Ok(Answer::Now(Value::decode(r).map_err(error)?)),
         1 | 6 | 9..=11 => Ok(Answer::Later(read_http(r, tag)?)),
+        12 => {
+            let cache = CacheMode::parse(Some(&r.string().map_err(error)?))?;
+            let tag = r.u8().map_err(error)?;
+            if !matches!(tag, 1 | 6 | 9 | 10) {
+                return Err("invalid cached HTTP result tag".into());
+            }
+            let mut request = read_http(r, tag)?;
+            request.cache = cache;
+            Ok(Answer::Later(request))
+        }
         5 => {
             let payload = read_bytes(r)?.to_vec();
             let present = r.u8().map_err(error)?;
@@ -658,6 +672,7 @@ fn read_http(r: &mut Reader<'_>, tag: u8) -> Result<Request, String> {
         body_from: None,
         body_to: None,
         redirect: Redirect::Follow,
+        cache: Default::default(),
         held: false,
         reach: Default::default(),
         listen: None,

@@ -7,6 +7,9 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import vm from 'node:vm';
+import { webCompiler } from './module.mjs';
 
 const root = resolve(import.meta.dir, '../..');
 // A folder of the runtime's modules side by side, as a build lays them out, with the app's grants in
@@ -207,3 +210,149 @@ async function withRows(check) {
 function frozenRow(id) {
   return Object.freeze({id, parts:Object.freeze([Object.freeze({text:id})])});
 }
+
+
+test("every cache mode reaches the browser from a JS fetch, a stream and a wasm request", async () => {
+  const fixture = runtime('exact-fetch-cache-'), browser = globalThis.fetch, pageLocation = globalThis.location, sent = [];
+  globalThis.location = new URL('https://example.test/');
+  try {
+    const { cmd, pre } = webCompiler();
+    if (cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+    const grants = resolve(fixture, 'grants.txt');
+    writeFileSync(grants, 'net.fetch https://example.test\nnet.fetch https://another.test');
+    const normalized = spawnSync(cmd, [...pre, 'normalize-grants', grants], { cwd: root, encoding: 'utf8' });
+    expect(normalized.status).toBe(0);
+    writeFileSync(resolve(fixture, 'admission-data.js'), `import { createGrantSet } from './admission.js'; export const tsGrantSet = createGrantSet(${normalized.stdout});`);
+    globalThis.fetch = async (input, init) => {
+      sent.push(init);
+      if (init.cache === 'only-if-cached') {
+        expect(init.mode).toBe('same-origin');
+        if (new URL(input).origin !== location.origin) throw new TypeError('cross-origin cache-only request');
+      }
+      return new Response('reply');
+    };
+    const { tsGrantSet } = await import(at(fixture, 'admission-data.js'));
+    const { createRequestExecutor } = await import(at(fixture, 'admission.js'));
+    const rustFetch = createRequestExecutor('test.cache', tsGrantSet);
+    const { fetch: appFetch } = await import(at(fixture, 'ts-fetch.js'));
+    const { open } = await import(at(fixture, 'ts-stream.js'));
+    const { request } = await import(at(fixture, 'http-body.js'));
+    for (const cache of ['default', 'no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached']) {
+      for (const options of [{ cache }, Object.create({ cache })]) {
+        expect(await (await appFetch('https://example.test/cache', options)).text()).toBe('reply');
+        expect(sent.at(-1).cache).toBe(cache);
+      }
+      await open({ input: 'https://example.test/cache', init: { exactStream: e => e.data, cache } }, v => v, tsGrantSet, () => {}, new AbortController());
+      expect(sent.at(-1).cache).toBe(cache);
+      await request({ method: 'GET', url: 'https://example.test/cache', headers: [], cache }, { grantSet: tsGrantSet, controllers: new Set() });
+      expect(sent.at(-1).cache).toBe(cache);
+      await rustFetch({ method: 'GET', url: 'https://example.test/cache', headers: [], cache });
+      expect(sent.at(-1).cache).toBe(cache);
+    }
+    expect(sent).toHaveLength(30);
+    const { answering } = await import(at(fixture, 'ts-fetch.js'));
+    for (const cache of ['force-cache', 'only-if-cached', 'no-store']) {
+      const expected = cache === 'no-store' ? cache : 'reload';
+      await rustFetch({ method: 'GET', url: 'https://example.test/cache', headers: [], cache, forced: true });
+      expect(sent.at(-1).cache).toBe(expected);
+      answering.call = { forced: true };
+      try { await appFetch('https://example.test/cache', { cache }); }
+      finally { answering.call = null; }
+      expect(sent.at(-1).cache).toBe(expected);
+      const controller = new AbortController(); controller.forced = true;
+      await open({ input: 'https://example.test/cache', init: { exactStream: e => e.data, cache } }, v => v, tsGrantSet, () => {}, controller);
+      expect(sent.at(-1).cache).toBe(expected);
+    }
+    for (const cache of [undefined, 'default', 'reload']) {
+      const controller = new AbortController();
+      globalThis.fetch = async (_input, init) => { sent.push(init); controller.abort(); return new Response(null, { status: 204 }); };
+      const poll = { cursor: 'since', from: 'seq', sameCursorEvent: false };
+      await request({ method: 'GET', url: 'https://example.test/poll', headers: [], cache, stream: true, longPoll: poll }, { grantSet: tsGrantSet, controllers: new Set(), controller });
+      expect(sent.at(-1).cache).toBe(cache ?? 'no-store');
+      const next = new AbortController();
+      globalThis.fetch = async (_input, init) => { sent.push(init); next.abort(); return new Response(null, { status: 204 }); };
+      await open({ input: 'https://example.test/poll', init: { cache, exactStream: e => e.data, exactLongPoll: { cursor: 'since', from: 'seq' } } }, v => v, tsGrantSet, () => {}, next);
+      expect(sent.at(-1).cache).toBe(cache ?? 'no-store');
+    }
+    globalThis.fetch = async (input, init) => { sent.push(init); if (init.cache === 'only-if-cached' && new URL(input).origin !== location.origin) throw new TypeError('cross-origin cache-only request'); return new Response('reply'); };
+    writeFileSync(resolve(fixture, 'ts-data.js'), readFileSync(resolve(root, 'host/web-js/ts-data.js'), 'utf8')
+      .replace("'__APP_TS__'", "'./app.js'").replace('__AUTH_IMPORT__', '').replace('__AUTH_INSTALL__', '').replace("'__FETCH_MODULE__'", "'./ts-fetch.js'"));
+    writeFileSync(resolve(fixture, 'names.js'), "export const sourceTypes = {cached:[['s'],'s']};\n");
+    writeFileSync(resolve(fixture, 'app.js'), "import {fetch} from './ts-fetch.js'; export const appId='test.forced'; export const answer=(_name,[cache])=>fetch('/assets/cache.txt',{cache}).then(r=>r.text());\n");
+    const { install } = await import(at(fixture, 'ts-data.js'));
+    const sourceData = { q: [] }; install(sourceData);
+    for (const cache of ['force-cache', 'no-store']) {
+      const answer = sourceData.answer('cached', [cache], new Map(), 'resource', false, true);
+      expect(await answer.promise).toBe('reply');
+      expect(sent.at(-1).cache).toBe(cache === 'no-store' ? 'no-store' : 'reload');
+    }
+    const mode = { method: 'GET', url: 'https://example.test/cache', headers: [], mode: 'same-origin' };
+    await request(mode, { grantSet: tsGrantSet, controllers: new Set() });
+    expect(sent.at(-1).mode).toBe('same-origin');
+    const crossSet = tsGrantSet;
+    const cross = await request({ ...mode, url: 'https://another.test/cache', cache: 'only-if-cached' }, { grantSet: crossSet, controllers: new Set() });
+    expect(cross.kind).toBe(1);
+    expect(new TextDecoder().decode(cross.body)).toContain('cross-origin');
+  } finally {
+    globalThis.fetch = browser;
+    globalThis.location = pageLocation;
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});
+
+
+test("the native cache option encoder distinguishes unsaid from explicit default", () => {
+  const realm = vm.createContext({});
+  vm.runInContext(readFileSync(resolve(root, 'js/src/binary.js'), 'utf8'), realm);
+  for (const init of ['{}', '{cache: undefined}'])
+    expect(vm.runInContext(`JSON.stringify({cache: __exact_binary.cacheMode(${init})})`, realm)).toBe('{}');
+  expect(vm.runInContext('JSON.stringify({cache: __exact_binary.cacheMode({cache: "default"})})', realm)).toBe('{"cache":"default"}');
+  expect(vm.runInContext('JSON.stringify({cache: __exact_binary.cacheMode({cache: "no-store"})})', realm)).toBe('{"cache":"no-store"}');
+});
+
+
+test("a kept upload's request distinguishes cache modes", async () => {
+  const { requestKey } = await import('./uploads.js');
+  const key = cache => requestKey({ input: 'https://example.test/upload', init: { method: 'POST', exactUploadProgress: true, cache } });
+  expect(key(undefined)).toBe(key('default'));
+  for (const mode of ['no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached'])
+    expect(key(mode)).not.toBe(key('default'));
+});
+
+test('a JS upload with effective only-if-cached fails before sending; a forced upload still sends without cache headers', async () => {
+  const fixture = runtime('exact-upload-cache-'), saved = globalThis.XMLHttpRequest, made = [];
+  globalThis.XMLHttpRequest = class {
+    constructor() { this.upload = {}; this.headers = []; made.push(this); }
+    open() {}
+    setRequestHeader(...header) { this.headers.push(header); }
+    send() { this.status = 201; this.response = new ArrayBuffer(0); this.onload(); }
+    getAllResponseHeaders() { return ''; }
+  };
+  try {
+    const { cmd, pre } = webCompiler();
+    const grants = resolve(fixture, 'grants.txt');
+    writeFileSync(grants, 'net.fetch https://example.test');
+    const normalized = spawnSync(cmd, [...pre, 'normalize-grants', grants], { cwd: root, encoding: 'utf8' });
+    expect(normalized.status).toBe(0);
+    const { createGrantSet } = await import(at(fixture, 'admission.js'));
+    const set = createGrantSet(JSON.parse(normalized.stdout));
+    const { open } = await import(at(fixture, 'ts-stream.js'));
+    const { streamed } = await import(at(fixture, 'http-body.js'));
+    for (const forced of [false, true]) {
+      const controller = new AbortController(); controller.forced = forced;
+      const req = { method: 'POST', url: 'https://example.test/upload', headers: [], stream: true, upload: true, cache: 'only-if-cached', forced };
+      const messages = [], outcome = await streamed(req, set, m => messages.push(m), controller);
+      expect(outcome.kind).toBe(forced ? 0 : 1);
+      expect(messages.some(m => m.event === 'exact:sending')).toBe(forced);
+      const events = [];
+      const ended = await open({ input: req.url, init: { method: 'POST', body: 'bytes', cache: req.cache, exactUploadProgress: true, exactStream: e => (events.push(e), e.type) } }, v => v, set, () => {}, controller);
+      expect(events.at(-1).type).toBe(forced ? 'load' : 'error');
+      expect(ended.v).toBe(forced ? 'load' : 'error');
+    }
+    expect(made).toHaveLength(2);
+    for (const xhr of made) expect(xhr.headers.some(([name]) => name.toLowerCase() === 'cache-control')).toBe(false);
+  } finally {
+    globalThis.XMLHttpRequest = saved;
+    rmSync(fixture, { recursive: true, force: true });
+  }
+});

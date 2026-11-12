@@ -100,6 +100,7 @@ fn settle_queued(
     state.completed[lane].push_back(Completed {
         finished_at: std::time::Instant::now(),
         ticket: job.ticket,
+        cached: false,
         elapsed_ms,
         outcome,
         bytes: job.charge,
@@ -233,6 +234,7 @@ impl Core {
             state.fenced_bytes = fenced_bytes(&state.fenced);
             rouse(&self.shared, state);
             place_waiting(state);
+            cache::serve_ready(state);
             // As in `complete`: emptying the lane can let a refusal settle.
             if has_ready(state) || (busy && state.counts[0] == 0) {
                 wake(state);

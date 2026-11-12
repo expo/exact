@@ -86,6 +86,25 @@ pub(super) fn fetch_request(request: Request, forced: bool) -> ibex2::stdlib::fe
     if forced {
         req.headers.set("cache-control", "no-cache");
     }
+    let mode = if forced && request.cache != exact_runner::CacheMode::NoStore {
+        exact_runner::CacheMode::Reload
+    } else {
+        request.cache
+    };
+    match mode {
+        exact_runner::CacheMode::NoCache if !req.headers.has("cache-control") => {
+            req.headers.set("cache-control", "max-age=0")
+        }
+        exact_runner::CacheMode::NoStore | exact_runner::CacheMode::Reload => {
+            if !req.headers.has("pragma") {
+                req.headers.set("pragma", "no-cache");
+            }
+            if !req.headers.has("cache-control") {
+                req.headers.set("cache-control", "no-cache");
+            }
+        }
+        _ => {}
+    }
     if !request.body.is_empty() {
         req.body = Some(request.body);
     }

@@ -769,6 +769,9 @@ impl Transport for RustlsHttpTransport {
                 .content_length()
                 .is_some_and(|n| n > limit as u64)
         {
+            if let Some(received) = &request.received {
+                (received.0)(&request.method, &request.url, status.as_u16(), &headers);
+            }
             return Err(over_limit(limit));
         }
         let reader = response.into_body().into_reader();

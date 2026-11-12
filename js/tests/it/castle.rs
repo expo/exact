@@ -288,6 +288,9 @@ fn a_fetch_deadline_reaches_the_request_and_its_timeout_rejects_with_its_kind() 
     }
 }
 
+#[path = "fetch_cache.rs"]
+mod fetch_cache;
+
 #[path = "fetch_body.rs"]
 mod fetch_body;
 

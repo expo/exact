@@ -1,13 +1,13 @@
 import { admitsSecret, createRequestExecutor, fetchHostAsset, sameGrantDeclaration, setAppGrantSet } from './admission.js';
 import { rustGrantSet, tsGrantSet } from './admission-data.js';
 import { boundedHttpBody, longPollRefusal, streamed } from './http-body.js';
-// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 6,
+// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 7,
 // `logic/abi/src/lib.rs`): the app's importless module wasm and its plan's
 // declarations (`app.bind.plan`, the plan without the bake's answers),
 // fetched after first pixel; once bound and activated, every answer is a
 // synchronous call, as the runner's `DataSource::answer` is. Until then the
 // runtime keeps each resource's compiled value and asks again at `ready`.
-const ABI = 6, utf8 = new TextEncoder(), text = new TextDecoder();
+const ABI = 7, utf8 = new TextEncoder(), text = new TextDecoder();
 
 function writer() {
   let buf = new Uint8Array(256), at = 0;
@@ -86,7 +86,11 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   };
   // A result (`read_result`): now, or an HTTP request for the host to run.
   const result = r => {
-    const tag = r.u8();
+    let tag = r.u8(), cache;
+    if (tag === 12) {
+      cache = r.str(); tag = r.u8();
+      if (!['default', 'no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached'].includes(cache) || ![1, 6, 9, 10].includes(tag)) throw new Error('invalid cached HTTP result');
+    }
     if (tag === 0) return { v: r.value() };
     // The source's own refusal refuses the commit, as the runner's does;
     // UnknownSource (2): a mixed app's TypeScript module may answer it.
@@ -106,7 +110,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       // (refused as the native seam refuses it: before the turn's writes apply)
       const pollRefusal = longPoll && longPollRefusal({ url, longPoll, stream: true }, method, n ? 'x' : '');
       if (pollRefusal) throw new Error(pollRefusal);
-      return { req: { method, url, headers, body: text.decode(body), raw: body, http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, longPoll } };
+      return { req: { method, url, headers, cache, body: text.decode(body), raw: body, http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, longPoll } };
     }
     // Storage work (LLP 1027.001 D2): a portable request the host runs
     // through the web host's own `storage-request.js`, under its scope.
@@ -156,7 +160,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   };
   const rust = (source, args, store) => callWith(3, source, args, store), ts = data.ts, tsThrewRead = data.threwRead;
   data.threwRead = () => { const read = [threwRead, !!tsThrewRead?.()]; threwRead = false; return read[0] || read[1]; };
-  data.answer = ts ? (source, args, store, target, mutation) => { try { return rust(source, args, store); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation); throw e; } } : rust;
+  data.answer = ts ? (source, args, store, target, mutation, forced) => { try { return rust(source, args, store); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation, forced); throw e; } } : rust;
   data.parse = (source, args, outcome, store) => callWith(4, source, args, store, outcome);
   // An overlay (`overlay_request`): what a resource shows while writes affect it; none from the Rust module asks
   // the TypeScript one's, beside it.

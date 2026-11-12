@@ -85,6 +85,7 @@ impl Executor {
                 f(ctx as *mut c_void);
             }
         }));
+        core.enable_http_cache();
         // The Mac starts programs for data code; iOS and tvOS do not (LLP
         // 1133.007 §8). There `bundle:/` is the trees the app declared and
         // `home:` is absent (D6).

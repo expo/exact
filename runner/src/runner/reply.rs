@@ -88,6 +88,9 @@ impl<D: DataSource> Runner<D> {
         };
         let mut summary = outcome.summary();
         if let Some(timing) = timing {
+            if timing.cached {
+                summary.push_str("; HTTP cache");
+            }
             exact_num::push_text!(&mut summary, "; wall {} ms", timing.elapsed_ms);
             if timing.delivery_wait_ms > 0 {
                 exact_num::push_text!(

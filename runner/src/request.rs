@@ -80,40 +80,9 @@ pub enum HttpScheduling {
     },
 }
 
-/// What a redirect response does: the Fetch standard's `redirect` option.
-/// Native transports follow it in Rust, re-checking the grant on every hop;
-/// `Manual` hands the 3xx back (its `Location` readable), `Error` fails.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Redirect {
-    /// Follow to the final response.
-    #[default]
-    Follow,
-    /// Return the redirect response itself.
-    Manual,
-    /// Fail the request on a redirect.
-    Error,
-}
-
-impl Redirect {
-    /// The mode `fetch` names (absent is `follow`), refusing any other word.
-    pub fn parse(name: Option<&str>) -> Result<Redirect, String> {
-        match name.unwrap_or("follow") {
-            "follow" => Ok(Redirect::Follow),
-            "manual" => Ok(Redirect::Manual),
-            "error" => Ok(Redirect::Error),
-            other => Err(format!("redirect: follow, manual or error, not {other}")),
-        }
-    }
-
-    /// Its name as `fetch` spells it.
-    pub fn name(self) -> &'static str {
-        match self {
-            Redirect::Follow => "follow",
-            Redirect::Manual => "manual",
-            Redirect::Error => "error",
-        }
-    }
-}
+pub use http::{CacheMode, Redirect};
+#[path = "request_http.rs"]
+mod http;
 
 /// One host request, with ordered native execution unless explicitly opted in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,6 +160,8 @@ pub struct Request {
     pub body_to: Option<String>,
     /// What a redirect response does (`fetch`'s `redirect`).
     pub redirect: Redirect,
+    /// Fetch's HTTP cache mode (LLP 1162 D4).
+    pub cache: CacheMode,
     /// The server may hold the reply until something changes (a long poll;
     /// LLP 1016.000 D9): pending as any request, but no clock waits on it,
     /// neither a jump nor `clock settle` nor `clock data`, and each reply
@@ -333,6 +304,7 @@ impl Request {
             body_from: None,
             body_to: None,
             redirect: Redirect::Follow,
+            cache: CacheMode::Unspecified,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -438,6 +410,7 @@ impl Request {
             body_from: None,
             body_to: None,
             redirect: Redirect::Follow,
+            cache: CacheMode::Unspecified,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -482,6 +455,7 @@ impl Request {
             body_from: None,
             body_to: None,
             redirect: Redirect::Follow,
+            cache: CacheMode::Unspecified,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -636,6 +610,12 @@ impl Request {
     /// (see [`Request::wake_ms`]).
     pub fn wake(mut self, ms: u64) -> Self {
         self.wake_ms = Some(ms);
+        self
+    }
+
+    /// With Fetch's HTTP cache mode (LLP 1162 D4).
+    pub fn cache(mut self, mode: CacheMode) -> Self {
+        self.cache = mode;
         self
     }
 
@@ -1282,6 +1262,8 @@ pub enum RequestClass {
 /// Monotonic milliseconds measured by the executor, apart from the agent clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompletionTiming {
+    /// The executor supplied a cached body (LLP 1162 D4).
+    pub cached: bool,
     /// Time spent executing the request, ending before delivery (LLP 1162 D1).
     pub elapsed_ms: u64,
     /// Time from the exchange ending until its outcome is drained (LLP 1162 D1).

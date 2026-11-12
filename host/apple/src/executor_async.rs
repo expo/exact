@@ -565,6 +565,16 @@ impl Machine {
             blocking,
             generation: run.1,
             claim: Claim::None,
+            cached: false,
+            cache_exchange: None,
+            cache_replacing: super::cache::replacing(
+                &job.request,
+                job.class,
+                job.forced,
+                job.work.is_some(),
+            ),
+            cache_barrier: super::cache::barrier(&job.request, job.class, job.work.is_some()),
+            invalidates: super::cache::invalidates(&job.request, job.work.is_some()),
         });
         let start: Start =
             Box::new(move |m: &Arc<Machine>| m.run(lane, run, kind, job, sized, abort));
@@ -586,6 +596,7 @@ impl Machine {
             forced,
             work,
             queued_deadline,
+            class,
             ..
         } = job;
         let refuse = |outcome| self.answer(lane, run, outcome);
@@ -638,6 +649,12 @@ impl Machine {
                 refuse(outcome);
             }
             Kind::Http => {
+                if let Some(outcome) =
+                    super::cache::prepare(&self.shared, run.0, &mut request, class, forced)
+                        .or_else(|| super::cache::missing(&request, forced))
+                {
+                    return refuse(outcome);
+                }
                 let fetch = scoped.map(|s| s.expect("checked").fetch);
                 self.http(lane, run, request, forced, sized, abort, retiring, fetch)
             }
@@ -716,23 +733,47 @@ impl Machine {
     ) {
         let timeout = request.timeout_ms;
         let mut req = fetch_request(request, forced);
+        super::cache::observe(&self.shared, &mut req);
         req.max_body = Some(limit);
         // The platform's idle timeout follows the deadline a second later,
         // as on the workers.
         req.timeout = timeout.map(|ms| Duration::from_millis(u64::from(ms) + 1_000));
-        let events = Arc::new(Events {
-            machine: self.clone(),
-            lane,
-            run,
-            limit,
-            _retiring: Mutex::new(Some(retiring)),
-        });
         let tracked = Arc::new(Tracked {
             inner: transport,
             machine: self.clone(),
             lane,
             run,
             deadline: Mutex::new(deadline),
+        });
+        let retry = super::cache::retry_request(&self.shared, run.0, &req).map(|request| {
+            let (fetch, tracked, upload, signal) = (
+                fetch.clone(),
+                tracked.clone(),
+                upload.clone(),
+                abort.signal(),
+            );
+            Box::new(move |events: Arc<Events>| {
+                fetch.start_async(
+                    tracked,
+                    request,
+                    upload,
+                    signal,
+                    HeaderCaps {
+                        bytes: MAX_HEADERS,
+                        entries: 1024,
+                    },
+                    events,
+                );
+            }) as Retry
+        });
+        let events = Arc::new_cyclic(|this| Events {
+            machine: self.clone(),
+            lane,
+            run,
+            limit,
+            this: this.clone(),
+            retry: Mutex::new(retry),
+            _retiring: Mutex::new(Some(retiring)),
         });
         fetch.start_async(
             tracked,
@@ -799,7 +840,13 @@ impl Machine {
                     ),
                     Done::Cancelled => failed(FailureKind::Aborted, "native request aborted"),
                     Done::Fetch(result, limit) => {
-                        classify(result, limit, self.shared.abort.signal().aborted())
+                        let redirected = result.as_ref().is_ok_and(|r| r.redirected);
+                        let mut outcome =
+                            classify(result, limit, self.shared.abort.signal().aborted());
+                        if let Outcome::Response(response) = &mut outcome {
+                            super::cache::response(state, run.0, response, redirected);
+                        }
+                        outcome
                     }
                 };
                 Some(self.settled(state, run, outcome))
@@ -1109,7 +1156,8 @@ fn settle(state: &mut State, run: Run, outcome: Outcome) {
         return;
     }
     r.terminal = true;
-    let (lane, limit, read, forgotten) = (r.lane, r.limit, r.read, r.forgotten);
+    let (lane, limit, read, forgotten, cached) = (r.lane, r.limit, r.read, r.forgotten, r.cached);
+    let invalidates = r.invalidates.take();
     let finished_at = std::time::Instant::now();
     let elapsed = finished_at
         .duration_since(r.started)
@@ -1120,6 +1168,7 @@ fn settle(state: &mut State, run: Run, outcome: Outcome) {
         state.book.blocking = false;
     }
     let outcome = bounded_outcome(outcome, limit);
+    super::cache::invalidate(state, invalidates.as_ref(), &outcome);
     if forgotten {
         state.book.trash.push(Box::new(outcome));
         state.counts[lane] -= 1;
@@ -1127,6 +1176,7 @@ fn settle(state: &mut State, run: Run, outcome: Outcome) {
     } else {
         state.light += usize::from(read);
         state.completed[lane].push_back(Completed {
+            cached,
             finished_at,
             elapsed_ms: elapsed,
             ticket: run.0,
@@ -1141,6 +1191,7 @@ fn settle(state: &mut State, run: Run, outcome: Outcome) {
         });
     }
     physical(state, run);
+    super::cache::serve_ready(state);
     if super::has_ready(state) || (lane == 0 && state.counts[0] == 0) {
         super::wake(state);
     }
@@ -1239,6 +1290,8 @@ mod metrics_log;
 #[path = "executor_async_transport.rs"]
 mod tracked_transport;
 
+type Retry = Box<dyn FnOnce(Arc<Events>) + Send>;
+
 /// A fetch's events, to its lane's finisher.
 struct Events {
     machine: Arc<Machine>,
@@ -1246,17 +1299,34 @@ struct Events {
     run: Run,
     /// The response ceiling, which names an over-limit failure.
     limit: usize,
+    this: std::sync::Weak<Events>,
+    retry: Mutex<Option<Retry>>,
     /// Retirement's abort registration, held for the fetch's life.
     _retiring: Mutex<Option<AbortRegistration>>,
 }
 
 impl FetchEvents for Events {
     fn outcome(&self, result: Result<Collected, HostError>) {
-        let accepted = {
+        let (retry, accepted) = {
             let state = &mut self.machine.shared.state.lock().unwrap();
-            claim(state, self.run, Claim::Answered)
+            let open = find(&mut state.running, self.run)
+                .is_some_and(|r| !r.terminal && r.claim == Claim::None);
+            let retry = open
+                && result
+                    .as_ref()
+                    .is_ok_and(|r| super::cache::retry(state, self.run.0, r.status, r.redirected));
+            (retry, !retry && claim(state, self.run, Claim::Answered))
         };
-        if accepted {
+        if retry {
+            let retry = self
+                .retry
+                .lock()
+                .unwrap()
+                .take()
+                .expect("a cache conditional");
+            let events = self.this.upgrade().expect("live fetch events");
+            self.next_hop(Box::new(move || retry(events)));
+        } else if accepted {
             self.machine.post(
                 self.lane,
                 Event::Outcome(self.run, Done::Fetch(result, self.limit)),

@@ -77,6 +77,7 @@ impl Executor {
                 std::sync::Arc::new(ibex2::host::Host::new)
             },
         );
+        core.enable_http_cache();
         // Linux starts programs for data code, and so does this host where it
         // runs on a Mac; Android and Windows do not yet (LLP 1133.007 §8).
         if cfg!(any(target_os = "linux", target_os = "macos")) {

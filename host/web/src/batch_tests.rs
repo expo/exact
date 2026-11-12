@@ -414,19 +414,19 @@ const GOLDEN: &[(&str, &str)] = &[
     ),
     (
         "request-independent",
-        r#"{"ops":[{"op":"request","ticket":42,"target":"feed \"home\"","scope":null,"nativeHttp":"independent","maxResponseBytes":1048576,"method":"GET","url":"https://api.example/big","headers":[],"body":"","cache":"default"}],"timers":false,"clock":0,"error":null}"#,
+        r#"{"ops":[{"op":"request","ticket":42,"target":"feed \"home\"","scope":null,"nativeHttp":"independent","maxResponseBytes":1048576,"method":"GET","url":"https://api.example/big","headers":[],"body":""}],"timers":false,"clock":0,"error":null}"#,
     ),
     (
         "request-body-from",
-        r#"{"ops":[{"op":"request","ticket":48,"target":"feed \"home\"","scope":null,"method":"POST","url":"https://api.example/blob","headers":[],"bodyFrom":"app:/tmp/a.jpg","body":"","cache":"default"}],"timers":false,"clock":0,"error":null}"#,
+        r#"{"ops":[{"op":"request","ticket":48,"target":"feed \"home\"","scope":null,"method":"POST","url":"https://api.example/blob","headers":[],"bodyFrom":"app:/tmp/a.jpg","body":""}],"timers":false,"clock":0,"error":null}"#,
     ),
     (
         "request-manual-redirect",
-        r#"{"ops":[{"op":"request","ticket":49,"target":"feed \"home\"","scope":null,"method":"GET","url":"https://api.example/authorize","headers":[],"redirect":"manual","body":"","cache":"default"}],"timers":false,"clock":0,"error":null}"#,
+        r#"{"ops":[{"op":"request","ticket":49,"target":"feed \"home\"","scope":null,"method":"GET","url":"https://api.example/authorize","headers":[],"redirect":"manual","body":""}],"timers":false,"clock":0,"error":null}"#,
     ),
     (
         "request-long-poll",
-        r#"{"ops":[{"op":"request","ticket":50,"target":"feed \"home\"","scope":null,"nativeHttp":"independent","maxResponseBytes":4096,"method":"GET","url":"https://api.example/changes?since=0","headers":[],"body":"","cache":"default","stream":true,"longPoll":{"cursor":"since","from":"meta.seq","sameCursorEvent":false}}],"timers":false,"clock":0,"error":null}"#,
+        r#"{"ops":[{"op":"request","ticket":50,"target":"feed \"home\"","scope":null,"nativeHttp":"independent","maxResponseBytes":4096,"method":"GET","url":"https://api.example/changes?since=0","headers":[],"body":"","stream":true,"longPoll":{"cursor":"since","from":"meta.seq","sameCursorEvent":false}}],"timers":false,"clock":0,"error":null}"#,
     ),
     (
         "request-continue",
@@ -572,5 +572,72 @@ fn an_upload_is_marked_and_refused_where_the_native_hosts_refuse_it() {
             text.contains(r#""op":"refuse""#) && !text.contains("\"upload\""),
             "{text}"
         );
+    }
+}
+
+#[test]
+fn request_cache_mode_reaches_the_browser_and_forced_asks_reload() {
+    for word in [
+        "unspecified",
+        "default",
+        "no-store",
+        "reload",
+        "no-cache",
+        "force-cache",
+        "only-if-cached",
+    ] {
+        for forced in [false, true] {
+            let mode =
+                exact_runner::CacheMode::parse((word != "unspecified").then_some(word)).unwrap();
+            let batch = one(|b| {
+                b.request(&request(
+                    1,
+                    Request::get("https://example.test").cache(mode),
+                    forced,
+                ))
+            });
+            let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
+            if word == "unspecified" && !forced {
+                assert!(batch["ops"][0].get("cache").is_none());
+                continue;
+            }
+            assert_eq!(
+                batch["ops"][0]["cache"],
+                if forced && mode != exact_runner::CacheMode::NoStore {
+                    "reload"
+                } else {
+                    word
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn streams_polls_and_uploads_keep_unsaid_and_explicit_default_distinct() {
+    for kind in ["stream", "poll", "upload"] {
+        for mode in [
+            exact_runner::CacheMode::Unspecified,
+            exact_runner::CacheMode::Default,
+        ] {
+            let mut req = Request::get("https://api.example/feed")
+                .independent_http(4096)
+                .cache(mode);
+            req.stream = true;
+            if kind == "poll" {
+                req = req.long_poll("cursor", "seq");
+            }
+            if kind == "upload" {
+                req.method = "POST".into();
+                req.upload_progress = true;
+            }
+            let batch: serde_json::Value =
+                serde_json::from_str(&one(|b| b.request(&request(1, req, false)))).unwrap();
+            assert_eq!(
+                batch["ops"][0].get("cache"),
+                (mode == exact_runner::CacheMode::Default).then_some(&serde_json::json!("default")),
+                "{kind}"
+            );
+        }
     }
 }

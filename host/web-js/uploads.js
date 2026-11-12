@@ -72,7 +72,7 @@ export const ledger = {
   kept: (r, a) => { if (r.ticket.upload) uploadSent(r, a, r.ticket); return r.value; },
 };
 /** The identity of an upload's request (`exactUploadProgress`) among `fetch`'s arguments, which the same request for newer
- * arguments shares (D3): its URL, method, headers, body (by length and FNV-1a), file, deadline and redirect mode. */
+ * arguments shares (D3): its URL, method, headers, body (by length and FNV-1a), file, deadline, cache mode and redirect mode. */
 export function requestKey({ input, init, redirect }) {
   if (init?.exactUploadProgress !== true) return undefined;
   const request = typeof Request === 'function' && input instanceof Request ? input : null, body = init.body;
@@ -81,5 +81,5 @@ export function requestKey({ input, init, redirect }) {
   let hash = 0x811c9dc5;
   for (const b of bytes ?? []) hash = Math.imul(hash ^ b, 16777619) >>> 0;
   return JSON.stringify([request ? request.url : String(input), init.method ?? request?.method ?? 'GET', [...new Headers(init.headers ?? request?.headers ?? [])].sort(),
-    bytes ? [bytes.length, hash] : null, init.exactBodyFrom ?? null, init.exactTimeout ?? null, redirect ?? null]);
+    bytes ? [bytes.length, hash] : null, init.exactBodyFrom ?? null, init.exactTimeout ?? null, init.cache ?? request?.cache ?? 'default', redirect ?? null]);
 }

@@ -1,7 +1,7 @@
 //! The JSON both sides of the host door speak: a fetch as the prelude
 //! records it, a reply as `__exact_fulfill` and `__exact_message` take it,
 //! and the Canvas 2D recorder's text and image questions (ops 9 and 10).
-use exact_runner::{Outcome, Redirect, Request};
+use exact_runner::{CacheMode, Outcome, Redirect, Request};
 use serde_json::{json, Value as Json};
 
 pub(crate) fn request_from_json(text: &str) -> Result<Request, String> {
@@ -112,6 +112,7 @@ pub(crate) fn request_from_json(text: &str) -> Result<Request, String> {
             Some(_) => return Err("exactBodyTo must be an app:/ path".into()),
         },
         redirect: Redirect::parse(j.get("redirect").and_then(Json::as_str))?,
+        cache: CacheMode::parse(j.get("cache").and_then(Json::as_str))?,
         held: j.get("held").and_then(Json::as_bool).unwrap_or(false),
         reach: Default::default(),
         // `exactListen`'s options (LLP 1133.005 D1); the defaults where unsaid.

@@ -91,7 +91,7 @@ fn a_send_leaves_as_a_request_op_and_the_reply_commits() {
 
     host.dispatch(view(&host, "who"), Event::Change("ada".into()));
     let batch = host.dispatch(view(&host, "login"), Event::Press);
-    assert!(batch.contains("\"op\":\"request\",\"ticket\":1,\"target\":\"session\",\"scope\":null,\"method\":\"POST\",\"url\":\"https://api.castle.test/graphql\",\"headers\":[[\"content-type\",\"application/json\"],[\"x-who\",\"ada\"]],\"body\":\"eyJxIjoxfQ==\",\"cache\":\"default\"}"), "{batch}");
+    assert!(batch.contains("\"op\":\"request\",\"ticket\":1,\"target\":\"session\",\"scope\":null,\"method\":\"POST\",\"url\":\"https://api.castle.test/graphql\",\"headers\":[[\"content-type\",\"application/json\"],[\"x-who\",\"ada\"]],\"body\":\"eyJxIjoxfQ==\"}"), "{batch}");
     assert!(batch.contains("Logging in…"), "the view says busy: {batch}");
     assert_eq!(host.runner().pending(), vec![("session".to_string(), 1)]);
 

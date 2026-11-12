@@ -138,3 +138,31 @@ fn a_binary_frame_and_a_close_cross_as_themselves() {
         "close 4001 gone true None"
     );
 }
+
+#[test]
+fn a_socket_keeps_tag_eleven_and_never_carries_a_cache_mode() {
+    let mut request = Request::socket("wss://echo.test/book");
+    request.cache = CacheMode::Reload;
+    let mut encoded = Writer::default();
+    encode_result(&mut encoded, Ok(Answer::Later(request)));
+    let bytes = encoded.into_vec();
+    assert_eq!(bytes[0], 11);
+    let mut reader = Reader::new(&bytes);
+    let Ok(Answer::Later(request)) = read_result(&mut reader).unwrap() else {
+        panic!("a socket request");
+    };
+    assert!(request.socket);
+    assert_eq!(request.cache, CacheMode::Unspecified);
+    end(&reader).unwrap();
+    for tag in [0, 5, 7, 8, 11, 12, 255] {
+        let mut encoded = Writer::default();
+        encoded.u8(12);
+        encoded.string("reload");
+        encoded.u8(tag);
+        let bytes = encoded.into_vec();
+        assert_eq!(
+            read_result(&mut Reader::new(&bytes)).unwrap_err(),
+            "invalid cached HTTP result tag"
+        );
+    }
+}

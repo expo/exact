@@ -349,7 +349,7 @@ fn app(name: &str) -> PathBuf {
     std::fs::write(dir.join("data/src/lib.rs"), "pub struct App;\n").unwrap();
     std::fs::write(
         dir.join("data/Cargo.toml"),
-        "[package]\nname = \"app-data\"\n",
+        "[package]\nname = \"app-data\"\n\n[workspace]\n",
     )
     .unwrap();
     std::fs::write(
@@ -716,6 +716,7 @@ fn an_executor_is_linked_only_for_a_named_module() {
 
 #[test]
 fn rust_capability_receipts_bind_executor_abi_target_and_module() {
+    assert_eq!(super::RUST_ABI, 7);
     let dir = app("rust-capabilities");
     let mut manifest = Manifest::read(&dir).unwrap();
     let mut ids = Vec::new();
@@ -901,6 +902,13 @@ fn production_trust_requires_keys_and_has_a_distinct_cohort() {
 fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
     let needs = |bundle: &[u8]| super::typescript_runtime_of(bundle, "");
     assert_eq!(needs(b"export const answer = () => 'idle';"), 0);
+    assert_eq!(needs(b"fetch(u)"), 0);
+    assert_eq!(needs(b"fetch(u, {redirect: 'manual'})"), 2);
+    assert_eq!(needs(b"fetch(u, {cache: 'no-store'})"), 11);
+    assert_eq!(
+        needs(b"fetch(u, {cache: 'default', exactIdleTimeout: n})"),
+        11
+    );
     assert_eq!(needs(b"fetch(u, {exactBodyFrom: p})"), 1);
     assert_eq!(needs(b"fetch(u, {exactBodyTo: p, exactBodyFrom: q})"), 4);
     assert_eq!(needs(b"fetch(u, {signal: AbortSignal.timeout(5e3)})"), 5);
@@ -934,14 +942,8 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
     let with = |grants: &str| {
         super::typescript_runtime_of(b"await db.transaction(m.commands, m.options)", grants)
     };
-    assert_eq!(
-        with("sqlite.open app:/data/a.db"),
-        super::TYPESCRIPT_RUNTIME
-    );
-    assert_eq!(
-        with("fs.read app:/data\n  sqlite.open app:/data"),
-        super::TYPESCRIPT_RUNTIME
-    );
+    assert_eq!(with("sqlite.open app:/data/a.db"), 10);
+    assert_eq!(with("fs.read app:/data\n  sqlite.open app:/data"), 10);
     assert_eq!(with("# sqlite.open app:/data/a.db\nfs.read app:/data"), 0);
     assert_eq!(with("fs.write app:/data/sqlite.open"), 0);
 }

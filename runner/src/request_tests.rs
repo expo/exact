@@ -162,3 +162,21 @@ fn a_held_mark_does_not_remove_a_file_transfers_effects() {
         .held()
         .has_effects());
 }
+
+#[test]
+fn cache_mode_is_part_of_request_equality() {
+    let default = Request::get("https://example.test");
+    assert_ne!(default, default.clone().cache(super::CacheMode::Default));
+    for word in [
+        "no-store",
+        "reload",
+        "no-cache",
+        "force-cache",
+        "only-if-cached",
+    ] {
+        let mode = super::CacheMode::parse(Some(word)).unwrap();
+        assert_eq!(mode.name(), word);
+        assert_ne!(default, default.clone().cache(mode));
+    }
+    assert!(super::CacheMode::parse(Some("other")).is_err());
+}

@@ -1,3 +1,4 @@
+import { sendRequest } from "./request-send.js";
 import { markdownText } from './markdown.js';
 import { resourceInspection } from "./resource-inspection.js"; export { canvasColor } from "./said.js";
 import { oneActivation, suppressedInvocation, imageEvent, releaseAsset as rel } from "./elements.js"; import { reloadOnGone } from "./generation-reload.js"; import { rt as Link } from "./rt-link.js";
@@ -5,7 +6,7 @@ export { liveTime } from "./live-time.js";
 import { viewChildren, listRow, listItem, syncListItemRoles, listOwner, unwrapListItem, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, inertAncestor, sheetLeaves, liveById, renderMarkup, reportPlace, onSelection, textField, sourceField, editMenu, settleRadios, installFits, contextAt, scrollDrag } from "./navigation.js"; export { animationClocks, launchLocation } from "./navigation.js"; export { fontFamily } from './font-family.js'; // synced animations (LLP 1055.002, emit.rs `clocks`)
 import { Docs, Head, head, markDocument, projectRoots, openTabs, unopened, tp } from "./document.js"; export { Head, unopened, tp }; export { canSetStatus, statusSubject } from "./document.js"; import { conforms, eq, equal, unchangedArguments, failureCode, failureReason, loneSurrogate, Refusal, Failed, checkArguments, finiteArguments } from "./shape.js"; import { pointer, record } from "./pointer.js"; import { autofocus, press } from "./focus.js";
 let Paint; export function usePaint(pass) { Paint = pass; } export { conforms, eq, equal, Refusal, Failed }; // the compiler installs `Paint` only when a plan can layer boxes
-import * as Ov from "./overlay.js"; import { beatAfter } from "./beat.js"; import { counted, heldAsks, heldReplies, longPollReplied, longPollEnded, trackAnswer, Open, closeLetGo } from "./held.js"; export { heldAsks, heldReplies }; // optimistic writes shown over answers (the runner's writes.rs)
+import * as Ov from "./overlay.js"; import { beatAfter } from "./beat.js"; import { counted, heldAsks, heldReplies, longPollReplied, Open, closeLetGo } from "./held.js"; export { heldAsks, heldReplies }; // optimistic writes shown over answers (the runner's writes.rs)
 export const writeRecords = () => Ov.Writes.list.map(w => ({ id: w.id, mutation: w.m.name, landed: !!w.landed })); // the agent's `state.writes`
 let Media = null; export function useMedia(m) { Media = m; } let Nav = null; export function useNavigation(n) { Nav = n; } // media.js only where a plan has a `video` or `audio`; navigation.js's `navigation` (the history, the stacks, the app bar) only where a plan has routes or a back control, handed over by the router (router.js `navigationRoots`): a plan without either never links it (LLP 1047.002 D1)
 // The JS runtime is imported by name, so a bundle carries only what its generated plan uses.
@@ -397,39 +398,16 @@ export const Store = {
 export const Resources = [];
 const Inspections = resourceInspection(!!DEVELOPMENT_STORE, () => clock.now);
 let Ticket = 0;
-const sameReq = (a, b) => a && b && a.storage === b.storage && a.method === b.method && a.url === b.url && a.body === b.body && JSON.stringify(a.headers) === JSON.stringify(b.headers) && a.http === b.http && JSON.stringify(a.longPoll) === JSON.stringify(b.longPoll);
+const sameReq = (a, b) => a && b && a.storage === b.storage && a.method === b.method && a.url === b.url && a.body === b.body && JSON.stringify(a.headers) === JSON.stringify(b.headers) && a.http === b.http && a.cache === b.cache && JSON.stringify(a.longPoll) === JSON.stringify(b.longPoll);
 export const inflight = { n: 0 }; // Requests in flight, for the agent's `clock settle`.
 export const busy = () => [...document.querySelectorAll('[aria-busy="true"]')].map(el => el.getAttribute('data-testid') ?? el.id); // the elements the app marks `aria-busy="true"` (still loading), by test id else id
-function send(t, land) {
-  Out.push(() => {
-    t.waiting = true; counted(t, inflight);
-    const started = performance.now();
-    // A stream's message (`more`) keeps its ticket; anything else ends it.
-    const done = (o, more) => {
-      if (t.closed) return;
-      if (t.waiting && !(more && t.upload)) { t.waiting = false; counted(t, inflight); } // an upload is in flight until its reply
-      // A render's storage refusal starts no work and leaves the source pending for adoption (LLP 1048.000 D9).
-      if (o.refused) { t.refused = o.refused; return; }
-      t.elapsed = Math.max(0, Math.round(performance.now() - started));
-      if (more) { t.messages++; t.coalesced += (o.streamed ?? o).coalesced ?? 0; o.more = true; } else { Open.delete(t); longPollEnded(t); }
-      say(`${more ? "message" : "reply"} ${t.id}; wall ${t.elapsed} ms`); land(o);
-    };
-    const failed = e => done({ failed: 1, message: String(e?.message ?? e) });
-    // An answer that keeps coming (LLP 1016.000): a Rust source's streamed request, or a TypeScript source's `exactStream`
-    // (ts-data.js). In flight until its first message (D5), then open until its end or until its ticket is let go (`Open`).
-    if (t.stream || t.req?.stream) {
-      t.ctl = new AbortController(); t.ctl.recount = () => counted(t, inflight); t.ctl.active = () => t.held() && !t.r?.gone; t.ctl.resource = !!t.r; t.messages = t.coalesced = 0; Open.add(t); // `resource`: a socket it owns takes its mapper's replies (ts-stream.js)
-      t.ctl.replied = () => { if (t.waiting) { t.waiting = false; counted(t, inflight); } longPollReplied(t); }; // a long poll's reply of any kind (LLP 1016.000 D8 on D9): out of the clocks' count, held, a reply for `clock held`
-      (t.stream ? t.stream(o => done(o, true), t.ctl) : data.fetch(t.req, m => (t.req.longPoll && m.event === 'exact:reply') || done({ streamed: m }, true), t.ctl)).then(done, failed);
-    } else if (t.req) data.fetch(t.req).then(done, failed);
-    else { if (globalThis.__exactRender) trackAnswer(t); t.promise.then(v => done({ v }), e => done({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) })); }
-  });
-}
-function ask(source, args, name, mutation) {
+const send = (t, land) => sendRequest(t, land, Out, data, inflight, say);
+
+function ask(source, args, name, mutation, forced = false) {
   checkArguments(name, args);
   if (mutation) mutation.requests++;
   if (["startActivity", "updateActivity", "endActivity"].includes(source)) throw new Refusal(`${source} is not linked into this artifact`);
-  let a; try { a = data.reserved?.[source] ? (v => v?.then ? v : { v })(data.reserved[source](source, args, name)) : data.answer(source, args, Store, name, !!mutation); } catch (e) { Out.push(...(data.thrown?.() ?? [])); throw e; } // what a resource's source sent before it threw goes if the commit stands (ts-data.js)
+  let a; try { a = data.reserved?.[source] ? (v => v?.then ? v : { v })(data.reserved[source](source, args, name)) : data.answer(source, args, Store, name, !!mutation, forced); } catch (e) { Out.push(...(data.thrown?.() ?? [])); throw e; } // what a resource's source sent before it threw goes if the commit stands (ts-data.js)
   return a && a.then ? (a.then(undefined, e => globalThis.exact?.generationGone?.(e)), { promise: a, call: a.call }) : a; // (a reaped build's lazy chunk fails here: the page loads again, generation-reload.js)
 }
 /** The reply to ticket `t` while its target `held()` it: a commit in which `f` takes the source's answer (a TypeScript
@@ -472,7 +450,19 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
     r.value = v; r.settled = a; r.origin = origin; r.placeholder = false; r.slept = false; Inspections.take(r, generation); // a fresh answer: current again after idleness (LLP 1161.001)
   };
   const land = t => reply(t, name, source, () => r.ticket === t, ...data.uploads.ends(r, t, (p, o) => { // an upload keeps how it ended (uploads.js)
-    if (t.call?.seen?.read || p.store) r.store = t.read = true; if (p.req) { if (o.more) { const n = { id: ++Ticket, name, owner: r, args: t.args, req: p.req, r, origin: t.origin, generation: t.generation }; r.ticket = n; send(n, land(n)); } else { t.req = p.req; t.id = ++Ticket; send(t, land(t)); } return; }
+    if (t.call?.seen?.read || p.store) r.store = t.read = true;
+    if (p.req) {
+      const req = { ...p.req, forced: t.forced };
+      if (o.more) {
+        const n = { id: ++Ticket, name, owner: r, args: t.args, forced: t.forced, req, r, origin: t.origin, generation: t.generation };
+        r.ticket = n;
+        send(n, land(n));
+      } else {
+        t.req = req; t.id = ++Ticket;
+        send(t, land(t));
+      }
+      return;
+    }
     if (t.baked) say(revalidated(name, eq(p.v, r.value))); t.baked = false; take(p.v, t.args, t.origin, t.generation); r.failed = null; r.error = r.code = r.reason = undefined; if (!o.more) r.ticket = null; again(t);
     W(pend, !!(o.more && t.upload)); W(fail, null); W(ver, ver.n.v + 1); // an upload is pending until its reply
   }, "it keeps its last value", (error, code, reason) => { if (t.call?.seen?.read || t.read || data.threwRead?.()) r.store = true; r.ticket = null; r.failed = t.args; r.error = error; r.code = code; r.reason = reason; write(pend.n, false); write(fail.n, failure()); Inspections.fail(r); }));
@@ -500,7 +490,7 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
       if (r.ticket && equal(a, r.ticket.args)) return r.value;
     }
     let ans; Inspections.begin(r);
-    try { ans = ask(source, a, name); Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
+    try { ans = ask(source, a, name, false, forced); Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
     catch (e) {
       if (data.threwRead?.()) r.store = true;
       if (e instanceof Refusal && !(reconciling && e instanceof Failed)) throw e;
@@ -524,7 +514,7 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
     }
     if (ans && (ans.req || ans.promise || ans.stream)) {
       hold();
-      const t = { id: ++Ticket, name, owner: r, args: a, req: ans.req, promise: ans.promise, call: ans.call, stream: ans.stream, upload: ans.upload, baked, r, origin: Ov.tick(), generation: r.inspection?.request }; if (t.call) t.call.ticket = t; if (baked) say(`${name} shows its build-time answer until its source answers`);
+      const t = { id: ++Ticket, name, owner: r, args: a, forced, req: ans.req && { ...ans.req, forced }, promise: ans.promise, call: ans.call, stream: ans.stream, upload: ans.upload, baked, r, origin: Ov.tick(), generation: r.inspection?.request }; if (t.call) t.call.ticket = t; if (baked) say(`${name} shows its build-time answer until its source answers`);
       if (r.ticket) say(`forget ticket ${r.ticket.id} (${name})`);
       r.ticket = t; flag(pend, true); send(t, land(t));
       return r.value;

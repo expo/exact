@@ -819,6 +819,20 @@
     }
     return { Response: Response, reply: reply };
   }
+  function FetchError(f) {
+    Object.defineProperties(this, {
+      name: { value: "FetchError", configurable: true },
+      message: { value: String(f.message), configurable: true },
+      kind: { value: String(f.kind), configurable: true },
+    });
+  }
+  FetchError.prototype = Object.create(Error.prototype);
+  function cacheMode(init) {
+    var raw = init ? init.cache : undefined, mode = raw === undefined ? "default" : String(raw);
+    if (["default", "no-store", "reload", "no-cache", "force-cache", "only-if-cached"].indexOf(mode) < 0)
+      throw new TypeError("cache must be default, no-store, reload, no-cache, force-cache or only-if-cached");
+    return raw === undefined ? undefined : mode;
+  }
   global.__exact_binary = Object.freeze({
     requestBody: requestBody,
     keptReply: keptReply,
@@ -826,6 +840,8 @@
     copyBytes: copyBytes,
     timers: timers,
     fileRefusal: fileRefusal,
+    cacheMode: cacheMode,
+    FetchError: FetchError,
     imageOptions: imageOptions,
     toBase64: toBase64,
     utf8Length: utf8Length,

@@ -158,6 +158,7 @@ char *dup_utf8(NSString *value) {
     [exchange finishWith:@"TypeError: Failed to fetch — no response"];
   } else if (hasBody && response.expectedContentLength >= 0 &&
              (unsigned long long)response.expectedContentLength > exchange.limit) {
+    exchange.response = (NSHTTPURLResponse *)response;
     [exchange finishWith:[NSString stringWithFormat:
         @"TypeError: Failed to fetch — response exceeded the %lu-byte limit",
         (unsigned long)exchange.limit]];
@@ -422,16 +423,19 @@ int ibex2_darwin_http_headers(void *handle, int *out_status,
       [exchange.condition unlock];
       return 2;
     }
+    // A head that arrived is handed back with a failure too (Exact patch 31).
+    if (exchange.response != nil) {
+      *out_status = (int)exchange.response.statusCode;
+      NSMutableString *headers = [NSMutableString string];
+      [exchange.response.allHeaderFields enumerateKeysAndObjectsUsingBlock:
+          ^(id key, id value, BOOL *) { [headers appendFormat:@"%@: %@\n", key, value]; }];
+      *out_headers = dup_utf8(headers);
+    }
     if (exchange.failure != nil) {
       *out_error = dup_utf8(exchange.failure);
       [exchange.condition unlock];
       return 1;
     }
-    *out_status = (int)exchange.response.statusCode;
-    NSMutableString *headers = [NSMutableString string];
-    [exchange.response.allHeaderFields enumerateKeysAndObjectsUsingBlock:
-        ^(id key, id value, BOOL *) { [headers appendFormat:@"%@: %@\n", key, value]; }];
-    *out_headers = dup_utf8(headers);
     [exchange.condition unlock];
     return 0;
   }
