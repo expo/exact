@@ -253,9 +253,9 @@ extension NavigationHost {
         // else in the tab's own. A tab's controller is empty until the runner
         // builds the tab, when it is first selected or More's list is about
         // to show it (LLP 1075.003 §9.14).
-        // While UIKit pops More, write no tab's routes and keep More's record, from which More's `didShow` finds the
-        // Back (`morePopPending`)
-        let popping = morePopPending
+        // Until More's `didShow` reports its pop, write no tab's routes and keep More's record, from which that
+        // `didShow` finds the Back (`morePopTab`)
+        let popping = morePopTab != nil
         if !popping {
             // Record what More holds once UIKit moved routes out of it, which More's `didShow` need not report, and the
             // own controller of the tab whose routes More holds, which holds none of them: what UIKit puts back there
@@ -269,9 +269,9 @@ extension NavigationHost {
         }
         // Fill the router's tab's controller with its first routes, or project
         // its bar when the router's tab changes, before UIKit shows it, where
-        // nothing animates in; `sync` writes the rest of its stack. While UIKit
-        // pops More, the controller stays as UIKit leaves it until More's
-        // `didShow` brings the Back (`morePopPending`).
+        // nothing animates in; `sync` writes the rest of its stack. While a pop
+        // of More is pending, an empty controller is left to `sync`, which
+        // waits for More's `didShow` while the router is on the tab More pops.
         let selected = routesStack(p.at) ?? navs[p.at]
         if selected.stackRoutes.isEmpty { if !popping { setRoutes(base(p.wanted[p.at]), in: selected) } }
         else if routerTab != p.at { prepareRoutes(base(p.wanted[p.at]), in: selected) }
@@ -384,30 +384,33 @@ extension NavigationHost {
     /// More where UIKit has none.
     var more: UINavigationController? { adoptedMore }
 
-    /// Whether UIKit pops More (its Back, More tapped again) and has not said
-    /// so yet in More's `didShow`: More holds a prefix of what Exact last
-    /// recorded, and a route it dropped is in no other controller. While an
-    /// animated pop runs, the route it takes away is still More's child (a
-    /// hosted run, iPhone 18 Pro simulator, iOS 27.0); a size class change
-    /// moves More's routes into their tab's own controller and pops none
-    /// (LLP 1075.003 §9.16). Until then a sync waits, as for any native pop,
-    /// and writes no tab's routes, so none that UIKit popped goes back into a
-    /// controller.
-    var morePopPending: Bool {
-        guard let more, let written = stacks[ObjectIdentifier(more)]?.written else { return false }
+    /// The tab whose routes UIKit pops in More (its Back, More tapped again)
+    /// before More's `didShow` has reported it: More holds a prefix of what
+    /// Exact last recorded, a route it dropped is More's child or in no
+    /// navigation controller, and the tab's own controller holds none of its
+    /// routes, as it does once a size class change moves them there (LLP
+    /// 1075.003 §9.16). While a pop is pending, `syncTabs` writes no tab's
+    /// routes, so none that UIKit popped goes back into a controller, and a
+    /// sync waits while the router is on that tab (`changing`). A pop within the tab's routes that ends while another
+    /// tab shows stays pending until More's next `didShow`, which UIKit sends
+    /// when More shows again (§9.16). With another delegate on More, Exact
+    /// hears no `didShow`, so a pop is pending only while More's delegate is
+    /// Exact's.
+    var morePopTab: Int? {
+        guard let more, let stack = stacks[ObjectIdentifier(more)], more.delegate === stack.proxy else { return nil }
+        let written = stack.written
         let now = more.viewControllers.map(ObjectIdentifier.init)
-        guard now.count < written.count, written.starts(with: now) else { return false }
-        return controllers.values.contains {
+        guard now.count < written.count, written.starts(with: now), let dropped = controllers.values.first(where: {
             let id = ObjectIdentifier($0)
             return written.contains(id) && !now.contains(id) && ($0.navigationController.map { $0 === more } ?? true)
-        }
+        }), let tab = tabIndex(ofRoute: dropped) else { return nil }
+        return tabStack(tab)?.stackRoutes.isEmpty != false ? tab : nil
     }
 
-    /// Whether `nav` is More showing its list: More's Back to it is the
-    /// router's whichever stack navigation follows by then, since UIKit moves
-    /// a tab's root back into its own controller as More pops to its list,
-    /// and Exact can already follow that controller when More's list shows
-    /// (LLP 1075.003 §9.16).
+    /// Whether `nav` is More showing its list, which Exact follows
+    /// (`followMoresList`) whichever stack navigation follows by then: once
+    /// More holds no route of the tab, `syncTabs` points navigation at the
+    /// tab's own controller, which can come before More's `didShow`.
     func showsMoresList(_ nav: UINavigationController) -> Bool {
         nav === more && nav.topViewController != nil && nav.topViewController === nav.viewControllers.first
     }
@@ -442,15 +445,20 @@ extension NavigationHost {
     }
 
     /// More shows a controller: a row of its list was picked, which sends no
-    /// tab delegate call (measured). A tab the router does not show is
-    /// pressed now, before More's push draws, as `mayShow` presses a tab a
+    /// tab delegate call (measured), or More was selected again with a tab's
+    /// controller on top (LLP 1075.003 §9.16). A tab the router does not show
+    /// is pressed now, before More's push draws, as `mayShow` presses a tab a
     /// tap on the bar selects; its routes then follow More's stack. The press
     /// runs with `tapping` set, as a tap's does, because UIKit has selected
-    /// the tab already. The routes UIKit moved into More are then projected
-    /// as pushed over its list, and More's bar shown as the top one wants,
-    /// before the push draws: the bar was decided for them before this, as
-    /// their own stack's. More's list, shown again by a pop or a swipe, gets
-    /// the tabs it shows built (`buildTabsUnderMore`).
+    /// the tab, or is selecting More. A transition from another controller of
+    /// the same tab is UIKit's push or pop within it, not a pick, and presses
+    /// nothing: a tap on another tab can move the router to that tab after
+    /// More's pop is asked for and before More's `willShow` for the pop
+    /// (§9.16). The routes UIKit moved into
+    /// More are then projected as pushed over its list, and More's bar shown
+    /// as the top one wants, before the push draws: the bar was decided for
+    /// them before this, as their own stack's. More's list, shown again by a
+    /// pop or a swipe, gets the tabs it shows built (`buildTabsUnderMore`).
     func followMore(_ shown: UIViewController, animated: Bool) {
         guard let more else { return }
         watchPops(more)
@@ -458,10 +466,11 @@ extension NavigationHost {
             if shown === more.viewControllers.first { buildTabsUnderMore() }
             return
         }
+        let withinTab = more.transitionCoordinator?.viewController(forKey: .from).flatMap(tabIndex(ofShown:)) == index
         if index == routerTab {
             // The router's own tab picked again: UIKit moved its routes back into More
             primaryNavigation = routesStack(index) as? UINavigationController ?? primaryNavigation
-        } else if let tab = authoredTab(index) {
+        } else if !withinTab, let tab = authoredTab(index) {
             tapping = tabStack(index)
             defer { tapping = nil }
             pressTab(tab)

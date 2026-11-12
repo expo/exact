@@ -1056,10 +1056,11 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// pressed), `cancelled` (an interactive pop returned), `idle` (a
     /// programmatic change, or nothing yet) — for `state.navigation`.
     private var lastTransition = "idle"
-    /// Whether UIKit is pushing or popping the stack navigation follows, or
-    /// popping More (`morePopPending`): from the transition's first frame
-    /// through `didShow`, until the completion `willShow` registers
-    var changing: Bool { navigation.map { nativePopPending(on: $0) || pushOrPop(on: $0) != nil } ?? false || morePopPending }
+    /// Whether UIKit is pushing or popping the stack navigation follows, from
+    /// the transition's first frame through `didShow` (before `willShow`
+    /// registers the coordinator's completion), or popping the routes of the
+    /// tab the router is on in More, until More's `didShow` (`morePopTab`)
+    var changing: Bool { navigation.map { nativePopPending(on: $0) || pushOrPop(on: $0) != nil } ?? false || morePopTab == routerTab }
 
     /// UIKit removes a controller before resigning its search field and calling willShow.
     /// A shorter prefix of our last write belongs to that unfinished native pop.
@@ -1283,6 +1284,12 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         if navigationController === more, declineMoreRow(viewController) { return }
         guard navigationController === navigation || showsMoresList(navigationController), navigationController.topViewController === viewController else {
             recordPop(navigationController)
+            // Run the sync that waited for More's pop (`morePopTab`) now that More has reported it while navigation
+            // follows another stack, as a sheet's
+            if navigationController === more, pendingSync {
+                pendingSync = false
+                sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+            }
             return
         }
         HostLog.note(presenter.session, "navigation: didShow \((viewController as? RouteController)?.key ?? "?")")
@@ -1294,10 +1301,13 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// An interactive pop's source and the stack's depth before it began.
     typealias Swipe = (node: NodeView, key: String, depth: Int)
 
-    /// A push or pop of the stack navigation follows is over: the deferred
-    /// work runs and a Back UIKit performed reaches the router. One on a
-    /// stack navigation stopped following (another tab was selected, or
-    /// the stacks were reset) is not navigation's.
+    /// A push or pop of the stack navigation follows, or More's to its list
+    /// (`showsMoresList`), is over: the deferred work runs and a Back UIKit
+    /// performed reaches the router. One on a stack navigation stopped
+    /// following (another tab was selected, or the stacks were reset) is not
+    /// navigation's. More's pop within a tab's routes that ends so keeps its
+    /// record, and its Back reaches the router when More shows again
+    /// (`morePopTab`).
     private func transitionEnded(_ navigationController: UINavigationController,
                                  swipe: Swipe?, cancelled: Bool) {
         // Finish the departed search field while its authored handlers still exist
@@ -1323,12 +1333,15 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
         let written = Set(stacks[ObjectIdentifier(navigationController)]?.written ?? [])
         let poppedKeys = controllers.values.filter { written.contains(ObjectIdentifier($0)) && !navigationController.viewControllers.contains($0) }.map(\.key)
         let source = swipe.map { (node: $0.node, key: $0.key) } ?? departed.map { (node: $0.node, key: $0.key) }
-        recordPop(navigationController)
+        // Keep More's record when its pop within a tab's routes ends while navigation follows another tab, so its Back
+        // reaches the router at More's `didShow` when More shows again (`morePopTab`)
+        let followed = navigationController === navigation || showsMoresList(navigationController)
+        if followed || navigationController !== more { recordPop(navigationController) }
         // A tab tapped again above its root: its press follows the Back this pop is
         let reselect = reselectedPop === navigationController ? reselectedPop : nil
         if reselect != nil { reselectedPop = nil }
         defer { if let reselect, !cancelled { pressReselected(reselect) } }
-        guard navigationController === navigation || showsMoresList(navigationController), let viewController = navigationController.topViewController else { return }
+        guard followed, let viewController = navigationController.topViewController else { return }
         nativeMoved = true
         stopRevealing()
         // The route a pop took away keeps its block until it leaves the stack (LLP 1123 D2)
