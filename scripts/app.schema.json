@@ -543,7 +543,7 @@
     },
     "intents": {
       "type": "object",
-      "description": "Faces: the app's tools offered to the system's callers, compiled into each native binary (LLP 1133.023 D8). A tool with no face is offered to none of them. A face's tool must exist; its parameters are strings, numbers or bools, and a destroys tool's face names only the apple door (D10).",
+      "description": "Faces: the app's tools offered to the system's callers, compiled into each native binary (LLP 1133.023 D8). A tool with no face is offered to none of them. A face's tool must exist; its parameters are strings, numbers or bools, a destroys tool's face names only the apple door (D10), and a face that reaches the web door needs a tool with a description and a name of at most 128 characters (WebMCP).",
       "additionalProperties": false,
       "properties": {
         "entities": {
