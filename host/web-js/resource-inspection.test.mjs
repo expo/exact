@@ -678,3 +678,38 @@ test("a refused refresh while waiting leaves the launch's ask ordinary, and a fa
     expect(observed).toEqual({ committed: false, launch: ['default', 'default'], failed: ['reload'] });
   } finally { await browser.close(); server.stop(true); }
 });
+
+test("a refresh of a resource that slept through its source becoming ready is a refresh", async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const observed = await page.evaluate(async () => {
+      globalThis.__exactRender = true;
+      const sent = [], callbacks = [];
+      globalThis.fetch = async (_input, init) => { sent.push(init.cache ?? 'default'); return new Response('reply'); };
+      const rt = await import('/host/web-js/rt.js');
+      const { createRequestExecutor, setAppGrantSet, appGrantSet } = await import('/host/web-js/admission.js');
+      setAppGrantSet();
+      rt.clock.agent = true;
+      rt.data.fetch = createRequestExecutor('test.launch', appGrantSet());
+      rt.data.parse = () => ({ v: 'reply' });
+      let ready = false;
+      rt.data.answer = () => ready ? { req: { method: 'GET', url: '/assets/cache.txt', headers: [] } } : null;
+      rt.data.ready = f => callbacks.push(f);
+      const open = rt.sig(true);
+      let g;
+      rt.mount(root => {
+        g = rt.res('g', 'g', Object.assign(() => [], { gate: () => open() }), undefined, undefined, 's', '');
+        rt.hd(root, { headTitle: () => g() });
+      });
+      rt.commit(() => rt.W(open, false)); // asleep before its source is ready
+      ready = true;
+      for (const f of callbacks) f();
+      const asleep = sent.length;
+      rt.commit(() => { rt.W(open, true); rt.R(g); });
+      while (rt.inflight.n) await new Promise(resolve => setTimeout(resolve, 0));
+      return { asleep, sent };
+    });
+    expect(observed).toEqual({ asleep: 0, sent: ['reload'] });
+  } finally { await browser.close(); server.stop(true); }
+});
