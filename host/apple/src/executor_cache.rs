@@ -3,8 +3,8 @@ use super::*;
 use exact_runner::CacheMode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const CAPACITY: usize = 16 << 20;
-const MAX_ENTRY: usize = CAPACITY / 4;
+pub(super) const CAPACITY: usize = 16 << 20;
+pub(super) const MAX_ENTRY: usize = CAPACITY / 4;
 type Headers = Vec<(String, String)>;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -37,6 +37,7 @@ struct Entry {
     lifetime: Duration,
     validate: bool,
     bytes: usize,
+    used: AtomicUsize,
 }
 impl Entry {
     fn age(&self, now: Instant) -> Duration {
@@ -83,22 +84,31 @@ pub(super) struct Exchange {
 }
 
 pub(super) struct Cache {
-    grants: String,
+    pub(super) grants: String,
     entries: VecDeque<Arc<Entry>>,
     // In-flight validations still own these bytes (LLP 1162 D4's bound).
     retired: Vec<Arc<Entry>>,
-    bytes: usize,
+    pub(super) bytes: usize,
+    pub(super) preloads: Vec<super::preload::Held>,
+    pub(super) journal: Vec<super::preload::Fact>,
+    pub(super) clock: Arc<dyn Fn() -> Instant + Send + Sync>,
+    tick: usize,
 }
 impl Cache {
-    fn new(grants: String) -> Self {
+    pub(super) fn new(grants: String) -> Self {
         Self {
             grants,
             entries: VecDeque::new(),
             retired: Vec::new(),
             bytes: 0,
+            preloads: Vec::new(),
+            journal: Vec::new(),
+            clock: Arc::new(Instant::now),
+            tick: 0,
         }
     }
     fn collect(&mut self) {
+        super::preload::expire(self);
         self.retired.retain(|e| {
             if Arc::strong_count(e) == 1 {
                 self.bytes -= e.bytes;
@@ -124,6 +134,7 @@ impl Cache {
     fn find(&mut self, key: &Key) -> Option<Arc<Entry>> {
         let index = self.entries.iter().position(|e| e.key == *key)?;
         let entry = self.entries.remove(index).expect("cache entry");
+        entry.used.store(self.touch(), Ordering::Relaxed);
         self.entries.push_back(entry.clone());
         Some(entry)
     }
@@ -132,13 +143,42 @@ impl Cache {
         if entry.bytes > MAX_ENTRY {
             return;
         }
-        while entry.bytes > CAPACITY.saturating_sub(self.bytes) && !self.entries.is_empty() {
-            self.remove(0);
-        }
-        if entry.bytes <= CAPACITY.saturating_sub(self.bytes) {
+        if self.room(entry.bytes) {
+            entry.used.store(self.touch(), Ordering::Relaxed);
             self.bytes += entry.bytes;
             self.entries.push_back(Arc::new(entry));
         }
+    }
+    pub(super) fn touch(&mut self) -> usize {
+        self.tick += 1;
+        self.tick
+    }
+    pub(super) fn room(&mut self, bytes: usize) -> bool {
+        self.collect();
+        while bytes > CAPACITY.saturating_sub(self.bytes) {
+            let held = self
+                .preloads
+                .iter()
+                .enumerate()
+                .filter_map(|(i, p)| p.used().map(|used| (i, used)))
+                .min_by_key(|(_, used)| *used);
+            let entry = self.entries.front().map(|e| e.used.load(Ordering::Relaxed));
+            match (held, entry) {
+                (Some((i, used)), entry) if entry.is_none_or(|e| used < e) => {
+                    super::preload::drop_held(self, i, super::preload::Event::NeverTaken);
+                }
+                (_, Some(_)) => self.remove(0),
+                _ => return false,
+            }
+        }
+        true
+    }
+    #[allow(dead_code)] // Some shells expose no launch entry (LLP 1162.000 D4).
+    pub(super) fn charge(&mut self, bytes: usize) {
+        self.bytes += bytes;
+    }
+    pub(super) fn release(&mut self, bytes: usize) {
+        self.bytes -= bytes;
     }
 }
 
@@ -189,7 +229,7 @@ fn replacing_before(state: &State, ticket: u64, key: &Key) -> bool {
     })
 }
 
-fn granted(grants: &str, request: &Request) -> Result<(), Outcome> {
+pub(super) fn granted(grants: &str, request: &Request) -> Result<(), Outcome> {
     let grants = exact_data::storage::scope(grants, request.grants.as_deref())
         .and_then(|s| ibex2::grant::GrantSet::parse(&exact_runner::io_grants(s)))
         .map_err(|message| failed(FailureKind::Refused, message))?;
@@ -201,6 +241,10 @@ fn granted(grants: &str, request: &Request) -> Result<(), Outcome> {
 
 /// Hits settle without a worker, behind earlier non-reads (LLP 1162 D1, D4).
 pub(super) fn serve_ready(state: &mut State) {
+    super::preload::serve_ready(state);
+    if !super::preload::reserve_front(state) {
+        return;
+    }
     if state.retired
         || state.cache.is_none()
         || state
@@ -212,11 +256,19 @@ pub(super) fn serve_ready(state: &mut State) {
     }
     let mut index = 0;
     while index < state.jobs[0].len() {
+        if !super::preload::reserve_front(state) {
+            break;
+        }
         let job = &state.jobs[0][index];
         if job.class != RequestClass::Read || !job.request.is_plain_http() || job.work.is_some() {
             break;
         }
-        if job.request.reach.origin != exact_runner::CallOrigin::App
+        if super::preload::waiting(state, job)
+            || state
+                .cache
+                .as_ref()
+                .is_some_and(|c| super::preload::different_body(c, &job.request))
+            || job.request.reach.origin != exact_runner::CallOrigin::App
             || job.forced
             || matches!(
                 job.request.cache,
@@ -319,7 +371,11 @@ pub(super) fn prepare(
     let mut state = shared.state.lock().unwrap();
     state.cache.as_ref()?;
     let key = Key::of(request);
-    let replacing = replacing_before(&state, ticket, &key);
+    let replacing = replacing_before(&state, ticket, &key)
+        || state
+            .cache
+            .as_ref()
+            .is_some_and(|c| super::preload::different_body(c, request));
     let cache = state.cache.as_mut().expect("enabled");
     {
         let now = Instant::now();
@@ -487,6 +543,43 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
             run.cached = true;
         }
     }
+    drop(previous);
+    store_response(cache, key, started, store, response, run.cached, now, wall);
+}
+
+#[allow(dead_code)] // Some shells expose no launch entry (LLP 1162.000 D4).
+pub(super) fn store_preload(
+    cache: &mut Cache,
+    request: &Request,
+    response: &mut Response,
+    started: Instant,
+    redirected: bool,
+) {
+    if !redirected && eligible(request, RequestClass::Read) && request.cache != CacheMode::NoStore {
+        store_response(
+            cache,
+            Key::of(request),
+            started,
+            !Directives::of(&request.headers).no_store,
+            response,
+            false,
+            Instant::now(),
+            SystemTime::now(),
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_response(
+    cache: &mut Cache,
+    key: Key,
+    started: Instant,
+    store: bool,
+    response: &mut Response,
+    cached: bool,
+    now: Instant,
+    wall: SystemTime,
+) {
     if !store {
         return;
     }
@@ -494,7 +587,6 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
         return;
     }
     cache.drop_key(&key);
-    drop(previous);
     cache.collect();
     if response.status != 200 {
         return;
@@ -505,7 +597,7 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
     }
     let received = wall.duration_since(UNIX_EPOCH).unwrap_or_default();
     let delay = now.saturating_duration_since(started);
-    if run.cached {
+    if cached {
         set(
             &mut response.headers,
             "age",
@@ -537,6 +629,7 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
         lifetime,
         validate,
         bytes,
+        used: AtomicUsize::new(0),
     });
 }
 
@@ -584,7 +677,7 @@ fn current_age(headers: &Headers, delay: Duration, received: Duration) -> Durati
         .max(Duration::from_secs(age).saturating_add(delay))
 }
 
-fn identity(value: &str) -> String {
+pub(super) fn identity(value: &str) -> String {
     let Ok(url) = url::Url::parse(value) else {
         return value.to_owned();
     };
@@ -652,6 +745,7 @@ fn drop_urls(state: &mut State, urls: &[String]) {
     let Some(cache) = state.cache.as_mut() else {
         return;
     };
+    super::preload::drop_urls(cache, urls);
     for index in (0..cache.entries.len()).rev() {
         if urls.contains(&cache.entries[index].key.url) {
             cache.remove(index);
@@ -659,6 +753,16 @@ fn drop_urls(state: &mut State, urls: &[String]) {
     }
     cache.collect();
 }
+#[allow(dead_code)] // Some shells expose no launch entry (LLP 1162.000 D4).
+pub(super) fn drop_preload_copy(cache: &mut Cache, request: &Request) {
+    for i in (0..cache.entries.len()).rev() {
+        if cache.entries[i].key == Key::of(request) {
+            cache.remove(i);
+        }
+    }
+    cache.collect();
+}
+
 pub(super) fn observe(shared: &Arc<Shared>, request: &mut ibex2::stdlib::fetch::Request) {
     if !unsafe_method(&request.method) {
         return;
@@ -900,4 +1004,4 @@ fn http_date(value: &str) -> Option<u64> {
 
 #[cfg(test)]
 #[path = "executor_cache_tests.rs"]
-mod tests;
+pub(super) mod tests;

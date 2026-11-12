@@ -5,6 +5,9 @@ use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::ffi::c_void;
 #[path = "executor_core.rs"]
 mod core;
+pub use core::preload::{
+    Definition as Preload, Event as PreloadEvent, Fact as PreloadFact, Preloads,
+};
 #[path = "executor_pump.rs"]
 pub mod pump;
 /// A new executor waits for a native-worker slot only under test (the core's `reserve`).
@@ -98,6 +101,22 @@ impl Executor {
             });
         }
         Self { core }
+    }
+    /// Adopt launch work before dispatching any request (LLP 1162.000 D4).
+    pub fn adopt_preloads(&self, preloads: Preloads) -> Result<(), Preloads> {
+        self.core.adopt_preloads(preloads)
+    }
+    /// Cancel and discard preloads that used a changed secret before returning.
+    pub fn drop_preload_secret(&self, name: &str) {
+        self.core.drop_preload_secret(name);
+    }
+    /// Facts are returned to the host for its journal (LLP 1162.000 D3).
+    pub fn take_preload_journal(&self) -> Vec<PreloadFact> {
+        self.core.take_preload_journal()
+    }
+    /// Take an already complete reply before the boot's first commit, without waiting.
+    pub fn settle_preload(&self, request: &RequestOut) -> Option<(Outcome, CompletionTiming)> {
+        self.core.settle_preload(request)
     }
     /// Where the app's files are, for a request whose body is one of them
     /// (LLP 1108 D6 R2): set before the first request.

@@ -51,6 +51,8 @@ struct Job {
     /// Charged now: the request's own buffers while an ordered job waits,
     /// the whole ceiling once it runs or while independent work is admitted.
     charge: usize,
+    /// Request buffers in the backlog, excluding a preload waiter's reply reservation.
+    waiting_charge: usize,
     /// The ceiling: request buffers plus the response allowance.
     limit: usize,
     /// The runner no longer wants its reply (`Core::forget`).
@@ -140,6 +142,7 @@ impl Fenced {
 }
 #[derive(Default)]
 struct State {
+    dispatched: bool,
     cache: Option<cache::Cache>,
     jobs: [VecDeque<Job>; 2],
     running: Vec<Running>,
@@ -252,6 +255,7 @@ pub(super) struct Core {
     stream_host: StreamHost,
     /// The asynchronous core instead of workers (LLP 1120), not yet started.
     machine: Option<Arc<asynch::Machine>>,
+    preloads: Mutex<Option<preload::Preloads>>,
 }
 /// Makes the host (and its transport) an owner, a scoped grant or a stream
 /// fetches through: the platform's, unless the embedder names another.
@@ -387,6 +391,7 @@ impl Core {
             grants: grants.to_string(),
             stream_host: host,
             machine,
+            preloads: Mutex::new(None),
         }
     }
 
@@ -565,6 +570,7 @@ impl Core {
     /// never started, as all work is.
     pub(super) fn again(&self, ticket: u64) -> Result<(), &'static str> {
         let mut state = self.shared.state.lock().unwrap();
+        state.dispatched = true;
         if self.disabled {
             return Err("native executor worker limit reached");
         }
@@ -610,6 +616,9 @@ impl Core {
         {
             let mut state = self.shared.state.lock().unwrap();
             state.retired = true;
+            if let Some(cache) = state.cache.as_mut() {
+                preload::cancel_all(cache);
+            }
             state.cache = None;
             for run in &mut state.running {
                 run.cache_exchange = None;
@@ -630,6 +639,7 @@ impl Core {
             .worker_notifications
             .fetch_add(1, Ordering::Relaxed);
         self.shared.ready.notify_all();
+        self.preloads.lock().unwrap().take();
         if let Some(machine) = &self.machine {
             machine.retire();
         }
@@ -1282,6 +1292,9 @@ mod body_to;
 mod admission;
 #[path = "executor_cache.rs"]
 mod cache;
+#[path = "executor_preload.rs"]
+#[allow(dead_code)] // Launch entry points are host-owned (LLP 1162.000 D4).
+pub(super) mod preload;
 #[path = "executor_reads.rs"]
 mod reads;
 

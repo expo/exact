@@ -474,12 +474,22 @@ impl Machine {
         }
         let mut index = 0;
         while index < state.jobs[lane].len() {
+            if lane == 0 && !super::preload::reserve_front(state) {
+                break;
+            }
             if super::forget::refuse_crowded(&self.shared, state, lane, index) {
                 continue;
             }
             let job = &state.jobs[lane][index];
             let kind = Kind::of(job);
-            if lane == 0 && (index > 0 || state.book.blocking) {
+            if lane == 0 && super::preload::waiting(state, job) {
+                index += 1;
+                continue;
+            }
+            if lane == 0
+                && ((index > 0 && job.class != exact_runner::RequestClass::Read)
+                    || state.book.blocking)
+            {
                 // One blocking job; a handoff only while none runs; nothing
                 // passes the head.
                 break;

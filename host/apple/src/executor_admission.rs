@@ -11,9 +11,25 @@ impl Core {
         forgotten: bool,
         waiting: bool,
     ) -> Result<(), (&'static str, Option<OwnedWork>)> {
+        let use_preload = {
+            let state = self.shared.state.lock().unwrap();
+            preload::matches(state.cache.as_ref(), &r, work.is_some())
+        };
+        let work = if use_preload {
+            match reach::admit_cached(&r.request) {
+                Ok(()) => work,
+                Err(error) => Some(OwnedWork::Now(Box::new(move || {
+                    fetch_failure(error, &AbortController::new())
+                }))),
+            }
+        } else {
+            work
+        };
         let ordered = r.request.is_ordered();
         let overlap = self.machine.is_none() && reads::overlaps(&r, work.is_some());
         let mut state = self.shared.state.lock().unwrap();
+        state.dispatched = true;
+        let use_preload = preload::matches(state.cache.as_ref(), &r, work.is_some());
         // A deadline on work that cannot take one (a stream but an upload, a continuation, native work), or a
         // long poll that is no stream's HTTP GET (LLP 1016.000 D8), is refused here, before any path.
         let checked = r
@@ -38,9 +54,9 @@ impl Core {
         if state.retired {
             return Err(("native executor retired", work));
         }
-        let effect_read = reads::effect_read(&r, work.is_some());
+        let effect_read = reads::effect_read(&r, work.is_some()) && !use_preload;
         let waits_for_effect =
-            (effect_read || waiting) && state.counts[0] - state.light >= COUNTS[0];
+            (effect_read || waiting) && preload::effect_count(&state) >= COUNTS[0];
         if ordered && (state.ordered_barrier || !state.fenced.is_empty() || waits_for_effect) {
             // Later requests, GETs included, wait behind a held read so
             // admission preserves reply order (LLP 1162 D1).
@@ -97,10 +113,10 @@ impl Core {
                 // hold no effect (LLP 1041 §8.4, amended 2026-10-09).
                 let full = if lane == 1 {
                     state.counts[1] - streams >= COUNTS[1]
-                } else if reads::safe_read(&r.request, work.is_some(), r.class) {
+                } else if use_preload || reads::safe_read(&r.request, work.is_some(), r.class) {
                     state.counts[0] - state.agains >= ORDERED_READS
                 } else {
-                    state.counts[0] - state.light >= COUNTS[0]
+                    preload::effect_count(&state) >= COUNTS[0]
                         || state.counts[0] - state.agains >= ORDERED_READS
                 };
                 (full && !one_shot, if one_shot { 0 } else { charge })
@@ -118,7 +134,7 @@ impl Core {
                 // Count every waiting request, including writes. Otherwise
                 // 128 large reads could fill the lane before its first job
                 // can reserve the response bytes it needs to start.
-                let waiting = state.jobs[0].iter().map(|job| job.charge).sum();
+                let waiting = state.jobs[0].iter().map(|job| job.waiting_charge).sum();
                 if charge > ORDERED_WAITING_BYTES.saturating_sub(waiting) {
                     return Err("native ordered queue byte limit reached");
                 }
@@ -228,6 +244,7 @@ impl Core {
             request: r.request,
             forced: r.forced,
             work,
+            waiting_charge: charge,
             charge,
             limit,
             forgotten,
