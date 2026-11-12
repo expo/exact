@@ -115,6 +115,9 @@ impl exact_runner::DataSourceWrapper for Composed {
     fn set_document_owner(&mut self, owner: u64) {
         self.0.set_document_owner(owner)
     }
+    fn render_web(&mut self) {
+        self.0.render_web()
+    }
     fn configure_storage(
         &mut self,
         data: std::path::PathBuf,

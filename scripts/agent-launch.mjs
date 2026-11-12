@@ -17,7 +17,7 @@ import { filesystemLock } from './filesystem.mjs';
 import { boundSettings, settingChanges, settingInputs, settingLines } from '../js/bake/src/__exact_env.mjs';
 import { backendOriginSelection, literalBackendOrigin, selectBackendOrigin } from '../js/bake/src/typescript.mjs';
 import { besidePattern } from '../host/web/beside.mjs';
-import { chooseSimulator, phone } from '../host/apple/devices.mjs';
+import { chooseSimulator, phone, simulatorLaunch } from '../host/apple/devices.mjs';
 import { androidDevice } from './agent-android.mjs';
 import { bakeOutput, gpuModules, linuxBinary, moduleDirectory, pendingBuildInputs, resolveApp, windowsFile, shaderWatchRoots, webDist } from './app.mjs';
 import { directoryInputSnapshot, packageTests } from './cargo-dep-info.mjs';
@@ -886,21 +886,23 @@ export const depInfoChanges = bin => existsSync(bin) ? depInfoNewer(statSync(bin
 /** The settings the native build `bin` of `app` inlined (LLP 1153 D4) whose sources give them otherwise now, as
  * `import.meta.env.NAME`: a change no file shows, which only a rebuild takes in. What it inlined is the record bound to
  * this executable (`boundSettings`); an app that declares settings and has none bound, an executable another build
- * made, has its record named as the change, so the drive says to build again. */
-export function bakedSettingChanges(bin, app) {
+ * made, has its record named as the change, so the drive says to build again. With `launch`, the environment a drive
+ * starts a Linux executable with, a marked name it sets is the launch's value, not a change (LLP 1153.002 D2); an
+ * Android build reads the build's value, so it counts there. */
+export function bakedSettingChanges(bin, app, { launch = null } = {}) {
   if (!app.manifest?.env?.length) return [];
   const record = boundSettings(bin);
   if (!record) return [`${bin}.settings.json (none, or another build's)`];
-  return settingChanges(record.env, process.env, app.dir).map(({ name }) => `import.meta.env.${name}`);
+  return settingChanges(record.env, process.env, app.dir, { launch }).map(({ name }) => `import.meta.env.${name}`);
 }
 
 /** A packaged Windows app keeps compiler provenance in the private bake cache.
  * Require both unchanged source inputs and the exact copied executable/DLLs. */
-export function packagedBuildChanges(receipt, directory, app) {
+export function packagedBuildChanges(receipt, directory, app, { launch } = {}) {
   if (!existsSync(receipt)) return ['missing compiler build receipt'];
   const build = JSON.parse(readFileSync(receipt, 'utf8'));
   if (build.version !== 1 || !build.binary?.inputs || !build.sourceInputs?.inputs || !build.sourceInputs.inventory || !build.sourceInputs.outputs || !build.products?.length) return ['invalid compiler build receipt'];
-  const changed = pendingBuildInputs(build, { includeSources: true });
+  const changed = pendingBuildInputs(build, { includeSources: true, launch });
   const products = build.products.filter(product => /\.(exe|dll)$/.test(product.path));
   if (!products.some(product => product.path.endsWith('.exe'))) changed.push('receipt has no executable');
   changed.push(...packagedProductChanges(build, directory, app));
@@ -1090,9 +1092,11 @@ export function refuseBinaryBackend(bin, app, { receipt, packaged = false, comma
 }
 
 /** An Apple build's receipt: its Rust and Swift inputs by digest, then by mtime the app's own files the receipt leaves out on purpose (the root build script's watches: the contract, app.json, data, shaders, assets — what the baked plan and bundle are made from). */
-export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hashed`: this drive compared its inputs' bytes already
+export function receiptChanges(receipt, app, { hashed = false, launch } = {}) { // `hashed`: this drive compared its inputs' bytes already; `launch`: pendingBuildInputs'
   if (!receipt || !existsSync(receipt)) return [];
   const { build, target, started } = JSON.parse(readFileSync(receipt, 'utf8'));
+  // Unsaid, an iOS app's launch is a simulator's, which gives it this environment's `SIMCTL_CHILD_` variables.
+  launch ??= build?.compat?.inputs?.platform === 'ios' ? simulatorLaunch() : undefined;
   // A file edited while the build ran is newer than what it read, though older than the receipt written at its end
   // (LLP 1116.008 D2): the build's own start bounds it, else (an older receipt) the receipt's time.
   const since = Math.min(statSync(receipt).mtimeMs, Date.parse(started) || Infinity);
@@ -1141,7 +1145,7 @@ export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hash
   // Absence recorded by Cargo or the linked bake is unchanged while absent; first creation counts even at an old mtime.
   const absent = new Set([...(build?.binary?.missing ?? []), ...missing]), stillAbsent = path => { const at = resolve(ROOT, path); return absent.has(at) && !existsSync(at); };
   const tools = info ? [...depInfoNewer(since, null, info, app.workspace, directories, products), ...watchedNewer(since, baked, directories, products)].filter(path => !skipped(path) && !products.has(resolve(ROOT, path)) && !stillAbsent(path)) : [];
-  return [...new Set([...(build?.binary && !hashed ? pendingBuildInputs(build) : []), ...own.filter(path => !products.has(resolve(ROOT, path))), ...tools, ...unread, ...replaced])];
+  return [...new Set([...(build?.binary && !hashed ? pendingBuildInputs(build, { launch }) : []), ...own.filter(path => !products.has(resolve(ROOT, path))), ...tools, ...unread, ...replaced])];
 }
 
 /** What a web build of `app` reads, modified after `since` (every file by default):

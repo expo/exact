@@ -78,7 +78,11 @@ pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// 12: `exactProtocols`, which an older prelude would ignore (LLP 1016.000).
 /// 13: `exactPreload` and `exactPrefetch`, which an older prelude ignores
 /// (LLP 1162.000 D1, D5).
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 13;
+/// 14: the settings a launch may give (LLP 1153.002), which the bundle's
+/// launch module asks the prelude for (`__exact_launch_settings`) before any
+/// other module runs: an older prelude has none, and gives the module the
+/// build's value whatever the launch set.
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 14;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -89,7 +93,8 @@ pub(crate) const TYPESCRIPT_RUNTIME: u32 = 13;
 /// `Response` now needs 8, as do constructors whose readable side can become
 /// a request body. `structuredClone` names none of them. 10 is read from the
 /// grants, not the bundle.
-const RUNTIME_OPTIONS: [(u32, &str); 27] = [
+const RUNTIME_OPTIONS: [(u32, &str); 28] = [
+    (14, "__exact_launch_settings"),
     (13, "exactPrefetch"),
     (13, "exactPreload"),
     (12, "exactProtocols"),

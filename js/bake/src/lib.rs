@@ -8,6 +8,7 @@ mod android;
 mod beside;
 pub mod cli;
 mod icon;
+mod launch;
 mod library;
 mod linked;
 #[path = "../../package_tool.rs"]
@@ -1058,6 +1059,7 @@ fn bake_in(
         "__exact_config.mjs",
         "__exact_binding.mjs",
         "__exact_env.mjs",
+        "__exact_launch_setting.mjs",
         "__exact_portable.mjs",
         "__exact_env.json",
         "__exact_paths.json",
@@ -1072,6 +1074,19 @@ fn bake_in(
     .any(|name| captured.contains_key(Path::new(name)))
     {
         return Err("__exact_* and app.js (the bundle) are reserved for the producer".into());
+    }
+    // The launch module's name (LLP 1153.002), whatever its extension, or a
+    // directory: the entry's and app.ts's `./__exact_launch` is the producer's.
+    if let Some(path) = captured.keys().find(|path| {
+        (path.components().next()).is_some_and(|first| {
+            let first = first.as_os_str().to_string_lossy();
+            first == "__exact_launch" || first.starts_with("__exact_launch.")
+        })
+    }) {
+        return Err(format!(
+            "{}: __exact_launch is the producer's launch module; rename it",
+            path.display()
+        ));
     }
     for name in previous.keys().filter(|name| !captured.contains_key(*name)) {
         let path = stage.join(name);
@@ -1213,6 +1228,13 @@ fn bake_in(
     let grants = module.grants().to_owned();
     exact_runner::auth::session_grant_refusal(&grants)
         .map_or(Ok(()), |refusal| Err(format!("app.ts: {refusal}")))?;
+    // The settings app.ts read (`import.meta.env`, LLP 1153 D4), each with the
+    // value inlined and its source (`typescript.mjs` `configure`; none without app.ts).
+    let settings: serde_json::Value = match std::fs::read(stage.join("__exact_env.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+        Err(_) => serde_json::Value::Null,
+    };
+    launch::grants(&grants, &settings)?;
     let surfaces: serde_json::Map<String, serde_json::Value> = module
         .canvas_roster()
         .iter()
@@ -1275,14 +1297,9 @@ fn bake_in(
     if !packages.is_empty() {
         receipt["packages"] = packages.into();
     }
-    // The settings app.ts read (`import.meta.env`, LLP 1153 D4), each with the
-    // value inlined and its source (`typescript.mjs` `configure`; absent with none).
-    if let Ok(bytes) = std::fs::read(stage.join("__exact_env.json")) {
-        let settings: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if settings.as_object().is_some_and(|s| !s.is_empty()) {
-            receipt["env"] = settings;
-        }
+    // The settings, in the receipt (absent with none).
+    if settings.as_object().is_some_and(|s| !s.is_empty()) {
+        receipt["env"] = settings;
     }
     let receipt = receipt.to_string();
     Ok(Baked {

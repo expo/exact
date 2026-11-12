@@ -23,8 +23,10 @@ pub struct Anonymous<D> {
 }
 
 impl<D: DataSource> Anonymous<D> {
-    /// Wrap `inner`; its grants narrow to what a render holds.
-    pub fn new(inner: D) -> Self {
+    /// Wrap `inner`; its grants narrow to what a render holds, and it reads
+    /// what the browser's bundle reads (`render_web`).
+    pub fn new(mut inner: D) -> Self {
+        inner.render_web();
         let grants = held(inner.grants());
         Self { inner, grants }
     }
@@ -43,6 +45,23 @@ fn held(spec: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// LLP 1153.002 D2: a render's source reads what the browser's bundle
+/// reads, told so before anything activates it.
+#[cfg(test)]
+#[test]
+fn a_render_source_is_told_it_renders_the_web() {
+    struct Leaf(bool);
+    impl DataSource for Leaf {
+        fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
+            Err(DataError::UnknownSource(source.into()))
+        }
+        fn render_web(&mut self) {
+            self.0 = true;
+        }
+    }
+    assert!(Anonymous::new(Leaf(false)).inner.0);
 }
 
 #[cfg(test)]
@@ -71,6 +90,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Anonymous<D> {
 
     // A render acquires no host storage, secrets or document handles.
     fn set_document_owner(&mut self, _: u64) {}
+
+    fn render_web(&mut self) {
+        self.inner.render_web();
+    }
 
     fn configure_storage(
         &mut self,

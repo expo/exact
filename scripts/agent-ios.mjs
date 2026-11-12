@@ -21,6 +21,7 @@ import {
   withMaterials,
   withSoftwareKeyboard,
   forwardedEnv,
+  simulatorLaunch,
 } from '../host/apple/devices.mjs';
 import { appleExecutableName, resolveApp } from './app.mjs';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -40,7 +41,13 @@ export async function openIOS({
   onProcess,
 }) {
   const a = resolveApp(app);
-  const built = nativeBuild('ios', a, { sample: hostFixture, checked: process.env.EXACT_BUILD_CHECKED }),
+  // What the simulator gives the app (openIOSOwned); a marked setting there is the launch's (LLP 1153.002 D2).
+  const launched = simulatorLaunch(extra);
+  const built = nativeBuild('ios', a, {
+      sample: hostFixture,
+      checked: process.env.EXACT_BUILD_CHECKED,
+      launch: launched,
+    }),
     bundle = built.built;
   if (!built.missing) refuseBackendOrigin(built, a);
   const id = hostFixture ? `${a.id}.host` : a.id;

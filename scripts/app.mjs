@@ -1386,7 +1386,7 @@ export function developmentCandidate(build, plan, assets, surfaces) {
 /** Source staleness is provisional until the next actual bake. These paths
  * came from the previous compiler receipt, including absent watched inputs.
  * `includeSources` also checks replaceable artifacts for a packaged Windows drive. */
-export function pendingBuildInputs(build, { includeSources = false } = {}) {
+export function pendingBuildInputs(build, { includeSources = false, launch } = {}) {
   const changed=[];
   try {if(build.binary.assetCatalogApp && canonicalBuild(appleAssetCatalogInventory(build.binary.assetCatalogApp, build.binary.assetCatalogApp.platform)) !== canonicalBuild(build.binary.metadata.appleAssetCatalogs ?? [])) changed.push('Apple asset catalogs');} catch {changed.push('Apple asset catalogs');}
   const resources=build.binary.nativeResourceApp, resourceKey=`host.${resources?.platform ?? 'macos'}.resources`; try {if(resources && canonicalBuild(nativeResourceInventory(resources, null, resources.platform)) !== canonicalBuild(build.binary.metadata.nativeResources)) changed.push(resourceKey);} catch {changed.push(resourceKey);}
@@ -1395,7 +1395,7 @@ export function pendingBuildInputs(build, { includeSources = false } = {}) {
     catch {changed.push(file.name);}
   }
   for(const path of [...build.binary.missing, ...(build.optionalInputs ?? [])])if(existsSync(path))changed.push(path);
-  for(const {name} of build.settings?settingChanges(build.settings.env,process.env,build.settings.dir):[])changed.push(`import.meta.env.${name}`); // a setting the module inlined, as its sources give it now (LLP 1153 D4)
+  for(const {name} of build.settings?settingChanges(build.settings.env,process.env,build.settings.dir,{launch:launch??(['macos','windows'].includes(build.compat?.inputs?.platform)?process.env:null)}):[])changed.push(`import.meta.env.${name}`); // a setting the module inlined, as its sources give it now (LLP 1153 D4); a marked name `launch`, the environment a drive starts the app with, sets is the launch's (LLP 1153.002 D2): unsaid, this one on a Mac or Windows, which a desktop process inherits
   for(const {path,names} of build.binary.directories) {
     try {if(!statSync(path).isDirectory()||canonicalBuild(directoryInputNames(path))!==canonicalBuild(names))changed.push(path);}
     catch {changed.push(path);}
