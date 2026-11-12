@@ -26,7 +26,9 @@ import android.os.Handler
 import android.os.Looper
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailability
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.fitness.FitnessLocal
+import com.google.android.gms.fitness.FitnessStatusCodes
 import com.google.android.gms.fitness.LocalRecordingClient
 import com.google.android.gms.fitness.data.LocalDataType
 import com.google.android.gms.fitness.data.LocalField
@@ -100,16 +102,20 @@ class PedometerModule(context: ExtensionContext) : ExactExtension(context) {
             subscription.failed()
             context.log("pedometer: recording subscription failed: ${e.message}")
         }
-        client.listSubscriptions().addOnSuccessListener { types ->
-            if (types.contains(LocalDataType.TYPE_STEP_COUNT_DELTA)) {
-                subscription.complete(existing = true, epoch = System.currentTimeMillis().toDouble())
-            } else {
+        // LocalRecordingClient lists no subscriptions; its one check of a kept one is a read, which fails
+        // API_EXCEPTION where none is kept. A window before the ten days it keeps answers empty otherwise.
+        val probe = LocalDataReadRequest.Builder().aggregate(LocalDataType.TYPE_STEP_COUNT_DELTA)
+            .bucketByTime(1, TimeUnit.SECONDS).setTimeRange(0, 1, TimeUnit.SECONDS).build()
+        client.readData(probe).addOnSuccessListener {
+            subscription.complete(existing = true, epoch = System.currentTimeMillis().toDouble())
+        }.addOnFailureListener { e ->
+            if (e is ApiException && e.statusCode == FitnessStatusCodes.API_EXCEPTION) {
                 client.subscribe(LocalDataType.TYPE_STEP_COUNT_DELTA).addOnSuccessListener {
                     subscription.complete(existing = false, epoch = System.currentTimeMillis().toDouble())
                     context.log("pedometer: recording subscribed")
                 }.addOnFailureListener { failed(it) }
-            }
-        }.addOnFailureListener { failed(it) }
+            } else failed(e)
+        }
     }
 
     private fun read(args: JSONObject, reply: (JSONObject) -> Unit) {
