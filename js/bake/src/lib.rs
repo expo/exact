@@ -822,8 +822,18 @@ fn sources(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
                     return Err(format!("source is not a regular file: {}", path.display()));
                 }
                 let size = entry.metadata().map_err(|e| e.to_string())?.len();
-                if size > 16 << 20 || *total as u64 + size > 64 << 20 {
-                    return Err("app source capture exceeds 64 MiB (16 MiB per file)".into());
+                if size > 16 << 20 {
+                    return Err(format!(
+                        "app source capture: {} is {size} bytes, exceeding the 16 MiB per-file limit",
+                        path.display()
+                    ));
+                }
+                let next_total = *total as u64 + size;
+                if next_total > 64 << 20 {
+                    return Err(format!(
+                        "app source capture: adding {} ({size} bytes) would bring the total to {next_total} bytes, exceeding the 64 MiB limit",
+                        path.display()
+                    ));
                 }
                 let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
                 *total += bytes.len();

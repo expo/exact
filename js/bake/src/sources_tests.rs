@@ -1,6 +1,82 @@
 use super::{sources, Scratch};
 
 #[test]
+fn source_capture_names_a_file_above_the_per_file_limit() {
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    let path = app.0.join("oversized.json");
+    let limit = 16 << 20;
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(limit).unwrap();
+    assert_eq!(
+        sources(&app.0).unwrap()[std::path::Path::new("oversized.json")].len(),
+        limit as usize
+    );
+    file.set_len(limit + 1).unwrap();
+    let error = sources(&app.0).unwrap_err();
+    assert!(error.contains(&path.display().to_string()), "{error}");
+    assert!(error.contains("16777217 bytes"), "{error}");
+    assert!(error.contains("16 MiB per-file limit"), "{error}");
+}
+
+#[test]
+fn source_capture_names_the_file_crossing_the_total_limit() {
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    for index in 0..4 {
+        std::fs::File::create(app.0.join(format!("{index}.json")))
+            .unwrap()
+            .set_len(16 << 20)
+            .unwrap();
+    }
+    assert_eq!(
+        sources(&app.0)
+            .unwrap()
+            .values()
+            .map(Vec::len)
+            .sum::<usize>(),
+        64 << 20
+    );
+    std::fs::write(app.0.join("extra.json"), b"x").unwrap();
+    let error = sources(&app.0).unwrap_err();
+    // Directory enumeration may reach the extra byte before any of the large files.
+    assert!(
+        (0..4)
+            .map(|i| (format!("{i}.json"), 16 << 20))
+            .chain([("extra.json".into(), 1)])
+            .any(|(name, bytes)| error
+                .contains(&format!("{} ({bytes} bytes)", app.0.join(name).display()))),
+        "{error}"
+    );
+    assert!(error.contains("67108865 bytes"), "{error}");
+    assert!(error.contains("64 MiB limit"), "{error}");
+}
+
+#[test]
+fn source_capture_names_the_physical_file_in_an_oversized_mount() {
+    let parent = Scratch::new(&std::env::temp_dir()).unwrap();
+    let app = parent.0.join("app");
+    let shared = parent.0.join("shared");
+    std::fs::create_dir(&app).unwrap();
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::write(
+        app.join("app.json"),
+        r#"{"typescript":{"sources":{"core":"../shared"}}}"#,
+    )
+    .unwrap();
+    let path = shared.join("large.ts");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len((16 << 20) + 1)
+        .unwrap();
+    let error = sources(&app).unwrap_err();
+    assert!(
+        error.contains(&path.canonicalize().unwrap().display().to_string()),
+        "{error}"
+    );
+    assert!(error.contains("16777217 bytes"), "{error}");
+    assert!(error.contains("16 MiB per-file limit"), "{error}");
+}
+
+#[test]
 fn mixed_bake_reads_rust_identity_and_own_grants_without_executing_it() {
     use contract::DataSource;
     struct Rust;
