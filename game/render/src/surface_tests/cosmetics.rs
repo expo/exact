@@ -55,7 +55,7 @@ impl Game for Dice {
     }
 }
 /// A square facing the camera, sampling `texture`.
-fn quad(texture: &str) -> Model {
+pub(super) fn quad(texture: &str) -> Model {
     let mesh = MeshData {
         positions: vec![-2., -2., 0., 2., -2., 0., 2., 2., 0., -2., 2., 0.],
         normals: [0., 0., 1.].repeat(4),

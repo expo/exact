@@ -41,11 +41,13 @@ pub(crate) trait Writes {
         false
     }
     /// `material` with the textures `names` gives replacing its own (by
-    /// `MaterialData` slot order), once all of them can draw.
+    /// `MaterialData` slot order), once all of them can draw. `layered`
+    /// enables the coat family without making a variant for each scalar value.
     fn material_variant(
         &mut self,
         _: crate::MaterialId,
         _: &[Option<String>; 5],
+        _: bool,
     ) -> Option<crate::MaterialId> {
         None
     }
@@ -154,9 +156,10 @@ impl<const ASSETS: bool> Writes for crate::renderer::RendererWithAssets<ASSETS> 
         &mut self,
         material: crate::MaterialId,
         names: &[Option<String>; 5],
+        layered: bool,
     ) -> Option<crate::MaterialId> {
         if ASSETS {
-            self.textured_variant(material, names)
+            self.override_variant(material, names, layered)
         } else {
             None
         }

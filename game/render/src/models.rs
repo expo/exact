@@ -42,8 +42,9 @@ pub(crate) const REPLACE: u32 = 1 << 31;
 pub(crate) const NUMBERED: u32 = 1 << 30;
 /// A look-table entry: tint, glow, its part's first vertex as bits; then, in a
 /// draw of several materials, its material (merge.rs `PartMaterial`); then the
-/// record's current and previous base colour and emission UV offsets.
-pub(crate) type PartLook = [f32; 20];
+/// record's current and previous base colour and emission UV offsets, and its
+/// optional surface factors.
+pub(crate) type PartLook = [f32; 24];
 pub(crate) type ModelNode = (MeshId, MaterialId, Mat4, Option<u32>);
 /// What the feed batches one loaded model from.
 pub(crate) struct Draws<'a> {
@@ -280,11 +281,12 @@ impl Models {
         }
         // A look-table entry is one record-sized entry: its tint and glow, in
         // `local`'s first two columns its material, when it has one, and in
-        // the third its current and previous UV offsets.
+        // the third its current and previous UV offsets, and in the fourth its
+        // surface factors.
         for look in &self.part_looks.1 {
             words.extend([0; 4]);
             words.extend(look[8..].iter().map(|v| v.to_bits()));
-            words.extend([0; 20]);
+            words.extend([0; 16]);
             words.extend(look[..8].iter().map(|v| v.to_bits()));
         }
         if words.len() as u64 * 4 > device.limits().max_storage_buffer_binding_size {

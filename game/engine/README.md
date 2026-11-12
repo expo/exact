@@ -501,7 +501,11 @@ it drew before (the model's own the first time). `MaterialOverride.uv_offset` sc
 the base colour and emission textures on one instance, after the material's own UV
 transform: a tail running along a ribbon, flowing water. Set `uv_offset_previous`
 to the previous tick's unwrapped offset to interpolate the pair at display time;
-leave it `None` for the current offset at every frame. `World::drawn(e)` is the displayed
+leave it `None` for the current offset at every frame. Optional `roughness`,
+`metallic`, `clearcoat` and `clearcoat_roughness` replace the material factors
+on that instance; `None` keeps each factor. Values are clamped to [0, 1],
+non-finite values are ignored, and roughness/metallic still multiply texture
+channels. A zero coat removes it. Unlit and custom materials ignore these factors. `World::drawn(e)` is the displayed
 pose and opacity, in the same walk as `World::is_visible`. Picking, layout, physics
 and gameplay use the simulated pose.
 

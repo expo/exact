@@ -8,8 +8,10 @@ struct ModelInstance {
     // and its top bit makes the tint replace the material's base colour factor
     // (MaterialOverrides). In a look entry, glow.w's bits are the part's
     // first vertex, with several materials local's first two columns are
-    // its material (models/merge.rs `PartMaterial`), and local[2].xy is the
-    // record's base colour and emission UV offset.
+    // its material (models/merge.rs `PartMaterial`), local[2] is the record's
+    // current (xy) and previous (zw) base colour and emission UV offset, and
+    // local[3] its roughness, metallic, coat and coat roughness overrides
+    // (negative: the material's own).
     tint: vec4<f32>, glow: vec4<f32>,
 }
 @group(3) @binding(0) var<storage, read> instances: array<ModelInstance>;
@@ -60,6 +62,7 @@ struct ModelVarying {
     // material draw), and its emission times the instance's emission strength.
     @location(8) @interpolate(flat) part: vec4<f32>, @location(9) @interpolate(flat) part_emission: vec3<f32>,
     @location(7) @interpolate(flat) uv_offset: vec2<f32>,
+    @location(10) @interpolate(flat) surface_override: vec4<f32>,
 }
 // A model draw's transform slot between the two ticks, at the frame's alpha;
 // its scale keeps its sign.
@@ -100,6 +103,7 @@ fn model_transform(position: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, instan
     var part=vec4(1.0);
     var part_emission=vec3(1.0);
     var uv_offset=vec2(0.0);
+    var surface_override=vec4(-1.0);
     let word=bitcast<u32>(draw.glow.w);
     let looks=word & 1073741823u;
     let numbered=(word & 1073741824u)!=0u;
@@ -118,6 +122,7 @@ fn model_transform(position: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, instan
         if any(previous!=uv_offset) {
             uv_offset=mix(previous,uv_offset,frame.camera_alpha.w);
         }
+        surface_override=look.local[3];
     }
     // Read the instance material per vertex, as the primitive path does. Flat
     // varyings avoid storage-buffer reads for every covered fragment.
@@ -132,10 +137,10 @@ fn model_transform(position: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, instan
         let affine=attachment_matrices[slot];
         var n=affine_normal(affine,local_normal);
         if OUTLINE_OFFSET { n=(affine*vec4(local_normal,0.0)).xyz; }
-        return ModelVarying(frame.view_proj*vec4(world,1.0),world,n,color*tint,uv,slot,vec4(glow,f32(word>>31u)),part,part_emission*strength,uv_offset);
+        return ModelVarying(frame.view_proj*vec4(world,1.0),world,n,color*tint,uv,slot,vec4(glow,f32(word>>31u)),part,part_emission*strength,uv_offset,surface_override);
     }
     let safe=select(max(abs(s),vec3(0.000001)),-max(abs(s),vec3(0.000001)),s<vec3(0.0));
     var n=rotate(q,local_normal/safe);
     if OUTLINE_OFFSET { n=rotate(q,local_normal*s); }
-    return ModelVarying(frame.view_proj*vec4(world,1.0),world,n,color*tint,uv,slot,vec4(glow,f32(word>>31u)),part,part_emission*strength,uv_offset);
+    return ModelVarying(frame.view_proj*vec4(world,1.0),world,n,color*tint,uv,slot,vec4(glow,f32(word>>31u)),part,part_emission*strength,uv_offset,surface_override);
 }

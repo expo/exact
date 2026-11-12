@@ -7,6 +7,8 @@ mod frames;
 mod prepare;
 #[path = "surface_tests/quality.rs"]
 mod quality;
+#[path = "surface_tests/scalars.rs"]
+mod scalars;
 #[path = "surface_tests/trace.rs"]
 mod trace;
 #[path = "surface_tests/uv.rs"]
