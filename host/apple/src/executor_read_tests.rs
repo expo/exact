@@ -64,7 +64,12 @@ impl Server {
 
     fn core_with_grants(&self, asynchronous: bool, grants: &str) -> (Core, Receiver<()>) {
         let owners = (0..WORKERS)
-            .map(|_| Some(lane_host().endow(ibex2::grant::GrantSet::parse(grants).unwrap())))
+            .map(|_| {
+                Some(
+                    crate::executor::core::tests::lane_host()
+                        .endow(ibex2::grant::GrantSet::parse(grants).unwrap()),
+                )
+            })
             .collect();
         let (wake, woke) = channel();
         let core = Core::with_owners_lanes(
@@ -73,7 +78,7 @@ impl Server {
             Box::new(move || {
                 let _ = wake.send(());
             }),
-            Arc::new(lane_host),
+            Arc::new(crate::executor::core::tests::lane_host),
             asynchronous.then(asynch_lanes),
         );
         (core, woke)
@@ -107,33 +112,6 @@ impl Server {
         socket.write_all(body).unwrap();
         socket.shutdown(Shutdown::Write).unwrap();
     }
-}
-
-/// The host a lane of the machine fetches through. The Darwin blocking
-/// transport serves four exchanges at a time, and the machine's adapter gives
-/// a lane's threads one transport: here each thread has its own, as each of
-/// the workers' owners has.
-fn lane_host() -> ibex2::host::Host {
-    #[cfg(target_vendor = "apple")]
-    {
-        use ibex2::stdlib::fetch::{Request, StreamingResponse, Transport};
-        struct PerThread;
-        impl Transport for PerThread {
-            fn open(
-                &self,
-                request: &Request,
-                signal: &ibex2::stdlib::abort::AbortSignal,
-            ) -> Result<StreamingResponse, ibex2::boundary::HostError> {
-                thread_local! {
-                    static OWN: Box<dyn Transport> = ibex2::transport::default_transport();
-                }
-                OWN.with(|own| own.open(request, signal))
-            }
-        }
-        ibex2::host::Host::with_transport(Box::new(PerThread))
-    }
-    #[cfg(not(target_vendor = "apple"))]
-    ibex2::host::Host::new()
 }
 
 impl Drop for Server {

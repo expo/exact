@@ -96,7 +96,10 @@ impl Server {
     fn core_grants(&self, asynchronous: bool, cache: bool, grants: &str) -> (Core, Receiver<()>) {
         let owners = (0..WORKERS)
             .map(|_| {
-                Some(ibex2::host::Host::new().endow(ibex2::grant::GrantSet::parse(grants).unwrap()))
+                Some(
+                    crate::executor::core::tests::lane_host()
+                        .endow(ibex2::grant::GrantSet::parse(grants).unwrap()),
+                )
             })
             .collect();
         let (wake, woke) = channel();
@@ -106,7 +109,7 @@ impl Server {
             Box::new(move || {
                 let _ = wake.send(());
             }),
-            Arc::new(ibex2::host::Host::new),
+            Arc::new(crate::executor::core::tests::lane_host),
             asynchronous.then(asynch_lanes),
         );
         if cache {

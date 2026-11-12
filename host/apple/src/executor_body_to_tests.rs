@@ -162,7 +162,7 @@ pub(in super::super) fn serving_on(grants: &str, switched: bool) -> (Core, Opene
         owners,
         grants,
         wake,
-        Arc::new(ibex2::host::Host::new),
+        Arc::new(crate::executor::core::tests::lane_host),
         switched.then(asynch::asynch_lanes),
     );
     (core, opened, woke)
@@ -671,7 +671,7 @@ fn an_upload_reserving_room_wakes_queued_reads_before_its_first_event() {
             Box::new(move || {
                 let _ = wake.send(());
             }),
-            Arc::new(ibex2::host::Host::new),
+            Arc::new(crate::executor::core::tests::lane_host),
             lanes,
         );
         let (opening, opened) = channel();

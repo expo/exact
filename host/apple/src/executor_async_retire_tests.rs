@@ -458,7 +458,7 @@ fn retained_handles_keep_no_machine_thread_or_permit_after_retirement() {
         owners,
         GRANTS,
         Box::new(|| {}),
-        Arc::new(ibex2::host::Host::new),
+        Arc::new(crate::executor::core::tests::lane_host),
         Some(super::asynch_lanes()),
     );
     let waker = core.waker();

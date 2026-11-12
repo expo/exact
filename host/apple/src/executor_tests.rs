@@ -1481,3 +1481,30 @@ pub(crate) mod abort;
 
 #[path = "executor_pump_tests.rs"]
 mod pump;
+
+/// The host a lane of the machine fetches through. The Darwin blocking
+/// transport serves four exchanges at a time, and the machine's adapter gives
+/// a lane's threads one transport: here each thread has its own, as each of
+/// the workers' owners has.
+pub(crate) fn lane_host() -> ibex2::host::Host {
+    #[cfg(target_vendor = "apple")]
+    {
+        use ibex2::stdlib::fetch::{Request, StreamingResponse, Transport};
+        struct PerThread;
+        impl Transport for PerThread {
+            fn open(
+                &self,
+                request: &Request,
+                signal: &ibex2::stdlib::abort::AbortSignal,
+            ) -> Result<StreamingResponse, ibex2::boundary::HostError> {
+                thread_local! {
+                    static OWN: Box<dyn Transport> = ibex2::transport::default_transport();
+                }
+                OWN.with(|own| own.open(request, signal))
+            }
+        }
+        ibex2::host::Host::with_transport(Box::new(PerThread))
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    ibex2::host::Host::new()
+}
