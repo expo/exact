@@ -104,7 +104,7 @@ function positive(t, band, out, n = 1, s = 0, e = t.base) {
 }
 
 class SizeIndex {
-  constructor(est) { this.est = est; this.order = []; this.pos = new Map(); this.h = []; this.gen = []; this.me = []; this.epoch = 1; this.next = 0; this.t = tree([], []); this.trailing = 0; this.leading = 0; }
+  constructor(est, gap = 0) { this.est = est; this.gap = gap; this.order = []; this.pos = new Map(); this.h = []; this.gen = []; this.me = []; this.epoch = 1; this.next = 0; this.t = tree([], []); this.trailing = 0; this.leading = 0; }
   get len() { return this.h.length; }
   replace(keys) {
     if (keys.length === this.order.length && keys.every((k, i) => k === this.order[i])) return;
@@ -120,7 +120,8 @@ class SizeIndex {
     Object.assign(this, { order: keys, pos, h, gen, me });
   }
   prefix(end) { return prefixT(this.t, end); }
-  get total() { return this.t.sums[1]; }
+  // Each row's height counts the list's gap after it (index.rs `total_height`).
+  get total() { return this.h.length ? Math.max(0, this.t.sums[1] - this.gap) : this.t.sums[1]; }
   // Sufficient bound: every candidate leaf and padding <= H. B >= 1 is
   // power-of-two; monotone nonnegative addition bounds each subtree by its
   // leaf count * H using exact doubling. Root <= B*H, either padded order
@@ -132,14 +133,21 @@ class SizeIndex {
   measured(key) { const i = this.pos.get(key); return i !== undefined && this.me[i] === this.epoch; }
   rangeMeasured(a, b) { return a < b && minEpoch(this.t, a, b) >= this.epoch; }
   invalidateAll() { this.epoch++; }
-  invalidateRow(key) { const i = this.pos.get(key); this.gen[i] = ++this.next; this.me[i] = 0; setEpoch(this.t, i, 0); return this.token(key); }
+  // -1 retains a prior measurement across content invalidation (LLP 1070 H4).
+  invalidateRow(key) { const i = this.pos.get(key); this.gen[i] = ++this.next; this.me[i] = this.me[i] === 0 ? 0 : -1; setEpoch(this.t, i, 0); return this.token(key); }
+  revive(key) {
+    const i = this.pos.get(key);
+    if (i === undefined) return;
+    setT(this.t, i, this.est); this.h[i] = this.est; this.me[i] = 0; setEpoch(this.t, i, 0);
+  }
+  edges() { return [find(this.t, 0, false), find(this.t, this.t.sums[1], true)]; }
   spread(a, b, delta) {
     if (!isFinite(delta) || Math.abs(delta) < 0.01) return;
     const open = [];
-    for (let i = a; i < Math.min(b, this.len); i++) if (this.me[i] !== this.epoch) open.push(i);
+    for (let i = a; i < Math.min(b, this.len); i++) if (this.h[i] > 0 && this.me[i] !== this.epoch) open.push(i);
     if (!open.length) return;
     const part = delta / open.length;
-    for (const i of open) { const h = Math.max(0, this.h[i] + part); setT(this.t, i, h); this.h[i] = h; }
+    for (const i of open) { const h = Math.max(this.gap, this.h[i] + part); setT(this.t, i, h); this.h[i] = h; }
   }
   setMeasured(key, token, h) {
     if (!(isFinite(h) && h >= 0)) throw new Refusal("row height must be finite and nonnegative");
@@ -180,12 +188,18 @@ class SizeIndex {
     // At the start, no anchor unless it follows the end (index.rs
     // `capture_anchor`): CSS scroll anchoring selects none at a zero offset.
     let row = offset <= 0 && !follows ? null : find(this.t, offset, false);
-    let within = row === null ? 0 : Math.max(0, offset - this.prefix(row));
-    if (!follows && row !== null && this.order[row] === excluded) {
-      row = find(this.t, this.prefix(row + 1), false);
-      if (row !== null && this.prefix(row) >= offset + port) row = null;
-      within = row === null ? offset : offset - this.prefix(row);
+    if (!follows) {
+      while (row !== null) {
+        const start = this.prefix(row);
+        if (start >= offset + port) { row = null; break; }
+        const size = Math.max(0, this.h[row] - this.gap);
+        const ended = this.gap > 0 && (size === 0 || start + size <= offset);
+        if (!ended && this.order[row] !== excluded) break;
+        const next = find(this.t, this.prefix(row + 1), false);
+        row = next !== null && next > row ? next : null;
+      }
     }
+    const within = row === null ? 0 : offset - this.prefix(row);
     // How far past the end the port was (a rubber band under a finger or a fling), kept past the end; and the
     // offset it was taken at, unclamped, where a port with no row to anchor stays.
     return { order: this.order, row, within, follows, beyond: Math.max(0, raw - max), raw };
@@ -259,7 +273,10 @@ class Collection {
     this.el = el; this.view = viewId(el); this.axis = o.x ? "x" : "y"; this.own = own; this.o = o;
     this.est = o.est ?? ESTIMATED;
     if (!(isFinite(this.est) && this.est > 0)) throw new Refusal("estimated item height must be positive and finite");
-    this.index = new SizeIndex(this.est);
+    // A row list's `gap`, which each row's extent counts after it; a vertical list is a block, with none (mod.rs `create`).
+    this.gap = o.x && isFinite(o.gap) && o.gap > 0 ? o.gap : 0;
+    this.est += this.gap;
+    this.index = new SizeIndex(this.est, this.gap);
     // The list's literal size along its axis bounds an inner list's first rows.
     const sizes = (o.x ? o.pw : o.ph).filter(n => typeof n === "number" && isFinite(n) && n > 0);
     this.port = sizes.length ? Math.min(...sizes) : null;
@@ -273,7 +290,7 @@ class Collection {
     const g = this.geometry;
     return { view: this.view, axis: this.axis, ...(this.parent != null ? { parent: this.parent } : {}), ...(this.restored ? { restored: true } : {}), ...(this.target ? { [this.requestWaits() ? "waiting" : "seeking"]: true, request: this.request } : {}),
       revision: this.revision, scrollSequence: g ? g.scroll_sequence : 0, count: this.index.len, totalExtent: this.index.total,
-      rows: this.mounted.map(m => ({ view: m.view, root: m.root, index: m.position, start: this.index.prefix(m.position), size: this.index.h[m.position], epoch: m.epoch, measured: this.index.measured(this.index.order[m.position]) })),
+      rows: this.mounted.filter(m => !m.displayNone).map(m => ({ view: m.view, root: m.root, index: m.position, start: this.index.prefix(m.position), size: Math.max(0, this.index.h[m.position] - this.gap), epoch: m.epoch, measured: this.index.measured(this.index.order[m.position]) })),
       pending: this.pending || (this.atEnd && this.index.len > 0) || this.portUnknown || (!!this.target && !this.requestWaits()), correction: this.correction }; // opening, an admitted request, or an unknown port owes another report (into_view.rs `asks_report`)
   }
   scrollAnchor() {
@@ -285,7 +302,12 @@ class Collection {
     // drawn at it (traversal.rs).
     const half = 0.5 / (globalThis.devicePixelRatio || 1), unit = v => Math.round(v * 64) / 64;
     let p = i.rowAt(Math.max(0, offset));
-    for (let q; p !== null && unit(i.prefix(p + 1)) - offset < half && (q = i.rowAt(i.prefix(p + 1))) !== null && q > p;) p = q;
+    while (p !== null) {
+      const size = Math.max(0, i.h[p] - this.gap);
+      if (size > 0 && unit(i.prefix(p) + size) - offset >= half) break;
+      const next = i.rowAt(i.prefix(p + 1));
+      p = next !== null && next > p ? next : null;
+    }
     if (p === null || port <= 0 || i.prefix(p) >= offset + port) return [null, 0];
     const within = offset - i.prefix(p), drawn = offset - unit(i.prefix(p));
     return [i.order[p].replace(/^d\d+:/, "").slice(2), drawn > -half && drawn <= half ? 0 : within];
@@ -348,14 +370,14 @@ class Collection {
     return positions;
   }
   invalidateEstimates() {
-    for (const key of this.zeros) { const t = this.index.token(key); if (t) this.index.setMeasured(key, t, this.est); }
+    for (const key of this.zeros) this.index.revive(key);
     this.zeros.clear();
     this.index.invalidateAll();
   }
   invalidateRows(positions) {
     for (const p of positions) {
       const key = this.index.order[p];
-      if (this.zeros.delete(key)) { const t = this.index.token(key); if (t) this.index.setMeasured(key, t, this.est); }
+      if (this.zeros.delete(key)) this.index.revive(key);
       this.index.invalidateRow(key);
     }
   }
@@ -448,7 +470,7 @@ class Collection {
       const optional = [];
       for (const [a, b] of ranges) for (let p = a; p < b; p++) if (!isOwed(p) && !old.has(this.index.order[p])) { const [before, d] = this.distance(p, port); optional.push([before !== toward, d, p]); }
       optional.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
-      pending = optional.length > limit;
+      pending ||= optional.length > limit;
       for (const x of optional.slice(0, limit)) admitted.add(x[2]);
     }
     for (const [a, b] of ranges) for (let p = a; p < b; p++) {
@@ -485,7 +507,7 @@ class Collection {
     if (this.preview || this.incoming || this.hidden != null) this.emitPreview();
   }
   distance(p, [top, end]) {
-    const start = this.index.prefix(p), finish = start + this.index.h[p];
+    const start = this.index.prefix(p), finish = start + Math.max(0, this.index.h[p] - this.gap);
     return finish <= top ? [true, top - finish] : [false, Math.max(0, start - end)];
   }
   reposition(m, p) { m.position = p; writeItem(m.item.n, this.items[p]); write(m.index.n, p); }
@@ -540,8 +562,10 @@ class Collection {
     let cursor = 0, n = 0;
     for (let i = 0; i <= this.mounted.length; i++) {
       const p = i < this.mounted.length ? this.mounted[i].position : this.index.len;
-      const gap = this.index.prefix(p) - this.index.prefix(cursor);
-      if (gap > 0) {
+      const skipped = this.index.prefix(p) - this.index.prefix(cursor);
+      if (skipped > 0) {
+        // The list's own gap is laid out on each side of the spacer.
+        const gap = skipped - this.gap;
         let s = this.spacers[n];
         if (!s) { const el = document.createElement("div"); el.$exactTree = true; el.setAttribute("aria-hidden", "true"); el.style.cssText = SPACER[this.axis]; s = this.spacers[n] = { el, size: null }; }
         if (s.size !== gap) { s.el.style.setProperty(MAIN[this.axis], num(gap) + "px"); s.size = gap; }
@@ -640,7 +664,7 @@ class Collection {
     for (const m of f.measurements) {
       const i = byView.get(m.view);
       if (i === undefined || this.mounted[i].epoch !== m.epoch) return null;
-      h = Math.max(h, m.size);
+      h = Math.max(h, m.size + this.gap);
     }
     const changedWidth = !g || g.cross !== f.cross;
     if (changedWidth && this.zeros.size) h = Math.max(h, this.est);
@@ -654,19 +678,26 @@ class Collection {
       }
     } else {
       for (const r of f.measurements) {
-        const p = this.mounted[byView.get(r.view)].position, key = this.index.order[p];
-        if (r.size !== this.index.h[p] && !noise(this.index, key, p, r.size)) (preview ??= new HeightPreview(this.index.t)).set(p, r.size);
+        const m = this.mounted[byView.get(r.view)], p = m.position;
+        const size = this.measuredSize(m, r.size);
+        if (size !== this.index.h[p]) (preview ??= new HeightPreview(this.index.t)).set(p, size);
       }
     }
-    const extent = preview ? preview.total : this.index.total;
+    const extent = preview ? Math.max(0, preview.total - (this.index.len ? this.gap : 0)) : this.index.total;
     const paddedExtent = Math.max(extent + f.padding[0] + f.padding[1], extent + f.padding[1] + f.padding[0]);
     if (!isFinite(paddedExtent) || paddedExtent > 3.4028234663852886e38) throw new Refusal("collection height exceeds finite geometry");
     return byView;
   }
   dims(f) { const g = this.geometry; return g && g.port_cross === f.port_cross && g.port_main === f.port_main && g.cross === f.cross && g.focus_view === f.focus_view && g.interaction_view === f.interaction_view; }
+  measuredSize(m, raw) {
+    if (!(isFinite(raw) && raw >= 0)) throw new Refusal("row height must be finite and nonnegative");
+    const p = m.position, key = this.index.order[p], size = m.displayNone ? 0 : raw + this.gap;
+    const sameZero = (raw === 0) === this.zeros.has(key);
+    return sameZero && noise(this.index, key, p, size) ? this.index.h[p] : size;
+  }
   measure(byView, r) {
     const m = this.mounted[byView.get(r.view)], key = this.index.order[m.position];
-    this.index.setMeasured(key, m.token, noise(this.index, key, m.position, r.size) ? this.index.h[m.position] : r.size);
+    this.index.setMeasured(key, m.token, this.measuredSize(m, r.size));
     if (r.size === 0) this.zeros.add(key); else this.zeros.delete(key);
   }
   feedback(f, byView, fill) {
@@ -694,7 +725,7 @@ class Collection {
     let measurements = f.measurements;
     if (this.axis === "x" && !changedWidth) {
       const first = [];
-      for (const r of measurements) { const m = this.mounted[byView.get(r.view)]; if (this.index.measured(this.index.order[m.position])) this.measure(byView, r); else first.push(r); }
+      for (const r of measurements) { const m = this.mounted[byView.get(r.view)]; if (this.index.me[m.position] !== 0) this.measure(byView, r); else first.push(r); }
       measurements = first;
     }
     const height = this.geometry ? this.geometry.port_main : f.port_main;
@@ -739,7 +770,7 @@ class Collection {
     if (!g) return undefined;
     const remeasures = r => {
       const m = this.mounted[byView.get(r.view)], key = this.index.order[m.position];
-      return this.index.token(key) === m.token && !(noise(this.index, key, m.position, r.size) && (r.size === 0) === this.zeros.has(key));
+      return this.index.token(key) === m.token && !(noise(this.index, key, m.position, this.measuredSize(m, r.size)) && (r.size === 0) === this.zeros.has(key));
     };
     if (f.measurements.some(remeasures) || this.restoredAt || this.atEnd || (this.target && !(this.scrolling && fill.scrolling && !fill.gesture)) || this.pending || this.correction || !this.dims(f)) return undefined;
     const a = this.index.anchor(f.offset, g.port_main, this.followEnd);
@@ -781,7 +812,7 @@ class Collection {
   // Within the port less its scroll-padding (into_view.rs `aligned`), down to the padding before the first row.
   aligned(p, align, current, offset) {
     if (offset != null) return Math.min(Math.max(this.index.prefix(p) + offset, -this.index.leading), this.index.maxOffset(this.geometry?.port_main ?? 0));
-    const [before, after] = this.margins(p);
+    const [before, gapless] = this.margins(p), after = gapless + this.gap;
     const start = this.index.prefix(p) + before, size = Math.max(0, this.index.h[p] - before - after), port = this.geometry?.port_main ?? 0;
     const [i0, i1] = this.scrollPadding(), low = i0, high = Math.max(i0, port - i1), view = high - low;
     const at = align === "start" ? start - low : align === "center" ? start + size / 2 - (low + high) / 2 : align === "end" ? start + size - high
@@ -893,18 +924,18 @@ class Collection {
     const start = Math.min(p, this.index.rowAt(Math.max(0, at)) ?? p), measured = q => this.index.measured(this.index.order[q]);
     return measured(p) && this.mounted.some(m => m.position === p) && !this.mounted.some(m => m.position >= start && m.position < p && !measured(m.position));
   }
-  disarm(i) { this.edgeArmed[i] = false; this.edgeFired[i] = this.index.order[i ? this.index.len - 1 : 0] ?? null; }
+  disarm(i) { this.edgeArmed[i] = false; this.edgeFired[i] = this.index.order[this.index.edges()[i]] ?? null; }
   edge(velocity) {
     const reached = [false, false], g = this.geometry;
     if (g && this.index.len) {
       // Reached within the edge band; re-armed outside it, or outside the band at rest once the edge's row is
       // another than the one it fired at, and only once the window at rest (one port each side) is measured (reach.rs).
-      const w = this.index.window(g.offset, g.port_main), n = this.index.len - 1;
-      const within = band => { const s = this.index.window(g.offset, g.port_main, band).segments; return [0, n].map(e => s.some(r => e >= r[0] && e < r[1])); };
+      const w = this.index.window(g.offset, g.port_main), ends = this.index.edges();
+      const within = band => { const s = this.index.window(g.offset, g.port_main, band).segments; return ends.map(e => e !== null && s.some(r => e >= r[0] && e < r[1])); };
       [reached[0], reached[1]] = within(reachBand(this.reach, g.port_main, velocity));
       if (!(this.edgeArmed[0] && this.edgeArmed[1]) && this.index.rangeMeasured(...w.overscan)) {
         const rest = within(reachBand(this.reach, g.port_main, 0));
-        for (const i of [0, 1]) this.edgeArmed[i] ||= !reached[i] || (this.edgeFired[i] !== this.index.order[i ? n : 0] && !rest[i]);
+        for (const i of [0, 1]) this.edgeArmed[i] ||= !reached[i] || (this.edgeFired[i] !== this.index.order[ends[i]] && !rest[i]);
       }
     }
     const ready = [0, 1].map(i => reached[i] && this.edgeArmed[i] && !!this.edges[i]);
@@ -1003,6 +1034,25 @@ Hosts.scrollIntoView = (...a) => a.length !== 7 ? element(...a) : intoView(a[0],
 /** `state.scrollIntoView`: each list's latest request, then refusals. */
 const intoViewState = () => [...[...Lists.values()].filter(c => c.status).map(c => ({ list: c.view, key: c.status[0], status: c.status[1] })), ...Refused];
 function publish() {
+  // Row effects have settled: only display:none removes a horizontal flex item.
+  for (const c of Lists.values()) if (c.axis === "x") for (const m of c.mounted) {
+    const hidden = (getComputedStyle(m.wrapper.firstElementChild).display ?? m.wrapper.firstElementChild.style.getPropertyValue("display")) === "none";
+    if (hidden !== !!m.displayNone) {
+      m.displayNone = hidden;
+      m.wrapper.style.setProperty("display", hidden ? "none" : "flex");
+      c.revision++;
+    }
+    if (hidden) {
+      // views.rs settle_mounted: the same hidden-row model.
+      c.zeros.add(m.key);
+      c.pending ||= c.index.h[m.position] !== 0;
+      const anchor = c.index.me[m.position] === 0 ? c.anchor() : null;
+      c.index.setMeasured(m.key, m.token, 0);
+      c.restore(anchor);
+    } else if (c.index.h[m.position] === 0 && !c.index.measured(m.key)) {
+      c.index.revive(m.key);
+    }
+  }
   // As the web host sends `collections`: only when a snapshot changed.
   const snapshots = [...Lists.values()].sort((a, b) => a.view - b.view).map(c => c.snapshot());
   const text = JSON.stringify(snapshots);

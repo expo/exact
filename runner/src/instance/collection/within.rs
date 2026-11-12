@@ -62,12 +62,15 @@ impl Collection {
                     .contains(self.index.key(row.position).unwrap())
             };
             if self.index.measurement_token_at(row.position) != Some(row.token)
-                || (self.index.noise_at(row.position, m.size)
+                || (self
+                    .index
+                    .noise_at(row.position, self.measured_size(row, m.size))
                     && (m.size == 0.0) == (!self.zero_heights.is_empty() && zero()))
             {
                 continue;
             }
-            let same = self.index.height(row.position).map(f64::to_bits) == Some(m.size.to_bits());
+            let same = self.index.height(row.position).map(f64::to_bits)
+                == Some((self.measured_size(row, m.size)).to_bits());
             if !same || m.size == 0.0 || zero() {
                 return Ok(None);
             }

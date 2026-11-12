@@ -4,6 +4,8 @@ use exact_plan::{asm::Asm, builder::PlanBuilder, BindingsRow, Opcode, TypeKind};
 
 #[path = "fill_tests.rs"]
 mod fill;
+#[path = "gap_tests.rs"]
+mod gap;
 #[path = "key_reads_tests.rs"]
 mod key_reads;
 #[path = "ownership_tests.rs"]

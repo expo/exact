@@ -120,6 +120,7 @@ struct CollectionSnapshot {
         let epoch: UInt64
         /// Logical position; -1 when a snapshot omits it.
         let index: Int
+        let start: Double?
         let size: Double?
         let measured: Bool
     }
@@ -170,7 +171,7 @@ struct CollectionSnapshot {
             guard let id = Self.viewID(item["view"]), let root = Self.viewID(item["root"]),
                   let epoch = Self.uint(item["epoch"]), seen.insert(id).inserted else { return nil }
             rows.append(Row(view: id, root: root, epoch: epoch, index: Self.uint(item["index"]).map { Int(clamping: $0) } ?? -1,
-                            size: Self.number(item["size"]), measured: item["measured"] as? Bool ?? false))
+                            start: Self.number(item["start"]), size: Self.number(item["size"]), measured: item["measured"] as? Bool ?? false))
         }
         var correction: Correction?
         if let raw = value["correction"], !(raw is NSNull) {
@@ -188,6 +189,13 @@ struct CollectionSnapshot {
         self.waiting = value["waiting"] as? Bool == true
         self.request = Self.uint(value["request"]) ?? 0
         self.lastRequest = Self.uint(value["lastRequest"]) ?? 0
+    }
+    func startsContent(_ row: Row) -> Bool {
+        row.start.map { $0 <= 0.5 } ?? (row.index == 0)
+    }
+    func endsContent(_ row: Row) -> Bool {
+        if let start = row.start, let size = row.size { return start + size >= extent - 0.5 }
+        return row.index == count - 1
     }
     private static func uint(_ value: Any?) -> UInt64? {
         // Integral JSON numbers read directly; a fraction or sign refuses.

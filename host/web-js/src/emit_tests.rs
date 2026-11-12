@@ -1341,3 +1341,14 @@ fn scroll_snap_emits_both_axes_and_center() {
         assert!(all.contains("scroll-snap-align:center"), "{all}");
     }
 }
+
+/// list.js reads a row list's `gap` and a computed `height` from its options.
+#[test]
+fn a_row_lists_gap_is_a_list_option() {
+    let source = "component App\n  state h = 120\n  view\n    list virtualized=true display=\"flex\" height=(h + 12) overflow-x=\"scroll\" overflow-y=\"hidden\" estimated-item-width=80 gap=14\n      for x in [1, 2] key=x\n        text `${x}` width=80\n";
+    let js = crate::emit::emit(&contract::compile(source).unwrap(), false, false)
+        .unwrap()
+        .js;
+    assert!(js.contains("gap:14,"), "{js}");
+    assert!(js.contains("ph:[(s_0()+12)]"), "{js}");
+}

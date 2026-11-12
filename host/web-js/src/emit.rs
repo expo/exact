@@ -1051,6 +1051,16 @@ impl Em<'_> {
             self.out,
             "const {e}={h}({parent},\"{element}\",{class},{attrs_js},{text});"
         );
+        // The server renderer has no computed style. Lists read a hidden
+        // root's authored display here before omitting its wrapper's gap.
+        if row.bindings.iter().map(|b| plan.binding(b)).any(|b| {
+            b.kind == BindingKind::Style
+                && b.id == exact_kernel::StyleId::Display as u16
+                && style::literal(plan, plan.code(b.expr))
+                    .is_some_and(|v| v.as_str() == Some("none"))
+        }) {
+            let _ = write!(self.out, "{e}.style.setProperty(\"display\",\"none\");");
+        }
         if let Some(register) = self.presence_registration(i, !presence.is_empty()) {
             let register = self.uses.rt(register);
             let _ = write!(self.out, "{register}({e});");

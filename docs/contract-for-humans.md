@@ -450,11 +450,18 @@ empty state), and `appearance="none"` on the list keeps rows that are yours, a
 transcript or a feed of cards. A list laid out sideways is a carousel and gets
 none of it.
 
+Item estimates must be positive literals; computed or changing estimates are refused.
+
 A virtualized list has exactly one direct `for`, whose body has one flow root.
 A vertical list needs a real height bound (`height`, `max-height`, or growing
 `flex` in a bounded parent). A horizontal one needs a literal `display="flex"` and
-a literal positive `height`, takes `estimated-item-width`, and refuses a nonzero
-`gap` and `justify-content` other than `flex-start`. Padding along the list's
+a positive `height` in points (a literal or a computed number), takes
+`estimated-item-width` and a literal nonnegative `gap` between its cards (LLP 1070), and refuses
+`justify-content` other than `flex-start`. A vertical one is a block, where CSS
+lays out no gap: space its rows with a margin. A horizontal row root with
+`display="none"` takes no space or gap once visited; unvisited rows retain
+estimates. A visible zero-width card keeps its gap
+([details](reference.md#horizontal-collection-gaps)). Padding along the list's
 axis is room before the first row and after the last, as in CSS: a length or an
 `env()` inset, not a percentage. On iOS a list's pull-to-refresh spinner draws
 below its `padding-top`, so a header laid over that padding does not hide it. A

@@ -63,6 +63,7 @@ pub(crate) struct MeasurementToken {
 struct RowHeight {
     height: f64,
     generation: u64,
+    /// None until first measured; zero retains that history after keyed invalidation.
     measured_epoch: Option<u64>,
 }
 
@@ -113,6 +114,9 @@ pub(crate) struct SizeIndex {
     /// And before its first row: the range starts this far before the
     /// rows' start, so a short list's end can be there.
     leading: f64,
+    /// The list's main-axis `gap`, which each row's height counts after
+    /// it: the rows end that much before their heights' sum.
+    gap: f64,
     #[cfg(test)]
     rebuilds: usize,
     #[cfg(test)]
@@ -142,6 +146,7 @@ impl SizeIndex {
             next_generation: 0,
             trailing: 0.0,
             leading: 0.0,
+            gap: 0.0,
             #[cfg(test)]
             rebuilds: 0,
             #[cfg(test)]
@@ -340,8 +345,18 @@ impl SizeIndex {
         (end <= self.len()).then(|| self.tree.prefix(end))
     }
 
+    /// Where the rows end: their heights' sum, less the gap the last one
+    /// counts after it.
     pub(crate) fn total_height(&self) -> f64 {
-        self.tree.total()
+        if self.rows.is_empty() {
+            return self.tree.total();
+        }
+        (self.tree.total() - self.gap).max(0.0)
+    }
+
+    /// The list's `gap`, counted in each row's height.
+    pub(crate) fn set_gap(&mut self, gap: f64) {
+        self.gap = if gap.is_finite() { gap.max(0.0) } else { 0.0 };
     }
 
     /// Sufficient bound only: caller bounds every candidate leaf and padding by H.
@@ -360,6 +375,7 @@ impl SizeIndex {
     pub(crate) fn preview_heights(&self) -> HeightPreview<'_> {
         HeightPreview {
             tree: &self.tree,
+            gap: if self.rows.is_empty() { 0.0 } else { self.gap },
             sums: None,
         }
     }
@@ -430,6 +446,13 @@ impl SizeIndex {
             .is_some_and(|row| row.measured_epoch == Some(self.epoch))
     }
 
+    /// Whether this key has been measured, even before an invalidation (LLP 1070 H4).
+    pub(crate) fn has_measurement_at(&self, index: usize) -> bool {
+        self.rows
+            .get(index)
+            .is_some_and(|row| row.measured_epoch.is_some())
+    }
+
     /// Current measurements for a nonempty geometric band, in O(log N).
     pub(crate) fn range_measured(&self, range: Range<usize>) -> bool {
         !range.is_empty() && self.tree.min_epoch(range) >= self.epoch
@@ -450,7 +473,7 @@ impl SizeIndex {
         let generation = next_generation(self.next_generation)?;
         self.next_generation = generation;
         self.rows[i].generation = generation;
-        self.rows[i].measured_epoch = None;
+        self.rows[i].measured_epoch = self.rows[i].measured_epoch.map(|_| 0);
         self.tree.set_epoch(i, 0);
         Ok(MeasurementToken {
             epoch: self.epoch,
@@ -458,8 +481,26 @@ impl SizeIndex {
         })
     }
 
+    /// A revived zero is provisional again, not a remeasurement of its old box.
+    pub(crate) fn revive(&mut self, key: &str) -> Result<(), IndexError> {
+        if let Some(i) = self.position(key) {
+            self.set_measured_height(key, self.measurement_token(key).unwrap(), self.estimate)?;
+            self.rows[i].measured_epoch = None;
+            self.tree.set_epoch(i, 0);
+        }
+        Ok(())
+    }
+
+    /// The first and last participating slots; zero extents are transparent.
+    pub(crate) fn edges(&self) -> [Option<usize>; 2] {
+        [
+            self.tree.find(0.0, false),
+            self.tree.find(self.tree.total(), true),
+        ]
+    }
+
     /// Add `delta` over the rows in `range` whose heights are estimates, in
-    /// equal parts, none below zero: a restored position's items above it
+    /// equal parts, none below the gap: a restored position's items above it
     /// (LLP 1070 §4.2) keep the start they had. O(k log N).
     pub(crate) fn spread_estimates(
         &mut self,
@@ -471,14 +512,16 @@ impl SizeIndex {
         }
         let range = range.start.min(self.rows.len())..range.end.min(self.rows.len());
         let open: Vec<usize> = range
-            .filter(|&i| self.rows[i].measured_epoch != Some(self.epoch))
+            .filter(|&i| {
+                self.rows[i].height > 0.0 && self.rows[i].measured_epoch != Some(self.epoch)
+            })
             .collect();
         if open.is_empty() {
             return Ok(());
         }
         let part = delta / open.len() as f64;
         for i in open {
-            let height = (self.rows[i].height + part).max(0.0);
+            let height = (self.rows[i].height + part).max(self.gap);
             self.tree.set(i, height)?;
             self.rows[i].height = height;
         }
@@ -631,15 +674,25 @@ impl SizeIndex {
         } else {
             self.tree.find(offset, false)
         };
-        let mut within = row.map_or(0.0, |i| (offset - self.tree.prefix(i)).max(0.0));
-        if !follows_end && row.is_some_and(|i| self.key(i) == excluded) {
-            let next = self.tree.prefix(row.unwrap() + 1);
-            row = self
-                .tree
-                .find(next, false)
-                .filter(|&i| self.tree.prefix(i) < offset + viewport);
-            within = row.map_or(offset, |i| offset - self.tree.prefix(i));
+        if !follows_end {
+            while let Some(i) = row {
+                let start = self.tree.prefix(i);
+                if start >= offset + viewport {
+                    row = None;
+                    break;
+                }
+                let size = (self.rows[i].height - self.gap).max(0.0);
+                let ended = self.gap > 0.0 && (size == 0.0 || start + size <= offset);
+                if !ended && self.key(i) != excluded {
+                    break;
+                }
+                row = self
+                    .tree
+                    .find(self.tree.prefix(i + 1), false)
+                    .filter(|&next| next > i);
+            }
         }
+        let within = row.map_or(0.0, |i| offset - self.tree.prefix(i));
         Ok(Anchor {
             order: Rc::clone(&self.order),
             row,
@@ -804,6 +857,7 @@ struct SumTree {
 
 pub(crate) struct HeightPreview<'a> {
     tree: &'a SumTree,
+    gap: f64,
     sums: Option<HashMap<usize, f64>>,
 }
 
@@ -836,11 +890,14 @@ impl HeightPreview<'_> {
     }
 
     pub(crate) fn total_height(&self) -> f64 {
-        self.sums
+        (self
+            .sums
             .as_ref()
             .and_then(|s| s.get(&1))
             .copied()
             .unwrap_or(self.tree.total())
+            - self.gap)
+            .max(0.0)
     }
 }
 

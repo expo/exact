@@ -180,27 +180,28 @@ extension CollectionHost {
     /// document's coordinates and across its full cross size. Padding
     /// before the first item or after the last counts as covered. Nil when
     /// no run reaches the port's start: a gap shows there. A row list's run
-    /// is along x (LLP 1070 §5.5).
+    /// is along x; its authored item gaps count as covered (LLP 1070 H2).
     func preparedCover(_ id: UInt32) -> NSRect? {
         guard let entry = entries[id], let node = presenter?.views[id], let scroll = node.scroll,
               let document = scroll.documentView else { return nil }
         let horizontal = entry.snapshot.horizontal
+        let gap = horizontal ? node.number("column_gap") : 0
         let lo = { (r: NSRect) in horizontal ? r.minX : r.minY }, hi = { (r: NSRect) in horizontal ? r.maxX : r.maxY }
         let port = scroll.contentView.bounds, whole = document.bounds
-        let frames = entry.snapshot.rows.compactMap { row -> (index: Int, frame: NSRect)? in
+        let frames = entry.snapshot.rows.compactMap { row -> (row: CollectionSnapshot.Row, frame: NSRect)? in
             guard let view = presenter?.views[row.view], view.isDescendant(of: document) else { return nil }
-            return (row.index, view.superview === document ? view.frame : view.convert(view.bounds, to: document))
+            return (row, view.superview === document ? view.frame : view.convert(view.bounds, to: document))
         }.sorted { lo($0.frame) < lo($1.frame) }
         var start = 0
         while start < frames.count {
             var end = start
             var reached = hi(frames[start].frame)
-            while end + 1 < frames.count, lo(frames[end + 1].frame) <= reached + 0.5 {
+            while end + 1 < frames.count, lo(frames[end + 1].frame) <= reached + gap + 0.5 {
                 end += 1
                 reached = max(reached, hi(frames[end].frame))
             }
-            let first = frames[start].index == 0 ? lo(whole) : lo(frames[start].frame)
-            let last = frames[end].index == entry.snapshot.count - 1 ? hi(whole) : reached
+            let first = entry.snapshot.startsContent(frames[start].row) ? lo(whole) : lo(frames[start].frame) - gap
+            let last = entry.snapshot.endsContent(frames[end].row) ? hi(whole) : reached + gap
             if first <= lo(port) + 0.5 && last > lo(port) {
                 return horizontal
                     ? NSRect(x: first, y: whole.minY, width: last - first, height: whole.height)
@@ -227,7 +228,8 @@ extension CollectionHost {
         let horizontal = entry.snapshot.horizontal
         let sizes = entry.snapshot.rows.compactMap { presenter?.views[$0.view].map { horizontal ? $0.frame.width : $0.frame.height } }
         guard !sizes.isEmpty else { return 0 }
-        let mean = sizes.reduce(0, +) / CGFloat(sizes.count)
+        let gap = horizontal ? presenter?.views[id]?.number("column_gap") ?? 0 : 0
+        let mean = sizes.reduce(0, +) / CGFloat(sizes.count) + gap
         guard mean > 0 else { return 0 }
         // Travel ends at the document's edges; the cover reaches them at the ends.
         let port = scroll.contentView.bounds, extent = document.bounds

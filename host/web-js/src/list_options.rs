@@ -51,7 +51,8 @@ impl Em<'_> {
     /// (`Collection::create`), evaluated there: its axis, its literal sizes,
     /// its row estimate, `scrollFollowEnd` (read again at each update),
     /// `scroll-start`, `scroll-restoration`, `reach-margin`, `keep-mounted`
-    /// (read again at each update), its edges' handlers, and its plan site.
+    /// (read again at each update), its `column-gap`, its edges' handlers,
+    /// and its plan site.
     pub(super) fn list_options(
         &mut self,
         i: u32,
@@ -70,6 +71,7 @@ impl Em<'_> {
         let mut at_end = "!1".to_string();
         let mut reach = "void 0".to_string();
         let mut keep = "void 0".to_string();
+        let mut gap = "0".to_string();
         let bindings = plan.node(NodesId(i)).bindings;
         for b in bindings.iter().map(|b| plan.binding(b)) {
             let value = match style::literal(plan, plan.code(b.expr)) {
@@ -88,6 +90,7 @@ impl Em<'_> {
                 {
                     pw.push(value)
                 }
+                BindingKind::Style if b.id == StyleId::ColumnGap as u16 => gap = value,
                 BindingKind::Style if b.id == StyleId::Display as u16 => {
                     x = format!("({value})===\"flex\"")
                 }
@@ -117,7 +120,7 @@ impl Em<'_> {
             }
         }
         Ok(format!(
-            "{{x:{x},ph:[{}],pw:[{}],est:{est},init:{init},atEnd:{at_end},follow:{follow},manual:{manual},reach:{reach},keep:{keep},start:{},end:{},site:\"{i}\"}}",
+            "{{x:{x},ph:[{}],pw:[{}],est:{est},gap:{gap},init:{init},atEnd:{at_end},follow:{follow},manual:{manual},reach:{reach},keep:{keep},start:{},end:{},site:\"{i}\"}}",
             ph.join(","),
             pw.join(","),
             edges[0],

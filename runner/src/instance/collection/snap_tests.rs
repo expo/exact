@@ -30,58 +30,62 @@ fn query_bounded(h: &Harness, proposed: f64, distance: f64) -> (Option<f64>, usi
 
 #[test]
 fn snap_uses_each_rows_alignment_and_index_size_beyond_the_mounted_window() {
-    let source = r#"component App
+    for gap in [0.0, 14.0] {
+        let source = format!(
+            r#"component App
   view
-    list virtualized=true display="flex" width=300 height=100 estimated-item-width=150
+    list virtualized=true display="flex" width=300 height=100 gap={gap} estimated-item-width=150
       for n in range(400) key=n
         view width=(100 + n % 5 * 25) height=100 scroll-snap-align=(n % 3 == 0 ? "none" : n % 3 == 1 ? "start" : "end")
-"#;
-    let mut h = Harness::from_parts(contract::compile(source).unwrap(), vec![]);
-    let opening = h.snapshot();
-    assert!(opening.rows.iter().all(|r| r.index < 10));
-    // Supply the measurements a traversal would leave in the index; they
-    // remain available after their native views have retired.
-    let Child::Node(root) = &mut h.tree.children[0] else {
-        panic!("list root")
-    };
-    let c = root.collection_mut().unwrap();
-    for p in 0..400 {
-        let token = c.index.measurement_token_at(p).unwrap();
-        c.index
-            .set_measured_height_at(p, token, (100 + p % 5 * 25) as f64)
-            .unwrap();
-    }
-    let before = h.snapshot();
-    let mut start = 0.0;
-    let mut positions = Vec::new();
-    for p in 0..400 {
-        let size = (100 + p % 5 * 25) as f64;
-        if p % 3 != 0 && !before.rows.iter().any(|r| r.index == p) {
-            positions.push(
-                (if p % 3 == 1 {
-                    start
-                } else {
-                    start + size - 300.0
-                })
-                .clamp(0.0, before.total_extent - 300.0),
-            );
+"#
+        );
+        let mut h = Harness::from_parts(contract::compile(&source).unwrap(), vec![]);
+        let opening = h.snapshot();
+        assert!(opening.rows.iter().all(|r| r.index < 10));
+        // Supply the measurements a traversal would leave in the index; they
+        // remain available after their native views have retired.
+        let Child::Node(root) = &mut h.tree.children[0] else {
+            panic!("list root")
+        };
+        let c = root.collection_mut().unwrap();
+        for p in 0..400 {
+            let token = c.index.measurement_token_at(p).unwrap();
+            c.index
+                .set_measured_height_at(p, token, (100 + p % 5 * 25) as f64 + gap)
+                .unwrap();
         }
-        start += size;
+        let before = h.snapshot();
+        let mut start = 0.0;
+        let mut positions = Vec::new();
+        for p in 0..400 {
+            let size = (100 + p % 5 * 25) as f64;
+            if p % 3 != 0 && !before.rows.iter().any(|r| r.index == p) {
+                positions.push(
+                    (if p % 3 == 1 {
+                        start
+                    } else {
+                        start + size - 300.0
+                    })
+                    .clamp(0.0, before.total_extent - 300.0),
+                );
+            }
+            start += size + gap;
+        }
+        for proposed in [1380.0, 30020.0, 59990.0] {
+            let expected = positions.iter().copied().min_by(|a, b| {
+                (a - proposed)
+                    .abs()
+                    .total_cmp(&(b - proposed).abs())
+                    .then(a.total_cmp(b))
+            });
+            assert_eq!(query(&h, proposed), expected, "projection {proposed}");
+        }
+        assert_eq!(
+            h.snapshot(),
+            before,
+            "a snap read changes no collection state"
+        );
     }
-    for proposed in [0.0, 160.0, 1380.0, 30020.0, 59990.0] {
-        let expected = positions.iter().copied().min_by(|a, b| {
-            (a - proposed)
-                .abs()
-                .total_cmp(&(b - proposed).abs())
-                .then(a.total_cmp(b))
-        });
-        assert_eq!(query(&h, proposed), expected, "projection {proposed}");
-    }
-    assert_eq!(
-        h.snapshot(),
-        before,
-        "a snap read changes no collection state"
-    );
 }
 
 #[test]
@@ -374,4 +378,20 @@ fn snap_vertical_and_center_use_the_axis_insets_and_margins() {
             );
         }
     }
+}
+
+#[test]
+fn a_hidden_unmounted_root_is_not_a_snap_target() {
+    let source = r#"component App
+  state shown = false
+  view
+    list virtualized=true display="flex" width=300 height=100 gap=14 estimated-item-width=100
+      for n in range(1000) key=n
+        view width=100 height=100 display=(n == 80 and not shown ? "none" : "block") scroll-snap-align=(n == 80 ? "start" : "none")
+"#;
+    let mut h = Harness::from_parts(contract::compile(source).unwrap(), vec![Value::Bool(false)]);
+    assert_eq!(query(&h, 9000.0), None);
+    h.slots[0] = Value::Bool(true);
+    h.update().unwrap();
+    assert_eq!(query(&h, 9000.0), Some(9120.0));
 }

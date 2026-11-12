@@ -44,11 +44,14 @@ impl Collection {
         mounted: &std::collections::BTreeMap<String, Mounted>,
     ) -> Vec<std::ops::Range<usize>> {
         let mut fresh: Vec<(f64, usize)> = visible
-            .filter(|&p| !mounted.contains_key(self.index.key(p).unwrap()))
+            .filter(|&p| {
+                !mounted.contains_key(self.index.key(p).unwrap())
+                    && self.index.height(p).unwrap() > self.gap
+            })
             .map(|p| {
                 let start = self.index.prefix(p).unwrap();
                 (
-                    (start + self.index.height(p).unwrap() / 2.0 - middle).abs(),
+                    (start + (self.index.height(p).unwrap() - self.gap) / 2.0 - middle).abs(),
                     p,
                 )
             })
@@ -69,8 +72,8 @@ impl Collection {
             return false;
         };
         let start = self.index.prefix(position).unwrap_or(0.0);
-        let size = self.index.height(position).unwrap_or(0.0);
-        start < g.offset + g.port_main && start + size > g.offset
+        let size = (self.index.height(position).unwrap_or(0.0) - self.gap).max(0.0);
+        size > 0.0 && start < g.offset + g.port_main && start + size > g.offset
     }
 
     /// A row just built or bound to another item: it waits when it is out
@@ -109,8 +112,8 @@ impl Collection {
             }
             let position = self.mounted[i].position;
             let start = self.index.prefix(position).unwrap_or(0.0);
-            let size = self.index.height(position).unwrap_or(0.0);
-            if start < offset + port && start + size > offset {
+            let size = (self.index.height(position).unwrap_or(0.0) - self.gap).max(0.0);
+            if size > 0.0 && start < offset + port && start + size > offset {
                 self.mounted[i].awaiting = false;
                 u.shown.revealed.push(self.mounted[i].wrapper);
             } else {

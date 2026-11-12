@@ -144,7 +144,7 @@ impl Lowerer<'_> {
             return Ok(());
         }
         let row = row_list(attrs);
-        self.collection_axis(attrs, row, span)?;
+        self.collection_axis(attrs, row, span, scope)?;
         // Computed bounds are checked by the bake's measured-layout lint.
         // Merely spelling `auto` or a non-growing flex is not a bound.
         if !row
@@ -279,9 +279,15 @@ impl Lowerer<'_> {
     }
 
     /// The rules that make a list's axis CSS's and keep its index's starts
-    /// prefix sums (LLP 1070 H2, §8): a row list is a literal-height flex row,
+    /// prefix sums (LLP 1070 H2, §8): a row list is a definite-height flex row,
     /// left to right, that neither wraps, reverses nor spreads its items.
-    fn collection_axis(&self, attrs: &[Attr], row: bool, span: Span) -> Result<(), LowerError> {
+    fn collection_axis(
+        &self,
+        attrs: &[Attr],
+        row: bool,
+        span: Span,
+        scope: &Scope,
+    ) -> Result<(), LowerError> {
         if let Some(display) = literal(attrs, "display") {
             if !matches!(string(display), Some("block" | "flex")) {
                 return err("lower-collection-flow", "a virtualized list's `display` is a literal `block` (it scrolls vertically) or `flex` (a row that scrolls horizontally)", display.span);
@@ -319,10 +325,18 @@ impl Lowerer<'_> {
         if !row {
             return Ok(());
         }
-        if !literal(attrs, "height")
-            .is_some_and(|a| numeric_literal(&a.value).is_some_and(|n| n > 0.0))
-        {
-            return err("lower-collection-cross", "a virtualized row list needs a literal `height`: an auto height would be its tallest mounted item, which changes as items mount", span);
+        // A computed number is points, as a literal is; a computed string
+        // could be `auto`.
+        let definite = |a: &Attr| match (numeric_literal(&a.value), &a.value) {
+            (Some(n), _) => n > 0.0,
+            (None, Expr::Str(..)) => false,
+            (None, value) => matches!(
+                contract_types::infer(value, scope, &self.types.shapes),
+                Ok(Ty::Number)
+            ),
+        };
+        if !literal(attrs, "height").is_some_and(definite) {
+            return err("lower-collection-cross", "a virtualized row list needs a `height` in points, a literal or a computed number: an auto height would be its tallest mounted item, which changes as items mount", span);
         }
         for a in attrs {
             let refusal = match a.name.as_str() {
@@ -478,8 +492,11 @@ impl Lowerer<'_> {
                     };
                     matches!(&a.value, Expr::Str(s, _) if if a.name == main { s == "scroll" || s == "auto" } else { s == "hidden" })
                 }
+                // A row list's gap is CSS's between its items, which the
+                // index counts after each row; a vertical list is a block,
+                // where CSS lays out no gap.
                 "gap" | "row-gap" | "column-gap" if container => {
-                    numeric_literal(&a.value) == Some(0.0)
+                    numeric_literal(&a.value).is_some_and(|v| v == 0.0 || horizontal && v > 0.0)
                 }
                 "flex-direction" | "flex-wrap" | "grid-template-rows" | "grid-template-columns"
                     if container =>
@@ -494,6 +511,18 @@ impl Lowerer<'_> {
             {
                 // @ref LLP 1083 D5 — each row is laid out in a wrapper of its own.
                 return err("lower-collection-flow", "a windowed row's root would stick only inside its own row: make a section one row, and its header `position: sticky` inside it", a.span);
+            }
+            if !allowed && matches!(a.name.as_str(), "gap" | "row-gap" | "column-gap") {
+                let reason = if horizontal {
+                    "a virtualized row list's gap must be a literal nonnegative number (LLP 1070); changing gaps are not supported"
+                } else {
+                    "a vertical virtualized list is a block, where CSS lays out no gap: space rows with a margin on the row root"
+                };
+                return err(
+                    "lower-collection-flow",
+                    format!("`{}`: {reason}", a.name),
+                    a.span,
+                );
             }
             if !allowed {
                 return err("lower-collection-flow", format!("`{}` is not supported on this virtual collection flow root; absolute/overlapping rows and alternate container layouts are not windowed", a.name), a.span);

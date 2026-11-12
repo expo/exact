@@ -63,10 +63,14 @@ fn wrapper_style(
     plan: &Plan,
     axis: ListAxis,
     reorderable: bool,
+    hidden: bool,
 ) -> Result<StyleProps, InstanceError> {
     let mut style = patch(plan, &wrapper_rows(axis))?;
     if reorderable {
         style.apply_patch(&patch(plan, &[(REORDERABLE.0, Value::str(REORDERABLE.1))])?);
+    }
+    if hidden {
+        style.apply_patch(&patch(plan, &[("display", Value::str("none"))])?);
     }
     Ok(style)
 }
@@ -181,14 +185,68 @@ fn spacer(u: &mut Update<'_>, axis: ListAxis, size: f64) -> Result<ViewId, Insta
     Ok(view)
 }
 impl Collection {
+    /// Publish a row's position and measurement epoch, and mount it.
+    pub(super) fn settle_mounted(
+        &mut self,
+        u: &mut Update<'_>,
+        mut mounted: Mounted,
+        text: &str,
+    ) -> Result<(), InstanceError> {
+        views::validate_row(u.env.plan, u.sites, &mounted.row.roots)?;
+        let hidden = self.axis == ListAxis::Horizontal
+            && matches!(&mounted.row.roots[..], [Child::Node(root)] if
+                root.bound_style(u.env.plan, u.sites, StyleId::Display)
+                    .as_ref().and_then(Value::as_str) == Some("none"));
+        if hidden != mounted.display_none {
+            style(
+                u,
+                mounted.wrapper,
+                &[("display", Value::str(if hidden { "none" } else { "flex" }))],
+            )?;
+            mounted.display_none = hidden;
+        }
+        let position = mounted.position;
+        let count = self.index.len();
+        if mounted.published != (position, count) {
+            views::publish_position(u, mounted.wrapper, position, count);
+            mounted.published = (position, count);
+        }
+        debug_assert_eq!(self.index.key(position), Some(text));
+        let token = self.index.measurement_token_at(position).unwrap();
+        if token != mounted.token {
+            mounted.token = token;
+            mounted.epoch = advance(&mut self.next_epoch)?;
+        }
+        // A display:none root has zero extent and no gap. It is not a snap,
+        // glimpse or anchor target; edges pass through it to visible rows.
+        // Invalidation restores its estimate until its display is read again.
+        if hidden {
+            self.zero_heights.insert(text.to_owned());
+            let anchor = if !self.index.has_measurement_at(position) {
+                self.anchor()?
+            } else {
+                None
+            };
+            self.index
+                .set_measured_height_at(position, token, 0.0)
+                .map_err(index_error)?;
+            self.restore_unless_unknown(anchor)?;
+        } else if self.index.height(position) == Some(0.0) && !self.index.is_measured_at(position) {
+            self.index.revive(text).map_err(index_error)?;
+        }
+        self.mounted.push(mounted);
+        Ok(())
+    }
     pub(super) fn emit_children(&mut self, u: &mut Update<'_>) -> Result<(), InstanceError> {
         let mut children = Vec::with_capacity(self.mounted.len() + 4);
         let mut cursor = 0;
         let mut spacer_count = 0;
         for i in 0..=self.mounted.len() {
             let position = self.mounted.get(i).map_or(self.index.len(), |r| r.position);
-            let gap = self.index.prefix(position).unwrap() - self.index.prefix(cursor).unwrap();
-            if gap > 0.0 {
+            let skipped = self.index.prefix(position).unwrap() - self.index.prefix(cursor).unwrap();
+            if skipped > 0.0 {
+                // The list's own gap is laid out on each side of the spacer.
+                let gap = skipped - self.gap;
                 if let Some((view, old)) = self.spacers.get_mut(spacer_count) {
                     if *old != gap {
                         style(u, *view, &[(main_size(self.axis), Value::Number(gap))])?;
@@ -266,7 +324,7 @@ impl Collection {
             }
             out.push(ListChild::Row(
                 *view,
-                wrapper_style(plan, self.axis, self.reorderable)?,
+                wrapper_style(plan, self.axis, self.reorderable, row.display_none)?,
                 props,
                 &row.row.roots,
             ));

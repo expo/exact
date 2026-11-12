@@ -346,3 +346,50 @@ component Pages
     expect([html('detail').includes('alt="1 &gt; 0"'), html('detail').includes('="1 > 0"')]).toEqual([true, false]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 180000);
+
+test('JS-rendered hidden list roots remove their wrappers before hydration', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/hidden-list-render-'));
+  let server, page;
+  try {
+    const dist = resolve(dir, 'dist');
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name:'Hidden List', app:{id:'test.hidden-list', name:'Hidden List'}, host:{web:{}} }));
+    writeFileSync(resolve(dir, 'app.contract'), `component App
+  state hidden = true
+  action show
+    hidden = false
+  view
+    column
+      button press=show testId="show"
+        text "show"
+      list virtualized=true display="flex" width=10 height=100 gap=14 estimated-item-width=100 testId="literal"
+        for n in range(3) key=n
+          view width=100 height=100 display="none"
+      list virtualized=true display="flex" width=10 height=100 gap=14 estimated-item-width=100 testId="computed"
+        for n in range(3) key=n
+          view width=100 height=100 display=(hidden ? "none" : "block")
+`);
+    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', dir, '--out', dist, '--render', 'js'], {cwd:root, stdout:'pipe', stderr:'pipe'});
+    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
+    expect({status, error:status ? stdout + stderr : ''}).toEqual({status:0, error:''});
+    const render = renderer(dist); render.ahead = false;
+    writeFileSync(resolve(dist, 'index.html'), (await render('/')).html);
+    server = Bun.serve({hostname:'127.0.0.1', port:0, fetch:req => new Response(Bun.file(resolve(dist, new URL(req.url).pathname.slice(1) || 'index.html')))});
+    const browser = await suiteBrowser();
+    page = await browser.newPage();
+    await page.route('**/*.js', route => route.abort());
+    await page.goto(server.url.href);
+    const read = () => ['literal','computed'].map(id => {
+      const el = document.querySelector(`[data-testid="${id}"]`);
+      return {width:el.scrollWidth, wrappers:[...el.querySelectorAll('[role="listitem"]')].map(e => e.style.display)};
+    });
+    expect(await page.evaluate(read)).toEqual([{width:10, wrappers:['none','none','none']}, {width:10, wrappers:['none','none','none']}]);
+    await page.unroute('**/*.js');
+    await page.reload();
+    await page.waitForFunction(() => !!globalThis.exact?.lists);
+    await page.evaluate(async () => { await exact.lists.pending(); await exact.lists.settle(); });
+    await page.getByTestId('show').click();
+    await page.evaluate(async () => { await exact.lists.settle(); });
+    expect(await page.getByTestId('computed').evaluate(el => el.scrollWidth)).toBe(328);
+  } finally { await page?.close(); server?.stop(true); rmSync(dir, {recursive:true, force:true}); }
+}, 60_000);

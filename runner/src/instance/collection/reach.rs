@@ -90,14 +90,15 @@ impl Collection {
                         .index
                         .window_led(g.offset, g.port_main, band, [None, None])
                         .map_err(index_error)?;
-                    Ok([0, self.index.len() - 1]
-                        .map(|i| reach.segments.iter().any(|range| range.contains(&i))))
+                    Ok(self.index.edges().map(|i| {
+                        i.is_some_and(|i| reach.segments.iter().any(|range| range.contains(&i)))
+                    }))
                 };
                 reached = within(self.reach.band(g.port_main, velocity))?;
                 if self.edge_armed != [true; 2] && self.index.range_measured(window.overscan) {
                     let at_rest = within(self.reach.band(g.port_main, 0.0))?;
                     for i in 0..2 {
-                        let row = self.index.key([0, self.index.len() - 1][i]);
+                        let row = self.index.edges()[i].and_then(|p| self.index.key(p));
                         let paged = self.edge_fired[i].as_deref() != row;
                         self.edge_armed[i] |= !reached[i] || (paged && !at_rest[i]);
                     }
@@ -109,8 +110,9 @@ impl Collection {
     /// An edge fired: disarmed until it re-arms ([`Collection::geometric_edges`]).
     pub(super) fn disarm_edge(&mut self, i: usize) {
         self.edge_armed[i] = false;
-        let row = [0, self.index.len().saturating_sub(1)][i];
-        self.edge_fired[i] = self.index.shared_key(row).cloned();
+        self.edge_fired[i] = self.index.edges()[i]
+            .and_then(|p| self.index.shared_key(p))
+            .cloned();
     }
     /// The edge a report's geometry reached, if armed and handled.
     pub(super) fn edge_event(

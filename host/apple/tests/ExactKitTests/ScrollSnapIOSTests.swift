@@ -5,6 +5,17 @@ import XCTest
 
 /// LLP 1008: nearest projected rest on both axes; oversized areas remain freely scrollable.
 final class ScrollSnapIOSTests: XCTestCase {
+    func testHiddenBoundaryCardsKeepPaddingCovered() throws {
+        let session = ExactApp.shared.makeSession(label: "hidden-boundary-cover")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: CGSize(width: 300, height: 800)).error)
+        let p = session.presenter
+        let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "hidden-boundaries" })
+        let snapshot = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
+        XCTAssertEqual(snapshot.rows.map(\.index), [1, 2])
+        XCTAssertTrue(p.collections.covers(node.id), "hidden boundary cards leave the padding covered")
+    }
+
     func testVirtualizedFlingReachesBeyondTheMountedWindow() throws {
         let session = ExactApp.shared.makeSession(label: "virtual-snap")
         defer { session.destroy() }
@@ -21,6 +32,32 @@ final class ScrollSnapIOSTests: XCTestCase {
             node.scrollViewWillEndDragging(scroll, withVelocity: CGPoint(x: 5, y: 0), targetContentOffset: &target)
             XCTAssertEqual(target.x, (projection / 150).rounded() * 150, accuracy: 0.01)
             XCTAssertEqual(target.x, rest(eager, eagerScroll, from: projection), "virtualization keeps the eager strip's target")
+        }
+    }
+
+    func testGappedStripUsesCardEdgesForMountedAndDistantSnaps() throws {
+        let session = ExactApp.shared.makeSession(label: "gapped-snap")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: CGSize(width: 300, height: 600)).error)
+        let p = session.presenter
+        let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "gapped" })
+        let scroll = try XCTUnwrap(node.scroll)
+        let snapshot = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
+        XCTAssertTrue(p.collections.covers(node.id), "authored gaps are covered")
+        XCTAssertEqual(p.collections.rowsToCover(node.id, ahead: 10), 0)
+        XCTAssertEqual(snapshot.extent, 163986, accuracy: 0.01)
+        XCTAssertEqual(scroll.contentSize.width, 163986, accuracy: 0.01)
+        let (eager, eagerScroll) = try strip((0..<1000).map { ("end", Double($0) * 164, 150) })
+        eagerScroll.contentSize.width = 163986
+        for projection: CGFloat in [10, 1380, 30020, 163686] {
+            XCTAssertEqual(rest(node, scroll, from: projection), rest(eager, eagerScroll, from: projection), accuracy: 0.01)
+        }
+        scroll.contentOffset.x = 3000
+        p.collections.flush()
+        let moved = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
+        XCTAssertGreaterThan(moved.rows.first?.index ?? 0, 0)
+        for row in moved.rows {
+            XCTAssertEqual(try XCTUnwrap(row.size), 150, accuracy: 0.01)
         }
     }
 

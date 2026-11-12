@@ -1671,9 +1671,17 @@ A percentage bounds it only against a definite containing-block height (a plain
 `column` is content-sized), and the bake refuses (`bake-scroll-unbounded`) only a
 list with no bound at all, in its first 390×844 frame, so look at the list in each
 layout it takes. It takes `estimated-item-height`. A horizontal one needs a
-literal `display="flex"` and a literal positive `height`, takes
-`estimated-item-width`, and refuses wrapping, reversed or right-to-left flow, a
-nonzero `gap`, `justify-content` other than `flex-start`, and `reorderdrop`.
+literal `display="flex"` and a positive `height` in points, a literal or a
+computed number (`height=(cardW / 0.68)`), takes `estimated-item-width` and a
+literal nonnegative `gap` (LLP 1070: between cards, with none after the last),
+and refuses wrapping, reversed or right-to-left flow, a computed `gap`,
+`justify-content` other than `flex-start`, and `reorderdrop`. A vertical list
+is a block, where CSS lays out no gap: it refuses a nonzero one, and its rows
+take a `margin-bottom` on their root instead.
+A horizontal row root with `display="none"` takes no space or gap once visited;
+unvisited rows retain estimates. A visible zero-width card keeps its gap ([details](reference.md#horizontal-collection-gaps)).
+Item estimates remain positive literals; computed or changing estimates are refused.
+A numeric height update lays out the strip again and keeps its scroll position.
 Main-axis padding (`padding-top`/`-bottom`, a row list's `-left`/`-right`) is
 CSS's room before the first row and after the last, inside the scroll content:
 room under a header laid over the list, or over a tab bar

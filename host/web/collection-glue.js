@@ -165,9 +165,10 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
   function rowsToCover(s, rects, g, ahead) {
     if (!ahead || !rects.length) return 0;
     const A = AXES[s.axis], count = s.snapshot.count;
+    const gap = s.axis === "x" ? number(getComputedStyle(s.el).columnGap) : 0;
     const rows = s.rows.map((row, i) => ({ index: row.index, top: rects[i][A.start], bottom: rects[i][A.end] }))
       .sort((a, b) => a.top - b.top);
-    const mean = rows.reduce((n, r) => n + r.bottom - r.top, 0) / rows.length;
+    const mean = rows.reduce((n, r) => n + r.bottom - r.top, 0) / rows.length + gap;
     if (!(mean > 0)) return 0;
     const top = viewport(s.port, A).start, bottom = top + g.portMain;
     let shortfall;
@@ -175,12 +176,12 @@ export function collectionController({ root, views, report, settled=()=>{}, agen
     // unbuilt rows is not in it (CollectionIOS.swift `rowsToCover`).
     if (ahead > 0) {
       let reached = top, last = null;
-      for (const r of rows) if (r.top <= reached + 0.5 && r.bottom >= reached) { reached = r.bottom; last = r.index; }
+      for (const r of rows) if (r.top <= reached + gap + 0.5 && r.bottom + gap >= reached) { reached = r.bottom; last = r.index; }
       if (last === count - 1) return 0;
       shortfall = bottom + ahead - reached;
     } else {
       let reached = bottom, first = null;
-      for (const r of rows.toReversed()) if (r.bottom >= reached - 0.5 && r.top <= reached) { reached = r.top; first = r.index; }
+      for (const r of rows.toReversed()) if (r.bottom >= reached - gap - 0.5 && r.top - gap <= reached) { reached = r.top; first = r.index; }
       if (first === 0) return 0;
       shortfall = reached - (top + ahead);
     }

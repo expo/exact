@@ -7,6 +7,33 @@ import XCTest
 /// what shows when a gap shows, defers the rest to the pump, and responsive
 /// scrolling may carry only the rows it has built (D5).
 final class CollectionFillMacTests: XCTestCase {
+    func testHiddenBoundaryCardsKeepPaddingCovered() throws {
+        let session = ExactApp.shared.makeSession(label: "hidden-boundary-cover")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: CGSize(width: 300, height: 800)).error)
+        let p = session.presenter
+        let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "hidden-boundaries" })
+        let snapshot = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
+        XCTAssertEqual(snapshot.rows.map(\.index), [1, 2])
+        XCTAssertTrue(p.collections.covers(node.id), "hidden boundary cards leave the padding covered")
+        let cover = try XCTUnwrap(p.collections.preparedCover(node.id))
+        XCTAssertEqual(cover.minX, 0, accuracy: 0.01)
+        XCTAssertGreaterThanOrEqual(cover.maxX, 294)
+    }
+
+    func testAuthoredHorizontalGapsStayInsideThePreparedCover() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "gapped-cover")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: CGSize(width: 300, height: 600)).error)
+        let p = session.presenter
+        let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "gapped" })
+        XCTAssertTrue(p.collections.covers(node.id))
+        XCTAssertEqual(p.collections.rowsToCover(node.id, ahead: 10), 0)
+        let cover = try XCTUnwrap(p.collections.preparedCover(node.id))
+        XCTAssertGreaterThan(cover.width, 300)
+    }
+
     private func batch(_ ops: [[String: Any]]) -> Batch {
         batchFixture(ops: ops, timers: false, motion: false, clock: nil, error: nil)
     }

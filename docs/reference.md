@@ -3798,12 +3798,29 @@ or select `--app markdown-stress` / `completion-storm` (with its fixture running
 It records raw command acknowledgments and executable identity; AppKit window
 resizing and Linux headless presenter resizing do not measure physical refresh.
 
+### Horizontal collection gaps
+
+A horizontal `list virtualized=true display="flex"` accepts a literal
+nonnegative `gap` or `column-gap` and a numeric `height` expression (LLP 1070).
+The gap separates row wrappers; there is none after the last wrapper.
+`row-gap` does not space cards along the horizontal axis. Item estimates
+remain positive literals.
+
+When the window visits a row whose root has `display="none"`, the index records
+zero extent and no gap. Hidden rows are not snap, glimpse or anchor targets;
+edge events use the first and last participating rows. A visible zero-width
+card keeps its wrapper and gap. Unvisited rows retain their estimates. If
+collapsing rows brings more estimates into the window, bounded follow-up
+reports continue the walk. Content or cross-size invalidation restores zero
+rows to their estimates, including off-window rows; visiting a still-hidden
+root collapses it again.
+
 ### Intersection visibility
 
 `reachstart` and `reachend` belong only to `list virtualized=true` with one
 direct `for` (LLP 1010). Only a non-empty collection has edges: its geometric
-window reaches the first or last supplied row. An empty collection fires neither
-event. A plain list lays out all its children and has no collection window;
+window reaches the first or last participating row, skipping hidden roots.
+An empty collection or one whose rows are all known hidden fires neither event. A plain list lays out all its children and has no collection window;
 the Contract compiler refuses either handler there, on every target.
 
 A row that is not an item, such as a line saying that older messages are loading

@@ -353,3 +353,36 @@ component App
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn horizontal_gaps_cross_the_web_feedback_abi_as_card_sizes_and_indexed_starts() {
+    exact_web::link(exact_web_capabilities::ALL);
+    let source = r#"component App
+  view
+    list virtualized=true display="flex" width=320 height=(60 * 2) gap=14 estimated-item-width=100
+      for n in range(1000) key=n
+        view width=100 height=100
+"#;
+    let bytes = contract::compile(source).unwrap().encode();
+    let (mut host, _) = Host::boot(&bytes, NoData, Default::default(), "/").unwrap();
+    for _ in 0..3 {
+        let c = host.runner().collections().remove(0);
+        let mut feedback = facts(&c);
+        feedback.scroll_sequence = c.scroll_sequence + 1;
+        feedback.port_main = 320.0;
+        feedback.port_cross = 120.0;
+        feedback.cross = 120.0;
+        for row in &mut feedback.measurements {
+            row.size = 100.0;
+        }
+        let batch = host.collection_feedback(&feedback.encode().unwrap());
+        assert!(batch.contains("\"error\":null"), "{batch}");
+        let after = host.runner().collections().remove(0);
+        assert_eq!(after.total_extent, 113986.0);
+        assert!(after
+            .rows
+            .iter()
+            .all(|row| row.start == row.index as f64 * 114.0 && row.size == 100.0));
+        assert!(after.rows.iter().any(|row| row.index > 20));
+    }
+}

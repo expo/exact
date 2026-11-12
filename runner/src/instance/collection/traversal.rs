@@ -114,13 +114,17 @@ impl Tree {
         let half = 0.5 / f64::from(kernel.display_scale());
         let unit = |v: f64| (v * 64.0).round() / 64.0;
         let mut position = c.index.row_at(offset.max(0.0)).ok()??;
-        // Past each row drawn before the port: `row_at` passes rows of no
-        // height, and this, rows too short to reach it.
-        while let Some(end) = c.index.prefix(position + 1) {
-            match c.index.row_at(end).ok().flatten() {
-                Some(next) if next > position && unit(end) - offset < half => position = next,
-                _ => break,
+        loop {
+            let size = (c.index.height(position)? - c.gap).max(0.0);
+            let end = c.index.prefix(position)? + size;
+            if size > 0.0 && unit(end) - offset >= half {
+                break;
             }
+            let next = c.index.row_at(c.index.prefix(position + 1)?).ok()??;
+            if next <= position {
+                return None;
+            }
+            position = next;
         }
         let start = c.index.prefix(position)?;
         if port <= 0.0 || start >= offset + port {
@@ -162,7 +166,13 @@ impl Tree {
             return;
         }
         if let Some(collection) = find_collection(&self.children, view) {
-            out.extend(collection.mounted.iter().map(|r| (r.wrapper, r.epoch)));
+            out.extend(
+                collection
+                    .mounted
+                    .iter()
+                    .filter(|r| !r.display_none)
+                    .map(|r| (r.wrapper, r.epoch)),
+            );
         }
     }
     /// Each mounted list's view, data generation and whether it runs along
@@ -283,13 +293,13 @@ impl Tree {
             let mut rows = Vec::new();
             rows.try_reserve_exact(c.mounted.len())
                 .map_err(|_| "collection rows allocation")?;
-            for row in &c.mounted {
+            for row in c.mounted.iter().filter(|r| !r.display_none) {
                 rows.push(CollectionRow {
                     view: row.wrapper,
                     root: first_root_bounded(&row.row.roots, &mut roots, max_traversal)?,
                     index: row.position,
                     start: c.index.prefix(row.position).unwrap(),
-                    size: c.index.height(row.position).unwrap(),
+                    size: (c.index.height(row.position).unwrap() - c.gap).max(0.0),
                     epoch: row.epoch,
                     measured: c.index.is_measured_at(row.position),
                 });

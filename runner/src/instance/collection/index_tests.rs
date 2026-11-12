@@ -1183,3 +1183,25 @@ fn relative_anchor_corrections_include_boundaries_but_exclude_clamping() {
     let start = i.capture_anchor(0., 100., false).unwrap();
     assert!(!i.kept_row(&start, 100.));
 }
+
+#[test]
+fn spreading_estimates_keeps_hidden_slots_at_zero() {
+    let mut i = index(&[114.0, 0.0, 114.0]);
+    i.set_gap(14.0);
+    i.invalidate_all().unwrap();
+    i.spread_estimates(0..3, -90.0).unwrap();
+    assert_eq!(i.height(1), Some(0.0));
+    assert_eq!(i.height(0), Some(69.0));
+    assert_eq!(i.height(2), Some(69.0));
+}
+
+#[test]
+fn edges_skip_hidden_prefixes_and_suffixes() {
+    let mut i = index(&vec![0.0; 25_000]);
+    assert_eq!(i.edges(), [None, None]);
+    for p in [100, 20_000] {
+        i.set_measured_height_at(p, i.measurement_token_at(p).unwrap(), 114.0)
+            .unwrap();
+    }
+    assert_eq!(i.edges(), [Some(100), Some(20_000)]);
+}

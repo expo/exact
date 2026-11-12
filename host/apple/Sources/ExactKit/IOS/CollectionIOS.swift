@@ -376,25 +376,26 @@ extension CollectionHost {
         return horizontal ? frame.minX...frame.maxX : frame.minY...frame.maxY
     }
     /// Whether the mounted rows cover the scrollport: no spacer (unbuilt
-    /// rows) shows. Padding before the first item or after the last counts.
+    /// rows) shows. Padding and authored item gaps count as covered (LLP 1070 H2).
     func covers(_ id: UInt32) -> Bool {
         guard let entry = entries[id], let node = presenter?.views[id], let scroll = node.scroll,
               let first = entry.snapshot.rows.first, let last = entry.snapshot.rows.last else { return false }
         let horizontal = entry.snapshot.horizontal
+        let gap = horizontal ? node.number("column_gap") : 0
         let port = horizontal ? scroll.bounds.minX...scroll.bounds.maxX : scroll.bounds.minY...scroll.bounds.maxY
         func box(_ row: CollectionSnapshot.Row) -> ClosedRange<CGFloat>? {
             presenter?.views[row.view].map { span($0, in: scroll, horizontal: horizontal) }
         }
         guard let head = box(first), let tail = box(last) else { return false }
-        var reached = first.index == 0 ? max(port.lowerBound, head.lowerBound) : port.lowerBound
-        let end = last.index == entry.snapshot.count - 1 ? min(port.upperBound, tail.upperBound) : port.upperBound
+        var reached = entry.snapshot.startsContent(first) ? max(port.lowerBound, head.lowerBound) : port.lowerBound
+        let end = entry.snapshot.endsContent(last) ? min(port.upperBound, tail.upperBound) : port.upperBound
         if reached >= end { return true }
         for row in entry.snapshot.rows {
             guard let frame = box(row) else { return false }
-            if frame.upperBound <= reached { continue }
-            if frame.lowerBound > reached + 0.5 { return false }
+            if frame.upperBound + gap <= reached { continue }
+            if frame.lowerBound > reached + gap + 0.5 { return false }
             reached = frame.upperBound
-            if reached >= end { return true }
+            if reached + gap >= end { return true }
         }
         return false
     }
@@ -403,9 +404,10 @@ extension CollectionHost {
     func rowsToCover(_ id: UInt32, ahead: CGFloat) -> UInt32 {
         guard ahead != 0, let entry = entries[id], let node = presenter?.views[id], let scroll = node.scroll else { return 0 }
         let horizontal = entry.snapshot.horizontal
+        let gap = horizontal ? node.number("column_gap") : 0
         let rows = entry.snapshot.rows.compactMap { row in presenter?.views[row.view].map { (index: row.index, frame: span($0, in: scroll, horizontal: horizontal)) } }
         guard !rows.isEmpty else { return 0 }
-        let mean = rows.map { $0.frame.upperBound - $0.frame.lowerBound }.reduce(0, +) / CGFloat(rows.count)
+        let mean = rows.map { $0.frame.upperBound - $0.frame.lowerBound }.reduce(0, +) / CGFloat(rows.count) + gap
         guard mean > 0 else { return 0 }
         let port = horizontal ? scroll.bounds.minX...scroll.bounds.maxX : scroll.bounds.minY...scroll.bounds.maxY
         // The run of rows that covers the port from its edge: a kept row
@@ -414,7 +416,7 @@ extension CollectionHost {
         var shortfall: CGFloat = 0
         if ahead > 0 {
             var reached = port.lowerBound, last: Int?
-            for row in rows where row.frame.lowerBound <= reached + 0.5 && row.frame.upperBound >= reached {
+            for row in rows where row.frame.lowerBound <= reached + gap + 0.5 && row.frame.upperBound + gap >= reached {
                 reached = row.frame.upperBound
                 last = row.index
             }
@@ -422,7 +424,7 @@ extension CollectionHost {
             shortfall = port.upperBound + ahead - reached
         } else {
             var reached = port.upperBound, first: Int?
-            for row in rows.reversed() where row.frame.upperBound >= reached - 0.5 && row.frame.lowerBound <= reached {
+            for row in rows.reversed() where row.frame.upperBound >= reached - gap - 0.5 && row.frame.lowerBound - gap <= reached {
                 reached = row.frame.lowerBound
                 first = row.index
             }

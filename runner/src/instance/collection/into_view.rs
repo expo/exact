@@ -265,6 +265,7 @@ impl Collection {
                 .clamp(-self.index.leading(), self.index.max_offset(port));
         }
         let (before, after) = self.root_margins(u, position);
+        let after = after + self.gap;
         let start = self.index.prefix(position).unwrap_or(0.0) + before;
         let size = (self.index.height(position).unwrap_or(0.0) - before - after).max(0.0);
         let port = self.geometry.as_ref().map_or(0.0, |g| g.port_main);
