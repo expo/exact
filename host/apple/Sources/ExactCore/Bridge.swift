@@ -848,9 +848,9 @@ package final class Runtime {
     package func bindExtensions(_ names: [String]) { on { exact_bind_extensions(rt, write(names.joined(separator: "\n"))) } }
     /// A package picture's admission (LLP 1133.019 D11 item 1): nil for a
     /// source of no package's scheme.
-    package func picture(_ source: String) -> [String: Any]? {
+    package func picture(_ source: String, count: Bool = true) -> [String: Any]? {
         on(busy: ["error": "NotAllowedError", "message": "busy"]) {
-            let len = exact_picture(rt, write(source))
+            let len = exact_picture(rt, write(source), count ? 1 : 0)
             guard len > 0 else { return nil }
             let data = Data(bytes: exact_out(rt), count: Int(len))
             return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? ["error": "NotAllowedError"]

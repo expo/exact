@@ -326,6 +326,15 @@ pub(super) fn affine(t: [f32; 6]) -> Transform {
 }
 
 impl Painter {
+    pub(super) fn svg_note(&mut self, node: &NodeRef<'_>, scene: &scene::Scene) {
+        if let Some(limit) = scene.over {
+            if self.svg_warned.insert(node.key) {
+                self.notes
+                    .push(format!("svg #{}: {limit}; drawing nothing", node.id));
+            }
+        }
+    }
+
     pub(super) fn svg(
         &mut self,
         walk: &mut Walk<'_, '_>,
@@ -334,6 +343,7 @@ impl Painter {
         ts: Transform,
     ) {
         let scene = resolve_svg(walk.scene, node, content.rect, self.dark);
+        self.svg_note(node, &scene);
         if let Some(refusal) = scene.refused {
             // @ref LLP 1055.000 D13 — refused by name, once.
             static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

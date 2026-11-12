@@ -1,6 +1,7 @@
 # Tab from a focused node that is no Tab stop goes to the page's first stop, not the next one after it
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Already fixed by 5f5b3064, which made a focused node that is no Tab stop the search's starting point outside a popover too; a test now presses the issue's clicked `tabindex=-1` box and gets `b` for Tab and `a` for Shift+Tab, as Chrome does.
 **Systems:** host/linux/src/presenter/typing.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

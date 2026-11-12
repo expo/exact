@@ -3,12 +3,12 @@
 import { test, expect } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { pollUntil } from './agent-launch.mjs';
-import { reverseRoot } from './agent-android.mjs';
+import { androidJavaEnv, androidSdk, androidSdkPackages, reverseRoot } from './agent-android.mjs';
 
 test('the Android reader variable filter and activity allowlist include the auth fixture; loopback URLs select ports', async () => {
   const { readerVariables, reversedPorts } = await import('./agent-android.mjs');
@@ -558,5 +558,98 @@ for (const failure of ['retained', 'replaced']) test(`the Android reader retries
   } finally {
     if (child && child.exitCode === null) { const closed = once(child, 'close'); child.kill(); await closed; }
     fixture.dispose();
+  }
+});
+
+test.skipIf(process.platform === 'win32')('Android tries PATH after an unusable Studio JDK but honors JAVA_HOME', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-jdk-fallback-'));
+  try {
+    const studio = resolve(dir, 'Studio Home'), pathJdk = resolve(dir, 'path-jdk');
+    for (const [home, version] of [[studio, 16], [pathJdk, 17]]) {
+      mkdirSync(resolve(home, 'bin'), { recursive: true });
+      writeFileSync(resolve(home, 'bin/java'), `#!/bin/sh\necho 'openjdk version "${version}.0.1"' >&2\n`, { mode: 0o755 });
+      writeFileSync(resolve(home, 'bin/javac'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+    }
+    const env = { PATH: resolve(pathJdk, 'bin') };
+    expect(androidJavaEnv(env, 'darwin', studio)).toBe(env);
+    expect(androidJavaEnv({ ...env, JAVA_HOME: studio }, 'darwin', pathJdk)).toBeNull();
+    expect(androidJavaEnv({ PATH: '' }, 'darwin', studio)).toBeNull();
+    writeFileSync(resolve(studio, 'bin/java'), `#!/bin/sh\necho 'openjdk version "21.0.1"' >&2\n`, { mode: 0o755 });
+    rmSync(resolve(studio, 'bin/javac'));
+    expect(androidJavaEnv(env, 'darwin', studio)).toBe(env);
+    expect(androidJavaEnv({ ...env, JAVA_HOME: studio }, 'darwin', pathJdk)).toBeNull();
+    const { androidJavaFix } = await import('./agent-android.mjs');
+    expect(androidJavaFix({ PATH: '' }, 'darwin', studio)).toContain(studio);
+    expect(androidJavaFix({ ...env, JAVA_HOME: pathJdk }, 'darwin', studio)).toContain(pathJdk);
+    expect(androidJavaFix({ ...env, JAVA_HOME: pathJdk }, 'darwin', studio)).not.toContain(studio);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+const releaseJavaEnv = androidJavaEnv(process.env);
+const releaseSdk = androidSdk(process.env);
+test.skipIf(process.platform !== 'darwin' || !releaseJavaEnv ||
+  !androidSdkPackages().every(pkg => existsSync(resolve(releaseSdk, pkg.path))))('Android release metadata and signing reach Gradle without patching its source', async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-android-release-'));
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ app: { id: 'dev.exact.ci', name: 'CI' } }));
+    writeFileSync(resolve(dir, 'upload.jks'), 'configuration fixture');
+    const init = resolve(dir, 'inspect.gradle');
+    writeFileSync(init, `allprojects { repositories { maven { url = uri('https://127.0.0.1:9/unused-ci-mirror') } } }
+    gradle.projectsEvaluated {
+      def app = gradle.rootProject.project(':app')
+      app.tasks.register('inspectRelease') {
+        doLast {
+          def android = app.extensions.getByName('android')
+          def signing = android.buildTypes.release.signingConfig
+          println('EXACT_RELEASE=' + groovy.json.JsonOutput.toJson([
+            code: android.defaultConfig.versionCode, version: android.defaultConfig.versionName,
+            signing: signing.name, store: signing.storeFile.name,
+            passwords: signing.storePassword == 'store-secret' && signing.keyPassword == 'key-secret',
+            alias: signing.keyAlias]))
+        }
+      }
+    }`);
+    const result = spawnSync(resolve(import.meta.dir, '../host/android/gradlew'), ['--no-daemon', '--console=plain', '-I', init,
+      ':app:inspectRelease', '-Papp=ci', `-PappDir=${dir}`, `-PappBuildDir=${dir}/app`, `-PcanvasBuildDir=${dir}/canvas`, '--project-cache-dir', `${dir}/cache`],
+    { cwd: resolve(import.meta.dir, '../host/android'), encoding: 'utf8', timeout: 180000,
+      env: { ...releaseJavaEnv, ANDROID_HOME: releaseSdk,
+        EXACT_BUILD_NUMBER: '42', EXACT_VERSION: '2.3.4', EXACT_KEYSTORE: resolve(dir, 'upload.jks'),
+        EXACT_KEYSTORE_PASSWORD: 'store-secret', EXACT_KEY_ALIAS: 'upload', EXACT_KEY_PASSWORD: 'key-secret' } });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const line = result.stdout.split('\n').find(line => line.startsWith('EXACT_RELEASE='));
+    expect(JSON.parse(line.slice('EXACT_RELEASE='.length))).toEqual({ code: 42, version: '2.3.4', signing: 'upload', store: 'upload.jks', passwords: true, alias: 'upload' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 200000);
+
+test('Android distribution refuses bad metadata and incomplete credentials before compiling', async () => {
+  const { androidReleaseEnvironment } = await import('./agent-android.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-upload-'));
+  try {
+    const store = resolve(dir, 'upload.jks'); writeFileSync(store, 'fixture');
+    const signed = { EXACT_KEYSTORE: store, EXACT_KEYSTORE_PASSWORD: 'secret', EXACT_KEY_ALIAS: 'upload', EXACT_KEY_PASSWORD: 'secret' };
+    expect(androidReleaseEnvironment({}, false).EXACT_BUILD_NUMBER).toBe('1');
+    expect(androidReleaseEnvironment(signed, true).EXACT_KEYSTORE).toBe(store);
+    expect(() => androidReleaseEnvironment({}, true)).toThrow('EXACT_KEYSTORE');
+    for (const key of Object.keys(signed)) {
+      const partial = { ...signed }; delete partial[key];
+      expect(() => androidReleaseEnvironment(partial)).toThrow(key);
+    }
+    for (const code of ['0', '-1', '1.2', '2100000001', '', ' 42', '1e2']) {
+      expect(() => androidReleaseEnvironment({ EXACT_BUILD_NUMBER: code })).toThrow('EXACT_BUILD_NUMBER');
+    }
+    expect(() => androidReleaseEnvironment({ ...signed, EXACT_KEYSTORE: store + '.missing' })).toThrow('EXACT_KEYSTORE');
+    expect(() => androidReleaseEnvironment({ EXACT_VERSION: '' })).toThrow('EXACT_VERSION');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Android bundles and unattended APKs have explicit command flags', async () => {
+  const { guardFlags } = await import('./help.mjs');
+  expect(guardFlags('android', ['--bundle', '--json'])).toEqual(['--bundle', '--json']);
+  expect(guardFlags('android', ['--no-install', '--release'])).toEqual(['--no-install', '--release']);
+  for (const flags of [['--bundle', '--run'], ['--bundle', '--headless'], ['--no-install', '--run']]) {
+    const r = spawnSync(process.execPath, [resolve(import.meta.dir, 'agent-android.mjs'), 'build', 'absent-app', ...flags], { encoding: 'utf8' });
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain('takes');
+    expect(r.stderr).not.toContain('no app at');
   }
 });

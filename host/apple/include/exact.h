@@ -798,8 +798,9 @@ void exact_bind_extensions(ExactRuntime rt, size_t len);
  * input buffer, admitted as a read: the output is {"extension","scheme",
  * "agent","owned"?} to ask that extension's implementation for the picture,
  * {"error","message"} for an unresolved image, or empty for a source of no
- * package's scheme. Never raises a ticket. */
-uint32_t exact_picture(ExactRuntime rt, size_t len);
+ * package's scheme. Never raises a ticket. count is 0 to recheck admission
+ * without counting another draw, 1 for a view/source admission attempt. */
+uint32_t exact_picture(ExactRuntime rt, size_t len, uint8_t count);
 /* @ref LLP 1121 D5: app modes, `axis=value` pins comma-separated (the agent's `prefer mode`); a leading `?` only checks them. */
 uint32_t exact_set_mode(ExactRuntime rt, size_t len);
 /* @ref LLP 1121 D13, stage 4: a live design batch or snapshot frame from the dev

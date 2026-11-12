@@ -1,6 +1,7 @@
 # A date picker left up across a reload sets whichever control took its node's id
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `Presenter::replaced` drops every date or time picker still up, journaling `picks_renewed`'s line, so its answer no longer sets the control that took its node's id in the new tree.
 **Systems:** host/linux/src/presenter/requests.rs, host/linux/src/presenter.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

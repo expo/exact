@@ -9,7 +9,7 @@ import { delimiter, resolve, toNamespacedPath } from 'node:path';
 import { HERMES_INSTALLER, PINNED_RUST, hermesBundle, hermesLeanSysRoots } from './app.mjs';
 import { androidHermes, checkHermesBundles, appleCrossTargets, appleSetupTargets, platformRowNames } from './exact.mjs';
 import { iosAssets, iosTarget, entitlements, infoPlist, macInfoPlist, documentTypes, importedTypes, exportedTypes, writeUsageStrings, designCompatible, COMPATIBLE_SDK, moduleTripleFor } from '../host/apple/build.mjs';
-import { useXcode } from '../host/apple/devices.mjs';
+import { HOST_SDKS, olderVersion, useXcode, xcodeRefusal } from '../host/apple/devices.mjs';
 import { encodePng } from './png.mjs';
 import { macReleaseEntitlements, launchImageInventory } from '../host/apple/assets.mjs';
 
@@ -287,6 +287,8 @@ test.skipIf(process.platform === 'win32')('an iOS, phone, Apple TV or iOS test b
     const build = (installed, ...args) => {
       // The pinned toolchain has `installed`; an ambient RUSTUP_TOOLCHAIN's has every target, which the build does not use.
       writeFileSync(resolve(bin, 'rustup'), `#!/bin/sh\ncase " $* " in *" --toolchain ${PINNED_RUST} "*) printf '${installed}\\n';; *) printf '${[iosTarget, 'aarch64-apple-ios', 'aarch64-apple-tvos', 'aarch64-apple-tvos-sim'].join('\\n')}\\n';; esac\n`, { mode: 0o755 });
+      // This machine's Xcode is not what is tested: its SDK is new enough.
+      writeFileSync(resolve(bin, 'xcrun'), `#!/bin/sh\ncase "$*" in *--show-sdk-version*) echo ${HOST_SDKS.ios};; *) exec /usr/bin/xcrun "$@";; esac\n`, { mode: 0o755 });
       return spawnSync(process.execPath, ['host/apple/build.mjs', ...args, 'no-such-app'], { encoding: 'utf8', env: { ...process.env, RUSTUP_TOOLCHAIN: 'stable', PATH: bin + delimiter + process.env.PATH } });
     };
     const phone = build('aarch64-apple-ios-sim', '--device');
@@ -310,8 +312,8 @@ test.skipIf(process.platform === 'win32')('an archive of an app without a 1024 p
     const bin = resolve(scratch, 'bin'), app = resolve(scratch, 'noicon'), log = resolve(scratch, 'log');
     mkdirSync(bin); mkdirSync(app);
     writeFileSync(resolve(bin, 'rustup'), `#!/bin/sh\nprintf 'aarch64-apple-ios\\n'\n`, { mode: 0o755 });
-    // Every compiler the build could start records that it was started, and compiles nothing.
-    for (const tool of ['cargo', 'rustc', 'swift', 'swiftc', 'xcodebuild', 'xcrun']) writeFileSync(resolve(bin, tool), `#!/bin/sh\necho "${tool} $*" >> '${log}'\nexit 9\n`, { mode: 0o755 });
+    // Every compiler the build could start records that it was started, and compiles nothing; the SDK is new enough.
+    for (const tool of ['cargo', 'rustc', 'swift', 'swiftc', 'xcodebuild', 'xcrun']) writeFileSync(resolve(bin, tool), `#!/bin/sh\n${tool === 'xcrun' ? `case "$*" in *--show-sdk-version*) echo ${HOST_SDKS.ios}; exit 0;; esac\n` : ''}echo "${tool} $*" >> '${log}'\nexit 9\n`, { mode: 0o755 });
     writeFileSync(resolve(app, 'app.contract'), 'component A\n');
     mkdirSync(resolve(app, 'assets'));
     writeFileSync(resolve(app, 'assets/small.png'), encodePng({ width: 192, height: 192, data: new Uint8Array(192 * 192 * 4).fill(255) }));

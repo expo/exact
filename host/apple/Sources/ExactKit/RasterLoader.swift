@@ -668,7 +668,7 @@ final class RasterLoader {
     func readmitPictures() {
         for (id, refusal) in refusedPictures {
             guard let view = refusal.view(), let session = view.presenter?.session else { refusedPictures[id] = nil; continue }
-            guard pictures.admit(refusal.source, session: session) == nil else { continue }
+            guard pictures.admit(refusal.source, session: session, count: false) == nil else { continue }
             refused[id] = nil
             load(view, source: refusal.source, resolver: refusal.resolver)
         }

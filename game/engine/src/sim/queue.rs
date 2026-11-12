@@ -2,7 +2,8 @@ use super::*;
 
 impl<G: Game> Sim<G> {
     /// Queue a raw event in stamp order, preserving arrival order at equal stamps.
-    /// Paused input updates held state directly, without edges or queued wheel deltas.
+    /// Paused input updates held state directly, without edges or queued wheel deltas,
+    /// after the device events still queued from before the pause.
     pub fn input(&mut self, event: InputEvent) {
         let event = self.unmarked(event);
         if let Err(error) = self.validate_input(&event) {
@@ -12,6 +13,16 @@ impl<G: Game> Sim<G> {
         self.invalidate();
         // A posted message waits for the next tick, paused or not.
         if G::paused(&self.args) && !matches!(event, InputEvent::Message { .. }) {
+            // The pause's flush leaves device events stamped after the last
+            // frame queued; they arrived first, so they apply first.
+            let queued = std::mem::take(&mut self.queue);
+            for e in queued {
+                if let InputEvent::Message { .. } = e.event {
+                    self.queue.push_back(e);
+                } else {
+                    self.deliver(e.event, self.world_us, true);
+                }
+            }
             self.deliver(event, self.world_us, true);
             return;
         }

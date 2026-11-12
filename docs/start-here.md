@@ -118,6 +118,8 @@ bun exact.mjs contract vocab for match persist grouped-form choice   # keywords,
 bun exact.mjs contract vocab timers dates-and-days task        # a timer, a day's log
 ```
 
+For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md).
+
 |Pattern|Already has|
 |---|---|
 |`one-screen`|a tracker: a total, quick-add buttons, a dated log in a file|

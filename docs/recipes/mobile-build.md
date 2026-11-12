@@ -1,14 +1,14 @@
 # Recipe: phone release builds
 
-Run in the app directory. `--json` prints `path`, `target`, `trust` and (on Apple)
-`signing` on stdout; failures print `code` and `error`. Logs go to stderr.
-No `--run`, `--prebuild` or `--test`. Releases omit the agent.
+Run in the app directory. `--json` reports the artifact's absolute `path`,
+`target`, `trust` and (Apple) `signing`; failures report `code` and `error`.
+Logs go to stderr. Releases omit the agent; no `--run`, `--prebuild` or `--test`.
 
-Updating production bakes need `deploy.signing.keys` and either
-`EXACT_UPDATE_RECEIPT` (an authenticated publisher receipt) or
-`EXACT_UPDATE_GENESIS=1` (a new stream), including simulator and Android builds.
-Store `"0"` needs no updates, keys or receipts: set `deploy.store.ios: "0"`
-(the first iOS build sets it when `host.ios` is absent).
+Production bakes with updates need `deploy.signing.keys` and
+`EXACT_UPDATE_RECEIPT` (authenticated receipt) or `EXACT_UPDATE_GENESIS=1`
+(new stream). Without updates, set the store to `"0"`: `deploy.store.ios`
+for iOS, `deploy.store.linux` for Android's shared Linux bake. An absent
+Linux store defaults to updates.
 
 **iOS Simulator**, no installation or signing team:
 
@@ -18,18 +18,16 @@ bun exact.mjs ios --release --no-install --json
 
 `--sim <udid|name>` selects it; omit `--no-install` to install.
 
-**Signed iPhone:** needs a phone this Mac knows, an Apple Development identity
-with its private key, and a profile covering its UDID, bundle id and entitlements:
+**Signed iPhone:** needs a paired phone, Apple Development identity with
+private key, and profile covering its UDID, bundle id and entitlements:
 
 ```sh
 DEVELOPMENT_TEAM=<team-id> bun exact.mjs ios --device --phone <udid> --release --no-install --json
 ```
 
-`DEVELOPMENT_TEAM=<team-id>` selects that team's installed profile and Apple
-Development identity. `EXACT_PROFILE=<file.mobileprovision>` and
-`EXACT_IDENTITY=<certificate-sha1>` override it. If none of its profiles covers this
-bundle id and phone, unset it, or run an Xcode project with that bundle id and
-team on that phone with Automatically manage signing, then retry. Connect to install.
+The team selects an installed profile and identity. `EXACT_PROFILE=<file.mobileprovision>`
+and `EXACT_IDENTITY=<certificate-sha1>` override them. If no profile covers
+this app and phone, use Xcode's automatic signing for that bundle id and team.
 
 **No team or phone:** an ad-hoc signed device `.app`, no installation:
 
@@ -37,30 +35,40 @@ team on that phone with Automatically manage signing, then retry. Connect to ins
 bun exact.mjs ios --device --release --unsigned --json
 ```
 
-Needs no profile, identity or icon. `--unsigned --run` refuses: a stock iPhone
-cannot launch an ad-hoc signed bundle. Add `--archive .exact/app.ipa` for a service
-that re-signs it; only the archive needs an AppIcon (a square icon at least 512 px).
+No profile, identity or icon needed. `--unsigned --run` refuses: stock iPhones
+cannot launch it. `--archive .exact/app.ipa` adds an IPA for re-signing and
+requires a square AppIcon of at least 512 px; the archive path is relative
+to the working directory. iOS optimizes for size (games: speed);
+`--optimize speed` overrides.
 
-**Standalone Android APK:** set `deploy.store.linux: "0"` in app.json first.
-Android uses the Linux bake; an absent Linux store defaults to updates, even in
-a new app.
+**Android APK**, no adb contact:
 
 ```sh
-EXACT_UPDATE_TRUST=production bun exact.mjs android --release --json
+EXACT_UPDATE_TRUST=production bun exact.mjs android --release --no-install --json
 ```
 
-It installs when an adb device is ready (`ANDROID_SERIAL` selects one); with none,
-it only builds. If modules name Maven libraries, use `--write-locks` once and keep
-the lock/verification files. Missing locks refuse before Rust compiles and name
-the app-local command to write them.
+Omit `--no-install` to install on an available device (`ANDROID_SERIAL`
+selects one). Maven modules need `--write-locks` once; keep the generated
+lock/verification files. Missing locks name the command before compiling.
 
-Read JSON's absolute `path`; `--archive` paths are relative to the working directory.
-iOS defaults to size (games: speed); `--optimize speed` overrides.
+**Android App Bundle:** supply all four upload-key variables:
+`EXACT_KEYSTORE` (file path), `EXACT_KEYSTORE_PASSWORD`, `EXACT_KEY_ALIAS`
+and `EXACT_KEY_PASSWORD`. An APK also uses them when supplied.
+`EXACT_VERSION` sets `versionName` (default `0.1.0`); `EXACT_BUILD_NUMBER`
+sets `versionCode` (default `1`, integer 1–2100000000). Increase it per upload.
 
-Setup: `bun <exact2>/scripts/exact.mjs setup --check`.
-Apple: Mac, Xcode/iOS SDK 27.1+, target Rust std/Hermes; simulator runtime to run.
-Android: platform-tools, NDK, JDK 17+ (`JAVA_HOME` or Android Studio's on macOS),
-`aarch64-linux-android` Rust std/Hermes. Setup reports the platform and build-tools
-Gradle declares and names their `sdkmanager` install commands; run those yourself.
-Without an SDK directory, the general report omits these rows; an Android report
-still shows them. Install Xcode and Android command-line tools before setup.
+```sh
+bun exact.mjs android --bundle --json
+```
+
+This selects release and production trust, with no adb installation.
+Under `target/android/app/outputs/`, the bundle is
+`bundle/release/app-release.aab`; the APK is `apk/release/app-release.apk`.
+
+With [Play App Signing](https://support.google.com/googleplay/android-developer/answer/9842756),
+you supply the upload key. Google holds the app signing key and signs the
+APKs delivered to users. This command uploads nothing to Play; submission
+remains unverified.
+
+For toolchains, SDK packages and scoped setup checks, see
+[native CI preparation](../reference.md#native-ci-preparation).

@@ -61,6 +61,13 @@ test('a maskable PNG becomes an adaptive icon, inset so its safe zone is the 66 
   assert.doesNotMatch(readFileSync(resolve(res, 'mipmap-anydpi/exact_icon.xml'), 'utf8'), /monochrome/);
 }));
 
+test('an app with no icons builds into a directory that does not exist yet', () => inDir((dir) => {
+  const res = resolve(dir, 'build/app/icons/res');
+  assert.deepEqual(androidIcons({}, dir, res), { icon: null, banner: null });
+  assert.deepEqual(androidIcons({}, dir, res), { icon: null, banner: null });
+  assert.deepEqual(files(res), []);
+}));
+
 test('without a maskable a square any PNG is the legacy icon at 192 px, and with no icons there is nothing', () => inDir((dir) => {
   png(dir, 'assets/icon.png', 1024, 1024, () => [10, 20, 30, 255]);
   png(dir, 'assets/small-mask.png', 256, 256, () => [0, 0, 0, 255]);

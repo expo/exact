@@ -860,10 +860,11 @@ macro_rules! host {
         /// An `img` source of a package's scheme, admitted (LLP 1133.019 D11
         /// item 1): the source in the input buffer; the output is
         /// `{"extension", "agent", "owned"?}`, `{"error", "message"}`, or
-        /// empty for a source of no package's scheme.
+        /// empty for a source of no package's scheme. `count` is 0 to
+        /// recheck admission without counting another draw.
         #[no_mangle]
-        pub extern "C" fn exact_picture(rt: u32, len: usize) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.picture(len), |n| n)
+        pub extern "C" fn exact_picture(rt: u32, len: usize, count: u8) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.picture(len, count != 0), |n| n)
         }
 
         /// The agent's `prefer extension` in the input buffer (LLP 1124 D7).

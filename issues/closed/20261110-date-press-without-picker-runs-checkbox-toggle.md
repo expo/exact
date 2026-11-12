@@ -1,6 +1,7 @@
 # A press on a date or time field with no picker runs the checkbox's toggle and logs `InvalidEvent`
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A press on a date, time or datetime-local control ends after the picker test whether or not a picker opened, so where none does it has no default action and never reaches the checkbox's toggle.
 **Systems:** host/linux/src/presenter/control.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

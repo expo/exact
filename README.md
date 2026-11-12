@@ -707,8 +707,10 @@ else here was admitted because a real app needed it.
   android` runs its tests, and `bun exact.mjs agent android …` drives it
   (LLP 1107). It needs the Android SDK,
   the Rust target `aarch64-linux-android`, and the Hermes Android bundle, which
-  `exact setup` installs with the target. Delivery and
-  store packaging don't exist yet.
+  `exact setup` installs with the target. `bun exact.mjs android --bundle`
+  produces a signed release App Bundle; the [phone release recipe](docs/recipes/mobile-build.md)
+  names the upload-key and version inputs. Play upload and store submission
+  remain the publisher's work.
 - **No JSX or React tier.** Nothing runs JavaScript above the data seam. The door stays
   open, but no one is building it.
 - **Code updates in production.** Signed delivery covers plans and assets. Signed

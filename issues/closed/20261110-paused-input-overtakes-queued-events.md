@@ -1,6 +1,7 @@
 # Input that arrives during a pause is applied before events still queued from before it
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A device event that arrives while the game is paused first applies the device events still queued from before the pause, so it no longer overtakes them.
 **Systems:** game/engine/src/sim/queue.rs, game/engine/src/sim.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

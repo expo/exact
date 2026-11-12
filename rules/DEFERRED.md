@@ -1903,3 +1903,10 @@ Consumer: T3 sidebar subscriptions and timeline minimap. LLP 1005 records the
 bounded event, browser executors and the shared AppKit/UIKit/Linux geometry
 slice; native qualification remains open. Container
 queries, derive-time frame and general live-position feedback stay deferred.
+
+**EAS Build compatibility (Charlie, 2026-11-12, #48; LLP 1030.003 D6, D8):**
+"Def want to make Exact work well w EAS Build" ([issue comment](https://github.com/expo/exact/issues/48#issuecomment-6807074446)).
+The owner admitted unattended native build commands, signing/version inputs,
+Android App Bundle output and one EAS recipe per platform on 2026-11-12. This unblocks an app repository's
+custom EAS build. Provider adapters and automatic account, credential and
+store provisioning remain deferred.

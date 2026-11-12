@@ -66,8 +66,8 @@ import { keptCrates } from './crates.mjs';
 import { appleCargo } from '../../scripts/cargo-check.mjs';
 import { linkedPlanArgs, placeLinkedPlan } from '../../scripts/linked-plan.mjs';
 import { stripForDistribution, stripProductionExecutable, appleComposition, appleProduction, appleLaunchFrameworks, appleLaunchLinkArgs, assertCapabilityFrameworks, assertLinkedSdk, linksByPlan } from './link.mjs';
-export { appIcon, iosAssets, documentTypes, exportedTypes, importedTypes, stripForDistribution, stripProductionExecutable };
-import { IPAD_ORIENTATIONS, orientationKeys, allows, chooseSimulator, deviceLaunchArgs, developmentLaunchEnvironment, identity, installedBuild, macIdentity, phone, replacedNote, profile, showSimulator, simulator, simulators, useXcode } from './devices.mjs';
+export { appIcon, appleEmbedOnly, iosAssets, documentTypes, exportedTypes, importedTypes, stripForDistribution, stripProductionExecutable };
+import { IPAD_ORIENTATIONS, orientationKeys, allows, chooseSimulator, deviceLaunchArgs, developmentLaunchEnvironment, identity, installedBuild, macIdentity, phone, replacedNote, profile, showSimulator, simulator, simulators, useXcode, appleEmbedOnly, appleSdkName, compilesSwiftHost, xcodeRefusal } from './devices.mjs';
 import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const run = (cmd, args, opts = {}) => {
@@ -572,10 +572,6 @@ export const shippedReceipt = (text) => {
     products: (build.products ?? []).map((product) => ({ ...product, path: basename(product.path) })) } }, null, 2) + '\n';
 };
 
-export function appleEmbedOnly(args) {
-  return args.includes('--embed') && !args.includes('--archive') && !args.includes('--run') && !args.includes('--host');
-}
-
 export function copyAppleGpuProducts(capture, destination, artifacts, archive = false) {
   for (const m of artifacts) {
     if (archive) cpSync(resolve(capture, `${m.framework}.framework`), resolve(destination, `${m.framework}.framework`), { recursive: true });
@@ -618,6 +614,8 @@ async function main(args, lockHeld = false) {
   // so the bake refuses a production build without its receipt; packaging refuses a missing icon (assets.mjs).
   const store = `deploy.store.${ios ? 'ios' : 'macos'}`, streamed = app.manifest.deploy?.store?.[ios ? 'ios' : 'macos'] !== '0';
   const refused = [...(distribution && streamed && !process.env.EXACT_UPDATE_RECEIPT && process.env.EXACT_UPDATE_GENESIS !== '1' ? [`${app.name}: what is distributed bakes production trust, and with an update store (${store} is not "0") it belongs to a stream: set EXACT_UPDATE_RECEIPT to its authenticated publisher receipt (scripts/deploy.mjs), or EXACT_UPDATE_GENESIS=1 to start a new stream`] : []), ...appleRefusals(app, tv ? 'tvos' : ios ? 'ios' : 'macos', { archive: !!ipa })];
+  const sdkName = appleSdkName(tv ? 'tvos' : ios ? 'ios' : 'macos', device); // the SDK this build compiles with
+  if (process.platform === 'darwin' && compilesSwiftHost(args)) refused.push(...[xcodeRefusal(sdkName)].filter(Boolean));
   if (refused.length) { console.error(refused.join('\n')); process.exitCode = 1; return; }
   if (ios && !device && !ipa && !args.includes('--no-install') && !args.includes('--prebuild')) chooseSimulator(args.includes('--sim') ? args[args.indexOf('--sim') + 1] : undefined, { tv, app: app.id, dir: app.dir, hint: '--sim <udid|name> (or EXACT_SIM)' }); // refused before anything compiles, not after (LLP 1156.000 D5)
   if (!existsSync(resolve(app.target, 'apple-swift'))) { const room = freeSpace(app.dir, [app.target, resolve(process.env.HOME ?? '', '.cache/exact')]); if (room && room.gb < ROOM_GB) console.warn(`host/apple: a first build here; ${room.text}`); } // a cold build (LLP 1156.000 D3)
@@ -672,7 +670,7 @@ async function main(args, lockHeld = false) {
   const t0 = Date.now();
   const target = ios ? (tv ? tvTarget : device ? 'aarch64-apple-ios' : iosTarget) : bakeTarget('macos');
   const library = prepareLibrary(app.dir, target); // a package's prebuilt framework (LLP 1154 D3), fetched and checked before Cargo
-  const sdkName = ios ? (tv ? (device ? 'appletvos' : 'appletvsimulator') : device ? 'iphoneos' : 'iphonesimulator') : 'macosx', stampSdk = { sdk: sdkName, sdkVersion: designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : null }; // stampSdk: the SDK the link records
+  const stampSdk = { sdk: sdkName, sdkVersion: designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : null }; // stampSdk: the SDK the link records
   const destination = ios ? (tv ? (device ? 'tvos' : 'tvos-simulator') : device ? 'ios' : 'ios-simulator') : 'macos';
   const sdk = read('xcrun', ['--sdk', sdkName, '--show-sdk-path']).stdout.trim();
   const targets = deploymentTargets(app);
@@ -1469,7 +1467,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(new URL(import
   const args = guardFlags(['--ios', '--device', '--tvos', '--watchos'].some((flag) => process.argv.includes(flag)) ? 'ios' : 'mac', process.argv.slice(2));
   if (args.includes('--phone') && !args.includes('--device')) throw new Error('--phone needs --device; for a simulator use --sim <udid|name> (or EXACT_SIM)');
   useXcode(); if (args.includes('--release')) process.env.EXACT_UPDATE_TRUST = 'production';
-  (args.includes('--test') ? test(args) : main(args)).catch((error) => { console.error(error.rebuild ? `${error.message}: ${rebuildArgs(args)}` : error.message); process.exitCode = 1; });
+  const oldXcode = process.platform === 'darwin' && args.includes('--test') && xcodeRefusal(args.includes('--ios') ? 'iphonesimulator' : 'macosx');
+  if (oldXcode) { console.error(oldXcode); process.exitCode = 1; } else (args.includes('--test') ? test(args) : main(args)).catch((error) => { console.error(error.rebuild ? `${error.message}: ${rebuildArgs(args)}` : error.message); process.exitCode = 1; });
 }
 
 /** This build's command, to run it again: an `exact new` app's `exact.mjs` verb (EXACT_APP_DIR, which that

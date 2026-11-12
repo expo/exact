@@ -36,7 +36,13 @@ keeps Hermes's OS-backed Intl; Android has no `Intl` yet. A Rust-only app needs 
 `exact setup` installs the host bundle and, on macOS, the iOS and tvOS Simulator
 bundles, and the iOS device bundle where Xcode's iphoneos SDK is installed.
 `exact setup --check` runs Ibex's own offline resolver validation over that
-same set.
+same set. On a CI worker, `bun <exact2>/scripts/exact.mjs setup --check
+--platform ios --device` checks the archive's prerequisites; `--platform
+android` checks the APK/AAB prerequisites, including JDK 17+ and the NDK's
+actual compiler paths. A scoped check fails when any of its rows is missing
+and does not check unrelated web tools. `--platform` is check-only; install
+commands are in the platform's CI recipe. The general check still reports
+optional tools separately (LLP 1086 D6).
 
 ### Windows painter
 
@@ -893,6 +899,174 @@ receipt, and signed GPU frameworks (primary and named modules). Copy those
 frameworks intact into the embedding app's `Frameworks/`; their binaries must
 retain the baked digests.
 
+### Native CI preparation
+
+The [EAS iOS](recipes/eas-ios.md) and [EAS Android](recipes/eas-android.md)
+recipes use the ordinary native builders (LLP 1030.003 D6, D8). Exact does
+not manage an EAS account, credentials, build counters or store submissions.
+These examples describe a single-target app; extensions need their own
+matching profiles, as described in the widget signing sections.
+
+Keep Exact's `app.json`. Add a separate `app.config.js` for EAS, returning
+only Expo's configuration rather than merging Exact's manifest:
+
+```js
+module.exports = {
+  name: 'My app', slug: 'my-app', version: process.env.EXACT_VERSION || '1.0.0',
+  ios: { bundleIdentifier: 'com.example.myapp' },
+  android: { package: 'com.example.myapp' },
+  extra: { eas: { projectId: 'YOUR-EAS-PROJECT-ID' } },
+};
+```
+
+Match both identifiers to Exact's app id. Link the EAS project and install
+`expo-modules-autolinking` as a development dependency for EAS's config
+resolver (`bun add --dev expo-modules-autolinking`; commit the lockfile).
+Exact does not need Expo or React Native at run time. Pin EAS CLI in the app's
+dev dependencies too (`bun add --dev --exact eas-cli`). This `eas.json` uses file secrets for signing; set
+`EXACT_REF` to the immutable Exact commit used by the app:
+
+```json
+{
+  "cli": { "appVersionSource": "remote" },
+  "build": {
+    "exact": {
+      "environment": "production",
+      "distribution": "store",
+      "withoutCredentials": true,
+      "autoIncrement": true,
+      "bun": "1.4.2",
+      "env": { "EXACT_REF": "FULL-EXACT-COMMIT", "EXACT_VERSION": "1.0.0" },
+      "ios": { "config": "eas-ios.yml", "image": "macos-tahoe-26.6-xcode-27.2" },
+      "android": { "config": "eas-android.yml", "image": "ubuntu-26.04-jdk-17-ndk-r27b-sdk-58" }
+    }
+  }
+}
+```
+
+Image names above are the reporter's working choices; choose an available
+image with Xcode 27.1+ for iOS, or JDK 17+ and Android command-line tools for
+Android. Bun must satisfy Exact's `package.json` engines range. Initialize
+EAS's remote build counters above any number already uploaded; do not assume
+the first remote build increments an existing store number. Resolve the
+build config before reading `eas.job.version.buildNumber` or `versionCode`.
+See [EAS custom builds](https://docs.expo.dev/custom-builds/schema/) and
+[build configuration](https://docs.expo.dev/build/eas-json/).
+
+Save the following as `.ci/prepare-native.sh` in the app repository. The
+recipes run it with `ios` or `android`. It installs only that platform's
+Rust targets and Hermes bundles, with no simulator. Bun, git, curl and
+unzip come from the selected image. For a clean local worker, install Bun
+1.4.2 first and omit the final two EAS `set-env` calls.
+
+```sh
+#!/bin/sh
+set -eu
+export EXACT="$PWD/../exact"
+git clone https://github.com/expo/exact.git "$EXACT"
+git -C "$EXACT" checkout --detach "$EXACT_REF"
+bun install --frozen-lockfile --cwd "$EXACT"
+if ! command -v rustup >/dev/null; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/exact-rustup.sh
+  sh /tmp/exact-rustup.sh -y --profile minimal --default-toolchain none --no-modify-path
+fi
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+pin=$(bun -e 'console.log(Bun.TOML.parse(await Bun.file(process.env.EXACT + "/rust-toolchain.toml").text()).toolchain.channel)')
+case "$1" in
+  ios) triple=aarch64-apple-ios ;;
+  android) triple=aarch64-linux-android ;;
+  *) exit 2 ;;
+esac
+rustup toolchain install "$pin" --profile minimal --target "$triple"
+cargo +"$pin" run --locked --manifest-path "$EXACT/vendor/ibex/crates/hermes-lean-sys-installer/Cargo.toml" -- --target "$triple"
+set-env EXACT "$EXACT"
+set-env PATH "$PATH"
+```
+
+The installer also installs the host Hermes bundle used to bake TypeScript.
+If the launcher or Cargo manifests still name a developer's checkout, run
+`EXACT=../exact bun exact.mjs update` locally and commit its changes before
+submitting the job. An app's `host.ios` and `host.android` entries must be
+present; `exact new --with ios,android` creates both. Native shells are
+generated by the build. A native-view dependency must supply a roster that
+can be read without a simulator; see [the CI archive path](#build-an-ios-app-on-a-ci-machine).
+
+Cache Cargo's registry and git downloads, `$CARGO_HOME/hermes-lean-sys`,
+Gradle's `GRADLE_USER_HOME` (default `~/.gradle`), and `~/.cache/exact` when
+useful. Restore app and Exact `target/` only under keys that distinguish
+OS/architecture, toolchain, lockfiles and build mode. A cache hit does not
+promise reuse: fresh checkout mtimes can invalidate Cargo fingerprints,
+and production Apple builds do not use the development module cache.
+`CARGO_LOG=cargo::core::compiler::fingerprint=info` explains rebuilds. Do not
+rewrite source mtimes to force reuse. A clean build must work without these
+caches. Do not cache signing keys or provisioning profiles.
+
+### Import an iOS signing identity on a CI worker
+
+For the iOS recipe, save this as `.ci/sign-ios.sh`. Source it in the build
+step so the exported identity reaches Exact. In the EAS production
+environment, create secret file variables `CI_IOS_P12` and `EXACT_PROFILE`,
+and a secret string `CI_IOS_P12_PASSWORD`. The files are a distribution
+certificate with its private key and a matching App Store provisioning
+profile. EAS supplies file variables as paths; see its
+[file-variable documentation](https://docs.expo.dev/eas/environment-variables/faq/).
+Use only on an ephemeral worker: this selects a temporary keychain for the
+step. Do not turn on shell tracing around credentials.
+
+```sh
+set -eu
+CI_SIGN_DIR=$(mktemp -d)
+CI_KEYCHAIN="$CI_SIGN_DIR/build.keychain-db"
+CI_KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
+trap 'security delete-keychain "$CI_KEYCHAIN"; rm -rf "$CI_SIGN_DIR"' EXIT
+security create-keychain -p "$CI_KEYCHAIN_PASSWORD" "$CI_KEYCHAIN"
+security set-keychain-settings -lut 21600 "$CI_KEYCHAIN"
+security unlock-keychain -p "$CI_KEYCHAIN_PASSWORD" "$CI_KEYCHAIN"
+security import "$CI_IOS_P12" -k "$CI_KEYCHAIN" -P "$CI_IOS_P12_PASSWORD" -T /usr/bin/codesign
+security set-key-partition-list -S apple-tool:,apple: -s -k "$CI_KEYCHAIN_PASSWORD" "$CI_KEYCHAIN"
+security list-keychains -d user -s "$CI_KEYCHAIN"
+EXACT_IDENTITY=$(security find-identity -v -p codesigning "$CI_KEYCHAIN" | awk '/[0-9A-F]{40}/ {print $2}')
+test "$(printf '%s\n' "$EXACT_IDENTITY" | wc -l | tr -d ' ')" = 1
+test -n "$EXACT_IDENTITY"
+export EXACT_IDENTITY
+```
+
+If EAS already manages the credentials, download them through `eas
+credentials` for these secret files, or adapt the step to decode
+`eas.job.secrets.buildCredentials`: iOS uses the chosen target's
+`distributionCertificate.dataBase64` (base64), its `password`, and
+`provisioningProfileBase64`; Android uses `keystore.dataBase64`,
+`keystorePassword`, `keyAlias` and `keyPassword`. When using EAS-managed
+job credentials, remove `withoutCredentials`. Select the intended iOS
+target explicitly when there are several. Do not use
+`eas/configure_ios_credentials`: it expects an Xcode project. Exact signs
+the app directly with `EXACT_IDENTITY` and `EXACT_PROFILE`.
+
+### Build Android artifacts without a device
+
+From the app's directory, `bun exact.mjs android --release --no-install --json`
+builds an APK without querying adb. `bun exact.mjs android --bundle --json`
+builds a production App Bundle (`.aab`) without installing. Both report the
+artifact's absolute path. An outside app's outputs are
+`target/android/app/outputs/apk/release/app-release.apk` and
+`target/android/app/outputs/bundle/release/app-release.aab`.
+
+`EXACT_BUILD_NUMBER` sets Android's `versionCode` (1 by default, an integer
+from 1 through 2100000000); `EXACT_VERSION` sets `versionName` (0.1.0 by
+default). Set all four of `EXACT_KEYSTORE` (a file path),
+`EXACT_KEYSTORE_PASSWORD`, `EXACT_KEY_ALIAS` and `EXACT_KEY_PASSWORD` to sign
+with your upload key. Partial credentials fail before compiling. A bundle
+requires them; an APK without them uses Android's debug key and cannot be
+submitted to Play. Passwords are passed through the environment, never as
+Gradle command arguments (LLP 1030.003 D6, D8).
+
+`--release` selects optimization. For an APK you will distribute, also set
+`EXACT_UPDATE_TRUST=production`; `--bundle` sets it itself. Production trust
+requires your update stream's signing keys and receipt (or
+`EXACT_UPDATE_GENESIS=1` for a new stream). Android uses the Linux bake:
+set `deploy.store.linux` to `"0"` for a binary without Exact updates;
+`deploy.store.android` does not disable the bake's update checks.
+
 ### Build an iOS app on a CI machine
 
 A Mac runner needs no phone. An app with native view tags has its build read
@@ -916,7 +1090,7 @@ With `--json`, `ios`, `mac`, `web-build`, `linux`, `android` and `windows`
 print one JSON object on stdout, its last and only line, however they end, and
 send the build's own output to stderr. The object names the artifact's
 absolute `path` (the `.app`, the `.ipa` of `--archive`, `--embed`'s directory,
-`target/web-dist` or `--out`'s directory, the executable, the APK), its
+`target/web-dist` or `--out`'s directory, the executable, the APK or AAB), its
 `target` (`ios-simulator`, `ios`, `tvos-simulator`, `tvos`, `macos`, `web`,
 `linux`, `windows` or `android`) and its `trust` (`development` or
 `production`: what the build baked; the JS target's `web-build` is
@@ -949,15 +1123,16 @@ team's, or run a project in Xcode with that bundle id and team on that phone wit
 Automatically manage signing enabled, then retry.
 `EXACT_IDENTITY` and `EXACT_PROFILE` in place of `--unsigned` sign the `.ipa`
 on the runner. The runner needs Xcode 27.1 or later selected (`DEVELOPER_DIR`,
-or `xcode-select -s`), rustup and Bun 1.4.2; then `bun <exact2>/scripts/exact.mjs setup` installs the
+or `xcode-select -s`); the build checks its destination’s SDK before compiling.
+It also needs rustup and Bun 1.4.2; then `bun <exact2>/scripts/exact.mjs setup` installs the
 pinned Rust with its iOS targets and the Hermes bundles, and `setup --check`
 names what is still missing. An archive needs a square icon of at least
 1024 px in `icons` (or `host.ios.icon`), which the build checks before it
 compiles. An archive, and a simulator build with `--release` (the build that
 ships), bake production trust: with an update store (`deploy.store.ios` not
 `"0"`) each needs `EXACT_UPDATE_RECEIPT` or `EXACT_UPDATE_GENESIS=1`. A cold
-build takes tens of minutes, most of it Rust and the Swift host. Keeping the
-app's `target/` and `~/.cache/exact` between runs makes the next one minutes.
+build compiles Rust and the Swift host. Cache reuse depends on the source,
+toolchain, paths and build mode; see [native CI preparation](#native-ci-preparation).
 Export compliance is the developer's answer, so a production iOS or tvOS build
 (`--release`, `--archive`, `--distribution`) writes `ITSAppUsesNonExemptEncryption`
 into Info.plist only when `EXACT_NON_EXEMPT_ENCRYPTION` is `true` or `false` in its

@@ -27,6 +27,76 @@ fn scene(batch: &str) -> serde_json::Value {
 }
 
 #[test]
+fn an_inline_svg_reports_its_cost_limit_once_per_node_lifetime() {
+    let app = r##"component App
+  state shown = true
+  state limited = false
+  action toggle
+    limited = !limited
+  action replace
+    shown = !shown
+  view
+    column
+      if shown
+        svg testId="chart" width=100 height=40
+          path d=(limited ? "M0 10H100000" : "M0 10H100") stroke="#ff0000" stroke-width=4 stroke-dasharray="0.25"
+      button testId="toggle" press=toggle
+        text "Toggle limit"
+      button testId="replace" press=replace
+        text "Replace node"
+"##;
+    let (mut host, batch) = Host::boot(
+        &contract::compile(app).unwrap().encode(),
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        200.,
+        200.,
+    )
+    .unwrap();
+    let id = |host: &Host<NoData>, name: &str| {
+        let k = host.runner.kernel();
+        k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+    };
+    let warnings = |host: &Host<NoData>| {
+        host.runner
+            .journal()
+            .filter_map(|line| line.split_once(' ').map(|(_, message)| message))
+            .filter(|line| line.starts_with("svg #"))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    assert!(!scene(&batch)["els"].as_array().unwrap().is_empty());
+    assert!(warnings(&host).is_empty());
+    host.runner.measure(true, false);
+    let chart = id(&host, "chart");
+    let toggle = id(&host, "toggle");
+    let replace = id(&host, "replace");
+    let batch = host.dispatch_at(toggle, Event::Press, 0.);
+    assert!(scene(&batch)["els"].as_array().unwrap().is_empty());
+    let expected = format!(
+        "svg #{chart}: {}; drawing nothing",
+        exact_kernel::svg::scene::Limit::Dashes
+    );
+    assert_eq!(warnings(&host).as_slice(), std::slice::from_ref(&expected));
+    let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
+    assert!(batch["journal"].to_string().contains(&expected));
+    host.svg.all_dirty();
+    host.resize(210., 210.);
+    host.svg.resend();
+    host.resize(220., 220.);
+    host.dispatch_at(toggle, Event::Press, 0.);
+    host.dispatch_at(toggle, Event::Press, 0.);
+    assert_eq!(warnings(&host), [expected]);
+    let old_key = host.runner.kernel().find_by_test_id("chart")[0];
+    host.dispatch_at(replace, Event::Press, 0.);
+    host.dispatch_at(replace, Event::Press, 0.);
+    assert_ne!(host.runner.kernel().find_by_test_id("chart")[0], old_key);
+    let chart = id(&host, "chart");
+    assert_eq!(warnings(&host).len(), 2);
+    assert!(warnings(&host)[1].starts_with(&format!("svg #{chart}: ")));
+}
+
+#[test]
 fn svg_filter_colors_follow_session_and_view_appearance() {
     use exact_kernel::svg::filter::{Filter, Op};
     let app = r##"component App

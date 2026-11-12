@@ -793,7 +793,7 @@ test.skipIf(process.platform === 'win32')('Gradle keeps its given environment wi
     const env = { PATH: bin, GRADLE_OPTS: '-Xmx128m' }, calls = [];
     expect(Bun.which('javac', { PATH: env.PATH })).toBe(resolve(bin, 'javac'));
     for (const platform of ['darwin', 'linux']) {
-      expect(androidJavaEnv(env, platform, studio)).toBeNull();
+      expect(androidJavaEnv(env, platform, studio)).toBe(env);
       expect(runGradle(['--version'], { env }, platform, { studio, run: (...args) => { calls.push(args); return { status: 0 }; } })).toBe(true);
       expect(calls.at(-1)[2].env).toBe(env);
       expect(calls.at(-1)[2].env).toEqual({ PATH: bin, GRADLE_OPTS: '-Xmx128m' });

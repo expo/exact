@@ -1,0 +1,6 @@
+use getBattery, BatteryManager from "@exact/device"
+
+component HeadlessReply
+  resource battery = getBattery() as shape BatteryManager else empty()
+  view
+    text `${battery.level}` font-variant-numeric="tabular-nums" testId="battery"
