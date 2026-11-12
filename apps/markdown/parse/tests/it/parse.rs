@@ -121,6 +121,375 @@ fn headings_paragraphs_and_emphasis() {
     assert!(runs.iter().any(|r| r.text == "code" && r.code));
 }
 
+fn assert_inline_runs(source: &str, expected: &[(&str, bool, bool, bool)]) {
+    let doc = here(source);
+    assert_eq!(doc.blocks.len(), 1, "{source:?}");
+    let actual: Vec<_> = doc.blocks[0]
+        .runs
+        .iter()
+        .map(|r| (r.text.as_str(), r.bold, r.italic, r.code))
+        .collect();
+    assert_eq!(actual, expected, "{source:?}");
+}
+
+#[test]
+fn code_spans_take_precedence_over_emphasis_closers() {
+    // CommonMark 0.31.2 examples 341, 478 and 479.
+    assert_inline_runs(
+        "*foo`*`",
+        &[("*foo", false, false, false), ("*", false, false, true)],
+    );
+    for marker in ["*", "_", "**", "__"] {
+        let bold = marker.len() == 2;
+        assert_inline_runs(
+            &format!("{marker}a `{marker}`{marker}"),
+            &[("a ", bold, !bold, false), (marker, bold, !bold, true)],
+        );
+    }
+    assert_inline_runs(
+        "**Pass `**kwargs` through**",
+        &[
+            ("Pass ", true, false, false),
+            ("**kwargs", true, false, true),
+            (" through", true, false, false),
+        ],
+    );
+    assert_inline_runs(
+        "*violates `break-*: avoid`*",
+        &[
+            ("violates ", false, true, false),
+            ("break-*: avoid", false, true, true),
+        ],
+    );
+    assert_inline_runs(
+        "*a ``*`x``*",
+        &[("a ", false, true, false), ("*`x", false, true, true)],
+    );
+    assert_inline_runs(
+        r"*a `\*`*",
+        &[("a ", false, true, false), (r"\*", false, true, true)],
+    );
+    assert_inline_runs("*a `*", &[("a `", false, true, false)]);
+    assert_inline_runs(
+        r"*a \`*`",
+        &[("a `", false, true, false), ("`", false, false, false)],
+    );
+    assert_inline_runs(r"*a \**", &[("a *", false, true, false)]);
+}
+
+#[test]
+fn intraword_underscores_do_not_close_emphasis() {
+    // CommonMark 0.31.2 examples 374 and 376.
+    assert_inline_runs("_foo_bar", &[("_foo_bar", false, false, false)]);
+    assert_inline_runs("_foo_bar_baz_", &[("foo_bar_baz", false, true, false)]);
+    assert_inline_runs(
+        "_see snake_case names_",
+        &[("see snake_case names", false, true, false)],
+    );
+    assert_inline_runs("_foo_123_", &[("foo_123", false, true, false)]);
+    assert_inline_runs("__foo__bar__", &[("foo__bar", true, false, false)]);
+    assert_inline_runs(
+        "_foo_, bar",
+        &[("foo", false, true, false), (", bar", false, false, false)],
+    );
+    assert_inline_runs(
+        "*foo*bar",
+        &[("foo", false, true, false), ("bar", false, false, false)],
+    );
+}
+
+#[test]
+fn emphasis_ignores_backticks_in_link_targets_and_autolinks() {
+    for (source, label) in [
+        ("[link](url \"a ` title\") *emphasis* and `code`", "link"),
+        ("[link](url`path) *emphasis* and `code`", "link"),
+        (
+            "<https://example.com/`> *emphasis* and `code`",
+            "https://example.com/`",
+        ),
+        ("<a`@b> *emphasis* and `code`", "a`@b"),
+    ] {
+        assert_inline_runs(
+            &format!("p {source}"),
+            &[
+                ("p ", false, false, false),
+                (label, false, false, false),
+                (" ", false, false, false),
+                ("emphasis", false, true, false),
+                (" and ", false, false, false),
+                ("code", false, false, true),
+            ],
+        );
+    }
+    for (source, label) in [
+        (
+            "*before [link](url \"a ` title\") after* and `code`",
+            "link",
+        ),
+        (
+            "*before <https://example.com/`> after* and `code`",
+            "https://example.com/`",
+        ),
+    ] {
+        assert_inline_runs(
+            source,
+            &[
+                ("before ", false, true, false),
+                (label, false, true, false),
+                (" after", false, true, false),
+                (" and ", false, false, false),
+                ("code", false, false, true),
+            ],
+        );
+    }
+}
+
+#[test]
+fn emphasis_wraps_bare_urls_without_changing_their_targets() {
+    use markdown_parse::Run;
+    for marker in ["*", "**", "_", "__"] {
+        for prefix in ["", "see "] {
+            for url in [
+                "https://example.com",
+                "https://example.com/foo",
+                "https://example.com/a",
+                "https://example.com/snake_case",
+            ] {
+                let source = format!("{marker}{prefix}{url}{marker}");
+                let bold = marker.len() == 2;
+                let style = Run {
+                    bold,
+                    italic: !bold,
+                    ..Run::default()
+                };
+                let mut expected = Vec::new();
+                if !prefix.is_empty() {
+                    expected.push(Run {
+                        text: prefix.into(),
+                        ..style.clone()
+                    });
+                }
+                expected.push(Run {
+                    text: url.into(),
+                    href: format!("resolved:{url}"),
+                    ..style
+                });
+                let doc = parse(&source, &|target| format!("resolved:{target}"));
+                assert_eq!(doc.blocks.len(), 1, "{source:?}");
+                assert_eq!(doc.blocks[0].runs, expected, "{source:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn emphasis_url_recognition_uses_the_content_before_its_closer() {
+    assert_inline_runs(r"*http://a\*b*", &[("http://a*b", false, true, false)]);
+    assert_inline_runs(
+        "*http://a`*`*",
+        &[("http://a", false, true, false), ("*", false, true, true)],
+    );
+}
+
+#[test]
+fn nested_emphasis_ends_url_opacity_before_a_code_span() {
+    use markdown_parse::Run;
+    for (outer, inner) in [("*", "__"), ("_", "**"), ("**", "_"), ("__", "*")] {
+        let url = "https://example.com";
+        let doc = here(&format!("{outer}{inner}{url}{inner}`{outer}`{outer}"));
+        assert_eq!(
+            doc.blocks[0].runs,
+            vec![
+                Run {
+                    text: url.into(),
+                    href: url.into(),
+                    bold: true,
+                    italic: true,
+                    ..Run::default()
+                },
+                Run {
+                    text: outer.into(),
+                    code: true,
+                    bold: outer.len() == 2,
+                    italic: outer.len() == 1,
+                    ..Run::default()
+                },
+            ],
+            "outer={outer:?}, inner={inner:?}",
+        );
+    }
+}
+
+#[test]
+fn emphasis_after_a_bare_url_uses_the_remaining_text() {
+    let url = "https://example.com/`";
+    let doc = here(&format!("p *x {url} *a* ` end"));
+    assert_eq!(
+        doc.blocks[0].runs,
+        vec![
+            markdown_parse::Run::text("p "),
+            markdown_parse::Run {
+                text: "x ".into(),
+                italic: true,
+                ..Default::default()
+            },
+            markdown_parse::Run {
+                text: url.into(),
+                href: url.into(),
+                italic: true,
+                ..Default::default()
+            },
+            markdown_parse::Run {
+                text: " *a".into(),
+                italic: true,
+                ..Default::default()
+            },
+            markdown_parse::Run::text(" ` end"),
+        ]
+    );
+}
+
+#[test]
+fn emphasis_keeps_bare_url_backticks_literal() {
+    use markdown_parse::Run;
+    for marker in ["*", "**", "_", "__"] {
+        let style = Run {
+            bold: marker.len() == 2,
+            italic: marker.len() == 1,
+            ..Run::default()
+        };
+        let url = "https://example.com/`";
+        let source = format!("{marker}a {url} b{marker} ` {marker}c{marker}");
+        let doc = here(&source);
+        assert_eq!(
+            doc.blocks[0].runs,
+            vec![
+                Run {
+                    text: "a ".into(),
+                    ..style.clone()
+                },
+                Run {
+                    text: url.into(),
+                    href: url.into(),
+                    ..style.clone()
+                },
+                Run {
+                    text: " b".into(),
+                    ..style.clone()
+                },
+                Run::text(" ` "),
+                Run {
+                    text: "c".into(),
+                    ..style
+                },
+            ],
+            "{source:?}",
+        );
+    }
+}
+
+#[test]
+fn emphasis_keeps_bare_url_brackets_and_escapes_literal() {
+    use markdown_parse::Run;
+    for marker in ["*", "**", "_", "__"] {
+        let style = Run {
+            bold: marker.len() == 2,
+            italic: marker.len() == 1,
+            ..Run::default()
+        };
+        for (path, suffix) in [("a[b", "](c)"), ("a![b", "](c)"), ("a\\", " tail")] {
+            let url = format!("https://example.com/{path}");
+            let source = format!("{marker}see {url}{marker}{suffix}");
+            let doc = parse(&source, &|target| format!("resolved:{target}"));
+            assert_eq!(
+                doc.blocks[0].runs,
+                vec![
+                    Run {
+                        text: "see ".into(),
+                        ..style.clone()
+                    },
+                    Run {
+                        text: url.clone(),
+                        href: format!("resolved:{url}"),
+                        ..style.clone()
+                    },
+                    Run::text(suffix),
+                ],
+                "{source:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn emphasis_recognizes_code_after_each_bare_url_terminator() {
+    for separator in [" ", "\t", "\u{2003}", "<", ")", "\""] {
+        let url = "https://example.com/`";
+        assert_inline_runs(
+            &format!("*a {url}{separator}`*` b*"),
+            &[
+                ("a ", false, true, false),
+                (url, false, true, false),
+                (separator, false, true, false),
+                ("*", false, true, true),
+                (" b", false, true, false),
+            ],
+        );
+    }
+}
+
+#[test]
+fn emphasis_code_spans_are_bounded_by_the_link_label() {
+    assert_inline_runs(
+        "[*a `b*](u) `c`",
+        &[
+            ("a `b", false, true, false),
+            (" ", false, false, false),
+            ("c", false, false, true),
+        ],
+    );
+    let doc = here("[*a `b*](u) `c`");
+    assert_eq!(doc.blocks[0].runs[0].href, "u");
+    assert_inline_runs(
+        "*before* [*a `b*](u) `c`",
+        &[
+            ("before", false, true, false),
+            (" ", false, false, false),
+            ("a `b", false, true, false),
+            (" ", false, false, false),
+            ("c", false, false, true),
+        ],
+    );
+}
+
+#[test]
+fn intraword_underscore_runs_stay_literal() {
+    for text in ["__foo__bar", "foo__bar__baz"] {
+        assert_inline_runs(text, &[(text, false, false, false)]);
+    }
+    assert_inline_runs("__foo__bar__", &[("foo__bar", true, false, false)]);
+}
+
+#[test]
+fn intraword_underscores_do_not_open_strong() {
+    assert_inline_runs("foo__bar__", &[("foo__bar__", false, false, false)]);
+}
+
+#[test]
+fn intraword_underscore_boundaries_include_unicode() {
+    for text in [
+        "_пристаням_стремятся",
+        "пристаням__стремятся__",
+        "_foo_１２３",
+    ] {
+        assert_inline_runs(text, &[(text, false, false, false)]);
+    }
+    assert_inline_runs(
+        "_пристаням_стремятся_",
+        &[("пристаням_стремятся", false, true, false)],
+    );
+}
+
 #[test]
 fn a_link_carries_its_target_through_the_resolver() {
     let doc = parse("See [the rules](rules/RULES.md).", &|target: &str| {

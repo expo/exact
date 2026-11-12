@@ -86,11 +86,12 @@ final class RegionWorkerLayout {
             let flush: CGFloat = source.align == 1 ? 0.5 : source.align == 2 ? 1 : 0
             let x = box.minX + TextEngine.penOffset(line, flush: flush, room: Double(box.width), rtl: source.direction == 1,
                                                     whiteSpace: source.whiteSpace, source: preparation.attributed)
-            let x0 = CTLineGetOffsetForStringIndex(line, lo, nil), x1 = CTLineGetOffsetForStringIndex(line, hi, nil)
             var above: CGFloat = 0, below: CGFloat = 0
             _ = CTLineGetTypographicBounds(line, &above, &below, nil)
-            rects.append(CGRect(x: x + min(x0, x1), y: box.minY + source.painted(baselines[i]) - above,
-                                width: max(1, abs(x1 - x0)), height: above + below))
+            for span in TextEngine.selectionSpans(line, range: NSRange(location: lo, length: hi - lo)) {
+                rects.append(CGRect(x: x + span.lowerBound, y: box.minY + source.painted(baselines[i]) - above,
+                                    width: max(1, span.upperBound - span.lowerBound), height: above + below))
+            }
         }
         return rects
     }

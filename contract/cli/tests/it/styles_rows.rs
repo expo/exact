@@ -100,7 +100,7 @@ component App
             ((0.0, 1.0, Dimension::Auto), 144.0)
         };
         assert_eq!(
-            (s.flex_grow, s.flex_shrink, s.flex_basis),
+            (s.flex_grow, s.flex_shrink, s.flex_basis.clone()),
             longhands,
             "{attrs}, on={on}, width={}",
             item.frame.width

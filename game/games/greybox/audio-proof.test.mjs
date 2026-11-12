@@ -43,15 +43,15 @@ test('web visibility and page events reach every canvas under either clock', () 
   const code = source.slice(start, source.indexOf('function render(entry, now)', start));
   for (const seekable of [false, true]) {
     const listeners = {}, calls = [], canceled = [];
-    let scheduled = 0;
+    let scheduled = 0, quarantined = false;
     const document = {hidden:false, addEventListener(name, fn) { listeners[name] = fn; }};
     const window = {addEventListener(name, fn) { listeners[name] = fn; }};
     // `recoveringDevice` is the host's in-flight device recovery (H1); none here,
     // so lifecycle codes deliver synchronously.
-    new Function('document','window','surfaces','gpu','exact','raf','cancelAnimationFrame','schedule','recoveringDevice', code)(
+    new Function('document','window','surfaces','gpu','exact','raf','cancelAnimationFrame','schedule','recoveringDevice','trapped', code)(
       document, window, new Map([[1, {id:11}], [2, {id:22}], [3, {id:0}]]),
       {gpu_lifecycle(id, code) { calls.push([id, code]); }}, seekable ? {now:() => 0} : {},
-      9, id => canceled.push(id), () => scheduled++, undefined);
+      9, id => canceled.push(id), () => scheduled++, undefined, () => quarantined);
     document.hidden = true; listeners.visibilitychange();
     listeners.pagehide();
     document.hidden = false; listeners.pageshow({persisted:false});
@@ -65,6 +65,12 @@ test('web visibility and page events reach every canvas under either clock', () 
     expect(calls.slice(-2)).toEqual([[11,0],[22,0]]);
     listeners.pageshow({persisted:false});
     expect(calls.slice(-2)).toEqual([[11,0],[22,0]]);
+    quarantined = true;
+    calls.length = 0; canceled.length = 0; scheduled = 0;
+    listeners.visibilitychange(); listeners.pagehide(); listeners.pageshow({persisted:true});
+    expect(calls).toEqual([]);
+    expect(canceled).toEqual([]);
+    expect(scheduled).toBe(0);
   }
 });
 
@@ -225,10 +231,12 @@ final class AVAudioSession {
     struct InterruptionOptions: OptionSet { let rawValue: UInt; static let shouldResume = Self(rawValue:1) }
     enum Category { case ambient }
     static let interruptionNotification = Notification.Name("interruption")
+    static let mediaServicesWereResetNotification = Notification.Name("reset")
     static let instance = AVAudioSession()
     static func sharedInstance() -> AVAudioSession { precondition(Thread.isMainThread); return instance }
     var fails = true
     var attempts = 0
+    var secondaryAudioShouldBeSilencedHint = false
     func setCategory(_ category: Category) throws { precondition(Thread.isMainThread) }
     func setActive(_ active: Bool) throws {
         precondition(Thread.isMainThread)
@@ -236,8 +244,44 @@ final class AVAudioSession {
         if fails { throw NSError(domain:"injected", code:1) }
     }
 }
-// ExactKit's session owner (AudioSession.swift): the app's category, then active
-enum AudioSession { static func activate() throws { let s = AVAudioSession.sharedInstance(); try s.setCategory(.ambient); try s.setActive(true) } }
+// Model AudioSession.swift's owner: activation and main-queue events, keyed by holder.
+enum AudioSession {
+    enum Heard {
+        case interruption(began: Bool, resume: Bool)
+        case appActive(othersPlaying: Bool)
+        case reset
+    }
+    private static var listeners: [ObjectIdentifier: (Heard) -> Void] = [:]
+    private static var observing = false
+    static func activate() throws {
+        let s = AVAudioSession.sharedInstance()
+        try s.setCategory(.ambient)
+        try s.setActive(true)
+    }
+    static func listen(_ holder: ObjectIdentifier, _ hear: @escaping (Heard) -> Void) {
+        precondition(Thread.isMainThread)
+        listeners[holder] = hear
+        guard !observing else { return }
+        observing = true
+        let center = NotificationCenter.default
+        center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { note in
+            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            let resume = AVAudioSession.InterruptionOptions(rawValue: note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0).contains(.shouldResume)
+            heard(.interruption(began: type == .began, resume: type == .ended && resume))
+        }
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+            heard(.appActive(othersPlaying: AVAudioSession.sharedInstance().secondaryAudioShouldBeSilencedHint))
+        }
+        center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { _ in
+            heard(.reset)
+        }
+    }
+    private static func heard(_ event: Heard) {
+        precondition(Thread.isMainThread)
+        for hear in Array(listeners.values) { hear(event) }
+    }
+}
 final class Frames { func requestCanvas() {} }
 final class Session { let frames = Frames() }
 // One artifact (LLP 1009 D6): each canvas's entry names the module that made it.

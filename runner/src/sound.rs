@@ -7,7 +7,7 @@
 //! through `take_commands` (what difftest observes), and every host skips
 //! them as the runner's own. What an output plays is [`SoundOp`]s: a
 //! `Play` for each new voice and an `End` for each voice whose end moved
-//! earlier, drained with `take_sounds`.
+//! earlier or later, drained with `take_sounds`.
 //!
 //! - **Start.** `max(at, t)`, `t` the commit's time: a timer's commit is its
 //!   due time, so a hit planned at `t` lands on the grid (D3).
@@ -63,7 +63,7 @@ pub enum SoundOp {
         /// Web Audio's `StereoPannerNode.pan`, −1 (left) to 1 (right).
         pan: f64,
     },
-    /// Voice `id` now ends at runner time `at`, earlier than it did.
+    /// Voice `id` now ends at runner time `at`, replacing its previous end.
     End {
         /// The voice.
         id: u64,
@@ -98,7 +98,7 @@ pub enum By {
     Cut,
     /// `stopSounds` ended it while it sounded.
     Stop,
-    /// `stopSounds` came at or before its start: it never sounds.
+    /// Cancelled before its start by a stop or the voice bound: it never sounds.
     Cancelled,
     /// Its sequence was edited before it started (LLP 1125 D3): it never
     /// sounds, and the new value is expanded in its place.
@@ -226,6 +226,7 @@ pub struct Sounds {
     ops: Vec<SoundOp>,
     haptics: VecDeque<Haptic>,
     next_haptic: u64,
+    restore_at: Option<f64>,
 }
 
 /// What became of a sequence step's sample.
@@ -334,8 +335,8 @@ impl Sounds {
 
     /// Apply one commit's calls at its time `t`, in order, journaling each
     /// change into `log`. The ops for the output are queued once, at the
-    /// end: a voice gets one `Play`, and an `End` only if it ends earlier
-    /// than its file does.
+    /// end: a new voice gets one `Play`, and an `End` if it ends before its
+    /// file does; an existing voice gets an `End` when its end changes.
     pub(crate) fn apply(&mut self, plan: &Plan, t: f64, calls: &[Call<'_>], log: &mut Vec<String>) {
         self.batch(|s| {
             for call in calls {
@@ -361,6 +362,9 @@ impl Sounds {
                 }
             }
         });
+        if plan.sequences.is_empty() {
+            self.settle(log);
+        }
     }
 
     /// Every live voice ends now: the runner is starting over (D5); every
@@ -469,6 +473,9 @@ impl Sounds {
                 n += 1;
             }
         }
+        if n > 0 {
+            self.restore_at = Some(t);
+        }
         log.push(format!("sounds retracted: {n} ({})", by.word()));
         self.retract_haptics(t, from, by.word(), log);
     }
@@ -479,7 +486,7 @@ impl Sounds {
     pub(crate) fn stop_seq(&mut self, t: f64, name: &str, log: &mut Vec<String>) {
         let mut n = 0;
         for v in self.voices.iter_mut() {
-            if v.seq && v.live(t) {
+            if v.seq && (v.live(t) || v.by == By::Group && v.ends == t) {
                 n += 1;
                 if v.at < t {
                     (v.ends, v.by) = (t, By::Stop);
@@ -488,8 +495,89 @@ impl Sounds {
                 }
             }
         }
+        if n > 0 {
+            self.restore_at = Some(t);
+        }
         log.push(format!("sounds stopped: {n} (sequence {name})"));
         self.retract_haptics(t, Cut::At(f64::NEG_INFINITY), "cancelled", log);
+    }
+
+    /// Reconcile after the commit's commands and sequence expansion, so a
+    /// temporary gap cannot cancel voices that fit the final schedule.
+    pub(crate) fn settle(&mut self, log: &mut Vec<String>) {
+        if let Some(t) = self.restore_at.take() {
+            self.batch(|s| s.restore(t, log));
+        }
+    }
+
+    /// Restore pending group cuts and revalidate future admissions, keeping
+    /// sounding voices. At each start, the last admitted voices lose first.
+    fn restore(&mut self, t: f64, log: &mut Vec<String>) {
+        if !self.restore_groups(t, log) {
+            return;
+        }
+        let mut waiting: Vec<usize> = self
+            .voices
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.by.sounds() && v.at >= t)
+            .map(|(i, _)| i)
+            .collect();
+        waiting.sort_by(|&a, &b| {
+            self.voices[a]
+                .at
+                .total_cmp(&self.voices[b].at)
+                .then(self.voices[b].id.cmp(&self.voices[a].id))
+        });
+        for i in waiting {
+            let v = &self.voices[i];
+            if !v.sounding(v.at) || self.voices.iter().filter(|w| w.sounding(v.at)).count() <= LIVE
+            {
+                continue;
+            }
+            log.push(format!(
+                "sound dropped: {LIVE} voices sound at its start ({} at {})",
+                v.src,
+                num(v.at)
+            ));
+            let v = &mut self.voices[i];
+            (v.ends, v.by) = (v.at, By::Cancelled);
+            // Cancelling a grouped voice can extend its predecessor, but
+            // only from this start onward; earlier starts remain valid.
+            self.restore_groups(t, log);
+        }
+    }
+
+    fn restore_groups(&mut self, t: f64, log: &mut Vec<String>) -> bool {
+        let mut changed = false;
+        // Ends already passed, explicit stops and tied losers stay ended.
+        for i in 0..self.voices.len() {
+            let v = &self.voices[i];
+            if v.by != By::Group || v.ends < t {
+                continue;
+            }
+            let next = self
+                .voices
+                .iter()
+                .filter(|w| w.group == v.group && w.by.sounds() && w.at > v.at)
+                .map(|w| w.at)
+                .reduce(f64::min)
+                .unwrap_or(f64::INFINITY);
+            let ends = v.natural.min(next);
+            let by = if next < v.natural { By::Group } else { By::End };
+            if ends != v.ends {
+                log.push(format!(
+                    "sound {} ends at {} ({})",
+                    v.id,
+                    num(ends),
+                    by.word()
+                ));
+                changed = true;
+            }
+            let v = &mut self.voices[i];
+            (v.ends, v.by) = (ends, by);
+        }
+        changed
     }
 
     fn queue(&mut self, before: Vec<(u64, f64)>, first_new: u64) {
@@ -510,7 +598,7 @@ impl Sounds {
                     });
                 }
             } else if let Some((_, was)) = before.iter().find(|(id, _)| *id == v.id) {
-                if v.ends < *was {
+                if v.ends != *was {
                     self.ops.push(SoundOp::End {
                         id: v.id,
                         at: v.ends,
@@ -697,20 +785,27 @@ impl Sounds {
     /// its next steps, and play (LLP 1125 D4).
     fn stop(&mut self, t: f64, group: Option<&str>, log: &mut Vec<String>) {
         let n = self.end_live(t, group.filter(|g| !g.is_empty()), true);
+        if n > 0 {
+            self.restore_at = Some(t);
+        }
         log.push(match group {
             Some(g) if !g.is_empty() => format!("sounds stopped: {n} (group {g})"),
             _ => format!("sounds stopped: {n}"),
         });
     }
 
-    /// End every voice live at `t` (in `group`, when given): one sounding
-    /// stops at `t`, one waiting is cancelled at its start — but a
-    /// sequence's waiting one is kept when `seq_waits`.
+    /// End live voices and group cuts at `t` (in `group`, when given): one
+    /// sounding stops at `t`, one waiting is cancelled at its start — but a
+    /// sequence's waiting one is kept when `seq_waits`. A cut at `t` must not
+    /// be restored when its successor is cancelled by the same stop.
     fn end_live(&mut self, t: f64, group: Option<&str>, seq_waits: bool) -> usize {
         let mut n = 0;
         for v in self.voices.iter_mut() {
             let kept = seq_waits && v.seq && v.at >= t;
-            if v.live(t) && !kept && group.is_none_or(|g| v.group == g) {
+            if (v.live(t) || v.by == By::Group && v.ends == t)
+                && !kept
+                && group.is_none_or(|g| v.group == g)
+            {
                 n += 1;
                 if v.at < t {
                     (v.ends, v.by) = (t, By::Stop);
@@ -723,10 +818,15 @@ impl Sounds {
     }
 
     /// Keep the last [`RECORD`] voices, letting the oldest that is no
-    /// longer live go first: a live one is still needed for its group.
+    /// longer live go first. A group cut at `t` can still be retracted later
+    /// in this commit.
     fn trim(&mut self, t: f64) {
         while self.voices.len() > RECORD {
-            let Some(i) = self.voices.iter().position(|v| !v.live(t)) else {
+            let Some(i) = self
+                .voices
+                .iter()
+                .position(|v| !v.live(t) && !(v.by == By::Group && v.ends == t))
+            else {
                 return;
             };
             let gone = self.voices.remove(i).expect("a position in the record");

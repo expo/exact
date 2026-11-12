@@ -79,6 +79,10 @@ pub trait Sink: Send {
     fn end(&mut self, result: Result<(), HostError>);
     /// The exchange's metrics, at most once, before or after `end`.
     fn metrics(&mut self, _metrics: HopMetrics) {}
+    /// A head the transport hands back with a failure, so never given to
+    /// `head`: one it refused for its declared length, or one that arrived
+    /// before the exchange failed (Exact patch 31).
+    fn observed(&mut self, _status: u16, _headers: &Headers) {}
 }
 
 /// A request body shared by every hop that sends it and lent to the
@@ -489,8 +493,39 @@ impl HopSink {
     }
 }
 
+impl HopSink {
+    /// Tell the embedder this hop's response head (Exact patch 31), outside
+    /// the task's lock: what it calls may abort this fetch.
+    fn tell_head(&self, status: u16, headers: &Headers) {
+        let Some(task) = &self.task else {
+            return;
+        };
+        let told = {
+            let state = task.state.lock().unwrap();
+            if state.done || state.hop != self.hop {
+                return;
+            }
+            state.current.received.clone().map(|received| {
+                (
+                    received,
+                    state.current.method.clone(),
+                    state.current.url.clone(),
+                )
+            })
+        };
+        if let Some((received, method, url)) = told {
+            (received.0)(&method, &url, status, headers);
+        }
+    }
+}
+
 impl Sink for HopSink {
+    fn observed(&mut self, status: u16, headers: &Headers) {
+        self.tell_head(status, headers);
+    }
+
     fn head(&mut self, head: Head) -> Flow {
+        self.tell_head(head.status, &head.headers);
         let Some(task) = &self.task else {
             return Flow::Stop;
         };
@@ -824,8 +859,24 @@ fn run_blocking(
     request.timeout = hop.timeout;
     request.redirect = crate::stdlib::fetch::RedirectMode::Manual;
     let _sending = hop.body;
-    let mut response = transport.open(&request, signal)?;
+    let refused = Arc::new(Mutex::new(None));
+    let told = refused.clone();
+    request.received = Some(crate::stdlib::fetch::Received(Arc::new(
+        move |_, _, status, headers: &Headers| {
+            *told.lock().unwrap() = Some((status, headers.clone()));
+        },
+    )));
+    let opened = transport.open(&request, signal);
     drop(request);
+    let mut response = match opened {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some((status, headers)) = refused.lock().unwrap().take() {
+                sink.observed(status, &headers);
+            }
+            return Err(error);
+        }
+    };
     let declared_length = response
         .headers
         .get("content-length")

@@ -384,7 +384,7 @@ export function perfExpectation(measured, st, resources = []) {
   if (st.subject === 'query') {
     if (!measured.whole.resources) return `this host counts no resource asks, so \`expect perf ${said}\` cannot be read`;
     if (resources.length && !resources.includes(st.target)) return `no resource is named ${st.target} (${resources.join(', ')})`;
-    got = measured.whole.resources.find((r) => r.name === st.target)?.asked ?? 0;
+    got = measured.whole.resources.reduce((n, r) => n + (r.name === st.target ? r.asked : 0), 0);
   } else {
     const count = st.subject === 'built' ? (x) => (x.created ?? 0) + (x.rowConstructed ?? 0) : (x) => x.evaluated ?? 0;
     let sites = measured.whole.sites.filter((x) => x.source?.component === st.target);
@@ -608,25 +608,26 @@ async function propertyFailure(p, line, state, previous, s, file, test, step, in
  * that test there, 'done' every test from there (verify's tour of the screens the tests pass through).
  */
 export async function runTests({ host, browser, file, plan, app, size, env, webDist, device = false, phone, url, seed, locale, formatLocale, timeZone, epoch, failFetch, storage = 'test', touch = 'agent', chrome: bars = 'agent', scale, atEnd, atStep, port } = {}) {
-  const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
-  if (host === 'web' && !url) await backendPreflight(resolveApp(app), resolve(webDist ?? defaultWebDist()));
+  const root = resolve(fileURLToPath(new URL('..', import.meta.url))), selected = resolveApp(app);
+  webDist ??= defaultWebDist(selected);
+  if (host === 'web' && !url) await backendPreflight(selected, resolve(webDist));
   // A fetch prefix outside every grant fails nothing (sb4 farm wave 4, lane 070: an origin moved in app.ts only).
-  const granted = host === 'web' && !url ? fetchOrigins(resolve(webDist ?? defaultWebDist())) : [];
+  const granted = host === 'web' && !url ? fetchOrigins(resolve(webDist)) : [];
   // The Snapback dev servers the tests share, and each one's head before the first test (`backendHead`).
-  const snapback = Object.values(resolveApp(app).manifest?.typescript?.sources ?? {}).some(p => /(?:^|\/)snapback4\/(?:ts|online)\/?$/.test(p));
-  const shared = host === 'web' && !url && snapback ? loopbackOrigins(resolve(webDist ?? defaultWebDist())) : [];
+  const snapback = Object.values(selected.manifest?.typescript?.sources ?? {}).some(p => /(?:^|\/)snapback4\/(?:ts|online)\/?$/.test(p));
+  const shared = host === 'web' && !url && snapback ? loopbackOrigins(resolve(webDist)) : [];
   const atStart = await Promise.all(shared.map((o) => backendHead(o)));
   const clocks = await Promise.all(shared.map(o => backendClock(o)));
   let schema = '';
-  try { schema = readFileSync(resolve(resolveApp(app).dir, '../snapback/schema.q'), 'utf8'); } catch { /* No schema beside this app. */ }
+  try { schema = readFileSync(resolve(selected.dir, '../snapback/schema.q'), 'utf8'); } catch { /* No schema beside this app. */ }
   // What `fresh` resets: every loopback origin the app's web build fetches (its net.fetch grants).
-  const backends = url ? [] : loopbackOrigins(resolve(webDist ?? defaultWebDist()));
+  const backends = url ? [] : loopbackOrigins(resolve(webDist));
   // Cargo owns target selection and freshness, including CARGO_TARGET_DIR.
   const c = spawnSync('cargo', ['run', '-q', '-p', 'contract', '--', 'test', resolve(file)], { cwd: root, encoding: 'utf8' });
   if (c.status !== 0) throw new Error(c.stderr?.trim() || c.error?.message || 'contract test compiler failed');
   // Native runs use the origin their build selected (LLP 1142 D13), else the scaffold's declared one, else the grants
   // app.ts names as the build evaluates them, when no web admission file exists.
-  const appOrigins = host !== 'web' ? nativeFetchOrigins(resolveApp(app).dir, { ...process.env, ...(env ?? {}) }) : [];
+  const appOrigins = host !== 'web' ? nativeFetchOrigins(selected.dir, { ...process.env, ...(env ?? {}) }) : [];
   const authored = JSON.parse(c.stdout), properties = authored.properties.filter(p => p.kind === 'always');
   const unchecked = authored.properties.filter(p => p.kind !== 'always').reduce((n, p) => n + Math.max(1, p.lines.length), 0);
   if (unchecked) console.error(`properties on ${host}: ${unchecked} lines not checked (after, its frames and commands, and never refuses); the driver exposes no commit trace`);
@@ -637,7 +638,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
   const results = [];
   // Where the host keeps its stores, as it will see its environment (a drive's env overrides the driver's).
   const launched = { ...process.env, ...(env ?? {}) };
-  const selected = resolveApp(app), id = selected.id, chrome = host === 'web' && (browser ?? launched.EXACT_WEB_BROWSER ?? 'chrome') === 'chrome';
+  const id = selected.id, chrome = host === 'web' && (browser ?? launched.EXACT_WEB_BROWSER ?? 'chrome') === 'chrome';
   const base = device ? null : chrome ? driveStore(selected, storage, env).base : host === 'web' ? null : storeBase(id, host, launched, launched.HOME || homedir());
   // A run's own names where the driver can remove them; a simulator's (one drive at a time: a launch ends the
   // last) reuse one store a test, emptied at launch, so they cannot pile up in its app container.

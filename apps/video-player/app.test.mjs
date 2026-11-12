@@ -37,7 +37,7 @@ for (const scheme of ['light', 'dark']) {
       const surface = '#' + paint['player-app'].fill.slice(0, 3)
         .map(n => n.toString(16).padStart(2, '0')).join('');
       expect(manifest.theme_color).toBe(surface);
-      expect(scheme === 'dark' ? manifest.background_color_dark ?? manifest.background_color
+      expect(scheme === 'dark' ? manifest.color_scheme_dark?.background_color ?? manifest.background_color
         : manifest.background_color).toBe(surface);
       await session.type('note', 'Keep this moment.');
       await session.tap('done');

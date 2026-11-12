@@ -271,13 +271,11 @@ final class BoxLayerMacTests: XCTestCase {
     }
 
     /// LLP 1116: a padding that resolves at layout (`min(10%, 20px)`
-    /// arrives as a calculation's handle) reads the content box the kernel published,
+    /// arrives as a calculation) reads the content box the kernel published,
     /// for the box and for each side; without one, the box's bounds.
     func testAPaddingResolvedAtLayoutReadsTheKernelsContentBox() throws {
-        let bytes = Array("min(10%, 20px)".utf8)
-        let handle = bytes.withUnsafeBufferPointer { exact_calc_parse($0.baseAddress, $0.count) }
         let padding = try XCTUnwrap(CalculatedLength([
-            "calc": .number(Double(handle)),
+            "calc": .string("min(10%, 20px)"),
             "env": [0, 0, 0, 0, 300, 600, 1, 1, 0, 0]
         ]))
         let knots: NodeStyle = ["padding_top": .calculation(padding)]

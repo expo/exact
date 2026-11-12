@@ -951,6 +951,12 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.list_index(view, len as usize), |_| u32::MAX)
         }
 
+        /// Nearest logical collection snap position, or NaN when absent.
+        #[no_mangle]
+        pub extern "C" fn exact_collection_snap(rt: u32, view: u32, proposed: f64, port: f64, maximum: f64, distance: f64) -> f64 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.collection_snap(view, proposed, port, maximum, distance), |_| f64::NAN)
+        }
+
         /// Copy logical text without materializing native views. Input is
         /// two concatenated UTF-8 row keys; first_len == 0 means all text.
         #[no_mangle]
@@ -1057,8 +1063,8 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.covers(len), |n| n)
         }
 
-        /// A trial layout of a block's root (`Bridge::measure_block`): its border
-        /// box and margins, six LE f32s, in the output buffer; 0 when refused.
+        /// A trial layout of a block's root (`Bridge::measure_block`): its used
+        /// size, border box and margins, eight LE f32s, in the output buffer; 0 when refused.
         /// No batch.
         #[no_mangle]
         pub extern "C" fn exact_measure_block(rt: u32, view: u32, width: f32, height: f32, width_policy: u32, height_policy: u32) -> u32 {

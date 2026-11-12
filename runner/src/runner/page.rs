@@ -18,45 +18,46 @@ impl<D: DataSource> Runner<D> {
     /// windows, and asks nothing of a reader of `onLine` alone (#114). Size
     /// readers are not asked.
     pub fn set_page(&mut self, page: Page) -> Result<Option<CommitReceipt>, RunnerError> {
-        if page == self.page {
-            return Ok(None);
-        }
-        let previous = std::mem::replace(&mut self.page, page);
-        // The GPU tier is read through `exactViewport` (LLP 1139.003 D2).
-        let tier = previous.gpu_tier != page.gpu_tier;
-        let which: Vec<usize> = (0..self.plan.resources.len())
-            .filter(|i| {
-                let source = self.plan.str(self.plan.resources[*i].source);
-                (source == SOURCE && self.page_reads_changed(*i, previous))
-                    || (tier && source == crate::viewport::SOURCE)
-            })
-            .collect();
-        // About to be suspended: a sequence stops in this commit, once it
-        // stands, and the commit carries its ends to the output (LLP 1125 D4).
-        let result = if page.suspended && !previous.suspended && self.transport.playing() {
-            self.transport.suspend = true;
-            self.commit_again(which, "page").map(Some)
-        } else {
-            self.recommit(which, "page")
-        };
-        // The stop is the standing commit's (a recovery commit after
-        // owed reads included); a call that failed as a whole made none.
-        if result.is_err() {
-            self.transport.suspend = false;
-            self.page = previous;
-        } else if previous.in_background() != page.in_background() {
-            self.samples_visibility(page.in_background());
-            self.tell_foreground();
-            self.arrival_visibility(page.hidden);
-        }
-        result
+        self.replace_fact(
+            |r| &mut r.page,
+            page,
+            SOURCE,
+            |r, previous, mut readers| {
+                // The GPU tier is read through `exactViewport` (LLP 1139.003 D2).
+                let tier = previous.gpu_tier != page.gpu_tier;
+                readers.retain(|i| r.page_reads_changed(*i, *previous));
+                if tier {
+                    readers.extend(r.resource_rows().enumerate().filter_map(|(i, row)| {
+                        (r.plan.str(row.source) == crate::viewport::SOURCE).then_some(i)
+                    }));
+                }
+                // About to be suspended: a sequence stops in this commit, once it
+                // stands, and the commit carries its ends to the output (LLP 1125 D4).
+                let result = if page.suspended && !previous.suspended && r.transport.playing() {
+                    r.transport.suspend = true;
+                    r.commit_again(readers, "page").map(Some)
+                } else {
+                    r.recommit(readers, "page")
+                };
+                // The stop is the standing commit's (a recovery commit after
+                // owed reads included); a call that failed as a whole made none.
+                if result.is_err() {
+                    r.transport.suspend = false;
+                } else if previous.in_background() != page.in_background() {
+                    r.samples_visibility(page.in_background());
+                    r.tell_foreground();
+                    r.arrival_visibility(page.hidden);
+                }
+                result
+            },
+        )
     }
 
     /// Whether an `exactPage` resource reads `field`: one whose shape names
     /// it, or one that is no record (refused, but asked again on every
     /// change). A host watches what no resource reads only if it wants to.
     pub fn reads_page_field(&self, field: &str) -> bool {
-        self.plan.resources.iter().any(|r| {
+        self.resource_rows().any(|r| {
             let ty = self.plan.type_(r.ty);
             self.plan.str(r.source) == SOURCE
                 && (ty.kind != TypeKind::Record
@@ -70,7 +71,7 @@ impl<D: DataSource> Runner<D> {
     /// Whether resource `i`'s shape names a field `previous` answered
     /// otherwise; a shape that is no record is asked again, to be refused.
     fn page_reads_changed(&self, i: usize, previous: Page) -> bool {
-        let ty = self.plan.type_(self.plan.resources[i].ty);
+        let ty = self.plan.type_(self.resource_row(i).ty);
         ty.kind != TypeKind::Record
             || ty.fields.iter().any(|f| {
                 let name = self.plan.str(self.plan.field(f).name);
@@ -79,7 +80,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     pub(super) fn page_answer(&self, i: usize) -> Result<Value, DataError> {
-        let row = &self.plan.resources[i];
+        let row = self.resource_row(i);
         if row.args.len > 0 {
             return Err(DataError::BadArguments(format!(
                 "{SOURCE} takes no arguments"

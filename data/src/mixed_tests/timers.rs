@@ -81,6 +81,7 @@ fn a_worker_timer_reserves_its_next_turn_and_reads_the_committed_store() {
                 target,
                 source: "sleep",
                 args: &[],
+                fetch: None,
                 continuation: Some(timer),
             }],
         );

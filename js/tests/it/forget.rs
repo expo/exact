@@ -218,6 +218,7 @@ fn a_refused_commit_puts_back_only_the_first_of_several_equal_calls() {
         target: Target::Mutation(0),
         source: "tagged",
         args: &[],
+        fetch: None,
         continuation: None,
     };
     m.forgotten(&s, &[back]);

@@ -115,11 +115,11 @@ pub use instance::{DocNode, DocTree, DocTreeError, ListLinks, SurfaceUpdate, LIS
 pub use page::Page;
 pub use process::{ProcessOp, WorkClock, PROCESS_URL};
 pub use request::{
-    io_grants, Answer, Dispatch, FailureKind, HttpScheduling, LongPoll, Message, Outcome,
-    Placement, Redirect, Reply, Request, RequestOut, Response, RetryReader, Retrying, SocketOp,
-    SocketOrigin, SocketSend, SurfaceOutcome, SurfaceRequest, Work, BODY_TO_HELD_BYTES,
-    BODY_WRITTEN, LONG_POLL_REPLY, MAX_BODY_FROM_BYTES, MAX_BODY_FROM_PATH, MAX_BODY_TO_BYTES,
-    MAX_HOST_WORK_BYTES, MAX_TIMEOUT_MS, NATIVE_URL,
+    io_grants, Answer, CacheMode, CompletionTiming, Dispatch, FailureKind, HttpScheduling,
+    LongPoll, Message, Outcome, Placement, Redirect, Reply, Request, RequestClass, RequestOut,
+    Response, RetryReader, Retrying, SocketOp, SocketOrigin, SocketSend, SurfaceOutcome,
+    SurfaceRequest, Work, BODY_TO_HELD_BYTES, BODY_WRITTEN, LONG_POLL_REPLY, MAX_BODY_FROM_BYTES,
+    MAX_BODY_FROM_PATH, MAX_BODY_TO_BYTES, MAX_HOST_WORK_BYTES, MAX_TIMEOUT_MS, NATIVE_URL,
 };
 pub use runner::{
     canvas_engine, press_writes_router, routing, virtual_frame, Advanced, Announce, AuthLinks,
@@ -147,7 +147,7 @@ pub mod tamber {
     };
 }
 pub use secrets::{SecretLease, SecretWait, SharedSecrets};
-pub use store::{Store, StoreChange, StoreError, StoreWrite};
+pub use store::{Socket, SocketCall, Store, StoreChange, StoreError, StoreWrite};
 pub use uses::{svg_filters, svg_islands, uses, Capability, Uses};
 pub use viewport::{Contrast, Fold, Gamut, Hover, Pointer, Posture, Preferences, Viewport};
 pub use vm::Trap;

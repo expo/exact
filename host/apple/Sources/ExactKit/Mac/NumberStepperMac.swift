@@ -62,7 +62,7 @@ extension NodeView {
             s.action = #selector(stepperChanged(_:))
             s.autorepeat = true
             s.valueWraps = false
-            addSubview(s)
+            (clipBox ?? self).addSubview(s)
             stepper = s
             return s
         }()

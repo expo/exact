@@ -2,7 +2,9 @@
 //! The person's own calendars and activity are instants, placed on days in the
 //! reader's zone at the offset in force at each one.
 
+#[cfg(not(target_arch = "wasm32"))]
 use chrono::{DateTime, NaiveDate, Offset, TimeDelta, TimeZone};
+#[cfg(not(target_arch = "wasm32"))]
 use chrono_tz::Tz;
 
 pub(crate) const FIRST_MONTH: i32 = 1900 * 12;
@@ -170,11 +172,13 @@ pub(crate) fn in_range(day: i32) -> bool {
 
 /// The reader's zone, by `time.timeZone`'s IANA name; UTC for a name the
 /// zone database does not know.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn zone(name: &str) -> Tz {
     name.parse().unwrap_or(Tz::UTC)
 }
 
 /// `zone`'s offset from UTC at an instant, both in ms.
+#[cfg(not(target_arch = "wasm32"))]
 fn offset(zone: Tz, ms: f64) -> f64 {
     DateTime::from_timestamp_millis(ms as i64).map_or(0.0, |at| {
         let offset = zone.offset_from_utc_datetime(&at.naive_utc()).fix();
@@ -183,11 +187,13 @@ fn offset(zone: Tz, ms: f64) -> f64 {
 }
 
 /// The local day an instant falls on in `zone`.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn local_day(ms: f64, zone: Tz) -> i32 {
     ((ms + offset(zone, ms)) / DAY_MS).floor() as i32
 }
 
 /// The minute of its local day an instant falls on in `zone`.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn local_minute(ms: f64, zone: Tz) -> u16 {
     let local = ms + offset(zone, ms);
     ((local - (local / DAY_MS).floor() * DAY_MS) / 60_000.0) as u16
@@ -195,6 +201,7 @@ pub(crate) fn local_minute(ms: f64, zone: Tz) -> u16 {
 
 /// The instant `day` begins in `zone`: its earlier local midnight where the
 /// clocks repeat it, or the first minute after a change that skips it.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn midnight(day: i32, zone: Tz) -> f64 {
     let wall = day as f64 * DAY_MS;
     let Some(midnight) = NaiveDate::from_num_days_from_ce_opt(day + 719_163)
@@ -236,6 +243,7 @@ mod tests {
         assert_eq!(display_time(12 * 60), "12:00 PM");
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn a_day_begins_at_its_own_offset() {
         let la = zone("America/Los_Angeles");

@@ -497,6 +497,40 @@ fn a_rename_leaves_metadata_alone() {
 }
 
 #[test]
+fn a_rename_keeps_kind_annotations() {
+    for (kind, value, other) in [
+        ("family", "\"Inter\", system-ui", "\"Menlo\", monospace"),
+        ("length", "4px", "8px"),
+    ] {
+        let src = format!(
+            "tamber t\n\ntheme\n  {kind}: {kind} = {value}\n  other: {kind} = {other}\n  alias: {kind} = {kind}\n"
+        );
+        exact_tamber::check(&src, &vocab()).unwrap();
+        let renamed = apply(
+            &src,
+            &Op::RenameToken {
+                from: kind.into(),
+                to: "token.renamed".into(),
+            },
+            &vocab(),
+        )
+        .unwrap();
+        assert_eq!(
+            renamed.text,
+            format!(
+                "tamber t\n\ntheme\n  token.renamed: {kind} = {value}\n  other: {kind} = {other}\n  alias: {kind} = token.renamed\n"
+            )
+        );
+        assert_eq!(
+            undo(&renamed.text, &renamed.inverse, &vocab())
+                .unwrap()
+                .text,
+            src
+        );
+    }
+}
+
+#[test]
 fn a_restore_is_an_inverse_and_a_value_carries_nothing_after_it() {
     let src = "tamber t\n\ntheme\n  ink = #ffffff  scheme=fixed\n";
     let vocab = vocab();

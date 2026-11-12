@@ -1,5 +1,6 @@
 //! A rendered document as a page (LLP 1048.000 D3, D6, D7): the one place a
 //! page is composed, for the build's `dist/` and the server alike.
+use crate::serve::deferred::{self, Checkpoints};
 use crate::Rendered;
 
 /// The capture script (LLP 1048.000 D6, 1048.001 D5): host code, inline in
@@ -26,8 +27,16 @@ pub fn capture() -> &'static str {
 /// built); an interaction page's are removed: it fetches nothing before a
 /// handler's intent. Refuses a shell that no longer has those places.
 pub fn page(shell: &str, rendered: &Rendered) -> Result<String, String> {
+    page_at(shell, rendered, None)
+}
+
+pub(crate) fn page_at(
+    shell: &str,
+    rendered: &Rendered,
+    checkpoints: Option<&Checkpoints>,
+) -> Result<String, String> {
     if is_js(shell) {
-        return page_js(shell, rendered);
+        return Ok(page_with(shell, &Js::of(shell)?, rendered, checkpoints));
     }
     let mut html = shell.to_string();
     // From `start` through the first `end` after it.
@@ -87,9 +96,10 @@ pub fn page(shell: &str, rendered: &Rendered) -> Result<String, String> {
     } else {
         glue
     };
+    let (src, body) = deferred::checkpoint(&rendered.checkpoint, rendered.activate, checkpoints);
     let checkpoint = format!(
-        "<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"{}\"{build}>{}</script>\n{entry}",
-        rendered.digest, rendered.activate.name(), rendered.checkpoint
+        "<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"{}\"{build}{src}>{body}</script>\n{entry}",
+        rendered.digest, rendered.activate.name()
     );
     cut(&mut html, glue, glue, &checkpoint)?;
     // Counted outside script elements ([`blanked`]) and before the shell's
@@ -169,21 +179,19 @@ pub(crate) fn preloads_early(plan: &exact_plan::Plan, location: &str) -> bool {
     }
 }
 
-/// [`page`] over the JavaScript runtime's shell (exact2's JS web target,
-/// LLP 1071): [`head_js`], then [`body_js`] — the page a server streams in
-/// those two parts is these bytes.
-fn page_js(shell: &str, rendered: &Rendered) -> Result<String, String> {
-    Ok(page_with(shell, &Js::of(shell)?, rendered))
-}
-
-/// [`page_js`] over a shell already read, with the build's analyzed sheet
+/// [`page`] over a shell already read, with the build's analyzed sheet
 /// when [`Js::with_rules`] gave it.
-pub(crate) fn page_with(shell: &str, js: &Js, rendered: &Rendered) -> String {
+pub(crate) fn page_with(
+    shell: &str,
+    js: &Js,
+    rendered: &Rendered,
+    checkpoints: Option<&Checkpoints>,
+) -> String {
     let preload = activate_js(rendered.activate) != "interaction";
     let document = &rendered.document;
     let scroll = document.scroll_document;
     head_js(shell, js, &document.lang, &document.dir, preload, scroll)
-        + &body_js(shell, js, rendered, false, scroll)
+        + &body_js(shell, js, rendered, false, scroll, checkpoints)
 }
 
 /// [`page`] with the build's analyzed sheet (`.gen/page-style.json`), so
@@ -197,6 +205,7 @@ pub fn page_with_rules(shell: &str, rules: &str, rendered: &Rendered) -> Result<
         shell,
         &Js::of(shell)?.with_rules(rules),
         rendered,
+        None,
     ))
 }
 
@@ -426,8 +435,9 @@ pub(crate) fn body_js(
     rendered: &Rendered,
     late: bool,
     marked: bool,
+    checkpoints: Option<&Checkpoints>,
 ) -> String {
-    body_after_boot_js(shell, js, rendered, late, marked, None)
+    body_after_boot_js(shell, js, rendered, late, marked, None, checkpoints)
 }
 
 pub(crate) fn body_after_boot_js(
@@ -437,6 +447,7 @@ pub(crate) fn body_after_boot_js(
     late: bool,
     marked: bool,
     boot: Option<&crate::direct::Boot>,
+    checkpoints: Option<&Checkpoints>,
 ) -> String {
     let document = &rendered.document;
     let mut html = std::borrow::Cow::Borrowed(document.root.as_str());
@@ -482,6 +493,7 @@ pub(crate) fn body_after_boot_js(
         rendered.activate,
         &rendered.wake,
         &rendered.checkpoint,
+        checkpoints,
     );
     out.push_str(&crate::direct::close_after_boot(close, boot.is_some()));
     out
@@ -570,7 +582,9 @@ pub(crate) fn body_close_js(
     activate: exact_plan::ActivatePolicy,
     wake: &str,
     checkpoint: &str,
+    checkpoints: Option<&Checkpoints>,
 ) -> String {
+    let (src, checkpoint) = deferred::checkpoint(checkpoint, activate, checkpoints);
     let at = &js.at;
     let mut out = String::with_capacity(shell.len() - at.root + checkpoint.len() + 256);
     out.push_str("</div>");
@@ -589,7 +603,7 @@ pub(crate) fn body_close_js(
     let _ = std::fmt::Write::write_fmt(
         &mut out,
         format_args!(
-            "<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"{}\"{}>{}</script>",
+            "<script type=\"application/vnd.exact.checkpoint\" data-digest=\"{}\" data-activate=\"{}\"{}{src}>{}</script>",
             digest,
             activate_js(activate),
             wake,
@@ -979,6 +993,86 @@ fn unescape(value: &str) -> std::borrow::Cow<'_, str> {
         .into()
 }
 
+/// One script element among `host.web.head`'s entries (LLP 1048.000 D3):
+/// its `src` and `type` attributes, read, and its text as the shell holds it.
+pub(crate) struct HeadScript {
+    pub src: Option<String>,
+    pub kind: Option<String>,
+    pub text: String,
+}
+
+/// The shell's `host.web.head` scripts: those between the end of its sheet,
+/// after which the entries are the app's, and its root. Each start tag is as
+/// `scripts/web-head.mjs` writes it: a bare attribute, or a value in double
+/// quotes with `"`, `<`, `>` and `&` escaped.
+pub(crate) fn head_scripts(shell: &str) -> Vec<HeadScript> {
+    let seen = blanked(shell);
+    let Some(from) = seen
+        .find("<style>")
+        .and_then(|at| seen[at..].find("</style>").map(|end| at + end))
+    else {
+        return Vec::new();
+    };
+    let to = seen[from..]
+        .find("<div id=\"exact-root\"")
+        .map_or(seen.len(), |at| at + from);
+    let mut scripts = Vec::new();
+    let mut at = from;
+    while let Some(open) = seen[at..to].find("<script").map(|found| found + at) {
+        let Some(close) = tag_end(&seen[open..to]).map(|found| found + open) else {
+            break;
+        };
+        let Some(end) = seen[close..to].find("</script").map(|found| found + close) else {
+            break;
+        };
+        let (mut src, mut kind) = (None, None);
+        let mut rest = &shell[open + "<script".len()..close];
+        while let Some(start) = rest.find(|c: char| !c.is_ascii_whitespace()) {
+            rest = &rest[start..];
+            let stop = rest
+                .find(|c: char| c == '=' || c.is_ascii_whitespace())
+                .unwrap_or(rest.len());
+            let name = rest[..stop].to_ascii_lowercase();
+            rest = &rest[stop..];
+            let value = rest.strip_prefix("=\"").and_then(|value| {
+                let q = value.find('"')?;
+                rest = &value[q + 1..];
+                Some(unescape(&value[..q]).into_owned())
+            });
+            match name.as_str() {
+                "src" => src = value,
+                "type" => kind = value,
+                _ => {}
+            }
+        }
+        scripts.push(HeadScript {
+            src,
+            kind,
+            text: shell[close + 1..end].to_string(),
+        });
+        at = end;
+    }
+    scripts
+}
+
+/// Where a start tag ends: its first `>` outside a quoted attribute value.
+fn tag_end(tag: &str) -> Option<usize> {
+    let mut quote = None;
+    tag.bytes().position(|b| match quote {
+        Some(q) => {
+            if b == q {
+                quote = None;
+            }
+            false
+        }
+        None if b == b'"' || b == b'\'' => {
+            quote = Some(b);
+            false
+        }
+        None => b == b'>',
+    })
+}
+
 /// A `modulepreload` in the JavaScript shell's head (`host/web-js/build.mjs`).
 const MODULE_PRELOAD: &str = "<link rel=\"modulepreload\" href=\"";
 
@@ -1016,11 +1110,11 @@ mod tests {
         let head = head_js(shell, &js, "en", "ltr", true, false);
         assert!(head.contains("<html lang=\"en\" dir=\"ltr\">"), "{head}");
         let mark = format!("<script>{}</script>", scroll_document_js());
-        let rest = body_js(shell, &js, &rendered, false, false);
+        let rest = body_js(shell, &js, &rendered, false, false, None);
         assert!(rest.find(&mark).unwrap() < rest.find("<div id=\"exact-root\">").unwrap());
-        assert!(!body_js(shell, &js, &rendered, false, true).contains(&mark));
+        assert!(!body_js(shell, &js, &rendered, false, true, None).contains(&mark));
         rendered.document.scroll_document = false;
-        assert!(!body_js(shell, &js, &rendered, false, false).contains(&mark));
+        assert!(!body_js(shell, &js, &rendered, false, false, None).contains(&mark));
     }
 
     /// LLP 1048.000 D3: the app's `host.web.head`, which the build writes
@@ -1092,7 +1186,7 @@ mod tests {
                 runtime_form: false,
             };
             let page = head_js(&shell, &js, "en", "ltr", false, false)
-                + &body_js(&shell, &js, &rendered, false, false);
+                + &body_js(&shell, &js, &rendered, false, false, None);
             for script in [head, after].into_iter().filter(|s| !s.is_empty()) {
                 assert_eq!(page.matches(script).count(), 1, "{page}");
             }

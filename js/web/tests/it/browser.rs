@@ -151,8 +151,8 @@ fn grant_sets() -> String {
         "net.fetch https://fixture.exact.test\n",
         "secret.keep dpop\n",
         "net.fetch https://api.castle.xyz\nsecret.keep castle.session\n",
-        // js/tests/fixtures/storage.ts's, as it declares them (its widget cache writes since 5363e50241).
-        "fs.read app:/data\nfs.write app:/data\nfs.write app:/cache/widget-hidden\nfs.write app:/cache/widget-copy\nfs.read doc:/\nfs.write doc:/\ndoc.keep\nsqlite.open app:/data/notes.db\nnet.fetch https://example.test\nsecret.keep session\n",
+        // js/tests/fixtures/storage.ts's declared grants.
+        "fs.read app:/data\nfs.write app:/data\nfs.write app:/cache/widget-hidden\nfs.write app:/cache/widget-copy\nfs.read doc:/\nfs.write doc:/\ndoc.keep\nsqlite.open app:/data/notes.db\nnet.fetch https://example.test\nsecret.keep session\nfs.read bundle:/Resources/shipped\n",
         "fs.read app:/\nfs.write app:/\nsqlite.open app:/data",
         "fs.read app:/data/move\nfs.write app:/data/move",
         "fs.read app:/data",
@@ -362,6 +362,34 @@ try {
     }
     module.dispose();
     if(!call({op:'answer',id:module.id,source:'explicit',args:[0]}).error)throw new Error('disposed environment is callable');
+
+    for(const placement of ['main','worker'])for(const hasOverlay of [false,true]){
+      const overlaySource=`let reads=0, present=${hasOverlay};
+        globalThis.exact={abi:1,appId:'test.browser.module',grants:'secret.keep token',
+          get overlay(){reads++;return present?()=>{throw new Error('worker overlay ran');}:undefined;},
+          answer(source){if(source==='toggle')present=!present;return reads;}};`;
+      const realm=await prepare(await payload(overlaySource),{...identity,placement});
+      try{
+        for(const source of ['reads','toggle','reads']){
+          const probe=call({op:'has-overlay',id:realm.id});
+          if(probe.has!==hasOverlay)throw new Error(`${placement}: overlay at load was ${hasOverlay}, probe answered ${JSON.stringify(probe)}`);
+          const started=call({op:'answer',id:realm.id,source,args:[],store:[],grants:[]});
+          if((await checkpoint(started)).value!==1)throw new Error(`${placement}: overlay was not read exactly once at load`);
+        }
+        if(placement==='worker'&&hasOverlay){
+          const overlay=call({op:'overlay',id:realm.id,source:'reads',args:[],answer:1,writes:[]});
+          if(overlay.tag!==4||overlay.worker!==true)throw new Error('worker overlay no longer shows the answer');
+        }
+      }finally{realm.dispose();}
+      if(!call({op:'has-overlay',id:realm.id}).error)throw new Error('disposed realm retained its overlay decision');
+      const bad=overlaySource.replace("appId:'test.browser.module'","appId:'another.app'");
+      let refused=false;try{await prepare(await payload(bad),{...identity,placement});}catch{refused=true;}
+      if(!refused)throw new Error(`${placement}: invalid module admitted`);
+      const throwing=await prepare(await payload(overlaySource.replace('reads++;return present?',
+        "throw new Error('overlay getter failed');return present?")),{...identity,placement});
+      try{if(call({op:'has-overlay',id:throwing.id}).has!==true)throw new Error(`${placement}: throwing overlay getter treated as absent`);}
+      finally{throwing.dispose();}
+    }
 
     const inputsIdentity=admit({appId:'test.explicit-inputs',grants:'net.fetch https://fixture.exact.test\n'});
     const inputs=await prepare(await payload(fixtures.inputs,inputsIdentity),inputsIdentity);
@@ -580,7 +608,7 @@ try {
     };
     // The fixture's own grants (js/tests/fixtures/storage.ts, js/tests/it/storage.rs GRANTS): its module declares
     // them, and admission refuses a module whose declaration differs from the admitted one.
-    const storageIdentity=admit({appId:'dev.exact.storage-test',grants:'fs.read app:/data\nfs.write app:/data\nfs.write app:/cache/widget-hidden\nfs.write app:/cache/widget-copy\nfs.read doc:/\nfs.write doc:/\ndoc.keep\nsqlite.open app:/data/notes.db\nnet.fetch https://example.test\nsecret.keep session\n'});
+    const storageIdentity=admit({appId:'dev.exact.storage-test',grants:'fs.read app:/data\nfs.write app:/data\nfs.write app:/cache/widget-hidden\nfs.write app:/cache/widget-copy\nfs.read doc:/\nfs.write doc:/\ndoc.keep\nsqlite.open app:/data/notes.db\nnet.fetch https://example.test\nsecret.keep session\nfs.read bundle:/Resources/shipped\n'});
     const beforeStorage=(await indexedDB.databases()).length;
     let storage=await prepare(await payload(fixtures.storage,storageIdentity),storageIdentity);
     if((await indexedDB.databases()).length!==beforeStorage)throw new Error('prepare opened storage');

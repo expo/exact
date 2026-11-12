@@ -42,7 +42,7 @@ export function members(rows, valueOf, grants) {
     if (can.available === false) return fail("NotSupportedError", `no ${option} provider is offered on web`);
     let kept = 0;
     for (const [i, p] of providers.entries()) {
-      const known = member.sub.providers?.[p?.configURL];
+      const known = member.sub.providers && Object.hasOwn(member.sub.providers, p?.configURL) ? member.sub.providers[p.configURL] : null;
       if (!known) return fail("NotSupportedError", `${option}.providers[${i}].configURL ${JSON.stringify(p?.configURL ?? null)} is no provider here`);
       if (!granted(known.line, p.clientId)) return fail("SecurityError", `grant-missing (${known.name}'s clientId=${p.clientId} needs \`${known.line} ${p.clientId}\`)`);
       const back = p.web?.redirectURI;

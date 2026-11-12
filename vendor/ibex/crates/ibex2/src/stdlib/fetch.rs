@@ -256,6 +256,8 @@ pub struct Request {
     pub timeout: Option<std::time::Duration>,
     /// Told the body's bytes as they are sent (Exact patch 23).
     pub sent: Option<Sent>,
+    /// Each hop's response head, before redirects or body reads (LLP 1162 D4).
+    pub received: Option<Received>,
 }
 
 /// An upload's progress, XMLHttpRequest's `upload` events: the body's bytes
@@ -281,6 +283,15 @@ impl std::fmt::Debug for Sent {
     }
 }
 
+type ReceiveHead = dyn Fn(&str, &str, u16, &Headers) + Send + Sync;
+#[derive(Clone)]
+pub struct Received(pub std::sync::Arc<ReceiveHead>);
+impl std::fmt::Debug for Received {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Received")
+    }
+}
+
 impl Request {
     pub fn get(url: &str) -> Self {
         Self {
@@ -293,6 +304,7 @@ impl Request {
             max_body: None,
             timeout: None,
             sent: None,
+            received: None,
         }
     }
 
@@ -462,6 +474,14 @@ pub fn fetch_stream_gated(
         guarded.headers = current.headers.for_request();
         let result = transport.open(&guarded, signal);
         current.body = guarded.body.take();
+        if let (Some(received), Ok(response)) = (&current.received, &result) {
+            (received.0)(
+                &current.method,
+                &current.url,
+                response.status,
+                &response.headers,
+            );
+        }
         signal.check()?;
         let mut response = result?;
         response.redirected = redirected;

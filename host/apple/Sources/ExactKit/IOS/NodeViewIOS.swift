@@ -62,9 +62,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     weak var paintParent: PaintView?
     let firstDraw: DrawReceipt?
     package let kind: String
-    var inlineText: [InlineText] = [] { didSet { hasInlineContextPopover = inlineText.contains { $0.props["contextPopover"]?.isEmpty == false } } }
-    /// A run names a context popover: read for every paragraph each batch (`ContextMenuHost.sync`).
-    private(set) var hasInlineContextPopover = false
+    var inlineText: [InlineText] = [] { didSet { hasInlineContextPopover = inlineText.contains { $0.props["contextPopover"]?.isEmpty == false }; hasInlineLink = inlineText.contains { $0.props["href"].map(NodeView.hasLinkMenu) == true } } }
+    /// A run names a context popover, or is a link with the host's own menu (`hasLinkMenu`): read for every paragraph each batch (`ContextMenuHost.sync`).
+    private(set) var hasInlineContextPopover = false, hasInlineLink = false
     /// The rarely set fields (`NodeExtrasIOS.swift`); nil until one is set.
     var extras: NodeExtras?
     /// A box's gradient and shadows (`NodePaintExtras`); nil until one is set.
@@ -938,7 +938,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
                     guard holder !== self, holder === child || holder.isDescendant(of: child) else { return nil }
                     let chain = sequence(first: holder, next: { $0 === child ? nil : $0.superview })
                     guard !chain.contains(where: { $0.isHidden || !$0.isUserInteractionEnabled }) else { return nil }
-                    return NodeView.hitChildren(in: holder, at: self.convert(point, to: holder), with: event)
+                    return NodeView.hitChildren(in: holder, at: self.convert(point, to: holder), with: event, visit: {
+                        ($0 as? NodeView)?.hitTest(self.convert(point, to: $0), with: event)
+                    })
                 }
                 return child.hitTest(self.convert(point, to: child), with: event)
             }) { return hit }
@@ -1058,7 +1060,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         defer { syncGlassSlot(); syncGlassGroup(); settleVibrancy(); syncDefaultSurfaceScroll() }
         let kind = materialRequest
         let supported = kind != nil
-        let interactive = Materials.glass(kind) && handlers.contains("press") && !disabled
+        let interactive = Materials.glass(kind) && glassInteracts
         if materialKind != (supported ? kind : nil) {
             let children = container.subviews.compactMap { $0 as? NodeView }
             let old = materialView
@@ -1085,9 +1087,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         }
         guard let materialView else { rehomeMaterialChildren(); return }
         if cssVisibilityHidden { materialView.effect = nil }
-        else if materialView.effect == nil || materialInteractive != interactive || backdropStale {
+        else if materialView.effect == nil || materialInteractive != interactive || materialTint != glassTint || backdropStale {
             showMaterialEffect(backdropEffect() ?? materialEffect(kind ?? "ultra-thin", interactive: interactive))
-            materialInteractive = interactive
+            materialInteractive = interactive; materialTint = glassTint
         }
         applyMaterialRadius()
         rehomeMaterialChildren()

@@ -13,6 +13,9 @@ impl<D: DataSource> Runner<D> {
     pub fn measure(&mut self, on: bool, moves: bool) {
         if !on {
             self.ids.work = Default::default();
+            for row in &mut self.resources {
+                row.inspection = Default::default();
+            }
             return;
         }
         if self.ids.work.sites.is_empty() {
@@ -173,6 +176,7 @@ impl<D: DataSource> Runner<D> {
         if self.ids.work.sites.is_empty() {
             return;
         }
+        let i = self.member(i).map_or(i, |m| m.family);
         let (n, now) = (self.plan.resources.len(), self.now_ms);
         let failures = &mut self.ids.work.failures;
         if failures.len() < n {
@@ -191,9 +195,10 @@ impl<D: DataSource> Runner<D> {
         if self.ids.work.sites.is_empty() {
             return;
         }
+        let i = self.member(i).map_or(i, |m| m.family);
         let asked = &mut self.ids.work.asked;
         if asked.len() <= i {
-            asked.resize(self.plan.resources.len().max(i + 1), 0);
+            asked.resize(self.plan.resources.len(), 0);
         }
         asked[i] += 1;
     }
@@ -205,7 +210,7 @@ impl<D: DataSource> Runner<D> {
             .iter()
             .enumerate()
             .filter(|(_, f)| f.count > 0)
-            .map(|(i, f)| (self.plan.str(self.plan.resources[i].name), *f))
+            .map(|(i, f)| (self.plan.str(self.resource_row(i).name), *f))
             .collect()
     }
 

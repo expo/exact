@@ -1,7 +1,7 @@
 // @exact/barcode-detection on the web (LLP 1133.027): the Shape Detection
 // API's `BarcodeDetector` (https://wicg.github.io/shape-detection-api/),
 // which Chrome ships on macOS, ChromeOS and Android and no other engine does;
-// where it is absent the formats are empty and every detection fails
+// where it is absent or reads no format, every detection fails
 // `NotSupportedError` (D18).
 //
 // - A still is a path the app may read (D4), decoded upright by
@@ -53,18 +53,23 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
   let supported = null;
 
   // The browser's own list (Chrome on macOS is Vision's, which reads a UPC-A as an EAN-13 and lists no `upc_a`).
-  const platformFormats = async () => supported ??= Detector ? Detector.getSupportedFormats().then(f => f.filter(x => FORMATS.includes(x)), () => []) : Promise.resolve([]);
-  /** What the module reads here: either UPC shape is the other by D11's rule. */
-  const formatsHere = async () => {
-    const own = await platformFormats();
-    return FORMATS.filter(f => own.includes(f) || ((f === 'upc_a' || f === 'ean_13') && (own.includes('upc_a') || own.includes('ean_13'))));
+  const platformFormats = async () => {
+    for (;;) {
+      const pending = supported ??= Detector ? Detector.getSupportedFormats().then(f => f.filter(x => FORMATS.includes(x)), () => []) : Promise.resolve([]);
+      const formats = await pending;
+      // A foreground refresh supersedes a query that was still in flight.
+      if (supported === pending) return formats;
+    }
   };
+  /** What the module reads here: either UPC shape is the other by D11's rule. */
+  const formatsHere = own => FORMATS.filter(f => own.includes(f) || ((f === 'upc_a' || f === 'ean_13') && (own.includes('upc_a') || own.includes('ean_13'))));
   /** The platform's detector for `keep`, asking both UPC shapes when either is asked (D11); `{error}` when it cannot read them. */
   async function detectorFor(keep) {
     if (!Detector) return failure('NotSupportedError', 'this browser has no BarcodeDetector');
-    const here = await formatsHere(), own = await platformFormats();
+    const own = await platformFormats(), here = formatsHere(own);
     if (keep && [...keep].some(f => !here.includes(f))) return failure('NotSupportedError', `this browser reads ${here.join(', ') || 'no format'}`);
     const ask = keep ? [...new Set([...keep, ...(keep.has('upc_a') || keep.has('ean_13') ? ['upc_a', 'ean_13'] : [])])].filter(f => own.includes(f)).sort() : own;
+    if (!ask.length) return failure('NotSupportedError', `this browser reads ${own.join(', ') || 'no format'}`);
     const key = ask.join(',');
     if (!detectors.has(key)) detectors.set(key, new Detector({ formats: ask }));
     return detectors.get(key);
@@ -103,11 +108,16 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
 
   // ---------------------------------------------------------------- live scans (D5)
   const scanKey = (track, keep) => `${track}|${keep ? [...keep].sort().join(',') : '*'}`;
-  /** The scan of `track` for `keep`, observing the track from its first read. */
+  /** Register before awaiting support so the last reader can release a pending scan (D5). */
   function scanOf(track, keep, interval) {
     const key = scanKey(track, keep);
     if (scans.has(key)) return scans.get(key);
-    const s = { key, track, keep, interval, state: 'idle', barcodes: [], seen: new Map(), frame: 0, width: 0, height: 0, error: null, video: null, busy: null, leave: () => {} };
+    const s = { key, track, keep, interval, read: 0, state: 'idle', barcodes: [], seen: new Map(), frame: 0, width: 0, height: 0, error: null, video: null, busy: null, leave: null };
+    scans.set(key, s);
+    return s;
+  }
+  function observeScan(s) {
+    if (s.leave) return;
     const play = source => {
       if (agent || !source) return;
       s.video ??= Object.assign(document.createElement('video'), { muted: true, playsInline: true, autoplay: true });
@@ -115,18 +125,18 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
       s.video.play?.().catch(() => {});
     };
     const set = state => { if (s.state !== state) { s.state = state; changed(SCAN); } };
-    s.leave = tracks.observe(track, {
+    s.leave = tracks.observe(s.track, {
       live(source) { play(source); set('scanning'); },
       muted() { set('idle'); },
       unmuted() { set('scanning'); },
       ended() { set('ended'); if (s.video) s.video.srcObject = null; },
     });
-    scans.set(key, s);
-    say(`scan ${key}: observing ${track}`);
-    return s;
+    say(`scan ${s.key}: observing ${s.track}`);
   }
-  function endScan(s, why) {
-    s.leave();
+  function endScan(s, why, read = s.read) {
+    // A failed read must not remove a scan that a newer read still uses.
+    if (scans.get(s.key) !== s || s.read !== read) return;
+    s.leave?.();
     if (s.video) { s.video.srcObject = null; s.video = null; }
     scans.delete(s.key);
     say(`scan ${s.key}: ${why}`);
@@ -145,7 +155,7 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
       const frame = await frameOf(s);
       if (!frame) return;
       const detector = await detectorFor(s.keep);
-      if (detector.error) { s.error = detector.message ?? detector.error; return; }
+      if (detector.error) return detector;
       try {
         const found = await detect(detector, frame, s.keep), at = now();
         s.frame += 1;
@@ -168,7 +178,7 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
 
   return {
     async getSupportedFormats() {
-      const formats = await formatsHere();
+      const formats = formatsHere(await platformFormats());
       return { formats, tracks: !!Detector && formats.length > 0 };
     },
     detectBarcodes: still,
@@ -180,17 +190,23 @@ export function implementation({ changed, agent, now, log, tracks, files }) {
       const entry = tracks.lookup(track);
       if (!entry) return failure('NotFoundError', `the session holds no track ${track}`);
       if (entry.kind !== 'video') return failure('NotSupportedError', `${track} is not a video track`);
-      if (!Detector) return failure('NotSupportedError', 'this browser has no BarcodeDetector');
-      let s;
-      try { s = scanOf(track, keep, interval ?? 100); } catch (e) { return failure(e?.code ?? 'NotFoundError', e?.message); }
-      await analyse(s);
+      const s = scanOf(track, keep, interval ?? 100);
+      const read = ++s.read;
+      let detector;
+      try { detector = await detectorFor(keep); } catch (e) { endScan(s, 'failed', read); throw e; }
+      if (detector.error) { endScan(s, 'unsupported', read); return detector; }
+      if (scans.get(s.key) !== s) return scanShape(s);
+      try { observeScan(s); } catch (e) { endScan(s, 'failed', read); return failure(e?.code ?? 'NotFoundError', e?.message); }
+      const result = await analyse(s);
+      if (result?.error) { endScan(s, 'unsupported', read); return result; }
       return scanShape(s);
     },
     /** The last reader of a scan let it go: its observer removed, its `seen` dropped (D5). */
     releaseArgs(name, args) {
       if (name !== 'detectedBarcodes') return;
       const keep = asked(args?.formats);
-      const s = scans.get(scanKey(args?.track, keep?.error ? null : keep));
+      if (keep?.error) return;
+      const s = scans.get(scanKey(args?.track, keep));
       if (s) endScan(s, 'released');
     },
     release(name) {

@@ -313,6 +313,28 @@ HUD children keep native resolution. Bind a `#[live]` argument through this meth
 for an app setting. This is the presented raster's size, and a look frame's; a
 fixture's or a readback's size is the one its caller asks for.
 
+`Game::render_scale` is read again at every frame, so a `#[live]` argument steps
+it while the world runs.
+
+`Game::render_idle(world, args)` lets a world that has come to rest stop
+drawing. Return true when nothing it shows is changing (the dice lie still). The
+canvas draws until both ticks it interpolates between are idle, then asks the
+host for no frame until input, a bind, an asset, a resize or a render hook's
+`Needs::ANIMATE` or `Needs::PENDING` wakes it; queued input and a pending hold or
+tap keep it drawing. The idle time never runs as ticks: the first frame after a
+wake advances one display period, and input that arrived meanwhile lands on its
+first tick. The agent's clock ignores it, so a seeked run ticks every
+millisecond as before. `Game::max_fps(world, args)` caps the drawn frames per
+second (0, the default, for the display's rate), changeable at any frame: 60 at
+rest, say, and 0 while the dice fly. The simulation still ticks at `HZ`; a render
+hook's `Hooks::max_fps` can cap lower (a budget or a thermal cap), and the lower
+non-zero cap stands. `Game::samples(args)` chooses scene sampling (by default
+`Game::SAMPLES`); a change makes the renderer again under the same world, as a
+"smooth edges" setting needs. None of the three is saved or hashed. The web, iOS,
+macOS and Android hosts rest and cap a canvas; the Linux and Windows desktop
+hosts draw a mounted world every display frame and take no cap
+([GPU module ABI](../gpu/README.md#frame-pacing-and-timing)).
+
 `Game::quality(args)` picks the renderer's rung of the quality ladder, read once,
 when the renderer is made, and never saved: the world hash is the same on every
 rung. The default `Quality::Auto` follows the device's GPU tier
@@ -506,6 +528,8 @@ nothing yet.
 | A moon | A second `DirectionalLight` (in entity order) is an unshadowed fill |
 | Team colours, mutation looks | A `Material` on a model entity tints every node and adds emission; `NodeMaterials` per named node or `MaterialOverrides` per material (one model in every team's colours), written from `Game::present` ([team colour from a saved `Team`](render/tests/instances.rs): `p.insert(e, MaterialOverrides(vec![MaterialOverride { material: 0, color: Some(team_rgba), ..Default::default() }]))`) |
 | A skin or theme picked while playing | One model per shape, its textures per instance: `MaterialOverride { material: 0, textures: TextureSlots { base_color: Some("walnut.tex".into()), ..Default::default() }, ..Default::default() }` from `Game::present`; each instance keeps its old look until the new textures arrive ([surface test](render/src/surface_tests/cosmetics.rs)) |
+| A scrolling texture: a light running along a ribbon, flowing water | `MaterialOverride { material: 0, uv_offset: Some([head, 0.]), ..Default::default() }` from `Game::present` each frame; blended materials too, one draw, any period ([surface test](render/src/surface_tests/cosmetics.rs)) |
+| No growth or compile when the first pieces spawn | `const PREPARE: &'static [(&'static str, u32)] = &[("die.model", 16)];` sizes the instance and skin buffers before the first frame and prepares the listed models' pipelines in the frames after; `state.world.perf.pipelineMs` times pipeline creation ([surface test](render/src/surface_tests/prepare.rs)) |
 | A model generated when the player picks it | The tick writes `Mesh::asset("walnut-d6.model")`; `Game::present` calls `p.cosmetic_model(name, \|\| model)` for each name a `Mesh` shows. Never saved or hashed, freed when unshown; the entity draws its previous model until the new one can |
 | Cheaper far trees and crowds | `ModelLod { levels: vec![LodLevel { distance: 30., model: "tree_low.model".into() }], hide: Some(120.) }` on the entity |
 | Fade a tree between camera and player | `Opacity(0.3)` on the entity from `Game::present`: a dithered fade, no sorting, never in a save or pin |

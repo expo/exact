@@ -197,6 +197,38 @@ for (const engine of engines) {
     } finally { await b.close(); server.close(); }
   }, 60_000);
 
+  engineTest[engine](`${engine}: a group cut can be extended or shortened before it takes effect`, async () => {
+    const b = await browser(engine);
+    if (!b) throw new Error(`${engine} did not launch`);
+    const server = await serve();
+    try {
+      const p = await b.newPage();
+      await p.goto(server.url);
+      await p.waitForFunction(() => window.ready);
+      const got = await p.evaluate(async () => {
+        const results = [];
+        for (const end of [250, 150, 75]) {
+          const r = offline(0.5, { kick: wav(12000, 0.5), hat: wav(4800, -0.25) });
+          await decoded(r.out);
+          r.out.ops([{ op: 'play', id: 1, sound: 0, at: 0, gain: 1 }, { op: 'end', id: 1, at: 100 },
+            { op: 'play', id: 2, sound: 1, at: 100, gain: 1 }]);
+          const paused = r.context.suspend(0.05);
+          const rendering = r.context.startRendering();
+          await paused;
+          r.out.ops([{ op: 'end', id: 1, at: end }, { op: 'end', id: 2, at: 100 }]);
+          if (end === 150) r.out.ops([{ op: 'play', id: 3, sound: 1, at: 150, gain: 1 }]);
+          await r.context.resume();
+          const pcm = (await rendering).getChannelData(0);
+          results.push([pcm[3599], pcm[3600], pcm[4800], pcm[7199], pcm[7200], pcm[11999], pcm[12000]]);
+        }
+        return results;
+      });
+      expect(got[0]).toEqual([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0].map(x => expect.closeTo(x, 3)));
+      expect(got[1]).toEqual([0.5, 0.5, 0.5, 0.5, -0.25, -0.25, 0].map(x => expect.closeTo(x, 3)));
+      expect(got[2]).toEqual([0.5, 0, 0, 0, 0, 0, 0].map(x => expect.closeTo(x, 3)));
+    } finally { await b.close(); server.close(); }
+  }, 60_000);
+
   engineTest[engine](`${engine}: a voice retracted before its start is silent and let go; a haptic plays at its time`, async () => {
     const b = await browser(engine);
     if (!b) throw new Error(`${engine} did not launch`);

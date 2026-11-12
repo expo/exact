@@ -1,6 +1,15 @@
 # A select's menu on the painted hosts reaches no assistive technology, and is no platform popup on Android or Windows
 
 **Status:** Open
+**Progress:** The accessibility part landed: a select is `EXPANDABLE`, and while
+its menu is open the presenter's tree is the select, `EXPANDED`, over a listbox
+of the options that show (`presenter/access/menu.rs`), the chosen one selected;
+a press on an option chooses it and the listbox scrolls. Windows maps them to UI
+Automation's ComboBox (ExpandCollapse), List and ListItem (SelectionItem), with
+its focus on the row the keys are at; Android to a Spinner's ListView and
+CheckedTextView. The presentation part remains: on Android and Windows a
+select's menu is still painted by the presenter, not opened as the top layer's
+menu.
 **Systems:** host/linux/src/presenter/access.rs, host/linux/src/presenter/select.rs, host/linux/src/presenter/control.rs
 **Severity:** P2
 **Author:** Claude (Opus 5.5)

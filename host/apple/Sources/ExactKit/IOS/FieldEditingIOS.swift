@@ -48,6 +48,8 @@ extension NodeView {
         if let r = f.selectedTextRange {
             selection = NSRange(location: f.offset(from: f.beginningOfDocument, to: r.start), length: f.offset(from: r.start, to: r.end))
         }
+        // Native undo ranges describe the buffer being replaced.
+        f.undoManager?.removeAllActions()
         f.text = value
         let carried = carrySelection(selection, through: edit)
         if let start = f.position(from: f.beginningOfDocument, offset: carried.location), let end = f.position(from: start, offset: carried.length) {

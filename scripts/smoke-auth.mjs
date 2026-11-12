@@ -13,7 +13,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { Cdp } from './agent.mjs';
-import { DESKTOP_INPUT, chromium } from './agent-launch.mjs';
+import { DESKTOP_INPUT, chromium, quitBrowser } from './agent-launch.mjs';
 import { jsTargetBuild, serveBuildTree, serveStatic } from '../host/web/serve.mjs';
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -148,6 +148,10 @@ export async function authPopupWeb({ webDist, check: record }) {
   const child = spawn(chrome, ['--headless=new', DESKTOP_INPUT, '--remote-debugging-pipe', '--window-size=500,700', `--user-data-dir=${profile}`,
     '--no-sandbox', '--no-first-run', '--disable-background-networking', 'about:blank'], { detached: true, stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
   const cdp = new Cdp(child.stdio[3], child.stdio[4]);
+  const exited = new Promise(resolve => {
+    child.once('exit', () => { cdp.fail('auth popup Chrome exited'); resolve(); });
+    child.on('error', error => { if (!child.pid) { cdp.fail(error.message); resolve(); } });
+  });
   const popups = [];
   cdp.listeners.push((msg) => {
     if (msg.method === 'Target.targetCreated' && msg.params.targetInfo.type === 'page' && msg.params.targetInfo.openerId) popups.push(msg.params.targetInfo);
@@ -221,9 +225,8 @@ export async function authPopupWeb({ webDist, check: record }) {
   } catch (error) {
     check(false, error.message);
   } finally {
-    try { process.kill(-child.pid, 'SIGKILL'); } catch {}
-    server.close();
-    fixture?.kill();
+    try { await quitBrowser(child, cdp, exited); }
+    finally { server.close(); fixture?.kill(); }
     rmSync(profile, { recursive: true, force: true });
   }
   console.log(`web auth popup: ${checks - failed} of ${checks} checks passed in ${((Date.now() - t0) / 1000).toFixed(1)} s (LLP 1069.006 D4, outside the agent)`);

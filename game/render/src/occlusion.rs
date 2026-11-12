@@ -76,19 +76,21 @@ impl Occlusion {
             label: Some("game occlusion"),
             source: wgpu::ShaderSource::Wgsl(crate::pipeline::OCCLUSION.into()),
         });
-        let reduce = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("game occlusion reduce"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("game occlusion reduce"),
-                    bind_group_layouts: &[Some(&reduce_layout)],
-                    immediate_size: 0,
-                }),
-            ),
-            module: &module,
-            entry_point: Some("reduce"),
-            compilation_options: Default::default(),
-            cache: None,
+        let reduce = crate::perf::pipeline(|| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("game occlusion reduce"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("game occlusion reduce"),
+                        bind_group_layouts: &[Some(&reduce_layout)],
+                        immediate_size: 0,
+                    }),
+                ),
+                module: &module,
+                entry_point: Some("reduce"),
+                compilation_options: Default::default(),
+                cache: None,
+            })
         });
         let occluder_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("game occluder"),
@@ -107,34 +109,36 @@ impl Occlusion {
             label: Some("game occluder"),
             source: wgpu::ShaderSource::Wgsl(crate::pipeline::occluder_source().into()),
         });
-        let occluder = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("game occluder"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("game occluder"),
-                    bind_group_layouts: &[Some(scene_layout), Some(&occluder_layout)],
-                    immediate_size: 0,
+        let occluder = crate::perf::pipeline(|| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("game occluder"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("game occluder"),
+                        bind_group_layouts: &[Some(scene_layout), Some(&occluder_layout)],
+                        immediate_size: 0,
+                    }),
+                ),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_occluder"),
+                    buffers: &crate::pipeline::vertex_layout(),
+                    compilation_options: Default::default(),
+                },
+                fragment: None,
+                // Both windings: a mirrored group's front faces wind the other way.
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
                 }),
-            ),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_occluder"),
-                buffers: &crate::pipeline::vertex_layout(),
-                compilation_options: Default::default(),
-            },
-            fragment: None,
-            // Both windings: a mirrored group's front faces wind the other way.
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
         });
         let (uniforms, uniforms_bind) = uniforms(device, &occluder_layout, 1);
         Self {

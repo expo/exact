@@ -128,9 +128,14 @@ pub(crate) fn placement(
         let gy = (rows as f32 - h).max(0.0);
         return (0.0, f.y - gy * ROW);
     }
-    let auto = [s.top, s.right, s.bottom, s.left]
-        .iter()
-        .all(|d| *d == Dimension::Auto);
+    let auto = [
+        s.top.clone(),
+        s.right.clone(),
+        s.bottom.clone(),
+        s.left.clone(),
+    ]
+    .iter()
+    .all(|d| *d == Dimension::Auto);
     if !auto {
         // In the viewport's block: by its insets in the grid.
         let grid = (cols as f32 * COLUMN, rows as f32 * ROW);
@@ -444,10 +449,10 @@ fn border(
     let env = scene.kernel.env();
     let round = !heavy
         && [
-            s.border_radius_top_left,
-            s.border_radius_top_right,
-            s.border_radius_bottom_right,
-            s.border_radius_bottom_left,
+            s.border_radius_top_left.clone(),
+            s.border_radius_top_right.clone(),
+            s.border_radius_bottom_right.clone(),
+            s.border_radius_bottom_left.clone(),
         ]
         .iter()
         .any(|d| matches!(d.resolve(&env), Dimension::Points(p) if p > 0.0));

@@ -21,17 +21,20 @@ impl Recorder {
         outer: &Shape,
         ts: Transform,
     ) -> bool {
+        // Android blurs in device space. Project the painter's bands instead.
+        if !self.planes.is_empty() {
+            return false;
+        }
         let reach = 3.0 * sigma;
         let (x, y, w, h) = shape.rect;
-        let Some(bounds) =
-            super::clip::map((x - reach, y - reach, w + 2.0 * reach, h + 2.0 * reach), ts)
-        else {
+        let bounds = self.on_page((x - reach, y - reach, w + 2.0 * reach, h + 2.0 * reach), ts);
+        if bounds.is_none() {
             return false;
-        };
-        if self.culled(Some(bounds)) {
+        }
+        if self.culled(bounds) {
             return true;
         }
-        self.need(Some(bounds));
+        self.need(bounds);
         self.transform(ts);
         self.ops.extend([SHADOW, Self::color(color)]);
         self.f(sigma);

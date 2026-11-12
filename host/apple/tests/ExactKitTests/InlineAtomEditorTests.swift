@@ -127,7 +127,6 @@ final class InlineAtomEditorMacTests: XCTestCase {
         presenter.session = session
         let node = NodeView(id: 3, kind: "textarea", presenter: presenter)
         node.frame = NSRect(x: 0, y: 0, width: 500, height: 300)
-        node.makeTextArea()
         node.props["markup"] = "markdown"
         node.props["value"] = text
         node.props["atoms"] = kinds
@@ -255,7 +254,7 @@ final class InlineAtomEditorMacTests: XCTestCase {
         let (node, f, window) = editor(source + " and " + second)
         defer { window.close() }
         let page = NodeView(id: 1, kind: "view", presenter: presenter), wrapper = NodeView(id: 2, kind: "view", presenter: presenter)
-        let after = NodeView(id: 4, kind: "view", presenter: presenter)
+        let after = button(4, "After", 300)
         page.frame = NSRect(x: 0, y: 0, width: 500, height: 400)
         wrapper.frame = NSRect(x: 0, y: 0, width: 500, height: 300)
         after.frame = NSRect(x: 0, y: 300, width: 500, height: 100)
@@ -278,7 +277,7 @@ final class InlineAtomEditorMacTests: XCTestCase {
         XCTAssertTrue(f.atomElements[1].accessibilityPerformPress())
         XCTAssertEqual(f.selectedRange(), f.atomElements[1].range, "VO-Space presses the atom VoiceOver is on")
         // A second item beside the field in the wrapper: the wrapper hosts them.
-        let beside = NodeView(id: 5, kind: "view", presenter: presenter)
+        let beside = button(5, "Beside", 60)
         wrapper.addSubview(beside)
         XCTAssertTrue(node.atomHost === wrapper)
     }
@@ -287,7 +286,6 @@ final class InlineAtomEditorMacTests: XCTestCase {
     private func field(_ id: UInt32, _ text: String) -> (NodeView, TextArea) {
         let node = NodeView(id: id, kind: "textarea", presenter: presenter)
         node.frame = NSRect(x: 0, y: 0, width: 400, height: 60)
-        node.makeTextArea()
         node.props["markup"] = "markdown"
         node.props["value"] = text
         node.props["atoms"] = kinds
@@ -362,20 +360,151 @@ final class InlineAtomEditorMacTests: XCTestCase {
         sv.documentView = document
         scroller.addSubview(sv)
         scroller.scroll = sv
-        window.contentView = scroller
+        let page = NodeView(id: 5, kind: "view", presenter: presenter)
+        page.frame = scroller.frame
+        window.contentView = page
+        page.addSubview(scroller)
+        page.addSubview(button(6, "After", 370))
         node.removeFromSuperview()
-        document.addSubview(button(2, "Heading", 0))
         node.frame.origin.y = 40
         document.addSubview(node)
         document.addSubview(button(4, "Send", 350))
-        XCTAssertTrue(node.atomHost === scroller)
-        XCTAssertFalse((scroller.accessibilityChildren() ?? []).contains { $0 is AtomElement }, "not after the whole scroll area")
-        let children = sv.accessibilityChildren() ?? []
-        let text = try XCTUnwrap(children.lastIndex { ($0 as? NSView)?.isDescendant(of: node) == true }, "\(children)")
-        let send = try XCTUnwrap(children.firstIndex { ($0 as? NSButtonCell)?.title == "Send" || ($0 as? NSButton)?.title == "Send" }, "\(children)")
-        XCTAssertTrue(children[text + 1] as AnyObject === f.atomElements[0], "\(children)")
-        XCTAssertLessThan(text + 1, send)
-        XCTAssertTrue(f.atomElements[0].accessibilityParent() as AnyObject === sv)
+        for material in ["ultra-thin", "glass", ""] {
+            node.applyProps(set: material.isEmpty ? [:] : ["backgroundMaterial": material], clear: material.isEmpty ? ["backgroundMaterial"] : [])
+            XCTAssertTrue(node.atomHost === scroller, material)
+            XCTAssertTrue(node.atomParent as AnyObject === sv, material)
+            XCTAssertFalse((page.accessibilityChildren() ?? []).contains { $0 is AtomElement }, material)
+            XCTAssertFalse((scroller.accessibilityChildren() ?? []).contains { $0 is AtomElement }, "not after the whole scroll area")
+            let children = sv.accessibilityChildren() ?? []
+            let text = try XCTUnwrap(children.lastIndex { ($0 as? NSView)?.isDescendant(of: node) == true }, "\(children)")
+            let send = try XCTUnwrap(children.firstIndex { ($0 as? NSButtonCell)?.title == "Send" || ($0 as? NSButton)?.title == "Send" }, "\(children)")
+            XCTAssertTrue(children[text + 1] as AnyObject === f.atomElements[0], "\(children)")
+            XCTAssertEqual(text + 2, send)
+            XCTAssertTrue(f.atomElements[0].accessibilityParent() as AnyObject === sv)
+        }
+    }
+
+    func testHiddenFieldsDoNotExposeAtomsThroughAVisibleHost() throws {
+        for exclusion in ["display", "aria-hidden", "host-hidden"] {
+            for hideAncestor in [false, true] {
+                let (node, f, window) = editor()
+                defer { window.close(); session?.destroy(); session = nil }
+                let page = NodeView(id: 1, kind: "view", presenter: presenter)
+                page.frame = window.contentView!.frame
+                window.contentView = page
+                let scroller = NodeView(id: 2, kind: "view", presenter: presenter)
+                scroller.frame = page.bounds
+                let sv = ChainingScrollView(frame: scroller.bounds)
+                sv.pointerOwner = scroller
+                let document = FlippedView(frame: scroller.bounds)
+                sv.documentView = document
+                scroller.addSubview(sv)
+                scroller.scroll = sv
+                page.addSubview(scroller)
+                page.addSubview(button(4, "After", 310))
+                let wrapper = NodeView(id: 5, kind: "view", presenter: presenter)
+                wrapper.frame = document.bounds
+                document.addSubview(wrapper)
+                wrapper.addSubview(node)
+                document.addSubview(button(6, "Send", 310))
+                let hiddenNode = hideAncestor ? wrapper : node
+                let atom = try XCTUnwrap(f.atomElements.first)
+                let frame = atom.accessibilityFrame()
+                let point = NSPoint(x: frame.midX, y: frame.midY)
+                for hidden in [true, false, true] {
+                    if exclusion == "display" { hiddenNode.applyStyle(["display": .string(hidden ? "none" : "block")]) }
+                    else if exclusion == "aria-hidden" { hiddenNode.applyProps(set: ["accessibilityElementsHidden": hidden ? "true" : "false"], clear: []) }
+                    else { hiddenNode.setAccessibilityHidden(hidden) }
+                    let context = "\(exclusion), ancestor: \(hideAncestor), hidden: \(hidden)"
+                    XCTAssertEqual(atom.isAccessibilityElement(), !hidden, context)
+                    XCTAssertTrue(f.atomElement(atScreen: point) === (hidden ? nil : atom), context)
+                    XCTAssertFalse((page.accessibilityChildren() ?? []).contains { $0 is AtomElement }, context)
+                    let children = sv.accessibilityChildren() ?? []
+                    XCTAssertEqual(children.filter { $0 is AtomElement }.count, hidden ? 0 : 1, context)
+                    if !hidden {
+                        XCTAssertTrue(node.atomHost === scroller, context)
+                        XCTAssertTrue(node.atomParent as AnyObject === sv, context)
+                        XCTAssertTrue(atom.accessibilityParent() as AnyObject === sv, context)
+                        let text = try XCTUnwrap(children.lastIndex { ($0 as? NSView)?.isDescendant(of: node) == true }, context)
+                        XCTAssertTrue(children[text + 1] as AnyObject === atom, context)
+                        let send = try XCTUnwrap(children.firstIndex { ($0 as? NSButtonCell)?.title == "Send" || ($0 as? NSButton)?.title == "Send" }, context)
+                        XCTAssertEqual(text + 2, send, context)
+                    }
+                }
+            }
+        }
+    }
+
+    /// A sibling VoiceOver does not see leaves the scroll area one item: the
+    /// atoms go outside it, to the page or, when the scrolling node is the
+    /// outermost, beside its scroll view.
+    func testHiddenSiblingsDoNotMakeAScrollingAtomHost() throws {
+        for exclusion in ["display", "aria-hidden"] {
+            for (nested, paged) in [(false, true), (true, true), (false, false), (true, false)] {
+                let (node, f, window) = editor(source + " and [Other](t3-citation:2)")
+                defer { window.close(); session?.destroy(); session = nil }
+                let page = NodeView(id: 1, kind: "view", presenter: presenter)
+                page.frame = window.contentView!.frame
+                let scroller = NodeView(id: 2, kind: "view", presenter: presenter)
+                scroller.frame = page.bounds
+                let sv = ChainingScrollView(frame: scroller.bounds)
+                sv.pointerOwner = scroller
+                let document = FlippedView(frame: scroller.bounds)
+                sv.documentView = document
+                scroller.addSubview(sv)
+                scroller.scroll = sv
+                if paged {
+                    window.contentView = page
+                    page.addSubview(scroller)
+                } else { window.contentView = scroller }
+                // The outermost node, which lists the atoms when the sibling is hidden.
+                let outer = paged ? page : scroller
+                let wrapper = NodeView(id: 5, kind: "view", presenter: presenter)
+                wrapper.frame = document.bounds
+                document.addSubview(wrapper)
+                wrapper.addSubview(node)
+                let sibling = button(6, "Beside", 310)
+                if nested {
+                    let transparent = NodeView(id: 7, kind: "view", presenter: presenter)
+                    transparent.frame = document.bounds
+                    document.addSubview(transparent)
+                    transparent.addSubview(sibling)
+                } else { document.addSubview(sibling) }
+
+                for hidden in [true, false, true] {
+                    if exclusion == "display" { sibling.applyStyle(["display": .string(hidden ? "none" : "block")]) }
+                    else { sibling.applyProps(set: ["accessibilityElementsHidden": hidden ? "true" : "false"], clear: []) }
+                    let context = "\(exclusion), nested: \(nested), paged: \(paged), hidden: \(hidden)"
+                    XCTAssertTrue(node.atomHost === (hidden ? outer : scroller), context)
+                    let parent = hidden ? NSAccessibility.unignoredAncestor(of: outer) : sv
+                    XCTAssertTrue(node.atomParent as AnyObject === parent as AnyObject, context)
+                    let parentChildren = (parent as? NSView)?.accessibilityChildren() ?? (parent as? NSWindow)?.accessibilityChildren() ?? []
+                    let listed = hidden ? outer.accessibilityChildren() ?? [] : sv.accessibilityChildren() ?? []
+                    let text = try XCTUnwrap(listed.lastIndex { child in
+                        guard let view = child as? NSView else { return false }
+                        return view === sv || view.isDescendant(of: node)
+                    }, context)
+                    for (offset, atom) in f.atomElements.enumerated() {
+                        XCTAssertEqual(listed.firstIndex { $0 as AnyObject === atom }, text + offset + 1, context)
+                        XCTAssertTrue(atom.accessibilityParent() as AnyObject === parent as AnyObject, context)
+                        XCTAssertTrue(parentChildren.contains { $0 as AnyObject === atom }, context)
+                    }
+                    if hidden {
+                        XCTAssertEqual(listed.count, text + f.atomElements.count + 1, context)
+                    } else {
+                        let nextIndex = try XCTUnwrap(listed.firstIndex { child in
+                            let view = (child as? NSView) ?? (child as? NSCell)?.controlView
+                            return view?.isDescendant(of: sibling) == true
+                        }, context)
+                        XCTAssertEqual(nextIndex, text + f.atomElements.count + 1, context)
+                    }
+                    let innerAtoms = (sv.accessibilityChildren() ?? []).filter { $0 is AtomElement }
+                    XCTAssertEqual(innerAtoms.count, hidden ? 0 : 2, context)
+                    let outerAtoms = (outer.accessibilityChildren() ?? []).filter { $0 is AtomElement }
+                    XCTAssertEqual(outerAtoms.count, hidden ? 2 : 0, context)
+                }
+            }
+        }
     }
 
     /// A pill is its atom's element where assistive technology points: the

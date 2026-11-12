@@ -604,13 +604,26 @@ async function inChrome(fixture, modules = ['/textflow-glue.js', '/timer-glue.js
 
 browserTest('flowed links keep press ownership and native Enter activation', async () => {
   const result = await inChrome(flowInputFixture, undefined, {}, false, async (cdp, sessionId, deliveries) => {
+    const focus = await cdp.send('Runtime.evaluate', { expression: `(() => {
+      const link = document.querySelector('[data-flow-fragment] a');
+      globalThis.enterActivation = { clicks: [], navigations: [], errors: [] };
+      addEventListener('click', e => enterActivation.clicks.push({ trusted: e.isTrusted, prevented: e.defaultPrevented }));
+      navigation.addEventListener('navigate', e => enterActivation.navigations.push(new URL(e.destination.url).hash));
+      addEventListener('error', e => enterActivation.errors.push(e.message));
+      return { focused: document.activeElement === link, connected: link.isConnected, href: link.getAttribute('href') };
+    })()`, returnByValue: true }, sessionId);
+    expect(focus.result.value).toEqual({ focused: true, connected: true, href: '#story' });
     for (const type of ['rawKeyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', {
       type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13,
     }, sessionId);
-    const hash = await cdp.send('Runtime.evaluate', { expression: 'location.hash', returnByValue: true }, sessionId);
-    return { deliveries, hash: hash.result.value };
+    const activation = await cdp.send('Runtime.evaluate', {
+      expression: '({ hash: location.hash, ...enterActivation })', returnByValue: true,
+    }, sessionId);
+    return { deliveries, activation: activation.result.value };
   });
-  expect(result.hash).toBe('#story');
+  expect(result.activation).toEqual({
+    hash: '#story', clicks: [{ trusted: true, prevented: false }], navigations: ['#story'], errors: [],
+  });
   expect(result.deliveries).toEqual([
     { press: 1, navigate: 0, prevented: true },
     { press: 1, navigate: 0, prevented: true },
@@ -740,7 +753,7 @@ browserTest('flowed Enter restores Back focus and Tab normalizes restored stops'
     ['link', 'pressable', 'radio', 'tab'].flatMap(kind => [false, true].map(flowed =>
       kind === 'link' || kind === 'pressable'
         ? { kind, flowed, pushes: 1, pushedFocus: 'detail-title', returnFocus: 'original', connected: true }
-        : { kind, flowed, stops: [0, -1], connected: true })),
+        : { kind, flowed, paintedStop: 0, stops: [0, -1], connected: true })),
   );
 }, 20000);
 
@@ -757,9 +770,14 @@ async function flowFocusFixture() {
     const paragraph = context.firstElementChild, ball = context.lastElementChild;
     paragraph.innerHTML = kind === 'link' ? '<a id="original" href="#detail" tabindex="0">flowed link</a>'
       : kind === 'pressable' ? '<span id="original" tabindex="0" data-exact-on="press">flowed link</span>'
-      : `<span role="${kind === 'radio' ? 'radiogroup' : 'tablist'}"><span id="original" role="${kind}" tabindex="0" aria-${kind === 'radio' ? 'checked' : 'selected'}="true">flowed</span><span id="next" role="${kind}" tabindex="-1" aria-${kind === 'radio' ? 'checked' : 'selected'}="false"> link</span></span>`;
+      : `<span role="${kind === 'radio' ? 'radiogroup' : 'tablist'}"><span id="original" role="${kind}" tabindex="0" aria-${kind === 'radio' ? 'checked' : 'selected'}="true">flowed</span><span id="next" role="${kind}" tabindex="0" aria-${kind === 'radio' ? 'checked' : 'selected'}="false"> link</span></span>`;
     const original = paragraph.querySelector('#original'), next = paragraph.querySelector('#next');
-    if (next) original.tabIndex = -1; // the source normalizes the clones' stops before capture restores the originals
+    if (next) {
+      const state = kind === 'radio' ? 'aria-checked' : 'aria-selected';
+      original.setAttribute(state, 'false'); next.setAttribute(state, 'true');
+      original.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+      original.setAttribute(state, 'true'); next.setAttribute(state, 'false');
+    }
     original.exactFlowEvents = ['keydown'];
     original.exactHandlers = kind === 'pressable' ? ['press', 'key'] : ['key'];
     const views = new Map([[1, context], [2, paragraph], [3, ball]]);
@@ -773,6 +791,11 @@ async function flowFocusFixture() {
     }
     const target = flowed ? paragraph.querySelector(navigation ? '[data-flow-fragment] [tabindex]' : `[data-flow-fragment] [role="${kind}"]`) : original;
     if (!target || flowed && (target === original || original.isConnected)) throw Error('must start from a flowed clone');
+    let paintedStop;
+    if (!navigation) {
+      target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+      paintedStop = target.tabIndex;
+    }
     let detail, pushes = 0;
     const push = () => {
       pushes++;
@@ -794,7 +817,7 @@ async function flowFocusFixture() {
       const pushedFocus = document.activeElement.id;
       detail?.remove(); nav.setAttribute('navigationKey', 'list'); input.arrive();
       results.push({ kind, flowed, pushes, pushedFocus, returnFocus: document.activeElement.id, connected: original.isConnected });
-    } else results.push({ kind, flowed, stops: [original.tabIndex, next.tabIndex], connected: original.isConnected });
+    } else results.push({ kind, flowed, paintedStop, stops: [original.tabIndex, next.tabIndex], connected: original.isConnected });
     flow.dispose();
   }
   return results;
@@ -1014,7 +1037,8 @@ async function flowInputFixture() {
   const { createInputHandlers } = await import('/input-glue.js');
   const root = document.getElementById('root'), views = new Map(), results = [];
   let presses = 0, navigates = 0;
-  globalThis.exact = { wasm: { exact_route_match: () => 1, exact_log() {} }, writeIn: s => s,
+  // Only /story is routed; this fixture document's #story link uses native navigation.
+  globalThis.exact = { wasm: { exact_route_match: path => Number(path === '/story'), exact_log() {} }, writeIn: s => s,
     navigate() { navigates++; return { ops: [{ op: 'router' }] }; } };
   createInputHandlers({ root, views, retiredViews: new WeakSet(), ready: () => true, inertAncestor: () => false, dispatch() {} });
   for (const [press, navigate, modified] of [[true, true, false], [true, false, false], [false, true, false], [true, true, true], [false, false, false]]) {

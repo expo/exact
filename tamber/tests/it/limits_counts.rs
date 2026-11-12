@@ -18,6 +18,7 @@ fn many_params_lay_in_moments() {
             full: format!("a.contract#C{k}.r"),
             kind: "length".into(),
             default: "1px".into(),
+            from_design: false,
         })
         .collect();
     let params = Params {

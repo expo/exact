@@ -665,7 +665,7 @@ impl<D: DataSource> Presenter<D> {
         }
         let feedback = pressed.and_then(|id| {
             let node = self.host.kernel().node(id)?;
-            let (key, origin) = (node.key, node.style.transform_origin);
+            let (key, origin) = (node.key, node.style.transform_origin.clone());
             self.box_of(id).map(|b| (key, b.unpressed(origin)))
         });
         let press_activates = feedback.is_some_and(|(key, _)| {

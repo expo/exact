@@ -14,7 +14,7 @@ use ibex2::{
 use std::{
     sync::{
         mpsc::{channel, Receiver, RecvTimeoutError, Sender},
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -48,6 +48,9 @@ impl BodySource for Fed {
 #[derive(Default)]
 struct Script {
     feeds: Mutex<Vec<Option<Feed>>>,
+    opened: Condvar,
+    /// Hold an upload after its start outcome, before registering its feed.
+    opening: Mutex<Option<Sender<Sender<()>>>>,
     aborted: Arc<Mutex<usize>>,
     /// Told when `/upload-burst` has reported all its bytes sent.
     reported: Mutex<Option<Sender<()>>>,
@@ -75,6 +78,7 @@ impl Transport for Scripted {
             headers.set_response("content-type", kind);
             let (tx, rx) = channel();
             self.0.feeds.lock().unwrap().push(Some(tx));
+            self.0.opened.notify_all();
             let aborted = self.0.aborted.clone();
             let registration = signal.register(move || *aborted.lock().unwrap() += 1);
             std::mem::forget(registration);
@@ -120,18 +124,25 @@ impl Transport for Scripted {
                     .map_err(|_| HostError::Failed("the test let go".into()))
             };
             let fed = || {
+                let opening = self.0.opening.lock().unwrap().clone();
+                if let Some(opening) = opening {
+                    let (release, released) = channel();
+                    opening.send(release).unwrap();
+                    released.recv().expect("the test releases the opening");
+                }
                 let (tx, rx) = channel();
                 self.0.feeds.lock().unwrap().push(Some(tx));
+                self.0.opened.notify_all();
                 rx
             };
             match kind {
                 "upload" => {
-                    let rx = fed();
                     {
                         let mut going = self.0.going.lock().unwrap();
                         going.0 += 1;
                         going.1 = going.1.max(going.0);
                     }
+                    let rx = fed();
                     let steps = (|| {
                         for loaded in [total / 4, total / 2, total] {
                             step(&rx)?;
@@ -230,6 +241,7 @@ fn stream(ticket: u64, path: &str, ceiling: u32) -> RequestOut {
         unreachable!()
     };
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "progress".into(),
         request,
@@ -253,6 +265,7 @@ fn upload_within(ticket: u64, path: &str, size: usize, ceiling: u32) -> RequestO
         unreachable!()
     };
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "upload".into(),
         request,
@@ -261,20 +274,17 @@ fn upload_within(ticket: u64, path: &str, size: usize, ceiling: u32) -> RequestO
 }
 
 fn feed(script: &Script, at: usize) -> Feed {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Some(feed) = script
-            .feeds
-            .lock()
-            .unwrap()
-            .get_mut(at)
-            .and_then(Option::take)
-        {
-            return feed;
-        }
-        assert!(Instant::now() < deadline, "stream {at} never opened");
-        std::thread::sleep(Duration::from_millis(2));
-    }
+    let feeds = script.feeds.lock().unwrap();
+    let (mut feeds, _) = script
+        .opened
+        .wait_timeout_while(feeds, Duration::from_secs(5), |feeds| {
+            feeds.get(at).is_none_or(Option::is_none)
+        })
+        .unwrap();
+    feeds
+        .get_mut(at)
+        .and_then(Option::take)
+        .unwrap_or_else(|| panic!("stream {at} never opened"))
 }
 
 fn next(core: &Core, woke: &Receiver<()>) -> (u64, Outcome) {
@@ -330,6 +340,7 @@ fn three_messages_then_a_close_and_the_worker_stays_free() {
     for ticket in [2, 3] {
         core.run_owned(
             RequestOut {
+                class: exact_runner::RequestClass::Ordered,
                 ticket,
                 target: "read".into(),
                 request: Request::get("https://example.test/read").independent_http(4096),
@@ -448,6 +459,7 @@ fn a_stream_opens_while_every_independent_worker_holds_a_reply() {
     for ticket in 1..=INDEPENDENT as u64 {
         core.run_owned(
             RequestOut {
+                class: exact_runner::RequestClass::Ordered,
                 ticket,
                 target: "held".into(),
                 request: Request::get("https://example.test/hold").independent_http(4096),
@@ -482,6 +494,7 @@ fn streams_have_their_own_bound_beside_a_full_independent_lane() {
         let request = Request::get("https://example.test/read").independent_http(4096);
         core.run_owned(
             RequestOut {
+                class: exact_runner::RequestClass::Ordered,
                 ticket,
                 target: "read".into(),
                 request,
@@ -492,6 +505,7 @@ fn streams_have_their_own_bound_beside_a_full_independent_lane() {
         .unwrap();
     }
     let read = |ticket| RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "read".into(),
         request: Request::get("https://example.test/read").independent_http(4096),
@@ -1187,67 +1201,8 @@ fn an_uploads_file_is_read_once_it_has_room() {
     );
 }
 
-/// LLP 1016.000 D10: fifteen 2 MB photo uploads, in the budget a device
-/// has, go out three at a time, as upstream T3 Code sends them, and leave
-/// the app's other streams their places. An event stream opened before the
-/// burst and one opened after it both open at once, and every upload ends
-/// with its reply. Without the cap all fifteen would go out at once, since
-/// the budget and the lane have room for them, and with the first stream
-/// they would take all 16 places, so the second stream would be refused.
-/// (Fifteen, because the independent lane has room for no more of them at
-/// once on the asynchronous core, which counts a second copy of each body.)
-#[test]
-fn a_burst_of_photo_uploads_goes_three_at_a_time_and_leaves_other_streams_their_places() {
-    let (core, script, woke) = setup();
-    core.run_owned(stream(100, "/events", 1024), None).unwrap();
-    let before = feed(&script, 0);
-    for ticket in 1..=15 {
-        core.run_owned(upload(ticket, "/upload", 2 << 20), None)
-            .unwrap();
-    }
-    let going: Vec<Feed> = (1..=3).map(|at| feed(&script, at)).collect();
-    core.run_owned(stream(101, "/events", 1024), None)
-        .expect("a stream after the burst has its place");
-    let after = feed(&script, 4);
-    assert_eq!(
-        core.shared.uploads.waiting(),
-        (12, 3 * (2 << 20) * super::COPIES)
-    );
-    for (fed, ticket) in [(&before, 100), (&after, 101)] {
-        fed.send(format!("id: {ticket}\ndata: {ticket}\n\n").into_bytes())
-            .unwrap();
-        while !matches!(next(&core, &woke), (t, Outcome::Message(_)) if t == ticket) {}
-    }
-    // Feed each upload as it opens, whatever its order, until all fifteen replied.
-    let (mut fed, mut replies) = (going, 0);
-    let mut opened = 5;
-    while replies < 15 {
-        for step in fed.drain(..) {
-            for _ in 0..3 {
-                step.send(Vec::new()).unwrap();
-            }
-        }
-        if let (_, Outcome::Response(_)) = next(&core, &woke) {
-            replies += 1;
-        }
-        while let Some(more) = script
-            .feeds
-            .lock()
-            .unwrap()
-            .get_mut(opened)
-            .and_then(Option::take)
-        {
-            fed.push(more);
-            opened += 1;
-        }
-    }
-    assert_eq!(
-        script.going.lock().unwrap().1,
-        3,
-        "never more than three at once"
-    );
-    assert_eq!(core.shared.uploads.waiting(), (0, 0));
-}
+#[path = "executor_upload_burst_tests.rs"]
+mod upload_burst;
 
 /// LLP 1016.000 D10: an upload waiting in the queue holds no count or
 /// bytes of its lane. Thirty with a 1 MiB reply ceiling, `maxResponseBytes`'s
@@ -1265,6 +1220,7 @@ fn thirty_uploads_waiting_leave_an_independent_fetch_its_room() {
     let _going: Vec<Feed> = (0..3).map(|at| feed(&script, at)).collect();
     assert_eq!(core.shared.uploads.waiting().0, 27);
     let fetch = RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket: 100,
         target: "data".into(),
         request: Request::get("https://example.test/data").independent_http(1 << 20),
@@ -1334,6 +1290,7 @@ fn an_upload_waiting_for_its_lanes_room_starts_when_a_request_let_go_frees_it() 
     let (core, script, _woke) = setup();
     for ticket in 1..=3 {
         let image = RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket,
             target: "image".into(),
             request: Request::get("https://example.test/hold").independent_http(22 << 20),
@@ -1393,26 +1350,6 @@ fn an_upload_the_grants_refuse_never_starts() {
         "{end:?}"
     );
     assert!(core.let_go_started(|_| false).is_empty());
-}
-
-#[test]
-fn a_reply_that_lands_as_the_deadline_passes_stands() {
-    use super::timed_out;
-    let reply = Outcome::Response(exact_runner::Response {
-        status: 201,
-        headers: Vec::new(),
-        body: Vec::new(),
-    });
-    assert!(matches!(timed_out(reply, true, 50), Outcome::Response(r) if r.status == 201));
-    let aborted = Outcome::Failed {
-        kind: FailureKind::Aborted,
-        message: "native request aborted".into(),
-    };
-    assert!(matches!(
-        timed_out(aborted.clone(), true, 50),
-        Outcome::Failed { kind: FailureKind::Timeout, message } if message == "the request timed out after 50 ms"
-    ));
-    assert_eq!(timed_out(aborted.clone(), false, 50), aborted);
 }
 
 /// URLSession end to end (local patch 23): a 16 MiB body from an app file

@@ -6,11 +6,13 @@
 // panel shows one fixed route with a header, so its tab is a navigation
 // controller too, whose bar shows that header. Six's panel shows one fixed
 // route with no header, so its tab is a plain view controller. Home and Five
-// push a route. With Redirect on, Four's press selects Three: a press that
-// moves the router to a tab other than the one tapped.
+// push a route, and Home presents Sheet, whose Five selects Five. With
+// Redirect on, Four's press selects Three: a press that moves the router to a
+// tab other than the one tapped.
 routes nav
   tab home "/"
     detail "/detail"
+    sheet "/sheet"
   tab barless "/barless"
   tab three "/three"
   tab four "/four"
@@ -47,7 +49,7 @@ component MoreTabs
           else
             column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
               for e in t.stack key=e.id
-                column navigationKey=`${e.id}` testId=`route-${e.name}` position="absolute" inset=0 display="flex" flex-direction="column"
+                column navigationKey=`${e.id}` navigationPresentation=(e.name == "sheet" ? "modal" : "") testId=`route-${e.name}` position="absolute" inset=0 display="flex" flex-direction="column"
                   if e.name != "barless" and e.name != "five"
                     header display="flex" align-items="center" padding="8px 16px"
                       if e.name == "detail" or e.name == "deeper"
@@ -59,6 +61,11 @@ component MoreTabs
                       text "Detail"
                     button press=redirect testId="redirect"
                       text (redirecting ? "Redirecting Four" : "Redirect Four")
+                    button press=open("/sheet") testId="open-sheet"
+                      text "Sheet"
+                  if e.name == "sheet"
+                    button press=pick("five") testId="sheet-five"
+                      text "Five"
                   if e.name == "five"
                     button press=open("/five/deeper") testId="open-deeper"
                       text "Deeper"

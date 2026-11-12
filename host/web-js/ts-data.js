@@ -15,7 +15,7 @@ import { createSecretFacade, hasGrant, inOverlay, overlaying, setAppGrantSet } f
 import { tsGrantSet } from './admission-data.js';
 import { sourceTypes } from './names.js';
 import { checkpoint, clock, commit, drive, inflight, journal, Origin, painted, R, Resources, time } from './rt.js';
-import { Shaped } from './shape.js';
+import { failureCode, failureReason, Shaped } from './shape.js';
 import { ledger, requestKey } from './uploads.js';
 useFetch(sourceFetch);
 // The app's id is app.json's, which the build writes here; app.ts need not export one.
@@ -355,9 +355,9 @@ const DIRECTORIES = Object.freeze({ data: 'app:/data', cache: 'app:/cache', temp
 // refused here, before any adapter loads, and never answers, so the answer that
 // made it stays pending and keeps its placeholder, as the render host holds a
 // storage request. The render does not wait for it, and the reader's page asks
-// it again once it adopts the page (render.mjs). Each answer is handed its own
-// facade, `owner` its call: the server bundle does not carry the answer across
-// an await or into a `.then`, where `answering.call` is null.
+// it again once it adopts the page (render.mjs). The lowered bundles restore the
+// answer across `await`. Each answer has its own facade; its `owner` names
+// refusals when no answer is current, as in a plain `.then`.
 // `compressImage` and `transformImage` options, checked as the native prelude checks them (binary.js
 // `imageOptions`) before anything is asked of storage: the options to run with, or the TypeError a call rejects with.
 function imageOptions(method, from, to, options, limits) {
@@ -546,7 +546,11 @@ function storageOf(grants) {
 }
 // A stream (LLP 1016.000; ts-fetch.js), opened by ts-stream.js, loaded on
 // first use so a module that never streams carries none of it.
-const opener = (stream, conv, name) => (deliver, controller) => { controller.streamName = name; return import('./ts-stream.js').then(m => m.open(stream, conv, tsGrantSet, deliver, controller)); };
+const opener = (stream, conv, name) => (deliver, controller) => {
+  controller.streamName = name;
+  return import('./ts-stream.js').then(m => m.open(stream, conv, tsGrantSet, deliver, controller))
+    .catch(e => ({ error: String(e?.message ?? e), code: failureCode(e), reason: failureReason(e) }));
+};
 export function install(data, mixed = false, modules = null) {
   data.appId = appId;
   bodyFiles.appId = appId ?? null; // `exactBodyFrom`'s store (ts-fetch.js)
@@ -597,22 +601,22 @@ export function install(data, mixed = false, modules = null) {
       if (k && types) try { source.kept(r.source, k[0].map((a, i) => named(a, types[0][i])), named(k[1], types[1])); } catch {}
     }
   };
-  const ts = (name, args, store, target, mutation = false) => {
+  const ts = (name, args, store, target, mutation = false, forced) => {
     if (!seeded) seed();
     const types = sourceTypes[name], [params, result] = types ?? [[], 'u'];
     // The store as the module sees it (LLP 1018): a read marks the answer.
     const seen = createSecretFacade(store, tsGrantSet, kept);
     // A call that read the store and then threw read it too: its resource is a store reader (LLP 1146 §2.3).
     threwRead = false;
-    try { return answerWith(name, args, target, mutation, types, params, result, seen); } catch (e) { threwRead = !!seen.read; throw e; }
+    try { return answerWith(name, args, target, mutation, types, params, result, seen, forced); } catch (e) { threwRead = !!seen.read; throw e; }
   };
-  const answerWith = (name, args, target, mutation, types, params, result, seen) => {
+  const answerWith = (name, args, target, mutation, types, params, result, seen, forced) => {
     // A kept key's work is counted on its answer as an ordinary fetch is (LLP 1016.000 D9).
     for (const name of ['key', 'keepKey', 'exclusive']) { const op = seen[name]; seen[name] = (...a) => ordinary(() => op(...a)); }
     asking = target ?? name; watching = name;
     for (const sources of moduleWatched.values()) sources.delete(name);
     // The origin of the commit that asked it (LLP 1133.002 D12), which a fetch it makes carries (LLP 1133.036 D6).
-    const call = answering.call = { stream: null, mutation, name: target ?? name, turn: true, origin: Origin.now() }, target_ = target ?? name;
+    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, origin: Origin.now() }, target_ = target ?? name;
     if (call.origin !== 'app') answering.untraced.add(call);
     // What the source sent goes once the commit that asked it stands: an answer in flight's (a resource's, or a mutation's that
     // answers with a promise) whatever it then answers, a refused commit saying so (LLP 1016.000 D7, amended 2026-10-18).
@@ -654,7 +658,7 @@ export function install(data, mixed = false, modules = null) {
   // answer is the Rust module's, not ready until it loads; rust-data.js
   // then asks it first and this module for what it calls unknown.
   data.uploads = ledger; // the uploads a resource asks are asked once (LLP 1016.000 D10)
-  data.answer = mixed ? (name, args, store, target, mutation) => { try { return ts(name, args, store, target, mutation); } catch { return null; } } : ts;
+  data.answer = mixed ? (name, args, store, target, mutation, forced) => { try { return ts(name, args, store, target, mutation, forced); } catch { return null; } } : ts;
   // An overlay (`overlay.js`): what a resource shows while writes affect it, in overlay mode; `undefined` without one.
   overlaying.say = line => journal.push(`t=${clock.now} ${line}`);
   data.overlay = source.overlay && ((name, args, answer, writes) => {
@@ -673,7 +677,7 @@ export function install(data, mixed = false, modules = null) {
   // fresh answer that fills no slot, with the call's origin on it, so a module call it makes is admitted with that
   // origin (`__exact_module`). Its answer, or null for a name `tools` does not export.
   data.tool = (name, args, store, origin) => {
-    const handler = source.tools?.[name];
+    const handler = source.tools && Object.hasOwn(source.tools, name) ? source.tools[name] : undefined;
     if (typeof handler !== 'function') return null;
     const before = answering.call, call = answering.call = { stream: null, mutation: true, name, turn: true, origin };
     if (origin !== 'app') answering.untraced.add(call);

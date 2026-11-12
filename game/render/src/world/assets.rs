@@ -519,7 +519,7 @@ impl Assets {
                     .0
                     .iter()
                     .find(|o| o.material as usize == index)?;
-                Some((o.color, o.emissive))
+                Some((o.color, o.emissive, o.uv_offset))
             };
             drawn |= !nodes.is_empty();
             if !nodes.is_empty() {
@@ -540,9 +540,28 @@ impl Assets {
                 let mut base = 0;
                 // A draw of several materials: each part's entry carries its own.
                 let materials = members.and_then(|m| m.2.get(i)).map_or(&[][..], |p| &p[..]);
-                if parts.len() == 1 {
-                    look = find(&parts[0]);
-                } else if !materials.is_empty() || parts.iter().any(|p| find(p).is_some()) {
+                // The material's UV offset, in each of the record's entries.
+                // A custom material's shader reads no look table.
+                let offset = material_look(material)
+                    .and_then(|l| l.2)
+                    .filter(|_| !draws.custom.contains(&material));
+                let [u, v] = offset.unwrap_or_default();
+                if parts.len() <= 1 {
+                    look = parts.first().and_then(find);
+                    // One neutral entry for the whole record, holding the offset.
+                    if offset.is_some() {
+                        base = self.part_looks.len() as u32 + 1;
+                        let mut entry = [0.; 18];
+                        entry[..4].copy_from_slice(&[1.; 4]);
+                        entry[16..].copy_from_slice(&[u, v]);
+                        let mut end = [0.; 18];
+                        end[7] = f32::from_bits(u32::MAX);
+                        self.part_looks.extend([entry, end]);
+                    }
+                } else if !materials.is_empty()
+                    || offset.is_some()
+                    || parts.iter().any(|p| find(p).is_some())
+                {
                     // A merged draw finds each vertex's part by its vertex range,
                     // or by its number when it has several materials.
                     let starts = &members.unwrap().1[i];
@@ -575,16 +594,18 @@ impl Assets {
                                         m[5],
                                         m[6],
                                         m[7],
+                                        u,
+                                        v,
                                     ]
                                 }),
                         );
-                    let mut end = [0.; 16];
+                    let mut end = [0.; 18];
                     end[7] = f32::from_bits(u32::MAX);
                     self.part_looks.push(end);
                 }
                 let (mut tint, mut glow) =
                     look.map_or(([1.; 4], [0.; 3]), |l| (l.color, l.emissive));
-                if let Some((color, g)) = material_look(material) {
+                if let Some((color, g, _)) = material_look(material) {
                     if let Some(c) = color {
                         tint = std::array::from_fn(|i| tint[i] * c[i]);
                         base |= REPLACE;
@@ -686,6 +707,7 @@ fn look_digests(w: &World) -> BTreeMap<u32, u64> {
             l.color.map(|c| c.map(f32::to_bits)).hash(h);
             l.emissive.map(f32::to_bits).hash(h);
             l.textures.names().hash(h);
+            l.uv_offset.map(|o| o.map(f32::to_bits)).hash(h);
         }
     }
     hashers.into_iter().map(|(k, h)| (k, h.finish())).collect()

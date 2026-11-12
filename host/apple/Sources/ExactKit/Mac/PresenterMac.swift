@@ -161,6 +161,7 @@ package final class Presenter {
     var fold = ViewportFold.flat
 
     init() {
+        textRasters.slotFreed = { [weak self] in self?.requestTextPublication() }
         viewport.permitsDocumentPrefit = { [weak self] in
             guard let self else { return false }
             return !self.applying && !self.resetting
@@ -255,7 +256,8 @@ package final class Presenter {
     }
 
     /// Bring bands up to date. Visible paragraphs always; others up to
-    /// `limit` of them (nil: all). True when some were left for a later slice.
+    /// `limit` of them (nil: all). True when work needs another frame;
+    /// worker completion requests its own pass, including refused admissions.
     @discardableResult
     func refreshVisibleText(limit: Int? = nil, afterFrame: Bool = false) -> Bool {
         // Bounds notifications can arrive while a batch is still changing the
@@ -287,8 +289,8 @@ package final class Presenter {
         var rasterBudget = limit.map { $0 == 0 ? 0 : Self.textRastersPerSlice } ?? rasters.count
         for node in rasters {
             guard rasterBudget > 0 else { rastersDeferred = true; break }
-            rasterBudget -= 1
-            if !textRasters.ensure(node, urgent: false) { rastersDeferred = true }
+            // A refusal waits for slotFreed, leaving the slice for ready work.
+            if textRasters.ensure(node, urgent: false) { rasterBudget -= 1 }
         }
         // Region readers own their pixel bands and publish positioned layers.
         // The ordinary backing-store band must not invalidate them a second time.
@@ -328,6 +330,7 @@ package final class Presenter {
     // MARK: The pump — list fill and text admission, a slice per frame
 
     private var pumpLink: CADisplayLink?
+    var asksForFrames: Bool { pumpLink != nil }
     private let pumpTarget = PumpTarget()
     private var inScrollCallback = false
     private var textPending = false
@@ -480,8 +483,8 @@ package final class Presenter {
         if refreshVisibleText(limit: 0) { textPending = true; startPump() }
     }
 
-    /// An offscreen worker supplied pixels, or a display pass found both
-    /// workers busy: publish them, or ask again, with the next text slice.
+    /// A worker freed a slot or supplied pixels, or a display pass found both
+    /// workers busy: publish or admit text with the next slice.
     func requestTextPublication() {
         textPending = true
         startPump()

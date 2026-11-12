@@ -88,6 +88,105 @@ fn tab_stops_at_a_range_a_select_and_a_file_control_as_htmls_focusable_areas() {
 }
 
 #[test]
+fn tab_from_a_focused_negative_index_control_continues_in_tree_order() {
+    let source = r#"component App
+  view
+    column width=400 height=600
+      button "Before" testId="before" height=30
+      button "Middle" tabindex=-1 testId="middle" height=30
+      button "After" testId="after" height=30
+"#;
+    for positive in [false, true] {
+        let extra = if positive {
+            r#"      button "Two" tabindex=2 testId="two" height=30
+      button "One" tabindex=1 testId="one" height=30
+"#
+        } else {
+            ""
+        };
+        let mut p = boot(&format!("{source}{extra}"));
+        for backward in [false, true] {
+            assert_eq!(p.set_focus(Some(id(&p, "middle")), 0.), None);
+            p.hold_modifier("ShiftLeft", backward);
+            let expected: &[&str] = match (positive, backward) {
+                (false, false) => &["after", "before", "after"],
+                (false, true) => &["before", "after", "before"],
+                (true, false) => &["after", "one", "two", "before", "after"],
+                (true, true) => &["before", "two", "one", "after", "before"],
+            };
+            assert_eq!(walk(&mut p, &vec!["Tab"; expected.len()]), expected);
+            p.hold_modifier("ShiftLeft", false);
+        }
+    }
+}
+
+#[test]
+fn tab_from_a_focused_negative_index_control_uses_tree_order_before_tabindex_order() {
+    let cases = [
+        (
+            &[("before", 1), ("middle", -1), ("after", 2)][..],
+            &["after", "before", "after"][..],
+            &["before", "after", "before"][..],
+        ),
+        (
+            &[("middle", -1), ("one", 1), ("zero", 0)],
+            &["one", "zero", "one"],
+            &["zero", "one", "zero"],
+        ),
+        (
+            &[("zero", 0), ("one", 1), ("middle", -1)],
+            &["one", "zero", "one"],
+            &["one", "zero", "one"],
+        ),
+        (
+            &[("before", 2), ("middle", -1), ("after", 1), ("zero", 0)],
+            &["after", "before", "zero", "after"],
+            &["before", "after", "zero", "before"],
+        ),
+        (
+            &[("middle", -1), ("only", 1)],
+            &["only", "only"],
+            &["only", "only"],
+        ),
+    ];
+    let mut actual = Vec::new();
+    let mut expected = Vec::new();
+    for (buttons, forward, backward) in cases {
+        let rows: String = buttons
+            .iter()
+            .map(|(name, index)| {
+                format!("      button \"{name}\" testId=\"{name}\" tabindex={index} height=30\n")
+            })
+            .collect();
+        let mut p = boot(&format!(
+            "component App\n  view\n    column width=400 height=600\n{rows}"
+        ));
+        for (back, stops) in [(false, forward), (true, backward)] {
+            assert_eq!(p.set_focus(Some(id(&p, "middle")), 0.), None);
+            p.hold_modifier("ShiftLeft", back);
+            actual.push(walk(&mut p, &vec!["Tab"; stops.len()]));
+            expected.push(stops.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn tab_keeps_a_focused_negative_index_control_when_there_are_no_stops() {
+    let mut p = boot(
+        r#"component App
+  view
+    button "Middle" tabindex=-1 autofocus testId="middle" width=100 height=30
+"#,
+    );
+    for backward in [false, true] {
+        p.hold_modifier("ShiftLeft", backward);
+        assert_eq!(walk(&mut p, &["Tab"]), ["middle"]);
+        p.hold_modifier("ShiftLeft", false);
+    }
+}
+
+#[test]
 fn space_and_enter_at_a_file_or_date_control_click_it() {
     let source = r#"component App
   state presses = 0

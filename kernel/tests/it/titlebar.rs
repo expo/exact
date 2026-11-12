@@ -182,10 +182,10 @@ fn titlebar_lengths_travel_the_wire() {
     other.apply_frame(&wire::encode(0, 2, &ops)).unwrap();
     let node = other.node(7).unwrap();
     let rows = [
-        node.style.padding_left,
-        node.style.margin_left,
-        node.style.width,
-        node.style.height,
+        node.style.padding_left.clone(),
+        node.style.margin_left.clone(),
+        node.style.width.clone(),
+        node.style.height.clone(),
     ];
     let area = Env::default().with_titlebar_area(Some(Rect::new(78.0, 0.0, 822.0, 32.0)));
     for ((_, text, css), (row, want)) in

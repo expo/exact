@@ -68,6 +68,7 @@ pub(super) fn end(b: &[u32], i: usize) -> Option<usize> {
     let words = |len: usize| len.div_ceil(4);
     Some(match *b.get(i)? {
         MATRIX => i + 7,
+        MATRIX3 => i + 10,
         RRECT => i + 14,
         PATH => path(i + 3)?,
         CLIP_RRECT => i + 13,
@@ -249,6 +250,35 @@ impl Recorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn turned_boxes_record_shapes_without_cpu_pictures() {
+        use crate::presenter::{PainterChoice, Presenter};
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan("component App\n  view\n    view perspective=600 width=200 height=100 margin=100\n      view rotate=\"y 40deg\" width=200 height=100 background-color=\"#ff0000\"\n        text \"Turned card\" font-size=18 color=\"white\" margin=12\n"),
+            (), (400., 400.), 3., std::path::PathBuf::new(), PainterChoice::Canvas,
+        ).unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut at = 0;
+        let mut shapes = 0;
+        let mut glyphs = 0;
+        let mut planes = 0;
+        while at < ops.len() {
+            assert_ne!(
+                ops[at], IMAGE_DEF,
+                "a turned solid box must not rasterize a CPU picture"
+            );
+            shapes += usize::from(ops[at] == RRECT);
+            glyphs += usize::from(ops[at] == GLYPHS);
+            planes += usize::from(ops[at] == MATRIX3);
+            at = end(&ops, at).expect("valid stream");
+        }
+        assert!(shapes > 0, "the turned box records its fill");
+        assert!(glyphs > 0, "the turned box records its text");
+        assert!(planes > 0, "the draws use a projective matrix");
+    }
 
     #[test]
     fn rows_first_walked_at_zero_opacity_are_recorded_when_shown() {

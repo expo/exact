@@ -34,7 +34,7 @@ fn background(id: u32) -> Option<InlineBackground> {
     Some(InlineBackground {
         color: GRAY,
         id,
-        radii: [Dimension::Points(3.0); 4],
+        radii: [const { Dimension::Points(3.0) }; 4],
     })
 }
 
@@ -247,7 +247,7 @@ fn inline_background_resolves_percentage_and_calc_radii_against_each_piece() {
         Dimension::parse_calc("calc(25% + 1px)").unwrap(),
     ] {
         let mut bg = background(1).unwrap();
-        bg.radii = [radius; 4];
+        bg.radii = std::array::from_fn(|_| radius.clone());
         let pieces = fills(&p, &[Some(bg)]);
         assert_eq!(pieces.len(), 2);
         for (piece, corner) in [(&pieces[0], 0), (&pieces[1], 1)] {
@@ -260,7 +260,7 @@ fn inline_background_resolves_percentage_and_calc_radii_against_each_piece() {
         }
     }
     let mut bg = background(1).unwrap();
-    bg.radii = [Dimension::Percent(100.0); 4];
+    bg.radii = [const { Dimension::Percent(100.0) }; 4];
     let p = e.paragraph(&spec(&["round"]), None);
     let piece = fills(&p, &[Some(bg)])[0];
     assert_eq!(
@@ -276,7 +276,7 @@ fn inline_background_zero_radius_keeps_the_square_path() {
     let p = e.paragraph(&spec(&["one", "two"]), None);
     let backgrounds = [1, 2].map(|id| {
         Some(InlineBackground {
-            radii: [Dimension::Points(0.0); 4],
+            radii: [const { Dimension::Points(0.0) }; 4],
             ..background(id).unwrap()
         })
     });

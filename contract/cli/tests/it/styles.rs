@@ -1152,7 +1152,7 @@ component Corners
     let style = |r: &Runner<NoData>, name: &str| {
         let k = r.kernel();
         let n = k.node_by_key(k.find_by_test_id(name)[0]).unwrap();
-        (n.id, n.style.border_radius_top_left)
+        (n.id, n.style.border_radius_top_left.clone())
     };
     let (id, initial) = style(&r, "box");
     assert_eq!(initial, Dimension::Points(4.0));

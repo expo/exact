@@ -213,7 +213,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         var fills = 0
         var i = from
         while (i < to) {
-            when (b.get(i)) { 1 -> {}; 2 -> fills++; else -> return false }
+            when (b.get(i)) { 1, 48 -> {}; 2 -> fills++; else -> return false }
             i = walker.end(b, i)
         }
         return fills == 1
@@ -225,7 +225,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         var fills = 0
         var i = from
         while (i < to) {
-            when (b.get(i)) { 1 -> {}; 2, 3 -> fills++; else -> return false }
+            when (b.get(i)) { 1, 48 -> {}; 2, 3 -> fills++; else -> return false }
             i = walker.end(b, i)
         }
         return fills == 1
@@ -507,7 +507,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         current.getValues(iconValues)
         val v = iconValues
         val sx = v[0]; val sy = v[4]
-        if (v[1] != 0f || v[3] != 0f || sx <= 0f || sy <= 0f) return false
+        if (v[1] != 0f || v[3] != 0f || v[6] != 0f || v[7] != 0f || v[8] != 1f || sx <= 0f || sy <= 0f) return false
         path.computeBounds(iconBounds, true)
         val grow = if (paint.style == Paint.Style.STROKE) paint.strokeWidth * (if (paint.strokeJoin == Paint.Join.MITER) 2f else 0.5f) else 0f
         val l = Math.floor(((iconBounds.left - grow) * sx + v[2]).toDouble()).toFloat() - 1f
@@ -630,7 +630,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
         if (readRRect(b, i + 15)) c.clipOutRect(rect) else { path.rewind(); path.addRoundRect(rect, radii, Path.Direction.CW); c.clipOutPath(path) }
         val square = readRRect(b, i + 3)
         // Under a scale and translation: the mask made once on the CPU ([Shadows]), not a GPU blur.
-        if (values[1] == 0f && values[3] == 0f && values[0] > 0f && Math.abs(values[0] - values[4]) < 1e-3f && sigma > 0.5f / values[0]) {
+        if (values[1] == 0f && values[3] == 0f && values[6] == 0f && values[7] == 0f && values[8] == 1f && values[0] > 0f && Math.abs(values[0] - values[4]) < 1e-3f && sigma > 0.5f / values[0]) {
             val mf = shadowPaint.maskFilter
             shadowPaint.maskFilter = null
             val drawn = Shadows.draw(c, shadowPaint, rect, radii, sigma, values[0])
@@ -700,6 +700,14 @@ internal class Player(private val fonts: Map<Int, Font>) {
                     current.set(matrix)
                     c.setMatrix(matrix)
                     i += 7
+                }
+                48 -> {
+                    for (k in 0 until 9) values[k] = f(b, i + 1 + k)
+                    matrix.setValues(values)
+                    if (shiftX != 0f || shiftY != 0f) matrix.postTranslate(-shiftX, -shiftY)
+                    current.set(matrix)
+                    c.setMatrix(matrix)
+                    i += 10
                 }
                 27 -> { backdrop(c, b, from, i); i += 14 }
                 42 -> { backdrop(c, b, from, i); i += 14 + 2 * b.get(i + 1) }

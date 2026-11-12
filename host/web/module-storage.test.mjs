@@ -12,6 +12,52 @@ const ROOT = resolve(import.meta.dir, '../..');
 // The runner's normalized set for `net.fetch https://api.castle.test` (as tests/it/request.rs's batch carries it).
 const GRANTS = {version:1,entries:[[1,'net.fetch https://api.castle.test',['fetch','https','api.castle.test',443],null]],error:null,seal:'825ec7a8503217b3'};
 
+test('image writes notify only for a successful widget-readable destination', async () => {
+  const realm = vm.createContext({ URL, TextEncoder, TextDecoder, AbortController, AbortSignal, crypto,
+    __exact_host: () => '', console: { error() {} } });
+  vm.runInContext(readFileSync(resolve(ROOT, 'js/src/binary.js'), 'utf8'), realm);
+  vm.runInContext(readFileSync(resolve(ROOT, 'js/src/prelude.js'), 'utf8'), realm);
+  vm.runInContext(`
+    exact = { grants: 'fs.read app:/data/output.jpg', answer(source, args, store, storage) {
+      return globalThis.result = storage.fs[args[0]](args[1], args[2], {
+        maxDimension: 32, maxBytes: 10000, rotate: 90
+      });
+    } };
+    function image(from, to, transform) {
+      if (from === 'app:/data/missing.jpg') throw new Error('missing image');
+      const path = transform ? to + '.jpg' : to;
+      return nativeReply
+        ? (transform ? '32\\t32\\t100\\t' + path + '\\t{"type":"image/jpeg"}' : '32\\t32\\t100')
+        : { path, type: 'image/jpeg', width: 32, height: 32, size: 100 };
+    }
+    __exact_storage = { fs: {
+      compressImage: (from, to) => Promise.resolve(image(from, to, false)),
+      transformImage: (from, to) => Promise.resolve(image(from, to, true))
+    } };
+    __exact_install_storage();
+  `, realm);
+  let writes = 0;
+  for (const nativeReply of [false, true]) {
+    realm.nativeReply = nativeReply;
+    for (const method of ['compressImage', 'transformImage']) {
+      const destination = method === 'transformImage' ? 'app:/data/output' : 'app:/data/output.jpg';
+      for (const [from, to, changed, ok] of [
+        ['app:/data/input.jpg', destination, true, true],
+        ['app:/data/output.jpg', 'app:/cache/hidden', false, true],
+        ['app:/data/missing.jpg', destination, false, false],
+      ]) {
+        const call = JSON.parse(realm.__exact_call('image', JSON.stringify([method, from, to]), 'answer'));
+        await realm.result.catch(() => {});
+        const reply = JSON.parse(realm.__exact_settle(String(call.call)));
+        expect(reply.tag).toBe(ok ? 0 : 2);
+        if (ok) expect(reply.value.path).toBe(method === 'transformImage' ? to + '.jpg' : to);
+        if (changed) writes++;
+        expect(JSON.parse(realm.__exact_background()).writes).toBe(writes);
+      }
+    }
+  }
+});
+
 // An answer's storage operation queued behind another answer's parks; when
 // that answer delivers its own (after its fetch came back), the parked one's
 // operation is in flight and it is asked again (prelude.js `settle`, LLP 1097

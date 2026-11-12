@@ -391,11 +391,13 @@ extension Agent {
     /// shows for an action, so the row is found by its popover and place:
     /// `pop` must be the menu UIKit was last given to present, or one of its
     /// submenus (`MenuHost.presentedMenu`), and its rows (`MenuHost.given`) must
-    /// read as exactly one run of the rows shown (in a menu that scrolls,
-    /// the rows it shows as one slice of them); the row is the one at its
-    /// place there. A row of another popover, however alike its rows read,
-    /// is refused, and so are two popovers of the presented menu that read
-    /// the same, a menu shown twice, and a row scrolled out of its menu.
+    /// read as a run of the rows shown (in a menu that scrolls, the rows it
+    /// shows as one slice of them), forward or, in a menu UIKit shows last
+    /// row first, reversed; the row is the one at its place there, which
+    /// every such reading must agree on. A row of another popover, however
+    /// alike its rows read, is refused, and so is a row another popover of
+    /// the presented menu also reads as its own (in either order), a menu
+    /// shown twice, and a row scrolled out of its menu.
     func shownRow(_ row: NodeView, of pop: NodeView, in window: UIWindow) -> Result<CGRect, AimRefusal> {
         let menus = presenter.menus, name = Agent.popoverName(pop)
         guard let given = menus.given[pop.id], menus.presentedMenu[pop.id] == pop.incarnation,
@@ -407,29 +409,38 @@ extension Agent {
         if let twin = menus.presentedMenu.keys.sorted().first(where: { $0 != pop.id && menus.given[$0]?.map(\.label) == labels }) {
             return .failure(AimRefusal(why: "\(name) and popover #\(twin) are both in the menu UIKit shows and read the same; give their rows different titles"))
         }
-        // Where the menu shows: a run of all its rows, or, in a list that
-        // scrolls, the rows the list shows as one slice of them (`first`:
-        // the place of the slice's first row).
-        var found: [(rows: [(label: String, box: CGRect)], first: Int)] = []
-        for group in Agent.menuGroups(in: window) {
-            if group.scrolls, !group.rows.isEmpty, group.rows.count <= labels.count {
-                for k in 0...(labels.count - group.rows.count) where zip(group.rows, labels[k...]).allSatisfy({ $0.label == $1 }) { found.append((group.rows, k)) }
-                continue
-            }
-            for i in group.rows.indices where i + labels.count <= group.rows.count && zip(group.rows[i...], labels).allSatisfy({ $0.label == $1 }) {
-                found.append((Array(group.rows[i..<i + labels.count]), 0))
+        // Every reading of the rows shown as this menu's (`runs`), each
+        // once: a menu that reads the same both ways has two, which must
+        // agree on the row.
+        let groups = Agent.menuGroups(in: window)
+        var readings: [(rows: [MenuRow], first: Int)] = []
+        for group in groups {
+            for r in Agent.runs(of: labels, in: group) where !readings.contains(where: { $0.first == r.first && $0.rows.map(\.box) == r.rows.map(\.box) }) {
+                readings.append(r)
             }
         }
-        guard found.count == 1 else {
-            return .failure(AimRefusal(why: found.isEmpty
-                ? "the menu of \(name) does not show its rows: tap its invoker first, then `clock settle`"
-                : "\(found.count) places UIKit shows read as the menu of \(name) (another menu, or a scrolled slice whose rows repeat); close the others first, or drive it without --touch platform"))
+        guard !readings.isEmpty else {
+            return .failure(AimRefusal(why: "the menu of \(name) does not show its rows: tap its invoker first, then `clock settle`"))
         }
-        let (rows, first) = found[0]
-        guard place >= first, place < first + rows.count else {
+        // The row in each reading; nil where the reading's slice leaves it out.
+        let boxes = readings.map { place >= $0.first && place < $0.first + $0.rows.count ? $0.rows[place - $0.first].box : nil }
+        if boxes.allSatisfy({ $0 == nil }) {
             return .failure(AimRefusal(why: "its row is scrolled out of the menu of \(name), and the agent's finger picks only rows the menu shows: drive it without --touch platform, where `tap` opens the menu painted"))
         }
-        return .success(rows[place - first].box)
+        guard let box = boxes[0], boxes.allSatisfy({ $0 == box }) else {
+            return .failure(AimRefusal(why: "\(readings.count) places UIKit shows read as the menu of \(name) (another menu, a scrolled slice whose rows repeat, or rows that read the same reversed); close the others first, or drive it without --touch platform"))
+        }
+        // UIKit records a menu's submenus when it builds it, and a submenu
+        // not shown can read some of the rows shown, either way round
+        // (`Delete, More` and its `More, Delete`): whose row the one aimed
+        // at is cannot be told from the labels, so it is not picked.
+        if let other = menus.presentedMenu.keys.sorted().first(where: { id in
+            guard id != pop.id, let theirs = menus.given[id]?.map(\.label), !theirs.isEmpty else { return false }
+            return groups.contains { Agent.runs(of: theirs, in: $0).contains { $0.rows.contains { $0.box == box } } }
+        }) {
+            return .failure(AimRefusal(why: "\(name) and popover #\(other) are both in the menu UIKit shows and read as rows shown, one maybe reversed; give their rows different titles"))
+        }
+        return .success(box)
     }
 
     /// Where `alert` shows its button for `action`, in `window`, or why a
@@ -466,15 +477,30 @@ extension Agent {
     /// Whether UIKit shows the menu it was last given (`shownRow`'s match),
     /// whatever presents it: a pull-down, a popover.
     func menuShown(in window: UIWindow) -> Bool {
-        let groups = Agent.menuGroups(in: window).map { ($0.scrolls, $0.rows.map(\.label)) }
+        let groups = Agent.menuGroups(in: window)
         return presenter.menus.presentedMenu.keys.contains { id in
             guard let labels = presenter.menus.given[id]?.map(\.label), !labels.isEmpty else { return false }
-            return groups.contains { scrolls, group in
-                // All of its rows; in a list that scrolls, a slice of them.
-                let (whole, part) = scrolls ? (labels, group) : (group, labels)
-                return !part.isEmpty && whole.indices.contains { $0 + part.count <= whole.count && Array(whole[$0..<$0 + part.count]) == part }
-            }
+            return groups.contains { !Agent.runs(of: labels, in: $0).isEmpty }
         }
+    }
+
+    typealias MenuRow = (label: String, box: CGRect)
+
+    /// Where `group` shows the rows `labels` reads, each as its rows in
+    /// `labels`' order and the place in `labels` of the first: a run of all
+    /// of them or, in a list that scrolls, one slice of them. A menu that
+    /// opens upward in UIKit's `.automatic` order shows its rows last first
+    /// (`UIContextMenuConfiguration.ElementOrder`), so the group is read
+    /// both ways.
+    static func runs(of labels: [String], in group: (scrolls: Bool, rows: [MenuRow])) -> [(rows: [MenuRow], first: Int)] {
+        func forward(_ rows: [MenuRow]) -> [(rows: [MenuRow], first: Int)] {
+            if group.scrolls, !rows.isEmpty, rows.count <= labels.count {
+                return (0...(labels.count - rows.count)).filter { k in zip(rows, labels[k...]).allSatisfy { $0.label == $1 } }.map { (rows, $0) }
+            }
+            return rows.indices.filter { i in i + labels.count <= rows.count && zip(rows[i...], labels).allSatisfy { $0.label == $1 } }
+                .map { (Array(rows[$0..<$0 + labels.count]), 0) }
+        }
+        return forward(group.rows) + forward(Array(group.rows.reversed()))
     }
 
     /// The labelled accessibility elements the window shows outside every
@@ -482,8 +508,8 @@ extension Agent {
     /// the scroll view that holds them (a menu's list) and in reading order
     /// within each: what a menu UIKit shows reads as. `scrolls`: the list
     /// holds more than it shows, and rows off the screen are not among these.
-    static func menuGroups(in window: UIWindow) -> [(scrolls: Bool, rows: [(label: String, box: CGRect)])] {
-        var groups: [ObjectIdentifier: (list: UIView, rows: [(label: String, box: CGRect)])] = [:], order: [ObjectIdentifier] = []
+    static func menuGroups(in window: UIWindow) -> [(scrolls: Bool, rows: [MenuRow])] {
+        var groups: [ObjectIdentifier: (list: UIView, rows: [MenuRow])] = [:], order: [ObjectIdentifier] = []
         func visit(_ v: UIView, in list: UIView) {
             guard !v.isHidden, v.alpha > 0.01, !(v is NodeView), !routes.contains(where: { shows($0.1, v) }) else { return }
             if v.isAccessibilityElement {

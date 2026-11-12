@@ -182,10 +182,10 @@ fn layout<D: DataSource>(host: &Host<D>) -> String {
         }
         let (f, c) = (n.frame, host.cells_of(id).expect("a node"));
         let radius = [
-            n.style.border_radius_top_left,
-            n.style.border_radius_top_right,
-            n.style.border_radius_bottom_right,
-            n.style.border_radius_bottom_left,
+            n.style.border_radius_top_left.clone(),
+            n.style.border_radius_top_right.clone(),
+            n.style.border_radius_bottom_right.clone(),
+            n.style.border_radius_bottom_left.clone(),
         ]
         // As a host sizes a corner: a percentage of the box's width across
         // and of its height down (`at_basis`), none below 0, one length where

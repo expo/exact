@@ -297,3 +297,69 @@ mod e11_assets_restore {
         assert_eq!(pending.take_assets(), ["crate.model"]);
     }
 }
+#[test]
+fn the_first_press_after_a_ten_minute_idle_gap_lands_on_the_wake_frame() {
+    #[derive(Default, crate::Component)]
+    struct Rolled;
+    struct Dice;
+    impl Game for Dice {
+        const ID: &'static str = "idle-dice";
+        type Args = ();
+        fn actions() -> Actions {
+            Actions::new().button("roll", &["Space"])
+        }
+        fn render_idle(world: &World, _: &()) -> bool {
+            world.count::<Rolled>(|_| true) == 0
+        }
+        fn setup(_: &mut World, _: &()) {}
+        fn tick(world: &mut World, input: &Input, _: &()) {
+            if input.pressed("roll") {
+                world.spawn(Rolled);
+            }
+        }
+    }
+    let period = 1000.0 / 60.0;
+    let press = |sim: &mut Sim<Dice>, at_ms: f64, down: bool| {
+        sim.input(InputEvent::Key {
+            code: "Space".into(),
+            down,
+            at_ms,
+            player: 0,
+        })
+    };
+    let rested = || {
+        let mut sim = Sim::<Dice>::new(()).unwrap().paranoid(Paranoid::Off);
+        sim.frame_period(period);
+        for frame in 0..=60 {
+            sim.advance(frame as f64 * period, Clock::Live);
+        }
+        assert!(sim.render_idle());
+        sim
+    };
+    let gap = 1000.0 + 600_000.0;
+    // Without a wake the live clock runs the gap's first 250 ms as ticks.
+    let mut unwoken = rested();
+    press(&mut unwoken, gap - 3.0, true);
+    assert_eq!(unwoken.advance(gap, Clock::Live), 15);
+    let mut sim = rested();
+    let tick = sim.world().tick();
+    press(&mut sim, gap - 3.0, true);
+    assert!(!sim.render_idle(), "queued input keeps the canvas drawing");
+    sim.wake(gap);
+    let ran = sim.advance(gap, Clock::Live);
+    assert!(
+        (1..=2).contains(&ran),
+        "one display period of ticks, not {ran}"
+    );
+    assert_eq!(sim.world().tick(), tick + u64::from(ran));
+    assert_eq!(
+        sim.world().count::<Rolled>(|_| true),
+        1,
+        "the press is not lost"
+    );
+    assert!(!sim.render_idle(), "the press is held");
+    press(&mut sim, gap + 40.0, false);
+    sim.advance(gap + period, Clock::Live);
+    sim.advance(gap + 3.0 * period, Clock::Live);
+    assert!(!sim.render_idle(), "the game's own word: a roll is showing");
+}

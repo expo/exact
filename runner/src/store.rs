@@ -14,6 +14,8 @@
 use crate::runner::DataError;
 
 mod presence;
+mod socket;
+pub use socket::{Socket, SocketCall};
 
 /// Durable client state as the runner holds it (LLP 1018 D1): the host's
 /// snapshot of the app's kept secrets, read before boot, and the writes
@@ -68,6 +70,13 @@ pub struct Store {
     /// Each open socket's buffered bytes at the start of the turn, by its
     /// resource's index: what its handle's `bufferedAmount` starts from.
     socket_buffered: Vec<(usize, u64)>,
+    /// Each open socket's stream ticket at the start of the turn, by its
+    /// resource's index: a Rust handle on another ticket is stale.
+    socket_open: Vec<(usize, u64)>,
+    /// Which sockets the call being made may send on (LLP 1016.003 D4), and
+    /// a mapper call's overload, which fails its frame.
+    socket_call: SocketCall,
+    socket_overload: Option<String>,
     /// The runner's clock as the call being made started, ms: when a timer
     /// a TypeScript answer arms now is due (LLP 1027.000 D1). The runner
     /// sets it before each call into its data source.
@@ -297,6 +306,9 @@ impl Store {
             sockets: Vec::new(),
             answer_sockets: Vec::new(),
             socket_buffered: Vec::new(),
+            socket_open: Vec::new(),
+            socket_call: SocketCall::None,
+            socket_overload: None,
             clock_ms: 0.0,
             undo: Vec::new(),
             copied: 0,

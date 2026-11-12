@@ -752,10 +752,10 @@ fn background_on_layer(kernel: &Kernel, n: &exact_kernel::NodeRef<'_>) -> bool {
     use exact_kernel::{ColorValue, Dimension};
     let s = n.style;
     let radii: Vec<Option<f32>> = [
-        s.border_radius_top_left,
-        s.border_radius_top_right,
-        s.border_radius_bottom_right,
-        s.border_radius_bottom_left,
+        s.border_radius_top_left.clone(),
+        s.border_radius_top_right.clone(),
+        s.border_radius_bottom_right.clone(),
+        s.border_radius_bottom_left.clone(),
     ]
     .iter()
     .map(|d| match d {

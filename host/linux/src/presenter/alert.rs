@@ -241,7 +241,7 @@ impl<D: DataSource> Presenter<D> {
         self.dirty = true;
         // An attached display still has the page's previous boxes. Initial
         // dialog focus follows its new layout before that picture is acknowledged.
-        let boxed: BTreeSet<ViewId> = self
+        let mut boxed: BTreeSet<ViewId> = self
             .host
             .preorder()
             .into_iter()
@@ -265,7 +265,12 @@ impl<D: DataSource> Presenter<D> {
         });
         let error = match autofocus {
             Some(id) => self.set_focus(Some(id), now),
-            None if dialog => self.move_focus_in(false, now, &boxed),
+            None if dialog => {
+                // The dialog is the fallback, even when Windows makes its
+                // scroll container a Tab stop.
+                boxed.remove(&id);
+                self.move_focus_in(false, now, &boxed)
+            }
             None => None,
         };
         if let Some(e) = error {
@@ -785,31 +790,34 @@ impl<D: DataSource> Presenter<D> {
         &self,
         mut order: Vec<(i64, usize, ViewId)>,
     ) -> Vec<(i64, usize, ViewId)> {
-        let Some(invoker) = self
-            .alert
-            .as_ref()
-            .filter(|a| !a.modal)
-            .and_then(|a| a.invoker)
-            .filter(|i| !self.alert_holds(*i))
-        else {
+        let Some(slot) = self.alert_tab_scope() else {
             return order;
         };
-        let Some(at) = self.host.preorder().iter().position(|id| *id == invoker) else {
-            return order;
-        };
-        let rank = (self.host.kernel().node(invoker))
-            .and_then(|n| n.props.get(PropId::TabIndex).and_then(|v| v.as_int()))
-            .filter(|&i| i > 0)
-            .unwrap_or(i64::MAX);
         let inside: Vec<_> = order
             .iter()
             .copied()
             .filter(|o| self.alert_holds(o.2))
             .collect();
         order.retain(|o| !self.alert_holds(o.2));
-        let after = order.partition_point(|o| (o.0, o.1) <= (rank, at));
+        let after = order.partition_point(|o| (o.0, o.1) <= slot);
         order.splice(after..after, inside);
         order
+    }
+    /// The invoker's rank and tree position, when it owns a popover focus
+    /// scope. A popover without an outside invoker stays in the page's scope.
+    pub(super) fn alert_tab_scope(&self) -> Option<(i64, usize)> {
+        let invoker = self
+            .alert
+            .as_ref()
+            .filter(|a| !a.modal)
+            .and_then(|a| a.invoker)
+            .filter(|i| !self.alert_holds(*i))?;
+        let at = self.host.preorder().iter().position(|id| *id == invoker)?;
+        let rank = (self.host.kernel().node(invoker))
+            .and_then(|n| n.props.get(PropId::TabIndex).and_then(|v| v.as_int()))
+            .filter(|&i| i > 0)
+            .unwrap_or(i64::MAX);
+        Some((rank, at))
     }
     /// Whether `id` is inside the open popover's invoker or any button that
     /// targets it, whose press is no light dismiss (HTML): its toggle acts.

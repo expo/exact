@@ -37,6 +37,8 @@ final class TextRasterizer {
     // free, so navigation and resize cannot queue obsolete document pixels.
     private var active = 0
     private static let maxConcurrent = 2
+    /// A freed slot resumes admission even when its pixels were discarded.
+    var slotFreed: (() -> Void)?
 
     private func key(_ node: NodeView) -> TextRasterKey {
         TextRasterKey(spec: node.paragraphSpec(), size: node.bounds.size,
@@ -89,6 +91,7 @@ final class TextRasterizer {
             DispatchQueue.main.async { [weak self, weak node] in
                 self?.active -= 1
                 node?.showTextRaster(image?.surface, for: key, frame: image?.frame, cast: image?.cast, deferOffscreen: true)
+                self?.slotFreed?()
             }
         }
         return true
@@ -127,7 +130,9 @@ final class TextRasterizer {
             let port = node.presenter?.textScrollportRect(node) ?? node.visibleRect
             if replacing || active > 0 || (node.inLiveResize && port.height < node.bounds.height * 0.5) {
                 node.useTextStrips()
-                deferred = true
+                // Busy workers request the next pass when they finish.
+                // Occluded live-resize text still needs a later frame.
+                deferred = deferred || active == 0
                 continue
             }
             if let job = prepare(node, key: key) { jobs.append((node, key, job)) }
@@ -160,8 +165,7 @@ final class TextRasterizer {
                 entry.0.showTextRaster(image?.surface, for: entry.1, frame: image?.frame, cast: image?.cast)
             }
             CATransaction.commit()
-            // A later width may have superseded this entire group.
-            jobs.first?.0.presenter?.requestTextPublication()
+            self?.slotFreed?()
         }
         if result.group.wait(timeout: .now() + max(0, wait)) == .success {
             publish()

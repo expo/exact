@@ -27,12 +27,14 @@ fn an_ordered_child_keeps_sent_replies_without_restoring_refused_turns() {
             target: Target::Mutation(0),
             source: "jssecret",
             args: &[],
+            fetch: None,
             continuation: Some(101),
         },
         InFlight {
             target: Target::Mutation(1),
             source: "rustsecret",
             args: &[],
+            fetch: None,
             continuation: None,
         },
     ];

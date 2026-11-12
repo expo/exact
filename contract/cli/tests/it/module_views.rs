@@ -70,6 +70,13 @@ impl Drop for App {
     }
 }
 
+#[test]
+fn a_package_view_in_an_uninstantiated_component_is_not_in_the_plan() {
+    let app = App::new("unused", "component App\n  view\n    text \"plain\"\ncomponent Tile\n  view\n    swatch-box tint=\"red\"\n", &[]);
+    let plan = contract::compile_path(&app.0.join("app.contract")).unwrap();
+    assert!(plan.views.is_empty());
+}
+
 struct NoData;
 impl exact_runner::DataSource for NoData {
     fn query(

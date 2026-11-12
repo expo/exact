@@ -11,6 +11,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 mod boot;
+mod checkpoints;
 mod direct;
 mod longpoll;
 mod overload;

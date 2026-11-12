@@ -1,13 +1,13 @@
 import { admitsSecret, createRequestExecutor, fetchHostAsset, sameGrantDeclaration, setAppGrantSet } from './admission.js';
 import { rustGrantSet, tsGrantSet } from './admission-data.js';
 import { boundedHttpBody, longPollRefusal, streamed } from './http-body.js';
-// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 4,
+// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 7,
 // `logic/abi/src/lib.rs`): the app's importless module wasm and its plan's
 // declarations (`app.bind.plan`, the plan without the bake's answers),
 // fetched after first pixel; once bound and activated, every answer is a
 // synchronous call, as the runner's `DataSource::answer` is. Until then the
 // runtime keeps each resource's compiled value and asks again at `ready`.
-const ABI = 4, utf8 = new TextEncoder(), text = new TextDecoder();
+const ABI = 7, utf8 = new TextEncoder(), text = new TextDecoder();
 
 function writer() {
   let buf = new Uint8Array(256), at = 0;
@@ -86,13 +86,19 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   };
   // A result (`read_result`): now, or an HTTP request for the host to run.
   const result = r => {
-    const tag = r.u8();
+    let tag = r.u8(), cache;
+    if (tag === 12) {
+      cache = r.str(); tag = r.u8();
+      if (!['default', 'no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached'].includes(cache) || ![1, 6, 9, 10].includes(tag)) throw new Error('invalid cached HTTP result');
+    }
     if (tag === 0) return { v: r.value() };
     // The source's own refusal refuses the commit, as the runner's does;
     // UnknownSource (2): a mixed app's TypeScript module may answer it.
     // A call the seam could not carry (`call` above) is the resource's
     // failure instead (LLP 1071 §7).
     if (tag >= 2 && tag <= 4) throw Object.assign(new Error(r.str()), { unknown: tag === 2, refuse: true });
+    // A two-way socket (tag 11, LLP 1016.003): the web carries no Rust socket yet.
+    if (tag === 11) throw new Error("a Rust source's two-way socket is not carried on the web yet");
     if (tag === 1 || tag === 6 || tag === 9 || tag === 10) {
       const http = tag === 1 ? 'ordered' : `independent:${r.u32()}`;
       const scoped = r.u8() === 1, scope = r.str();
@@ -104,7 +110,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       // (refused as the native seam refuses it: before the turn's writes apply)
       const pollRefusal = longPoll && longPollRefusal({ url, longPoll, stream: true }, method, n ? 'x' : '');
       if (pollRefusal) throw new Error(pollRefusal);
-      return { req: { method, url, headers, body: text.decode(body), raw: body, http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, longPoll } };
+      return { req: { method, url, headers, cache, body: text.decode(body), raw: body, http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, longPoll } };
     }
     // Storage work (LLP 1027.001 D2): a portable request the host runs
     // through the web host's own `storage-request.js`, under its scope.
@@ -116,7 +122,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   if (!sameGrantDeclaration(rustGrantSet, meta[1])) throw new Error('Rust module grants differ from the admitted build');
   r = op(1, w => w.bytes(new Uint8Array(plan))); r.u8(); result(r);
   r = op(2); r.u8(); result(r);
-  // One call (`call_request`): source, arguments by type, the store's
+  // One call (`call_request`): source, arguments by type, admitted secret names, the store's
   // snapshot; its reply (`call_reply`): a store read, writes, the result.
   // Whether the module's last call read the store before it failed: its resource is a store reader (LLP 1146 §2.3).
   let threwRead = false;
@@ -125,7 +131,9 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
     const r = op(code, w => {
       w.str(source); w.u8(6); w.u32(args.length);
       const t = (sources[source] ?? '').split('|')[0]; let i = 0; for (const a of args) i = encode(w, a, t, i);
-      const pairs = [...store.map].filter(([k]) => admitsSecret(rustGrantSet, k));
+      const names = globalThis.__exactRender ? [] : rustGrantSet.entries.filter(([, , grant]) => grant?.[0] === 'secret-keep').map(([, , grant]) => grant[1]);
+      w.u32(names.length); for (const name of names) w.str(name);
+      const pairs = globalThis.__exactRender ? [] : [...store.map].filter(([k]) => admitsSecret(rustGrantSet, k));
       w.u32(pairs.length); for (const [k, v] of pairs) { w.str(k); w.str(v); }
       if (outcome) {
         if (outcome.storage) { w.u8(5); w.bytes(outcome.storage); }
@@ -134,20 +142,25 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
         else if (outcome.failed) { w.u8(outcome.failed); w.str(outcome.message); }
         else { w.u8(0); w.u16(outcome.status); w.u32(outcome.headers.length); for (const [k, v] of outcome.headers) { w.str(k); w.str(v); } w.bytes(outcome.body); }
       }
+      // The socket turn (LLP 1016.003 D5): none, and no open socket.
+      w.u8(0); w.u32(0);
     });
     if (r.u8() !== 2) throw new Error('expected a call reply');
     const observed = r.u8() === 1;
     const writes = [];
     for (let n = r.u32(); n--;) { const k = r.str(); const v = r.u8() ? r.str() : null; if (!admitsSecret(rustGrantSet, k)) throw new Error(`secret ${k} is not granted`); writes.push([k, v]); }
+    // No socket operation, in a turn that may send on none.
+    if (r.u32() !== 0) throw new Error('a Rust module staged socket frames on the web');
+    r.u8(); r.str();
     let out;
-    try { out = result(r); } catch (error) { threwRead = observed; if (error.refuse) for (const [k, v] of writes) store.set(k, v); throw error; }
-    for (const [k, v] of writes) store.set(k, v);
+    try { out = result(r); } catch (error) { threwRead = observed; if (error.refuse && !globalThis.__exactRender) for (const [k, v] of writes) store.set(k, v); throw error; }
+    if (!globalThis.__exactRender) for (const [k, v] of writes) store.set(k, v);
     if (observed) out.store = true;
     return out;
   };
   const rust = (source, args, store) => callWith(3, source, args, store), ts = data.ts, tsThrewRead = data.threwRead;
   data.threwRead = () => { const read = [threwRead, !!tsThrewRead?.()]; threwRead = false; return read[0] || read[1]; };
-  data.answer = ts ? (source, args, store, target, mutation) => { try { return rust(source, args, store); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation); throw e; } } : rust;
+  data.answer = ts ? (source, args, store, target, mutation, forced) => { try { return rust(source, args, store); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation, forced); throw e; } } : rust;
   data.parse = (source, args, outcome, store) => callWith(4, source, args, store, outcome);
   // An overlay (`overlay_request`): what a resource shows while writes affect it; none from the Rust module asks
   // the TypeScript one's, beside it.

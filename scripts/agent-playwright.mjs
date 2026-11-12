@@ -68,10 +68,10 @@ async function assertDist(dist, app) {
 }
 
 async function files({ plan, pageURL, app, webDist, port, env }) {
-  const selected = resolveApp(app), dist = resolve(webDist ?? defaultWebDist());
+  const selected = resolveApp(app), dist = resolve(webDist ?? defaultWebDist(selected));
   if (!pageURL) {
     await assertDist(dist, selected);
-    const js = jsTargetBuild(dist), env = process.env.EXACT_APP_DIR || webDist || process.env.EXACT_WEB_DIST ? `EXACT_APP_DIR=${selected.dir} EXACT_WEB_DIST=${dist} ` : '';
+    const js = jsTargetBuild(dist), env = selected.outside || webDist || process.env.EXACT_WEB_DIST ? `EXACT_APP_DIR=${selected.dir} EXACT_WEB_DIST=${dist} ` : '';
     const command = webBuildCommand(selected, dist, js ? '' : ' --wasm', `${env}bun host/web/build.mjs ${selected.crate('web')}${js ? '' : ' --wasm'}`), changed = webChanges(dist, selected);
     refuseStale('web', resolve(dist, '.exact-build.json'), changed.app, command);
     warnStale('web', resolve(dist, '.exact-build.json'), changed.shared, `if they matter, run ${command}`);
@@ -226,7 +226,7 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
   const hosted = await files({ plan, pageURL, app, webDist, port, env });
   let browserServer, browser, context, page, poolKey;
   // Only Chrome keeps a named store's profile between drives (agent.mjs `openWeb`); here it is this drive's own.
-  const hostLines = [...pageURL ? [] : builtSettingLines(resolve(webDist ?? defaultWebDist())), ...storage === undefined ? [] : [`${name}: --storage ${storage} is this drive's own profile, emptied when it ends; Chrome keeps a store between drives`]];
+  const hostLines = [...pageURL ? [] : builtSettingLines(resolve(webDist ?? defaultWebDist(resolveApp(app)))), ...storage === undefined ? [] : [`${name}: --storage ${storage} is this drive's own profile, emptied when it ends; Chrome keeps a store between drives`]];
   // Why a page never booted: its last 20 lines when the wait gave up, as a hangup's report (agent-wire.mjs).
   const neverBooted = what => () => `${what}; ${hostLines.slice(-20).join('\n')}`;
   const closeFiles = () => {

@@ -46,6 +46,7 @@ fn setup(processes: &[(&str, &str)]) -> (Core, Receiver<()>) {
 
 fn request(ticket: u64, body: &str, stream: bool) -> RequestOut {
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "server".into(),
         request: Request::process(body.as_bytes().to_vec(), stream, 1 << 20),

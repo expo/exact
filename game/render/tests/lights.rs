@@ -958,3 +958,225 @@ fn a_new_local_resolution_replaces_the_layers() {
     let made: Vec<_> = creations.windows(2).map(|w| w[1] - w[0]).collect();
     assert_eq!(made, [0, 1, 0, 0, 0, 1], "{creations:?}");
 }
+
+/// A quad of one model material. Without `layers`, the unlit test's material
+/// (`MaterialData::unlit`, issue #100): a colour of its base plus its
+/// emission, which lights and the view change when it is lit. With them
+/// (issue #98), a rough red base: plain (1), under a clear coat (2) or with a
+/// sheen (3); or a black base emitting red, plain (4) or under a coat (5).
+#[derive(Default, Args)]
+struct Quad {
+    mode: u32,
+    light: u32,
+    view: u32,
+    unlit: bool,
+    layers: u32,
+}
+struct UnlitQuad;
+impl Game for UnlitQuad {
+    const ID: &'static str = "render-unlit-quad";
+    type Args = Quad;
+    fn setup(w: &mut World, args: &Quad) {
+        use exact_game::asset::{AlphaMode, MaterialData, MeshData, Model, Node};
+        w.insert_resource(Environment {
+            background: Some([0.; 3].into()),
+            bloom: None,
+            fog: None,
+            tone_mapping: ToneMapping::None,
+            ..Default::default()
+        });
+        let mode = [AlphaMode::Opaque, AlphaMode::Mask, AlphaMode::Blend][args.mode as usize];
+        let mesh = MeshData {
+            positions: vec![-1., -1., 0., 1., -1., 0., 1., 1., 0., -1., 1., 0.],
+            normals: [0., 0., 1.].repeat(4),
+            uvs: vec![0.; 8],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            bounds: [-1., -1., 0., 1., 1., 0.],
+            ..Default::default()
+        };
+        let quad = w
+            .generated_model(
+                "quad.model",
+                Model {
+                    bounds: mesh.bounds,
+                    meshes: vec![mesh],
+                    materials: vec![if args.layers == 0 {
+                        MaterialData {
+                            base_color: [0.2, 0.2, 0.2, 0.8],
+                            metallic: 0.,
+                            roughness: 0.4,
+                            emissive: [0.5, 0.4, 0.3],
+                            alpha_mode: mode,
+                            double_sided: true,
+                            unlit: args.unlit,
+                            ..Default::default()
+                        }
+                    } else {
+                        MaterialData {
+                            base_color: if args.layers < 4 {
+                                [0.5, 0.02, 0.02, 1.]
+                            } else {
+                                [0., 0., 0., 1.]
+                            },
+                            emissive: if args.layers < 4 {
+                                [0.; 3]
+                            } else {
+                                [0.8, 0., 0.]
+                            },
+                            metallic: 0.,
+                            roughness: 1.,
+                            alpha_mode: mode,
+                            clearcoat: if matches!(args.layers, 2 | 5) { 1. } else { 0. },
+                            clearcoat_roughness: 0.05,
+                            sheen_color: if args.layers == 3 { [1.; 3] } else { [0.; 3] },
+                            sheen_roughness: 0.5,
+                            ..Default::default()
+                        }
+                    }],
+                    nodes: vec![Node {
+                        mesh: Some(0),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        w.spawn((Transform::default(), quad));
+        let eye = [
+            Vec3::new(0., 0., 4.),
+            Vec3::new(2.5, 0.8, 3.),
+            Vec3::new(3.9, 0., 0.9),
+        ][args.view as usize];
+        w.spawn((
+            Transform::at(eye.x, eye.y, eye.z).looking_at(Vec3::ZERO, Vec3::Y),
+            Camera::default(),
+        ));
+        let toward =
+            |from: Vec3| Transform::at(from.x, from.y, from.z).looking_at(Vec3::ZERO, Vec3::Y);
+        let sun = DirectionalLight {
+            illuminance: if args.light == 0 { 0. } else { 20_000. },
+            ..Default::default()
+        };
+        // A sun grazing the quad from the side (or behind the eye, 3), then a
+        // fill and a point light.
+        let from = if args.light == 3 {
+            eye
+        } else {
+            Vec3::new(5., 0.5, 0.3)
+        };
+        w.spawn((toward(from), sun));
+        if args.light == 2 {
+            w.spawn((
+                toward(Vec3::new(-1., 2., 3.)),
+                DirectionalLight {
+                    color: [0.6, 0.7, 1.],
+                    illuminance: 8_000.,
+                    shadows: false,
+                },
+            ));
+            w.spawn((
+                Transform::at(0.5, 0.5, 1.),
+                PointLight {
+                    intensity: 3_000.,
+                    range: 5.,
+                    ..Default::default()
+                },
+            ));
+        }
+    }
+    fn tick(_: &mut World, _: &Input, _: &Quad) {}
+}
+
+#[test]
+fn an_unlit_quads_pixels_change_with_no_light_or_view() {
+    let Some(gpu) = gpu() else { return };
+    let centre = |mode: u32, light: u32, view: u32, unlit: bool| -> [u8; 4] {
+        quad_centre(&gpu, [mode, light, view], unlit, 0)
+    };
+    let srgb = |linear: f32| {
+        let v = if linear <= 0.0031308 {
+            linear * 12.92
+        } else {
+            1.055 * linear.powf(1. / 2.4) - 0.055
+        };
+        (v * 255.).round() as i32
+    };
+    for mode in 0..3 {
+        // Blended, the quad's alpha mixes it with the black background.
+        let alpha = if mode == 2 { 0.8 } else { 1. };
+        let expected = [0.7, 0.6, 0.5].map(|c| srgb(c * alpha));
+        let unlit = centre(mode, 0, 0, true);
+        for c in 0..3 {
+            assert!(
+                (i32::from(unlit[c]) - expected[c]).abs() <= 1,
+                "mode {mode}: {unlit:?}, expected {expected:?}"
+            );
+        }
+        for (light, view) in [(1, 0), (2, 1)] {
+            assert_eq!(
+                centre(mode, light, view, true),
+                unlit,
+                "mode {mode} light {light} view {view}"
+            );
+        }
+        // The closest lit material is changed by the lights.
+        assert_ne!(
+            centre(mode, 0, 0, false),
+            centre(mode, 2, 1, false),
+            "mode {mode}"
+        );
+    }
+}
+
+/// The centre pixel of a `UnlitQuad` frame, `[mode, light, view]` as `Quad`'s.
+fn quad_centre(gpu: &Gpu, [mode, light, view]: [u32; 3], unlit: bool, layers: u32) -> [u8; 4] {
+    use exact_game_render::ModelExecutor;
+    let mut surface = WorldSurface::<UnlitQuad, ModelExecutor, true>::default();
+    let [mode, light, view, layers] =
+        [mode, light, view, layers].map(|v| Value::Number(f64::from(v)));
+    surface
+        .bind(&[mode, light, view, Value::Bool(unlit), layers], None)
+        .unwrap();
+    surface.device_ready(exact_gpu::wgpu::Features::empty());
+    surface.prepare_assets(
+        &gpu.device,
+        &gpu.queue,
+        exact_gpu::wgpu::TextureFormat::Rgba8Unorm,
+    );
+    let frame = Frame {
+        width: 64.,
+        height: 64.,
+        scale: 1.,
+        now_ms: 0.,
+        seekable: true,
+        period_ms: 0.,
+        children_generation: 0,
+        shader_generation: 0,
+        headroom: 1.0,
+    };
+    let (pixels, _) = fixture::render(gpu, &mut surface, &frame).unwrap();
+    assert!(surface.error().is_none(), "{:?}", surface.error());
+    pixels.at(32, 32)
+}
+
+/// A clear coat adds a sharp highlight over a rough base and darkens emission
+/// under it, and a sheen adds light at grazing angles (`MaterialData::clearcoat`, `sheen_color`; issue #98).
+#[test]
+fn a_clear_coat_and_a_sheen_add_their_lobes_to_a_rough_base() {
+    let Some(gpu) = gpu() else { return };
+    let green = |view: u32, layers: u32| quad_centre(&gpu, [0, 3, view], false, layers)[1];
+    let (plain, coated) = (green(0, 1), green(0, 2));
+    let (grazing, sheen) = (green(2, 1), green(2, 3));
+    assert!(
+        coated > plain.saturating_add(60),
+        "coat: {plain} -> {coated}"
+    );
+    assert!(
+        sheen > grazing.saturating_add(20),
+        "sheen: {grazing} -> {sheen}"
+    );
+    // The coat's Fresnel darkens emission under it, at a grazing view most.
+    let red = |layers: u32| quad_centre(&gpu, [0, 0, 2], false, layers)[0];
+    let (bare, coated) = (red(4), red(5));
+    assert!(coated + 10 < bare, "emission: {bare} -> {coated}");
+}

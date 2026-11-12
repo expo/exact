@@ -246,9 +246,10 @@ impl Em<'_> {
             let _ = write!(self.out, "{p}({e},\"data-x-pin\",{f});");
             return Ok(());
         }
-        // Mark bound rows while they hold a value: grouped separators yield to
-        // authored edges and images (LLP 1084 D7), and a native button's floor
-        // yields to authored size and padding. Literal rows use data-exact-said.
+        // Mark bound rows while they are declared, a clear included, as the
+        // kernel's written bit marks a literal one (data-exact-said): grouped
+        // separators yield to authored edges and images (LLP 1084 D7), and a
+        // native button's floor yields to authored size and padding.
         let button = kind == NodeType::Control && parts.props.contains_key("data-button-style");
         let mark = match id {
             StyleId::BorderWidthTop if b.written => Some("data-exact-top-width"),
@@ -275,7 +276,7 @@ impl Em<'_> {
             let when = if id == StyleId::Display {
                 "v===\"none\"?\"\":null"
             } else {
-                "v==null||v===\"\"?null:\"\""
+                "v==null?null:\"\""
             };
             let _ = write!(
                 self.out,
@@ -528,6 +529,19 @@ impl Em<'_> {
         if !sized.is_empty() {
             self.uses.rt("normal");
         }
+        // An animation shorthand resets play state, so read its live timeline again.
+        if id == StyleId::Animation && timeline {
+            let getter = self.bound(i, e, &binding(StyleId::AnimationTimeline).unwrap(), scope)?;
+            for (name, _, map) in &mut writes {
+                if name == "animation-play-state" {
+                    let inner = map.take().unwrap();
+                    *map = Some(format!(
+                        "v=>({inner})(v)==null?null:({})(({getter})())",
+                        style::TIMELINE_PLAY_STATE
+                    ));
+                }
+            }
+        }
         writes.extend(sized);
         if matches!(id, StyleId::FontWeight | StyleId::LineHeight) {
             let normal = self.uses.rt("normal");
@@ -607,6 +621,7 @@ impl Em<'_> {
             format!("()=>{{const v=({f})();return typeof v===\"string\"&&!v.trim()?\"unset\":v}}")
         });
         let f = clear.as_deref().unwrap_or(f);
+        let clear_css = style::clear_css(id, press);
         for (name, unit, map) in writes {
             let modes = self.answers.modes;
             let channel = crate::modes::CHANNELS
@@ -615,17 +630,28 @@ impl Em<'_> {
                     *p == name || name == "-webkit-text-stroke" && *p == "-webkit-text-stroke-color"
                 })
                 .filter(|_| modes);
-            let map = match map {
-                Some(m) if modes && name == "--exact-accent" => Some(format!(
-                    "v=>{{v=({m})(v);if(!{e}.hasAttribute(\"data-x-b\"))return v;{e}.removeAttribute(\"data-x-accent\");if(v==null||/^\\s*(unset|inherit)?\\s*$/i.test(v))return null;const n={}.find(p=>v.includes(`var(${{p}})`));if(n){{{e}.setAttribute(\"data-x-accent\",n);return null}}return v}}",
-                    self.answers.accent()
-                )),
-                map => map,
-            };
+            let clear = style::cleared(&clear_css, &name)
+                .filter(|_| {
+                    id != StyleId::Display || !parts.props.contains_key("data-button-style")
+                })
+                .map(|v| format!(",{}", serde_json::to_string(v).unwrap()));
+            let map =
+                map.or_else(|| (name.starts_with("--") && clear.is_some()).then(|| "v=>v".into()));
             let value = match map {
-                // An empty string declares nothing before the map reads it.
-                Some(m) => format!("()=>({m})({}(({f})()))", self.uses.rt("blank")),
+                Some(m) => format!(
+                    "()=>{}(({f})(),{m}{})",
+                    self.uses.rt("mapped"),
+                    clear.unwrap_or_default()
+                ),
                 None => f.to_string(),
+            };
+            let value = if modes && name == "--exact-accent" {
+                format!(
+                    "()=>{{const v=({value})();if(!{e}.hasAttribute(\"data-x-b\"))return v;{e}.removeAttribute(\"data-x-accent\");if(v==null||/^\\s*(unset|inherit)?\\s*$/i.test(v))return null;const n={}.find(p=>v.includes(`var(${{p}})`));if(n){{{e}.setAttribute(\"data-x-accent\",n);return null}}return v}}",
+                    self.answers.accent()
+                )
+            } else {
+                value
             };
             match channel {
                 Some(j) => {
@@ -1109,22 +1135,6 @@ mod tests {
     }
 
     #[test]
-    fn a_native_buttons_bound_display_preserves_the_semantic_grid() {
-        let plan = contract::compile(
-            r#"component App
-  state visible = true
-  view
-    button appearance="auto" display=(visible ? "flex" : "none")
-      text "Lock"
-      image "symbol:lock"
-"#,
-        )
-        .unwrap();
-        let js = crate::emit::emit(&plan, false, false).unwrap().js;
-        assert!(js.contains("v=>v===\"none\"?\"none\":\"grid\""), "{js}");
-    }
-
-    #[test]
     fn a_literal_data_frame_is_shown_by_its_sandbox() {
         // A literal opaque sandbox decides here; a bound one, in rt.js `P`,
         // which is handed the source (no attribute until then); a
@@ -1226,7 +1236,7 @@ mod tests {
         );
         assert!(
             js.contains(&format!("const $cm={map};\n"))
-                && js.contains(",\"filter\",\"\",()=>($cm)(blank(("),
+                && js.contains(",\"filter\",\"\",()=>mapped(("),
             "the bound filter is not mapped:\n{js}"
         );
         // One constant, however many sites; none where no site maps a colour.
@@ -1353,10 +1363,9 @@ mod tests {
             .unwrap_or_else(|| panic!("no column-count write:\n{js}"));
         let rest = &js[at + marker.len()..];
         let (unit, after) = rest.split_once('"').expect("unit");
-        let map = after.strip_prefix(",()=>(").and_then(|mapped| {
-            mapped
-                .find(")(blank((")
-                .map(|end| mapped[..end].to_string())
+        let map = after.strip_prefix(",()=>mapped(").and_then(|mapped| {
+            let (_, map) = mapped.split_once(")(),")?;
+            map.split_once(",\"unset\")").map(|(m, _)| m.to_string())
         });
         let map_src = map.unwrap_or_else(|| "v=>v".into());
         let script = format!(
@@ -1475,26 +1484,5 @@ try {{
             got,
             serde_json::json!({"out": ["unset", "unset", "calc(10px + 2px)", "12px", 8, null], "journal": 2})
         );
-    }
-
-    /// An empty string declares nothing before a row's map reads it: the
-    /// mapped rows (`cursor`, `animation-timeline` and its companions) see
-    /// `null` (rt.js `blank`), never a value to diagnose.
-    #[test]
-    fn an_empty_value_reaches_a_mapped_row_as_nothing() {
-        let plan = contract::compile(
-            "component App\n  state c = \"\"\n  view\n    view cursor=c animation-timeline=c testId=\"v\"\n",
-        )
-        .unwrap();
-        let js = crate::emit::emit(&plan, false, false).unwrap().js;
-        for name in [
-            "\"cursor\"",
-            "\"--exact-animation-timeline\"",
-            "\"animation-play-state\"",
-        ] {
-            let at = js.find(name).unwrap_or_else(|| panic!("{name}:\n{js}"));
-            let write = js[at..].split(";S").next().unwrap();
-            assert!(write.contains("blank(("), "{name}: {write}");
-        }
     }
 }

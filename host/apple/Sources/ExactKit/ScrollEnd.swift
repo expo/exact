@@ -15,7 +15,7 @@ final class ScrollEnd {
     /// that moves nothing (a resize, an inset that leaves the offset) owes
     /// nothing, as a `scroll` would not fire.
     private var seen: [CGFloat] = [0, 0, 0]
-    /// On the Mac: a live scroll (a trackpad's, its momentum included) is running.
+    /// A live scroll (AppKit's gesture and momentum, or an agent drag) is running.
     var live = false
     var elementAnimation: UUID?
     private var settle: DispatchWorkItem?

@@ -11,12 +11,14 @@ theorem ask_legit (o : Oracle) (src : String) (args : List Value) (r : String) :
     GoodW Strict (fun _ => True) (o.ask src args r) := by
   unfold Oracle.ask
   split
-  · trivial
+  · exact ⟨trivial, by simp⟩
   · split
     · trivial
     · split
-      · exact ⟨trivial, by simp⟩
-      · exact ⟨trivial, by simp⟩
+      · trivial
+      · split
+        · exact ⟨trivial, by simp⟩
+        · exact ⟨trivial, by simp⟩
 
 /-- What settlement's evaluations need: the derives and resources are
 typed in a scope `G`, and an environment of the slots and any well-typed

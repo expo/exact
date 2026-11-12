@@ -215,16 +215,13 @@ size_t exact_gradient(const uint8_t *css, size_t len, float width, float height,
 size_t exact_corner_outline(const float *shape, float x, float y, float width, float height,
     const float *radii, float *out, size_t cap);
 
-/* Intern a CSS calculation tree; return 0 for invalid or compact lengths.
- * The returned handle has no environment; exact_calc_create supplies it. */
-uint32_t exact_calc_parse(const uint8_t *text, size_t len);
-
 /* A style owns this environment snapshot until destroy. Values: top, right, bottom, left,
  * viewport width/height (the window's when a sheet is open), segment cols/rows, the layout
  * regions' count (0 or 20) and the regions (LLP 1123 D10), the title-bar area's count (0 or 4)
- * and its x,y,w,h, then x,y,w,h per segment. create copies them and returns NULL for malformed input or an unknown handle.
+ * and its x,y,w,h, then x,y,w,h per segment. create copies them and parses the UTF-8
+ * expression; NULL for malformed input.
  * resolve borrows a live context; destroy consumes it exactly once (NULL is allowed). */
-void *exact_calc_create(uint32_t handle, const double *values, size_t count);
+void *exact_calc_create(const uint8_t *text, size_t len, const double *values, size_t count);
 double exact_calc_resolve(const void *context, double basis);
 void exact_calc_destroy(void *context);
 
@@ -647,6 +644,9 @@ const uint8_t *exact_field_decorations(const uint8_t *input, size_t len, size_t 
 void exact_top_layer(ExactRuntime rt, const uint32_t *views, const double *rects, const double *clips, uint32_t count, uint32_t modal);
 /* Versioned LE collection feedback in exact_in; returns the ordinary batch. */
 uint32_t exact_collection_feedback(ExactRuntime rt, size_t len, double now_ms);
+/* Read a local row-root snap without mounting views; NaN when absent.
+ * distance is the nearest mounted target's distance, infinity when absent. */
+double exact_collection_snap(ExactRuntime rt, uint32_t view, double proposed, double port, double maximum, double distance);
 /* The agent's tap <list> into <key> (LLP 1070.000): "key\nblock\ninline" in
    exact_in; returns the ordinary batch. */
 uint32_t exact_into_view(ExactRuntime rt, uint32_t view, size_t len);
@@ -959,10 +959,10 @@ uint32_t exact_host_covers(ExactRuntime rt, size_t len);
 /* What a block's root would measure in another block (a popover's
  * position-area option, LLP 1021 D2): each axis a length and a policy as
  * exact_host_covers' kind 4 takes them (0 size, 1 maximum, 2 fit, 3 a
- * position-area's region). The border box's width and height, then the
- * margins (top, right, bottom, left) as the layout resolved them, six LE
- * floats in the output buffer, and 24; 0 when refused. Not a batch:
- * nothing is laid out, published or sent. */
+ * position-area's region). The used width and height, the border box's
+ * width and height, then the margins (top, right, bottom, left) as the layout
+ * resolved them, eight LE floats in the output buffer, and 32; 0 when refused.
+ * Not a batch: nothing is laid out, published or sent. */
 uint32_t exact_measure_block(ExactRuntime rt, uint32_t view, float width, float height, uint32_t width_policy, uint32_t height_policy);
 /* A number that moves whenever exact_measure_block could answer otherwise
  * (a commit that changed something, a layout, a reset): a host keeps a

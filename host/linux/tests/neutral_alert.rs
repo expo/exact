@@ -1343,3 +1343,6 @@ fn a_part_or_role_change_lays_out_as_a_rebuild_does() {
 
 #[path = "neutral_alert/keyboard.rs"]
 mod keyboard;
+
+#[path = "neutral_alert/popover.rs"]
+mod popover;

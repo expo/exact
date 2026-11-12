@@ -396,7 +396,7 @@ impl<D: DataSource> Runner<D> {
             }
             let resources = &self.resources;
             let readers = self.extensions.readers.entry(key.clone()).or_default();
-            readers.retain(|i, _| resources.get(*i).is_some_and(Option::is_some));
+            readers.retain(|i, _| resources.get(*i).is_some_and(|row| row.state.is_some()));
             let current: BTreeSet<String> = readers.values().cloned().collect();
             let told = self.extensions.groups.entry(key.clone()).or_default();
             let gone: Vec<String> = told.difference(&current).cloned().collect();
@@ -451,8 +451,9 @@ impl<D: DataSource> Runner<D> {
             return false;
         };
         let source = self.plan.sources[row.source.0 as usize].name;
-        (0..self.plan.resources.len()).any(|i| {
-            self.plan.resources[i].source == source || self.watching[i].iter().any(|t| t == key)
+        (0..self.resources.len()).any(|i| {
+            self.resource_row(i).source == source
+                || self.resources[i].watching.iter().any(|t| t == key)
         }) || self.pending.iter().any(|p| {
             (p.keepable.as_ref())
                 .and_then(|r| self.module_topic(&r.body))

@@ -27,7 +27,7 @@ impl Recorder {
         if s.rect.2 <= 0.0 || s.rect.3 <= 0.0 || g.stops.is_empty() {
             return;
         }
-        let bounds = super::clip::map(s.rect, ts);
+        let bounds = self.on_page(s.rect, ts);
         if self.culled(bounds) {
             return;
         }

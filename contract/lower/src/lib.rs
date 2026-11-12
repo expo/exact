@@ -665,7 +665,7 @@ fn lower_body(
         if let Some(m) = file.modules.iter().find(|m| m.name == *name) {
             l.b.module(
                 id,
-                &m.extension,
+                (&m.extension, &m.package),
                 &m.declared,
                 m.kind == contract_syntax::ModuleKind::Send,
                 m.live,
@@ -798,7 +798,7 @@ fn lower_body(
             continue;
         };
         l.b.module_event(
-            &m.extension,
+            (&m.extension, &m.package),
             &m.declared,
             l.actions[i],
             &m.raised,
@@ -1329,10 +1329,10 @@ impl<'a> Lowerer<'a> {
                     }
                     let stacks = self.family_stacks(&a.value)?;
                     let (code, ty) = self.typed_code(&stacks, scope, locals)?;
-                    // Literal families are stack numbers, an empty one `none`.
+                    // Validated literal choices contain stack ids or string clears.
                     let literal = Self::literal_family_arms(&a.value);
                     if ty != Ty::String
-                        && !(literal && matches!(ty, Ty::Number | Ty::Option(_)))
+                        && !(literal && matches!(ty, Ty::Number | Ty::Unknown))
                         && !matches!(ty, Ty::Option(ref inner) if **inner == Ty::String)
                     {
                         return err("lower-attr-type", "`font-family` needs a string", a.span);

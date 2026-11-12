@@ -13,8 +13,12 @@ impl<D: DataSource> Presenter<D> {
         .then_some(node.view)
     }
 
-    /// The accessible identity holding keyboard focus, including a menu item.
+    /// The accessible identity holding keyboard focus, including a menu item
+    /// and the row an open select's menu is at.
     pub fn access_focus(&self) -> Option<i32> {
+        if let Some(row) = self.access_menu_focus() {
+            return Some(row);
+        }
         let view = if let Some((focused, _)) = self.desktop_surface_access() {
             focused
         } else {

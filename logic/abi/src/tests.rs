@@ -1,5 +1,64 @@
 use super::*;
 
+#[test]
+fn a_module_store_obeys_the_hosts_scope_in_answers_and_parses() {
+    struct Scoped;
+    impl DataSource for Scoped {
+        fn grants(&self) -> &str {
+            "secret.keep token"
+        }
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            unreachable!()
+        }
+        fn answer(&mut self, store: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            let set = store.set("token", "private");
+            let seen = store.get("token").unwrap_or("empty").to_string();
+            let forget = store.forget("token");
+            Ok(Answer::Now(Value::record(vec![
+                Value::Bool(set.is_err()),
+                Value::str(&seen),
+                Value::Bool(forget.is_err()),
+                Value::str(store.get("token").unwrap_or("empty")),
+            ])))
+        }
+        fn parse(
+            &mut self,
+            store: &mut Store,
+            source: &str,
+            args: &[Value],
+            _: Outcome,
+        ) -> Result<Answer, DataError> {
+            self.answer(store, source, args)
+        }
+    }
+    let mut module = Session::new(Scoped);
+    for granted in [false, true, false] {
+        let mut store = Store::new(
+            if granted {
+                "secret.keep token"
+            } else {
+                "secret.keep other"
+            },
+            [],
+        );
+        for outcome in [None, Some(Outcome::Storage(vec![]))] {
+            module
+                .dispatch(&call_request(&store, "scope", &[], outcome.as_ref()).unwrap())
+                .unwrap();
+            assert_eq!(
+                call_reply(module.output(), &mut store).unwrap(),
+                Answer::Now(Value::record(vec![
+                    Value::Bool(!granted),
+                    Value::str(if granted { "private" } else { "empty" }),
+                    Value::Bool(!granted),
+                    Value::str("empty"),
+                ]))
+            );
+            assert_eq!(store.take_writes().len(), if granted { 2 } else { 0 });
+        }
+    }
+}
+
 struct Fixture(u32);
 impl DataSource for Fixture {
     fn app_id(&self) -> &str {
@@ -603,7 +662,7 @@ w.u8(6); w.u32(2); api.encode(w, 'a|b', 's'); api.encode(w, value, '{s?s[s}');
 if (process.argv[2] === 'true') {
   api.encode(w, value, '{s?s[s}'); w.u32(1); w.u64(7); w.str('save'); w.str('save');
   w.u8(6); w.u32(1); api.encode(w, 'a|b', 's'); w.u8(1); api.encode(w, value, '{s?s[s}'); w.u8(1);
-} else w.u32(0);
+} else { w.u32(0); w.u32(0); }
 process.stdout.write(w.done());
 "#;
         let out = std::process::Command::new("bun")
@@ -712,4 +771,64 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
         Some(&b"secret-2"[..]),
         "for the host's backend"
     );
+}
+
+#[test]
+fn cache_modes_cross_the_rust_module_seam() {
+    assert_eq!(ABI, 7);
+    let mut old = header(0).into_vec();
+    old[..4].copy_from_slice(&6u32.to_le_bytes());
+    assert!(matches!(reader(&old), Err(e) if e == "logic ABI version differs"));
+    for word in [
+        "unspecified",
+        "default",
+        "no-store",
+        "reload",
+        "no-cache",
+        "force-cache",
+        "only-if-cached",
+    ] {
+        let mode = CacheMode::parse((word != "unspecified").then_some(word)).unwrap();
+        for mut request in [
+            Request::get("https://example.test"),
+            Request::get("https://example.test").independent_http(4096),
+            Request {
+                stream: true,
+                ..Request::get("https://example.test").independent_http(4096)
+            },
+            Request {
+                stream: true,
+                ..Request::get("https://example.test")
+                    .independent_http(4096)
+                    .long_poll("cursor", "next")
+            },
+        ] {
+            request.cache = mode;
+            let mut encoded = Writer::default();
+            encode_result(&mut encoded, Ok(Answer::Later(request.clone())));
+            let bytes = encoded.into_vec();
+            assert_eq!(
+                bytes[0],
+                if mode == CacheMode::Unspecified {
+                    if request.long_poll.is_some() {
+                        10
+                    } else if request.stream {
+                        9
+                    } else if request.http == HttpScheduling::Ordered {
+                        1
+                    } else {
+                        6
+                    }
+                } else {
+                    12
+                }
+            );
+            let mut reader = Reader::new(&bytes);
+            assert_eq!(
+                read_result(&mut reader).unwrap(),
+                Ok(Answer::Later(request))
+            );
+            end(&reader).unwrap();
+        }
+    }
 }

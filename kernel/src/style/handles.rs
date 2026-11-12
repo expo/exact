@@ -1,91 +1,92 @@
-//! Interned calculation handles for Taffy, resolved against the current layout
-//! environment and percentage basis.
-
+//! Calculation handles live as long as their lowered styles, including retained clones.
+use super::intern::{Table, Value};
 use super::{Comparison, Env};
+use std::cell::RefCell;
+use std::sync::{Arc, LazyLock, Mutex};
 
-/// The `calc()` pairs the engine holds by handle: Taffy keeps one opaque
-/// pointer per length, so a pair is interned here and named by its index,
-/// shifted past the three tag bits Taffy reserves. Equal pairs share a
-/// handle, so an unchanged style still compares equal by value. `floor`
-/// clamps the result at zero for a row with no negative values (CSS Values 4
-/// §10.12); `added` is added after the clamp.
-static CALC_PAIRS: std::sync::Mutex<Vec<CalcPair>> = std::sync::Mutex::new(Vec::new());
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Key {
+    Pair {
+        percent: u32,
+        points: u32,
+        floor: bool,
+        added: u32,
+    },
+    Tree {
+        tree: usize,
+        floor: bool,
+        added: u32,
+    },
+}
 
-#[derive(Clone, Copy)]
-struct CalcPair {
-    percent: f32,
-    points: f32,
-    floor: bool,
-    added: f32,
+type Calculation = Value<Key, Option<Comparison>>;
+static HANDLES: LazyLock<Mutex<Table<Key, Option<Comparison>>>> =
+    LazyLock::new(|| Mutex::new(Table::new()));
+
+thread_local! {
+    static LOWERING: RefCell<Vec<Vec<Arc<Calculation>>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Collect the owners while constructing a style, including grid tracks.
+/// Nested scopes keep independent owners; unwinding releases unfinished work.
+pub(super) struct Lowering;
+impl Lowering {
+    pub(super) fn new() -> Self {
+        LOWERING.with(|stack| stack.borrow_mut().push(Vec::new()));
+        Self
+    }
+    pub(super) fn finish(self, style: &mut taffy::Style) {
+        LOWERING.with(|stack| {
+            for owner in stack.borrow_mut().last_mut().unwrap().drain(..) {
+                style.rare.keep_calc(owner);
+            }
+        });
+    }
+}
+impl Drop for Lowering {
+    fn drop(&mut self) {
+        LOWERING.with(|stack| {
+            stack.borrow_mut().pop();
+        });
+    }
+}
+
+fn intern(key: Key, tree: Option<Comparison>) -> *const () {
+    let value = Table::intern(&HANDLES, key, tree);
+    let handle = (value.id << 3) as *const ();
+    LOWERING.with(|stack| {
+        stack
+            .borrow_mut()
+            .last_mut()
+            .expect("calculation lowering scope")
+            .push(value);
+    });
+    handle
 }
 
 pub(super) fn calc_handle(percent: f32, points: f32) -> *const () {
     calc_handle_in(percent, points, false, 0.0)
 }
-
 pub(crate) fn calc_handle_in(percent: f32, points: f32, floor: bool, added: f32) -> *const () {
-    handle(intern_pair(CalcPair {
-        percent,
-        points,
-        floor,
-        added,
-    }))
+    intern(
+        Key::Pair {
+            percent: percent.to_bits(),
+            points: points.to_bits(),
+            floor,
+            added: added.to_bits(),
+        },
+        None,
+    )
 }
-
-/// A handle names a pair or a tree by an index whose low bit says which,
-/// shifted past the three tag bits Taffy reserves.
-fn handle(index: usize) -> *const () {
-    ((index + 1) << 3) as *const ()
-}
-
-fn intern_pair(pair: CalcPair) -> usize {
-    let CalcPair {
-        percent,
-        points,
-        floor,
-        added,
-    } = pair;
-    let same = |p: &CalcPair| {
-        p.percent.to_bits() == percent.to_bits()
-            && p.points.to_bits() == points.to_bits()
-            && p.floor == floor
-            && p.added.to_bits() == added.to_bits()
-    };
-    let mut pairs = CALC_PAIRS.lock().unwrap_or_else(|e| e.into_inner());
-    let index = pairs.iter().position(same).unwrap_or_else(|| {
-        pairs.push(pair);
-        pairs.len() - 1
-    });
-    index << 1
-}
-
-/// The trees with a percentage the engine holds by handle: a handle names
-/// the tree, not resolved numbers, and the environment is the layout's own
-/// ([`LayoutEnv`]), so a resize resolves the same handles again rather than
-/// minting new ones.
-static TREES: std::sync::Mutex<Vec<TreeCalc>> = std::sync::Mutex::new(Vec::new());
-
-#[derive(Clone, Copy, PartialEq)]
-struct TreeCalc {
-    tree: Comparison,
-    floor: bool,
-    added: u32,
-}
-
-/// The engine's handle for a tree with a percentage, floored at zero when
-/// `floor`, plus `added` after.
 pub(crate) fn tree_handle(tree: Comparison, floor: bool, added: f32) -> *const () {
-    let entry = TreeCalc {
-        tree,
-        floor,
-        added: added.to_bits(),
-    };
-    let mut trees = TREES.lock().unwrap_or_else(|e| e.into_inner());
-    let index = trees.iter().position(|t| *t == entry).unwrap_or_else(|| {
-        trees.push(entry);
-        trees.len() - 1
-    });
-    handle(index << 1 | 1)
+    intern(
+        Key::Tree {
+            tree: tree.identity(),
+            floor,
+            added: added.to_bits(),
+        },
+        Some(tree),
+    )
 }
 
 std::thread_local! {
@@ -111,23 +112,156 @@ impl Drop for LayoutEnv {
     }
 }
 
-/// The points a `calc()` handle resolves to against `basis`, the size its
-/// percentage is a fraction of — what [`crate::LayoutTree`] gives Taffy.
-/// The arithmetic is `f64`, narrowed once at the end, so a pair and a tree
-/// holding the same calculation round alike.
+/// Resolve a live handle; a released or unknown handle fails closed.
 pub(crate) fn resolve_calc(handle: *const (), basis: f32) -> f32 {
-    let index = (handle as usize >> 3) - 1;
-    let basis = f64::from(basis);
-    let (value, floor, added) = if index & 1 == 1 {
-        let tree = TREES.lock().unwrap_or_else(|e| e.into_inner())[index >> 1];
-        let value = LAYOUT_ENV.with(|e| tree.tree.wide(&e.borrow(), Some(basis)));
-        (value.unwrap_or(0.0), tree.floor, f32::from_bits(tree.added))
-    } else {
-        let pair = CALC_PAIRS.lock().unwrap_or_else(|e| e.into_inner())[index >> 1];
-        let value = basis * f64::from(pair.percent) / 100.0 + f64::from(pair.points);
-        (value, pair.floor, pair.added)
+    let Some(calc) = HANDLES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(handle as usize >> 3)
+    else {
+        return 0.0;
     };
-    // A NaN is 0 before the clamp, as a narrowed one would be
+    let basis = f64::from(basis);
+    let (value, floor, added) = match calc.key {
+        Key::Tree { floor, added, .. } => {
+            let value =
+                LAYOUT_ENV.with(|e| calc.value.as_ref().unwrap().wide(&e.borrow(), Some(basis)));
+            (value.unwrap_or(0.0), floor, added)
+        }
+        Key::Pair {
+            percent,
+            points,
+            floor,
+            added,
+        } => (
+            basis * f64::from(f32::from_bits(percent)) / 100.0 + f64::from(f32::from_bits(points)),
+            floor,
+            added,
+        ),
+    };
     let value = if value.is_nan() { 0.0 } else { value };
-    super::calc::narrow((if floor { value.max(0.0) } else { value }) + f64::from(added))
+    super::calc::narrow(
+        (if floor { value.max(0.0) } else { value }) + f64::from(f32::from_bits(added)),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Dimension;
+
+    fn left_handle(style: &taffy::Style) -> *const () {
+        let taffy::style::ExpandedLengthPercentageAuto::Calc(handle) = style.inset.left.expand()
+        else {
+            panic!("expected calculation");
+        };
+        handle
+    }
+
+    #[test]
+    fn released_styles_release_calculation_handles() {
+        let mut style = crate::StyleProps::default();
+        let env = Env::default();
+        style.left = Dimension::parse_calc("min(37px, 50%)").unwrap();
+        let detached = style.left.clone();
+        let survivor = style.to_taffy(crate::NodeType::View, &env);
+        let retained = survivor.clone();
+        let live = left_handle(&survivor);
+        let mut released = Vec::new();
+        for i in 0..16_000 {
+            for text in [format!("calc({i}% - 6px)"), format!("min({i}px, 51%)")] {
+                style
+                    .set_dynamic(crate::StyleId::Left, &crate::StyleValue::Text(text.into()))
+                    .unwrap();
+                let lowered = style.to_taffy(crate::NodeType::View, &env);
+                released.push(left_handle(&lowered) as usize);
+            }
+        }
+        drop(style);
+        drop(survivor);
+        for handle in released {
+            assert!(HANDLES.lock().unwrap().get(handle >> 3).is_none());
+            assert_eq!(resolve_calc(handle as *const (), 100.), 0.);
+        }
+        assert_eq!(detached.at_basis(&env, 100.), 37.);
+        drop(detached);
+        assert_eq!(resolve_calc(live, 100.), 37.);
+        assert_eq!(resolve_calc(live, 40.), 20.);
+        drop(retained);
+        assert!(HANDLES.lock().unwrap().get(live as usize >> 3).is_none());
+        assert_eq!(resolve_calc(live, 100.), 0.);
+        style = crate::StyleProps::default();
+        style.left = Dimension::Calc(3., 7.);
+        let next = style.to_taffy(crate::NodeType::View, &env);
+        assert_ne!(left_handle(&next), live);
+        assert_eq!(
+            resolve_calc(live, 100.),
+            0.,
+            "released IDs never alias new values"
+        );
+    }
+
+    #[test]
+    fn retained_grid_styles_keep_calculations_after_the_authored_tracks_drop() {
+        let mut style = crate::StyleProps::default();
+        style.rare.grid_template_columns =
+            crate::style::GridTracks::parse("min(31px, 50%)").unwrap();
+        let lowered = style.to_taffy(crate::NodeType::View, &Env::default());
+        let taffy::style::GridTemplateComponent::Single(track) =
+            lowered.rare.grid_template_columns[0]
+        else {
+            panic!("single track")
+        };
+        let taffy::style::ExpandedMinTrackSizingFunction::Calc(handle) = track.min.expand() else {
+            panic!("calculation track")
+        };
+        drop(style);
+        let copy = lowered.clone();
+        drop(lowered);
+        assert_eq!(resolve_calc(handle, 100.), 31.);
+        assert_eq!(resolve_calc(handle, 40.), 20.);
+        drop(copy);
+        assert!(HANDLES.lock().unwrap().get(handle as usize >> 3).is_none());
+    }
+
+    #[test]
+    fn handles_preserve_bits_floor_and_added_length() {
+        let _lowering = Lowering::new();
+        let mut pairs = std::collections::HashSet::new();
+        for (percent, points, floor, added) in [
+            (0.0, 0.0, false, 0.0),
+            (-0.0, 0.0, false, 0.0),
+            (0.0, -0.0, false, 0.0),
+            (0.0, 0.0, true, 0.0),
+            (0.0, 0.0, false, -0.0),
+            (f32::from_bits(0x7fc0_0001), 0.0, false, 0.0),
+            (f32::from_bits(0x7fc0_0002), 0.0, false, 0.0),
+        ] {
+            let handle = calc_handle_in(percent, points, floor, added);
+            assert_eq!(handle, calc_handle_in(percent, points, floor, added));
+            assert!(pairs.insert(handle));
+        }
+        let Dimension::Compare(tree) = Dimension::parse_calc("min(50%, -60px)").unwrap() else {
+            panic!("a comparison tree");
+        };
+        let mut trees = std::collections::HashSet::new();
+        for (floor, added) in [(false, 0.0), (true, 0.0), (false, -0.0), (true, 7.0)] {
+            let handle = tree_handle(tree.clone(), floor, added);
+            assert_eq!(handle, tree_handle(tree.clone(), floor, added));
+            assert!(trees.insert(handle));
+            assert!(!pairs.contains(&handle));
+        }
+        for (floor, added, pair_value, tree_value) in
+            [(false, 7.0, -3.0, -53.0), (true, 7.0, 7.0, 7.0)]
+        {
+            assert_eq!(
+                resolve_calc(calc_handle_in(50.0, -60.0, floor, added), 100.0),
+                pair_value,
+            );
+            assert_eq!(
+                resolve_calc(tree_handle(tree.clone(), floor, added), 100.0),
+                tree_value
+            );
+        }
+    }
 }

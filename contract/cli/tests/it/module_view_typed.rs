@@ -5,7 +5,7 @@
 //! declares beyond the nine runs its handler with the typed record the
 //! implementation sent.
 
-use exact_kernel::{Dimension, PropId, StyleId};
+use exact_kernel::{Dimension, ObjectFit, PropId, StyleId};
 use exact_runner::{Event, Runner, Value};
 use serde_json::json;
 use std::path::PathBuf;
@@ -20,7 +20,7 @@ const INTERFACE: &str = r#"{
   },
   "views": {
     "pin-board": {
-      "props": { "latitude": "number", "zoomLevel": "option<number>", "pins": "option<Pin[]>", "focus": "option<Pin>", "object-fit": "option<string>", "fontSize": "option<number>", "width": "option<number>" },
+      "props": { "latitude": "number", "zoomLevel": "option<number>", "pins": "option<Pin[]>", "focus": "option<Pin>", "object-fit": "option<string>", "fontSize": "option<number>" },
       "events": ["change", { "event": "moveend", "args": ["Camera"] }]
     }
   },
@@ -113,9 +113,8 @@ fn a_record_list_prop_reaches_the_view_as_its_json() {
     );
 }
 
-/// A prop the view declares is the module's even where the known attribute
-/// table names it too (`exact-camera`'s `object-fit`); a known word the view
-/// does not declare still binds to its box.
+/// A non-layout prop may share a known attribute's name, as `exact-camera`'s
+/// `object-fit` does; layout attributes still bind to the box.
 #[test]
 fn a_declared_prop_the_table_also_names_reaches_the_view() {
     let app = App::new(
@@ -126,42 +125,96 @@ fn a_declared_prop_the_table_also_names_reaches_the_view() {
         )
         .replace(
             "testId=\"board\"",
-            "testId=\"board\" object-fit=fit height=200",
+            "testId=\"board\" object-fit=fit width=200 height=200",
         ),
     );
     let r = boot(&app);
     let props = props(&r);
     assert_eq!(props["object-fit"], "cover", "{props}");
+    assert!(props.get("width").is_none(), "{props}");
     assert!(props.get("height").is_none(), "{props}");
+    let key = r.kernel().find_by_test_id("board")[0];
+    let style = &r.kernel().node_by_key(key).unwrap().style;
+    assert!(style.mask.has(StyleId::Width));
+    assert_eq!(style.width, Dimension::Points(200.0));
+    assert_eq!(style.height, Dimension::Points(200.0));
 }
 
-/// A declared prop is the module's where it is written on the tag; a class's
-/// row of the same name is its box's style.
 #[test]
-fn a_declared_prop_written_on_the_tag_is_the_views_and_a_classs_row_its_boxs() {
-    let width = |r: &Runner<NoData>| {
+fn a_package_cannot_declare_a_layout_attribute_as_a_view_prop() {
+    for name in ["width", "min-width", "padding", "flex", "border"] {
+        for attr in ["", " width=200", " class=Wide"] {
+            let app = App::new(
+                "layout",
+                &APP.replace(
+                    "\ncomponent App",
+                    "\nstyle Wide\n  width=\"100%\"\n\ncomponent App",
+                )
+                .replace("testId=\"board\"", &format!("testId=\"board\"{attr}")),
+            );
+            let mut declaration: serde_json::Value = serde_json::from_str(INTERFACE).unwrap();
+            declaration["views"]["pin-board"]["props"][name] =
+                json!({ "type": "option<number>", "binds": true });
+            std::fs::write(
+                app.0.join("node_modules/@fixture/pinboard/exact.json"),
+                declaration.to_string(),
+            )
+            .unwrap();
+            let errors = app.compile().expect_err("a layout prop must be refused");
+            assert!(
+                errors.iter().any(|e| e.id == "bake-view-prop-layout"
+                    && e.message.contains("@fixture/pinboard")
+                    && e.message.contains("`pin-board`")
+                    && e.message.contains(&format!("`{name}`"))),
+                "{name}{attr}: {errors:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_class_styles_the_box_without_setting_a_declared_view_prop() {
+    for (attr, expected) in [("", None), (" object-fit=\"cover\"", Some("cover"))] {
+        let app = App::new(
+            "classed",
+            &APP.replace(
+                "\ncomponent App",
+                "\nstyle Preview\n  width=\"100%\"\n  object-fit=\"contain\"\n\ncomponent App",
+            )
+            .replace(
+                "testId=\"board\"",
+                &format!("testId=\"board\" class=Preview{attr}"),
+            ),
+        );
+        let r = boot(&app);
+        assert_eq!(props(&r)["object-fit"].as_str(), expected);
         let key = r.kernel().find_by_test_id("board")[0];
         let style = &r.kernel().node_by_key(key).unwrap().style;
-        style.mask.has(StyleId::Width).then_some(style.width)
-    };
-    let written = App::new(
-        "written",
-        &APP.replace("testId=\"board\"", "testId=\"board\" width=200"),
+        assert!(style.mask.has(StyleId::Width));
+        assert_eq!(style.width, Dimension::Percent(100.0));
+        assert!(style.mask.has(StyleId::ObjectFit));
+        assert_eq!(style.object_fit, ObjectFit::Contain);
+    }
+}
+
+#[test]
+fn the_camera_declaration_still_accepts_object_fit() {
+    let app = App::new(
+        "camera",
+        "component App\n  state fit = \"cover\"\n  view\n    exact-camera testId=\"board\" object-fit=fit width=200\n",
     );
-    let r = boot(&written);
-    assert_eq!(props(&r)["width"], "200");
-    assert_eq!(width(&r), None);
-    let classed = App::new(
-        "classed",
-        &APP.replace(
-            "\ncomponent App",
-            "\nstyle Wide\n  width=\"100%\"\n\ncomponent App",
-        )
-        .replace("testId=\"board\"", "testId=\"board\" class=Wide"),
+    std::fs::write(
+        app.0.join("node_modules/@fixture/pinboard/exact.json"),
+        include_str!("../../../../packages/camera/exact.json"),
+    )
+    .unwrap();
+    let r = boot(&app);
+    assert_eq!(props(&r)["object-fit"], "cover");
+    let key = r.kernel().find_by_test_id("board")[0];
+    assert_eq!(
+        r.kernel().node_by_key(key).unwrap().style.width,
+        Dimension::Points(200.0)
     );
-    let r = boot(&classed);
-    assert!(props(&r).get("width").is_none(), "{}", props(&r));
-    assert_eq!(width(&r), Some(Dimension::Percent(100.0)));
 }
 
 /// A renamed spelling is refused with its CSS name even where the view

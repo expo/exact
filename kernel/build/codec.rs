@@ -408,7 +408,7 @@ impl Codec {
     }
     fn encode_stmt(&self, access: &str) -> String {
         match self {
-            Codec::Dimension => format!("w.dimension({access});"),
+            Codec::Dimension => format!("w.dimension({access}.clone());"),
             Codec::LineHeight => format!("w.line_height({access});"),
             Codec::F32 => format!("w.f32({access});"),
             Codec::U8 => format!("w.u8({access});"),
@@ -437,7 +437,8 @@ impl Codec {
     fn is_copy(&self) -> bool {
         !matches!(
             self,
-            Codec::Tracks
+            Codec::Dimension
+                | Codec::Tracks
                 | Codec::Placement
                 | Codec::Transitions
                 | Codec::Animations

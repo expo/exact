@@ -259,11 +259,14 @@ fn checked(
     app: &contract::tamber_params::AppParams,
 ) -> Result<(Vec<Refusal>, Vec<exact_tamber::Checked>), String> {
     let vocab = contract_lower::tamber_vocab();
+    let file = contract::tamber_uses::shown(path, dir);
     let folded = match (app.tokens.is_empty(), app.packages.is_empty()) {
         (true, true) => exact_tamber::check(text, &vocab),
-        (_, false) => contract::tamber_params::fold_with(text, app, &vocab).map(|(f, _)| f),
+        (_, false) => {
+            contract::tamber_params::fold_with(text, app, &vocab, Some(&file)).map(|(f, _)| f)
+        }
         (false, true) => exact_tamber::parse(text).and_then(|d| {
-            exact_tamber::check_design(contract::tamber_params::laid(&d, app), &vocab)
+            exact_tamber::check_design(contract::tamber_params::laid(&d, app, Some(&file)), &vocab)
         }),
     };
     let folding = match folded {

@@ -1,6 +1,81 @@
 use super::*;
 
 #[test]
+fn mixed_writes_use_app_reads_for_notifications_and_source_grants_for_execution() {
+    for (source, op, args, succeeds, changed) in [
+        (
+            "rust",
+            "fs.writeFile",
+            json!({"path":"app:/data/note","text":"hello"}),
+            true,
+            true,
+        ),
+        (
+            "rust",
+            "fs.writeFile",
+            json!({"path":"app:/cache/hidden","text":"hidden"}),
+            true,
+            false,
+        ),
+        (
+            "rust",
+            "fs.readFile",
+            json!({"path":"app:/data/note"}),
+            false,
+            false,
+        ),
+        (
+            "javascript",
+            "fs.writeFile",
+            json!({"path":"app:/data/note","text":"hello"}),
+            false,
+            false,
+        ),
+    ] {
+        let paths = Paths::new();
+        std::fs::create_dir_all(paths.0.join("data")).unwrap();
+        std::fs::write(paths.0.join("data/note"), "original").unwrap();
+        let request = storage::request(op, args);
+        let javascript = Fixture {
+            grants: "fs.read app:/data",
+            request: request.clone(),
+            ..Fixture::new()
+        };
+        let rust = Fixture {
+            grants: "fs.write app:/data\nfs.write app:/cache",
+            request,
+            ..Fixture::new()
+        };
+        let mut host = Storage::new(
+            exact_data::Mixed::new(javascript, rust, &["javascript"], &["rust"]).unwrap(),
+        );
+        let directories = paths.directories();
+        host.configure_storage(directories.data, directories.cache, directories.temporary)
+            .unwrap();
+        host.activate().unwrap();
+        let mut store = Store::default();
+        let Answer::Later(request) = host.answer(&mut store, source, &[]).unwrap() else {
+            panic!("expected storage request")
+        };
+        let Dispatch::Run(exact_runner::Work::Now(job)) =
+            host.dispatch(request.continuation.unwrap(), &store)
+        else {
+            panic!("expected storage worker")
+        };
+        let outcome = std::thread::spawn(job).join().unwrap();
+        let result = storage::response(outcome);
+        assert_eq!(result.is_ok(), succeeds, "{source} {op}: {result:?}");
+        let expected = if changed { "hello" } else { "original" };
+        assert_eq!(
+            std::fs::read_to_string(paths.0.join("data/note")).unwrap(),
+            expected,
+        );
+        assert_eq!(host.take_storage_changed(), changed, "{source} {op}");
+        assert!(!host.take_storage_changed());
+    }
+}
+
+#[test]
 fn native_storage_changes_reach_both_mixed_children_through_storage() {
     use std::{cell::Cell, rc::Rc};
     struct Changed(Rc<Cell<bool>>);
@@ -90,4 +165,26 @@ fn mixed_storage_waits_for_both_images_without_activating_sources() {
     second.set(true);
     assert!(source.preload().unwrap());
     assert!(!source.ready(), "preloading does not activate storage");
+}
+
+#[test]
+fn source_scope_refuses_writes_and_cannot_expand_the_app_ceiling() {
+    let paths = Paths::new();
+    let mut host = Storage::new(Fixture::new());
+    paths.configure(&mut host);
+    host.activate().unwrap();
+    host.source.request.grants = Some("fs.write app:/elsewhere".into());
+    assert!(host
+        .answer(&mut Store::default(), "operation", &[])
+        .is_err());
+    assert!(!paths.0.exists());
+    for scope in ["", "fs.read app:/data"] {
+        let mut request = Fixture::new().request;
+        request.grants = Some(scope.into());
+        assert!(run(&mut host, request).is_err());
+        assert!(!paths.0.join("data/note").exists());
+        assert!(!host.take_storage_changed());
+    }
+    run(&mut host, Fixture::new().request).unwrap();
+    assert_eq!(std::fs::read(paths.0.join("data/note")).unwrap(), b"hello");
 }

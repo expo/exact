@@ -4,7 +4,8 @@ Types as sets of values, and the order the checker's `?` induces on them.
 `ValTy p v τ` says the value `v` has the type `τ` in program `p`. It is
 `conforms` without finiteness: a number inside an evaluation may be an
 infinity or NaN (`1 / 0` is a value), and only a boundary — a slot written,
-a derive settled, a source's answer — refuses a non-finite one, at run time.
+a derive settled, a source's argument or answer — refuses a non-finite one,
+at run time.
 
 The checker's `?` (`Ty.unknown`) is the empty type here: `[]` is a
 `list<?>` and `none` an `option<?>` because nothing is in the list or the

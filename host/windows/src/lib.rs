@@ -18,6 +18,8 @@ mod desktop;
 #[cfg(windows)]
 mod edit_menu;
 #[cfg(windows)]
+mod icon;
+#[cfg(windows)]
 mod ime;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod jump_list;
@@ -37,6 +39,8 @@ mod placement;
 mod probe;
 #[cfg(windows)]
 mod timers;
+#[cfg(any(windows, test))]
+mod touch;
 #[cfg(windows)]
 mod url;
 #[cfg(any(windows, test))]

@@ -80,40 +80,9 @@ pub enum HttpScheduling {
     },
 }
 
-/// What a redirect response does: the Fetch standard's `redirect` option.
-/// Native transports follow it in Rust, re-checking the grant on every hop;
-/// `Manual` hands the 3xx back (its `Location` readable), `Error` fails.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Redirect {
-    /// Follow to the final response.
-    #[default]
-    Follow,
-    /// Return the redirect response itself.
-    Manual,
-    /// Fail the request on a redirect.
-    Error,
-}
-
-impl Redirect {
-    /// The mode `fetch` names (absent is `follow`), refusing any other word.
-    pub fn parse(name: Option<&str>) -> Result<Redirect, String> {
-        match name.unwrap_or("follow") {
-            "follow" => Ok(Redirect::Follow),
-            "manual" => Ok(Redirect::Manual),
-            "error" => Ok(Redirect::Error),
-            other => Err(format!("redirect: follow, manual or error, not {other}")),
-        }
-    }
-
-    /// Its name as `fetch` spells it.
-    pub fn name(self) -> &'static str {
-        match self {
-            Redirect::Follow => "follow",
-            Redirect::Manual => "manual",
-            Redirect::Error => "error",
-        }
-    }
-}
+pub use http::{CacheMode, Redirect};
+#[path = "request_http.rs"]
+mod http;
 
 /// One host request, with ordered native execution unless explicitly opted in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,6 +160,8 @@ pub struct Request {
     pub body_to: Option<String>,
     /// What a redirect response does (`fetch`'s `redirect`).
     pub redirect: Redirect,
+    /// Fetch's HTTP cache mode (LLP 1162 D4).
+    pub cache: CacheMode,
     /// The server may hold the reply until something changes (a long poll;
     /// LLP 1016.000 D9): pending as any request, but no clock waits on it,
     /// neither a jump nor `clock settle` nor `clock data`, and each reply
@@ -333,6 +304,7 @@ impl Request {
             body_from: None,
             body_to: None,
             redirect: Redirect::Follow,
+            cache: CacheMode::Unspecified,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -398,6 +370,24 @@ impl Request {
             || self.continuation.is_some()
     }
 
+    /// Eligible for read or parallel-send overlap (LLP 1162 D1).
+    pub fn is_plain_http(&self) -> bool {
+        self.http == HttpScheduling::Ordered
+            && self.storage.is_none()
+            && self.continuation.is_none()
+            && self.surface.is_none()
+            && !self.stream
+            && !self.socket
+            && self.listen.is_none()
+            && !self.is_process()
+            && self.long_poll.is_none()
+            && !self.upload_progress
+            && !self.is_native()
+            && !self.is_auth()
+            && self.body_from.is_none()
+            && self.body_to.is_none()
+    }
+
     /// A `GET`.
     pub fn get(url: &str) -> Request {
         Request {
@@ -420,6 +410,7 @@ impl Request {
             body_from: None,
             body_to: None,
             redirect: Redirect::Follow,
+            cache: CacheMode::Unspecified,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -427,6 +418,19 @@ impl Request {
             wake_ms: None,
             fetch: None,
         }
+    }
+
+    /// A two-way WebSocket to a `ws:` or `wss:` URL (LLP 1016.003 D1): a
+    /// stream whose `parse` receives `open`, each frame in order and the
+    /// close, and whose mapper and the module's mutations send on it through
+    /// [`crate::Socket`]. Answer it with `Answer::Later`.
+    pub fn socket(url: &str) -> Request {
+        let request = Request {
+            stream: true,
+            socket: true,
+            ..Request::get(url)
+        };
+        request.independent_http(1 << 20)
     }
 
     /// A `POST` of a JSON text.
@@ -451,6 +455,7 @@ impl Request {
             body_from: None,
             body_to: None,
             redirect: Redirect::Follow,
+            cache: CacheMode::Unspecified,
             held: false,
             reach: Default::default(),
             listen: None,
@@ -605,6 +610,12 @@ impl Request {
     /// (see [`Request::wake_ms`]).
     pub fn wake(mut self, ms: u64) -> Self {
         self.wake_ms = Some(ms);
+        self
+    }
+
+    /// With Fetch's HTTP cache mode (LLP 1162 D4).
+    pub fn cache(mut self, mode: CacheMode) -> Self {
+        self.cache = mode;
         self
     }
 
@@ -1236,6 +1247,29 @@ impl Dispatch {
     }
 }
 
+/// What the executor may overlap (LLP 1162 D1). The runner sets it when it hands a request out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RequestClass {
+    /// Starts when everything before it in the ordered sequence has ended.
+    #[default]
+    Ordered,
+    /// A plain HTTP request a resource's answer made: it does not wait for the reads before it.
+    Read,
+    /// A send of `plan.mutations[m]`, a `parallel` mutation: it does not wait for that mutation's other sends.
+    Parallel(u32),
+}
+
+/// Monotonic milliseconds measured by the executor, apart from the agent clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompletionTiming {
+    /// The executor supplied a cached body (LLP 1162 D4).
+    pub cached: bool,
+    /// Time spent executing the request, ending before delivery (LLP 1162 D1).
+    pub elapsed_ms: u64,
+    /// Time from the exchange ending until its outcome is drained (LLP 1162 D1).
+    pub delivery_wait_ms: u64,
+}
+
 /// A request the host is to run: its ticket, the resource or mutation it
 /// answers, and the request. Taken by [`Runner::take_requests`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1246,6 +1280,8 @@ pub struct RequestOut {
     pub target: String,
     /// What to run.
     pub request: Request,
+    /// What the executor may overlap (LLP 1162 D1).
+    pub class: RequestClass,
     /// The app forced it (`refresh`): the executor bypasses its cache.
     pub forced: bool,
 }

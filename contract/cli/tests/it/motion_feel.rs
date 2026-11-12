@@ -127,7 +127,7 @@ fn transform_origin_is_css_from_a_literal_or_an_expression() {
         "      view scale=0.9 transform-origin=\"25%\" testId=\"b\"\n",
         "      button press=drop transform-origin=(low ? \"0 100%\" : \"right 4px\") testId=\"c\"\n        text \"c\"\n",
     ));
-    let origin = |r: &Runner<NoData>, id: &str| style(r, id).transform_origin;
+    let origin = |r: &Runner<NoData>, id: &str| style(r, id).transform_origin.clone();
     assert_eq!(origin(&r, "root"), TransformOrigin::default());
     assert!(!style(&r, "root").mask.has(StyleId::TransformOrigin));
     assert_eq!(

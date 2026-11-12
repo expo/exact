@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { GLOBAL, Graph, Repo, auditProfile, cargoTests, commands, jsSources, rustLiterals, rustSource, select, suites } from './affected.mjs';
@@ -281,6 +281,83 @@ test('the commands run each workspace once, the Bun files together and every app
     ['bun', 'host/apple/build.mjs', '--test', '--ios', '--only', 'ATests,BTests'],
     ['bun', 'host/web-js/conform.mjs', 'caltrain', '--synthetic', '--build', '--linux'],
   ]);
+});
+
+function commandFixture() {
+  const root = mkdtempSync(resolve(tmpdir(), 'affected-commands-'));
+  const files = ['Cargo.toml', 'game/Cargo.toml', 'core/src/lib.rs', 'game/src/lib.rs', 'scripts/sample.test.mjs',
+    'apps/demo/web/src/lib.rs', 'apps/demo/first.test.contract', 'apps/demo/second.test.contract'];
+  for (const file of files) {
+    mkdirSync(dirname(resolve(root, file)), { recursive: true });
+    writeFileSync(resolve(root, file), '');
+  }
+  copyFileSync(resolve(import.meta.dir, 'affected.mjs'), resolve(root, 'scripts/affected.mjs'));
+  mkdirSync(resolve(root, 'host/apple'), { recursive: true });
+  symlinkSync(resolve(import.meta.dir, '../host/apple/xctest.mjs'), resolve(root, 'host/apple/xctest.mjs'));
+  symlinkSync(resolve(import.meta.dir, '../node_modules'), resolve(root, 'node_modules'), 'dir');
+  const bin = resolve(root, 'bin'), log = resolve(root, 'commands.jsonl');
+  mkdirSync(bin);
+  const executable = (name, source) => writeFileSync(resolve(bin, name), `#!${process.execPath}\n${source}\n`, { mode: 0o755 });
+  executable('git', `const args = process.argv.slice(2);
+    process.stdout.write(args[0] === 'diff' ? 'Cargo.toml\\0' : args.includes('-o') ? '' : ${JSON.stringify(files.join('\0'))});`);
+  const metadata = packages => {
+    const entries = packages.map(([name, dir]) => ({ id: name, name, source: null,
+      manifest_path: resolve(root, dir, 'Cargo.toml'), dependencies: [],
+      targets: [{ kind: ['lib'], test: true, src_path: resolve(root, dir, 'src/lib.rs') }] }));
+    return { workspace_members: entries.map(p => p.id), packages: entries,
+      resolve: { nodes: entries.map(p => ({ id: p.id, deps: [] })) } };
+  };
+  const record = `require('node:fs').appendFileSync(${JSON.stringify(log)}, JSON.stringify([process.argv[1].split('/').at(-1), ...process.argv.slice(2)]) + '\\n');`;
+  executable('cargo', `const args = process.argv.slice(2);
+    if (args[0] === 'metadata') {
+      console.log(JSON.stringify(args.includes(${JSON.stringify(resolve(root, 'game/Cargo.toml'))})
+        ? ${JSON.stringify(metadata([['game', 'game']]))} : ${JSON.stringify(metadata([['core', 'core'], ['demo-web', 'apps/demo/web']]))}));
+    } else {
+      ${record}
+      process.exit(args.includes('--manifest-path') ? 0 : Number(process.env.AFFECTED_FIRST_STATUS));
+    }`);
+  executable('bun', record);
+  executable('sandbox-exec', `${record}
+    process.exit(process.argv.at(-1).endsWith('first.test.contract') ? Number(process.env.AFFECTED_FIRST_STATUS) : 0);`);
+  return {
+    bin,
+    run: (args, status = 0) => {
+      rmSync(log, { force: true });
+      const result = spawnSync(process.execPath, [resolve(root, 'scripts/affected.mjs'), ...args], {
+        cwd: root, encoding: 'utf8', env: { ...process.env, PATH: bin, AFFECTED_FIRST_STATUS: String(status) },
+      });
+      return { ...result, ran: readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line)) };
+    },
+    done: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+test('--run executes later Cargo and Bun commands after a failure and retains failures to spawn', () => {
+  const { bin, run, done } = commandFixture();
+  try {
+    for (const status of [7, 0]) {
+      const result = run(['--base', 'HEAD', '--run'], status);
+      expect(result.ran.map(c => c[0]), result.stderr).toEqual(['cargo', 'cargo', 'bun']);
+      expect(result.ran[1]).toContain('game/Cargo.toml');
+      expect(result.ran[2]).toContain('./scripts/sample.test.mjs');
+      expect(result.status, result.stderr).toBe(status);
+    }
+    writeFileSync(resolve(bin, 'bun'), '#!/missing-affected-interpreter\n');
+    const missing = run(['--base', 'HEAD', '--run']);
+    expect(missing.ran.map(c => c[0]), missing.stderr).toEqual(['cargo', 'cargo']);
+    expect(missing.status, missing.stderr).toBe(1);
+  } finally { done(); }
+});
+
+test('--audit executes every app test command after a failure', () => {
+  const { run, done } = commandFixture();
+  try {
+    for (const status of [7, 0]) {
+      const result = run(['--audit', 'app:demo:web'], status);
+      expect(result.ran.map(c => c.at(-1)), result.stderr).toEqual(['apps/demo/first.test.contract', 'apps/demo/second.test.contract']);
+      expect(result.status, result.stderr).toBe(status);
+    }
+  } finally { done(); }
 });
 
 test('an audit makes every unit outside the inputs unreadable, Cargo manifests aside', () => {

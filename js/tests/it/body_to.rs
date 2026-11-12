@@ -88,6 +88,7 @@ fn run(
 ) -> Outcome {
     request.url = format!("http://127.0.0.1:{}{path}", server.port);
     let out = RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket: 1,
         target: "download".into(),
         request,

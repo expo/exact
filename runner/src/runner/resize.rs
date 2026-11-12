@@ -205,17 +205,20 @@ fn content_rect(
         BorderStyle::None | BorderStyle::Hidden => 0.0,
         _ => w,
     };
-    let (left, top) = (pad(used_l, s.padding_left), pad(used_t, s.padding_top));
+    let (left, top) = (
+        pad(used_l, s.padding_left.clone()),
+        pad(used_t, s.padding_top.clone()),
+    );
     let (frame_width, frame_height) = stitched.unwrap_or((node.frame.width, node.frame.height));
     let field = node.field_content_rect();
     let width = frame_width
         - left
-        - pad(used_r, s.padding_right)
+        - pad(used_r, s.padding_right.clone())
         - border(s.border_width_left, s.border_style_left)
         - border(s.border_width_right, s.border_style_right);
     let height = frame_height
         - top
-        - pad(used_b, s.padding_bottom)
+        - pad(used_b, s.padding_bottom.clone())
         - border(s.border_width_top, s.border_style_top)
         - border(s.border_width_bottom, s.border_style_bottom);
     ResizeRect {

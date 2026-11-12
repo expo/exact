@@ -1,5 +1,7 @@
 key radio-a ArrowRight
 tap tab-saved
+tap tab-home
+tap tab-saved
 tap resize
 tap change-role
 tap drop

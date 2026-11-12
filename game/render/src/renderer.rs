@@ -84,6 +84,10 @@ pub struct RendererWithAssets<const ASSETS: bool> {
     /// Timestamp pairs this frame wrote (`timing::GPU_PASS_NAMES` bits), so a
     /// readback never reports a pass that did not run.
     pub(crate) timed: std::cell::Cell<u64>,
+    /// The last frame's shared model pipeline key bits (`Game::PREPARE`'s
+    /// warm-up reads them), and the keys that warm-up prepared.
+    pub(crate) model_frame: std::cell::Cell<Option<crate::models::ModelFrame>>,
+    pub(crate) warmed: std::collections::BTreeSet<(u8, usize)>,
     pub(crate) local: Option<crate::local_shadows::LocalMaps>,
     pub(crate) local_plan: crate::local_shadows::Plan,
     pub(crate) local_culls: Vec<local::LocalCull>,
@@ -403,6 +407,8 @@ impl<const ASSETS: bool> RendererWithAssets<ASSETS> {
             environment,
             lights,
             timed: std::cell::Cell::new(0),
+            model_frame: std::cell::Cell::new(None),
+            warmed: Default::default(),
             local: None,
             local_plan: Default::default(),
             local_culls: Vec::new(),

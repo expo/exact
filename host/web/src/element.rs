@@ -257,7 +257,7 @@ pub fn host_css_of(
         // percentage is of the containing block's width, which a background
         // cannot reach: the line then stands at the content box's foot.
         let mut bottom = String::new();
-        crate::css::dimension(&mut bottom, node.style.padding_bottom);
+        crate::css::dimension(&mut bottom, node.style.padding_bottom.clone());
         if bottom.contains('%') || bottom == "auto" {
             bottom = "0px".into();
         }
@@ -945,6 +945,8 @@ pub fn props_of(node: &NodeFacts<'_>) -> SortedMap<String, String> {
             PropId::BackgroundMaterial => "backgroundMaterial",
             // LLP 1053.000.000 D1: written, read by no rule, drawn nowhere.
             PropId::GlassGroup => "glassGroup",
+            // Interactive glass and a menu's order are UIKit's; a page has neither.
+            PropId::GlassInteractive | PropId::MenuOrder => continue,
             PropId::RetainFocus => "retainFocus",
             // tvOS's focus guide; a browser's Tab order is sequential.
             PropId::FocusGuide => continue,

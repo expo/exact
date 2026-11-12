@@ -235,8 +235,9 @@ public final class ExactPackageContext {
 
     /// The file an admitted `app:/` path names (LLP 1133.009 D10 item 4):
     /// the session's own directories, a scratch tree under the agent.
-    /// Admission has checked the path against the calling source's grants;
-    /// nil unless it is a regular file reached through no symbolic link.
+    /// Admission has checked the path against the calling source's grants.
+    /// A destination may be missing; an existing destination must be a regular
+    /// file, and existing parts must lead through no symbolic link.
     public func file(_ path: String) -> URL? { fileFn(path) }
 
     /// Under the agent, what the implementation discloses of its own objects

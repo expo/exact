@@ -42,7 +42,7 @@ fn plan(timeout: &str) -> Plan {
         );
         b.module(
             source,
-            "test.motion",
+            ("test.motion", "@fixture/test.motion"),
             name,
             false,
             false,
@@ -177,7 +177,7 @@ mod shared_permission {
         let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
         let string = b.primitive(TypeKind::String);
         let source = b.source("position", &[], string);
-        b.module(source, "testgeo", "position", false, false, "when-prompt", "", r#"{"default":"position","permission":{"name":"location","status":"status","field":"state","denied":"NotAllowedError"}}"#);
+        b.module(source, ("testgeo", "@fixture/testgeo"), "position", false, false, "when-prompt", "", r#"{"default":"position","permission":{"name":"location","status":"status","field":"state","denied":"NotAllowedError"}}"#);
         let r0 = b.resource("first", "position", &[], string, None);
         b.resource("second", "position", &[], string, None);
         let mut refresh = Asm::new();
@@ -233,7 +233,7 @@ fn a_default_written_null_is_a_value() {
         let source = b.source(name, &[], string);
         b.module(
             source,
-            "test.push",
+            ("test.push", "@fixture/test.push"),
             name,
             true,
             false,
@@ -262,7 +262,7 @@ fn an_ungranted_value_stands_until_the_permission_is_granted() {
     let substitute = r#"{"default":null,"ungranted":null,"permission":{"name":"notifications","status":"status","field":"state","denied":"NotAllowedError"}}"#;
     b.module(
         source,
-        "test.push",
+        ("test.push", "@fixture/test.push"),
         "subscription",
         true,
         false,
@@ -312,7 +312,7 @@ fn member_only_routing_preserves_options_and_uses_the_members_binding() {
         let source = b.source(&format!("{extension}.{name}"), &[], string);
         b.module(
             source,
-            extension,
+            (extension, extension),
             name,
             true,
             false,
@@ -393,7 +393,7 @@ fn a_dropped_bound_member_reply_retires_its_provisional_request() {
         let source = b.source(&format!("{extension}.{name}"), &[], string);
         b.module(
             source,
-            extension,
+            (extension, extension),
             name,
             true,
             false,

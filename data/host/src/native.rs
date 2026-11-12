@@ -2,7 +2,7 @@
 use super::Directories;
 use exact_runner::{FailureKind, Outcome};
 use ibex2::{
-    grant::GrantSet,
+    grant::{Grant, GrantSet, PathPrefix},
     stdlib::{
         app_fs::{self, AppDirectories},
         fs::{self, FsOp, FsResult},
@@ -11,6 +11,7 @@ use ibex2::{
     },
 };
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 fn error(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
@@ -555,8 +556,10 @@ pub(super) fn independent_storage(payload: &[u8]) -> bool {
 pub(super) fn run(
     paths: Option<&Directories>,
     grants: &str,
+    app_grants: &str,
     payload: &[u8],
     owner: u64,
+    changed: &AtomicBool,
 ) -> Outcome {
     let result = (|| {
         if payload.len() > exact_data::storage::MAX_BYTES {
@@ -572,6 +575,8 @@ pub(super) fn run(
             return kept;
         }
         let grants = GrantSet::parse(&exact_runner::io_grants(grants)).map_err(error)?;
+        // A sibling source's refresh can read files this writer cannot read.
+        let app_grants = GrantSet::parse(&exact_runner::io_grants(app_grants)).map_err(error)?;
         // Two app files, never a document or a disk path (LLP 1069.002 A1.1).
         if (op == "fs.compressImage" || op == "fs.transformImage")
             && ![&args["path"], &args["destination"]]
@@ -587,22 +592,26 @@ pub(super) fn run(
             }
             AppDirectories::new(&paths.data, &paths.cache, &paths.temporary).map_err(error)
         };
-        if args["path"]
+        let result = if args["path"]
             .as_str()
             .is_some_and(exact_data::documents::is_document)
         {
             let directories = copies_into_app(op, args)
                 .then(app_directories)
                 .transpose()?;
-            return document_request(&grants, directories.as_ref(), op, args, owner);
+            document_request(&grants, directories.as_ref(), op, args, owner)
+        } else if native_filesystem(op, args) {
+            execute(&grants, None, op, args)
+        } else {
+            if !text(args, "path")?.starts_with("app:/") {
+                return Err("portable storage needs an app:/ path".into());
+            }
+            execute(&grants, Some(&app_directories()?), op, args)
+        }?;
+        if changes_readable_files(&app_grants, op, args, &result) {
+            changed.store(true, Ordering::Release);
         }
-        if native_filesystem(op, args) {
-            return execute(&grants, None, op, args);
-        }
-        if !text(args, "path")?.starts_with("app:/") {
-            return Err("portable storage needs an app:/ path".into());
-        }
-        execute(&grants, Some(&app_directories()?), op, &request["args"])
+        Ok(result)
     })();
     match result {
         Ok(v) => {
@@ -623,5 +632,108 @@ pub(super) fn run(
             }
         }
         Err(message) => Outcome::Storage(serde_json::to_vec(&json!({"error":message})).unwrap()),
+    }
+}
+
+// Keep the prelude's storageCounts.writes rule: refreshes read app files only.
+fn changes_readable_files(grants: &GrantSet, op: &str, args: &Value, result: &Value) -> bool {
+    let paths = match op {
+        "fs.writeFile" | "fs.atomicWriteFile" | "fs.appendFile" | "fs.mkdir" | "fs.rm" => {
+            [args["path"].as_str(), None]
+        }
+        "fs.rename" => [args["path"].as_str(), args["destination"].as_str()],
+        "fs.copyFile" | "fs.compressImage" => [args["destination"].as_str(), None],
+        "fs.transformImage" => [result["path"].as_str(), None],
+        _ => return false,
+    };
+    paths.into_iter().flatten().any(|path| {
+        if !path.starts_with("app:/") {
+            return false;
+        }
+        let Some(path) = PathPrefix::new(path) else {
+            return false;
+        };
+        grants.iter().any(|grant| {
+            let Grant::FsRead(root) = grant else {
+                return false;
+            };
+            path.components().starts_with(root.components())
+                || root.components().starts_with(path.components())
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn changed_paths_follow_destinations_and_read_grant_overlap() {
+        let grants = GrantSet::parse("fs.read app:/data/output.jpg/\nfs.write app:/").unwrap();
+        for (op, path, destination, actual, expected) in [
+            (
+                "fs.compressImage",
+                "app:/data/input",
+                "app:/data/output.jpg",
+                "",
+                true,
+            ),
+            (
+                "fs.compressImage",
+                "app:/data/output.jpg",
+                "app:/cache/hidden",
+                "",
+                false,
+            ),
+            (
+                "fs.transformImage",
+                "app:/data/input",
+                "app:/data/output",
+                "app:/data/output.jpg",
+                true,
+            ),
+            (
+                "fs.transformImage",
+                "app:/data/output.jpg",
+                "app:/cache/hidden",
+                "app:/cache/hidden.jpg",
+                false,
+            ),
+            (
+                "fs.transformImage",
+                "app:/data/input",
+                "app:/data/output.jpg",
+                "app:/data/output.jpg.png",
+                false,
+            ),
+            (
+                "fs.rename",
+                "app:/cache/hidden",
+                "app:/data/output.jpg",
+                "",
+                true,
+            ),
+            (
+                "fs.rename",
+                "app:/data/output.jpg",
+                "app:/cache/hidden",
+                "",
+                true,
+            ),
+            ("fs.rm", "app:/data", "", "", true),
+            ("fs.writeFile", "app:/data/output.jpg2", "", "", false),
+            ("fs.chmod", "app:/data/output.jpg", "", "", false),
+        ] {
+            assert_eq!(
+                changes_readable_files(
+                    &grants,
+                    op,
+                    &json!({"path":path,"destination":destination}),
+                    &json!({"path":actual}),
+                ),
+                expected,
+                "{op} {path} -> {destination} ({actual})",
+            );
+        }
     }
 }

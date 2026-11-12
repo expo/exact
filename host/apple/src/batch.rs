@@ -1211,6 +1211,7 @@ mod tests {
         let mut extra = Batch::new();
         extra.surface_work(
             &RequestOut {
+                class: exact_runner::RequestClass::Ordered,
                 ticket: 7,
                 target: "continue".into(),
                 request: Request::restore_surface("world", vec![0, 128, 255]),
@@ -1225,6 +1226,7 @@ mod tests {
         let mut refused = Batch::new();
         refused.surface_work(
             &RequestOut {
+                class: exact_runner::RequestClass::Ordered,
                 ticket: 8,
                 target: "save".into(),
                 request: Request::restore_surface("world", vec![1, 2, 3]),

@@ -56,6 +56,11 @@ android {
         manifestPlaceholders["appName"] = identity["name"] as String
         manifestPlaceholders["screenOrientation"] = screenOrientation
         manifestPlaceholders["exactDevelopment"] = providers.gradleProperty("exactDevelopment").orNull == "1"
+        // The launcher icon (`android:icon` and `android:roundIcon`) and the TV banner among the resources below, as
+        // agent-android.mjs names them. With no icon the system draws its default one; with no banner the TV launcher
+        // shows the shell's plain one (res/drawable/banner.xml).
+        manifestPlaceholders["appIcon"] = providers.gradleProperty("appIcon").orNull ?: "@null"
+        manifestPlaceholders["appBanner"] = providers.gradleProperty("appBanner").orNull ?: "@drawable/banner"
     }
     buildTypes {
         release {
@@ -68,6 +73,8 @@ android {
     // The app's Rust library (as libexactcanvas.so) and its assets (the reader copies `app/` out of the APK once).
     sourceSets["main"].jniLibs.directories.add(out.resolve("rust/jniLibs").path)
     sourceSets["main"].assets.directories.add(out.resolve("rust/assets").path)
+    // The icon and banner agent-android.mjs makes from the manifest's `icons` (LLP 1163 D6).
+    sourceSets["main"].res.directories.add(out.resolve("icons/res").path)
     sourceSets["main"].kotlin.directories.add(if (compose) "src/compose/java" else "src/nocompose/java")
     // The app's Kotlin hatches and module roster (LLP 1115.001.000 D4) in its `modules/android`; -PmodulesDir lets a
     // component fixture compile the app's actual provider without copying its Kotlin.

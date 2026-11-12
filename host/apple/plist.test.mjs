@@ -100,24 +100,46 @@ test('a package key that collides with a key the build writes is refused, naming
 
 test('an app that grants no device still gets its packages\' keys and dictionaries, and only from packages it uses', () => {
   withApp('import { purchase } from "@exact/purchases";\n', ['purchases'], (app) => {
-    for (const plist of [infoPlist(app, false, { reach: modulePlist(app, null, 'ios') }), macInfoPlist(app, { reach: modulePlist(app, null, 'macos') })]) {
+    for (const plist of [infoPlist(app, false, { reach: modulePlist(app, null, 'ios', { purchases: '@exact/purchases' }) }), macInfoPlist(app, { reach: modulePlist(app, null, 'macos', { purchases: '@exact/purchases' }) })]) {
       assert.match(flat(plist), KEY);
       assert.doesNotMatch(plist, /UsageDescription|CFBundleLocalizations/);
     }
     // Purchases has no tvOS implementation.
-    assert.doesNotMatch(infoPlist(app, false, { reach: modulePlist(app, null, 'tvos'), tv: true }), /SKInclude/);
+    assert.doesNotMatch(infoPlist(app, false, { reach: modulePlist(app, null, 'tvos', { purchases: '@exact/purchases' }), tv: true }), /SKInclude/);
   });
-  withApp('export const nothing = true;\n', ['purchases'], (app) => assert.doesNotMatch(infoPlist(app, false, { reach: modulePlist(app, null, 'ios') }), /SKInclude/));
+  withApp('export const nothing = true;\n', ['purchases'], (app) => assert.doesNotMatch(infoPlist(app, false, { reach: modulePlist(app, null, 'ios', {}) }), /SKInclude/));
   withApp('import { requestPreciseLocation } from "@exact/geolocation";\nrequestPreciseLocation({ purposeKey: "nav" });\n', ['geolocation'], (app) => {
-    assert.match(flat(infoPlist(app, false, { reach: modulePlist(app, null, 'ios') })),
+    assert.match(flat(infoPlist(app, false, { reach: modulePlist(app, null, 'ios', { geolocation: '@exact/geolocation' }) })),
       /<key>NSLocationTemporaryUsageDescriptionDictionary<\/key><dict><key>nav<\/key><string>Turn-by-turn directions need your precise location.<\/string><\/dict>/);
+  });
+});
+
+test('a literal purpose key in a loaded Contract library reaches the plist', () => {
+  withApp('', ['geolocation'], (app) => {
+    const lib = resolve(app.dir, 'node_modules/@repro/lib');
+    mkdirSync(lib, { recursive: true });
+    writeFileSync(resolve(lib, 'package.json'), JSON.stringify({ name: '@repro/lib', version: '1.0.0', exports: { '.': './index.contract' }, dependencies: { '@exact/geolocation': '1.0.0' } }));
+    writeFileSync(resolve(app.dir, 'package.json'), JSON.stringify({ dependencies: { '@exact/geolocation': '1.0.0', '@repro/lib': '1.0.0' } }));
+    writeFileSync(resolve(lib, 'index.contract'), 'use requestPreciseLocation, GeolocationStatus from "@exact/geolocation"\ncomponent Locate\n  mutation precise as shape GeolocationStatus\n  action ask\n    send precise = requestPreciseLocation(purposeKey="nav")\n  view\n    button press=ask\n      text "Locate"\n');
+    writeFileSync(resolve(app.dir, 'app.contract'), 'use Locate from "@repro/lib"\n');
+    const compiler = resolve(import.meta.dir, '../../target/debug/contract');
+    const run = childProcess.spawnSync(compiler, ['sources', resolve(app.dir, 'app.contract')], { encoding: 'utf8' });
+    assert.equal(run.status, 0, run.stderr);
+    const compiled = childProcess.spawnSync(compiler, ['build', resolve(app.dir, 'app.contract'), '-o', resolve(app.dir, 'app.plan')], { encoding: 'utf8' });
+    assert.equal(compiled.status, 0, compiled.stderr);
+    const files = JSON.parse(run.stdout).sources.map(s => s.path);
+    const reach = modulePlist(app, null, 'ios', { geolocation: '@exact/geolocation' }, files);
+    assert.match(flat(infoPlist(app, false, { reach })), /<key>NSLocationTemporaryUsageDescriptionDictionary<\/key><dict><key>nav<\/key>/);
+    const source = readFileSync(resolve(lib, 'index.contract'), 'utf8');
+    writeFileSync(resolve(lib, 'index.contract'), source.replace('component Locate\n', 'component Locate\n  state purpose = "nav"\n').replace('purposeKey="nav"', 'purposeKey=purpose'));
+    assert.doesNotMatch(infoPlist(app, false, { reach: modulePlist(app, null, 'ios', { geolocation: '@exact/geolocation' }, files) }), /NSLocationTemporaryUsageDescriptionDictionary/);
   });
 });
 
 test('a plist entry that is not "<call>.<option>" is refused, naming the package and the field', () => {
   for (const plist of [{ SKIncludeConsumableInAppPurchaseHistory: true }, { NSLocationTemporaryUsageDescriptionDictionary: 'requestPreciseLocation' }, ['x']]) {
     withApp('import { purchase } from "@exact/purchases";\n', ['purchases'], (app) => {
-      assert.throws(() => modulePlist(app, null, 'ios'), /purchases's Apple implementation: its plist (gives|is not an object)/);
+      assert.throws(() => modulePlist(app, null, 'ios', { purchases: '@exact/purchases' }), /purchases's Apple implementation: its plist (gives|is not an object)/);
     }, (json) => ({ ...json, plist }));
   }
 });

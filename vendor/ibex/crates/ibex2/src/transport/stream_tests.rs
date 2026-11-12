@@ -13,7 +13,7 @@ fn transports() -> Vec<Arc<dyn Transport>> {
         Arc::new(RustlsHttpTransport::new()),
     ]
 }
-fn request_head(socket: &mut TcpStream) {
+pub(super) fn request_head(socket: &mut TcpStream) {
     socket
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
@@ -25,7 +25,9 @@ fn request_head(socket: &mut TcpStream) {
         assert!(head.len() < 64 * 1024);
     }
 }
-fn server(work: impl FnOnce(TcpStream) + Send + 'static) -> (String, std::thread::JoinHandle<()>) {
+pub(super) fn server(
+    work: impl FnOnce(TcpStream) + Send + 'static,
+) -> (String, std::thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     let thread = std::thread::spawn(move || {
@@ -88,11 +90,18 @@ fn abort_interrupts_waiting_for_headers_and_closes_the_socket() {
 #[test]
 fn abort_interrupts_body_reads_and_drop_closes_an_unread_body() {
     for transport in transports() {
-        for abort in [true, false] {
+        for (abort, event_stream) in [(true, false), (false, false), (true, true), (false, true)] {
             let (url, peer) = server(move |mut socket| {
-                socket
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n")
-                    .unwrap();
+                let content_type = if event_stream {
+                    "text/event-stream"
+                } else {
+                    "text/plain"
+                };
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: 10\r\n\r\n"
+                )
+                .unwrap();
                 assert_eq!(socket.read(&mut [0]).unwrap(), 0);
             });
             let control = AbortController::new();
@@ -253,12 +262,14 @@ fn an_unread_response_does_not_hold_up_another_request() {
 
 #[test]
 fn portable_request_timeout_bounds_waiting_for_headers_and_body() {
-    for body in [false, true] {
+    for content_type in [None, Some("text/plain"), Some("text/event-stream")] {
         let (url, peer) = server(move |mut socket| {
-            if body {
-                socket
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nx")
-                    .unwrap();
+            if let Some(content_type) = content_type {
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: 2\r\n\r\nx"
+                )
+                .unwrap();
             }
             // The configured attempt timeout closes the stalled request.
             assert_eq!(socket.read(&mut [0]).unwrap(), 0);
@@ -269,6 +280,48 @@ fn portable_request_timeout_bounds_waiting_for_headers_and_body() {
         assert!(result.is_err(), "stalled response unexpectedly completed");
         peer.join().unwrap();
     }
+}
+
+fn event(body: &mut crate::stdlib::fetch::Body) -> Result<Vec<u8>, crate::boundary::HostError> {
+    let mut event = Vec::new();
+    while !event.ends_with(b"\n\n") {
+        let mut byte = [0];
+        if body.read(&mut byte)? == 0 {
+            break;
+        }
+        event.push(byte[0]);
+        assert!(event.len() < 1024);
+    }
+    Ok(event)
+}
+
+#[test]
+fn a_portable_event_stream_delivers_later_events_and_closes_when_released() {
+    let (release, released) = mpsc::channel();
+    let (url, peer) = server(move |mut socket| {
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: Text/Event-Stream; charset=utf-8\r\n\r\ndata: first\n\n",
+            )
+            .unwrap();
+        for event in [b"data: later\n\n".as_slice(), b"data: final\n\n"] {
+            released.recv_timeout(Duration::from_secs(3)).unwrap();
+            socket.write_all(event).unwrap();
+        }
+        assert_eq!(socket.read(&mut [0]).unwrap(), 0);
+    });
+    let control = AbortController::new();
+    let mut body = RustlsHttpTransport::new()
+        .open(&Request::get(&url), &control.signal())
+        .unwrap()
+        .body;
+    assert_eq!(event(&mut body).unwrap(), b"data: first\n\n");
+    release.send(()).unwrap();
+    assert_eq!(event(&mut body).unwrap(), b"data: later\n\n");
+    release.send(()).unwrap();
+    assert_eq!(event(&mut body).unwrap(), b"data: final\n\n");
+    drop(body);
+    peer.join().unwrap();
 }
 
 /// An upload's progress (Exact patch 23): the portable transport tells each

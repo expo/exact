@@ -149,6 +149,21 @@ impl exact_runner::DataSourceWrapper for Seeded<'_> {
     ) -> Result<Answer, DataError> {
         self.module.parse(store, source, args, outcome)
     }
+    fn more_for(&mut self, target: Target) -> Vec<exact_runner::Request> {
+        self.module.more_for(target)
+    }
+    fn parse_fetch_for(
+        &mut self,
+        target: Target,
+        fetch: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        self.module
+            .parse_fetch_for(target, fetch, store, source, args, outcome)
+    }
     fn parse_for(
         &mut self,
         target: Target,
@@ -258,8 +273,9 @@ impl exact_runner::DataSourceWrapper for Seeded<'_> {
         &mut self,
         store: &Store,
         in_flight: InFlight<'_>,
+        fetch: Option<u64>,
     ) -> Option<(u64, exact_runner::Request)> {
-        self.module.timer_before_reply(store, in_flight)
+        self.module.timer_before_reply(store, in_flight, fetch)
     }
     fn module_landed(
         &mut self,

@@ -84,40 +84,42 @@ impl MaterialGpu<'_> {
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
         })];
-        self.device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("game custom material"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: shader,
-                    entry_point: Some(vertex),
-                    buffers: &[Some(vertices)],
-                    compilation_options: Default::default(),
-                },
-                fragment: fragment.map(|entry| wgpu::FragmentState {
-                    module: shader,
-                    entry_point: Some(entry),
-                    targets: if shadow { &[] } else { &color },
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: None,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: if shadow { 1 } else { self.pipelines.samples },
-                    ..Default::default()
-                },
-                multiview_mask: None,
-                cache: None,
-            })
+        crate::perf::pipeline(|| {
+            self.device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("game custom material"),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: shader,
+                        entry_point: Some(vertex),
+                        buffers: &[Some(vertices)],
+                        compilation_options: Default::default(),
+                    },
+                    fragment: fragment.map(|entry| wgpu::FragmentState {
+                        module: shader,
+                        entry_point: Some(entry),
+                        targets: if shadow { &[] } else { &color },
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        cull_mode: None,
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: wgpu::TextureFormat::Depth32Float,
+                        depth_write_enabled: Some(true),
+                        depth_compare: Some(wgpu::CompareFunction::Less),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample: wgpu::MultisampleState {
+                        count: if shadow { 1 } else { self.pipelines.samples },
+                        ..Default::default()
+                    },
+                    multiview_mask: None,
+                    cache: None,
+                })
+        })
     }
 }
 /// A custom opaque material replaces the shading of an existing model material.

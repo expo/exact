@@ -409,8 +409,8 @@ pub struct ButtonRasterImage {
 /// native one (`ControlKind::Button`) alike.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PressFace {
-    /// Its first `text` child's text, white space collapsed; a blank title is
-    /// none.
+    /// Its first `text` child's text, processed by its effective `white-space`
+    /// style; none when empty.
     pub title: Option<String>,
     /// The second text, the platform's semantic subtitle (LLP 1069.011.001 D3).
     pub subtitle: Option<String>,

@@ -331,7 +331,7 @@ impl Painter {
             }
             return false;
         }
-        self.rows.active && (scrolls(y) || self.rows_wrapper(node.key))
+        self.rows.active && self.backend.rows() && (scrolls(y) || self.rows_wrapper(node.key))
     }
 
     /// Whether `key` is the container walked for its scroller's rows.
@@ -637,9 +637,15 @@ impl Painter {
                 b.rect.0 += origin.0;
                 b.rect.1 += origin.1;
                 b.clip = b.clip.map(|c| (c.0 + origin.0, c.1 + origin.1, c.2, c.3));
-                b.affine = b
-                    .affine
-                    .map(|(t, r)| (t.post_translate(origin.0, origin.1), r));
+                if let Some((inv, ..)) = &mut b.projective {
+                    // Undo the row's translation before entering the plane;
+                    // its affine coordinates remain local to that plane.
+                    *inv = space::mul3(inv, &[1., 0., -origin.0, 0., 1., -origin.1, 0., 0., 1.]);
+                } else {
+                    b.affine = b
+                        .affine
+                        .map(|(t, r)| (t.post_translate(origin.0, origin.1), r));
+                }
             }
             for (id, inline) in &mut capture.inline {
                 *inline = inline.translated(origin.0, origin.1);

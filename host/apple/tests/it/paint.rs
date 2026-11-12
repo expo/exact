@@ -451,10 +451,7 @@ fn cancelling_color_motion_restores_inheriting_views_and_inline_runs() {
     );
 }
 
-/// LLP 1116 D5: a radius that is a calculation with a percentage crosses to
-/// Swift as a handle on the kernel's evaluator, the environment's inset in
-/// it: `min(50%, calc(env(safe-area-inset-top) + 10px))` is half the basis up
-/// to 60 points, then 30.
+/// Native percentage lengths use their captured environment (LLP 1116 D5).
 #[test]
 fn a_calculated_radius_carries_its_own_environment() {
     use exact_kernel::{Env, StyleId, StyleProps, StyleValue};
@@ -469,7 +466,7 @@ fn a_calculated_radius_carries_its_own_environment() {
         let (json, _) = exact_apple::style::style_json(&style, &Env::new(top, 0.0, 0.0, 0.0));
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
         let radius = &value["border_radius_top_left"];
-        let handle = radius["calc"].as_u64().unwrap() as u32;
+        let expression = radius["calc"].as_str().unwrap();
         let environment: Vec<f64> = radius["env"]
             .as_array()
             .unwrap()
@@ -477,15 +474,49 @@ fn a_calculated_radius_carries_its_own_environment() {
             .map(|v| v.as_f64().unwrap())
             .collect();
         (
-            handle,
-            exact_apple::calc::Context::new(handle, &environment).unwrap(),
+            expression.to_string(),
+            exact_apple::calc::Context::new(expression, &environment).unwrap(),
         )
     };
-    let (first_handle, first) = context(20.0);
+    let (first_expression, first) = context(20.0);
     assert_eq!(first.length(40.0), 20.0);
     assert_eq!(first.length(200.0), 30.0);
-    let (other_handle, other) = context(2.0);
-    assert_eq!(first_handle, other_handle);
+    let (other_expression, other) = context(2.0);
+    assert_eq!(first_expression, other_expression);
     assert_eq!(other.length(200.0), 12.0);
     assert_eq!(first.length(200.0), 30.0);
+}
+
+#[test]
+fn a_calculated_radius_keeps_the_author_depth_after_serialization() {
+    use exact_kernel::{Env, StyleId, StyleProps, StyleValue};
+    let mut nested = "1%".to_string();
+    for _ in 0..31 {
+        nested = format!("clamp(none, {nested}, none)");
+    }
+    let mut style = StyleProps::default();
+    style
+        .set_dynamic(
+            StyleId::BorderRadiusTopLeft,
+            &StyleValue::Text(format!("calc(1px + 2 * {nested})").into()),
+        )
+        .unwrap();
+    let (json, skipped) = exact_apple::style::style_json(&style, &Env::default());
+    assert!(skipped.is_empty());
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let radius = &value["border_radius_top_left"];
+    let expression = radius["calc"].as_str().unwrap();
+    let environment: Vec<f64> = radius["env"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect();
+    let context = exact_apple::calc::Context::new(expression, &environment)
+        .expect("serialized calculations keep the author's depth budget");
+    drop(style);
+    drop(value);
+    drop(json);
+    assert_eq!(context.length(100.), 3.);
+    assert_eq!(context.length(200.), 5.);
 }

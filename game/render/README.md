@@ -45,14 +45,20 @@ writes that line ([game README](../README.md#exact2-integration)).
 See LLP 1046.006.000 and `tests/hooks.rs` for the independent public fixture.
 
 Hooks borrow `RenderWorld` for immutable extraction and `FrameView` for the exact
-engine camera, interpolation, viewport/capacity and clock-reset facts. Register
+engine camera, interpolation, viewport/capacity and clock-reset facts.
+`FrameView.time` also carries the frame's timing: `interval_ms` since the
+canvas's previous drawn frame (0 after a rest), `display_period_ms`, the host's
+callback (`host.raw_ms`, `host.callback_ms`, `host.fastest_period_ms`) and
+`thermal_state` (`Unknown` off Apple). A hook steering by them, a frame budget
+or a thermal cap, answers `Hooks::max_fps`; the lower non-zero of it and
+`Game::max_fps` caps drawing. Register
 entities through `entities()` to get tick-interpolated `FrameView::pose`. Use
 `Pipelines<T>` for asynchronous candidate validation, `Needs::PENDING` until ready,
 and `error()` for a named rejected replacement. Never step or mutate the simulation.
 
 Stages are compute before shadows, opaque, background after sky, an optional
 surface continuation, and optional HDR post before bloom/tone. Geometry uses
-`Game::SAMPLES` (4× MSAA by default; one under the `Low` rung of `Game::quality`); hooks use `FrameView.sample_count`. `SCENE_COPY` supplies resolved HDR and positive view-space depth (zero for
+`Game::samples` (`Game::SAMPLES`, 4× MSAA by default; one under the `Low` rung of `Game::quality`); hooks use `FrameView.sample_count`. `SCENE_COPY` supplies resolved HDR and positive view-space depth (zero for
 sky); `FINAL_DEPTH` requests final sampled depth independently; `HDR_POST` supplies
 a distinct HDR output. Respect the active rectangle inside bucketed textures.
 The refractor writes depth. Transparent objects behind it and intersecting
@@ -170,6 +176,18 @@ fog, cascade, filter and fade changes use that fallback while a worker builds th
 specialization; unchanged frames reuse it. Web builds keep using the fallback
 until the material family is recreated, without compiling a live setting change.
 Shadow and camera-depth families prepare both coverage modes, with no lighting cross-product, so changing opacity does not compile depth pipelines.
+`Game::PREPARE` lists models with how many of each may draw at once
+(`&[("die.model", 16)]`), for what a game spawns later: the dice of a throw, an
+inventory. Before the first frame with a listed model resident, the instance and
+skin buffers are sized for every listed instance at once (unmerged, each record with
+a look), so that spawn grows none. After each frame from the first, the renderer
+builds the pipelines for two more of the keys the listed models' materials draw with
+under that frame's settings (forward, shadow caster when anything casts, camera
+depth under the prepass), for instances that are not fading, until none is left.
+Readiness waits for none of it and no entity is added. A key is prepared once per
+renderer, so a renderer made again (a quality rung, a sample count) prepares again,
+and a changed setting (fog, a light, a cascade count) prepares that frame's keys
+(`surface_tests::prepare::a_prepared_throw_grows_no_buffer_and_builds_no_pipeline`).
 Materials with no authored texture use a texture-free variant: no material
 sampling, UV transforms or cotangent-frame derivatives. Both textured and
 untextured materials use the geometric normal when no normal map is authored;
@@ -507,6 +525,45 @@ attachment or pass boundary. Device timing is still required on Adreno 620 and i
 these are work counts, not a GPU-time claim.
 
 
+### Unlit materials
+
+`MaterialData.unlit` draws a model material without light: its colour is
+`base + emission`, where `base` is the base colour factor times its texture, the
+vertex colour and the instance tint, and `emission` the emissive factor times its
+texture and `Glow`. Ambient and image-based light, the sun, the fill, local
+lights and rim do not reach it; fog and fading still do, and it is opaque, masked
+or blended as its `alpha_mode` says (three.js's `MeshBasicMaterial`). The bake
+maps glTF's `KHR_materials_unlit` to it, keeping the base colour, its texture,
+alpha and sidedness and, as the extension says, ignoring every other property:
+the emission is zero and no other texture is baked. The flag is a word of the
+material's uniform, read once per fragment, so no pipeline is added for it.
+SSAO, a screen effect, still darkens an opaque unlit surface.
+
+### Clearcoat and sheen
+
+`MaterialData.clearcoat` and `clearcoat_roughness` lay a clear coat over a model
+material, and `sheen_color` and `sheen_roughness` a sheen under it, as glTF's
+`KHR_materials_clearcoat` and `KHR_materials_sheen` (and three.js's
+`MeshPhysicalMaterial`) define them; all four default to zero, which is no
+layer. The coat is a second GGX lobe with F0 0.04 at its own roughness, about
+the geometric normal (a base normal map does not reach it); its Fresnel at the
+view angle weights it and attenuates everything under it, emission included.
+The sheen is a Charlie lobe (roughness squared, Charlie visibility), and the
+base under it is scaled by one less the sheen's brightest channel times the
+lobe's directional albedo, a fit to its numerical integral. Both reach the
+sun, the fill, local lights and the environment: the coat reflects the
+prefiltered environment at its roughness, the sheen its diffuse irradiance.
+Toon (matte) models and unlit materials draw neither. The bake reads both
+extensions' factors; a model that uses either extension's textures
+(`clearcoatTexture`, `clearcoatRoughnessTexture`, `clearcoatNormalTexture`,
+`sheenColorTexture`, `sheenRoughnessTexture`) is refused by name, and so is one
+that lists either extension as required, which the glTF reader does not accept.
+
+A material with either layer draws in a *layered* pipeline, a variant key bit
+(`MODEL_LAYERED`) beside the others above, made on first use like them and with
+its own uniform-driven fallback; a material with neither never compiles or runs
+the lobes, and keeps its pixels.
+
 ### Environment lighting
 
 Ambient light is image-based, from the procedural sky (`Environment.zenith`,
@@ -689,6 +746,18 @@ changed too, until every texture of its new set is
 resident, so a skin never draws with mixed maps; the feed watches the names it waits
 for and rebuilds when one arrives.
 A variant is reclaimed with its material or when one of its textures retires.
+`MaterialOverride.uv_offset` adds to the coordinates the material's base colour and
+emission textures are sampled at on that instance, after the material's
+`KHR_texture_transform` (`MaterialData.uv_transforms`), in the transformed space, so
+an offset of 1 is one repeat of the texture as the material shows it; the sampler's
+wrap mode applies. Normal, metallic-roughness and occlusion maps stay put, and a
+masked material's cutout moves with its base colour. It holds a ribbon's tail
+scrolled each frame in one draw, blended or not. The offset lives in the look
+table, not the instance record: a record with an offset and no merged-part looks
+gets a run of one neutral entry, which adds nothing, and a record with merged-part
+looks carries it in each part's entry. Changing it patches those entries in place;
+its first appearance, or removal, changes the table's shape and rebatches. Instances
+without one draw as before (`surface_tests::cosmetics::a_blended_material_s_uv_offset_scrolls_its_texture_in_place`).
 
 When an entity's `Mesh` names a model that cannot draw yet, the feed keeps drawing the
 rigid model (no skin, no animated parts) that entity drew at its last rebuild, with the
@@ -791,7 +860,15 @@ N·L shape it (three.js `decay`). Decays 2 and 0 take no `pow` in the shader.
 Missing materials/environment use defaults.
 
 Performance samples appear only in `state.world.perf`: live frame stamps, tick,
-feed, encode (frame input through submit) and ticks/frame distributions. CPU sample
+feed, encode (frame input through submit), pipeline and ticks/frame distributions.
+`pipelineMs` is the time a live frame spent creating render and compute pipelines
+on its thread (`perf::pipeline`): in the host's asset preparation before it, its feed
+and encode, frames before it that stopped short of drawing, and the `Game::PREPARE`
+warm-up after the previous submit. A worker compiling a live-settings variant stalls
+no frame and is not counted. The log's `game renderer first frame encoded` line
+gives the same time from the renderer's making to that frame as `pipeline_ms=`
+(`untimed` when the renderer was made, or a frame drawn, on the agent's clock).
+Driver work a pipeline defers to its first use is GPU or encode time, not this. CPU sample
 rings retain 16,384 values. Seekable renders, agent advances and timed binds make
 no CPU frame perf clock calls unless tick spans are armed; samples do not enter hashes.
 `perf world:<surface>` arms exclusive tick spans, exposed in
@@ -1087,7 +1164,7 @@ and browser hashes. [Game README](../README.md) covers clock, save and dev carry
 `RenderError::Capacity { arena, slot, limit }` or `RenderError::Scene(reason)`.
 Mesh centers support transparent sorting; there is no unused sphere-radius API.
 World surfaces retain small work counters by default. A world-state request with
-`perf: true` or `perf_reset: true` arms the five 16,384-sample diagnostic rings;
+`perf: true` or `perf_reset: true` arms the six 16,384-sample diagnostic rings;
 `perf.armed` distinguishes recorded percentiles from the unarmed zero values.
 Arming preserves accumulated counts, means, maxima and cadence; only `perf_reset`
 clears them. The feel probe requests `perf: true`.

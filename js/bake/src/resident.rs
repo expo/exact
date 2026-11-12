@@ -147,8 +147,9 @@ async function compile() {
   // Generated output is not a captured input. Remove it before resolution,
   // so an app's ./app.js import follows the same TS substitution as one-shot.
   rmSync(resolve(stage,'app.js'),{force:true});
-  const { configure, check, dataBundle } = await import(resolve(stage,'__exact_config.mjs'));
+  const { configure, check, dataBundle, prepareCanvas } = await import(resolve(stage,'__exact_config.mjs'));
   configure(stage, true, parseSync);
+  await prepareCanvas(stage, libraries);
   const checking=check(stage,tsc,libraries).then(()=>null,error=>error);
   let failed;
   try {

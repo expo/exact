@@ -363,7 +363,7 @@ enum FrameHealthCardText {
                         source: Source = .exact, paused: Bool, health: FrameHealth) -> Summary {
         let windows = [(0.5, reader.window(0.5)), (5, reader.window(5)), (30, reader.window(30))]
             .map { (window($0.1, nominal: $0.0, source: source).lowercased(), $0.1) }
-        let figures = windows.map { figures($0.1, rates: rates, adaptiveSync: display.adaptiveSync, source: source, count: { String($0) }) }
+        let windowFigures = windows.map { figures($0.1, rates: rates, adaptiveSync: display.adaptiveSync, source: source, count: { String($0) }) }
         let (verdict, detail) = pacing(windows[1].1, rates: rates, adaptiveSync: display.adaptiveSync, source: source, count: { String($0) })
         let requested = rates.requestedHz > 0
             ? "Requested rate: \(Int(rates.requestedHz.rounded())) FPS" + (rates.limited ? ", limited by the system to \(Int(rates.scheduleHz.rounded())) FPS" : "")
@@ -376,7 +376,7 @@ enum FrameHealthCardText {
                 caption(rates, source: source, varied: windows[2].1.counts.epochs > 0),
                 (source.screen ? "Main thread" : "Pacing") + " (\(windows[1].0)): " + [verdict, detail].filter { !$0.isEmpty }.joined(separator: "; ")],
             figures: rows(source).map { name, key in
-                let values = zip(figures, windows).filter { $0.0[keyPath: key] != "—" }.map { "\($0.0[keyPath: key]) (\($0.1.0))" }
+                let values = zip(windowFigures, windows).filter { $0.0[keyPath: key] != "—" }.map { "\($0.0[keyPath: key]) (\($0.1.0))" }
                 return "\(name): " + (values.isEmpty ? "—" : values.joined(separator: ", "))
             },
             results: results(reader: clock ?? reader, health: health, screen: source.screen),

@@ -5,7 +5,7 @@
 use exact_plan::Value;
 use exact_runner::failure::FailureCode;
 use exact_runner::{
-    Answer, DataError, HttpScheduling, Outcome, Redirect, Request, Response, Store,
+    Answer, CacheMode, DataError, HttpScheduling, Outcome, Redirect, Request, Response, Store,
 };
 use serde_json::{json, Value as Json};
 
@@ -27,6 +27,16 @@ pub fn snapshot(store: &Store, grants: &str) -> Vec<(String, Vec<u8>)> {
 /// device observations it made; its `console` lines; and the answer — a
 /// value, the next request (a yield at storage or `fetch`), or an error.
 pub fn encode(result: Result<Answer, DataError>, local: &mut Store, logs: Vec<String>) -> Outcome {
+    encode_optional(result.map(Some), vec![], local, logs)
+}
+
+/// A resource's turn may leave its other fetches in flight (LLP 1162 D2).
+pub fn encode_optional(
+    result: Result<Option<Answer>, DataError>,
+    more: Vec<Request>,
+    local: &mut Store,
+    logs: Vec<String>,
+) -> Outcome {
     let writes: Vec<Json> = local
         .take_writes()
         .into_iter()
@@ -41,14 +51,18 @@ pub fn encode(result: Result<Answer, DataError>, local: &mut Store, logs: Vec<St
         .collect();
     let mut body = json!({"turn": 1, "reads": local.reads(), "topics": local.take_topics(), "writes": writes, "logs": logs});
     match result {
-        Ok(Answer::Now(value)) => body["value"] = Json::String(base64(&value.to_bytes())),
+        Ok(Some(Answer::Now(value))) => body["value"] = Json::String(base64(&value.to_bytes())),
         // A long poll no host may run (LLP 1016.000 D8) is refused before it crosses: the envelope carries
         // no surface, so its far side couldn't tell.
-        Ok(Answer::Later(request)) if request.long_poll_refusal().is_some() => {
+        Ok(Some(Answer::Later(request))) if request.long_poll_refusal().is_some() => {
             let why = request.long_poll_refusal().unwrap_or_default();
             body["error"] = error_json(&unavailable(why));
         }
-        Ok(Answer::Later(request)) => body["request"] = request_json(&request),
+        Ok(Some(Answer::Later(request))) => {
+            body["request"] = request_json(&request);
+            body["more"] = Json::Array(more.iter().map(request_json).collect());
+        }
+        Ok(None) => body["waiting"] = Json::Bool(true),
         Err(error) => body["error"] = error_json(&error),
     }
     Outcome::Response(Response {
@@ -72,6 +86,17 @@ pub fn apply(
     store: &mut Store,
     logs: &mut Vec<String>,
 ) -> Result<Answer, DataError> {
+    apply_optional(outcome, store, logs, &mut Vec::new())?
+        .ok_or_else(|| unavailable("turn reply: no answer"))
+}
+
+/// Apply the turn's writes and observations even while its answer waits.
+pub fn apply_optional(
+    outcome: Outcome,
+    store: &mut Store,
+    logs: &mut Vec<String>,
+    more: &mut Vec<Request>,
+) -> Result<Option<Answer>, DataError> {
     let body = match outcome {
         Outcome::Response(r)
             if r.headers
@@ -118,14 +143,25 @@ pub fn apply(
         return Err(error_from(error));
     }
     if let Some(request) = json.get("request") {
-        return request_from(request).map(Answer::Later);
+        let request = request_from(request)?;
+        let requests = json["more"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(request_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        more.extend(requests);
+        return Ok(Some(Answer::Later(request)));
+    }
+    if json["waiting"] == Json::Bool(true) {
+        return Ok(None);
     }
     let bytes = json["value"]
         .as_str()
         .and_then(unbase64)
         .ok_or_else(|| unavailable("turn reply: no answer"))?;
     Value::from_bytes(&bytes)
-        .map(Answer::Now)
+        .map(|v| Some(Answer::Now(v)))
         .map_err(|e| unavailable(format!("turn reply: {e:?}")))
 }
 
@@ -186,6 +222,7 @@ fn request_json(request: &Request) -> Json {
         "body_from": request.body_from,
         "body_to": request.body_to,
         "redirect": (request.redirect != Redirect::Follow).then(|| request.redirect.name()),
+        "cache": (request.cache != CacheMode::Unspecified).then(|| request.cache.name()),
         "held": request.held.then_some(true),
         "due_ms": request.due_ms,
         "wake_ms": request.wake_ms,
@@ -303,6 +340,8 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         },
         redirect: Redirect::parse(json["redirect"].as_str())
             .map_err(|_| unavailable("turn reply: an invalid redirect mode"))?,
+        cache: CacheMode::parse(json["cache"].as_str())
+            .map_err(|_| unavailable("turn reply: an invalid cache mode"))?,
         held: json["held"].as_bool().unwrap_or(false),
         due_ms: json["due_ms"].as_u64(),
         wake_ms: json["wake_ms"].as_u64(),
@@ -331,6 +370,28 @@ pub fn unbase64(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_cache_mode_crosses_a_module_turn() {
+        for word in [
+            "unspecified",
+            "default",
+            "no-store",
+            "reload",
+            "no-cache",
+            "force-cache",
+            "only-if-cached",
+        ] {
+            let request = Request::get("https://example.test")
+                .cache(CacheMode::parse((word != "unspecified").then_some(word)).unwrap());
+            let wire = request_json(&request);
+            assert_eq!(
+                wire["cache"].as_str(),
+                (word != "unspecified").then_some(word)
+            );
+            assert_eq!(request_from(&wire).unwrap(), request);
+        }
+    }
 
     #[test]
     fn a_turn_round_trips_its_value_writes_reads_and_yields() {

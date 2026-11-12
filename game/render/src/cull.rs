@@ -176,19 +176,21 @@ impl Cull {
             source: wgpu::ShaderSource::Wgsl(crate::pipeline::cull_source().into()),
         });
         let pipeline = |layout: &wgpu::BindGroupLayout, entry: &str| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("game cull"),
-                layout: Some(
-                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("game cull"),
-                        bind_group_layouts: &[Some(layout)],
-                        immediate_size: 0,
-                    }),
-                ),
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache,
+            crate::perf::pipeline(|| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("game cull"),
+                    layout: Some(
+                        &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                            label: Some("game cull"),
+                            bind_group_layouts: &[Some(layout)],
+                            immediate_size: 0,
+                        }),
+                    ),
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache,
+                })
             })
         };
         let storage = |label| Buffer::new(device, 256, wgpu::BufferUsages::STORAGE, label);
@@ -659,19 +661,21 @@ impl Cull {
         });
         let bind = self.test_bind(device, key, current, &out);
         let pipeline = self.probe.get_or_init(|| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("game look cull account"),
-                layout: Some(
-                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("game look cull account"),
-                        bind_group_layouts: &[Some(&self.test_layout)],
-                        immediate_size: 0,
-                    }),
-                ),
-                module: &self.module,
-                entry_point: Some("probe"),
-                compilation_options: Default::default(),
-                cache: None,
+            crate::perf::pipeline(|| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("game look cull account"),
+                    layout: Some(
+                        &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                            label: Some("game look cull account"),
+                            bind_group_layouts: &[Some(&self.test_layout)],
+                            immediate_size: 0,
+                        }),
+                    ),
+                    module: &self.module,
+                    entry_point: Some("probe"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
             })
         });
         let mut pass = encoder.begin_compute_pass(&Default::default());

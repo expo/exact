@@ -834,7 +834,7 @@ pub(super) fn narrow_tab_geometry_follows_root_metrics_and_authored_rows() {
                             rows.button.padding_bottom,
                             rows.button.padding_left
                         ],
-                        [exact_kernel::Dimension::Points(2.0); 4]
+                        [const { exact_kernel::Dimension::Points(2.0) }; 4]
                     );
                 }
             }

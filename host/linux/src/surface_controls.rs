@@ -378,6 +378,14 @@ impl<D: DataSource> Presenter<D> {
             "buttons":buttons,"axes":axes,"at":at}),
         );
     }
+    /// A device key's press that types `text`, not its own character: the
+    /// `key` handlers hear `key`, and its default action types `text`.
+    pub fn hardware_key_typing(&mut self, code: &str, key: &str, text: &str, repeat: bool) {
+        self.key_text = Some(text.to_owned());
+        self.hardware_key(code, key, true, repeat);
+        self.key_text = None;
+    }
+
     /// Route device keys through the same targeted path as agent keys.
     pub fn hardware_key(&mut self, code: &str, key: &str, down: bool, repeat: bool) {
         self.restore_controls();

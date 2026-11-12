@@ -54,9 +54,21 @@ extension NodeView {
             }
         }
         visit(scrollView)
+        func nearer(_ a: CGFloat, _ b: CGFloat) -> Bool {
+            let da = abs(a - proposed.x), db = abs(b - proposed.x)
+            return da < db || (da == db && a < b)
+        }
+        let mounted = positions.min(by: nearer)
+        let distance = mounted.map { abs($0 - proposed.x) } ?? .infinity
+        if distance > 0, targetPositions.isEmpty,
+           presenter?.collections.entries[id]?.snapshot.horizontal == true,
+           let position = presenter?.session?.runtime.collectionSnap(id, proposed: Double(proposed.x),
+                port: Double(scrollView.bounds.width), maximum: Double(maximum), distance: Double(distance)) {
+            positions.append(CGFloat(position))
+        }
         let choices = targetPositions.isEmpty ? positions : targetPositions
         var result = proposed
-        if let nearest = choices.min(by: { abs($0 - proposed.x) < abs($1 - proposed.x) }) { result.x = nearest }
+        if let nearest = choices.min(by: nearer) { result.x = nearest }
         return result
     }
 }

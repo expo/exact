@@ -128,13 +128,16 @@ pub(crate) fn parse_ops(ops: &Value, design: &str) -> Result<Vec<(String, Op)>, 
 }
 
 /// The app's params as the design's folds take them (LLP 1121 D15).
-pub(crate) fn params(app: &contract::tamber_params::AppParams) -> exact_tamber::params::Params {
+pub(crate) fn params(
+    app: &contract::tamber_params::AppParams,
+    file: &str,
+) -> exact_tamber::params::Params {
     // And its packages' tokens (LLP 1121 D11), which every plan folds beside the design.
     let (joined, joined_icons) = contract::tamber_params::joined_all(app);
     exact_tamber::params::Params {
         joined,
         joined_icons,
-        ..contract_lower::params::folds(&app.tokens, &app.identities)
+        ..contract_lower::params::folds(&app.tokens, &app.identities, Some(file))
     }
 }
 
@@ -255,10 +258,11 @@ pub(crate) fn param_values(
                     list,
                     &app.identities,
                     vocab,
+                    Some(file),
                 ))
                 .map(|(line, col, e)| at(*line, *col, e.id, &e.message))
                 .collect();
-        let laid = contract::tamber_params::laid(&design, app);
+        let laid = contract::tamber_params::laid(&design, app, Some(file));
         match exact_tamber::check_design(laid, vocab) {
             Err(all) => refused.extend(all.iter().map(|d| {
                 let mut d = d.clone();

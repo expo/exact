@@ -1244,10 +1244,14 @@ its unknown attributes, and an SVG element's own props, pass to the module as on
 object. A known attribute binds to the module's box, and the box takes only layout,
 box and paint rows, handlers, `testId`, `id`, `class`, `data-*`, `role`, ARIA,
 `disabled` and `inert`; any other known name (`color`, `value`, `command`, `href`)
-is `lower-native-attr` (LLP 1024 D1, LLP 1088 D7.2). A prop a package declares for
-its view goes to the view when written on the tag, even under a known name
-(`exact-camera`'s `object-fit`); a class's rows are still the box's styles, and a
-renamed spelling (`fontSize`) is refused whatever is declared. A capitalized name is a component use, not a
+is `lower-native-attr` (LLP 1024 D1, LLP 1088 D7.2). A package cannot declare a
+view prop whose name writes a layout row (`width`, `padding`, `flex`): the bake
+refuses the declaration with `bake-view-prop-layout`, naming the package, view
+and prop. Other declared props go to the view when written on the tag, even
+under a known name (`exact-camera`'s `object-fit`). A class's rows style only
+the box: `object-fit` in a class never configures the camera's viewfinder;
+write it on `exact-camera` for that. A renamed spelling (`fontSize`) is refused
+whatever is declared. A capitalized name is a component use, not a
 built-in tag. Platform support can further restrict an admitted tag, notably
 native `foreignObject`.
 
@@ -1270,8 +1274,11 @@ each interpolation part of one value that also holds text, outside parentheses
 a concatenation, a `fn` that returns one) is refused
 (`lower-css-shorthand`): write the longhands, each of which may be computed. A computed
 single value (`padding=pad`) is every side's.
-An empty string on any style row declares nothing, as CSSOM's `setProperty(p, "")`:
-the row is unset (`background-color=dot` with `dot` `""`).
+An empty or whitespace-only string explicitly clears a style row: it keeps the
+author's declaration without an own value (inherited on inherited rows, otherwise
+initial). For example, `background-color=dot` with `dot` `""` overrides class and
+platform fills with a transparent background. An absent optional value (`none`)
+removes the binding's declaration and exposes those lower-priority values.
 `border-style` and each `border-<side>-style` accept `none`, `hidden`, `solid`,
 `inset`, `dotted` and `dashed`. The two patterned styles keep their authored
 border widths in layout. AppKit, UIKit and Linux paint their dots and dashes;
@@ -1608,11 +1615,11 @@ component Composer
 
 The web, macOS and iOS draw atoms in the editor and the reader (on Apple the
 reader's pill draws no icon, border, ring or `:hover` paint, and UIKit's smart
-delete takes one of the two spaces an atom's deletion leaves). VoiceOver on macOS and iOS reads
-an atom's label in place and its role only from its own element, which the
-next-item command passes over on macOS and reaches after the field on iOS
-(LLP 1045.000 §10 Q10). Linux, Windows and Android show the source in the
-editor and the link text in the reader, with no `atompress`. The driver's
+delete takes one of the two spaces an atom's deletion leaves). In the editor,
+VoiceOver on macOS and iOS reads an atom's accessible name in place and its
+role from its element after the field. The next-item command reaches each
+atom in source order (LLP 1045.000 §10 Q10). Linux, Windows and Android show
+the source in the editor and the link text in the reader, with no `atompress`. The driver's
 `state atoms` lists each one: its node, kind, source, range, label and frame from the node's top
 left, where `tap <node> at <x> <y>` presses it.
 
@@ -2249,7 +2256,8 @@ unchecks the rest at once, then fires `input` and `change` on it, carrying its
 `value` (`on` when it has none); choosing the checked one fires nothing. With
 a radio focused, ArrowDown and ArrowRight move the focus and the check to the
 next enabled radio of its group, ArrowUp and ArrowLeft to the previous,
-wrapping, each move an `input` and a `change`; Space checks the focused one.
+wrapping. Left and Right reverse when the radio's parent group is right to
+left. Each move fires `input` and `change`; Space checks the focused one.
 `checked` is controlled as a checkbox's: after the action, every radio shows
 its bound `checked` again, so an action that writes nothing snaps the group
 back. The driver's `type <radio> true` checks it as a click does; `false` is
@@ -2314,14 +2322,14 @@ On **web (JS and wasm), macOS, iOS and Linux**, `setRangeText(id, text)` replace
 current selection; `setRangeText(id, text, start, end[, selectionMode])`
 replaces the given UTF-16 range. `selectionMode` is `preserve` by default,
 or `select`, `start`, `end`, following HTML. It does not focus the field or
-apply `maxlength`. On macOS it is one undo step that restores the text before
-it, as on the Markdown editor, wherever the field has an editor (a textarea, or
-an input being edited); without one, or while an input method composes, the
-value is written as the app's own is. On iOS it is no undo step. Both Apple
-hosts clear the edited field's undo history when a value is written. On the web
-it is HTML's, which Chrome makes no undo step, and Linux keeps no field undo
-history. Invalid ranges, modes, unsupported
-input types and missing ids log a refusal without editing. On the Markdown
+apply `maxlength`. On macOS, wherever the field has an editor (a textarea, or
+an input being edited), and on iOS while the field is focused, a changed value
+is one undo step that restores the text and selection before it. On iOS, redo
+also restores the replacement and its selection. Without an editor, without
+focus on iOS, or while an input method composes, the value is written as the
+app's own is, clearing only that field's undo history. On the web it is HTML's,
+which Chrome makes no undo step, and Linux keeps no field undo history. Invalid
+ranges, modes, unsupported input types and missing ids log a refusal without editing. On the Markdown
 editor (web, macOS and iOS) the offsets are the source's and each call is one
 undo step ([Markdown](#markdown-markup-format-select)); Linux refuses it there.
 Windows, Android and terminal do not support this command yet.
@@ -2760,7 +2768,7 @@ argument validation. Use the working implementation when selecting arguments:
 | `blur()`, `blur(id)` | [Messages](../apps/messages/app.contract), [keyboard-bar corpus](../contract/corpus/keyboard-bar.contract) |
 | `selectText(...)` | No app fixture; the hosts' field selection, such as [`FieldSelections.swift`](../host/apple/Sources/ExactKit/FieldSelections.swift) |
 | `setSelectionRange(id, start, end[, direction])`: a text field's or text's selection, by its `id` ([form controls](#form-controls-radio-inputevent-setselectionrange)) | [radios conformance](../host/web-js/conformance/radios.contract), [control tests](../contract/cli/tests/it/controls.rs) |
-| `setRangeText(id, text[, start, end[, selectionMode]])`: a field's range replacement, one `input`, preserve selection by default; one undo step on macOS and on the Markdown editor, none on a plain field elsewhere ([form controls](#form-controls-radio-inputevent-setselectionrange)) | [Chrome comparison](../host/web/tests/field-range.test.mjs) |
+| `setRangeText(id, text[, start, end[, selectionMode]])`: a field's range replacement, one `input`, preserve selection by default; one undo step on macOS, focused iOS fields and the Markdown editor ([form controls](#form-controls-radio-inputevent-setselectionrange)) | [Chrome comparison](../host/web/tests/field-range.test.mjs) |
 | `copyText(text)` | [Messages](../apps/messages/app.contract) |
 | `startTrace_EXPERIMENTAL()`, `stopTrace_EXPERIMENTAL()`: experimental, so named while the trace's fields may still change; a recording of each UI update UIKit makes, observed without asking for one or for a frame rate (iOS and tvOS 18 and later), elsewhere of each display-link callback, from which it estimates the frames the display showed again, from an app's own control and in any build, a production one included; `stopTrace_EXPERIMENTAL()` puts the trace on the clipboard as compact JSON and in a `trace-recording-*.json` file in the app's temporary directory; `stopTrace_EXPERIMENTAL(maxBytes)` copies it cut to that many bytes (its totals and scroll segments as rows, then the frames late the longest first, as many as fit), for a conversation that limits a message (a budget too small for its totals gets a note naming the size that fits them; that note can exceed the requested budget), and still saves the whole trace. On iOS it splits each scroll a person makes of an element's scroller, a route's page or the document into its drag and its glide, with its frame rate and delay relative to the display’s fastest rate; a Mac recording follows no scroller. It lists each late frame with its cause, its scroll offset, its update's phases, the main thread's busy time, its overrun and commit time, batches and host phases; [Frame trace fields](#frame-trace-fields) says what each field means. Apple hosts (tvOS, with no clipboard, only saves the file); the web and Linux refuse it in the journal | [`TraceRecording.swift`](../host/apple/Sources/ExactKit/TraceRecording.swift) |
 | `openURL(url)`: an absolute `http`, `https`, `mailto` or `tel` URL, or one of a scheme app.json's `open_url.schemes` declares (`"open_url": {"schemes": ["vscode", "zed"]}`, an editor's deep link), opened by whatever the system registered for it; the web's JS target, macOS and iOS open declared schemes (a browser asks first) and journal one nothing could open, and under the agent journal them instead (`openURL vscode: …`). `openURL(url, id)` also says whether it opened, as Electron's `shell.openExternal` does: `change` at the element `id` names hears `opened` when the system took the URL, or `failed` when it was refused or nothing could open it (no app registered for its scheme, a host with no browser). The web hears `opened` for any URL it hands the browser, which does not say what opened it. Where the agent's drive journals an open instead, macOS answers whether an app is registered for the URL and the other hosts answer `opened` A link's `href` of a declared scheme opens on macOS and iOS, which hand followed links to `openURL`; the web writes no such `href` (its link policy keeps the four schemes). `file`, `javascript`, `data` and the other schemes that run or read content cannot be declared. Any other scheme is refused in the journal (LLP 1133.000 §2) | No Contract fixture; the hosts' dispatch, such as [`host/web-js/commands.js`](../host/web-js/commands.js), [`OpenURL.swift`](../host/apple/Sources/ExactKit/OpenURL.swift) |

@@ -66,6 +66,30 @@ final class AppFilesLinkTests: XCTestCase {
         XCTAssertNil(AppFileWalk.open(data.appendingPathComponent("linked"), ["secret.png"]), "a root that is a link")
     }
 
+    func testAPackageCanCreateAFileWithoutFollowingLinks() throws {
+        let data = base.appendingPathComponent("data")
+        for names in [["purchases.json"], ["new", "nested", "review.json"], ["photos", "a.png"]] {
+            XCTAssertEqual(AppFileWalk.destination(data, names), names.reduce(data) { $0.appendingPathComponent($1) })
+        }
+        try FileManager.default.createSymbolicLink(at: data.appendingPathComponent("dangling"), withDestinationURL: base.appendingPathComponent("absent"))
+        for names in [["x.png"], ["linked", "new.json"], ["dangling"], ["dangling", "new.json"], [], ["..", "new.json"], ["new", "..", "new.json"], ["photos", ""], ["photos", "a.png", "child"]] {
+            XCTAssertNil(AppFileWalk.destination(data, names), names.joined(separator: "/"))
+        }
+        XCTAssertNil(AppFileWalk.destination(data.appendingPathComponent("linked"), ["new.json"]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: data.appendingPathComponent("purchases.json").path))
+    }
+
+    func testAFileDestinationRefusesAPopulatedDirectory() throws {
+        let data = base.appendingPathComponent("data")
+        let album = data.appendingPathComponent("album.jpg")
+        try FileManager.default.createDirectory(at: album, withIntermediateDirectories: true)
+        let photo = album.appendingPathComponent("a.png")
+        try PNG.write(to: photo)
+        XCTAssertNil(AppFileWalk.destination(data, ["album.jpg"]))
+        XCTAssertEqual(try Data(contentsOf: photo), PNG.bytes)
+        XCTAssertNil(AppFileWalk.destination(data, ["photos"]))
+    }
+
     private enum PNG {
         /// A 1 × 1 opaque PNG.
         static let bytes = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==")!

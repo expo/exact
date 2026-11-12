@@ -36,8 +36,9 @@ final class TextRasterIOSTests: XCTestCase {
         drain(p)
         p.views[2]?.dropTextRaster()
         p.textRasters.dropKept()
-        // The pump the publication woke stays out of it: each test calls it.
+        // Each test drives the rasterizer; completions cannot refill it.
         p.scrollPump.reset()
+        p.textRasters.slotFreed = nil
         return session
     }
     /// Where the list's scroll carries it: the view moves, nothing redraws.
@@ -286,6 +287,9 @@ final class TextRasterIOSTests: XCTestCase {
         window.layoutIfNeeded()
         p.viewport.contentOffset.y = 2000
         drain(p)
+        // Drive each band's admission without the pump refilling the other.
+        p.scrollPump.reset()
+        p.textRasters.slotFreed = nil
         let left = try XCTUnwrap(p.views[2]), right = try XCTUnwrap(p.views[3])
         left.dropTextRaster(); right.dropTextRaster()
         RegionTextExecutor.queue.isSuspended = true

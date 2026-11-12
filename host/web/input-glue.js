@@ -31,16 +31,23 @@ function pointerLine(el, e, lifted = false) {
 }
 /** @ref LLP 1116.004 D5.2 — a `radiogroup` of `radio`s, a value chosen from a few (the segmented
  * control the shell draws), keyed as WAI-ARIA's radio group and a native one: one Tab stop, its
- * checked radio or else its first, set as the Tab key goes down, before the browser moves the
+ * checked eligible radio or else its first eligible one on entry, set as Tab goes down, before the browser moves the
  * focus; and the arrows move the choice, to the next or previous radio, wrapping and past
  * disabled ones (Left and Right mirrored right to left), focused and pressed. */
 const radiosOf = group => viewChildren(group).filter(el => el.getAttribute?.("role") === "radio");
 const radioUsable = el => !el.disabled && el.getAttribute("aria-disabled") !== "true" && el.getClientRects().length > 0;
-const rove = (all, stop) => { for (const r of all) r.tabIndex = r === stop ? 0 : -1; };
+// Both renderers keep authored updates here, even when the DOM already has roving's -1.
+const roveAllowed = el => {
+  if (el.exactAuthoredTabIndex === undefined) el.exactAuthoredTabIndex = el.getAttribute("tabindex");
+  return !(Number(el.exactAuthoredTabIndex) < 0);
+};
+const rove = (all, stop) => {
+  for (const r of all) if (roveAllowed(r)) r.tabIndex = r === stop ? 0 : -1;
+};
 function radioStops(root) {
   for (const group of root.querySelectorAll('[role="radiogroup"]')) {
-    const all = radiosOf(group);
-    rove(all, all.find(r => r.getAttribute("aria-checked") === "true" && radioUsable(r)) ?? all.find(radioUsable));
+    const all = radiosOf(group), live = all.filter(r => radioUsable(r) && roveAllowed(r)), at = document.activeElement;
+    rove(all, all.includes(at) ? at : live.find(r => r.getAttribute("aria-checked") === "true") ?? live[0]);
   }
 }
 /** An arrow on a radio group's radio moves its choice; whether it did. */
@@ -61,8 +68,9 @@ function radioArrow(root, event) {
  * (Up and Down when it is vertical: its `aria-orientation`, or a root tab bar the shell draws as a sidebar), Up and Down
  * in a menu, Home and End to its ends (into the one on top: Up and Down from outside, all four from a menu beneath),
  * wrapping, past disabled ones. The focus moves and nothing is pressed: a tab's press is the app's action (a fetch, in
- * Shelf's Discover), so Enter or Space chooses, as a `<button>` takes them. A tablist is one Tab stop: its selected tab,
- * or the tab the arrows left the focus on. */
+ * Shelf's Discover), so Enter or Space chooses, as a `<button>` takes them. A tablist's entry stop is its selected
+ * eligible tab, or its first eligible tab. While a member has focus, Tab leaves the group in either direction, including from an
+ * authored exclusion or an aria-disabled member. */
 const MENUS = '[role="menu"], [data-exact-chooser]', ROVES = `[role="tablist"], ${MENUS}`;
 const roversOf = group => [...group.querySelectorAll(group.matches(MENUS) ? 'button, a[href], [role^="menuitem"]' : '[role="tab"]')].filter(el => el.closest(ROVES) === group);
 // The open menu on top: the last to open (navigation.js stamps `exactOpened`), which is the top layer's order and not
@@ -70,8 +78,8 @@ const roversOf = group => [...group.querySelectorAll(group.matches(MENUS) ? 'but
 const topMenu = root => [...root.querySelectorAll(`:is(${MENUS}):popover-open`)].sort((a, b) => (a.exactOpened ?? 0) - (b.exactOpened ?? 0)).at(-1);
 function tabStops(root) {
   for (const list of root.querySelectorAll('[role="tablist"]')) {
-    const all = roversOf(list), at = document.activeElement;
-    rove(all, all.includes(at) ? at : all.find(t => t.getAttribute("aria-selected") === "true" && radioUsable(t)) ?? all.find(radioUsable));
+    const all = roversOf(list), live = all.filter(t => radioUsable(t) && roveAllowed(t)), at = document.activeElement;
+    rove(all, all.includes(at) ? at : live.find(t => t.getAttribute("aria-selected") === "true") ?? live[0]);
   }
 }
 /** An arrow, Home or End among a tablist's tabs or a menu's items moves the focus; whether it did. */
@@ -1022,7 +1030,10 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     if (active && active !== document.body && !active.closest("[data-exiting]") && (top.contains(active) || ![by?.el, by?.focus].includes(active))) return; // a focus a leaving element still holds (in a frame or a shadow root, where its blur does not reach) is no one's
     const origin = back ? origins.get(was[was.indexOf(top) + 1]) : null;
     const to = lands(origin) ? origin : titleOf(top) ?? top;
-    if (!to.hasAttribute("tabindex") && to.tabIndex < 0) { to.tabIndex = -1; to.addEventListener("blur", () => to.removeAttribute("tabindex"), { once: true }); }
+    if (!to.hasAttribute("tabindex") && to.tabIndex < 0) {
+      if (to.exactAuthoredTabIndex === undefined) to.exactAuthoredTabIndex = null;
+      to.tabIndex = -1; to.addEventListener("blur", () => to.removeAttribute("tabindex"), { once: true });
+    }
     const focus = () => to.focus({ preventScroll: true, ...(by ? { focusVisible: byKey(by) } : touched ? {} : { focusVisible: false }) }); focus(); if (document.activeElement?.closest("[data-exiting]")) focus(); // from a frame in a shadow root Firefox lands the focus on the second call
   };
   return {

@@ -159,6 +159,61 @@ fn a_bound_row_maps_a_tokens_name_to_its_css() {
     );
 }
 
+fn bound_length_maps(tag: &str, rows: &str) {
+    let plan = plan(
+        tag,
+        DESIGN,
+        &format!("component App\n  state w = \"space.row\"\n  view\n    text \"a\" {rows}\n"),
+    );
+    for development in [false, true] {
+        let out = crate::emit::emit(&plan, false, development).unwrap();
+        let map = |property: &str| {
+            let binding = out
+                .js
+                .split(&format!(",\"{property}\",\"px\",()=>"))
+                .nth(1)
+                .unwrap_or_else(|| panic!("{}", out.js));
+            let name = binding.split('(').next().unwrap();
+            let value = out
+                .js
+                .split(&format!("const {name}="))
+                .nth(1)
+                .and_then(|m| m.split(';').next())
+                .unwrap_or_else(|| panic!("{}", out.js));
+            (name, value)
+        };
+        let (width_name, width) = map("width");
+        let (spacing_name, spacing) = map("letter-spacing");
+        assert!(
+            width.contains("\"space.row\":\"var(--x-space-row)\""),
+            "width: {width}"
+        );
+        assert!(
+            !spacing.contains("\"space.row\":"),
+            "letter-spacing: {spacing}"
+        );
+        assert_ne!(width_name, spacing_name);
+        for value in [width, spacing] {
+            let constant = if development {
+                "\"radius.card\":\"var(--x-radius-card)\""
+            } else {
+                "\"radius.card\":\"6px\""
+            };
+            assert!(value.contains(constant), "{value}");
+        }
+    }
+}
+
+#[test]
+fn width_before_letter_spacing_keeps_their_bound_length_maps_distinct() {
+    bound_length_maps("width-first", "width=w letter-spacing=w");
+}
+
+#[test]
+fn letter_spacing_before_width_keeps_their_bound_length_maps_distinct() {
+    bound_length_maps("spacing-first", "letter-spacing=w width=w");
+}
+
 /// Review round 1: two varying numbers each get a sentinel no other is a
 /// part of; an SVG stroke's length, which css.rs writes unitless, is its
 /// property too; a font weight's number says it is inline, so a change
@@ -338,7 +393,7 @@ fn a_bound_text_shadow_token_marks_its_read() {
         "component App\n  state on = false\n  view\n    text \"a\" text-shadow=(on ? \"glow\" : \"none\")\n",
     );
     let out = crate::emit::emit(&plan, false, false).unwrap();
-    assert!(out.js.contains("const $tt=(M=>v=>typeof v===\"string\"&&Object.hasOwn(M,v.trim())?((globalThis.exact??={}).$th=1,M[v.trim()])"), "{}", out.js);
+    assert!(out.js.contains("const $tti=(M=>v=>typeof v===\"string\"&&Object.hasOwn(M,v.trim())?((globalThis.exact??={}).$th=1,M[v.trim()])"), "{}", out.js);
 }
 
 /// Stage 6 C: a type or family token is written as the kernel resolves each
@@ -549,10 +604,10 @@ fn a_type_tokens_properties_hold_their_edges() {
         "{css}"
     );
     // The column's bound family: its map leaves the varying token standing.
-    assert!(dev.js.contains("const $tly67c="), "{}", dev.js);
+    assert!(dev.js.contains("const $tly67ic="), "{}", dev.js);
     let container = dev
         .js
-        .split("const $tly67c=")
+        .split("const $tly67ic=")
         .nth(1)
         .unwrap()
         .split(";")
@@ -565,7 +620,7 @@ fn a_type_tokens_properties_hold_their_edges() {
     // The text's, the same row with no children: its own map, the property.
     let leaf = dev
         .js
-        .split("const $tly67=")
+        .split("const $tly67i=")
         .nth(1)
         .unwrap_or_else(|| panic!("{}", dev.js))
         .split(";")

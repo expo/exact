@@ -1,6 +1,10 @@
 use super::*;
 #[path = "surface_tests/cosmetics.rs"]
 mod cosmetics;
+#[path = "surface_tests/frames.rs"]
+mod frames;
+#[path = "surface_tests/prepare.rs"]
+mod prepare;
 #[path = "surface_tests/quality.rs"]
 mod quality;
 #[path = "surface_tests/trace.rs"]

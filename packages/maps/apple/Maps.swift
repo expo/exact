@@ -12,8 +12,8 @@
 //   replaced by plain tiles, an `MKTileOverlay` that `canReplaceMapContent`
 //   (§12), so a screenshot is stable and offline; the markers stay MapKit's.
 // - Each marker is a part named by its id (§9 item 3): the map answers
-//   `exactPart:` with the marker's annotation view, where a drive's real
-//   input lands.
+//   `exactPartIds` with those ids and `exactPart:` with the marker's
+//   annotation view, where a drive's real input lands.
 // - The hatch (D5) is given the `MKMapView` after it is made and after each
 //   props change; the module owns its delegate and the annotations it added.
 import ExactPackage
@@ -79,6 +79,7 @@ final class PartedMap: MKMapView {
     #else
     override func layoutSubviews() { super.layoutSubviews(); laidOut() }
     #endif
+    @objc func exactPartIds() -> [String] { markers().map(\.id) }
     /// The annotation view of marker `name` (§9 item 3), the view a
     /// drive's tap aims at; nil when it is not on screen.
     @objc func exactPart(_ name: String) -> AnyObject? {

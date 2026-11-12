@@ -185,19 +185,16 @@ impl Ink {
             b.right().ceil() - b.left().floor() > limit
                 || b.bottom().ceil() - b.top().floor() > limit
         });
-        if !self.rows.capture.is_empty() && oversized {
+        let geometry = (!self.rows.capture.is_empty()).then(|| rows::PathGeometry {
+            path: path.clone(),
+            rule,
+            clips: clips.iter().map(|(p, r)| ((*p).clone(), *r)).collect(),
+            transform: self.record_transform(ts),
+        });
+        if geometry.is_some() && oversized {
             let mut instance = Instance::new(Kind::Coverage, Brush::Solid, [0.; 4]);
             instance.xform = affine(dev);
-            return Ok(Some((
-                instance,
-                Bindings::default(),
-                Some(rows::PathGeometry {
-                    path: path.clone(),
-                    rule,
-                    clips: clips.iter().map(|(p, r)| ((*p).clone(), *r)).collect(),
-                    transform: self.record_transform(ts),
-                }),
-            )));
+            return Ok(Some((instance, Bindings::default(), geometry)));
         }
         let coverage = exact_ink::path::coverage(
             &mut self.paths,
@@ -218,7 +215,7 @@ impl Ink {
                     path: c.entry.texture,
                     ..Default::default()
                 },
-                None,
+                geometry,
             )
         }))
     }

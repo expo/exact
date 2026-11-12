@@ -3,6 +3,7 @@
 //! the module's background work under one round at a time, every operation
 //! of the module runs in one queue in the order issued, and what fails is
 //! journaled.
+#![cfg(exact_js_engine)]
 use super::storage::{args, call, plan, text, Root, GRANTS};
 use exact_js::Module;
 use exact_kernel::{Kernel, PropId};

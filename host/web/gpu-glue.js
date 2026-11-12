@@ -442,10 +442,15 @@ function frame(now) {
   // Bootstrap and subsequent stable fits reach the module once per real change.
   const period = pace.period_ms;
   if (period !== sentPeriod && gpu) { sentPeriod = period; gpu.gpu_period(period); }
+  // The callback's own time and when it ran, for a world's FrameView.time; the web has no thermal state.
+  gpu?.gpu_host_frame?.(now, performance.now(), 0, 0);
   let more = false;
   for (const entry of surfaces.values()) {
     if (!entry.id || entry.terminal) continue;
-    if (entry.wants || gpu.gpu_dirty(entry.id)) render(entry, at);
+    const owed = entry.wants || gpu.gpu_dirty(entry.id);
+    // Under its frame-rate cap (Surface::max_fps) a canvas skips the callbacks before its deadline.
+    if (owed && gpu.gpu_due?.(entry.id, clockFor(at)) === false) { more = true; continue; }
+    if (owed) render(entry, at);
     more ||= entry.wants;
   }
   flush();
@@ -481,7 +486,9 @@ function create(entry, module, carry) {
   }
 }
 function attach(entry) {
-  entry.observer = new ResizeObserver(() => { if (entry.id && !entry.terminal) { render(entry, frameAt ?? performance.now()); flush(); } });
+  // A canvas that rested draws again at its new size, at the present time (its last frame's is
+  // the start of its rest); one that now wants more frames gets them.
+  entry.observer = new ResizeObserver(() => { if (entry.id && !entry.terminal) { render(entry, entry.wants ? frameAt ?? performance.now() : performance.now()); flush(); if (entry.wants) schedule(); } });
   entry.observer.observe(entry.el);
   entry.wantsInput = gpu.gpu_wants_input(entry.id);
   entry.hdr = gpu.gpu_high_dynamic_range?.(entry.id) === true;

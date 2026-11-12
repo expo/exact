@@ -575,8 +575,8 @@ pub(super) fn checkbox(
 /// box where the author sized it, as a page's checkbox grows with its box.
 fn drawn(node: &NodeRef<'_>, row: usize) -> f32 {
     let sized = |id, d| node.style.mask.has(id) && d != exact_kernel::Dimension::Auto;
-    let authored =
-        sized(StyleId::Width, node.style.width) || sized(StyleId::Height, node.style.height);
+    let authored = sized(StyleId::Width, node.style.width.clone())
+        || sized(StyleId::Height, node.style.height.clone());
     if authored {
         f32::INFINITY
     } else {

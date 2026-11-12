@@ -198,11 +198,13 @@ pub(crate) const PCF_SOFT: usize = 256;
 pub(crate) const PREPASS: usize = 512;
 /// Model forward variant bits beyond the primitive ones they share (shadowed 1,
 /// fogged 2, PCF-soft and prepass): double-sided 4, blended 8, mirrored 16,
-/// opaque without coverage fading 32, untextured 64, one cascade 128, and direct
-/// (`MODEL_DIRECT`, tonemapped into the target's format).
+/// opaque without coverage fading 32, untextured 64, one cascade 128, direct
+/// (`MODEL_DIRECT`, tonemapped into the target's format) and layered.
 pub(crate) const MODEL_DIRECT: usize = 1024;
+/// A clearcoat or sheen (`model_pipeline::layered`): their lobes compile in.
+pub(crate) const MODEL_LAYERED: usize = 8192;
 /// A model build key's uniform-driven fallback, never an index.
-pub(crate) const MODEL_GENERAL: usize = 8192;
+pub(crate) const MODEL_GENERAL: usize = 16384;
 pub(crate) const MODEL_BILINEAR: usize = 4096;
 pub(crate) const BILINEAR: usize = 1024;
 const PRIMITIVE_GENERAL: usize = 2048;
@@ -506,34 +508,40 @@ impl Pipelines {
                 bind_group_layouts: &[Some(&scene_layout), Some(&camera_layout)],
                 immediate_size: 0,
             });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("game shadow"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shaders[1],
-                    entry_point: Some("vs_shadow"),
-                    buffers: &vertex_layout,
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shaders[1],
-                    entry_point: Some("fs_shadow"),
-                    targets: &[],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    front_face: if i != 0 {
-                        wgpu::FrontFace::Cw
-                    } else {
-                        wgpu::FrontFace::Ccw
+            crate::perf::pipeline(|| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("game shadow"),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &shaders[1],
+                        entry_point: Some("vs_shadow"),
+                        buffers: &vertex_layout,
+                        compilation_options: Default::default(),
                     },
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..Default::default()
-                },
-                depth_stencil: scene_depth(true, wgpu::CompareFunction::Less, Default::default()),
-                multisample: Default::default(),
-                multiview_mask: None,
-                cache: cache.handle.as_ref(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shaders[1],
+                        entry_point: Some("fs_shadow"),
+                        targets: &[],
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        front_face: if i != 0 {
+                            wgpu::FrontFace::Cw
+                        } else {
+                            wgpu::FrontFace::Ccw
+                        },
+                        cull_mode: Some(wgpu::Face::Back),
+                        ..Default::default()
+                    },
+                    depth_stencil: scene_depth(
+                        true,
+                        wgpu::CompareFunction::Less,
+                        Default::default(),
+                    ),
+                    multisample: Default::default(),
+                    multiview_mask: None,
+                    cache: cache.handle.as_ref(),
+                })
             })
         });
         let sky = sky_pipeline(
@@ -613,32 +621,34 @@ impl Pipelines {
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
         });
-        let bright_split = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("game bloom bright split"),
-            layout: Some(
-                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("game bloom bright split"),
-                    bind_group_layouts: &[Some(&bloom_layout)],
-                    immediate_size: 0,
+        let bright_split = crate::perf::pipeline(|| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("game bloom bright split"),
+                layout: Some(
+                    &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("game bloom bright split"),
+                        bind_group_layouts: &[Some(&bloom_layout)],
+                        immediate_size: 0,
+                    }),
+                ),
+                vertex: wgpu::VertexState {
+                    module: &shaders[4],
+                    entry_point: Some("vs"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shaders[4],
+                    entry_point: Some("bright_split"),
+                    targets: &[split_target.clone(), split_target],
+                    compilation_options: Default::default(),
                 }),
-            ),
-            vertex: wgpu::VertexState {
-                module: &shaders[4],
-                entry_point: Some("vs"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shaders[4],
-                entry_point: Some("bright_split"),
-                targets: &[split_target.clone(), split_target],
-                compilation_options: Default::default(),
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: cache.handle.as_ref(),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: cache.handle.as_ref(),
+            })
         });
         let bright_join = make_pipeline(
             device,
@@ -697,8 +707,10 @@ pub(crate) struct ModelPipelines {
     pub cache: Option<wgpu::PipelineCache>,
     pub material: wgpu::BindGroupLayout,
     pub instance: wgpu::BindGroupLayout,
-    pub forward: std::sync::Arc<[OnceLock<wgpu::RenderPipeline>; MODEL_GENERAL]>,
-    pub fallback: [OnceLock<wgpu::RenderPipeline>; 2048],
+    /// `MODEL_GENERAL` slots, on the heap: built on the stack they overflow a test thread's.
+    pub forward: std::sync::Arc<[OnceLock<wgpu::RenderPipeline>]>,
+    /// By class; a layered class's 2048 above its unlayered twin's.
+    pub fallback: Box<[OnceLock<wgpu::RenderPipeline>]>,
     #[cfg(not(target_arch = "wasm32"))]
     workers: Specializations,
     pub camera_depth: [OnceLock<wgpu::RenderPipeline>; 16],
@@ -812,8 +824,8 @@ impl Pipelines {
                 cache: self.cache.handle.clone(),
                 material,
                 instance,
-                forward: std::sync::Arc::new(std::array::from_fn(|_| OnceLock::new())),
-                fallback: std::array::from_fn(|_| OnceLock::new()),
+                forward: (0..MODEL_GENERAL).map(|_| OnceLock::new()).collect(),
+                fallback: (0..4096).map(|_| OnceLock::new()).collect(),
                 #[cfg(not(target_arch = "wasm32"))]
                 workers: Specializations::default(),
                 camera_depth: std::array::from_fn(|_| OnceLock::new()),
@@ -865,15 +877,17 @@ impl Pipelines {
             return pipeline;
         }
         {
-            let class = key & (4 | 8 | 16 | 64 | PREPASS | MODEL_DIRECT);
+            let class = key & (4 | 8 | 16 | 64 | PREPASS | MODEL_DIRECT | MODEL_LAYERED);
+            let fallback_index =
+                |class: usize| class & 2047 | usize::from(class & MODEL_LAYERED != 0) << 11;
             #[cfg(target_arch = "wasm32")]
-            let first = family.fallback[class].get().is_none();
+            let first = family.fallback[fallback_index(class)].get().is_none();
             // Uniform-driven opaque and coverage programs handle live settings.
             // The opaque fallback must retain early depth while a worker specializes it.
-            let coverage =
-                family.fallback[class].get_or_init(|| make(class | MODEL_GENERAL | 3, false));
+            let coverage = family.fallback[fallback_index(class)]
+                .get_or_init(|| make(class | MODEL_GENERAL | 3, false));
             let opaque = (class & 8 == 0).then(|| {
-                family.fallback[class | 32]
+                family.fallback[fallback_index(class | 32)]
                     .get_or_init(|| make(class | MODEL_GENERAL | 3 | 32, false))
             });
             let fallback = if key & 32 != 0 {
@@ -1210,48 +1224,50 @@ pub(crate) fn make_pipeline(
             wgpu::ColorWrites::empty()
         },
     })];
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some(vs),
-            buffers,
-            compilation_options: Default::default(),
-        },
-        fragment: fs.map(|entry| wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(entry),
-            targets: if format == wgpu::TextureFormat::Depth32Float {
-                &[]
-            } else {
-                &targets
+    crate::perf::pipeline(|| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some(vs),
+                buffers,
+                compilation_options: Default::default(),
             },
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants,
+            fragment: fs.map(|entry| wgpu::FragmentState {
+                module: shader,
+                entry_point: Some(entry),
+                targets: if format == wgpu::TextureFormat::Depth32Float {
+                    &[]
+                } else {
+                    &targets
+                },
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants,
+                    ..Default::default()
+                },
+            }),
+            primitive: wgpu::PrimitiveState {
+                front_face: if mirrored {
+                    wgpu::FrontFace::Cw
+                } else {
+                    wgpu::FrontFace::Ccw
+                },
+                cull_mode: if buffers.is_empty() {
+                    None
+                } else {
+                    Some(wgpu::Face::Back)
+                },
                 ..Default::default()
             },
-        }),
-        primitive: wgpu::PrimitiveState {
-            front_face: if mirrored {
-                wgpu::FrontFace::Cw
-            } else {
-                wgpu::FrontFace::Ccw
+            depth_stencil,
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
             },
-            cull_mode: if buffers.is_empty() {
-                None
-            } else {
-                Some(wgpu::Face::Back)
-            },
-            ..Default::default()
-        },
-        depth_stencil,
-        multisample: wgpu::MultisampleState {
-            count: samples,
-            ..Default::default()
-        },
-        multiview_mask: None,
-        cache,
+            multiview_mask: None,
+            cache,
+        })
     })
 }
 
@@ -1349,14 +1365,14 @@ struct Attempt {
 struct Specializations(std::sync::Mutex<Workers>);
 #[cfg(not(target_arch = "wasm32"))]
 struct Workers {
-    attempts: [Attempt; MODEL_GENERAL],
+    attempts: Box<[Attempt]>,
     handles: Vec<(usize, std::thread::JoinHandle<()>)>,
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl Default for Specializations {
     fn default() -> Self {
         Self(std::sync::Mutex::new(Workers {
-            attempts: [Attempt::default(); MODEL_GENERAL],
+            attempts: vec![Attempt::default(); MODEL_GENERAL].into_boxed_slice(),
             handles: Vec::new(),
         }))
     }

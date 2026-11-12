@@ -376,7 +376,7 @@ const look = q => {
 };
 Sounds.transportAnswer = Answer;
 Sounds.gate = () => { Pending = null; if (Seqs.length) Pending = untracked(() => Seqs.map(look)); };
-Sounds.stood = () => { const seen = Pending; Pending = null; if (seen) stood(seen); };
+Sounds.stood = () => { const seen = Pending; Pending = null; if (seen) stood(seen); else T()?.flush(); };
 // The beat at `t` while a sequence plays, by the segment that holds it; −1 while stopped or waiting (a MIDI input's `beat`).
 // Following a clock, by the one segment hits are issued under: its segments do not join (D9).
 Sounds.beatAt = t => Owner == null || State === 'waiting' || !Segments.length ? -1 : beatAt(Follow ? seg() : Segments.findLast(g => g.at <= t) ?? Segments[0], t);

@@ -165,7 +165,7 @@ test('launch colours and the dark empty web shell match the first frame', async 
       const firstFrame = await session.carrier.evaluate(`getComputedStyle(
         document.querySelector('[data-testid="app"]').firstElementChild).backgroundColor`);
       const hex = '#' + firstFrame.match(/\d+/g).map(n => Number(n).toString(16).padStart(2, '0')).join('');
-      const launch = scheme === 'light' ? manifest.background_color : manifest.background_color_dark;
+      const launch = scheme === 'light' ? manifest.background_color : manifest.color_scheme_dark?.background_color;
       if (launch !== hex) failures.push({ scheme, launch, firstFrame: hex });
       if (scheme === 'dark') {
         // Disable scripts to observe the built shell before any app nodes mount.

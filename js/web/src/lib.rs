@@ -1047,6 +1047,7 @@ mod tests {
                 target: Target::Mutation(0),
                 source: "source",
                 args: &[Value::str("ab")],
+                fetch: None,
                 continuation: Some(1),
             }],
         );
@@ -1255,10 +1256,8 @@ mod tests {
 mod overlay_probe_tests {
     use super::overlay_present;
 
-    /// Only an explicit answer decides: `{has: false}` is no overlay, `{has:
-    /// true}` (a page realm with one, or a worker realm, which can't say) is
-    /// one, and a probe that threw or answered nothing usable fails, as the
-    /// overlay call's own failure did.
+    /// Only an explicit boolean decides whether a realm has an overlay;
+    /// a probe that threw or answered nothing usable fails.
     #[test]
     fn only_an_explicit_answer_decides_whether_a_realm_has_an_overlay() {
         assert!(!overlay_present(br#"{"has":false}"#).unwrap());

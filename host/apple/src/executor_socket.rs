@@ -230,6 +230,8 @@ fn frame(shared: &Shared, ticket: u64, message: Message, limit: usize) -> Frame 
     }
     exact_runner::stream_timing::received(ticket);
     state.completed[lane].push_back(Completed {
+        cached: false,
+        finished_at: std::time::Instant::now(),
         elapsed_ms,
         ticket,
         outcome: Outcome::Message(message),

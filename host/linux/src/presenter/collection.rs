@@ -383,16 +383,16 @@ fn geometry(kernel: &Kernel, snapshot: &CollectionSnapshot, viewport: f64) -> Op
     // pair, and the inner port along each axis.
     let (origin, end, cross_pad, main, port_cross) = match axis {
         ListAxis::Vertical => (
-            pad(s.padding_top),
-            pad(s.padding_bottom),
-            pad(s.padding_left) + pad(s.padding_right),
+            pad(s.padding_top.clone()),
+            pad(s.padding_bottom.clone()),
+            pad(s.padding_left.clone()) + pad(s.padding_right.clone()),
             height,
             width,
         ),
         ListAxis::Horizontal => (
-            pad(s.padding_left),
-            pad(s.padding_right),
-            pad(s.padding_top) + pad(s.padding_bottom),
+            pad(s.padding_left.clone()),
+            pad(s.padding_right.clone()),
+            pad(s.padding_top.clone()) + pad(s.padding_bottom.clone()),
             width,
             height,
         ),
@@ -533,10 +533,10 @@ impl<D: DataSource> Presenter<D> {
                 ScrollPort {
                     size: (node.frame.width, node.frame.height),
                     padding: [
-                        style.padding_top,
-                        style.padding_right,
-                        style.padding_bottom,
-                        style.padding_left,
+                        style.padding_top.clone(),
+                        style.padding_right.clone(),
+                        style.padding_bottom.clone(),
+                        style.padding_left.clone(),
                     ]
                     .map(|d| length(kernel, d, basis)),
                     borders: style.border_widths(),

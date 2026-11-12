@@ -70,7 +70,7 @@ pub fn link() {
 }
 
 /// A minimum breadth in `minmax()` (CSS does not admit a flexible minimum).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum GridTrackMin {
     /// Layout points.
     Points(f32),
@@ -87,7 +87,7 @@ pub enum GridTrackMin {
 }
 
 /// A maximum breadth in `minmax()`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum GridTrackMax {
     /// A flexible fraction of the free space.
     Fr(f32),
@@ -115,7 +115,7 @@ pub enum GridFitContent {
 }
 
 /// One non-repeated CSS grid track.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum GridTrack {
     /// A flexible fraction of the free space.
     Fr(f32),
@@ -211,9 +211,9 @@ impl GridTracks {
         #[cfg(not(target_arch = "wasm32"))]
         let line_names: Vec<Vec<String>> = vec![Vec::new(); tracks.len().saturating_add(1)];
         #[cfg(target_arch = "wasm32")]
-        let finite = tracks.iter().copied().all(track_finite);
+        let finite = tracks.iter().cloned().all(track_finite);
         #[cfg(target_arch = "wasm32")]
-        let valid = tracks.len() <= MAX_GRID_TRACKS && tracks.iter().copied().all(track_valid);
+        let valid = tracks.len() <= MAX_GRID_TRACKS && tracks.iter().cloned().all(track_valid);
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             components: tracks.into_iter().map(GridTrackComponent::Single).collect(),
@@ -343,8 +343,8 @@ impl GridTracks {
         return false;
         #[cfg(not(target_arch = "wasm32"))]
         self.components.iter().any(|c| match c {
-            GridTrackComponent::Single(t) => track_reads_rem(*t),
-            GridTrackComponent::Repeat(r) => r.tracks.iter().copied().any(track_reads_rem),
+            GridTrackComponent::Single(t) => track_reads_rem(t.clone()),
+            GridTrackComponent::Repeat(r) => r.tracks.iter().cloned().any(track_reads_rem),
         })
     }
 
@@ -423,7 +423,9 @@ fn tracks_valid(components: &[GridTrackComponent], line_names: &[Vec<String>], c
 #[cfg(not(target_arch = "wasm32"))]
 fn component_to_taffy(value: &GridTrackComponent, env: &Env) -> TaffyComponent<String> {
     match value {
-        GridTrackComponent::Single(track) => TaffyComponent::Single(track_to_taffy(*track, env)),
+        GridTrackComponent::Single(track) => {
+            TaffyComponent::Single(track_to_taffy(track.clone(), env))
+        }
         GridTrackComponent::Repeat(repeat) => TaffyComponent::Repeat(TaffyRepeat {
             count: match repeat.count {
                 GridRepeatCount::Count(n) => TaffyRepeatCount::Count(n),
@@ -431,14 +433,14 @@ fn component_to_taffy(value: &GridTrackComponent, env: &Env) -> TaffyComponent<S
                 GridRepeatCount::AutoFit => TaffyRepeatCount::AutoFit,
             },
             tracks: (repeat.tracks.iter())
-                .map(|t| track_to_taffy(*t, env))
+                .map(|t| track_to_taffy(t.clone(), env))
                 .collect(),
             line_names: repeat.line_names.clone(),
         }),
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum GridTrackMaxExpanded {
     Track(GridTrackMax),
     FitContentPoints(f32),
@@ -504,14 +506,14 @@ fn max_from_taffy(value: TaffyMax) -> Option<GridTrackMaxExpanded> {
 
 fn component_finite(value: &GridTrackComponent) -> bool {
     match value {
-        GridTrackComponent::Single(track) => track_finite(*track),
-        GridTrackComponent::Repeat(repeat) => repeat.tracks.iter().copied().all(track_finite),
+        GridTrackComponent::Single(track) => track_finite(track.clone()),
+        GridTrackComponent::Repeat(repeat) => repeat.tracks.iter().cloned().all(track_finite),
     }
 }
 
 fn component_valid(value: &GridTrackComponent) -> bool {
     match value {
-        GridTrackComponent::Single(track) => track_valid(*track),
+        GridTrackComponent::Single(track) => track_valid(track.clone()),
         GridTrackComponent::Repeat(repeat) => {
             !repeat.tracks.is_empty()
                 && repeat.line_names.len() == repeat.tracks.len().saturating_add(1)
@@ -521,7 +523,7 @@ fn component_valid(value: &GridTrackComponent) -> bool {
                     .flatten()
                     .all(|name| valid_grid_ident(name))
                 && !matches!(repeat.count, GridRepeatCount::Count(0))
-                && repeat.tracks.iter().copied().all(track_valid)
+                && repeat.tracks.iter().cloned().all(track_valid)
         }
     }
 }
@@ -559,7 +561,7 @@ fn component_css(value: &GridTrackComponent) -> String {
             let components = repeat
                 .tracks
                 .iter()
-                .copied()
+                .cloned()
                 .map(GridTrackComponent::Single)
                 .collect::<Vec<_>>();
             format!(
@@ -584,8 +586,8 @@ fn line_names_css(names: &[String]) -> String {
 
 fn component_is_fixed(value: &GridTrackComponent) -> bool {
     match value {
-        GridTrackComponent::Single(track) => track_is_fixed(*track),
-        GridTrackComponent::Repeat(repeat) => repeat.tracks.iter().copied().all(track_is_fixed),
+        GridTrackComponent::Single(track) => track_is_fixed(track.clone()),
+        GridTrackComponent::Repeat(repeat) => repeat.tracks.iter().cloned().all(track_is_fixed),
     }
 }
 
@@ -633,7 +635,7 @@ fn track_finite(value: GridTrack) -> bool {
 }
 
 fn track_valid(value: GridTrack) -> bool {
-    track_finite(value)
+    track_finite(value.clone())
         && match value {
             GridTrack::Fr(v) | GridTrack::Points(v) | GridTrack::Percent(v) => v >= 0.0,
             GridTrack::FitContent(GridFitContent::Points(v) | GridFitContent::Percent(v)) => {
@@ -650,7 +652,7 @@ fn scalar(value: f32, suffix: &str) -> String {
 }
 
 fn track_css(value: &GridTrack) -> String {
-    match *value {
+    match value.clone() {
         GridTrack::Fr(v) => scalar(v, "fr"),
         GridTrack::Points(v) => scalar(v, "px"),
         GridTrack::Percent(v) => scalar(v, "%"),

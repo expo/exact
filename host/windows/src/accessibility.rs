@@ -96,7 +96,9 @@ impl Access {
                     (Action::Focus, _) => {
                         p.access_focus_node(id, now);
                     }
-                    (Action::Click, _) => {
+                    // A select's Expand and Collapse press it: the press
+                    // opens its menu, and closes it while open.
+                    (Action::Click | Action::Expand | Action::Collapse, _) => {
                         p.access_act(id, act::CLICK, 0., now);
                     }
                     (Action::ShowContextMenu, _) => {
@@ -365,6 +367,8 @@ fn map_node(
         role::EDIT | role::FIELD => Role::TextInput,
         role::TABLIST => Role::TabList,
         role::DROPDOWN => Role::ComboBox,
+        role::LIST_BOX => Role::ListBox,
+        role::OPTION => Role::ListBoxOption,
         // @ref LLP 1153 D7 — HTML's table and description list (HTML-AAM).
         role::TABLE => Role::Table,
         role::CAPTION => Role::Caption,
@@ -409,9 +413,20 @@ fn map_node(
     }
     if flags & flag::SELECTED != 0 {
         node.set_selected(true);
+    } else if source.role == role::OPTION {
+        // UI Automation offers SelectionItem only where a selection is said.
+        node.set_selected(false);
     }
     if flags & flag::EXPANDABLE != 0 {
-        node.set_expanded(flags & flag::EXPANDED != 0);
+        let expanded = flags & flag::EXPANDED != 0;
+        node.set_expanded(expanded);
+        if flags & flag::CLICK != 0 {
+            node.add_action(if expanded {
+                Action::Collapse
+            } else {
+                Action::Expand
+            });
+        }
     }
     if flags & flag::ASSERTIVE != 0 {
         node.set_live(Live::Assertive);
@@ -449,8 +464,10 @@ fn map_node(
             node.add_action(Action::SetValue);
         }
     }
-    if source.role == role::SCROLLER {
-        node.add_action(Action::Focus);
+    if matches!(source.role, role::SCROLLER | role::LIST_BOX) {
+        if source.role == role::SCROLLER {
+            node.add_action(Action::Focus);
+        }
         let sideways = flags & flag::SIDEWAYS != 0;
         if sideways {
             node.set_scroll_x(source.range[0].into());
@@ -557,10 +574,39 @@ mod tests {
             (role::DESCRIPTION_LIST, Role::DescriptionList),
             (role::TERM, Role::Term),
             (role::DEFINITION, Role::Definition),
+            (role::LIST_BOX, Role::ListBox),
+            (role::OPTION, Role::ListBoxOption),
         ] {
             let node = map_node(&source(from), (0., 0.), false, false, false);
             assert_eq!(node.role(), to, "role {from}");
         }
+    }
+
+    /// A select is a combobox with UI Automation's ExpandCollapse, and its
+    /// open menu's options each have a selection for SelectionItem.
+    #[test]
+    fn accessibility_select_expands_and_its_options_are_selectable() {
+        let mut source = source(role::DROPDOWN);
+        source.flags = flag::CLICK | flag::EXPANDABLE;
+        let closed = map_node(&source, (0., 0.), false, false, false);
+        assert_eq!(closed.is_expanded(), Some(false));
+        assert!(closed.supports_action(Action::Expand));
+        assert!(!closed.supports_action(Action::Collapse));
+        source.flags |= flag::EXPANDED;
+        let open = map_node(&source, (0., 0.), false, false, false);
+        assert!(open.supports_action(Action::Collapse));
+        source.role = role::OPTION;
+        source.flags = flag::CLICK;
+        let option = map_node(&source, (0., 0.), false, false, false);
+        assert_eq!(option.is_selected(), Some(false));
+        assert!(option.supports_action(Action::Click));
+        source.role = role::LIST_BOX;
+        source.flags = flag::FORWARD;
+        source.range = [0., 900., 0.];
+        let list = map_node(&source, (0., 0.), false, false, false);
+        assert_eq!(list.scroll_y_max(), Some(900.));
+        assert!(list.supports_action(Action::ScrollDown));
+        assert!(!list.supports_action(Action::Focus));
     }
 
     #[test]

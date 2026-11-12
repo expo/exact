@@ -8,6 +8,21 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "std")]
 use std::sync::Arc;
 
+/// An owner compares by identity, as its opaque calculation handle does.
+#[cfg(all(feature = "calc", any(feature = "alloc", feature = "std")))]
+#[derive(Clone)]
+pub struct CalcOwner(Arc<dyn Send + Sync>);
+#[cfg(all(feature = "calc", any(feature = "alloc", feature = "std")))]
+impl PartialEq for CalcOwner {
+    fn eq(&self, other: &Self) -> bool { Arc::ptr_eq(&self.0, &other.0) }
+}
+#[cfg(all(feature = "calc", any(feature = "alloc", feature = "std")))]
+impl core::fmt::Debug for CalcOwner {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "CalcOwner({:p})", Arc::as_ptr(&self.0))
+    }
+}
+
 /// Grid and multi-column fields stored apart from the common style fields.
 #[derive(Clone, PartialEq, Debug)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -16,6 +31,10 @@ pub struct RareStyle<S: CheapCloneStr = DefaultCheapStr> {
     /// Keeps the custom identifier type when grid layout is disabled.
     #[cfg_attr(feature = "serde", serde(skip))]
     pub dummy: core::marker::PhantomData<S>,
+    /// Owners of opaque calculation handles in this style, including its grid tracks.
+    #[cfg(all(feature = "calc", any(feature = "alloc", feature = "std")))]
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub calc_owners: crate::sys::Vec<CalcOwner>,
     // Grid container properties
     /// Defines the track sizing functions (heights) of the grid rows
     #[cfg(feature = "grid")]
@@ -60,9 +79,17 @@ pub struct RareStyle<S: CheapCloneStr = DefaultCheapStr> {
 }
 
 impl<S: CheapCloneStr> RareStyle<S> {
+    /// Keep an opaque calculation alive for this style and every clone of it.
+    #[cfg(all(feature = "calc", any(feature = "alloc", feature = "std")))]
+    pub fn keep_calc<T: Send + Sync + 'static>(&mut self, owner: Arc<T>) {
+        self.calc_owners.push(CalcOwner(owner));
+    }
+
     /// Initial values, without allocating.
     pub const DEFAULT: Self = Self {
         dummy: core::marker::PhantomData,
+        #[cfg(all(feature = "calc", any(feature = "alloc", feature = "std")))]
+        calc_owners: crate::sys::Vec::new(),
         // Grid
         #[cfg(feature = "grid")]
         grid_template_rows: GridTrackVec::new(),

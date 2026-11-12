@@ -54,7 +54,7 @@ impl<D: DataSource> Runner<D> {
     /// stages), with the batches of earlier turns the host has not taken.
     /// Without a reader, the count the last publication left.
     pub(super) fn snapshot_sockets(&mut self) {
-        let mut snapshot = Vec::new();
+        let (mut snapshot, mut open) = (Vec::new(), Vec::new());
         for p in &mut self.pending {
             let (Target::Resource(i), Some(socket)) =
                 (p.target, p.stream.as_mut().and_then(|s| s.socket.as_mut()))
@@ -70,9 +70,52 @@ impl<D: DataSource> Runner<D> {
                     .filter(|(t, ..)| *t == p.ticket)
                     .map(|(.., op)| op.size() as u64);
                 snapshot.push((i, socket.buffered + held.sum::<u64>()));
+                open.push((i, p.ticket));
             }
         }
         self.store.set_socket_buffered(snapshot);
+        self.store.set_socket_open(open);
+    }
+
+    /// The answer to a mutation's send (`target`), which may send on its module's open sockets
+    /// through a Rust handle (LLP 1016.003 D4).
+    pub(super) fn answer_mutation(
+        &mut self,
+        target: Target,
+        source: &str,
+        args: &[Value],
+    ) -> Result<Answer, DataError> {
+        self.store.set_socket_call(crate::SocketCall::Mutation);
+        let answer = self.data.answer_for(target, &mut self.store, source, args);
+        self.store.end_socket_call(answer)
+    }
+
+    /// `p`'s source parses `outcome`. Answering a message of a resource's
+    /// own two-way socket (`open` or a frame) it is the socket's mapper, and
+    /// a Rust handle may send on that socket (LLP 1016.003 D4).
+    pub(super) fn parse_frame(
+        &mut self,
+        p: &PendingReq,
+        message: bool,
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        let socket = p.stream.and_then(|s| s.socket);
+        let call = match p.target {
+            Target::Resource(i) if message && socket.is_some_and(|s| s.listen.is_none()) => {
+                crate::SocketCall::Mapper(crate::Socket::new(i, p.ticket))
+            }
+            _ => crate::SocketCall::None,
+        };
+        self.store.set_socket_call(call);
+        let parsed = self.data.parse_fetch_for(
+            p.target,
+            p.fetch,
+            &mut self.store,
+            &p.source,
+            &p.args,
+            outcome,
+        );
+        self.store.end_socket_call(parsed)
     }
 
     /// Read each long poll's backoff wait from the host with `reader`, for

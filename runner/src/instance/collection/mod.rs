@@ -15,6 +15,7 @@ mod reorder_group;
 mod reorder_tests;
 mod reuse;
 pub(crate) mod shown;
+mod snap;
 use shown::in_collection_row;
 mod start;
 #[cfg(test)]

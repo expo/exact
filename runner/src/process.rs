@@ -102,6 +102,7 @@ impl Request {
             body_from: None,
             body_to: None,
             redirect: Redirect::Follow,
+            cache: Default::default(),
             held: false,
             listen: None,
             reach: Default::default(),

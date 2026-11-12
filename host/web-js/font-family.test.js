@@ -5,6 +5,8 @@ test('runtime family lists preserve installed names and portable generic fallbac
   expect(fontFamily('"Comma, Family", ui-monospace, Georgia')).toBe('"Comma, Family",ui-monospace,monospace, Georgia');
   expect(fontFamily("'ui-serif', ui-serif")).toBe("'ui-serif',ui-serif,serif");
   expect(fontFamily('Arial, sans-serif')).toBe('Arial, sans-serif');
+  // A family named as a member Object.prototype holds is an installed name too.
+  expect(fontFamily('Georgia, constructor, __proto__')).toBe('Georgia, constructor, __proto__');
 });
 
 test('CSS-wide keywords follow the kernel: initial is its family 0, revert inherits', () => {

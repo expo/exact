@@ -588,7 +588,7 @@ fn fold_with_answers_an_unchanged_design_from_the_last() {
     assert!(!params.failed && params.tokens.len() == 1, "{params:?}");
     let vocab = contract_lower::tamber_vocab();
     let began = std::time::Instant::now();
-    let first = contract::tamber_params::fold_with(&design, &params, &vocab)
+    let first = contract::tamber_params::fold_with(&design, &params, &vocab, None)
         .map(|(f, _)| f.tokens.len())
         .ok();
     let cold = began.elapsed();
@@ -597,7 +597,7 @@ fn fold_with_answers_an_unchanged_design_from_the_last() {
     let warm = (0..5)
         .map(|_| {
             let began = std::time::Instant::now();
-            let again = contract::tamber_params::fold_with(&design, &params, &vocab)
+            let again = contract::tamber_params::fold_with(&design, &params, &vocab, None)
                 .map(|(f, _)| f.tokens.len())
                 .ok();
             assert_eq!(again, first);

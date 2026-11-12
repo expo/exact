@@ -91,7 +91,7 @@ fn a_send_leaves_as_a_request_op_and_the_reply_commits() {
 
     host.dispatch(view(&host, "who"), Event::Change("ada".into()));
     let batch = host.dispatch(view(&host, "login"), Event::Press);
-    assert!(batch.contains("\"op\":\"request\",\"ticket\":1,\"target\":\"session\",\"scope\":null,\"method\":\"POST\",\"url\":\"https://api.castle.test/graphql\",\"headers\":[[\"content-type\",\"application/json\"],[\"x-who\",\"ada\"]],\"body\":\"eyJxIjoxfQ==\",\"cache\":\"default\"}"), "{batch}");
+    assert!(batch.contains("\"op\":\"request\",\"ticket\":1,\"target\":\"session\",\"scope\":null,\"method\":\"POST\",\"url\":\"https://api.castle.test/graphql\",\"headers\":[[\"content-type\",\"application/json\"],[\"x-who\",\"ada\"]],\"body\":\"eyJxIjoxfQ==\"}"), "{batch}");
     assert!(batch.contains("Logging in…"), "the view says busy: {batch}");
     assert_eq!(host.runner().pending(), vec![("session".to_string(), 1)]);
 
@@ -184,6 +184,7 @@ fn storage_batch_preserves_text_and_scope_and_refuses_invalid_utf8() {
         request.grants = Some(String::new());
         let mut batch = exact_web::batch::Batch::default();
         batch.request(&RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket: 1,
             target: "backup".into(),
             request,
@@ -212,6 +213,7 @@ fn surface_batch_and_outcomes_keep_their_typed_kind() {
     ] {
         let mut batch = exact_web::batch::Batch::default();
         batch.request(&RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket: 7,
             target: "save".into(),
             request,
@@ -246,6 +248,7 @@ fn surface_batch_and_outcomes_keep_their_typed_kind() {
     mixed.storage = Some(b"{}".to_vec());
     let mut batch = exact_web::batch::Batch::default();
     batch.request(&RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket: 8,
         target: "save".into(),
         request: mixed,

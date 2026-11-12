@@ -67,13 +67,22 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
 
     private class Sub(val track: String, val origin: String) : TrackConsumer {
         var live = false
+        private var source: VideoSource? = null
         var leave: () -> Unit = {}
         var onLive: (VideoSource?) -> Unit = {}
         var onBlank: () -> Unit = {}
-        override fun liveVideo(source: VideoSource?) { live = true; onLive(source) }
+        override fun liveVideo(source: VideoSource?) {
+            live = true
+            this.source = source
+            onLive(source)
+        }
         override fun muted(reason: String) = onBlank()
-        override fun unmuted() {}
-        override fun ended() { live = false; onBlank() }
+        override fun unmuted() { if (live) onLive(source) }
+        override fun ended() {
+            live = false
+            source = null
+            onBlank()
+        }
     }
 
     private val views = HashMap<String, ViewState>()
@@ -164,7 +173,7 @@ class CameraModule(context: ExtensionContext) : ExactExtension(context) {
         if (!want || v.sub != null) return
         val sub = Sub(src, v.madeBy)
         sub.onLive = { source -> show(v, sub, source) }
-        sub.onBlank = { blank(v.view) }
+        sub.onBlank = { if (v.sub === sub) blank(v.view) }
         v.sub = sub
         try {
             sub.leave = context.tracks.subscribe(src, sub, false, v.madeBy)

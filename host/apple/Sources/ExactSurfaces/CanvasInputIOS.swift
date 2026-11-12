@@ -159,9 +159,10 @@ final class CanvasInputHost {
             guard let key = press.key else { continue }
             let code = KeyCodes.hid(key.keyCode.rawValue)
             if down && code == "Escape" { unlock() } // the web's way out of a lock
+            // A control already holding the key's contact takes a second down
+            // and sends nothing (`pressedControlKey`), so `keys` stays the
+            // canvas's own: its release is sent below.
             if (source.isSurfaceControl || !down) && ["Space", "Enter", "NumpadEnter"].contains(code) {
-                if down && keys.contains(code) { handled = true; continue }
-                if down { keys.insert(code) } else { keys.remove(code) }
                 if source.controlKey(code, down: down, timestamp: press.timestamp) { handled = true; continue }
             }
             if down {

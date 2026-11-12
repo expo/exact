@@ -1,4 +1,4 @@
-//! Malformed delimiters stay literal, with the pre-S2 parser as a test oracle.
+//! Malformed delimiters stay literal, with a recursive parser as a test oracle.
 use markdown_parse::{parse, Run};
 
 #[path = "support/inline_legacy.rs"]
@@ -28,20 +28,49 @@ fn malformed_delimiters_keep_literal_text() {
 }
 
 #[test]
-fn deeply_nested_labels_do_not_copy_or_recurse_over_their_descendants() {
-    let text = format!("p {}x{} end", "[".repeat(16_384), "](u)".repeat(16_384));
+fn adjacent_emphasized_urls_keep_their_boundaries() {
+    let url = "https://example.com/a";
+    let count = 4096;
+    let text = format!("*{url}*").repeat(count);
     assert_eq!(
         runs(&text, &str::to_string),
         vec![
-            Run::text("p "),
             Run {
-                text: "x".into(),
-                href: "u".into(),
+                text: url.into(),
+                href: url.into(),
+                italic: true,
                 ..Run::default()
-            },
-            Run::text(" end"),
-        ]
+            };
+            count
+        ],
     );
+}
+
+#[test]
+fn deeply_nested_labels_do_not_copy_or_recurse_over_their_descendants() {
+    for (open, close, italic) in [("[", "](u)", false), ("*[", "](u)*", true)] {
+        let text = format!("p {}x{} end", open.repeat(16_384), close.repeat(16_384));
+        assert_eq!(
+            runs(&text, &str::to_string),
+            vec![
+                Run::text("p "),
+                Run {
+                    text: "x".into(),
+                    href: "u".into(),
+                    italic,
+                    ..Run::default()
+                },
+                Run::text(" end"),
+            ]
+        );
+    }
+    let text = format!("p {}x{} end", "*[".repeat(16_384), "](u) <*".repeat(16_384));
+    let parsed = runs(&text, &str::to_string);
+    assert_eq!(
+        parsed.iter().map(|r| r.text.as_str()).collect::<String>(),
+        format!("p x{} end", " <".repeat(16_384))
+    );
+    assert!(parsed[1..parsed.len() - 1].iter().all(|r| r.italic));
 }
 
 fn equivalent(body: &str) {
@@ -66,7 +95,7 @@ fn equivalent(body: &str) {
 }
 
 #[test]
-fn indexed_parser_matches_old_behavior_over_seeded_corpus() {
+fn indexed_parser_matches_scanning_oracle_over_seeded_corpus() {
     for text in [
         r"[outer [inner](b)](a)",
         r"[unclosed [label](ok)",
@@ -79,6 +108,29 @@ fn indexed_parser_matches_old_behavior_over_seeded_corpus() {
         "``````",
         r"**\*** _\__ **a\*b**",
         r"[*x*](u)tail",
+        "[link](url \"a ` title\") *emphasis* and `code`",
+        "*before [link](url \"a ` title\") after* and `code`",
+        "<https://example.com/`> *emphasis* and `code`",
+        "[*a `b*](u) `c`",
+        "*before* [*a `b*](u) `c`",
+        "*https://example.com*",
+        "*see https://example.com/foo*",
+        "**https://example.com/foo**",
+        "_see https://example.com/a_",
+        "__https://example.com/snake_case__",
+        "*x https://example.com/` *a* `",
+        "*a https://example.com/` b* ` *c*",
+        "*see https://example.com/a[b*](c)",
+        "*see https://example.com/a![b*](c)",
+        r"*see https://example.com/a\* tail",
+        "*a https://example.com/` `*` b*",
+        r"*http://a\*b*",
+        "*http://a`*`*",
+        "*__https://example.com__`*`*",
+        "_**https://example.com**`_`_",
+        "**_https://example.com_`**`**",
+        "__*https://example.com*`__`__",
+        "__foo__bar foo__bar__baz foo__bar__ _пристаням_стремятся",
         r"[x](u)tail",
         r"[](u)tail",
         r"![x](u)tail",
@@ -154,6 +206,7 @@ fn cancellation_discards_partial_documents_at_scan_checkpoints() {
         "x<".repeat(32_768),
         "`".repeat(65_536),
         "*x ".repeat(32_768),
+        format!("a{}", "_".repeat(65_536)),
         "\\".repeat(65_536),
         "[x](".repeat(16_384),
         "a\nb\nc\n".repeat(4096),

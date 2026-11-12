@@ -30,6 +30,228 @@ const VIEW: &str = "component App\n  view\n    text \"a\" color=\"ink\"\n";
 
 const MAP_CARD: &str = "tamber t\n\naxes\n  tone = warm | cool\n\ntheme\n  ink = #111111\n  accent.fill = #c8102e\n    when tone=cool: #0a7aff\n\nexports\n  ink\n\ncomponent MapCard\n  params\n    pin: color = accent.fill  control=color  priority=1\n    inset: length = 8px  in 0..24  step=2  control=slider  group=\"Shape\"\n    halo: color = color-mix(in oklab, param.pin 40%, white)  control=none\n";
 
+#[cfg(unix)]
+#[test]
+fn a_native_default_follows_a_token_rename_through_the_server() {
+    use crate::tamber_serve::{digest, Serve};
+    use serde_json::json;
+
+    let path = app(
+        "rename",
+        &[("app.contract", VIEW), ("app.tamber", MAP_CARD)],
+    );
+    contract::compile_path(&path).unwrap();
+    let dir = path.parent().unwrap();
+    let mut server = Serve::start(dir, &[]);
+    server.ask(json!({"method": "hello", "client": "rename"}));
+    let ops = json!([{"op": "rename-token", "from": "accent.fill", "to": "accent.main"}]);
+    let (proposal, _) = server.ask(json!({"method": "propose", "ops": ops}));
+    assert!(proposal["ok"].is_object(), "{proposal}");
+    assert!(proposal["ok"]["diff"]
+        .as_str()
+        .unwrap()
+        .contains("pin: color = accent.main"));
+    let (written, _) = server.ask(json!({
+        "method": "transaction", "client": "rename", "ops": ops,
+        "files": {"app.tamber": digest(&dir.join("app.tamber"))}
+    }));
+    assert!(written["ok"].is_object(), "{written}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("app.tamber")).unwrap(),
+        MAP_CARD.replace("accent.fill", "accent.main")
+    );
+    contract::compile_path(&path).unwrap();
+    let (undone, _) = server.ask(json!({
+        "method": "undo", "client": "rename", "inverse": written["ok"]["inverse"]
+    }));
+    assert!(undone["ok"].is_object(), "{undone}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("app.tamber")).unwrap(),
+        MAP_CARD
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_token_rename_follows_a_manifest_path_with_parent_segments() {
+    use crate::tamber_serve::{digest, Serve};
+    use serde_json::json;
+
+    let path = app(
+        "rename-parent",
+        &[
+            ("app.contract", VIEW),
+            ("app.tamber", MAP_CARD),
+            (
+                "app.json",
+                r#"{"app": {"id": "com.example.rename", "name": "Rename"}, "tamber": "design/../app.tamber"}"#,
+            ),
+        ],
+    );
+    let dir = path.parent().unwrap();
+    std::fs::create_dir(dir.join("design")).unwrap();
+    contract::compile_path(&path).unwrap();
+    let mut server = Serve::start(dir, &[]);
+    server.ask(json!({"method": "hello", "client": "rename"}));
+    let rename = json!({"op": "rename-token", "from": "accent.fill", "to": "accent.main"});
+    let (proposal, _) = server.ask(json!({"method": "propose", "ops": [rename]}));
+    assert!(proposal["ok"].is_object(), "{proposal}");
+    assert!(proposal["ok"]["diff"]
+        .as_str()
+        .unwrap()
+        .contains("pin: color = accent.main"));
+    let params = contract::tamber_params::params_of(&path);
+    assert!(params
+        .tokens
+        .iter()
+        .any(|p| p.full == "app.tamber#MapCard.pin"));
+    for method in ["propose", "transaction"] {
+        let (reply, _) = server.ask(json!({
+            "method": method, "client": "rename",
+            "files": {"app.tamber": digest(&dir.join("app.tamber"))},
+            "ops": [rename, {"op": "set-param", "name": "MapCard.inset", "value": "99px"}]
+        }));
+        let diagnostics = reply["error"]["diagnostics"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{reply}"));
+        assert!(
+            diagnostics.iter().any(|d| d["id"] == "tamber-param-range"),
+            "{reply}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("app.tamber")).unwrap(),
+            MAP_CARD
+        );
+    }
+    let (written, _) = server.ask(json!({
+        "method": "transaction", "client": "rename", "ops": [rename],
+        "files": {"app.tamber": digest(&dir.join("app.tamber"))}
+    }));
+    assert!(written["ok"].is_object(), "{written}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("app.tamber")).unwrap(),
+        MAP_CARD.replace("accent.fill", "accent.main")
+    );
+    contract::compile_path(&path).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_token_rename_keeps_param_range_checks_in_the_same_transaction() {
+    use crate::tamber_serve::{digest, Serve};
+    use serde_json::json;
+
+    let path = app(
+        "rename-range",
+        &[("app.contract", VIEW), ("app.tamber", MAP_CARD)],
+    );
+    contract::compile_path(&path).unwrap();
+    let dir = path.parent().unwrap();
+    let mut server = Serve::start(dir, &[]);
+    server.ask(json!({"method": "hello", "client": "rename"}));
+    for when in [json!([]), json!([{"axis": "tone", "value": "cool"}])] {
+        let mut ops = json!([
+            {"op": "rename-token", "from": "accent.fill", "to": "accent.main"},
+            {"op": "set-param", "name": "MapCard.inset", "value": "8px"},
+            {"op": "set-param", "name": "MapCard.inset", "when": when, "value": "99px"}
+        ]);
+        for method in ["propose", "transaction"] {
+            let (reply, _) = server.ask(json!({
+                "method": method, "client": "rename", "ops": ops,
+                "files": {"app.tamber": digest(&dir.join("app.tamber"))}
+            }));
+            let diagnostics = reply["error"]["diagnostics"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{reply}"));
+            assert!(
+                diagnostics.iter().any(|d| d["file"] == "app.tamber"
+                    && d["id"] == "tamber-param-range"
+                    && d["message"].as_str().unwrap().contains("MapCard.inset")),
+                "{reply}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(dir.join("app.tamber")).unwrap(),
+                MAP_CARD
+            );
+        }
+        ops[2]["value"] = json!("24px");
+        let (reply, _) = server.ask(json!({"method": "propose", "ops": ops}));
+        assert!(reply["ok"].is_object(), "{reply}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rename_names_a_contract_default_that_still_reads_the_token() {
+    use crate::tamber_serve::Serve;
+    use serde_json::json;
+
+    let view = "component App\n  params\n    pin: color = \"accent.fill\"\n  view\n    text \"a\" color=\"param.pin\"\n";
+    let design = "tamber t\n\ntheme\n  accent.fill = #1083fe\n";
+    let path = app(
+        "rename-contract",
+        &[("app.contract", view), ("app.tamber", design)],
+    );
+    contract::compile_path(&path).unwrap();
+    let mut server = Serve::start(path.parent().unwrap(), &[]);
+    let (reply, _) = server.ask(json!({
+        "method": "propose", "ops": [{"op": "rename-token", "from": "accent.fill", "to": "accent.main"}]
+    }));
+    let diagnostics = reply["error"]["diagnostics"].as_array().unwrap();
+    assert!(
+        diagnostics.iter().any(|d| d["file"] == "app.contract"
+            && d["id"] == "tamber-unknown-token"
+            && d["message"].as_str().unwrap().contains("accent.fill")),
+        "{reply}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path.parent().unwrap().join("app.tamber")).unwrap(),
+        design
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rename_preserves_a_secondary_designs_literal_component_default() {
+    use crate::tamber_serve::{digest, Serve};
+    use serde_json::json;
+
+    let design = "tamber t\n\ntheme\n  serif = 1px\n\ncomponent Card\n  params\n    face: family = serif, sans-serif\n";
+    let path = app(
+        "rename-secondary",
+        &[
+            ("app.contract", VIEW),
+            ("app.tamber", "tamber t\n\ntheme\n  ink = #111111\n"),
+            ("other.tamber", design),
+        ],
+    );
+    let dir = path.parent().unwrap();
+    let mut server = Serve::start(dir, &[]);
+    server.ask(json!({"method": "hello", "client": "rename"}));
+    for method in ["propose", "transaction"] {
+        let (reply, _) = server.ask(json!({
+            "method": method, "client": "rename",
+            "files": {"other.tamber": digest(&dir.join("other.tamber"))},
+            "ops": [{"op": "rename-token", "file": "other.tamber", "from": "serif", "to": "mono"}]
+        }));
+        let diagnostics = reply["error"]["diagnostics"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{reply}"));
+        assert!(
+            diagnostics.iter().any(|d| d["file"] == "other.tamber"
+                && d["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("change what a value folds to")),
+            "{reply}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("other.tamber")).unwrap(),
+            design
+        );
+    }
+}
+
 #[test]
 fn a_native_components_params_are_kept_named_and_listed() {
     let path = app("kept", &[("app.contract", VIEW), ("app.tamber", MAP_CARD)]);
@@ -88,6 +310,79 @@ fn a_native_components_params_are_kept_named_and_listed() {
             .token,
         token("inset")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_rename_preserves_an_overridden_component_default() {
+    use crate::tamber_serve::{digest, Serve};
+    use serde_json::json;
+
+    let design = "tamber t\n\ntheme\n  ink = #111111\n  serif = 1px\n\ncomponent Card\n  params\n    face: family = serif, sans-serif\n\nparams\n  Card.face = system-ui\n";
+    let path = app(
+        "rename-overridden",
+        &[("app.contract", VIEW), ("app.tamber", design)],
+    );
+    contract::compile_path(&path).unwrap();
+    let dir = path.parent().unwrap();
+    let mut server = Serve::start(dir, &[]);
+    for method in ["propose", "transaction"] {
+        let (reply, _) = server.ask(json!({
+            "method": method, "client": "rename",
+            "files": {"app.tamber": digest(&dir.join("app.tamber"))},
+            "ops": [{"op": "rename-token", "from": "serif", "to": "mono"}]
+        }));
+        let diagnostics = reply["error"]["diagnostics"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{reply}"));
+        assert!(
+            diagnostics.iter().any(|d| d["message"]
+                .as_str()
+                .unwrap()
+                .contains("change what a value folds to")),
+            "{reply}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("app.tamber")).unwrap(),
+            design
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_secondary_design_keeps_the_declaring_files_component_defaults() {
+    use crate::tamber_serve::Serve;
+    use serde_json::json;
+
+    let design = "tamber t\n\ntheme\n  ink = #111111\n\ncomponent Card\n  params\n    pin: color = #111111\n";
+    let path = app(
+        "read-secondary",
+        &[
+            ("app.contract", VIEW),
+            ("app.tamber", design),
+            ("other.tamber", design),
+        ],
+    );
+    let dir = path.parent().unwrap();
+    let mut server = Serve::start(dir, &[]);
+    for value in ["#ffffff", "missing.token"] {
+        std::fs::write(
+            dir.join("other.tamber"),
+            design.replace("pin: color = #111111", &format!("pin: color = {value}")),
+        )
+        .unwrap();
+        let (reply, _) = server.ask(json!({
+            "method": "resolve", "file": "other.tamber", "token": "app.tamber#Card.pin"
+        }));
+        assert_eq!(reply["ok"]["tuples"][0]["value"], "#111111ff", "{reply}");
+        let (reply, _) = server.ask(json!({"method": "describe", "file": "other.tamber"}));
+        assert_eq!(
+            reply["ok"]["ir"]["components"][0]["params"][0]["values"],
+            json!(["#111111ff"]),
+            "{reply}"
+        );
+    }
 }
 
 #[test]

@@ -147,12 +147,6 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   raster image only, and a native button's face symbol. Write
   `image "symbol:forward-chevron" color="-exact-tertiary-label"`. The build warns
   (`lower-symbol-tint`).
-- **A sized `symbol:` image is stretched.** An ellipsis became three tall bars.
-  Cause: `object-fit` defaults to `fill`, as for `<img>`. Fix: don't size a symbol;
-  it follows its text (in a button, tab or bar item, its title's font; give it a
-  `font-size` if it must differ; a native button refuses its symbol's `width` and
-  `height`). A symbol you do size by its box needs `object-fit="contain"`. (Signal
-  Clone, 2026-10-02.)
 - **`color-scheme="light dark"` is refused.** Contract accepts only `light` or
   `dark` to fix a subtree's scheme. Leave it unsaid to follow the surrounding
   scheme; put `color-scheme="dark"` on a media viewer itself, not its shared
@@ -434,9 +428,9 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   (`xcrun simctl io booted recordVideo`) and read its frames.
 
 - **A cold launch flashes the wrong colour, and no screenshot shows it.** The launch
-  screen is `host.ios.launchImage` centred on `background_color` (`background_color_dark`
-  in dark mode); unset, the platform's background (the grouped grey under a first route
-  that scrolls a grouped list). It is gone before a screenshot can be taken: record one
+  screen is `host.ios.launchImage` centred on `background_color` (`color_scheme_dark`'s
+  `background_color` in dark mode); unset, the platform's background (the grouped grey
+  under a first route that scrolls a grouped list). It is gone before a screenshot can be taken: record one
   (`xcrun simctl io <udid> recordVideo launch.mp4`, then `simctl launch`) and read its
   frames (the euxy port's white launch, 2026-10-21).
 
@@ -1239,10 +1233,10 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   ```
 - **A write left running after a source answers can be lost on iOS or macOS.** The
   web kept it; the native host did not, and a list was empty after a relaunch. Cause:
-  the native data executor runs a source's promises while a request waits on them,
-  one request at a time, so a `promise` started and not awaited (a fire-and-forget
-  SQLite write) can stay unfinished, and an answer queues behind a request still in
-  flight. Fix: await the write before answering, or carry it in a
+  the native data executor advances a source's promises while an answer waits on
+  them. A `promise` started and not awaited (a fire-and-forget SQLite write) can
+  stay unfinished, and storage steps wait for earlier requests even while resource
+  fetches overlap. Fix: await the write before answering, or carry it in a
   request of its own that the view sends (a `flush` source called with the change).
   (Authoring bench, LLP 1087, t2-todo on iOS: about 20 minutes, 2026-10-05.)
 

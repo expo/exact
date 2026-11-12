@@ -52,6 +52,7 @@
 //! - `45 CLIP_UNION len n (rule path)×n` — save and clip to the union of independently filled paths
 //! - `46 MASK_LAYER` — save a layer composited through destination-in at its RESTORE
 //! - `47 IMAGE_TINT color` — the next IMAGE or IMAGE_RRECT uses this colour through the image's alpha
+//! - `48 MATRIX3 a b c d e f g h i` — a row-major projective matrix, in device pixels
 //! - `25 DASH phase n d×n` — the next STROKE is dashed: `n` (even) on/off lengths and the
 //!   offset into them, in the stroke's own units (SVG `stroke-dasharray`, `stroke-dashoffset`)
 //!
@@ -76,6 +77,7 @@ use std::sync::Arc;
 use tiny_skia::{Pixmap, Transform};
 
 const MATRIX: u32 = 1;
+const MATRIX3: u32 = 48;
 const RRECT: u32 = 2;
 const PATH: u32 = 3;
 const CLIP_RRECT: u32 = 4;
@@ -175,6 +177,8 @@ mod gradient;
 #[cfg(target_os = "android")]
 #[path = "canvas/input.rs"]
 mod input;
+#[path = "canvas/plane.rs"]
+mod plane;
 #[cfg(target_os = "android")]
 #[path = "canvas/presence.rs"]
 pub mod presence;
@@ -260,6 +264,7 @@ pub struct Recorder {
     ops: Vec<u32>,
     /// The matrix last written into `ops` (points → device pixels).
     matrix: Option<[f32; 6]>,
+    planes: Vec<[f32; 9]>,
     /// Faces announced to the reader, by (file, index, weight, axes).
     fonts: HashMap<FontKey, u32>,
     /// Files standing in for faces loaded from bytes, by blob id.
@@ -339,6 +344,7 @@ impl Recorder {
             direct: stream::Direct::default(),
             ops: Vec::new(),
             matrix: None,
+            planes: Vec::new(),
             fonts: HashMap::new(),
             face_files: HashMap::new(),
             optical: HashMap::new(),
@@ -375,6 +381,9 @@ impl Recorder {
 
     /// Write the transform for the next op if it differs from the last.
     fn transform(&mut self, ts: Transform) {
+        if self.plane_matrix(ts) {
+            return;
+        }
         let s = self.scale;
         let m = [
             ts.sx * s,
@@ -475,6 +484,7 @@ impl Backend for Recorder {
         self.scale = scale;
         self.ops.clear();
         self.matrix = None;
+        self.planes.clear();
         self.clips.clear();
         self.origin = (0.0, 0.0);
         self.row = None;
@@ -509,7 +519,7 @@ impl Backend for Recorder {
         if s.rect.2 <= 0.0 || s.rect.3 <= 0.0 || color[3] == 0 {
             return;
         }
-        let bounds = clip::map(s.rect, ts);
+        let bounds = self.on_page(s.rect, ts);
         if self.culled(bounds) {
             return;
         }
@@ -524,7 +534,7 @@ impl Backend for Recorder {
     }
 
     fn fill_border(&mut self, part: &BorderFill, ts: Transform) {
-        let bounds = path_bounds(&part.region).and_then(|b| clip::map(b, ts));
+        let bounds = path_bounds(&part.region).and_then(|b| self.on_page(b, ts));
         if self.culled(bounds) {
             return;
         }
@@ -599,7 +609,7 @@ impl Backend for Recorder {
         if filter.is_none() || shape.rect.2 <= 0.0 || shape.rect.3 <= 0.0 {
             return;
         }
-        let bounds = clip::map(shape.rect, ts);
+        let bounds = self.on_page(shape.rect, ts);
         if self.culled(bounds) {
             return;
         }
@@ -689,7 +699,7 @@ impl Backend for Recorder {
             .collect();
         let grow = if s.stroke.is_some() { s.width } else { 0.0 };
         self.need(path_bounds(&ops).and_then(|(x, y, w, h)| {
-            clip::map((x - grow, y - grow, w + 2.0 * grow, h + 2.0 * grow), ts)
+            self.on_page((x - grow, y - grow, w + 2.0 * grow, h + 2.0 * grow), ts)
         }));
         self.transform(ts);
         if let Some(c) = s.fill.as_ref().and_then(|ink| self.ink(ink)) {
@@ -758,7 +768,7 @@ impl Backend for Recorder {
     fn pointer(&mut self, _x: f32, _y: f32) {}
 
     fn rows(&self) -> bool {
-        true
+        self.planes.is_empty()
     }
 
     fn row_begin(&mut self, id: u32, origin: (f32, f32), previous: Option<u32>) {
@@ -840,8 +850,21 @@ impl Backend for Recorder {
     }
 
     fn layer_begin(&mut self, key: u64, ts: Transform, pivot: (f32, f32), base: [f32; 7]) -> bool {
+        // Retained layers animate in page coordinates, outside any projective plane.
+        if !self.planes.is_empty() {
+            return false;
+        }
         self.layer_open(key, ts, pivot, base);
         true
+    }
+
+    fn plane_begin(&mut self, matrix: [f32; 9]) -> bool {
+        self.plane_open(matrix)
+    }
+
+    fn plane_end(&mut self) {
+        self.planes.pop();
+        self.matrix = None;
     }
 
     fn layer_recolored(&mut self) {

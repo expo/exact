@@ -54,8 +54,8 @@ impl<'a> Scan<'a> {
 }
 
 /// A parse frame borrows a range of the original paragraph. Nested labels and
-/// emphasis share delimiter indexes and emit directly into the final run list;
-/// neither their source nor their descendant runs are copied per nesting level.
+/// emphasis share bracket/backtick indexes and emit directly into the final runs;
+/// neither source nor descendant runs are copied per nesting level.
 struct Frame {
     start: usize,
     end: usize,
@@ -66,6 +66,36 @@ struct Frame {
     href: std::rc::Rc<str>,
     plain_wrapper: bool,
     last_plain: bool,
+    // Code spans must close inside this frame, so each frame owns its cache.
+    closers: [CloserCache; 4],
+}
+
+type CloserCache = std::collections::HashMap<(usize, usize), Option<usize>>;
+
+struct EmphasisSearch {
+    start: usize,
+    marker: u8,
+    count: usize,
+    // Each nested emphasis bounds the tokens in its content, then resumes
+    // after its closer. Searches use a stack so malformed input cannot recurse.
+    scopes: Vec<(usize, usize)>,
+    visited: Vec<(usize, usize)>,
+}
+
+impl EmphasisSearch {
+    fn new(start: usize, marker: u8, count: usize, end: usize) -> Self {
+        Self {
+            start,
+            marker,
+            count,
+            scopes: vec![(end, end)],
+            visited: Vec::new(),
+        }
+    }
+
+    fn index(&self) -> usize {
+        usize::from(self.marker == b'_') * 2 + self.count - 1
+    }
 }
 
 struct Parser<'a> {
@@ -81,14 +111,12 @@ struct Parser<'a> {
     brackets: Option<Vec<usize>>,
     parens: Option<Vec<usize>>,
     ticks: Option<Vec<(usize, usize)>>,
-    stars: Option<Vec<[usize; 2]>>,
-    underscores: Option<Vec<[usize; 2]>>,
-    angle: Option<Angle>,
+    angles: Option<Vec<Angle>>,
+    url: Option<std::ops::Range<usize>>,
 }
 
-// One forward scan per interval ending at `>`, including failed mail tests.
-// Remember the last relevant characters, not just the closing delimiter: a
-// repeated `<` before one invalid autolink must not rescan its mail address.
+// Remember the last relevant characters in each interval ending at `>`.
+// Both parsing and emphasis lookahead can revisit an interval from nested labels.
 struct Angle {
     close: usize,
     mail: usize,
@@ -122,14 +150,14 @@ pub(crate) fn runs(
             href: "".into(),
             plain_wrapper: true,
             last_plain: false,
+            closers: Default::default(),
         },
         parents: Vec::new(),
         brackets: None,
         parens: None,
         ticks: None,
-        stars: None,
-        underscores: None,
-        angle: None,
+        angles: None,
+        url: None,
     };
     p.run(link);
     p.runs
@@ -203,6 +231,7 @@ impl Parser<'_> {
                 href.into()
             },
             last_plain: false,
+            closers: Default::default(),
         };
         self.parents.push(std::mem::replace(&mut self.frame, child));
         self.at = start;
@@ -259,6 +288,7 @@ impl Parser<'_> {
                 }
                 b'<' if self.html_image() => {}
                 b'<' if self.autolink(link) => {}
+                b'_' if self.intraword_underscores() => {}
                 b'*' | b'_' if self.emphasis(c) => {}
                 b'h' if self.bare_url(link) => {}
                 _ => {
@@ -283,14 +313,9 @@ impl Parser<'_> {
     }
 
     fn code_span(&mut self) -> bool {
-        let ticks = self
-            .ticks
-            .get_or_insert_with(|| tick_matches(self.src, self.scan));
-        let (open, close) = ticks[self.at];
-        if close >= self.frame.end {
+        let Some((open, close, end)) = self.code_bounds() else {
             return false;
-        }
-        let count = open - self.at;
+        };
         let text = &self.text[open..close];
         let text = text
             .strip_prefix(' ')
@@ -301,8 +326,20 @@ impl Parser<'_> {
             code: true,
             ..Run::default()
         });
-        self.at = close + count;
+        self.at = end;
         true
+    }
+
+    fn code_bounds(&mut self) -> Option<(usize, usize, usize)> {
+        let ticks = self
+            .ticks
+            .get_or_insert_with(|| tick_matches(self.src, self.scan));
+        let (open, close) = ticks[self.at];
+        if close >= self.frame.end {
+            return None;
+        }
+        let count = open - self.at;
+        (close + count <= self.frame.end).then_some((open, close, close + count))
     }
 
     fn bracketed(&mut self, start: usize) -> Option<(usize, usize)> {
@@ -321,39 +358,10 @@ impl Parser<'_> {
     }
 
     fn autolink(&mut self, link: &dyn Fn(&str) -> String) -> bool {
-        if self.angle.as_ref().is_none_or(|a| a.close < self.at) {
-            let mut angle = Angle {
-                close: self.src.len(),
-                mail: 0,
-                invalid: 0,
-            };
-            for at in self.at + 1..self.src.len() {
-                if at.is_multiple_of(4096) && self.scan.cancelled() {
-                    return false;
-                }
-                match self.src[at] {
-                    b'>' => {
-                        angle.close = at;
-                        break;
-                    }
-                    b'@' => angle.mail = at,
-                    b' ' | b'/' => angle.invalid = at,
-                    _ => {}
-                }
-            }
-            self.angle = Some(angle);
-        }
-        let angle = self.angle.as_ref().unwrap();
-        let close = angle.close;
-        if close >= self.frame.end {
+        let Some((close, is_mail)) = self.autolink_bounds() else {
             return false;
-        }
+        };
         let inner = &self.text[self.at + 1..close];
-        let is_url = inner.starts_with("http://") || inner.starts_with("https://");
-        let is_mail = !is_url && angle.mail > self.at && angle.invalid <= self.at;
-        if !is_url && !is_mail {
-            return false;
-        }
         let href = if is_mail {
             format!("mailto:{inner}")
         } else {
@@ -368,22 +376,25 @@ impl Parser<'_> {
         true
     }
 
+    fn autolink_bounds(&mut self) -> Option<(usize, bool)> {
+        let angles = self
+            .angles
+            .get_or_insert_with(|| angle_matches(self.src, self.scan));
+        let angle = angles.get(angles.partition_point(|a| a.close < self.at))?;
+        let close = angle.close;
+        if close >= self.frame.end {
+            return None;
+        }
+        let inner = &self.text[self.at + 1..close];
+        let is_url = inner.starts_with("http://") || inner.starts_with("https://");
+        let is_mail = !is_url && angle.mail > self.at && angle.invalid <= self.at;
+        (is_url || is_mail).then_some((close, is_mail))
+    }
+
     /// An `<img>` or `<picture>` (LLP 1033 D9): the caller's run for each
     /// of its images, or each one's alt text.
     fn html_image(&mut self) -> bool {
-        let rest = &self.text[self.at..self.frame.end];
-        let links = self.html.links();
-        if !self.html.images || !crate::html::starts_image(rest, links.is_some()) {
-            return false;
-        }
-        let mut limit = rest.len().min(crate::html::MARKUP_LIMIT);
-        while !rest.is_char_boundary(limit) {
-            limit -= 1;
-        }
-        // The paragraph's end closes a picture left open.
-        let ends = limit == rest.len() && self.frame.end == self.text.len();
-        let Some(markup) = crate::html::element(&rest[..limit], self.html.schemes, links, ends)
-        else {
+        let Some(markup) = self.html_markup() else {
             return false;
         };
         for image in markup.images {
@@ -396,24 +407,106 @@ impl Parser<'_> {
         true
     }
 
-    fn bare_url(&mut self, link: &dyn Fn(&str) -> String) -> bool {
+    fn html_markup(&self) -> Option<crate::html::Markup> {
         let rest = &self.text[self.at..self.frame.end];
-        if !rest.starts_with("http://") && !rest.starts_with("https://") {
-            return false;
+        let links = self.html.links();
+        if !self.html.images || !crate::html::starts_image(rest, links.is_some()) {
+            return None;
         }
-        let end = rest
-            .find(|c: char| c.is_whitespace() || c == '<' || c == ')' || c == '"')
-            .unwrap_or(rest.len());
-        let url = rest[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
-        if url.len() < 12 {
-            return false;
+        let mut limit = rest.len().min(crate::html::MARKUP_LIMIT);
+        while !rest.is_char_boundary(limit) {
+            limit -= 1;
         }
+        // The paragraph's end closes a picture left open.
+        let ends = limit == rest.len() && self.frame.end == self.text.len();
+        crate::html::element(&rest[..limit], self.html.schemes, links, ends)
+    }
+
+    fn bare_url(&mut self, link: &dyn Fn(&str) -> String) -> bool {
+        let Some(len) = self.bare_url_len() else {
+            return false;
+        };
+        let url = &self.text[self.at..self.at + len];
         self.push(Run {
             text: url.to_string(),
             href: link(url),
             ..Run::default()
         });
-        self.at += url.len();
+        self.at += len;
+        true
+    }
+
+    fn bare_url_len(&mut self) -> Option<usize> {
+        let end = self.bare_url_end()?;
+        self.url_len_to(end)
+    }
+
+    fn bare_url_end(&mut self) -> Option<usize> {
+        let rest = &self.text[self.at..self.frame.end];
+        if !rest.starts_with("http://") && !rest.starts_with("https://") {
+            return None;
+        }
+        // Adjacent emphasis frames can start URLs in the same uninterrupted
+        // candidate. Find its terminator once, then bound it by each frame.
+        if self.url.as_ref().is_none_or(|url| !url.contains(&self.at)) {
+            let rest = &self.text[self.at..];
+            let len = rest
+                .find(|c: char| c.is_whitespace() || c == '<' || c == ')' || c == '"')
+                .unwrap_or(rest.len());
+            self.url = Some(self.at..self.at + len);
+        }
+        Some(self.url.as_ref().unwrap().end.min(self.frame.end))
+    }
+
+    fn url_len_to(&self, end: usize) -> Option<usize> {
+        let url = self.text[self.at..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        (url.len() >= 12).then_some(url.len())
+    }
+
+    fn emphasis_url_len(&mut self, marker: u8, count: usize) -> Option<usize> {
+        let mut end = self.bare_url_end()?;
+        let mut at = self.at;
+        while at < end {
+            if at.is_multiple_of(4096) && self.scan.cancelled() {
+                return None;
+            }
+            if self.src[at] == marker {
+                let first = at;
+                while at < end && self.src[at] == marker {
+                    at += 1;
+                    if at.is_multiple_of(4096) && self.scan.cancelled() {
+                        return None;
+                    }
+                }
+                if let Some(close) = self.closing_marker(marker, count, first, at) {
+                    end = close;
+                    break;
+                }
+            } else {
+                at += 1;
+            }
+        }
+        self.url_len_to(end)
+    }
+
+    fn intraword_underscores(&mut self) -> bool {
+        if !self.text[self.frame.start..self.at]
+            .chars()
+            .next_back()
+            .is_some_and(char::is_alphanumeric)
+        {
+            return false;
+        }
+        // Reject the whole run so a second underscore cannot open italic.
+        let start = self.at;
+        while self.peek(0) == b'_' {
+            if self.at.is_multiple_of(4096) && self.scan.cancelled() {
+                self.at = self.frame.end;
+                return true;
+            }
+            self.at += 1;
+        }
+        self.pending.push_str(&self.text[start..self.at]);
         true
     }
 
@@ -422,21 +515,11 @@ impl Parser<'_> {
         if matches!(self.peek(count), 0 | b' ' | b'\t') {
             return false;
         }
-        if marker == b'_'
-            && count == 1
-            && self.at > self.frame.start
-            && self.src[self.at - 1].is_ascii_alphanumeric()
-        {
-            return false;
-        }
-        let index = if marker == b'*' {
-            &mut self.stars
-        } else {
-            &mut self.underscores
-        };
-        let matches = index.get_or_insert_with(|| emphasis_matches(self.src, marker, self.scan));
+        let close = self.emphasis_close(marker, count);
         let open = self.at + count;
-        let close = matches[open][count - 1];
+        let Some(close) = close else {
+            return false;
+        };
         if close + count > self.frame.end {
             return false;
         }
@@ -450,6 +533,178 @@ impl Parser<'_> {
         );
         true
     }
+
+    fn closing_marker(&self, marker: u8, count: usize, first: usize, end: usize) -> Option<usize> {
+        let intraword = marker == b'_'
+            && self.text[end..self.frame.end]
+                .chars()
+                .next()
+                .is_some_and(char::is_alphanumeric);
+        let allowed = first + usize::from(first == 0 || self.src[first - 1] == b' ');
+        (!intraword && allowed + count <= end).then_some(allowed)
+    }
+
+    // Cache suffix searches by token boundary and scope end. URL recognition
+    // uses the same end as parsing, including any nested emphasis closer.
+    fn emphasis_close(&mut self, marker: u8, count: usize) -> Option<usize> {
+        let start = self.at;
+        let end = self.frame.end;
+        let mut search = EmphasisSearch::new(start, marker, count, end);
+        let mut parents = Vec::new();
+        self.at += count;
+        let mut checkpoint = self.at;
+        let result = 'search: loop {
+            self.frame.end = search.scopes.last().unwrap().0;
+            let close = loop {
+                if self.at >= checkpoint {
+                    if self.scan.cancelled() {
+                        break 'search None;
+                    }
+                    checkpoint = self.at + 4096;
+                }
+                if self.at >= self.frame.end {
+                    if search.scopes.len() == 1 {
+                        break None;
+                    }
+                    let (first, resume) = search.scopes.pop().unwrap();
+                    self.frame.end = search.scopes.last().unwrap().0;
+                    if self.src[first] == search.marker {
+                        let mut last = first;
+                        while last < self.frame.end && self.src[last] == search.marker {
+                            last += 1;
+                            if last.is_multiple_of(4096) && self.scan.cancelled() {
+                                break 'search None;
+                            }
+                        }
+                        if let Some(close) =
+                            self.closing_marker(search.marker, search.count, first, last)
+                        {
+                            break Some(close);
+                        }
+                    }
+                    self.at = resume;
+                    continue;
+                }
+                let key = (self.frame.end, self.at);
+                if let Some(&close) = self.frame.closers[search.index()].get(&key) {
+                    match close {
+                        Some(_) => break close,
+                        None => {
+                            self.at = self.frame.end;
+                            continue;
+                        }
+                    }
+                }
+                search.visited.push(key);
+                let c = self.peek(0);
+                let opaque_end = match c {
+                    b'\\' if self.peek(1).is_ascii_punctuation() => Some(self.at + 2),
+                    b'`' => self.code_bounds().map(|(_, _, end)| end),
+                    b'!' if self.peek(1) == b'[' => {
+                        self.bracketed(self.at + 1).map(|(_, end)| end + 1)
+                    }
+                    b'[' => self.bracketed(self.at).map(|(_, end)| end + 1),
+                    b'<' => self
+                        .html_markup()
+                        .map(|m| self.at + m.len)
+                        .or_else(|| self.autolink_bounds().map(|(end, _)| end + 1)),
+                    b'h' => self
+                        .emphasis_url_len(search.marker, search.count)
+                        .map(|len| self.at + len),
+                    _ => None,
+                };
+                if let Some(end) = opaque_end {
+                    self.at = end;
+                    continue;
+                }
+                if matches!(c, b'*' | b'_') {
+                    let first = self.at;
+                    while self.peek(0) == c {
+                        if self.at.is_multiple_of(4096) && self.scan.cancelled() {
+                            break 'search None;
+                        }
+                        self.at += 1;
+                    }
+                    let last = self.at;
+                    if c == search.marker {
+                        if let Some(close) = self.closing_marker(c, search.count, first, last) {
+                            for at in first..=last - search.count {
+                                if at.is_multiple_of(4096) && self.scan.cancelled() {
+                                    break 'search None;
+                                }
+                                self.frame.closers[search.index()]
+                                    .insert((self.frame.end, at), Some(at.max(close)));
+                            }
+                            break Some(close);
+                        }
+                        // A shorter suffix can open nested italic in a strong
+                        // search, so it is not the same failed suffix search.
+                        for at in first + 1..last.saturating_sub(search.count - 1) {
+                            if at.is_multiple_of(4096) && self.scan.cancelled() {
+                                break 'search None;
+                            }
+                            search.visited.push((self.frame.end, at));
+                        }
+                    }
+                    let count = (last - first).min(2);
+                    let intraword = c == b'_'
+                        && self.text[self.frame.start..first]
+                            .chars()
+                            .next_back()
+                            .is_some_and(char::is_alphanumeric);
+                    let after = self.src.get(first + count).copied().unwrap_or(0);
+                    if !intraword
+                        && first + count < self.frame.end
+                        && !matches!(after, b' ' | b'\t')
+                        && (c != search.marker || count != search.count)
+                    {
+                        let child = EmphasisSearch::new(first, c, count, self.frame.end);
+                        parents.push(search);
+                        search = child;
+                        self.at = first + count;
+                        checkpoint = self.at;
+                        continue 'search;
+                    }
+                } else {
+                    let first = (self.at + utf8_width(c)).min(self.frame.end);
+                    let mut limit = (first + 4096).min(self.frame.end);
+                    while !self.text.is_char_boundary(limit) {
+                        limit -= 1;
+                    }
+                    self.at = self.src[first..limit]
+                        .iter()
+                        .position(|&c| {
+                            matches!(c, b'\\' | b'`' | b'!' | b'[' | b'<' | b'h' | b'*' | b'_')
+                        })
+                        .map_or(limit, |offset| first + offset);
+                }
+            };
+            let index = search.index();
+            for (i, (bound, at)) in search.visited.into_iter().enumerate() {
+                if i.is_multiple_of(4096) && self.scan.cancelled() {
+                    break 'search None;
+                }
+                self.frame.closers[index]
+                    .insert((bound, at), close.filter(|c| c + search.count <= bound));
+            }
+            let Some(parent) = parents.pop() else {
+                break close;
+            };
+            self.at = search.start + 1;
+            if let Some(close) = close {
+                self.at = search.start + search.count;
+                let scope = (close, close + search.count);
+                search = parent;
+                search.scopes.push(scope);
+            } else {
+                search = parent;
+            }
+            checkpoint = self.at;
+        };
+        self.at = start;
+        self.frame.end = end;
+        result
+    }
 }
 
 fn target(inside: &str) -> &str {
@@ -459,6 +714,28 @@ fn target(inside: &str) -> &str {
         None => inside,
     };
     target.trim_start_matches('<').trim_end_matches('>')
+}
+
+fn angle_matches(src: &[u8], scan: &Scan<'_>) -> Vec<Angle> {
+    let mut angles = Vec::new();
+    let mut mail = 0;
+    let mut invalid = 0;
+    for (at, &byte) in src.iter().enumerate() {
+        if at.is_multiple_of(4096) && scan.cancelled() {
+            break;
+        }
+        match byte {
+            b'>' => angles.push(Angle {
+                close: at,
+                mail,
+                invalid,
+            }),
+            b'@' => mail = at,
+            b' ' | b'/' => invalid = at,
+            _ => {}
+        }
+    }
+    angles
 }
 
 // Direct-address indexes have no sorting or per-opener suffix scan. Unmatched
@@ -519,27 +796,6 @@ fn tick_matches(src: &[u8], scan: &Scan<'_>) -> Vec<(usize, usize)> {
         }
         next[end - start] = start;
         end = start;
-    }
-    pairs
-}
-
-fn emphasis_matches(src: &[u8], marker: u8, scan: &Scan<'_>) -> Vec<[usize; 2]> {
-    let mut next = [src.len(); 2];
-    let mut pairs = vec![next; src.len() + 1];
-    for at in (0..src.len()).rev() {
-        if at.is_multiple_of(4096) && scan.cancelled() {
-            break;
-        }
-        if src[at] == marker && at > 0 && src[at - 1] != b' ' {
-            let slashes = src[..at].iter().rev().take_while(|&&c| c == b'\\').count();
-            if slashes.is_multiple_of(2) {
-                next[0] = at;
-                if src.get(at + 1) == Some(&marker) {
-                    next[1] = at;
-                }
-            }
-        }
-        pairs[at] = next;
     }
     pairs
 }

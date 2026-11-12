@@ -751,8 +751,24 @@ must hold at every box size; use a single unit when mixed units could cross.
 Restricted paint values are literals or choices of literals, so their admission
 is checked at bake.
 
-App icons come from `app.json`'s Web App Manifest `icons` array: Apple uses
-the first square raster of at least 512 px. To select an
+App icons come from `app.json`'s Web App Manifest `icons` array, and in a dark
+scheme from `color_scheme_dark.icons`, which replaces it there (LLP 1163). Each
+host picks by `purpose`, then shape and size, and refuses a file smaller than
+its slot. iOS and macOS take the smallest square `maskable`, else `any`, PNG of
+at least 1024 px; iOS, watchOS and tvOS pass over one with transparent pixels,
+and refuse it when no opaque file fits. iOS's dark icon is picked the same way
+from `color_scheme_dark.icons`, and its tinted icon is a square `monochrome`
+PNG, whose alpha iOS draws white on black. The web links each scheme's favicons
+(the smallest square raster of at least 32 px, then an SVG when there is one)
+and an Apple touch icon (the smallest opaque square PNG of at least 180 px, else
+the largest). Android takes a square `maskable` of at least 432 px as its
+adaptive icon, a `monochrome` one as its themed layer, a square `any` of 192 px
+when there is no `maskable`, and a 16:9 `any` of at least 640×360 px as the TV
+banner. tvOS takes the brand assets in the app's catalogs, else a 5:3 `any` of
+at least 1280×768 px (an 8:3 and a 29:9 one give the Top Shelf images); the
+watch app a square one of 1024 px, or `host.ios.icon` when its `icon.json` lists
+watchOS; Windows a square `any` of at least 256 px, linked into the executable.
+To select an
 [Icon Composer project](https://developer.apple.com/documentation/xcode/creating-your-app-icon-using-icon-composer),
 set `host.ios.icon` or `host.macos.icon` to its app-relative `.icon` directory,
 for example `"host": { "ios": { "icon": "art/Primary.icon" }, "macos": { "icon": "art/Primary.icon" } }`.
@@ -785,13 +801,22 @@ directory to compile everything here. Every production Apple build (`--release`,
 Swift build and strips its executable, writing `<executable>.dSYM` beside the staged
 build product. Development builds keep their symbols. iPhone and iPad device app executables
 link SafariServices in development and production so dyld loads the libraries
-UIKit would load at launch (LLP 1047.001.001). An App Clip copies its parent’s
-executable and carries the same link. An IPA writes `<name>.dSYM`
+UIKit would load at launch (LLP 1047.001.001). A device App Clip copies its parent’s
+executable and carries the same link; a simulator links the same target with the Clip’s
+own embedded entitlements. An IPA writes `<name>.dSYM`
 beside its archive; `exact release` copies the build's matching dSYM beside its release.
-Production iOS and tvOS bundles ship a small receipt and stripped frameworks, whether
+Production iOS and tvOS bundles ship a small receipt and strip Swift frameworks, whether
 archived or not. The whole receipt stays beside `<name>.app` or `<name>.ipa` as
 `<name>.receipt.json`; framework dSYMs are in `<name>.dSYMs/<Framework>.framework.dSYM`.
-GPU frameworks keep the bytes the bake authenticated and also get dSYMs.
+Rust module and package frameworks keep their linker output because Xcode's strip
+can make them unloadable. GPU frameworks keep the bytes the bake authenticated.
+All keep matching dSYMs outside the bundle.
+Production widget and share extension executables are stripped before signing; their
+source dSYMs are kept in `<name>.dSYMs/<Extension>.appex.dSYM`, outside the app.
+Watch builds keep the watch executable's, complication extension's and runtime
+framework's dSYMs in `<name>.dSYMs/Watch/`. Mac builds keep module library and
+framework dSYMs outside the app too, including the bare products' shared runtime
+at `<namespace>/ExactCore.framework.dSYM`.
 A production build links its Rust
 with fat LTO and, when its plan is fixed, leaves out the loaded modules the
 plan cannot reach (LLP 1036.000 §5–§10). `--bundle` prints the stable Mac bundle at
@@ -927,7 +952,7 @@ on the runner. The runner needs Xcode 27.1 or later selected (`DEVELOPER_DIR`,
 or `xcode-select -s`), rustup and Bun 1.4.2; then `bun <exact2>/scripts/exact.mjs setup` installs the
 pinned Rust with its iOS targets and the Hermes bundles, and `setup --check`
 names what is still missing. An archive needs a square icon of at least
-512 px in `icons` (or `host.ios.icon`), which the build checks before it
+1024 px in `icons` (or `host.ios.icon`), which the build checks before it
 compiles. An archive, and a simulator build with `--release` (the build that
 ships), bake production trust: with an update store (`deploy.store.ios` not
 `"0"`) each needs `EXACT_UPDATE_RECEIPT` or `EXACT_UPDATE_GENESIS=1`. A cold
@@ -1060,6 +1085,13 @@ runner's boot admission mark, consumed at activation. The JS target reports
 `keptSeedSupported: false`: its rendered-document checkpoint is separate from a
 persisted boot answer. `failures` counts refused answers since observation began, with
 `first` and `last` on that clock. A success clears `failed`, preserving the count.
+On the web JS target, list members use `name[id]` in `resourceStatus`, `failed`
+and `failures`. The opaque member id stays the same through reordering and is
+retired on removal; it is local to the page. Singleton keys stay their resource
+names. Each status's `resource` still identifies the declaration. The driver's
+source location names the declaration for every member. In `perf.resources`,
+each list member carries the same key as `member`, while `name` remains the
+declaration name. `expect perf query <resource>` sums its members' asks.
 
 ### What a data module can use
 
@@ -1084,7 +1116,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 
 | Available on every executor | Notes on Hermes |
 | --- | --- |
-| `fetch`, `Headers`, `Response` | Grant-checked; `signal` aborts, and the host cancels the request (below). A request `body` accepts a string, `URLSearchParams`, or bytes from an `ArrayBuffer` or view (such as `storage.fs.readFile`'s bytes). Unless `headers` already names a `Content-Type` (case-insensitively, even an empty value), a string adds `text/plain;charset=UTF-8` and `URLSearchParams` adds `application/x-www-form-urlencoded;charset=UTF-8`, including empty strings and forms. The prelude adds none for bytes or an absent body; on Apple, URLSession adds `application/x-www-form-urlencoded` to an untyped POST with a body, including bytes. As Fetch does, a body on a GET or HEAD, or a view on a `SharedArrayBuffer` or resizable buffer, rejects, and a detached buffer sends no bytes. Natively, in the wasm target's module realms and with `exactStream` on the web JS target, a `ReadableStream` request body rejects with a `TypeError` before sending; collect it with `await new Response(stream).arrayBuffer()` first. `exactBodyFrom: "app:/tmp/…"` sends an app file instead: the host reads it when it sends the request, under `fs.read` as `readFile` is, at most 64 MiB, and the bytes never enter JavaScript, so a 2 MB upload costs the answer's step nothing; with `body`, or on a GET or HEAD, it is a `TypeError`, and a missing file, a denied path or one over 64 MiB rejects the fetch (`FetchError`, kind `Refused`, naming why) before anything is sent, as does a host with no app files (a drive with no scratch store) or none built yet (Windows), with kind `Unsupported`; Exact adds no Content-Type (Apple's POST default above still applies; LLP 1108 D6 R2). An older binary's prelude would send it as an empty body, so a native app with a TypeScript data module carries `typescriptRuntime` in its compatibility id: the first build after this change gives every such app a new id, and each needs a new binary once. `exactBodyTo: "app:/cache/…"` is the reverse, for a download: the host writes a 2xx reply's body into that app file as it arrives, under `fs.write` as `writeFile` is, and the bytes never enter JavaScript, so a large file costs neither the answer's step nor the engine's 64 MiB heap. The body goes to a staging file beside the target, which replaces the target only once the body is complete; a failure, an abort, the deadline or a body over the bound leaves the target as it was. The bound is `exactIndependentHttp.maxResponseBytes`, which may then be up to 1 GiB, or 1 GiB when none is given. The `Response` resolves once the file is in place, with `status`, `ok` and `headers` as received, an empty body, and `exactBodyTo: {path, bytes}`, the bytes written (absent or `null` on any other response). A reply that is not 2xx is not written: the file is untouched and its body is read as usual, at most 1 MiB, so the server's error is readable. A path that is not a plain `app:/` one, a HEAD, or `exactStream` beside it is a `TypeError`; a denied path or a missing folder rejects the fetch (`FetchError`, kind `Refused`) before anything is sent, and a host with no app files does so with kind `Unsupported`. It may come with a `body` or `exactBodyFrom`. On the web the body becomes a Blob the browser holds, stored in the page's store in one transaction (LLP 1108 D6 R2, 2026-10-26). An older prelude would ignore it and read the body into memory, so it moves `typescriptRuntime` to 4. `redirect` is Fetch's: `follow` (the default), `error` (a redirect rejects the fetch), or `manual`, which answers with the 3xx itself; natively its `Location` header is readable (an OAuth step whose redirect names an app scheme), while a browser gives its opaque redirect (status 0, no headers); any other word is a `TypeError`. An older prelude would ignore it and follow, so it moves `typescriptRuntime` to 2: such an app needs a new binary once more, and a cohort on an older binary gets no bundle that relies on it. A `Response` has `status`, `ok`, `statusText`, `headers`, `bodyUsed`, `text()`, `json()`, `arrayBuffer()`, `clone()`, as Fetch's does: a body reads once, a clone of a read one is a `TypeError`, a fetched reply's headers and a redirect's take no change, and a response's own refuse `Set-Cookie`; no `body` getter, `Request`, `Blob` or `FormData`. `new Response(body, init)`, `Response.json` and `Response.redirect` make a reply as Fetch does (a demo's server in the app), from a string, `URLSearchParams`, bytes or a `ReadableStream`. A stream brings no Content-Type; `text()`, `json()` and `arrayBuffer()` read its `Uint8Array` chunks to the end, rejecting any other chunk with a `TypeError` and propagating stream errors. A locked or already-read stream is refused; `bodyUsed` tracks reads and cancellation, and `clone()` tees an unread, unlocked stream so each response reads independently. A module that names `.clone`, `statusText` or `bodyUsed` needs `typescriptRuntime` 7, as an older prelude makes one with no status and no body, reads a body again, or throws. `Response`, `ReadableStream`, `TransformStream`, `CompressionStream` and `DecompressionStream` require runtime 8 so stream bodies cannot reach an older prelude that stringifies them. Natively and in the wasm target's module realms, `Response.redirect` takes only an absolute URL (a relative one is a `TypeError`; the web JS executor resolves it as the browser does), and natively a fetched reply's `statusText` is `""`; in the wasm target's browser realms, which are not hardened, a `Response`'s headers take no guard, and an app that replaces an intrinsic there (a prototype's method, `Math`, a `WeakMap`'s `get`) changes what `Response` does, as it changes what any code in that realm does, while what an app gives a `Response` (an object's own properties, its iterator, its conversion hooks) is read as Fetch reads it on every host |
+| `fetch`, `Headers`, `Response` | Grant-checked; `signal` aborts, and the host cancels the request (below). A request `body` accepts a string, `URLSearchParams`, or bytes from an `ArrayBuffer` or view (such as `storage.fs.readFile`'s bytes). Unless `headers` already names a `Content-Type` (case-insensitively, even an empty value), a string adds `text/plain;charset=UTF-8` and `URLSearchParams` adds `application/x-www-form-urlencoded;charset=UTF-8`, including empty strings and forms. The prelude adds none for bytes or an absent body; on Apple, URLSession adds `application/x-www-form-urlencoded` to an untyped POST with a body, including bytes. As Fetch does, a body on a GET or HEAD, or a view on a `SharedArrayBuffer` or resizable buffer, rejects, and a detached buffer sends no bytes. Natively, in the wasm target's module realms and with `exactStream` on the web JS target, a `ReadableStream` request body rejects with a `TypeError` before sending; collect it with `await new Response(stream).arrayBuffer()` first. `exactBodyFrom: "app:/tmp/…"` sends an app file instead: the host reads it when it sends the request, under `fs.read` as `readFile` is, at most 64 MiB, and the bytes never enter JavaScript, so a 2 MB upload costs the answer's step nothing; with `body`, or on a GET or HEAD, it is a `TypeError`, and a missing file, a denied path or one over 64 MiB rejects the fetch (`FetchError`, kind `Refused`, naming why) before anything is sent, as does a host with no app files (a drive with no scratch store) or none built yet (Windows), with kind `Unsupported`; Exact adds no Content-Type (Apple's POST default above still applies; LLP 1108 D6 R2). An older binary's prelude would send it as an empty body, so a native app with a TypeScript data module carries `typescriptRuntime` in its compatibility id: the first build after this change gives every such app a new id, and each needs a new binary once. `exactBodyTo: "app:/cache/…"` is the reverse, for a download: the host writes a 2xx reply's body into that app file as it arrives, under `fs.write` as `writeFile` is, and the bytes never enter JavaScript, so a large file costs neither the answer's step nor the engine's 64 MiB heap. The body goes to a staging file beside the target, which replaces the target only once the body is complete; a failure, an abort, the deadline or a body over the bound leaves the target as it was. The bound is `exactIndependentHttp.maxResponseBytes`, which may then be up to 1 GiB, or 1 GiB when none is given. The `Response` resolves once the file is in place, with `status`, `ok` and `headers` as received, an empty body, and `exactBodyTo: {path, bytes}`, the bytes written (absent or `null` on any other response). A reply that is not 2xx is not written: the file is untouched and its body is read as usual, at most 1 MiB, so the server's error is readable. A path that is not a plain `app:/` one, a HEAD, or `exactStream` beside it is a `TypeError`; a denied path or a missing folder rejects the fetch (`FetchError`, kind `Refused`) before anything is sent, and a host with no app files does so with kind `Unsupported`. It may come with a `body` or `exactBodyFrom`. On the web the body becomes a Blob the browser holds, stored in the page's store in one transaction (LLP 1108 D6 R2, 2026-10-26). An older prelude would ignore it and read the body into memory, so it moves `typescriptRuntime` to 4. `redirect` is Fetch's: `follow` (the default), `error` (a redirect rejects the fetch), or `manual`, which answers with the 3xx itself; natively its `Location` header is readable (an OAuth step whose redirect names an app scheme), while a browser gives its opaque redirect (status 0, no headers); any other word is a `TypeError`. An older prelude would ignore it and follow, so it moves `typescriptRuntime` to 2: such an app needs a new binary once more, and a cohort on an older binary gets no bundle that relies on it. `cache` is Fetch's `"default"` (unsaid), `"no-store"`, `"reload"`, `"no-cache"`, `"force-cache"` or `"only-if-cached"`, controlling the native cache for a resource's `GET` and the browser's cache on the web; any other value is a `TypeError`, and a module that names it needs `typescriptRuntime` 11. A `Response` has `status`, `ok`, `statusText`, `headers`, `bodyUsed`, `text()`, `json()`, `arrayBuffer()`, `clone()`, as Fetch's does: a body reads once, a clone of a read one is a `TypeError`, a fetched reply's headers and a redirect's take no change, and a response's own refuse `Set-Cookie`; no `body` getter, `Request`, `Blob` or `FormData`. `new Response(body, init)`, `Response.json` and `Response.redirect` make a reply as Fetch does (a demo's server in the app), from a string, `URLSearchParams`, bytes or a `ReadableStream`. A stream brings no Content-Type; `text()`, `json()` and `arrayBuffer()` read its `Uint8Array` chunks to the end, rejecting any other chunk with a `TypeError` and propagating stream errors. A locked or already-read stream is refused; `bodyUsed` tracks reads and cancellation, and `clone()` tees an unread, unlocked stream so each response reads independently. A module that names `.clone`, `statusText` or `bodyUsed` needs `typescriptRuntime` 7, as an older prelude makes one with no status and no body, reads a body again, or throws. `Response`, `ReadableStream`, `TransformStream`, `CompressionStream` and `DecompressionStream` require runtime 8 so stream bodies cannot reach an older prelude that stringifies them. Natively and in the wasm target's module realms, `Response.redirect` takes only an absolute URL (a relative one is a `TypeError`; the web JS executor resolves it as the browser does), and natively a fetched reply's `statusText` is `""`; in the wasm target's browser realms, which are not hardened, a `Response`'s headers take no guard, and an app that replaces an intrinsic there (a prototype's method, `Math`, a `WeakMap`'s `get`) changes what `Response` does, as it changes what any code in that realm does, while what an app gives a `Response` (an object's own properties, its iterator, its conversion hooks) is read as Fetch reads it on every host |
 | `structuredClone` | No transfer list |
 | `ReadableStream`, `WritableStream`, `TransformStream`, their readers, writers and controllers, `CountQueuingStrategy`, `ByteLengthQueuingStrategy` | WHATWG Streams, with `pipeTo`, `pipeThrough`, `tee`, `for await` and `ReadableStream.from`. No byte streams: `type: "bytes"` and a BYOB reader are a `TypeError` |
 | `DecompressionStream`, `CompressionStream` | WHATWG Compression's `"deflate"`, `"deflate-raw"` and `"gzip"`, worked by native code in the turn that writes each chunk: 8 MB of JSON inflates from 1.4 MB in about 25 ms of that turn's budget, and writing it in slices with `await scheduler.yield()` between spreads it over turns of their own. Its errors are the standard's `TypeError`s: corrupt data, data after the end, input that ends before its end at `close()`, a chunk that is not an `ArrayBuffer` or view. One stream may span many writes: Discord's `zlib-stream` (one zlib stream across a socket's messages, each ending in a sync flush) inflates message by message, each write's output queued once it settles; keep a `read()` pending, as a write waits for one |
@@ -1138,18 +1170,40 @@ can also hide the response and yield `Network`. Exact API grants do not
 sandbox page code: it can call browser `fetch` directly, subject to the
 rendered page's CSP where one is served.
 
-On native hosts, ordinary ordered `GET`/`HEAD` reads wait in the same FIFO as
-writes: up to 128 queued, running and unconsumed requests, with at most 64 MiB
-of waiting request buffers. Other ordered work retains a 16-request admission
-bound. A full queue rejects explicitly; the runtime never restarts the whole
-source on that refusal, since earlier turns may have written already. For
-example, 20 resources fetching once beside one source fetching 20 times can
-all wait and answer. A failed resource keeps its last value; `refresh` asks
-again. See LLP 1041 §8.4 for the byte reservations and cancellation policy.
+On native hosts, a resource's plain HTTP requests overlap, up to six at a
+time, and their replies are delivered in the order asked (LLP 1162 D1, D2).
+A TypeScript resource's answer hands over every request it has made, so
+`Promise.all` overlaps too. Reads wait for earlier sends, storage steps and
+native continuations; those wait for the reads before them. In the sequence,
+requests with `exactBodyFrom` or `exactBodyTo` still run one at a time.
 
-That queue runs one request at a time, so a screen that reads twenty feeds
-waits for each in turn. A read whose request and reply may both be handled
-out of order can leave it: `fetch(url, { exactIndependentHttp:
+Resource `GET`/`HEAD` reads retain the bound of 128 queued, running and
+unconsumed requests, with at most 64 MiB of waiting request buffers. A
+resource's other methods, including a GraphQL `POST`, overlap too, but count
+against the 16-request effect bound and wait when it is full. They are never
+aborted when their answer is let go. Other ordered work retains that
+16-request admission bound and rejects explicitly when full; the runtime
+never restarts the whole source on that refusal, since earlier turns may have
+written already. For example, 20 resources fetching once beside one resource
+fetching 20 times can all wait and answer. A failed resource keeps its last
+value; `refresh` asks again. See LLP 1041 §8.4 for the byte reservations and
+cancellation policy.
+
+A mutation's answer hands over one request at a time, in order. Sends of the
+same `parallel` mutation overlap, up to three at a time on the six shared
+workers. They wait for everything before them except the other sends of
+their mutation; later work waits for them. Replies retain the order asked.
+
+Native hosts keep a resource's `GET` reply when it says how long it is fresh
+or carries a validator (LLP 1162 D4): in memory, 16 MiB per runtime, gone with
+the process. An entry answers only a request equal in method, URL and every
+header; a stale reply is revalidated when it has a validator. `refresh` and a
+declared `refreshes` go to the network and replace the entry, and a successful
+write to a URL drops that URL's entries. A browser uses its own cache; the
+render server keeps none.
+
+A read whose request and reply may both be handled out of order can leave
+the sequence altogether: `fetch(url, { exactIndependentHttp:
 { maxResponseBytes: 4194304 } })` in TypeScript, or
 `Request::get(url).independent_http(4 << 20)` from a Rust source. A native app
 then runs up to six such reads at once, within their own budget of 128
@@ -1158,15 +1212,16 @@ running read counts its ceiling, and one that does not fit waits for the reads
 before it, so keep the ceiling near the largest reply you expect. An open
 stream (`exactStream`) counts twice its ceiling on the same budget for as long
 as it is open, and a read whose ceiling does not fit beside the open streams is
-refused when it is made. A download written to a file (`exactBodyTo`) counts
+refused when it is made or while it waits if a later stream takes its room.
+A download written to a file (`exactBodyTo`) counts
 only the 1 MiB it can hold, whatever its ceiling. A browser has no lanes and schedules every fetch itself, so
 there only the ceiling applies. On every host a reply larger than
 `maxResponseBytes` fails as `refused`. The ceiling is 1 byte to 64 MiB (1 GiB
 with `exactBodyTo`), and anything else is a `TypeError`. A `GET` is
-not independent by default, because a source may depend on its replies
-arriving in order. Leave writes, and any read whose parse depends on an
-earlier reply, in the queue. Storage steps and native continuations cannot
-opt out of it.
+not independent by default: ordinary resource reads already overlap, while
+an independent reply settles as it arrives. Leave writes, and any read whose
+parse depends on an earlier reply, in the queue. Storage steps and native
+continuations cannot opt out of it.
 
 On Hermes each turn of an answer has 100 ms of wall clock: its call, or its
 resumption after a `fetch`, storage step or yield it awaited, until it awaits
@@ -1543,7 +1598,8 @@ of them, wait; one more ends the stream. The web's wasm host maps each message
 now and refuses a promise. An `http:`/`https:` URL is read as server-sent
 events under `net.fetch`; a `ws:`/`wss:` URL is a WebSocket under
 `net.websocket` alone. Except for TypeScript sources on the web JS target and
-native hosts, described below, sockets are receive-only. An event is
+native hosts, described below, and Rust sources on native hosts ("Rust data
+sources", "A two-way socket"), sockets are receive-only. An event is
 `{type, data, lastEventId, coalesced}`; messages that arrive faster than they
 commit coalesce to the newest, counted in `coalesced`. The end is
 `{type: 'error', kind, message, status}`: `kind` is `Network` (the far side
@@ -1638,7 +1694,11 @@ out (a limit, the grants, the local network's rule) was never sent, and
 It must be an `http:` or `https:` request other than GET or HEAD, without
 `exactLongPoll`, and with `redirect` left to follow (XMLHttpRequest can only
 follow), or it is a `TypeError`. On the web a cross-origin upload asks a CORS
-preflight, as any XMLHttpRequest with an upload listener does. An older
+preflight, as any XMLHttpRequest with an upload listener does. Uploads are
+sent without consulting the browser's cache. `only-if-cached` fails with a
+network error and sends nothing; a forced ask overrides it, as for other
+fetches. The other cache modes need no change to the upload, and Exact adds
+no cache request headers (LLP 1162 D4). An older
 prelude would ignore the option and read the reply as a byte stream, so a
 module that uses it needs `typescriptRuntime` 5, which it shares with the
 abort changes above (no binary had shipped 5): the bake records each
@@ -1681,8 +1741,9 @@ every host take it, and Rust sources with `Request::long_poll(cursor, from)` on
 a stream's request. An older prelude would ignore it and open an event stream,
 so it moves `typescriptRuntime` to 3: a native app with a TypeScript data module
 needs a new binary once more. A Rust source's long poll is a new kind on the
-module seam, so the Rust ABI moves to 4, and every app with Rust data sources
-needs a new binary once too.
+module seam. The Rust module ABI is 7: long polls, two-way sockets
+(LLP 1016.003), cache modes (LLP 1162 D4) and admitted secret names
+(LLP 1048.000 D9) require a matching binary.
 
 On the **web JS target and on macOS, iOS, Linux and Windows, TypeScript sources**
 receive `(event, socket)` for a WebSocket (LLP 1016.000 D7). Keep the handle by your resource's identity in
@@ -2222,8 +2283,14 @@ half a second is left on a wake of its own that runs no action and that
 loses no step. The bound is the same for a sequence's voices and a tap's: at
 most 32 voices sound at any voice's start (another is dropped and journaled),
 and at most 256 wait to start (another tap is dropped; a sequence stops
-expanding early and wakes when the first starts, dropping nothing). The
-Apple mixer has 288 slots and a ring of 1024 ops for it (a Play that finds no free slot takes one whose voice ends inside the buffer, mixing that voice's last frames first), and frees a voice
+expanding early and wakes when the first starts, dropping nothing).
+Retracting a future group voice restores the preceding voice's pending
+cut after the commit's commands and sequence expansion. If that extension
+exceeds the bound, excess future voices are cancelled and journaled;
+sounding voices play on. At each start, the last admitted voices are
+cancelled first.
+The Apple mixer has 288 slots and a ring of
+1024 ops for it (a Play that finds no free slot takes one whose voice ends inside the buffer, mixing that voice's last frames first), and frees a voice
 retracted before it starts at once; the web lets its node go. A step's haptic
 plays on the main thread at its time (Apple's feedback generators;
 `navigator.vibrate` on the web, where it exists): a blocked main thread makes
@@ -2809,7 +2876,7 @@ Browser navigation, both Apple cold/warm handlers and malformed-link refusals ar
 tested. The page cannot detect installation, and does not trigger signing/builds.
 
 **Limits.** Linux native hosts don't run TypeScript yet (use a Rust data crate
-there); `app.ts` imports pure-JavaScript packages only (Node's modules, the DOM, a computed `import()` and native addons are refused; a use that a `typeof` test guards is not, nor a read through the global object, such as `globalThis.process?.env`, whose value is only tested, compared, spread into an object, returned, or held in a `const` whose uses are guarded in turn). Code from a string throws on every host through `Function` and `eval`, and through their own `constructor`: each throws `SyntaxError: Parsing source code unsupported`, as Hermes does. The build warns (`code-from-string`) at the uses of the global `Function` or `eval` it can see by name, a package's or `app.ts`'s: a direct call or `new`, and a member of `globalThis`. A use reached another way builds without a warning and throws the same error when it runs. Either way, code that uses them works only if it catches that error and takes another path, as zod does. What reaches `Function.prototype.constructor` or a function's own `constructor` (`(function () {}).constructor`) still runs code from a string on the web, and not on Hermes: the warning is a tripwire, not a sandbox, and refuses nothing. Under the render server's CSP and in the JS server render that throws too. A package may not read `import.meta.env`, which is app.ts's to read and pass in; a read the bundle drops, in a function nothing calls, is not one. That check keeps a module portable between Hermes and the page; it is no security boundary: on the web the module runs in the page's realm, and a package is code the author chose, trusted as their own. A package's `/// <reference lib>` to an ES library newer than the data module's (`esnext.disposable`) loads nothing, so what that library declares (`Symbol.dispose`, which Hermes lacks) stays undeclared for the app. Signed delivery of TypeScript and Rust
+there); `app.ts` imports pure-JavaScript packages only (Node's modules, the DOM, a computed `import()` and native addons are refused; a use that a `typeof` test guards is not, nor a read through the global object, such as `globalThis.process?.env`, whose value is only tested, compared, spread into an object, returned, or held in a `const` whose uses are guarded in turn). Code from a string throws on every host through `Function` and `eval`, and through their own `constructor`: each throws `SyntaxError: Parsing source code unsupported`, as Hermes does. The build warns (`code-from-string`) at the uses of the global `Function` or `eval` it can see by name, a package's or `app.ts`'s: a direct call or `new`, a member of `globalThis`, destructuring a global object's property, a parameter initializer, or a JSX component name (`<Function />`). A use reached another way builds without a warning and throws the same error when it runs. Either way, code that uses them works only if it catches that error and takes another path, as zod does. What reaches `Function.prototype.constructor` or a function's own `constructor` (`(function () {}).constructor`) still runs code from a string on the web, and not on Hermes: the warning is a tripwire, not a sandbox, and refuses nothing. Under the render server's CSP and in the JS server render that throws too. A package may not read `import.meta.env`, which is app.ts's to read and pass in; a read the bundle drops, in a function nothing calls, is not one. That check keeps a module portable between Hermes and the page; it is no security boundary: on the web the module runs in the page's realm, and a package is code the author chose, trusted as their own. A package's `/// <reference lib>` to an ES library newer than the data module's (`esnext.disposable`) loads nothing, so what that library declares (`Symbol.dispose`, which Hermes lacks) stays undeclared for the app. Signed delivery of TypeScript and Rust
 modules isn't implemented, so set `deploy.store` to `"0"`. The history of how this
 was proved on each host is in LLP 1027
 and git.
@@ -3001,6 +3068,55 @@ generates the module bindings. For a build script,
 pass to `contract::rust`; the names are compiler metadata, outside the binary
 plan. Both map scoped names such as `Point__exact` to `PointExact`.
 `Value::Number`, `Value::str`, `Value::Bool` and `Value::list` are the rest.
+
+### A two-way socket
+
+On native hosts a Rust source sends on a WebSocket with TypeScript's rules
+(LLP 1016.003). Answer `Answer::Later(Request::socket(url))` for a `ws:` or
+`wss:` URL under a `net.websocket` grant. Its `parse` is the mapper: it gets
+an `Outcome::Message` whose `event` is `open`, then one for each frame in
+order (text in `data`, a binary frame in `binary`), then `Outcome::Closed {
+code, reason, was_clean }`. While it answers `open` or a frame,
+`store.socket()` is that socket's handle; keep it to send from a mutation:
+
+```rust
+fn answer(&mut self, store: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
+    match source {
+        "book" => Ok(Answer::Later(Request::socket("wss://stream.example/ws"))),
+        "subscribe" => {
+            let socket = self.book.ok_or(DataError::Unavailable("the book is not open".into()))?;
+            socket.send_text(store, r#"{"method":"SUBSCRIBE","params":["depth.SOL_USDC"]}"#)?;
+            Ok(Answer::Now(Value::Bool(true)))
+        }
+        _ => Err(DataError::UnknownSource(source.into())),
+    }
+}
+fn parse(&mut self, store: &mut Store, _: &str, _: &[Value], outcome: Outcome) -> Result<Answer, DataError> {
+    match outcome {
+        Outcome::Message(m) if m.event == "open" => {
+            let socket = store.socket().expect("a socket's mapper has its handle");
+            self.book = Some(socket);
+            socket.send_text(store, r#"{"method":"SUBSCRIBE","params":["trade.SOL_USDC"]}"#)?;
+            Ok(Answer::Now(Value::str("open")))
+        }
+        Outcome::Message(m) => Ok(Answer::Now(Value::str(&m.data))),
+        Outcome::Closed { code, .. } => Ok(Answer::Now(Value::str(&format!("closed {code}")))),
+        other => Err(DataError::Unavailable(other.summary())),
+    }
+}
+```
+
+`Socket` has `send_text`, `send_binary`, `close(store, code, reason)`,
+`buffered_amount` and `is_open`. A mutation's `answer` may send on any open
+socket of the app's resources, and must then answer `Answer::Now`; a mapper
+sends only on its own socket. What either stages goes once its commit
+stands. A refusal is an `Err` whose text names the DOM exception a
+TypeScript handle would throw: `InvalidStateError` for a socket not open, a
+handle from before the resource was asked again, or a send from a resource's
+answer; `QuotaExceededError` past 256 operations or 1 MiB a call, which
+fails a mapper's frame even when it ignores the error. The web refuses a
+Rust socket request by name, and a worker-placed source's socket only
+listens.
 
 ### Where data lives: app storage, not secrets
 

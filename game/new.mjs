@@ -873,21 +873,22 @@ function agentNotes(dir, name, {game = false} = {}) {
   return `${BEGIN}
 # ${name}: an Exact app
 
-\`app.contract\` is the view, \`app.ts\` its data module, \`app.test.contract\` its tests, \`app.json\`
-the manifest: set its \`app.name\` and \`app.id\` before the first build. The app uses the exact2
-checkout at \`${pathFrom(from, ROOT)}\` by path (\`EXACT\` overrides it).
+\`app.contract\` is the view, \`app.ts\` the data module, \`app.test.contract\` the tests, \`app.json\`
+the manifest: set \`app.name\` and \`app.id\` before building. The app uses Exact at
+\`${pathFrom(from, ROOT)}\` by path (\`EXACT\` overrides it).
 
 This file is already in your instructions. Start from the nearest pattern: \`bun exact.mjs
 pattern\` lists them and \`pattern <name>\` writes one, tested. ${doc('start-here-site.md')} (a site) or
 ${doc('start-here.md')} is the only required reading. \`bun exact.mjs contract vocab <name>\` answers a
 name (none: the card); \`bun exact.mjs docs <heading words>\` a guide's
 section. Run \`bun exact.mjs verify\` when the features work, and \`verify ios|android\` at the end for a
-phone app. When an iPhone app is ready for the person to try, run \`bun exact.mjs share\` and give
-them the link it prints; run it again after each change they should see. \`bun exact.mjs help\` lists the verbs, and your own in app.json \`"commands"\`.
+phone app. When an iPhone app is ready to try, run \`bun exact.mjs share\` and send its link;
+repeat for each change the person should see. \`bun exact.mjs help\` lists the verbs, including
+app.json's \`"commands"\`.
 \`bun exact.mjs update\` refreshes files.${authoredApp(dir) ? ` \`bun exact.mjs lock\` repairs Cargo lock drift.
-\`bun exact.mjs update --without linux\` stops shipping Linux.` : ` A native verb (\`ios\`, \`mac\`, \`linux\`, \`android\`,
-\`windows\`) names its platform in app.json the first time it runs and builds it in a generated
-workspace; \`update --without <platform>\` stops it.`}
+\`bun exact.mjs update --without linux\` stops shipping Linux.` : ` Native verbs (\`ios\`, \`mac\`, \`linux\`, \`android\`, \`windows\`)
+name their platform in app.json on first use and build in a generated workspace;
+\`update --without <platform>\` stops shipping it.`}
 \`bun ${sdk('scripts/exact.mjs')} setup --check\` names what a native build lacks.
 ${snapbackNotes(dir, from)}
 

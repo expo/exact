@@ -114,7 +114,11 @@ impl<D: DataSource> Runner<D> {
             .collect();
         let (mut answers, mut open) = (Vec::new(), Vec::new());
         let declared = self.declared_resources().len();
-        for (i, (row, state)) in self.plan.resources.iter().zip(&self.resources).enumerate() {
+        for (i, (row, state)) in self
+            .resource_rows()
+            .zip(self.resources.iter().map(|row| &row.state))
+            .enumerate()
+        {
             // An element's answer is asked again by its list's page.
             if i >= declared {
                 break;
@@ -124,7 +128,7 @@ impl<D: DataSource> Runner<D> {
             if self.device_answers(source) {
                 continue;
             }
-            if self.stale[i] {
+            if self.resources[i].stale {
                 if !pending.iter().any(|p| p == name) {
                     pending.push(name.to_string());
                 }
@@ -132,7 +136,7 @@ impl<D: DataSource> Runner<D> {
             }
             if let Some(state) = state
                 .as_ref()
-                .filter(|state| !self.pending_res[i] && !state.placeholder)
+                .filter(|state| !self.resources[i].pending && !state.placeholder)
             {
                 answers.push((
                     name.to_string(),
@@ -162,16 +166,16 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         checkpoint: &Checkpoint,
     ) -> (Vec<bool>, Vec<usize>, String) {
-        let mut seeded = vec![false; self.plan.resources.len()];
+        let mut seeded = vec![false; self.resources.len()];
         let mut open = Vec::new();
         if checkpoint.logic.as_deref() != self.data.revision() {
             let note = "checkpoint: other logic answered it; its answers are asked again";
             return (seeded, open, note.into());
         }
         for (i, seed) in seeded.iter_mut().enumerate() {
-            let row = &self.plan.resources[i];
+            let row = self.resource_row(i);
             let (name, source) = (self.plan.str(row.name), self.plan.str(row.source));
-            if self.resources[i].is_some() || self.device_answers(source) {
+            if self.resources[i].state.is_some() || self.device_answers(source) {
                 continue;
             }
             let Some((_, _, args, value)) = checkpoint
@@ -184,7 +188,7 @@ impl<D: DataSource> Runner<D> {
             if args.len() != row.args.len as usize || self.check_shape(i, value).is_err() {
                 continue;
             }
-            self.resources[i] = Some(ResourceState {
+            self.resources[i].state = Some(ResourceState {
                 inspection_generation: 0,
                 args: args.clone(),
                 value: crate::held::Held::new(value.clone()),

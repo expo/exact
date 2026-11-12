@@ -290,6 +290,8 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("-exact-content-transition", "exact LLP 1077", AttrTarget::Styles(&[StyleId::ContentTransition])),
     ("-exact-scroll-edge-effect", "exact LLP 1077", AttrTarget::Styles(&[StyleId::ScrollEdgeEffect])),
     ("-exact-hover-effect", "exact LLP 1077", AttrTarget::Styles(&[StyleId::HoverEffect])),
+    // @ref LLP 1053.000 — the tint of a box's glass material (`UIGlassEffect.tintColor`).
+    ("-exact-glass-tint", "exact LLP 1053.000", AttrTarget::Styles(&[StyleId::GlassTint])),
     ("-exact-smart-invert", "exact LLP 1077", AttrTarget::Styles(&[StyleId::SmartInvert])),
     // @ref LLP 1116.001 D1.4 — a text shrinks to fit its line, down to half.
     ("-exact-fit", "exact LLP 1116.001 D1.4", AttrTarget::Styles(&[StyleId::Fit])),

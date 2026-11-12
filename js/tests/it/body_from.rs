@@ -78,6 +78,7 @@ fn run(
     executor
         .run(
             RequestOut {
+                class: exact_runner::RequestClass::Ordered,
                 ticket: 1,
                 target: "upload".into(),
                 request,

@@ -2,9 +2,20 @@
 // pulls as a finger does (NavigationCollapseIOSTests).
 component PullRefresh
   state pulls = 0
+  state waiting = false
+  state rests = 0
   action reload
     pulls = pulls + 1
+  action waitForRest
+    waiting = true
+  action rested
+    rests = rests + 1
+    waiting = false
+  task rest when waiting
+    every(100, rested, wait=scrollend)
   view
     scroll testId="feed" refresh=reload refreshing=false height="100%"
       text `${pulls}` testId="pulls"
+      button "Wait for rest" press=waitForRest testId="wait-for-rest"
+      text `${rests}` testId="rests"
       column height=1600

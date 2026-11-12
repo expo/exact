@@ -5,7 +5,7 @@ use exact_runner::{
     Answer, DataError, DataSource, Dispatch, InFlight, Interrupt, Outcome, Placement, Store, Target,
 };
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::PathBuf,
 };
 #[cfg(not(target_arch = "wasm32"))]
@@ -46,7 +46,10 @@ pub struct Storage<D> {
     effects: bool,
     next: u64,
     pending: BTreeMap<u64, Pending>,
+    more: HashMap<Target, Vec<exact_runner::Request>>,
     alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(not(target_arch = "wasm32"))]
+    storage_changed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// A scripted drive (`EXACT_AGENT=1`): storage is the scratch store it
     /// names, else none.
     agent: bool,
@@ -67,7 +70,10 @@ impl<D> Storage<D> {
             effects: false,
             next: 0,
             pending: BTreeMap::new(),
+            more: HashMap::new(),
             alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            #[cfg(not(target_arch = "wasm32"))]
+            storage_changed: Default::default(),
             agent: std::env::var("EXACT_AGENT").as_deref() == Ok("1"),
             logs: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -89,6 +95,25 @@ impl<D: DataSource> Storage<D> {
             .ok_or_else(|| unavailable("storage token space exhausted"))?;
         self.pending.insert(self.next, pending);
         Ok(self.next)
+    }
+
+    fn step_set(
+        &mut self,
+        target: Target,
+        store: &mut Store,
+        result: Result<Answer, DataError>,
+    ) -> Result<Answer, DataError> {
+        let answer = self.step(store, result)?;
+        if matches!(answer, Answer::Later(_)) {
+            let mut more = Vec::new();
+            for request in self.source.more_for(target) {
+                if let Answer::Later(request) = self.step(store, Ok(Answer::Later(request)))? {
+                    more.push(request);
+                }
+            }
+            self.more.insert(target, more);
+        }
+        Ok(answer)
     }
 
     fn step(
@@ -165,7 +190,13 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
         self.source.prepare_snapshot(module, deadline)
     }
     fn take_storage_changed(&mut self) -> bool {
-        self.source.take_storage_changed()
+        let changed = self.source.take_storage_changed();
+        #[cfg(not(target_arch = "wasm32"))]
+        let changed = self
+            .storage_changed
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+            || changed;
+        changed
     }
 
     fn note_storage_changed(&mut self) {
@@ -213,7 +244,26 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
         args: &[Value],
     ) -> Result<Answer, DataError> {
         let answer = self.source.answer_for(target, store, name, args);
-        self.step(store, answer)
+        self.step_set(target, store, answer)
+    }
+    fn more_for(&mut self, target: Target) -> Vec<exact_runner::Request> {
+        self.more.remove(&target).unwrap_or_default()
+    }
+    fn parse_fetch_for(
+        &mut self,
+        target: Target,
+        fetch: Option<u64>,
+        store: &mut Store,
+        name: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        let answer = self
+            .source
+            .parse_fetch_for(target, fetch, store, name, args, outcome)?;
+        answer
+            .map(|a| self.step_set(target, store, Ok(a)))
+            .transpose()
     }
     fn parse_for(
         &mut self,
@@ -224,7 +274,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
         outcome: Outcome,
     ) -> Result<Answer, DataError> {
         let answer = self.source.parse_for(target, store, name, args, outcome);
-        self.step(store, answer)
+        self.step_set(target, store, answer)
     }
     fn app_id(&self) -> &str {
         self.source.app_id()
@@ -468,8 +518,9 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
         &mut self,
         store: &Store,
         in_flight: exact_runner::InFlight<'_>,
+        fetch: Option<u64>,
     ) -> Option<(u64, exact_runner::Request)> {
-        let (token, mut request) = self.source.timer_before_reply(store, in_flight)?;
+        let (token, mut request) = self.source.timer_before_reply(store, in_flight, fetch)?;
         let child = request.continuation?;
         request.continuation = Some(self.token(Pending::Child(child)).ok()?);
         Some((token, request))
@@ -509,6 +560,8 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
                 let paths = self.directories.clone();
                 let owner = self.document_owner;
                 let alive = self.alive.clone();
+                let storage_changed = self.storage_changed.clone();
+                let app_grants = self.source.grants().to_owned();
                 let refused =
                     paths.is_none() && self.agent && !native::independent_storage(&payload);
                 if refused && !self.told_agent {
@@ -528,7 +581,14 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Storage<D> {
                     if refused {
                         return native::agent_refusal();
                     }
-                    native::run(paths.as_ref(), &grants, &payload, owner)
+                    native::run(
+                        paths.as_ref(),
+                        &grants,
+                        &app_grants,
+                        &payload,
+                        owner,
+                        &storage_changed,
+                    )
                 }))
             }
         }

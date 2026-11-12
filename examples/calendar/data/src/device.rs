@@ -8,6 +8,7 @@
 //! access only when they turn it on.
 
 use crate::dates::{self, local_day};
+use crate::empty_store_answer as failed;
 use crate::modules::calendar;
 use chrono_tz::Tz;
 use exact_plan::Value;
@@ -95,13 +96,6 @@ pub(crate) fn answer(walks: &mut Walks, source: &str, args: &[Value]) -> Answer 
     };
     walks.insert(key(source, args), walk);
     first.unwrap_or_else(|code| Answer::Now(failed(source, &code)))
-}
-
-fn failed(source: &str, code: &str) -> Value {
-    match source {
-        "calendarDeviceDays" => days(code, Vec::new()),
-        _ => agenda(code, Vec::new()),
-    }
 }
 
 /// A reply in a walk: the next request, or the answer.

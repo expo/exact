@@ -90,7 +90,7 @@ package struct InlineRadius: Hashable {
     }
     package static func == (a: InlineRadius, b: InlineRadius) -> Bool { a.px == b.px && a.pct == b.pct && a.calc == b.calc }
     package func hash(into hasher: inout Hasher) {
-        hasher.combine(px); hasher.combine(pct); hasher.combine(calc?.handle); hasher.combine(calc?.environment)
+        hasher.combine(px); hasher.combine(pct); hasher.combine(calc?.expression); hasher.combine(calc?.environment)
     }
 }
 

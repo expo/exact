@@ -16,7 +16,7 @@ const name = t => typeof t === 'string' ? { n: 'number', s: 'string', b: 'bool' 
 
 /** `v`, parsed JSON, as a value of type `t`; `undefined` when it is not one. */
 function revive(v, t) {
-  if (t === 'n') return typeof v === 'number' ? v : typeof v === 'string' && v in NONFINITE ? NONFINITE[v] : undefined;
+  if (t === 'n') return typeof v === 'number' ? v : typeof v === 'string' && Object.hasOwn(NONFINITE, v) ? NONFINITE[v] : undefined;
   if (t === 's') return typeof v === 'string' ? v : undefined;
   if (t === 'b') return typeof v === 'boolean' ? v : undefined;
   if (t[0] === '?') return v === null ? null : revive(v, t[1]);

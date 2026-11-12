@@ -23,7 +23,7 @@ extension NodeView {
     /// start at the content box's edge. A grouped row's field is out by it
     /// already (`layoutField`).
     func nativeEditorRect(in proposed: NSRect) -> NSRect? {
-        guard isNativeTextControl, let rect = kernelContentBox else { return nil }
+        guard pageField == nil, isNativeTextControl, let rect = kernelContentBox else { return nil }
         // Layout's insets less what the drawn box lost to the pixel grid, so
         // the text keeps layout's width (`PixelGridMac.swift`).
         let content = proposed.insetBy(left: rect.minX, top: rect.minY,
@@ -36,7 +36,7 @@ extension NodeView {
     /// content box for its frame; its line is placed as a native one's, and
     /// AppKit's horizontal placement is kept.
     func authoredEditorRect(_ appKit: NSRect, in proposed: NSRect) -> NSRect? {
-        guard !isNativeTextControl, let font = field?.font else { return nil }
+        guard pageField == nil, !isNativeTextControl, let font = field?.font else { return nil }
         let line = cssLine(in: proposed, font: font)
         return NSRect(x: appKit.minX, y: line.minY, width: appKit.width, height: line.height)
     }
@@ -91,7 +91,7 @@ extension NodeView {
         let selection = editingEditor.map { presenter?.fieldSelections.current(self) ?? FieldSelection($0.selectedRange()) }
         keepingEditing(f) {
             f.removeFromSuperview()
-            addSubview(n)
+            (clipBox ?? self).addSubview(n)
             field = n
             if let selection, window?.makeFirstResponder(n) == true {
                 if let selections = presenter?.fieldSelections { selections.restore(self, selection) }
@@ -236,19 +236,19 @@ final class SearchFieldCell: NSSearchFieldCell {
     /// The input's node is its field's delegate, in the page and in the
     /// window's toolbar alike (LLP 1115.002 D2): there too it edits in the
     /// session's editor, which tells the node of a composition and of a
-    /// copy, cut or paste. The rectangles below are the page's: a field
-    /// the toolbar hosts has no node above it, and its geometry is AppKit's.
+    /// copy, cut or paste. The rectangles below use the page's content box;
+    /// a lent field keeps AppKit's geometry.
     override func fieldEditor(for controlView: NSView) -> NSTextView? {
         ((controlView as? NSTextField)?.delegate as? NodeView)?.presenter?.fieldEditor ?? super.fieldEditor(for: controlView)
     }
     override func drawingRect(forBounds rect: NSRect) -> NSRect {
-        (controlView?.superview as? NodeView)?.nativeEditorRect(in: rect) ?? super.drawingRect(forBounds: rect)
+        fieldNode?.nativeEditorRect(in: rect) ?? super.drawingRect(forBounds: rect)
     }
     override func titleRect(forBounds rect: NSRect) -> NSRect {
-        (controlView?.superview as? NodeView)?.nativeEditorRect(in: rect) ?? super.titleRect(forBounds: rect)
+        fieldNode?.nativeEditorRect(in: rect) ?? super.titleRect(forBounds: rect)
     }
     override func searchTextRect(forBounds rect: NSRect) -> NSRect {
-        (controlView?.superview as? NodeView)?.nativeEditorRect(in: rect) ?? super.searchTextRect(forBounds: rect)
+        fieldNode?.nativeEditorRect(in: rect) ?? super.searchTextRect(forBounds: rect)
     }
     override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
         drawingAntialiased(node?.drawsAntialiased == true) { super.drawInterior(withFrame: cellFrame, in: controlView) }

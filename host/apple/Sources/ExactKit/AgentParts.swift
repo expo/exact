@@ -54,6 +54,26 @@ extension Agent {
         return nil
     }
 
+    /// Declared package parts (LLP 1133.021 §9 item 3), resolved through the
+    /// same view lookup a tap uses; an offscreen part stays listed without a frame.
+    static func packageParts(in node: PlatformView) -> [[String: Any]] {
+        let ask = NSSelectorFromString("exactPartIds")
+        var stack = [node]
+        while let v = stack.popLast() {
+            if v.responds(to: ask), let ids = v.perform(ask)?.takeUnretainedValue() as? [String] {
+                return ids.map { id in
+                    let view = packagePart(id, in: v)
+                    let live = view?.window != nil
+                    var part: [String: Any] = ["id": id, "live": live]
+                    if live, let view { part["frame"] = AgreementReport.rect(view.convert(view.bounds, to: nil)) }
+                    return part
+                }
+            }
+            stack.append(contentsOf: v.subviews)
+        }
+        return []
+    }
+
     /// The part a package view hit-tests itself at `point` (in the window):
     /// the window's hit test reaches the package's view, or a view inside it,
     /// and the nearest that answers `exactPartAt:` names the part there. On

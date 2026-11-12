@@ -36,18 +36,22 @@ pub fn geometry(
             Seg::Move(prop(PropId::X1, vp.width), prop(PropId::Y1, vp.height)),
             Seg::Line(prop(PropId::X2, vp.width), prop(PropId::Y2, vp.height)),
         ])),
-        NodeType::SvgCircle => circle(vp.x(style.cx), vp.y(style.cy), vp.d(style.r)),
+        NodeType::SvgCircle => circle(
+            vp.x(style.cx.clone()),
+            vp.y(style.cy.clone()),
+            vp.d(style.r.clone()),
+        ),
         NodeType::SvgEllipse => {
             let (rx, ry) = radii(style, vp);
-            ellipse(vp.x(style.cx), vp.y(style.cy), rx, ry)
+            ellipse(vp.x(style.cx.clone()), vp.y(style.cy.clone()), rx, ry)
         }
         NodeType::SvgRect => {
             let (rx, ry) = radii(style, vp);
             rect(
-                vp.x(style.x),
-                vp.y(style.y),
-                vp.x(style.width),
-                vp.y(style.height),
+                vp.x(style.x.clone()),
+                vp.y(style.y.clone()),
+                vp.x(style.width.clone()),
+                vp.y(style.height.clone()),
                 rx,
                 ry,
             )
@@ -65,13 +69,16 @@ fn radii(style: &StyleProps, vp: Viewport) -> (Option<f32>, Option<f32>) {
             Compare(c) => c.substituted(vp.env)?,
             d => d,
         };
-        let v = vp.resolve(d, basis)?;
+        let v = vp.resolve(d.clone(), basis)?;
         match d {
             Calc(..) | Compare(..) | Env(..) | Segment(..) => Some(v.max(0.0)),
             _ => (v >= 0.0).then_some(v),
         }
     };
-    (r(style.rx, vp.width), r(style.ry, vp.height))
+    (
+        r(style.rx.clone(), vp.width),
+        r(style.ry.clone(), vp.height),
+    )
 }
 
 /// An ellipse as SVG 2 §10.4 draws it; an `auto` radius takes the other's.

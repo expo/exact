@@ -16,38 +16,49 @@ let emptied; // the store once `app:/tmp/picked/` is emptied, at this page's fir
 // the page's launch URL's), so what a pick puts there the data module reads.
 function fileStore(appId) {
   return opened ??= (async () => {
+    let store;
     try {
       const { storageKey } = await import('./storage-environment.js');
       const key = storageKey(appId);
       if (key == null) return null;
       const { createFileStore } = await import('./storage-fs.js');
-      return createFileStore(key);
+      store = createFileStore(key);
+      await store.stat('app:/tmp');
+      return store;
     } catch (error) {
+      store?.close();
       console.warn('exact: the app\'s files are not available', String(error));
       return null;
     }
   })();
 }
 
-/** An `app:/` source for an `image` or `video` (D7): an object URL for the
- * app's own file — one this page picked, or one in its store (a pick the
- * data module kept in `app:/data`, after a reload too) — or '' when there is
- * none. A file that changed gets a new URL; the last one is revoked. */
-async function appURL(path, appId) {
+async function appFile(path, appId) {
   const file = picked.get(path);
-  if (file) return made(path, file, file);
+  // Opening the app's store can succeed while preparing the picked directory fails.
+  const store = await (file ? emptied : fileStore(appId));
+  if (store) return store.blob(path, typeFor(path));
+  if (file) return { blob: file, version: file };
+  throw new Error('this page has no app files');
+}
+
+/** An `app:/` source for an `image` or `video` (D7): an object URL for the
+ * app's current file in its store, or this page's unstored pick — or '' when
+ * there is none. A file that changed gets a new URL; the last one is revoked. */
+async function appURL(path, appId) {
   try {
-    const s = await fileStore(appId);
-    if (!s) return '';
-    const { blob, modifiedMs } = await s.blob(path, typeFor(path));
-    return made(path, blob, `${modifiedMs}:${blob.size}`);
+    const { blob, version } = await appFile(path, appId);
+    return made(path, blob, version);
   } catch {
+    const was = urls.get(path);
+    if (was) URL.revokeObjectURL(was[0]);
+    urls.delete(path);
     return ''; // no such file, or not an app:/data|cache|tmp path: nothing to show
   }
 }
 function made(path, blob, version) {
   const was = urls.get(path);
-  if (was?.[1] === version) return was[0];
+  if (was && was[1] === version) return was[0];
   if (was) URL.revokeObjectURL(was[0]);
   const url = URL.createObjectURL(blob);
   urls.set(path, [url, version]);
@@ -94,7 +105,7 @@ async function framePage(el, state, appId, given, committed, admit) {
   const notGiven = (path, why) => console.warn(`exact: iframe ${state.path}: ${path} is not given (${why})`);
   for (const path of given.paths) {
     if (!GIVEN.test(path)) { notGiven(path, 'a page is given app:/cache and app:/tmp files only'); continue; }
-    try { blobs.set(path, picked.get(path) ?? (await store.blob(path, typeFor(path))).blob); } catch { notGiven(path, store ? 'no such file' : 'this page has no app files'); }
+    try { blobs.set(path, (await appFile(path, appId)).blob); } catch { notGiven(path, store ? 'no such file' : 'this page has no app files'); }
   }
   if (!state.live) return;
   const urls = new Map([...blobs].map(([path, blob]) => [path, URL.createObjectURL(shown(blob))])), dispose = state.dispose;
@@ -119,8 +130,7 @@ export async function appFrame(el, state, appId, committed = () => {}, admit = (
   }
   try {
     const path = state.path.split(/[?#]/, 1)[0];
-    const store = await fileStore(appId);
-    const blob = picked.get(path) ?? (await store.blob(path, typeFor(path))).blob;
+    const { blob } = await appFile(path, appId);
     if (!state.live) return;
     // Chrome refuses PDF viewers in every sandbox, including allow-same-origin.
     if (blob.type.split(';', 1)[0].toLowerCase() === 'application/pdf' && el.hasAttribute('sandbox'))
@@ -235,11 +245,8 @@ globalThis.exact.picker = function install(host) {
       let made;
       try {
         made = await Promise.all(files.map(async ({ path }) => {
-          const name = path.split('/').pop(), type = typeFor(name), file = picked.get(path);
-          if (file) return new File([file], name, { type });
-          const s = await fileStore(host.appId);
-          if (!s) throw new Error('this page has no app files');
-          return new File([(await s.blob(path, type)).blob], name, { type });
+          const name = path.split('/').pop(), type = typeFor(name);
+          return new File([(await appFile(path, host.appId)).blob], name, { type });
         }));
       } catch (e) { return `share: refused: ${e?.message ?? e}`; }
       const members = { ...Object.fromEntries(Object.entries(data).filter(([, v]) => v != null)), files: made };

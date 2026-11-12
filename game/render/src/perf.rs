@@ -51,6 +51,54 @@ fn performance_now() -> f64 {
     }
     PERFORMANCE.with(web_sys::Performance::now)
 }
+thread_local! {
+    // Whether this thread times pipeline creation, and the milliseconds it
+    // has spent creating pipelines since the last `pipeline_ms`.
+    static PIPELINES: std::cell::Cell<(bool, f64)> = const { std::cell::Cell::new((false, 0.)) };
+}
+/// Times this thread's pipeline creation from zero while it lives, when `on`:
+/// a seekable frame reads no clock, so it times nothing. Every return of the
+/// timed work stops it.
+pub(crate) struct PipelineTiming;
+impl PipelineTiming {
+    pub fn start(on: bool) -> Self {
+        PIPELINES.with(|p| p.set((on, 0.)));
+        Self
+    }
+}
+impl Drop for PipelineTiming {
+    fn drop(&mut self) {
+        PIPELINES.with(|p| p.set((false, p.get().1)));
+    }
+}
+/// Whether this thread is timing pipeline creation now.
+pub(crate) fn timing() -> bool {
+    PIPELINES.with(|p| p.get().0)
+}
+/// The milliseconds this thread spent creating pipelines since the last call,
+/// or since its `PipelineTiming` started.
+pub(crate) fn pipeline_ms() -> f64 {
+    PIPELINES.with(|p| {
+        let (on, ms) = p.get();
+        p.set((on, 0.));
+        ms
+    })
+}
+/// Create a pipeline, adding its time to this thread's while timing is on.
+/// A worker thread compiling a variant never times it: it stalls no frame.
+pub(crate) fn pipeline<T>(make: impl FnOnce() -> T) -> T {
+    if !PIPELINES.with(|p| p.get().0) {
+        return make();
+    }
+    let start = Stamp::now();
+    let made = make();
+    let ms = start.elapsed();
+    PIPELINES.with(|p| {
+        let (on, sum) = p.get();
+        p.set((on, sum + ms));
+    });
+    made
+}
 pub(crate) use exact_game::diagnostics::Ring;
 #[derive(Default)]
 pub(crate) struct Perf {
@@ -58,6 +106,19 @@ pub(crate) struct Perf {
     pub tick: Ring,
     pub feed: Ring,
     pub encode: Ring,
+    /// Of the frame's feed and encode, the time creating pipelines on its thread.
+    pub pipeline: Ring,
+    /// Pipeline time from the renderer's making to the first frame log; None
+    /// once a seekable frame, which times nothing, came between.
+    pub pipeline_ready: Option<f64>,
+    /// Pipeline time not yet in a frame's: a frame that stopped before
+    /// encoding, the `Game::PREPARE` warm-up after the last submit. The next
+    /// drawn frame counts it.
+    pub pipeline_pending: f64,
+    /// Whether the last rendered frame was live, so its warm-up may be timed,
+    /// and whether one is rendering now (its own timing covers what it prepares).
+    pub live: bool,
+    pub rendering: bool,
     pub ticks: Ring,
     last_live: Option<f64>,
     pub stats: Stats,
@@ -83,6 +144,7 @@ impl Perf {
             &mut self.tick,
             &mut self.feed,
             &mut self.encode,
+            &mut self.pipeline,
             &mut self.ticks,
         ] {
             r.values.resize(16384, 0.0);
@@ -94,6 +156,7 @@ impl Perf {
             &mut self.tick,
             &mut self.feed,
             &mut self.encode,
+            &mut self.pipeline,
             &mut self.ticks,
         ] {
             r.values.resize(16384, 0.0);
@@ -138,6 +201,7 @@ impl Perf {
             ("tickMs", &self.tick),
             ("feedMs", &self.feed),
             ("encodeMs", &self.encode),
+            ("pipelineMs", &self.pipeline),
             ("ticksPerFrame", &self.ticks),
         ] {
             write!(out, ",\"{name}\":").unwrap();

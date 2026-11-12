@@ -184,21 +184,26 @@ pub fn located(d: &exact_tamber::Diagnostic, app: &AppParams, design: &Path) -> 
 /// `design` laid out with the app's params as the build lays it (D15): each
 /// a token, each of its `params` lines in its param's place; and its
 /// packages' tokens joined, as the build joins them (LLP 1121 D11).
-pub fn laid(design: &exact_tamber::Design, app: &AppParams) -> exact_tamber::Design {
-    let mut out = contract_lower::with_package_designs(Some(design.clone()), &app.packages)
+/// `file` names the design being folded; only its own defaults are reread.
+pub fn laid(
+    design: &exact_tamber::Design,
+    app: &AppParams,
+    file: Option<&str>,
+) -> exact_tamber::Design {
+    let out = contract_lower::with_package_designs(Some(design.clone()), &app.packages)
         .unwrap_or_else(|| design.clone());
-    params::add_to(&mut out, &app.tokens, &app.identities);
-    out
+    exact_tamber::params::laid(&out, &params::folds(&app.tokens, &app.identities, file))
 }
 
 /// `text`, a design, folded with the app's params, its `params` lines in
 /// their places, and the design as parsed, without them; a refusal as the
 /// fold gives it ([`relocate`] it), and one for a `params` line the build
-/// refuses.
+/// refuses. `file` has the same meaning as in [`laid`].
 pub fn fold_with(
     text: &str,
     app: &AppParams,
     vocab: &exact_tamber::Vocab,
+    file: Option<&str>,
 ) -> Result<(exact_tamber::Folding, exact_tamber::Design), Vec<exact_tamber::Diagnostic>> {
     let design = exact_tamber::parse(text)?;
     // What the build refuses of the packages' designs, as it refuses it.
@@ -209,7 +214,7 @@ pub fn fold_with(
     // (an unchanged design answered from the last few checked: a client
     // asking again can't make the server fold it, dial influence and all,
     // each time; theme2's condition on the counts)
-    let folding = exact_tamber::check_design_cached(laid(&design, app), vocab)?;
+    let folding = exact_tamber::check_design_cached(laid(&design, app, file), vocab)?;
     let wrong =
         contract_lower::package_references(&folding, &app.packages, &app.tokens, &app.identities);
     if !wrong.is_empty() {
@@ -408,7 +413,8 @@ pub fn library(app: &AppParams, design: Option<&exact_tamber::Design>) -> Value 
     // design and its packages' (what the server re-checks on a write).
     let folding =
         contract_lower::with_package_designs(design.cloned(), &app.packages).and_then(|d| {
-            exact_tamber::check_design_cached(laid(&d, app), &contract_lower::tamber_vocab()).ok()
+            exact_tamber::check_design_cached(laid(&d, app, None), &contract_lower::tamber_vocab())
+                .ok()
         });
     let reaches = |value: &str| -> Vec<String> {
         let value = value.trim();
@@ -486,7 +492,7 @@ pub fn components(
 ) -> Value {
     let all = app.tokens.as_slice();
     let design = design.cloned().unwrap_or_default();
-    let folding = exact_tamber::check_design_cached(laid(&design, app), vocab).ok();
+    let folding = exact_tamber::check_design_cached(laid(&design, app, None), vocab).ok();
     // What each param's default reaches (stage 12 B2-levels, *1.15*).
     let designs = crate::tamber_levels::Designs::parsed("", Some(design.clone()), app, vocab);
     let mut out: Vec<Value> = Vec::new();

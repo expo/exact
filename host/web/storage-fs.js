@@ -4,7 +4,7 @@
 // Modification times come from the platform's clock, captured when this
 // module evaluates: a realm that later refuses ambient time to app code (the
 // module Worker, LLP 1027.002 D2) still stamps files with the real one.
-import { agentStorageRefusal, directories as roots, now, storageKey } from './storage-environment.js';
+import { agentStorageRefusal, directories as roots, fileVersion, now, storageKey } from './storage-environment.js';
 import { coversPath } from './grant-admission.js';
 const rootPaths = Object.values(roots);
 // Calls from one host module retain invocation order. Web Locks queue
@@ -182,7 +182,10 @@ export function createFileStore(appId) {
         const values = requests.flatMap(request => request.result ?? []);
         const records = new Map(values.map(value => [value.path, value]));
         const changes = {
-          put(value) { records.set(value.path, value); store.put(value); },
+          put(value) {
+            if (value.kind === 'file') value = { ...value, version: fileVersion() };
+            records.set(value.path, value); store.put(value);
+          },
           remove(path) { records.delete(path); store.delete(path); },
           touch(path) { const value = directory(records, path); this.put({ ...value, modifiedMs: now() }); },
         };
@@ -226,13 +229,13 @@ export function createFileStore(appId) {
       return contents instanceof Blob ? contents.arrayBuffer() : contents;
     },
     // Trusted host only: a file as a Blob, for an `image` or `video` source
-    // (LLP 1069.002 D7), and when it last changed. A picked entry is its File.
+    // (LLP 1069.002 D7), its modification time and its version. A picked entry is its File.
     async blob(path, type, maxBytes = Infinity, label = 'compressImage') {
       path = normalizePath(path);
-      const { contents, modifiedMs } = await run(false, records => file(records, path), path);
+      const { contents, modifiedMs, version } = await run(false, records => file(records, path), path);
       const size = contents.byteLength ?? contents.size;
       if (size > maxBytes) throw failure(`${label}: too-large: ${size} bytes is over ${maxBytes}`, 'too-large');
-      return { blob: contents instanceof Blob ? contents : new Blob([contents], { type }), modifiedMs };
+      return { blob: contents instanceof Blob ? contents : new Blob([contents], { type }), modifiedMs, version };
     },
     // Trusted host only: a picked file's entry, backed by the browser's File
     // rather than bytes read into memory (LLP 1069.002 D5).

@@ -1,24 +1,44 @@
-// The oracle keys all NaNs alike, including inside containers, but keeps
-// signed zeros distinct. Negation can change a NaN's bits on either VM.
+// A non-finite argument refuses before the source is asked, including
+// inside containers and in a send. Finite signed zeros still cross.
 shape Query
   values: option<number>[]
 
 component App
   state flipped = false
-  resource scalar = loadNumber(flipped ? -(0 / 0) : ((0 / 0) / (-2.5))) as shape number
-  resource nested = loadNested(Query(values=[some(flipped ? -(0 / 0) : (0 / 0)), none])) as shape number
+  state badScalar = false
+  state badNested = false
+  resource scalar = loadNumber(badScalar ? -(0 / 0) : 0) as shape number
+  resource nested = loadNested(Query(values=[some(badNested ? (0 / 0) : 0), none])) as shape number
   resource positive = loadZero(0) as shape string
   resource negative = loadZero(-0) as shape string
+  mutation result as shape number
+  action scalarArgument
+    badScalar = true
+  action nestedArgument
+    badNested = true
+  action sendArgument
+    flipped = true
+    send result = loadNumber(0 / 0)
   action flip
     flipped = not flipped
   view
     column
       text `${scalar} ${nested}` testId="nan"
       text `${positive} ${negative}` testId="zeros"
+      button "scalar" press=scalarArgument testId="scalar"
+      button "nested" press=nestedArgument testId="nested"
+      button "send" press=sendArgument testId="send"
       button "flip" press=flip testId="flip"
 
-test "NaN oracle arguments and signed zeros"
+test "non-finite arguments refuse and signed zeros cross"
   expect state flipped == false
+  tap "scalar"
+  expect state badScalar == false
+  tap "nested"
+  expect state badNested == false
+  tap "send"
+  expect state flipped == false
+  expect state result == none
   tap "flip"
   expect state flipped == true
   tap "missing"

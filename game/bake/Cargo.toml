@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 exact-game = { path = "../engine" }
-gltf = { version = "1.4.1", features = ["import", "KHR_materials_emissive_strength", "KHR_texture_transform", "extensions", "extras"] }
+gltf = { version = "1.4.1", features = ["import", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform", "extensions", "extras"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # Ogg Vorbis is decoded at bake time only; no game module links a decoder.
 lewton = "0.10.2"

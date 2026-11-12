@@ -53,7 +53,7 @@ export function refusedFile(input, init, owner) {
   if (refusal) return Promise.reject(new TypeError(refusal));
   return from ? readBodyFile(init.exactBodyFrom, tsGrantSet, owner) : openBodyTarget(init.exactBodyTo, tsGrantSet, owner);
 }
-export async function fromFile(input, init, redirect, started, origin = 'app', armed) {
+export async function fromFile(input, init, redirect, started, origin = 'app', armed, forced) {
   const from = init.exactBodyFrom !== undefined, to = init.exactBodyTo !== undefined;
   const refusal = (from ? bodyFromRefusal(input, init) : null) ?? (to ? bodyToRefusal(input, init) : null);
   if (refusal) throw new TypeError(refusal);
@@ -94,7 +94,7 @@ export async function fromFile(input, init, redirect, started, origin = 'app', a
     if (ms !== undefined && spent >= ms) throw new FetchError('Timeout', `the request timed out after ${ms} ms`);
     const left = ms === undefined ? undefined : Math.max(1, Math.ceil(ms - spent));
     const sent = { ...rest, signal, ...(from ? { body } : {}), ...(left === undefined ? {} : { exactTimeout: left }) }, expires = ms === undefined ? null : { at: started + ms, ms };
-    if (!to) return await fetchWith(tsGrantSet, input, sent, expires, redirect, undefined, origin, true);
+    if (!to) return await fetchWith(tsGrantSet, input, sent, expires, redirect, undefined, origin, true, forced);
     // A 2xx body goes to the file, counted as it arrives, within the deadline;
     // any other reply is read as usual, at most 1 MiB, and the file is untouched.
     const ceiling = init.exactIndependentHttp?.maxResponseBytes ?? 1073741824;
@@ -117,7 +117,7 @@ export async function fromFile(input, init, redirect, started, origin = 'app', a
         if (signal?.aborted && error === signal.reason) throw error;
         throw error?.kind === 'Refused' || error?.kind === 'Unavailable' ? new FetchError('Refused', error.message) : error;
       }
-    }, origin, true);
+    }, origin, true, forced);
     if (written === undefined) return response;
     // The body is the file's now: this response has none, and says what was written.
     const done = new Response(null, { status: response.status, statusText: response.statusText, headers: response.headers });

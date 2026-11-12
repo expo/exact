@@ -1,12 +1,14 @@
 //! Bounded native I/O, shared with Apple. A nonblocking socketpair makes
 //! completions and admission refusals visible to the Linux display loop.
 use crate::wake::Stream as UnixStream;
-use exact_runner::{Outcome, RequestOut, Work};
+use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, RawFd};
 #[path = "../../apple/src/executor_core.rs"]
 mod core;
+#[path = "../../apple/src/executor_pump.rs"]
+pub mod pump;
 /// A new executor waits for a native-worker slot under test: the crate's own
 /// tests, and the integration binaries, whose every test's presenters share
 /// one process's bound (`test-wait`, which only the dev-dependency on this
@@ -75,6 +77,7 @@ impl Executor {
                 std::sync::Arc::new(ibex2::host::Host::new)
             },
         );
+        core.enable_http_cache();
         // Linux starts programs for data code, and so does this host where it
         // runs on a Mac; Android and Windows do not yet (LLP 1133.007 §8).
         if cfg!(any(target_os = "linux", target_os = "macos")) {
@@ -144,8 +147,8 @@ impl Executor {
     pub(crate) fn take_wake(&self) -> bool {
         (&self.wake).read(&mut [0; 1]).is_ok_and(|n| n > 0)
     }
-    /// One completion per turn, rearming the FD if more remain.
-    pub fn drain(&self) -> Vec<(u64, Outcome, Option<u64>)> {
+    /// Take the next ready outcome, rearming the FD if more remain.
+    pub fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
         self.core.drain()
     }
     /// Wake for a refusal stored on a runner ticket.

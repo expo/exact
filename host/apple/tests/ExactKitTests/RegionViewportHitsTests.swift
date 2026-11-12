@@ -135,15 +135,14 @@ import XCTest
         context.translateBy(x: 0,y: 160); context.scaleBy(x: 1,y: -1)
         context.setFillColor(CGColor(colorSpace: CGColorSpaceCreateDeviceRGB(),components: phase.selectionColor)!)
         for (i,line) in ordinary.lines.enumerated() {
-            let range = CTLineGetStringRange(line)
-            let lo = max(selected.location,range.location), hi = min(NSMaxRange(selected),range.location+range.length)
-            guard hi > lo else { continue }
             var ascent: CGFloat = 0, descent: CGFloat = 0
             _ = CTLineGetTypographicBounds(line,&ascent,&descent,nil)
-            let x0 = CTLineGetOffsetForStringIndex(line,lo,nil), x1 = CTLineGetOffsetForStringIndex(line,hi,nil)
             let x = CGFloat(CTLineGetPenOffsetForFlush(line,0,320))
             let y = TextEngine.paintedLine(ordinary.baselines[i], top: -phase.scroll.y, scale: 1)
-            context.fill(CGRect(x: x+min(x0,x1),y: y-ascent,width: max(1,abs(x1-x0)),height: ascent+descent))
+            for span in TextEngine.selectionSpans(line, range: selected) {
+                context.fill(CGRect(x: x + span.lowerBound, y: y - ascent,
+                    width: max(1, span.upperBound - span.lowerBound), height: ascent + descent))
+            }
         }
         TextEngine.draw(ordinary,spec: spec,in: CGRect(x: 0,y: -phase.scroll.y,width: 320,height: ordinary.height),context: context)
         context.flush()

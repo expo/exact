@@ -137,38 +137,40 @@ fn seed_pipeline(
             count: None,
         }],
     });
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("sun cache seed"),
-        layout: Some(
-            &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("sun cache seed"),
-                bind_group_layouts: &[Some(&layout)],
-                immediate_size: 0,
+    let pipeline = crate::perf::pipeline(|| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sun cache seed"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("sun cache seed"),
+                    bind_group_layouts: &[Some(&layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[],
             }),
-        ),
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vs"),
-            compilation_options: Default::default(),
-            buffers: &[],
-        },
-        fragment: Some(wgpu::FragmentState {
-            module: &shader,
-            entry_point: Some("fs"),
-            compilation_options: Default::default(),
-            targets: &[],
-        }),
-        primitive: Default::default(),
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::Always),
-            stencil: Default::default(),
-            bias: Default::default(),
-        }),
-        multisample: Default::default(),
-        multiview_mask: None,
-        cache: None,
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        })
     });
     let binds = layers
         .iter()

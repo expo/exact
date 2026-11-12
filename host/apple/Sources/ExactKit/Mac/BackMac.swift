@@ -82,13 +82,13 @@ extension NavigationHost {
     var hasStack: Bool { !presenter.carrying("navigationBack").isEmpty }
 
     /// Whether the stack has anywhere Back could go: its route table
-    /// declares more than one location, or a route is pushed. A one-screen
-    /// app has no chevron, as a hand-built one has none, until something
+    /// declares more than one location, or the window's route is pushed.
+    /// A one-screen app has no chevron, as a hand-built one has none, until something
     /// pushes onto its stack (its one location with another query, or a
     /// location nothing matches); its toolbar is not held for Back until then.
-    var backPossible: Bool { !oneLocation || pushedRoute != nil }
+    var backPossible: Bool { !oneLocation || windowRoute?.pushed == true }
 
-    /// Whether the window's toolbar shows the chevron: the selected route,
+    /// Whether the window's toolbar shows the chevron: the window's route,
     /// pushed or the first of its stack, did not ask for a screen with no
     /// bar (`navigationBar="none"`, LLP 1115.000 D5.2). At the root of a
     /// stack it is there and disabled (`canGoBack`), as Finder's and
@@ -104,8 +104,10 @@ extension NavigationHost {
     var backInToolbar: Bool {
         guard hasStack, backPossible else { return false }
         guard let selection, selection.stack.indices.contains(selection.at) else { return true }
-        guard presenter.views[selection.stack[selection.at]]?.props["navigationBar"] != "none" else { return false }
-        return !split.active || pushedRoute != nil
+        let route = windowRoute
+        let owner = route?.route ?? presenter.views[selection.stack[selection.at]]
+        guard owner?.props["navigationBar"] != "none" else { return false }
+        return !split.active || route?.pushed == true
     }
 
     /// The first navigation root when it has no routes, as an app whose one

@@ -157,7 +157,7 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
     // Elsewhere a finger's strokes (`strokes`).
     if (!(inside(start) && ['ScrollView', 'List'].includes(b.type) && !during.length && opts.to === undefined)) throw new Error(`drag: from (${start}) to (${end}) leaves the viewport (${vp.w} × ${vp.h})`);
     if (!['ios', 'host-ios'].includes(host)) return strokes(s, target, opts, start, vp);
-    const r = await carrier.ask({ op: 'tap', id: node.id, scrollDrag: [dx, dy], ...(from ? { from: start } : {}) });
+    const r = await carrier.ask({ op: 'tap', id: node.id, scrollDrag: [dx, dy], ms: over, ...(from ? { from: start } : {}) });
     if (r.error) throw new Error(r.error);
     // Landed as an input is (`s.landed`): what the scroll settled lands its `then`s before the reply, and a landing error is said.
     const real = carrier.touches ? ['past the screen a drag is the scroll view\'s own (recognized), not a real touch: one ends inside the screen'] : [];
@@ -208,10 +208,10 @@ export async function dragTap({ s, carrier, node, target, host, timing, tapRefus
       if (Number.isFinite(down.clock)) s.now = down.clock;
     }
     if (down.delivery === 'unsupported' && ['ios', 'host-ios'].includes(host)) {
-      // iOS holds no contact across requests: a drag on a scroller is what the scroll view's pan ends with, its content
-      // moved with the finger (LLP 1116.003); any other drag is refused, never answered `unsupported` as a success.
+      // iOS holds no contact across requests: one request moves the scroller with the finger (LLP 1116.003).
+      // Any other drag is refused, never answered `unsupported` as a success.
       if (during.length) throw new Error('drag: during needs the finger held down, which only --touch platform does on iOS (LLP 1080.000 §11)');
-      const r = await carrier.ask({ op: 'tap', id: node.id, scrollDrag: [dx, dy], ...(from ? { from: start } : {}) });
+      const r = await carrier.ask({ op: 'tap', id: node.id, scrollDrag: [dx, dy], ms: over, ...(from ? { from: start } : {}) });
       if (r.error) throw new Error(r.error);
       return noted(await s.tagged({ ...r, target, ...(scrolled ? { scrolled } : {}), drag: said, carrier: host, mode: timing }), [...(moves ? still(r, target) : []), ...await reorderNotes(s, mark)]);
     }

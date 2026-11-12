@@ -29,6 +29,11 @@ struct HostBlock: Equatable {
     static func fit(_ size: CGSize) -> HostBlock { HostBlock(width: .fit(size.width), height: .fit(size.height)) }
     /// A popover's position-area option (`PositionArea.place`).
     static func region(_ size: CGSize) -> HostBlock { HostBlock(width: .region(size.width), height: .region(size.height)) }
+
+    struct Measurement {
+        var used: CGSize
+        var box: PositionArea.Measured
+    }
 }
 
 /// Where a host shows a block in place (LLP 1123 D2): its rectangle in the
@@ -75,19 +80,20 @@ extension Runtime {
 }
 
 extension Runtime {
-    /// What `view`'s subtree would measure in `block`, its border box and
-    /// margins as that layout resolves them (`exact_measure_block`, a trial
-    /// layout): nothing is laid out or sent, so a host can weigh several
+    /// What `view`'s subtree would measure in `block`, its used size, border
+    /// box and margins as that trial layout resolves them (`exact_measure_block`):
+    /// nothing is laid out or sent, so a host can weigh several
     /// blocks for one box; nil when refused (a view that holds no block).
-    func measureBlock(_ view: UInt32, in block: HostBlock) -> PositionArea.Measured? {
+    func measureBlock(_ view: UInt32, in block: HostBlock) -> HostBlock.Measurement? {
         return on(busy: nil) {
             let width = block.width.wire, height = block.height.wire
             let len = exact_measure_block(rt, view, Float(width.length), Float(height.length), UInt32(width.policy), UInt32(height.policy))
-            guard len == 24 else { return nil }
+            guard len == 32 else { return nil }
             guard let out = UnsafeRawPointer(exact_out(rt)) else { return nil }
             let f = { (i: Int) in CGFloat(Float(bitPattern: UInt32(littleEndian: out.loadUnaligned(fromByteOffset: 4 * i, as: UInt32.self)))) }
-            return PositionArea.Measured(size: CGSize(width: f(0), height: f(1)),
-                                         margins: PositionArea.Margins(top: f(2), right: f(3), bottom: f(4), left: f(5)))
+            return HostBlock.Measurement(used: CGSize(width: f(0), height: f(1)),
+                                         box: PositionArea.Measured(size: CGSize(width: f(2), height: f(3)),
+                                              margins: PositionArea.Margins(top: f(4), right: f(5), bottom: f(6), left: f(7))))
         }
     }
 

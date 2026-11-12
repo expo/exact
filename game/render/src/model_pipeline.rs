@@ -84,116 +84,132 @@ pub(crate) fn pipeline(
             wgpu::ColorWrites::ALL
         },
     })];
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("game textured PBR"),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some(if shadow {
-                "model_shadow_vs"
-            } else if camera_depth && variant & 32 != 0 {
-                // Opaque camera depth: position only.
-                "model_depth_vs"
-            } else {
-                "model_vs"
-            }),
-            buffers: &buffers,
-            compilation_options: Default::default(),
-        },
-        fragment: (!((shadow || (camera_depth && !direct)) && variant & 32 != 0)).then_some(
-            wgpu::FragmentState {
+    crate::perf::pipeline(|| {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("game textured PBR"),
+            layout: Some(layout),
+            vertex: wgpu::VertexState {
                 module: shader,
-                entry_point: Some(if camera_depth && variant & 32 != 0 {
-                    "camera_depth_empty"
-                } else if camera_depth {
-                    "model_depth_fs"
-                } else if shadow {
-                    "model_shadow_fs"
-                } else if early && variant & 32 != 0 {
-                    if variant & 1 != 0 {
-                        "model_fs_shadow_early"
-                    } else {
-                        "model_fs_early"
-                    }
-                } else if variant & 1 != 0 {
-                    "model_fs_shadow"
+                entry_point: Some(if shadow {
+                    "model_shadow_vs"
+                } else if camera_depth && variant & 32 != 0 {
+                    // Opaque camera depth: position only.
+                    "model_depth_vs"
                 } else {
-                    "model_fs"
+                    "model_vs"
                 }),
-                targets: if shadow || (camera_depth && !direct) {
-                    &[]
+                buffers: &buffers,
+                compilation_options: Default::default(),
+            },
+            fragment: (!((shadow || (camera_depth && !direct)) && variant & 32 != 0)).then_some(
+                wgpu::FragmentState {
+                    module: shader,
+                    entry_point: Some(if camera_depth && variant & 32 != 0 {
+                        "camera_depth_empty"
+                    } else if camera_depth {
+                        "model_depth_fs"
+                    } else if shadow {
+                        "model_shadow_fs"
+                    } else if early && variant & 32 != 0 {
+                        if variant & 1 != 0 {
+                            "model_fs_shadow_early"
+                        } else {
+                            "model_fs_early"
+                        }
+                    } else if variant & 1 != 0 {
+                        "model_fs_shadow"
+                    } else {
+                        "model_fs"
+                    }),
+                    targets: if shadow || (camera_depth && !direct) {
+                        &[]
+                    } else {
+                        &targets
+                    },
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[
+                            ("MATTE", if matte { 1. } else { 0. }),
+                            ("FOG", if variant & 2 != 0 { 1. } else { 0. }),
+                            (
+                                "LIGHTS",
+                                if general || variant & crate::pipeline::MODEL_LIGHTS != 0 {
+                                    1.
+                                } else {
+                                    0.
+                                },
+                            ),
+                            ("DEPTH_PREPASS", if depth_prepass { 1. } else { 0. }),
+                            ("MODEL_DISCARD", if variant & 32 != 0 { 0. } else { 1. }),
+                            ("SINGLE_CASCADE", if variant & 128 != 0 { 1. } else { 0. }),
+                            (
+                                "SHADOW_FILTER",
+                                if general {
+                                    2.
+                                } else if variant & crate::pipeline::MODEL_BILINEAR != 0 {
+                                    3.
+                                } else if variant & 256 != 0 {
+                                    1.
+                                } else {
+                                    0.
+                                },
+                            ),
+                            (
+                                "MODEL_TEXTURES",
+                                if !shadow && variant & 64 != 0 { 0. } else { 1. },
+                            ),
+                            ("DIRECT", if direct { 1. } else { 0. }),
+                            (
+                                "LAYERED",
+                                if variant & crate::pipeline::MODEL_LAYERED != 0 {
+                                    1.
+                                } else {
+                                    0.
+                                },
+                            ),
+                            ("ENCODE_SRGB", if format.is_srgb() { 0. } else { 1. }),
+                        ],
+                        ..Default::default()
+                    },
+                },
+            ),
+            primitive: wgpu::PrimitiveState {
+                front_face: if variant & 16 != 0 {
+                    wgpu::FrontFace::Cw
                 } else {
-                    &targets
+                    wgpu::FrontFace::Ccw
                 },
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &[
-                        ("MATTE", if matte { 1. } else { 0. }),
-                        ("FOG", if variant & 2 != 0 { 1. } else { 0. }),
-                        (
-                            "LIGHTS",
-                            if general || variant & crate::pipeline::MODEL_LIGHTS != 0 {
-                                1.
-                            } else {
-                                0.
-                            },
-                        ),
-                        ("DEPTH_PREPASS", if depth_prepass { 1. } else { 0. }),
-                        ("MODEL_DISCARD", if variant & 32 != 0 { 0. } else { 1. }),
-                        ("SINGLE_CASCADE", if variant & 128 != 0 { 1. } else { 0. }),
-                        (
-                            "SHADOW_FILTER",
-                            if general {
-                                2.
-                            } else if variant & crate::pipeline::MODEL_BILINEAR != 0 {
-                                3.
-                            } else if variant & 256 != 0 {
-                                1.
-                            } else {
-                                0.
-                            },
-                        ),
-                        (
-                            "MODEL_TEXTURES",
-                            if !shadow && variant & 64 != 0 { 0. } else { 1. },
-                        ),
-                        ("DIRECT", if direct { 1. } else { 0. }),
-                        ("ENCODE_SRGB", if format.is_srgb() { 0. } else { 1. }),
-                    ],
-                    ..Default::default()
+                cull_mode: if variant & 4 != 0 {
+                    None
+                } else {
+                    Some(wgpu::Face::Back)
                 },
+                ..Default::default()
             },
-        ),
-        primitive: wgpu::PrimitiveState {
-            front_face: if variant & 16 != 0 {
-                wgpu::FrontFace::Cw
-            } else {
-                wgpu::FrontFace::Ccw
-            },
-            cull_mode: if variant & 4 != 0 {
-                None
-            } else {
-                Some(wgpu::Face::Back)
-            },
-            ..Default::default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(!blend),
-            depth_compare: Some(if depth_prepass && !shadow && !blend {
-                wgpu::CompareFunction::Equal
-            } else {
-                wgpu::CompareFunction::Less
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(!blend),
+                depth_compare: Some(if depth_prepass && !shadow && !blend {
+                    wgpu::CompareFunction::Equal
+                } else {
+                    wgpu::CompareFunction::Less
+                }),
+                stencil: Default::default(),
+                bias: Default::default(),
             }),
-            stencil: Default::default(),
-            bias: Default::default(),
-        }),
-        multisample: wgpu::MultisampleState {
-            count: if shadow { 1 } else { samples },
-            ..Default::default()
-        },
-        multiview_mask: None,
-        cache,
+            multisample: wgpu::MultisampleState {
+                count: if shadow { 1 } else { samples },
+                ..Default::default()
+            },
+            multiview_mask: None,
+            cache,
+        })
     })
+}
+
+/// A clearcoat or a sheen: the material draws in the pipelines with their
+/// lobes (`MODEL_LAYERED`), which no other material compiles or runs.
+pub(crate) fn layered(m: &exact_game::asset::MaterialData) -> bool {
+    !m.unlit && (m.clearcoat > 0. || m.sheen_color.iter().any(|&c| c > 0.))
 }
 
 /// A missing normal map uses the geometric normal, without a quantized default map.

@@ -36,6 +36,37 @@ final class ElementHatchesIOSTests: XCTestCase {
         session.presenter.views.values.first { $0.props["testId"] == testId }
     }
 
+    func testAScrollHatchIsBlamedOnlyForTheRecognizersItsCallAdds() throws {
+        NativeViews.uninstallTable()
+        let session = ExactApp.shared.makeSession(label: "scroll-hatch-recognizers")
+        sessions.append(session)
+        session.natives.install(module: UnsafeMutableRawPointer(bitPattern: 1)!)
+        session.natives.hatchesConnected = true
+        session.natives.elementCall = { _, event, view, platform, _, _ in
+            guard event != 2, let view, let platform else { return 0 }
+            let node = Unmanaged<NodeView>.fromOpaque(view).takeUnretainedValue()
+            let scroll = Unmanaged<UIScrollView>.fromOpaque(platform).takeUnretainedValue()
+            XCTAssertTrue(scroll === node.scrollView)
+            if node.props["dataset"] == #"{"add":true}"# { scroll.addGestureRecognizer(UIPinchGestureRecognizer()) }
+            return 0
+        }
+        let p = session.presenter, regions = p.elements.regions
+        p.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "view", "props": ["hatch": "scroller"], "style": ["overflow_y": "auto"]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0, "y": 0, "w": 200, "h": 100],
+            ["op": "content", "id": 1, "w": 200, "h": 400],
+        ]))
+        let node = try XCTUnwrap(p.views[1]), scroll = try XCTUnwrap(node.scrollView)
+        XCTAssertTrue(scroll.gestureRecognizers?.contains { $0 === scroll.panGestureRecognizer } == true)
+        XCTAssertTrue(regions.reported.isEmpty, "built keeps UIKit's existing scroll recognizers: \(regions.reported)")
+        p.apply(wireBatch([["op": "props", "id": 1, "set": ["dataset": #"{"add":false}"#]]]))
+        XCTAssertTrue(regions.reported.isEmpty, "changed keeps the same recognizer baseline: \(regions.reported)")
+        p.apply(wireBatch([["op": "props", "id": 1, "set": ["dataset": #"{"add":true}"#]]]))
+        XCTAssertTrue(scroll.gestureRecognizers?.contains { $0 is UIPinchGestureRecognizer } == true)
+        XCTAssertEqual(regions.reported, ["element scroller\nUIPinchGestureRecognizer"])
+    }
+
     func testAHatchedLeafIsAViewItsHatchRunsAtEachMomentAndAReloadEndsIt() throws {
         let env = ProcessInfo.processInfo.environment
         let plan = try Data(contentsOf: URL(fileURLWithPath: try XCTUnwrap(env["EXACT_FIXTURE_PLAN"])))

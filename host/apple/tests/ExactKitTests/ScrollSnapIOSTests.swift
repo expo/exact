@@ -7,6 +7,76 @@ import XCTest
 /// start at the viewport's, `end` its end, and an area wider than the
 /// viewport is free while it covers it (CSS Scroll Snap §5.2.2).
 final class ScrollSnapIOSTests: XCTestCase {
+    func testVirtualizedFlingReachesBeyondTheMountedWindow() throws {
+        let session = ExactApp.shared.makeSession(label: "virtual-snap")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: CGSize(width: 300, height: 100)).error)
+        let p = session.presenter
+        let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "strip" })
+        let scroll = try XCTUnwrap(node.scroll)
+        let snapshot = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
+        XCTAssertLessThan(snapshot.rows.map(\.index).max() ?? 1000, 10)
+        let (eager, eagerScroll) = try strip((0..<300).map { ("start", Double($0) * 150, 150) })
+        eagerScroll.contentSize.width = 45000
+        for projection: CGFloat in [1380, 30020] {
+            var target = CGPoint(x: projection, y: 0)
+            node.scrollViewWillEndDragging(scroll, withVelocity: CGPoint(x: 5, y: 0), targetContentOffset: &target)
+            XCTAssertEqual(target.x, (projection / 150).rounded() * 150, accuracy: 0.01)
+            XCTAssertEqual(target.x, rest(eager, eagerScroll, from: projection), "virtualization keeps the eager strip's target")
+        }
+    }
+
+    func testMountedAndUnmountedRelativeRootsUseTheSameDisplacement() throws {
+        let session = ExactApp.shared.makeSession(label: "relative-snap")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: CGSize(width: 300, height: 500)).error)
+        let p = session.presenter
+        let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "relative" })
+        let scroll = try XCTUnwrap(node.scroll)
+        let mounted = rest(node, scroll, from: 20)
+        XCTAssertEqual(mounted, 30, accuracy: 0.01)
+        XCTAssertEqual(rest(node, scroll, from: 30020) - 30000, mounted, accuracy: 0.01)
+    }
+
+    func testWindowEdgeTieKeepsTheEarlierUnmountedRow() throws {
+        let session = ExactApp.shared.makeSession(label: "tie-snap")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: CGSize(width: 300, height: 500)).error)
+        let p = session.presenter
+        let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == "strip" })
+        let scroll = try XCTUnwrap(node.scroll)
+        scroll.contentOffset.x = 3000
+        p.collections.flush()
+        let snapshot = try XCTUnwrap(p.collections.entries[node.id]?.snapshot)
+        let first = try XCTUnwrap(snapshot.rows.map(\.index).min())
+        XCTAssertGreaterThan(first, 0)
+        let earlier = CGFloat(first - 1) * 150
+        XCTAssertEqual(rest(node, scroll, from: earlier + 75), earlier, accuracy: 0.01)
+    }
+
+    func testDescendantsAndLayoutDependentOffsetsAreOnlyKnownWhileMounted() throws {
+        let session = ExactApp.shared.makeSession(label: "snap-limits")
+        defer { session.destroy() }
+        XCTAssertNil(session.boot(plan: try fixturePlan("SCROLL_SNAP"), size: CGSize(width: 300, height: 500)).error)
+        let p = session.presenter
+        for name in ["percent", "transform", "descendant"] {
+            let node = try XCTUnwrap(p.views.values.first { $0.props["testId"] == name })
+            let scroll = try XCTUnwrap(node.scroll)
+            let logical = session.runtime.collectionSnap(node.id, proposed: 30020, port: 300, maximum: 149700)
+            if name == "descendant" {
+                XCTAssertEqual(rest(node, scroll, from: 140), 150, accuracy: 0.01)
+                XCTAssertNil(logical, "unmounted descendants require row layout")
+            } else {
+                if name == "transform" {
+                    XCTAssertEqual(rest(node, scroll, from: 20), 30, accuracy: 0.01)
+                } else {
+                    XCTAssertGreaterThan(rest(node, scroll, from: 0), 0)
+                }
+                XCTAssertNil(logical, "layout-dependent displacement requires a mounted row")
+            }
+        }
+    }
+
     private func strip(_ aligns: [(String, Double, Double)]) throws -> (NodeView, UIScrollView) {
         let p = Presenter()
         p.viewport.frame = CGRect(x: 0, y: 0, width: 300, height: 100)

@@ -494,29 +494,34 @@ impl Kernel {
                     room: f32,
                     across: bool| {
             let from_end = |end: f32| room - end - end_margin - size;
-            match (length(inset[0], room), length(inset[1], room)) {
-                (Some(start), Some(end)) => match (auto(margin[0]), auto(margin[1])) {
-                    (true, true) => {
-                        let share = (room - start - end - size) / 2.0;
-                        match (across && share < 0.0, rtl) {
-                            (true, false) => start,
-                            (true, true) => room - end - size,
-                            (false, _) => start + share,
+            match (
+                length(inset[0].clone(), room),
+                length(inset[1].clone(), room),
+            ) {
+                (Some(start), Some(end)) => {
+                    match (auto(margin[0].clone()), auto(margin[1].clone())) {
+                        (true, true) => {
+                            let share = (room - start - end - size) / 2.0;
+                            match (across && share < 0.0, rtl) {
+                                (true, false) => start,
+                                (true, true) => room - end - size,
+                                (false, _) => start + share,
+                            }
                         }
+                        (true, false) => from_end(end),
+                        (false, true) => start + at,
+                        (false, false) if across && rtl => from_end(end),
+                        (false, false) => start + at,
                     }
-                    (true, false) => from_end(end),
-                    (false, true) => start + at,
-                    (false, false) if across && rtl => from_end(end),
-                    (false, false) => start + at,
-                },
+                }
                 (Some(start), None) => start + at,
                 (None, Some(end)) => from_end(end),
                 (None, None) => at,
             }
         };
         let x = axis(
-            [s.left, s.right],
-            [s.margin_left, s.margin_right],
+            [s.left.clone(), s.right.clone()],
+            [s.margin_left.clone(), s.margin_right.clone()],
             f.x,
             f.width,
             ends.0,
@@ -524,8 +529,8 @@ impl Kernel {
             true,
         );
         let y = axis(
-            [s.top, s.bottom],
-            [s.margin_top, s.margin_bottom],
+            [s.top.clone(), s.bottom.clone()],
+            [s.margin_top.clone(), s.margin_bottom.clone()],
             f.y,
             f.height,
             ends.1,

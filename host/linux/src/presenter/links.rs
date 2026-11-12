@@ -112,70 +112,35 @@ impl<D: DataSource> Presenter<D> {
         None
     }
 
-    /// Inline nodes share their paragraph's paint box. Their own geometry
-    /// comes from the glyphs, including wrapping and the paragraph's scroll.
+    /// The paragraph whose paint box the inline node `id` shares.
+    pub(super) fn inline_block(&self, id: ViewId) -> Option<ViewId> {
+        let kernel = self.host.kernel();
+        let mut parent = kernel.node(id)?.parent?;
+        loop {
+            let node = kernel.node(parent)?;
+            if node.node_type != NodeType::Text {
+                return None;
+            }
+            if self.boxes.iter().any(|b| b.id == parent) {
+                return Some(parent);
+            }
+            parent = node.parent?;
+        }
+    }
+
+    /// Inline nodes keep the paragraph's captured ownership and placement,
+    /// including wrapping, fragmentation and its scroll mapping.
     pub(super) fn inline_box(&self, id: ViewId) -> Option<PaintedBox> {
         let kernel = self.host.kernel();
         let node = kernel.node(id)?;
         if node.node_type != NodeType::Text || !crate::paint::paints(kernel, id, None) {
             return None;
         }
-        let mut parent = node.parent?;
-        let mut painted = loop {
-            let node = kernel.node(parent)?;
-            if node.node_type != NodeType::Text {
-                return None;
-            }
-            if let Some(b) = self.boxes.iter().find(|b| b.id == parent) {
-                break *b;
-            }
-            parent = node.parent?;
-        };
-        let node = kernel.node(parent)?;
-        let sources = inline_sources(&node);
-        let owns: Vec<bool> = sources
-            .iter()
-            .map(|source| {
-                let mut at = Some(*source);
-                while let Some(leaf) = at.filter(|leaf| *leaf != parent) {
-                    if leaf == id {
-                        return true;
-                    }
-                    at = kernel.node(leaf).and_then(|n| n.parent);
-                }
-                false
-            })
-            .collect();
-        let paragraph = self.paragraph(parent)?;
-        let content = exact_kernel::svg::scene::content_box(kernel, &node);
-        let down = kernel.text_line_offset(&node);
-        let mut bounds: Option<(f32, f32, f32, f32)> = None;
-        for (line, baseline) in paragraph.layout_runs().zip(paragraph.baselines()) {
-            for g in line
-                .glyphs
-                .iter()
-                .filter(|g| owns.get(g.run()) == Some(&true))
-            {
-                let r = (
-                    g.x,
-                    baseline - g.font_size,
-                    g.x + g.w,
-                    baseline + g.font_size * 0.3,
-                );
-                bounds = Some(bounds.map_or(r, |b| {
-                    (b.0.min(r.0), b.1.min(r.1), b.2.max(r.2), b.3.max(r.3))
-                }));
-            }
-        }
-        let (x, y, right, bottom) = bounds?;
+        let parent = self.inline_block(id)?;
+        let mut painted = *self.boxes.iter().find(|b| b.id == parent)?;
+        let paragraph = self.brush.inline_text.get(&parent)?;
         painted.id = id;
-        let local = painted.scroll_rect();
-        painted.with_scroll_rect((
-            local.0 + content.0 + x,
-            local.1 + content.1 + down + y,
-            right - x,
-            bottom - y,
-        ))
+        painted.with_scroll_rect(paragraph.local_frame(id)?)
     }
 
     /// Follow `href` from `from`: a path naming a declared route navigates

@@ -7,7 +7,7 @@ use exact_kernel::{PropId, StyleId};
 /// A virtualized list's rows as logical text sees them: every row, mounted
 /// or not. Given the plan, also whether the list's text may be selected:
 /// the host policy and the `user-select` it has or takes from above.
-fn list_region<'a>(
+pub(super) fn list_region<'a>(
     plan: Option<(&Plan, &SiteIndex)>,
     children: &'a [Child],
     view: ViewId,
@@ -88,7 +88,7 @@ fn hidden(n: &NodeInst, plan: &Plan, sites: &SiteIndex) -> bool {
 /// and AppKit's own selection: computed `visibility: hidden` (inherited, a
 /// nearer `visible` shows again), and `inert` here or above.
 #[derive(Clone, Copy, Default)]
-struct Selection {
+pub(super) struct Selection {
     explicit: Option<bool>,
     document: bool,
     chrome: bool,
