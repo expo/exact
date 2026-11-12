@@ -33,10 +33,10 @@ import { writeTamberNames } from './tamber-names.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { inflateRawSync } from 'node:zlib';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
-import { homedir, userInfo } from 'node:os';
-import { basename, dirname, resolve } from 'node:path';
+import { homedir, tmpdir, userInfo } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, injectedProfiles, linuxBuild, mavenProblems, resolveApp, wholeProgram } from './app.mjs';
 import { ANDROID_MIN_API, hermesAndroidBundle } from './hermes-android.mjs';
 import { ANDROID_PAGE_SIZE, androidCargo } from './cargo-check.mjs';
@@ -847,7 +847,7 @@ export function buildApk(app, env, profile, writeLocks = false, bundle = false) 
     assembled = runGradle(['--no-watch-fs', ...(env.CI ? ['--no-daemon'] : []), bundle ? ':app:bundleRelease' : ':app:assembleRelease', `-Papp=${app.name}`, `-PappDir=${app.manifest.game ? app.workspace : app.dir}`,
       `-PexactDevelopment=${development ? '1' : '0'}`,
       `-PappBuildDir=${dirs.app}`, `-PcanvasBuildDir=${dirs.canvas}`, `-PndkPath=${env.ANDROID_NDK_HOME}`, '--project-cache-dir', dirs.cache, `-Pkotlin.project.persistent.dir=${dirs.kotlin}`,
-      ...(gpu ? [`-PgpuModule=${basename(gpu)}`] : []), ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env) } });
+      ...(gpu ? [`-PgpuModule=${basename(gpu)}`] : []), ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env), ...graph.env } });
     if (assembled) graph.kept();
   } finally {
     graph.done();
@@ -903,18 +903,29 @@ function mavenLocksPresent(app, maven) {
  * reader's own AndroidX, locked to the app's `gradle.lockfile` and verified against its `gradle-verification.xml`,
  * both beside its other locks. The verification file is Gradle's, which it reads only from the reader's `gradle/`:
  * it is put there for this build (`done` takes it away). `writeLocks` writes both from the graph as it resolves
- * (`kept` copies the verification back). Missing locks are refused before Gradle runs. */
+ * (`kept` copies the verification back), in an empty Gradle user home (`env`): a warm one's cache lets Gradle
+ * resolve fewer files than a fresh machine's build downloads (a BOM's `.module` beside its `.pom`, another
+ * version's parent pom), so checksums written warm fail a cold build's strict verification. Missing locks are
+ * refused before Gradle runs. */
 function mavenGraph(app, writeLocks, maven) {
   const placed = resolve(READER, 'gradle/verification-metadata.xml');
-  const none = { args: [], kept() {}, done() {} };
+  const none = { args: [], env: {}, kept() {}, done() {} };
   if (!maven.length) return none;
   const lock = resolve(app.dir, 'gradle.lockfile'), checksums = resolve(app.dir, 'gradle-verification.xml');
   rmSync(placed, { force: true });
   if (existsSync(checksums)) copyFileSync(checksums, placed);
+  const home = writeLocks ? mkdtempSync(join(tmpdir(), 'exact-gradle-')) : null;
+  // The wrapper's distribution is the tool, never a resolved dependency: seeding one keeps the module cache cold
+  // while skipping the download a fresh home would make of it again.
+  if (home) {
+    const dists = resolve(process.env.GRADLE_USER_HOME ?? join(homedir(), '.gradle'), 'wrapper/dists');
+    if (existsSync(dists)) cpSync(dists, join(home, 'wrapper/dists'), { recursive: true, verbatimSymlinks: true });
+  }
   return {
     args: [`-Pmaven=${maven.join(',')}`, `-PmavenLock=${lock}`, ...(writeLocks ? ['--write-locks', '--write-verification-metadata', 'sha256'] : ['--dependency-verification=strict'])],
+    env: home ? { GRADLE_USER_HOME: home } : {},
     kept() { if (writeLocks && existsSync(placed)) copyFileSync(placed, checksums); },
-    done() { rmSync(placed, { force: true }); },
+    done() { rmSync(placed, { force: true }); if (home) rmSync(home, { recursive: true, force: true }); },
   };
 }
 
