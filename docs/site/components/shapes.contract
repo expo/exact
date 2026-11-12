@@ -93,9 +93,17 @@ shape NavItem
   parent: string
   children: number
 
+shape NavTab
+  id: string
+  title: string
+  icon: string
+  href: string
+  routes: string[]
+
 shape NavGroup
   id: string
   title: string
+  tab: string
   card: NavItem
   items: NavItem[]
 
@@ -106,6 +114,7 @@ shape AgentLink
   href: string
 
 shape Nav
+  tabs: NavTab[]
   groups: NavGroup[]
   year: string
   agentIntro: string

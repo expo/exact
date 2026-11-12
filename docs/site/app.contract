@@ -3,7 +3,7 @@
 // app.ts imports one page's module per route, so a reader downloads only the page it reads.
 // Each route waits for the reader before its runtime loads.
 use Page, Nav, Moved, Markdown, Viewport, SearchHit, SearchPart, Hit, Key from "./components/shapes.contract"
-use Sidebar from "./components/sidebar.contract"
+use Sidebar, Tabs from "./components/sidebar.contract"
 use Article from "./components/article.contract"
 
 font "Inter"
@@ -179,6 +179,8 @@ component App
   // out of the tab order and the accessibility tree.
   resource viewport = exactViewport() as shape Viewport
   derive wide = viewport.width >= 960
+  // The tab that holds the page; a route no tab holds (the not-found page) is shown under Home.
+  derive tab = site.tabs.filter(t => t.routes.includes(top(nav).name)).map(t => t.id).concat(["home"]).slice(0, 1).join("")
   derive roomy = viewport.width >= 1280
   resource moved = resolveMoved(top(nav).name == "notfound" ? top(nav).url : "") as shape Moved else empty()
   mutation markdown as shape Markdown then copyFetched
@@ -328,8 +330,10 @@ component App
             row aria-hidden=true gap=4
               text "⌘" class=Key
               text "K" class=Key
+        row min-width=234 box-sizing="border-box" border-bottom="1px solid var(--color-border-secondary)"
+          Tabs(nav=site, tab=tab, prefix="")
         scroll flex=1 min-height=0 min-width=234
-          Sidebar(nav=site, current=top(nav).name, toggled=navToggled, toggle=toggleNav, prefix="")
+          Sidebar(nav=site, current=top(nav).name, tab=tab, toggled=navToggled, toggle=toggleNav, prefix="")
       column width=(sidebar ? "0px" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease" flex-shrink=0 overflow="hidden" inert=(not wide or sidebar) padding-top=12 align-items="center" testId=(sidebar ? "sidebar-rail" : "sidebar-rail-shown") position="absolute" top=0 bottom=0 left=0
         button press=toggleSidebar appearance="none" aria-label="Show the sidebar" title="Show the sidebar" padding=6 border-radius="var(--radius-lg)" testId="sidebar-show"
           image "symbol:icon.panelopen" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
@@ -337,7 +341,9 @@ component App
           image "symbol:search" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
       if menu
         scroll id="site-menu" flex=1 min-width=0 background-color="var(--color-background-screen)" testId="site-menu" position="absolute" top="clamp(0px, (960px - 100vw) * 1000, 57px)" left=0 right=0 bottom=0
-          Sidebar(nav=site, current=top(nav).name, toggled=navToggled, toggle=toggleNav, prefix="menu-")
+          row padding-top=12 border-bottom="1px solid var(--color-border-secondary)"
+            Tabs(nav=site, tab=tab, prefix="menu-")
+          Sidebar(nav=site, current=top(nav).name, tab=tab, toggled=navToggled, toggle=toggleNav, prefix="menu-")
       dialog id="search" closedby="any" aria-label="Search the docs" padding=0 margin=0 left="50%" transform="translate(-50%, -50%)"
         top="calc(45vh + clamp(0px, (789px - 100vw) * 1000, 5vh))" height="calc(75vh + clamp(0px, (789px - 100vw) * 1000, 21vh))" width="calc(max(40vw, 680px) + clamp(0px, (789px - 100vw) * 1000, max(0px, 96vw - max(40vw, 680px))) - clamp(0px, (789px - 100vw) * 1000, max(0px, max(40vw, 680px) - 96vw)))" max-width="none" max-height="none" overflow="hidden"
         border="1px solid var(--color-border-default)" border-radius=40 background-color="var(--color-background-default)" color="var(--color-text-default)" font-family="var(--font-sans)"

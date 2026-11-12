@@ -3,7 +3,7 @@ import { createHighlighter } from 'shiki';
 import { execSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, normalize, relative, resolve } from 'node:path';
-import { agentRows, sections, type NavPage } from '../constants/navigation.ts';
+import { agentRows, sections, tabs, type NavPage } from '../constants/navigation.ts';
 import { redirects } from '../constants/redirects.ts';
 import { site } from '../constants/site.ts';
 
@@ -452,9 +452,14 @@ const nav = {
   startPrompt: START_PROMPT,
   startLabel: `${new URL(DOCS_URL).host}/start.md`,
   agents: agentLinks,
+  tabs: tabs.map(tab => {
+    const sources = new Set(sections.filter(s => s.tab === tab.id).flatMap(s => s.pages.map(p => p.source)));
+    return { ...tab, href: sections.find(s => s.tab === tab.id)!.pages[0].path, routes: pages.filter(x => sources.has(x.source)).map(x => x.route) };
+  }),
   groups: sections.filter(section => section.pages.some(p => !p.hidden && !p.landing)).map((section, g) => ({
     id: `${g}`,
     title: section.title,
+    tab: section.tab,
     card: { id: `${g}`, title: section.card?.title ?? '', href: section.card ? firstPage(section)!.path : '', route: firstPage(section)!.route, depth: 0, description: section.card?.description ?? '', parent: '', children: 0 },
     items: section.pages.filter(p => !p.hidden && !p.landing).flatMap(p => {
       const doc = bySource.get(p.source)!;
