@@ -826,6 +826,11 @@ fn media_preferences_inherit_by_name_and_can_change_between_steps() {
     }
     assert!(contract::tests("test \"t\"\n  prefer hover none\n").is_ok());
     assert!(contract::tests("test \"t\"\n  prefer online false\n").is_ok());
+    let sized = contract::tests("prefer root-font-size \"24\"\ntest \"sized\"\n  expect tree has \"root\"\n  prefer root-font-size \"28px\"\n  reload\n").unwrap();
+    let sized: serde_json::Value = serde_json::from_str(&contract::tests_json(&sized)).unwrap();
+    assert_eq!(sized[0]["steps"][0]["name"], "root-font-size");
+    assert_eq!(sized[0]["steps"][0]["value"], "24");
+    assert_eq!(sized[0]["steps"][2]["value"], "28px");
     // The driver validates media names and values at the failing test's line.
     assert!(contract::tests("test \"t\"\n  prefer unknown banana\n").is_ok());
     assert!(contract::tests("test \"t\"\n  prefer prefers-color-scheme banana\n").is_ok());

@@ -707,7 +707,7 @@ launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
               | "seed" NUMBER NL                     (* 0 through 2^32 - 1 *)
               | "fresh" [ STRING ] NL                (* the Snapback dev server emptied first, seeded from the file *)
               | "before" "data" NL                   (* the first step does not wait for data *)
-              | "prefer" IDENT IDENT NL              (* CSS media feature and value, before observations *)
+              | "prefer" IDENT ( IDENT | STRING ) NL (* media feature or root-font-size, before observations *)
               | "fail" "fetch" STRING [ "times" NUMBER ] NL ; (* armed before the first data load *)
 step          = "tap" STRING [ "hover" | "dblclick" | "contextmenu"
                   | "pinch" NUMBER [ "at" NUMBER NUMBER ]
@@ -728,7 +728,7 @@ step          = "tap" STRING [ "hover" | "dblclick" | "contextmenu"
               | "clock" "until" "state" IDENT { "." ( IDENT | NUMBER ) } "==" scalar "within" NUMBER NL
                                                      (* real time, the clock frozen, until it holds *)
               | "resize" NUMBER "x" NUMBER NL        (* the window, mid-test: 800x600 *)
-              | "prefer" IDENT IDENT NL              (* change a media preference now *)
+              | "prefer" IDENT ( IDENT | STRING ) NL (* change a media preference or root-font-size now *)
               | "reload" NL
               | "fail" "fetch" STRING [ "times" NUMBER ] NL (* later fetches whose URL starts with it fail *)
               | "pass" "fetch" STRING NL             (* it stops failing *)
@@ -871,7 +871,8 @@ launch lines: `size 1200x800`, `epoch "2026-09-21T12:00:00Z"`, `time-zone
 each once; `at "/item/7#moves"` opens the app at that location, fragment included,
 as `--url` with a path does. Written at the top of the file they apply to every test that does not
 name its own; either way they override the drive's flags. Media preferences
-(`prefer prefers-color-scheme dark`) also lead a test or the file, and may
+(`prefer prefers-color-scheme dark`) and text size (`prefer root-font-size "24"`)
+also lead a test or the file, and may
 change between steps. Defaults merge by feature name; duplicate names among
 leading lines are errors. A bad name or value fails that test at its line.
 The latest values survive `reload` and verify's relaunch. A file whose

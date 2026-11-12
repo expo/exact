@@ -121,7 +121,16 @@ impl<D: DataSource + Default> CanvasHost<D> {
             }
             _ => {}
         }
-        let reply = crate::agent::handle(&mut self.p, line);
+        let scroll = serde_json::from_str::<serde_json::Value>(line)
+            .ok()
+            .filter(|r| r["op"] == "tap" && r.get("scrollDrag").is_some());
+        let reply = match scroll {
+            Some(request) => self
+                .p
+                .agent_scroll_drag(&request)
+                .unwrap_or_else(|e| error(&e)),
+            None => crate::agent::handle(&mut self.p, line),
+        };
         // One display turn, a paint whatever changed: what the request made
         // is admitted to the next one, and its stream follows the handler's.
         self.p.repaint();

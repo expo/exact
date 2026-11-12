@@ -4123,6 +4123,10 @@ ends the drag on another node (refused by name when it is not mounted or off
 screen); a drag that should autoscroll a list or a board is `drag dx dy hold ms`. On iOS
 without `--touch platform` a drag scrolls the scroll or list it starts on with the
 finger, no fling; any other drag there is refused, naming the flag.
+On the Android APK reader, a named scroll or list receives deterministic scroll
+samples; the reply labels native touch recognition and fling as unobserved.
+Presenter-owned pans keep their contact path. Scroll samples cannot hold a touch
+for `press`, `hold` or `during`; use native device input to verify those gestures.
 On an iOS simulator, append `then dx dy [over ms] [hold ms] [during "op" …]`
 to script another leg with the same finger. For example:
 `tap handle drag 0 120 over 300 hold 500 during "layout" then 0 -120 over 300 hold 500 during "state"`.
@@ -4255,6 +4259,10 @@ A bad name, value or unsupported emulation fails that test at its line.
 hosts they are applied after connection, before the test observes the app;
 they do not set its appearance before mount. MIDI's `prefer midi.…` remains a
 step inside a test.
+
+`prefer root-font-size "24"` sets the root text size in pixels for a large-text
+fixture. It follows the same launch, override and reload rules; other page facts
+are not admitted by this test form.
 
 Before the first step (and after a `reload`) the driver waits for the app's data
 as `clock data` does: its data module activated and every request launch started

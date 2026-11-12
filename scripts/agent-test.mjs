@@ -715,7 +715,7 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
     const prefer = async (st) => {
       const facts = { [st.name]: st.value };
       preferGroups(facts); // Keep the driver's diagnostic for a bad name or value.
-      if (!Object.hasOwn(PREFERENCES, st.name)) throw new Error(`test prefer: expected a CSS media feature: ${Object.keys(PREFERENCES).join(', ')}`);
+      if (!Object.hasOwn(PREFERENCES, st.name) && st.name !== 'root-font-size') throw new Error(`test prefer: expected a CSS media feature or root-font-size: ${Object.keys(PREFERENCES).join(', ')}`);
       const r = await s.prefer(facts);
       if (r?.error) throw new Error(r.error);
       // Preserve last-application order: pointer and hover emulation affect each other.
@@ -747,8 +747,9 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
       const now = await s.state().catch((e) => { throw new Error(`reload: could not read the fault table to carry: ${e.message}`); });
       const failFetch = now.faults ? faultSpecOf(now.faults) : undefined;
       facts.epoch = await reached();
-      if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, epoch: facts.epoch }); s.now = 0; resetLogs(s); s.notes = notes; return; }
-      await s.close(); s = await open({ host, browser, plan, ...facts, failFetch: failFetch ?? facts.failFetch, env: { ...(env ?? {}), ...fixture }, app, webDist, device, phone, url, storage: store, touch: fingers, chrome: bars, scale, port }); s.notes = notes;
+      if (s.host === 'web') { await s.carrier.reset({ keep: true, failFetch, epoch: facts.epoch }); s.now = 0; resetLogs(s); }
+      else { await s.close(); s = await open({ host, browser, plan, ...facts, failFetch: failFetch ?? facts.failFetch, env: { ...(env ?? {}), ...fixture }, app, webDist, device, phone, url, storage: store, touch: fingers, chrome: bars, scale, port }); }
+      s.notes = notes;
       for (const [name, value] of Object.entries(media)) {
         const r = await s.prefer({ [name]: value });
         if (r?.error) throw new Error(r.error);

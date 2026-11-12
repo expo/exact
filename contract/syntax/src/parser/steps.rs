@@ -543,10 +543,10 @@ impl Parser {
             "prefer" => {
                 let (name, _) = self.ident()?;
                 let value = match self.next() {
-                    Token { kind: TokenKind::Ident(value), .. } => value,
+                    Token { kind: TokenKind::Ident(value) | TokenKind::Str(value), .. } => value,
                     token => return Err(SyntaxError {
                         id: "syntax-expected-step",
-                        message: "`prefer` takes a CSS media feature and its value, as `prefer prefers-color-scheme dark`".into(),
+                        message: "`prefer` takes a preference and its value, as `prefer prefers-color-scheme dark` or `prefer root-font-size \"24\"`".into(),
                         span: token.span,
                     }),
                 };

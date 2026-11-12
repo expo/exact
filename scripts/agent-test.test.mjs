@@ -492,6 +492,22 @@ test "page facts are outside the test media grammar"
 
 test "a failure does not stop the next test"
   expect text "scheme" == "dark"
+
+test "large text at launch survives reload"
+  prefer root-font-size "24"
+  expect text "scheme" == "dark"
+  reload
+
+test "large text can change between steps"
+  expect text "scheme" == "dark"
+  prefer root-font-size "28px"
+  reload
+
+test "invalid text size"
+  prefer root-font-size "0"
+
+test "text size does not leak into another test"
+  expect text "scheme" == "dark"
 `);
   const root = fileURLToPath(new URL('..', import.meta.url));
   const compile = spawnSync(join(process.env.CARGO_TARGET_DIR ?? join(root, 'target'), 'debug', 'contract'), ['build', contract, '-o', plan], { cwd: root, encoding: 'utf8' });
@@ -506,20 +522,29 @@ test "a failure does not stop the next test"
       if (t.failures.length) return {};
       const dark = t.launch.media['prefers-color-scheme'] === 'dark';
       expect(await s.carrier.evaluate("matchMedia('(prefers-color-scheme: dark)').matches")).toBe(dark);
+      const fontSize = parseFloat(t.launch.media['root-font-size'] ?? '16');
+      const rootSize = () => s.carrier.evaluate('parseFloat(getComputedStyle(document.documentElement).fontSize)');
+      expect(await rootSize()).toBe(fontSize);
       await t.restart();
       expect(textExpectation((await s.tree()).nodes, 'scheme', dark ? 'dark' : 'light')).toBeNull();
+      expect(await rootSize()).toBe(fontSize);
       ends.push(t.launch.media);
       return {};
     } });
-    expect(r.results.map(t => t.end?.error)).toEqual(Array(7).fill(undefined));
-    expect(r.results.map(t => t.failures.length)).toEqual([0, 0, 1, 1, 1, 1, 0]);
+    expect(r.results.map(t => t.end?.error)).toEqual(Array(11).fill(undefined));
+    expect(r.results.map(t => t.failures.length)).toEqual([0, 0, 1, 1, 1, 1, 0, 0, 0, 1, 0]);
     for (const [index, line, name, value] of [[2, 24, 'prefers-color-scheme', 'banana'], [3, 28, 'unknown', 'dark'], [4, 33, 'prefers-color-scheme', 'banana']]) {
-      expect(r.results[index].failures[0]).toContain(`line ${line}: prefer: ${name} ${value}: expected`);
+      const hint = name === 'unknown' ? 'did you mean `prefer prefers-color-scheme dark`? ' : '';
+      expect(r.results[index].failures[0]).toContain(`line ${line}: prefer: ${name} ${value}: ${hint}expected`);
     }
     expect(r.results[5].failures[0]).toContain('test prefer: expected a CSS media feature');
+    expect(r.results[9].failures[0]).toContain('prefer: root-font-size 0: expected');
     expect(ends).toEqual([
       { 'prefers-color-scheme': 'light', 'prefers-reduced-motion': 'reduce' },
       { 'prefers-color-scheme': 'light', 'prefers-reduced-motion': 'reduce' },
+      { 'prefers-color-scheme': 'dark', 'prefers-reduced-motion': 'reduce' },
+      { 'prefers-color-scheme': 'dark', 'prefers-reduced-motion': 'reduce', 'root-font-size': '24' },
+      { 'prefers-color-scheme': 'dark', 'prefers-reduced-motion': 'reduce', 'root-font-size': '28px' },
       { 'prefers-color-scheme': 'dark', 'prefers-reduced-motion': 'reduce' },
     ]);
   } finally { server.close(); rmSync(dir, { recursive: true, force: true }); }
