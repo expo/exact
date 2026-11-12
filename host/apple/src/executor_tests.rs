@@ -655,29 +655,6 @@ fn grants_that_do_not_parse_are_named_in_every_refusal() {
     }
 }
 
-/// A redirect that leaves the grants is refused naming the origin it led to
-/// (podcast F5: a feed moved to another host read only "outside the app's
-/// grants"), and the second hop is never sent.
-#[test]
-fn a_refused_redirect_names_where_it_led() {
-    let (core, fixture, woke) = setup();
-    core.run(job(1, Request::get("https://example.test/away")), None)
-        .unwrap();
-    let [(_, outcome)] = collect(&core, &woke, 1).try_into().unwrap();
-    let Outcome::Failed { kind, message } = outcome else {
-        panic!("the redirect was followed: {outcome:?}");
-    };
-    assert_eq!(kind, FailureKind::Refused);
-    assert_eq!(
-        message,
-        "outside the app's grants (net.fetch): redirected to https://elsewhere.test"
-    );
-    assert_eq!(
-        fixture.state.lock().unwrap().2,
-        ["https://example.test/away"]
-    );
-}
-
 #[test]
 fn native_post_refuses_a_source_ungranted_middle_hop_before_contact() {
     let grants = "net.fetch https://example.test\nnet.fetch https://elsewhere.test\nnet.fetch https://finish.test";

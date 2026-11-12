@@ -12,13 +12,15 @@ pub(in super::super) enum Phase {
     Publish,
     Renamed,
     Cleaned,
+    RedirectEnded,
+    ReplyEnded,
 }
 #[cfg(test)]
 pub(in super::super) type Hook = Arc<dyn Fn(Phase, Run) + Send + Sync>;
 
 impl Machine {
     #[cfg(test)]
-    fn body_to_phase(&self, phase: Phase, run: Run) {
+    pub(super) fn body_to_phase(&self, phase: Phase, run: Run) {
         let hook = self.body_to_hook.lock().unwrap().clone();
         if let Some(hook) = hook {
             hook(phase, run);

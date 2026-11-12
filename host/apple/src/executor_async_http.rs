@@ -26,8 +26,7 @@ impl Machine {
         let transport_lane = find(&mut self.shared.state.lock().unwrap().running, run)
             .expect("starting run")
             .transport_lane;
-        let Some((transport, fetch)) = self.transports.lock().unwrap()[transport_lane].clone()
-        else {
+        let Some((_, fetch)) = self.transports.lock().unwrap()[transport_lane].clone() else {
             return refuse(failed(FailureKind::Refused, self.unbound.clone()));
         };
         if request.body_to.is_some()
@@ -47,7 +46,6 @@ impl Machine {
                 limit,
                 abort,
                 retiring,
-                transport,
                 fetch,
             };
             return self.file(lane, run, file, sized);
@@ -62,7 +60,7 @@ impl Machine {
             request.timeout_ms.map(|ms| (ms, abort.clone()))
         };
         self.fetch(
-            lane, run, request, None, forced, abort, retiring, limit, transport, fetch, deadline,
+            lane, run, request, None, forced, abort, retiring, limit, fetch, deadline,
         );
     }
 
@@ -77,7 +75,6 @@ impl Machine {
         abort: AbortController,
         retiring: AbortRegistration,
         limit: usize,
-        transport: Arc<dyn AsyncTransport>,
         fetch: ibex2::host::Fetch,
         deadline: Option<(u32, AbortController)>,
     ) {
@@ -93,14 +90,9 @@ impl Machine {
         // The platform's idle timeout follows the deadline a second later,
         // as on the workers.
         req.timeout = timeout.map(|ms| Duration::from_millis(u64::from(ms) + 1_000));
-        let transport_lane = find(&mut self.shared.state.lock().unwrap().running, run)
-            .expect("fetching run")
-            .transport_lane;
         let tracked = Arc::new(Tracked {
-            inner: transport,
             machine: self.clone(),
             lane,
-            transport_lane,
             run,
             deadline: Mutex::new(deadline),
         });
@@ -111,7 +103,8 @@ impl Machine {
                 upload.clone(),
                 abort.signal(),
             );
-            Box::new(move |events: Arc<Events>| {
+            let url = request.url.clone();
+            let retry = Box::new(move |events: Arc<Events>| {
                 fetch.start_async(
                     tracked,
                     request,
@@ -123,12 +116,12 @@ impl Machine {
                     },
                     events,
                 );
-            }) as Retry
+            }) as RetryStart;
+            (url, retry)
         });
         let events = Arc::new_cyclic(|this| Events {
             machine: self.clone(),
             lane,
-            transport_lane,
             run,
             limit,
             this: this.clone(),
@@ -149,14 +142,11 @@ impl Machine {
     }
 }
 
-/// The lane's transport, counting each hop it starts: the in-flight cap,
-/// the per-origin limit, the run's live count (D3, D5). Its first hop arms
-/// the deadline, when the task is resumed.
+/// Each hop uses its admitted transport and places (LLP 1162 D1).
+/// Its first hop arms the deadline when the task is resumed.
 struct Tracked {
-    inner: Arc<dyn AsyncTransport>,
     machine: Arc<Machine>,
     lane: usize,
-    transport_lane: usize,
     run: Run,
     deadline: Mutex<Option<(u32, AbortController)>>,
 }
@@ -166,13 +156,13 @@ mod metrics_log;
 #[path = "executor_async_transport.rs"]
 mod tracked_transport;
 
-type Retry = Box<dyn FnOnce(Arc<Events>) + Send>;
+type RetryStart = Box<dyn FnOnce(Arc<Events>) + Send>;
+type Retry = (String, RetryStart);
 
 /// A fetch's events, to its lane's finisher.
 struct Events {
     machine: Arc<Machine>,
     lane: usize,
-    transport_lane: usize,
     run: Run,
     /// The response ceiling, which names an over-limit failure.
     limit: usize,
@@ -204,14 +194,14 @@ impl FetchEvents for Events {
             (retry, accepted)
         };
         if retry {
-            let retry = self
+            let (url, retry) = self
                 .retry
                 .lock()
                 .unwrap()
                 .take()
                 .expect("a cache conditional");
             let events = self.this.upgrade().expect("live fetch events");
-            self.next_hop(Box::new(move || retry(events)));
+            self.next_hop(&url, Box::new(move || retry(events)));
         } else if accepted {
             self.machine.post(
                 self.lane,
@@ -229,14 +219,9 @@ impl FetchEvents for Events {
             metrics.remote.as_deref(),
             metrics.queued_ms,
         );
-        if let Some(protocol) = metrics.protocol {
-            self.machine.post(
-                self.lane,
-                Event::Protocol(self.transport_lane, origin(url), protocol),
-            );
-        }
     }
-    fn next_hop(&self, start: Box<dyn FnOnce() + Send>) {
-        self.machine.post(self.lane, Event::Hop(self.run, start));
+    fn next_hop(&self, url: &str, start: Box<dyn FnOnce() + Send>) {
+        self.machine
+            .post(self.lane, Event::Hop(self.run, url.to_owned(), start));
     }
 }

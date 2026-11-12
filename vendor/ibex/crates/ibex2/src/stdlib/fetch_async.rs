@@ -245,8 +245,8 @@ pub trait FetchEvents: Send + Sync {
     /// A hop's metrics, as the transport reports them, with the URL that
     /// hop sent: a late report from an earlier hop names its own origin.
     fn metrics(&self, _url: &str, _metrics: HopMetrics) {}
-    /// The next hop of a redirect is ready: start it, now or later.
-    fn next_hop(&self, start: Box<dyn FnOnce() + Send>) {
+    /// The next hop is ready at `url`: admit it, then start it now or later.
+    fn next_hop(&self, _url: &str, start: Box<dyn FnOnce() + Send>) {
         start()
     }
 }
@@ -763,10 +763,11 @@ impl Sink for HopSink {
         match then {
             Then::Nothing => {}
             Then::Destination(_) => unreachable!("completed outside the lock"),
-            Then::Next(_) => {
+            Then::Next(step) => {
                 let next = task.clone();
                 if catch_unwind(AssertUnwindSafe(|| {
-                    self.events.next_hop(Box::new(move || next.hop()))
+                    self.events
+                        .next_hop(&step.url, Box::new(move || next.hop()))
                 }))
                 .is_err()
                 {

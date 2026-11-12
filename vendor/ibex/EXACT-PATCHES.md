@@ -806,3 +806,13 @@ session with `invalidateAndCancel`, even when callers retain the lane.
 Retirement refuses further preparation and task completions still arrive.
 
 Replay these lifecycle methods and the retained-pool and lane tests on a refresh.
+
+## Local patch 34, a redirect's next hop names its destination
+
+The asynchronous fetch tells its embedder that a redirect's next hop is
+ready (`next_hop`). The call now carries the hop's URL, so the embedder
+admits the hop against its destination's origin before it starts it, as it
+admits a first hop (LLP 1162 D8). An embedder that ignores the URL behaves
+as before.
+
+Replay the parameter and its test on a refresh.

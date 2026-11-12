@@ -240,14 +240,10 @@ impl Machine {
             forced,
             abort,
             retiring,
-            transport,
             fetch,
             ..
         } = state.book.files.remove(&run).expect("a file job");
-        state
-            .book
-            .trash
-            .push(Box::new((abort, retiring, transport, fetch)));
+        state.book.trash.push(Box::new((abort, retiring, fetch)));
         state.book.sized.insert(run.0, size as u64);
         // In admission order: behind any job still queued ahead of it.
         let at = state.jobs[lane]
@@ -331,12 +327,11 @@ impl Machine {
                 file.abort,
                 file.retiring,
                 file.limit,
-                file.transport,
                 file.fetch,
                 None,
             )
         });
-        let origin = Some(origin(&url));
+        let origin = origin(&url);
         state.book.hops[lane].push_back(Hop { run, origin, start });
         None
     }
@@ -424,7 +419,11 @@ mod tests {
         machine.apply(
             &mut state,
             1,
-            Event::Hop((77, 1), Box::new(move || drop(probe))),
+            Event::Hop(
+                (77, 1),
+                "https://example.test/".into(),
+                Box::new(move || drop(probe)),
+            ),
         );
         machine.apply(
             &mut state,

@@ -21,7 +21,7 @@ pub(super) struct Started {
 #[derive(Default)]
 pub(super) struct Script {
     retired: std::sync::atomic::AtomicBool,
-    refuse_next: std::sync::atomic::AtomicBool,
+    pub(super) refuse_next: std::sync::atomic::AtomicBool,
     panic_next: std::sync::atomic::AtomicBool,
     panic_activate: std::sync::atomic::AtomicBool,
     started: Mutex<Vec<Started>>,

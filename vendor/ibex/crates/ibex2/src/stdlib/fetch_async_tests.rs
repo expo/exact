@@ -62,6 +62,7 @@ struct Recorded {
     outcomes: Mutex<Vec<Result<Collected, HostError>>>,
     ended: AtomicUsize,
     metrics: Mutex<Vec<(String, HopMetrics)>>,
+    next_urls: Mutex<Vec<String>>,
     /// Next hops held back, to start by hand.
     held: Mutex<Option<Vec<Job>>>,
     /// Run at a hop's end, as a caller's re-entrant abort would.
@@ -84,7 +85,8 @@ impl FetchEvents for Recorded {
             .unwrap()
             .push((url.to_string(), metrics));
     }
-    fn next_hop(&self, start: Box<dyn FnOnce() + Send>) {
+    fn next_hop(&self, url: &str, start: Box<dyn FnOnce() + Send>) {
+        self.next_urls.lock().unwrap().push(url.to_owned());
         match self.held.lock().unwrap().as_mut() {
             Some(held) => held.push(start),
             None => start(),
@@ -239,6 +241,7 @@ fn a_followed_redirect_starts_the_next_hop_after_the_old_one_ends() {
         "the next hop waits for the old one's end"
     );
     first.sink.end(cancel_error());
+    assert_eq!(*events.next_urls.lock().unwrap(), ["https://b.example/y"]);
     let mut second = transport.take(0);
     assert_eq!(second.request.url, "https://b.example/y");
     // A late event from the first hop is ignored by hop identity.

@@ -201,6 +201,58 @@ fn an_overlapping_redirected_revalidation_retries_in_its_original_place() {
 }
 
 #[test]
+fn a_redirected_revalidation_retry_checks_its_original_origin_again() {
+    let script = Arc::new(Script::default());
+    let (mut core, woke) = core(&script, GRANTS);
+    core.enable_http_cache();
+    seed(&core, &woke, &script, A, true);
+    core.run(job(2, A), None).unwrap();
+    script.wait_for(A);
+    let mut conditional = script.take(A);
+    head(&mut conditional, 302, &[("Location", B)]);
+    conditional.sink.end(Ok(()));
+    drop(conditional);
+    script.wait_for(B);
+    for ticket in 10..10 + PER_ORIGIN as u64 {
+        let mut held = job(ticket, &format!("{A}/{ticket}"));
+        held.request = held.request.independent_http(1024);
+        core.run(held, None).unwrap();
+    }
+    assert_eq!(script.wait(PER_ORIGIN + 1), PER_ORIGIN + 1);
+    let mut redirected = script.take(B);
+    head(&mut redirected, 304, &[]);
+    redirected.sink.end(Ok(()));
+    drop(redirected);
+    script.wait_for(A);
+    let mut retry = script.take(A);
+    assert_eq!(retry._request.headers.get("if-none-match"), None);
+    {
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!(state.book.origins[1][&origin(A)], PER_ORIGIN);
+        assert_eq!(state.book.origins[0][&origin(A)], 1);
+        assert_eq!(
+            state
+                .running
+                .iter()
+                .find(|r| r.ticket == 2)
+                .unwrap()
+                .transport_lane,
+            0
+        );
+    }
+    head(&mut retry, 200, &[]);
+    retry.sink.data(b"unconditional");
+    retry.sink.end(Ok(()));
+    drop(retry);
+    assert!(
+        matches!(&drain(&core, &woke, 1)[0].1, Outcome::Response(r) if r.body == b"unconditional")
+    );
+    wait(&core, |s| !s.running.iter().any(|r| r.ticket == 2));
+    core.retire();
+    zero(&core);
+}
+
+#[test]
 fn observed_failures_and_file_reply_heads_invalidate_the_cache() {
     for file in [false, true] {
         for failed in [false, true] {

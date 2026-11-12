@@ -49,6 +49,9 @@ mod cache_tests;
 #[path = "executor_async_read_tests.rs"]
 mod read_tests;
 #[cfg(test)]
+#[path = "executor_redirect_tests.rs"]
+mod redirect_tests;
+#[cfg(test)]
 #[path = "executor_async_retire_tests.rs"]
 mod retire_tests;
 #[path = "executor_async_retire.rs"]
@@ -119,15 +122,12 @@ pub(super) struct Book {
     downloads: HashSet<Run>,
     /// Admission places retained until physical cleanup ends.
     held_counts: HashSet<Run>,
-    /// Final hop places wait for the destination's physical release.
-    download_ends: HashMap<Run, (String, bool)>,
-    /// Exchanges waiting for the starter: a redirect's next hop, an
-    /// upload's first, each with its origin when it is known now.
+    /// Each ended hop's places wait for the destination's physical release.
+    download_ends: HashMap<Run, Vec<(usize, String, bool)>>,
+    /// Redirects and uploads waiting for admission at their destination origin.
     hops: [VecDeque<Hop>; 2],
-    /// Places held for a run's next hop, from the starter's choice until
-    /// its transport starts it: the in-flight one, and the origin's when
-    /// known.
-    reserved: HashMap<Run, Option<String>>,
+    /// Places held from selection until transport preparation consumes them.
+    reserved: HashMap<Run, (usize, String)>,
     /// Upload bytes charged per run, released once the lent buffer has
     /// gone and the run has physically ended (D5).
     uploads: HashMap<Run, Charged>,
@@ -190,7 +190,7 @@ impl Book {
 /// An exchange for the starter to start.
 struct Hop {
     run: Run,
-    origin: Option<String>,
+    origin: String,
     start: Start,
 }
 
@@ -228,7 +228,6 @@ struct FileJob {
     limit: usize,
     abort: AbortController,
     retiring: AbortRegistration,
-    transport: Arc<dyn AsyncTransport>,
     fetch: ibex2::host::Fetch,
 }
 
@@ -251,9 +250,9 @@ type Lane = (Arc<dyn AsyncTransport>, ibex2::host::Fetch);
 enum Event {
     /// A run's outcome: a fetch's, a closure's, a handoff's, the timer's.
     Outcome(Run, Done),
-    /// Something physical of a run ended: a hop (with the origin it
-    /// counted, whether it sent the upload and whether it is final), a reader, a start.
-    Ended(Run, Option<String>, bool, bool),
+    /// A hop's end names its own transport lane and origin: a later hop may
+    /// have changed routes (LLP 1162 D1). Readers and starts have no origin.
+    Ended(Run, Option<(usize, String)>, bool, bool),
     ReaderEnded(Run),
     /// A charged upload buffer's last release, including queued disposal.
     Released(Run),
@@ -264,7 +263,7 @@ enum Event {
     /// A reader's file, or why not (`None`: it grew past its charge).
     Read(Run, Result<Vec<u8>, Option<Outcome>>),
     /// A redirect's next hop.
-    Hop(Run, Box<dyn FnOnce() + Send>),
+    Hop(Run, String, Box<dyn FnOnce() + Send>),
 }
 
 enum Done {
@@ -480,15 +479,20 @@ impl Machine {
                 state.book.trash.push(Box::new(hop.start));
                 continue;
             }
-            let transport_lane = find(&mut state.running, run).expect("open").transport_lane;
-            if transport_lane == 1 && state.book.in_flight >= IN_FLIGHT {
-                break;
-            }
+            let r = find(&mut state.running, run).expect("open");
+            let previous_lane = r.transport_lane;
+            let overlap = r.overlap;
             let hop = &state.book.hops[lane][at];
-            if hop
-                .origin
-                .as_deref()
-                .is_some_and(|o| at_limit(state, transport_lane, o))
+            // LLP 1162 D1: every shared hop can fall back when held independent
+            // exchanges occupy its adapter. An ordered route keeps its slot.
+            let transport_lane = if lane == 0 && overlap && previous_lane == 1 {
+                shared_route(state, &hop.origin)
+            } else {
+                previous_lane
+            };
+            if (transport_lane == 0 && previous_lane != 0 && state.book.blocking)
+                || (transport_lane == 1 && state.book.in_flight >= IN_FLIGHT)
+                || at_limit(state, transport_lane, &hop.origin)
             {
                 at += 1;
                 continue;
@@ -496,7 +500,10 @@ impl Machine {
             let hop = state.book.hops[lane].remove(at).expect("index");
             hold(&mut state.book, transport_lane, hop.run, hop.origin);
             // The start holds its run until it has run (`starter`).
-            find(&mut state.running, hop.run).expect("open").live += 1;
+            let r = find(&mut state.running, hop.run).expect("open");
+            r.transport_lane = transport_lane;
+            r.live += 1;
+            state.book.blocking |= lane == 0 && transport_lane == 0;
             starts.push((hop.run, hop.start));
         }
         let mut index = 0;
@@ -517,19 +524,8 @@ impl Machine {
             {
                 break;
             }
-            // LLP 1162 D1: the portable adapter's held workers must not queue
-            // a read ahead of the send that releases them.
-            let shared_capacity = if state.book.portable[1] {
-                IN_FLIGHT.min(super::INDEPENDENT)
-            } else {
-                IN_FLIGHT
-            };
-            let transport_lane = if lane == 0
-                && job.overlap
-                && state.book.in_flight < shared_capacity
-                && !at_limit(state, 1, &origin(&job.request.url))
-            {
-                1
+            let transport_lane = if lane == 0 && job.overlap {
+                shared_route(state, &origin(&job.request.url))
             } else {
                 lane
             };
@@ -592,7 +588,7 @@ impl Machine {
                 &mut state.book,
                 transport_lane,
                 run,
-                Some(origin(&job.request.url)),
+                origin(&job.request.url),
             );
         }
         let blocking = lane == 0;
@@ -789,18 +785,19 @@ impl Machine {
                 Some(self.settled(state, run, outcome))
             }
             Event::Ended(run, origin, sent, final_hop) => {
-                if let Some(origin) = origin {
-                    let transport_lane = find(&mut state.running, run)
-                        .expect("live hop")
-                        .transport_lane;
+                if let Some((transport_lane, origin)) = origin {
                     let deferred = state.book.downloads.contains(&run)
                         && (final_hop
                             || find(&mut state.running, run)
                                 .is_some_and(|r| r.claim != Claim::None));
                     if deferred {
-                        state.book.download_ends.insert(run, (origin, sent));
+                        state.book.download_ends.entry(run).or_default().push((
+                            transport_lane,
+                            origin,
+                            sent,
+                        ));
                     } else {
-                        unreserve(&mut state.book, transport_lane, Some(&origin));
+                        unreserve(&mut state.book, transport_lane, &origin);
                         if let Some(u) = state.book.uploads.get_mut(&run).filter(|_| sent) {
                             u.hops -= 1;
                         }
@@ -833,7 +830,7 @@ impl Machine {
             }
             Event::Sized(run, size) => self.sized(state, lane, run, size),
             Event::Read(run, read) => self.read(state, lane, run, read),
-            Event::Hop(run, start) => {
+            Event::Hop(run, url, start) => {
                 let open = find(&mut state.running, run)
                     .is_some_and(|r| !r.terminal && r.claim == Claim::None);
                 if !open {
@@ -842,7 +839,7 @@ impl Machine {
                 }
                 state.book.hops[lane].push_back(Hop {
                     run,
-                    origin: None,
+                    origin: origin(&url),
                     start: Box::new(move |_| start()),
                 });
                 None
@@ -1004,26 +1001,31 @@ fn fits(state: &State, lane: usize, job: &Job, kind: Kind) -> bool {
     more + upload <= BYTES[lane].saturating_sub(state.bytes[lane])
 }
 
-/// Hold `run`'s next exchange's places: the in-flight one, and its
-/// origin's when known (a redirect's is known when it starts).
-fn hold(book: &mut Book, lane: usize, run: Run, origin: Option<String>) {
-    if let Some(origin) = &origin {
-        *book.origins[lane].entry(origin.clone()).or_default() += 1;
-    }
+/// The same shared admission for a read's first hop and its redirects (LLP 1162 D1).
+fn shared_route(state: &State, origin: &str) -> usize {
+    let capacity = if state.book.portable[1] {
+        IN_FLIGHT.min(super::INDEPENDENT)
+    } else {
+        IN_FLIGHT
+    };
+    usize::from(state.book.in_flight < capacity && !at_limit(state, 1, origin))
+}
+
+/// Hold the exchange's shared and origin places before its start can run.
+fn hold(book: &mut Book, lane: usize, run: Run, origin: String) {
+    *book.origins[lane].entry(origin.clone()).or_default() += 1;
     if lane == 1 {
         book.in_flight += 1;
     }
-    book.reserved.insert(run, origin);
+    book.reserved.insert(run, (lane, origin));
 }
 
-/// Give back one exchange's in-flight place and its origin's, if counted.
-fn unreserve(book: &mut Book, lane: usize, origin: Option<&str>) {
-    if let Some(origin) = origin {
-        if let Some(n) = book.origins[lane].get_mut(origin) {
-            *n -= 1;
-            if *n == 0 {
-                book.origins[lane].remove(origin);
-            }
+/// Give back one exchange's shared and origin places on its actual transport.
+fn unreserve(book: &mut Book, lane: usize, origin: &str) {
+    if let Some(n) = book.origins[lane].get_mut(origin) {
+        *n -= 1;
+        if *n == 0 {
+            book.origins[lane].remove(origin);
         }
     }
     if lane == 1 {
@@ -1175,18 +1177,20 @@ fn physical(state: &mut State, run: Run) {
             super::wake(state);
         }
     }
-    if let Some((origin, sent)) = state.book.download_ends.remove(&run) {
-        unreserve(&mut state.book, r.transport_lane, Some(&origin));
-        if let Some(u) = state.book.uploads.get_mut(&run).filter(|_| sent) {
-            u.hops -= 1;
+    if let Some(ends) = state.book.download_ends.remove(&run) {
+        for (transport_lane, origin, sent) in ends {
+            unreserve(&mut state.book, transport_lane, &origin);
+            if let Some(u) = state.book.uploads.get_mut(&run).filter(|_| sent) {
+                u.hops -= 1;
+            }
         }
     }
     if state.book.sizing[lane] == Some(run) {
         state.book.sizing[lane] = None;
     }
     // An exchange chosen that never started gives back its places.
-    if let Some(origin) = state.book.reserved.remove(&run) {
-        unreserve(&mut state.book, r.transport_lane, origin.as_deref());
+    if let Some((transport_lane, origin)) = state.book.reserved.remove(&run) {
+        unreserve(&mut state.book, transport_lane, &origin);
     }
     let (gone, kept): (VecDeque<Hop>, VecDeque<Hop>) = std::mem::take(&mut state.book.hops[lane])
         .into_iter()
