@@ -464,7 +464,7 @@ if (import.meta.main) {
     let origin = null;
     for (const p of pages) {
       const page = await render(p.location);
-      docs.push({ location: canonical(p.location), notfound: p.notfound, status: page.status, robots: page.robots, page: page.html });
+      docs.push({ location: canonical(p.location), notfound: p.notfound, status: page.status, robots: page.robots });
       origin ??= page.origin;
       const file = p.notfound ? '404.html' : `${p.location.replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
       mkdirSync(dirname(resolve(dist, file)), { recursive: true });

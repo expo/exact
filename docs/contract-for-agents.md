@@ -2656,8 +2656,7 @@ route rendered so, `shell.html`, and `routes.json`, the route table in the plan'
 route's pattern, render policy and `notfound`. An app with routes also gets `robots.txt`, which
 allows every path, and with `app.json`'s `app.origin` a `sitemap.xml` of the pages made at build,
 by the render server's rule: not the `notfound` page, a page whose status is neither 200 nor 503
-(a render at its deadline), one whose `head` says `robots="noindex"` or `"none"`, or one whose
-`canonical` is another page. A page rendered per request is not made at build, so the built
+(a render at its deadline), or one whose `head` says `robots="noindex"` or `"none"`. A page rendered per request is not made at build, so the built
 sitemap does not list it. A declared route at `/robots.txt` or `/sitemap.xml` keeps that path
 instead of a generated file. Inside the app, `--out` is `dist` (or a path under `dist/` or
 `target/`), which no build reads as source; the build it replaces is kept beside it in

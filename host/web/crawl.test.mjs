@@ -17,8 +17,8 @@ const written = (pages, origin = ORIGIN, before = () => {}, routes = []) => {
 };
 const locs = sitemap => [...(sitemap ?? '').matchAll(/<loc>([^<]*)<\/loc>/g)].map(m => m[1]);
 
-// The sitemap keeps what the render server's keeps (serve.rs `sitemap`): a page whose status is 200 or 503, that says
-// neither `noindex` nor `none`, and whose canonical URL is its own.
+// The sitemap keeps what the render server's keeps (serve.rs `indexed`): a page whose status is 200 or 503 and that
+// says neither `noindex` nor `none`. A canonical URL naming another page does not leave a page out, as on the server.
 test('the sitemap lists the pages a crawler should index, against the origin', () => {
   const { robots, sitemap } = written([
     page('/'), page('/late', { status: 503 }), page('/gone', { status: 410 }), page('/missing', { notfound: true, status: 404 }),
@@ -27,7 +27,7 @@ test('the sitemap lists the pages a crawler should index, against the origin', (
     page('/self', { page: '<link rel="canonical" href="https://site.invalid/self">' }),
     page('/a%20b?x=1&y=2'),
   ], ORIGIN + '/');
-  expect(locs(sitemap)).toEqual(['https://site.invalid/', 'https://site.invalid/late', 'https://site.invalid/self', 'https://site.invalid/a%20b?x=1&amp;y=2']);
+  expect(locs(sitemap)).toEqual(['https://site.invalid/', 'https://site.invalid/late', 'https://site.invalid/copy', 'https://site.invalid/self', 'https://site.invalid/a%20b?x=1&amp;y=2']);
   expect(robots).toBe('User-agent: *\nAllow: /\nSitemap: https://site.invalid/sitemap.xml\n');
 });
 
@@ -57,14 +57,6 @@ test('a route with a parameter does not claim either path', () => {
   expect(locs(files.sitemap)).toEqual(['https://site.invalid/']);
 });
 
-test('a Unicode self canonical stays in the sitemap with either origin spelling', () => {
-  for (const origin of [ORIGIN, ORIGIN + '/']) {
-    const { sitemap } = written([page('/caf%C3%A9', {
-      page: '<link rel="canonical" href="https://site.invalid/café">',
-    })], origin);
-    expect(locs(sitemap)).toEqual(['https://site.invalid/caf%C3%A9']);
-  }
-});
 
 test('robots directives use their names, not values', () => {
   const { sitemap } = written([
