@@ -8,14 +8,15 @@ import { glueDeclarations, checkedGlueCall } from './glue-fixture.mjs';
 // Run the production lazy module and applyBatch with a deterministic GPU and
 // presenter. The runner's returned batch addresses the *final* outer tree.
 export async function fixture(options = {}) {
-  const views = new Map(), records = [], diagnostics = [], observers = [], sizeWrites = [];
+  const views = new Map(), records = [], metrics = [], reporting = [], diagnostics = [], observers = [], sizeWrites = [];
   let next = 0, hud = null, expectedView = null;
   const changed = new Map(), events = [], order = [], restored = new Set();
-  let mutations = Promise.resolve(), frame;
+  let mutations = Promise.resolve(), frame, timerId = -1;
+  const metricTimers = new Map();
   const window = new EventTarget();
   const document = { createElement: () => ({}), head: { append() {} }, activeElement:{}, hidden:false, baseURI:"http://fixture/", addEventListener() {} };
   const exact = { mutate: fn => { const p = mutations.then(fn); mutations = p.catch(() => {}); return p; }, views, root: { dataset: {} }, now: () => 0, devAssets: [],
-    writeIn: text => text, wasm: { exact_surface_record(text) {
+    writeIn: text => text, wasm: { exact_canvas_performance_requested: name => options.metricsName === name, exact_canvas_performance_record: text => { metrics.push(text); return {ops: []}; }, exact_surface_record(text) {
       records.push(text);
       return { ops: [() => {
         if (expectedView !== null) assert.ok(views.has(expectedView), 'recommit addressed a view before create');
@@ -33,6 +34,7 @@ export async function fixture(options = {}) {
   }, gpu_seekable() {}, gpu_shader_names: () => '[]', gpu_shaders_clear() {},
     gpu_create: () => ++next, gpu_bind_at(id) { if (options.initialBindFail === id) return false; changed.set(id, JSON.stringify({ value: id })); return true; },
     gpu_published(id) { const r = changed.get(id); changed.delete(id); return r; },
+    gpu_performance_reporting: (id, enabled) => reporting.push([id, enabled]), gpu_performance: id => options.snapshot?.(id),
     gpu_messages: () => undefined, gpu_wants_input: () => Boolean(options.input), gpu_destroy() { order.push("old destroy"); },
     gpu_carry: () => new Uint8Array([1]), gpu_restore(id) { if (options.refuse?.(id)) return false; restored.add(id); return true; },
     gpu_error: () => options.error ?? "fixture refusal", gpu_render: () => 0, gpu_flush: () => true, gpu_dirty: () => false,
@@ -109,16 +111,19 @@ export async function fixture(options = {}) {
     }
   }
   await new (Object.getPrototypeOf(async function() {}).constructor)(
-    'padPoller', 'inertAncestor', 'assetDelivery', 'globalThis', 'candidate', 'document', 'Element', 'devicePixelRatio', 'MutationObserver', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'location', 'console', 'window', 'performance', 'setTimeout',
+    'padPoller', 'inertAncestor', 'assetDelivery', 'globalThis', 'candidate', 'document', 'Element', 'devicePixelRatio', 'MutationObserver', 'ResizeObserver', 'requestAnimationFrame', 'cancelAnimationFrame', 'location', 'console', 'window', 'performance', 'setTimeout', 'clearTimeout',
     source + `;exact.finishRestore = (view) => { const e = surfaces.get(view); e.pendingRestore = {bytes:new Uint8Array([7])}; finishRestore(e, gpu); };`
   )(options.padPoller ?? (() => {}), inertAncestor, settings => assetDelivery({...settings, ...options.delivery}), { exact }, async version => version ? nextGpu : gpu, document, Element, 3, class { constructor(fn) { observers.push(fn); } observe() {} disconnect() {} },
     class { observe() {} disconnect() {} }, fn => { if (fn.name === "frame") frame = fn; return 1; }, () => {}, { search: '' }, { error: (...args) => diagnostics.push(args.join(' ')), info() {} }, window,
-    options.performance ?? globalThis.performance, options.setTimeout ?? globalThis.setTimeout);
+    options.performance ?? globalThis.performance, (fn, ms) => {
+      if (ms === 1000) { const id = timerId--; metricTimers.set(id, fn); return id; }
+      return (options.setTimeout ?? globalThis.setTimeout)(fn, ms);
+    }, id => { if (!metricTimers.delete(id)) clearTimeout(id); });
   function create(id, name = 'world') {
     const el = new Element("host"); el.canvas = new Element();
     views.set(id, el); exact.gpu.surface(id, name, []); return el;
   }
   function destroy(id) { views.delete(id); exact.gpu.destroy(id); }
-  return { window, document, exact, records, diagnostics, sizeWrites, create, destroy, applyBatch, events, order, gpu, nextGpu, Element, publish:(id,value)=>changed.set(id,JSON.stringify(value)), mutation: () => observers.forEach(fn => fn()),
+  return { metricTimers, pollMetrics: () => { const pending = [...metricTimers.values()]; metricTimers.clear(); for (const fn of pending) fn(); }, metrics, reporting, window, document, exact, records, diagnostics, sizeWrites, create, destroy, applyBatch, events, order, gpu, nextGpu, Element, publish:(id,value)=>changed.set(id,JSON.stringify(value)), mutation: () => observers.forEach(fn => fn()),
     frame: () => frame?.(0), expectView: id => { expectedView = id; }, stale: () => { hud = 'stale'; }, hud: () => hud };
 }

@@ -9,11 +9,9 @@ use std::os::unix::io::{AsRawFd, RawFd};
 mod core;
 #[path = "../../apple/src/executor_pump.rs"]
 pub mod pump;
-/// A new executor waits for a native-worker slot under test: the crate's own
-/// tests, and the integration binaries, whose every test's presenters share
-/// one process's bound (`test-wait`, which only the dev-dependency on this
-/// crate turns on). A presenter's executor is refused at the bound instead.
-const WAIT_FOR_SLOT: bool = cfg!(any(test, feature = "test-wait"));
+/// Each test thread shares a worker budget among its presenters. The
+/// dev-dependency enables this for integration tests; production shares one process bound.
+const ISOLATE_WORKER_BUDGET: bool = cfg!(any(test, feature = "test-budget"));
 
 /// Ordered native work plus explicitly independent HTTP, with a poll wake.
 pub struct Executor {
@@ -198,6 +196,12 @@ fn listen_module() -> core::stream::listen::Module {
 
 #[cfg(test)]
 mod wire_tests {
+    #[test]
+    #[ignore = "async lane: real WebSocket handshake"]
+    fn socket_protocols_on_portable_transport() {
+        super::core::stream::protocol_tests::protocols(super::portable_host);
+    }
+
     /// The Linux host's own transport (rustls): an app's abort closes a held
     /// write's connection, and the server sees it end (shared with Apple's
     /// platform transport, `executor_tests.rs`).

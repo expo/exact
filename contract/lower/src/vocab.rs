@@ -303,6 +303,17 @@ pub fn shorthand_rows(name: &str) -> &'static [StyleId] {
     crate::shorthands::rows(name)
 }
 
+/// An enum row's keywords an author may write: the schema's, less its
+/// `refused` (LLP 1043.000 §3 D1).
+pub fn authored_names(row: StyleId) -> Vec<&'static str> {
+    let refused = row.refused_enum_names();
+    row.enum_names()
+        .iter()
+        .copied()
+        .filter(|n| !refused.contains(n))
+        .collect()
+}
+
 /// A style row's wire codec, by the schema's spelling (`dimension`,
 /// `colorValue`, `enum`).
 pub fn codec(row: StyleId) -> String {

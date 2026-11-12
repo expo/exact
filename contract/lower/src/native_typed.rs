@@ -33,6 +33,8 @@ pub const EVENT_MARKER: &str = "exact:event:";
 /// One package view's declaration, as the bake reads it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DeclaredView {
+    /// The interface whose implementation serves the view.
+    pub extension: String,
     /// Each declared prop's type as the interface writes it
     /// (`option<MapMarker[]>`).
     pub props: BTreeMap<String, String>,
@@ -65,6 +67,18 @@ impl Drop for DeclaredViews {
 
 pub(crate) fn declared(tag: &str) -> Option<DeclaredView> {
     DECLARED.with(|d| d.borrow().get(tag).cloned())
+}
+
+pub(crate) fn used_extensions(
+    nodes: &[contract_syntax::Node],
+) -> std::collections::BTreeSet<String> {
+    DECLARED.with(|d| {
+        let d = d.borrow();
+        crate::native::module_tags_in(nodes)
+            .iter()
+            .filter_map(|(tag, _)| d.get(tag).map(|v| v.extension.clone()))
+            .collect()
+    })
 }
 
 /// Whether the package view `tag` declares a prop named `name`.

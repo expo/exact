@@ -25,7 +25,7 @@ impl<const N: usize> Color<N> {
     }
     fn css(css: &str) -> Result<Self, String> {
         let (linear, alpha) = match exact_color::parse(css) {
-            Some(exact_color::Parsed::Legacy(c)) => (
+            Some(exact_color::Parsed::Legacy(c, _)) => (
                 [c.r, c.g, c.b].map(|v| decode(f64::from(v) / 255.0)),
                 c.a as f32,
             ),

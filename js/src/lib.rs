@@ -334,6 +334,8 @@ pub struct Module {
     /// none when placed on main (`keeps_plan`), whose engine is this one.
     plan: Option<Plan>,
     keeps_plan: bool,
+    /// True before binding, then whether the entry reaches application code.
+    reached: bool,
     sigs: HashMap<String, Sig>,
     parked: Vec<(Key, Parked)>,
     /// Module work's let-go calls (`module_work.rs`, LLP 1146 D2).
@@ -428,6 +430,7 @@ impl Module {
             native_slot: Default::default(),
             plan: None,
             keeps_plan: true,
+            reached: true,
             sigs: HashMap::new(),
             parked: Vec::new(),
             work: Default::default(),
@@ -464,8 +467,9 @@ impl Module {
     }
 
     /// This module's Canvas 2D roster, as the bake recorded it beside the
-    /// bytecode (`module.rs`'s `CANVAS_SURFACES`).
-    pub fn with_canvas_surfaces(mut self, surfaces: &[(&str, usize)]) -> Self {
+    /// bytecode (`module.rs`'s `CANVAS_SURFACES`, which a linked bake reads).
+    pub fn with_canvas_surfaces<'a>(mut self, surfaces: impl AsRef<[(&'a str, usize)]>) -> Self {
+        let surfaces = surfaces.as_ref();
         self.canvas_surfaces = surfaces.iter().map(|(n, a)| (n.to_string(), *a)).collect();
         self
     }
@@ -709,8 +713,8 @@ impl Module {
                     .set(later.map(|handler| -> exact_runner::NativeHandler {
                         std::sync::Arc::new(move |body: Vec<u8>, reply| {
                             let reply = NativeReply::new(reply);
-                            match serde_json::from_slice(&body) {
-                                Ok(request) => handler(request, reply),
+                            match exact_js_value::json::parse(&body) {
+                                Ok(request) => handler(request.into(), reply),
                                 Err(e) => reply.send(Err(format!("native.later: {e}"))),
                             }
                         })
@@ -793,7 +797,8 @@ impl Module {
     }
 
     /// The per-turn budget in milliseconds (its own time, `turn.rs`); a turn
-    /// over it is `Unavailable` and the resource keeps its last value.
+    /// over it is `DataError::Overrun`, and a resource keeps its last value
+    /// while the runner asks it again (`runner/src/runner/overrun.rs`).
     pub fn set_budget_ms(&mut self, ms: f64) {
         self.budget_ms = ms;
     }

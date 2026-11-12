@@ -1,9 +1,11 @@
 import { test, expect } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { open } from '../../scripts/agent.mjs';
+import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { hostFixtureFile } from '../web/tests/glue-fixture.mjs';
 
 // The module seam's general pieces on the JS target (LLP 1133.002 D14; LLP
 // 1133.008 D8 item 9; LLP 1133.009 D10 items 3, 7, 10-12), through an
@@ -13,6 +15,71 @@ import { open } from '../../scripts/agent.mjs';
 // driven by the agent.
 
 const root = resolve(import.meta.dir, '../..');
+
+test.each([false, true])('a view validates and delivers its agent vocabulary (substitute source: %p)', async withSource => {
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+    const path = new URL(request.url).pathname;
+    if (path === '/') return new Response('<div id="exact-root"></div>', { headers: { 'content-type': 'text/html' } });
+    if (path.endsWith('/names.js')) return new Response('export const sourceTypes = {};', { headers: { 'content-type': 'text/javascript' } });
+    const local = resolve(root, '.' + path);
+    const file = existsSync(local) ? local : resolve(root, 'host/web', path.split('/').at(-1));
+    return existsSync(file) ? new Response(hostFixtureFile(file), { headers: { 'content-type': 'text/javascript' } }) : new Response('Not found', { status: 404 });
+  } });
+  let browser;
+  try {
+    browser = await suiteBrowser();
+    const page = await browser.newPage();
+    await page.goto(server.url.href);
+    const result = await page.evaluate(async withSource => {
+      const rt = await import('/host/web-js/rt.js');
+      const { modules } = await import('/host/web-js/modules.js');
+      rt.clock.agent = true;
+      const seen = [];
+      const loader = async () => ({
+        implementation: () => ({ preferred(values) { seen.push(values); } }),
+        roster: { 'words-panel': { view: class {} } },
+      });
+      const words = { heard: 'string', levels: 'number[]', enabled: 'bool', status: 'string' };
+      const rows = withSource ? { status: ['words.status', false, { default: { available: false }, agent: words }, { available: 'b' }] } : {};
+      modules(rows, { words: loader }, { 'words-panel': ['words', false, [], words] });
+      const prefer = extension => exact.extensions.prefer({ extension });
+      const before = prefer({ 'words.heard': 'hello' });
+      if (before.error) throw new Error(before.error);
+      await exact.packageViews.make('words-panel', {});
+      const initial = seen.at(-1);
+      const errors = [
+        prefer({ 'words.heard': 7 }), prefer({ 'words.levels': [1, 'two'] }),
+        prefer({ 'words.enabled': 'true' }), prefer({ 'words.unknown': 'hello' }),
+        prefer({ 'unknown.heard': 'hello' }),
+      ];
+      await prefer({ 'words.heard': 'again', 'words.levels': [1, 2], 'words.enabled': true });
+      const updated = seen.at(-1);
+      await prefer({ 'words.heard': 'clear' });
+      const cleared = seen.at(-1), count = seen.length;
+      const source = withSource ? await prefer({ 'words.status': { available: true } }) : null;
+      const sourceError = withSource ? prefer({ 'words.status': 'a string' }) : null;
+      return { before, initial, updated, errors, cleared, source, sourceError, sourceTold: count !== seen.length, state: exact.extensions.state() };
+    }, withSource);
+    expect(result.before.error).toBeUndefined();
+    expect(result.initial).toEqual({ heard: 'hello' });
+    expect(result.updated).toEqual({ heard: 'again', levels: [1, 2], enabled: true });
+    expect(result.errors.map(e => e.error)).toEqual([
+      'prefer extension: `words.heard` is a string',
+      'prefer extension: `words.levels` is a number[]',
+      'prefer extension: `words.enabled` is a bool',
+      `prefer extension: no source \`words.unknown\` in this app; its module sources are ${withSource ? 'words.status' : 'none'}`,
+      `prefer extension: no source \`unknown.heard\` in this app; its module sources are ${withSource ? 'words.status' : 'none'}`,
+    ]);
+    expect(result.cleared).toEqual({ levels: [1, 2], enabled: true });
+    expect(result.sourceTold).toBe(false);
+    if (withSource) {
+      expect(result.source.error).toBeUndefined();
+      expect(result.sourceError.error).toContain('type its JSON');
+    }
+    expect(result.state.words.preferred).toEqual({ ...result.cleared, ...(withSource ? { status: { available: true } } : {}) });
+  } finally { await browser?.close(); server.stop(true); }
+});
+
 const run = (cmd, args, cwd) => {
   const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')}: ${r.stdout}\n${r.stderr}`);
@@ -108,16 +175,69 @@ function fixture() {
   return { dir, dist: join(app, 'target/web-dist') };
 }
 
+function serveFixture(dist, opener = open) {
+  const types = { '.js': 'text/javascript', '.html': 'text/html', '.wasm': 'application/wasm', '.json': 'application/json', '.css': 'text/css' };
+  const missing = [];
+  const server = Bun.serve({ port: 0, async fetch(req) {
+    const url = new URL(req.url), asked = url.pathname;
+    const file = Bun.file(join(dist, asked === '/' ? 'index.html' : asked.slice(1)));
+    const response = (await file.exists())
+      ? new Response(file, { headers: { 'content-type': types[extname(asked)] ?? 'text/html' } })
+      // Bun otherwise adds this header when sending, after the diagnostic reads it.
+      : new Response('not found', { status: 404, headers: { 'content-type': 'text/plain;charset=utf-8' } });
+    if (response.status === 404) missing.push(
+      `${req.method} ${asked}${url.search} -> ${response.status}\n` +
+      `  file: ${file.name}\n  content-type: ${response.headers.get('content-type')}\n` +
+      `  referer: ${req.headers.get('referer') ?? '(none)'}`,
+    );
+    return response;
+  } });
+  return {
+    server,
+    async open() {
+      try {
+        return await opener({ host: 'web', url: `http://127.0.0.1:${server.port}/`, webDist: dist });
+      } catch (error) {
+        throw new Error(`${error.message}\nStatic server at ${server.url} (${dist}):\n` +
+          (missing.join('\n') || 'no missing resources'), { cause: error });
+      }
+    },
+  };
+}
+
+test('a failed seam fixture boot names missing static resources', async () => {
+  const dist = mkdtempSync(join(tmpdir(), 'exact-module-seam-missing-'));
+  const cause = new Error('fixture page could not boot');
+  const served = serveFixture(dist, async ({ host, url, webDist }) => {
+    expect(host).toBe('web');
+    expect(webDist).toBe(dist);
+    const response = await fetch(new URL('/missing-seam.js?probe=1', url), { headers: { referer: url } });
+    expect(response.status).toBe(404);
+    expect(response.headers.get('content-type')).toBe('text/plain;charset=utf-8');
+    expect(await response.text()).toBe('not found');
+    throw cause;
+  });
+  try {
+    const failure = await served.open().then(() => null, error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toContain(cause.message);
+    expect(failure.message).toContain('GET /missing-seam.js?probe=1 -> 404');
+    expect(failure.message).toContain(join(dist, 'missing-seam.js'));
+    expect(failure.message).toContain('content-type: text/plain;charset=utf-8');
+    expect(failure.message).toContain(`referer: http://127.0.0.1:${served.server.port}/`);
+    expect(failure.cause).toBe(cause);
+  } finally {
+    served.server.stop(true);
+    rmSync(dist, { recursive: true, force: true });
+  }
+});
+
 test('an implementation that is its own substitute answers under the agent, behind admission and its ticket', async () => {
   const { dir, dist } = fixture();
-  const types = { '.js': 'text/javascript', '.html': 'text/html', '.wasm': 'application/wasm', '.json': 'application/json', '.css': 'text/css' };
-  const server = Bun.serve({ port: 0, async fetch(req) {
-    const asked = new URL(req.url).pathname, file = Bun.file(join(dist, asked === '/' ? 'index.html' : asked.slice(1)));
-    return (await file.exists()) ? new Response(file, { headers: { 'content-type': types[extname(asked)] ?? 'text/html' } }) : new Response('not found', { status: 404 });
-  } });
+  const served = serveFixture(dist);
   let s;
   try {
-    s = await open({ host: 'web', url: `http://127.0.0.1:${server.port}/`, webDist: dist });
+    s = await served.open();
     const seen = () => s.carrier.evaluate('globalThis.__sensor ?? null');
     const texts = async () => {
       const { nodes } = await s.tree(), byId = new Map(nodes.map(n => [n.id, n]));
@@ -169,7 +289,7 @@ test('an implementation that is its own substitute answers under the agent, behi
     expect((await texts()).opened).toBe('t3');
   } finally {
     await s?.close?.();
-    server.stop(true);
+    served.server.stop(true);
     rmSync(dir, { recursive: true, force: true });
   }
 }, 600_000);

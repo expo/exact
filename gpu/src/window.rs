@@ -496,6 +496,9 @@ impl Module {
         if let Some(inst) = inst {
             inst.dirty = false;
             inst.seen.store(true, Ordering::Release);
+            if inst.surface.frame_ready() {
+                inst.presented.now();
+            }
         }
         gpu.queue.present(drawable);
         Ok(())

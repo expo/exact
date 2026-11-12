@@ -22,9 +22,9 @@ its data.
 ## Serving
 
 `bun exact.mjs web-build --out dist` writes the site to `dist/`, and `bun exact.mjs serve
-dist` serves it on 127.0.0.1:8765 (`--port`, else `PORT`), building it again when you edit.
-A page it renders asks the API as it is made: start the stand-in first (`bun server.ts`),
-or set `API_BASE_URL` to an API that answers.
+dist` serves it on 127.0.0.1:8765 (`--port`, else `PORT`), rebuilding it when you edit.
+A page it renders asks the API: start the stand-in (`bun server.ts`) first, or set
+`API_BASE_URL` to one that answers.
 `npm run build` and `npm start` do the same, as hosts run them. A static host serves
 `dist/` by the rule `serve --help` states.
 
@@ -52,13 +52,14 @@ app.ts    export const API = import.meta.env.API_BASE_URL;
 ```
 
 The value is the environment's, else `.env.local`'s (out of git), else `.env`'s, else a
-default written after the read (`?? 'https://…'`); with none the build fails. It is inlined
-into the module on every host, so it is public: never a secret. A value changed since the
+default written after the read (`?? 'https://…'`); with none the build fails. Every host
+inlines it in the module: it is public, never a secret. A value changed since the
 build makes `test`, `agent`, `web` and `serve` build again.
 
 ## A deep link
 
-`/planet/7#details` opens the page at its `id="details"` once its data has arrived. Write
-it `path("planet", id) + "#details"`, or `link href="#details"` on the page shown;
+`/planet/7#details` opens the page at its `id="details"` once its data arrives. Write
+it `path("planet", id) + "#details"`, or `link href="#details"` on that page;
 `fragment(top(nav))` reads it, and a test opens there with `at "/planet/7#details"`. A query
-follows the path: `` path("home") + `?q=${v}` ``, read with `searchParam(top(nav), "q")`.
+follows the path: `` path("home") + `?q=${encodeURIComponent(v)}` `` (raw, `A&B` reads back
+`A`), read with `searchParam(top(nav), "q")`.

@@ -517,6 +517,36 @@ fn unrelated_layout_does_not_remeasure_native_buttons() {
 }
 
 #[test]
+fn root_font_changes_refresh_cached_button_faces_under_a_fixed_ancestor_font() {
+    let answers = Rc::new(RefCell::new((false, Vec::new())));
+    let mut k = tree(Box::new(Buttons(answers.clone())));
+    for size in ["mini", "small", "medium", "large"] {
+        patch(&mut k, 2, &[(StyleId::ControlSize, size)]);
+        for root in [16.0, 12.0, 24.0, 16.0] {
+            k.set_root_font_size(root).unwrap();
+            k.apply(0, 1, &[]).unwrap();
+            answers.borrow_mut().1.clear();
+            layout(&mut k);
+            let state = answers.borrow();
+            assert!(!state.1.is_empty(), "{size} at root {root} remeasures");
+            for request in &state.1 {
+                assert_eq!(request.style.root_font_size, root);
+                assert_eq!(request.style.title.font_size, 30.0);
+                assert!(!request.style.title.mask.has(StyleId::FontSize));
+            }
+            assert_eq!(k.button_face_style(2).unwrap().root_font_size, root);
+            drop(state);
+            answers.borrow_mut().1.clear();
+            layout(&mut k);
+            assert!(
+                answers.borrow().1.is_empty(),
+                "unchanged root reuses offers"
+            );
+        }
+    }
+}
+
+#[test]
 fn two_text_custom_face_keeps_the_projected_name() {
     let mut k = tree(Box::new(MonospaceMeasurer::default()));
     k.apply(

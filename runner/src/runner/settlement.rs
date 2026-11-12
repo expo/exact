@@ -719,6 +719,17 @@ impl<D: DataSource> Runner<D> {
                     // resource query, including through derives. Such a
                     // resource is device data just like a direct reader.
                     self.resources[i].store_reader |= store_dependent;
+                    // Whether a store change asks it again follows what its
+                    // arguments' readers read as they stand now, so it is
+                    // checked here even when cached arguments skipped their
+                    // evaluation: an upstream answer can start reading the
+                    // store and give the same value.
+                    if self.resources[i].store_reader
+                        && !self.resources[i].contents_reader
+                        && self.args_read_contents(i)
+                    {
+                        self.resources[i].contents_reader = true;
+                    }
                     let forced = force.contains(&i);
                     let refreshed = forced || refreshing.contains(&i);
                     self.forget_refused(i, &args);
@@ -793,7 +804,11 @@ impl<D: DataSource> Runner<D> {
                         && !unknown
                         && states[i].as_ref().is_some_and(|s| {
                             s.kept_seed
-                                && !self.data.ready()
+                                && (if super::kept::kept_surface(&self.plan, i) {
+                                    self.surface_seed_waiting(i)
+                                } else {
+                                    !self.data.ready()
+                                })
                                 && s.args
                                     == args[..row.args.len as usize - usize::from(row.context)]
                         });
@@ -826,7 +841,7 @@ impl<D: DataSource> Runner<D> {
                                 && !exact_plan::runner_owned_source(self.plan.str(row.source))
                                 && (upload
                                     || !forced
-                                        && (!self.resources[i].store_reader
+                                        && (!self.asks_on_store_change(i)
                                             || s.store_revision == self.store.revision()
                                             || self.asks_again_after_reply(i)))
                                 // @ref LLP 1054.000.002 D4 — a placeholder stands
@@ -1046,9 +1061,7 @@ impl<D: DataSource> Runner<D> {
                                     // A failed ask that read the store makes a store
                                     // reader too, so a reply's write asks it again
                                     // (LLP 1146 §2.3).
-                                    if self.store.reads() > reads_before {
-                                        self.resources[i].store_reader = true;
-                                    }
+                                    self.note_reads(i, reads_before, draws_before);
                                     resources[i] = Some(shown);
                                     settled_res[i] = true;
                                     current_res[i] =
@@ -1059,12 +1072,7 @@ impl<D: DataSource> Runner<D> {
                                 answer => answer,
                             };
                             force.retain(|forced| *forced != i);
-                            if self.store.reads() > reads_before {
-                                self.resources[i].store_reader = true;
-                            }
-                            if self.store.entropy_draws() > draws_before {
-                                self.resources[i].entropy_reader = true;
-                            }
+                            self.note_reads(i, reads_before, draws_before);
                             // What a fresh answer watches replaces what the
                             // last one did; its reply's parse may add more.
                             self.resources[i].watching = self.store.take_topics();
@@ -1304,7 +1312,7 @@ impl<D: DataSource> Runner<D> {
             // the writer's state already carries the new revision, so it
             // does not refresh itself.
             let stale_store_reader = states.iter().enumerate().any(|(i, state)| {
-                self.resources[i].store_reader
+                self.asks_on_store_change(i)
                     && !self.asks_again_after_reply(i)
                     && state
                         .as_ref()

@@ -54,23 +54,34 @@ pub(super) fn accepts_expr(
 
 /// An assignment diagnostic keeps the rejected literal visible through wrappers.
 pub(super) fn assignment_error(target: &str, want: &Ty, expr: &Expr, have: &Ty) -> String {
-    fn rejected<'a>(want: &Ty, expr: &'a Expr) -> Option<&'a str> {
-        match (want, expr) {
-            (Ty::Enum(values), Expr::Str(value, _)) if !values.contains(value) => Some(value),
-            (Ty::Option(inner), Expr::Some(value, _)) => rejected(inner, value),
-            (Ty::List(inner), Expr::List(values, _)) => {
-                values.iter().find_map(|v| rejected(inner, v))
-            }
-            (_, Expr::Ternary(_, a, b, _)) => rejected(want, a).or_else(|| rejected(want, b)),
-            (_, Expr::Match { some, none, .. }) => {
-                rejected(want, some).or_else(|| rejected(want, none))
-            }
-            _ => None,
-        }
-    }
     let mut message = format!("`{target}` is `{want}`, cannot assign `{have}`");
     if let Some(value) = rejected(want, expr) {
         message.push_str(&format!("; {value:?} is not a declared member"));
     }
     message
+}
+
+/// A state's initializer that does not fit its declared type, worded as an
+/// assignment's refusal is.
+pub(super) fn initializer_error(state: &str, want: &Ty, expr: &Expr, have: &Ty) -> String {
+    let mut message =
+        format!("state `{state}` is declared `{want}`, and its initializer is `{have}`");
+    if let Some(value) = rejected(want, expr) {
+        message.push_str(&format!("; {value:?} is not a declared member"));
+    }
+    message.push_str(": start it from a value of the declared type, or declare the type it holds");
+    message
+}
+
+fn rejected<'a>(want: &Ty, expr: &'a Expr) -> Option<&'a str> {
+    match (want, expr) {
+        (Ty::Enum(values), Expr::Str(value, _)) if !values.contains(value) => Some(value),
+        (Ty::Option(inner), Expr::Some(value, _)) => rejected(inner, value),
+        (Ty::List(inner), Expr::List(values, _)) => values.iter().find_map(|v| rejected(inner, v)),
+        (_, Expr::Ternary(_, a, b, _)) => rejected(want, a).or_else(|| rejected(want, b)),
+        (_, Expr::Match { some, none, .. }) => {
+            rejected(want, some).or_else(|| rejected(want, none))
+        }
+        _ => None,
+    }
 }

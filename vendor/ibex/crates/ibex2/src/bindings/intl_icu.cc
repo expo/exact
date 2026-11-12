@@ -1,4 +1,4 @@
-// ICU computation backend for Ibex's Linux and Windows Intl bindings.
+// ICU computation backend for Ibex's Linux, Android and Windows Intl bindings.
 //
 // The ECMAScript policy lives in Rust. This file deliberately exposes only
 // locale/metadata queries and an immutable skeleton formatter: ICU computes,

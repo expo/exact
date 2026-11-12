@@ -1,7 +1,7 @@
-# Return still breaks a list item's inline syntax in two cases: beside a literal backtick in code, and with a selection that starts in the list marker
+# Return beside a literal backtick in a list item's code span breaks the span
 
 **Status:** Open
-**Systems:** markdown/src/edit.rs, markdown/editor/src/editor.rs
+**Systems:** markdown/src/edit.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review
 **Date:** 2026-11-10
@@ -11,7 +11,8 @@
 This issue was filed for Return inside a formatted list item destroying its formatting and
 misplacing the caret. That is fixed: Return keeps bold, emphasis, code and link
 destinations on both sides of the break, nested in order, and Backspace at the new item's
-start removes only its block prefix. Two cases are left.
+start removes only its block prefix. So does a selection that starts in the list marker. One
+case is left.
 
 **A literal backtick in a code span.** Return next to a backtick inside a code span copies
 the span's delimiter beside it. The run no longer matches the opening delimiter, so the
@@ -37,25 +38,13 @@ A span whose content starts or ends with a backtick needs padding to separate it
 delimiter, and under this dialect the padding stays visible. So the fix needs a decision on
 code-span padding first.
 
-**A selection that starts in the list marker.** When the selection begins before the
-item's content, Return bypasses the inline split and exposes the link's syntax:
-
-```rust
-let source = "- [docs](https://example.com)";
-let change = exact_markdown::edit(source, exact_markdown::Range::new(0, 5), exact_markdown::Command::Newline);
-// change.apply(source) == "\ncs](https://example.com)"
-```
-
-Expected: `cs` stays a link to `https://example.com`. With the selection starting at the
-content (`Range::new(2, 5)`) the result is right: `"- \n- [cs](https://example.com)"`.
-
 ## Verification
 
-Ran both reproductions with the fix for the rest of this issue applied: the results in
-the comments above.
+Ran the table's three rows through `exact_markdown::edit` on 2026-11-12: the first gives the
+result in the comment above, the second `"- ``a``\n- ```b``"` and the third
+`"- ```a````\n- ````b```"`.
 
 ## Direction
 
-For the first, decide the padding rule, then serialize each half with valid delimiters and
-unchanged displayed text. For the second, apply the inline split whether or not the
-selection starts inside the block's content.
+Decide the padding rule, then serialize each half with valid delimiters and unchanged
+displayed text.

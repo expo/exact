@@ -44,11 +44,12 @@ built, then launch that app's bundle by hand (its path is printed).
 ## Windows (waits for the NucBox)
 
 Built for Windows so far: the host's services (`host/windows/src/desktop.rs`:
-`RegisterHotKey`, `FlashWindowEx`, the `Run` value) and the three packages'
-Rust (`packages/*/windows/lib.rs`), cross-checked on this Mac only. Not
-built: the notification-area icon, `keepRunning`, the launch with no window,
-one instance, the startup task and the modifier pair's hook (LLP 1133.025
-§14, stage 2's as-built note). Run these in the NucBox's signed-in console
+`RegisterHotKey`, `FlashWindowEx`, the `Run` value), the three packages'
+Rust (`packages/*/windows/lib.rs`), `keepRunning`, the hidden login launch
+and one instance (`host/windows/src/window/lifecycle.rs`,
+`host/windows/src/instance.rs`), cross-checked on this Mac only. Not built:
+the notification-area icon, a launch with no window at every launch, the
+startup task and the modifier pair's hook (LLP 1133.025 §14). Run these in the NucBox's signed-in console
 session (`docs/testing.md`, "Windows: the NucBox"), not over SSH, with a
 development build of an app that depends on the three packages.
 
@@ -65,7 +66,15 @@ development build of an app that depends on the three packages.
    HKCU\Software\Microsoft\Windows\CurrentVersion\Run` lists the app with
    `"<exe>" --login hidden`, and Settings › Apps › Startup lists it, on.
    Turn it off there: the status reads `requires-approval`. Sign out and
-   in with it on: the app starts and reads "launched at login" (a window
-   shows: the launch with no window is not built). Then Don't Open at
-   Login: the value is gone. Never leave it registered.
+   in with it on: the app starts, reads "launched at login" and shows no
+   window; starting it from Start shows the window, and Task Manager lists
+   one process. Then Don't Open at Login: the value is gone. Never leave it
+   registered.
 4. **Login Items Settings…** opens Settings › Apps › Startup.
+5. **Keep running.** With `"keepRunning": true` in `host.windows.window`:
+   the close button and Alt+F4 hide the window, Task Manager still lists the app and its global shortcut
+   still answers. Starting it from Start shows the window as it was
+   (`exactPage().restores` reads 1), and no second process stays in Task
+   Manager. The app's own button that calls `close()` ends it.
+6. **One instance.** With Shelf open (no `keepRunning`), its jump-list task
+   Add Book opens Add Book in that window, and no second window appears.

@@ -106,7 +106,7 @@ fn a_cold_share_shows_its_text_first_with_its_files_pending_then_they_land() {
     let token = share_in::token(7.0, 0);
     assert_eq!(
         claimed.location,
-        format!("/share?text=hello%20there&files={token}")
+        format!("/share?text=hello+there&files={token}")
     );
     assert_eq!(
         claimed.line,

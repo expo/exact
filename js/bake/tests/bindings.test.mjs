@@ -59,3 +59,59 @@ request.allowCredentials![0].id = 42;
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/** An app with `@scratch/cloud` installed, declared by `declaration`, its stage holding `entry`. */
+function cloudApp(declaration, entry) {
+  const root = mkdtempSync(join(tmpdir(), 'exact-json-list-'));
+  const app = join(root, 'app'), stage = join(root, 'stage'), pkg = join(app, 'node_modules/@scratch/cloud');
+  mkdirSync(pkg, { recursive: true });
+  mkdirSync(stage);
+  writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@scratch/cloud', version: '1.0.0', exports: { '.': './exact.json' } }));
+  writeFileSync(join(pkg, 'exact.json'), JSON.stringify(declaration));
+  writeFileSync(join(stage, '__exact_paths.json'), JSON.stringify({ app, mounts: [] }));
+  writeFileSync(join(stage, '__exact_entry.ts'), entry);
+  return { root, stage };
+}
+
+const cloud = (records) => ({
+  kind: 'interface', name: '@scratch/cloud', version: '1.0.0',
+  shapes: { CloudRecordWrite: { key: 'string' }, Sent: { echoed: 'option<json<PublicKeyCredentialDescriptorJSON[]>>' } },
+  names: [{ send: 'write', request: true, contract: false, answers: 'Sent',
+    options: { records, kinds: 'option<json<enum<a|b>[]>>', ids: 'json<PublicKeyCredentialDescriptorJSON>[]' } }],
+});
+
+test('json<T> holds a list, an option or an enum of shapes and DOM dictionaries', async () => {
+  const libraries = resolve(dirname(fileURLToPath(import.meta.resolve(`@typescript/typescript-${process.platform}-${process.arch}/package.json`))), 'lib');
+  const { root, stage } = cloudApp(cloud('json<CloudRecordWrite[]>'), `
+import { write, type CloudRecordWrite } from '@scratch/cloud';
+
+const records: CloudRecordWrite[] = [{ key: 'a' }];
+export const sent = write({ records, kinds: ['a'], ids: [{ id: 'eA', type: 'public-key' }] })
+  .then(({ echoed }) => echoed?.[0].id);
+// @ts-expect-error A list's element keeps its shape.
+write({ records: [{ key: 1 }], ids: [] });
+// @ts-expect-error An enum's members are its only values.
+write({ records, kinds: ['c'], ids: [] });
+`);
+  try {
+    configure(stage, false, parseSync);
+    await check(stage, join(libraries, 'tsc'), libraries);
+    const binding = readFileSync(join(stage, '__exact_modules/scratch__cloud.ts'), 'utf8');
+    // A declared shape is not also a DOM dictionary; a DOM dictionary in a list or a shape's field is.
+    expect(binding).not.toContain('type CloudRecordWrite');
+    expect(binding).toContain('export interface PublicKeyCredentialDescriptorJSON');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('json<T> refuses at bake what JSON does not carry, naming what it holds', () => {
+  for (const held of ['json<bytes>', 'json<handle<file>>', 'json<json<CloudRecordWrite>>', 'json<lowercase>']) {
+    const { root, stage } = cloudApp(cloud(held), '');
+    try {
+      expect(() => configure(stage, false, parseSync)).toThrow(`@scratch/cloud's exact.json: \`${held}\` is not a JSON value's type: \`json<T>\` holds a shape or DOM dictionary by name`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});

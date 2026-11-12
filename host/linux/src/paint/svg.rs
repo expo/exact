@@ -123,7 +123,8 @@ pub(crate) fn view_box(text: &str) -> [f32; 4] {
 
 impl Painter {
     /// A portable symbol role (LLP 1035.004 D1) as the web draws it: the
-    /// role's path in a 24-unit box at the image's font size, placed by
+    /// role's path in a 24-unit box at the image's font size (the bar's
+    /// symbol size on a lone bar item's face), placed by
     /// `object-fit`, stroked `1.1 + (weight − 100) / 400` units with round
     /// caps and joins (a `-fill` role filled even-odd), in `ink` (its
     /// presented `color`, or a list sheet's tint) or else its computed `color`
@@ -145,7 +146,7 @@ impl Painter {
             return;
         };
         let style = node.style;
-        let size = style.font_size.max(1.0);
+        let size = node.bar_symbol_size().unwrap_or(style.font_size).max(1.0);
         let natural = (size.round().max(1.0) as u32, size.round().max(1.0) as u32);
         // `fill` keeps a symbol's aspect, as the web's `contain` and Apple do.
         let fit = match style.object_fit {
@@ -326,6 +327,15 @@ pub(super) fn affine(t: [f32; 6]) -> Transform {
 }
 
 impl Painter {
+    pub(super) fn svg_note(&mut self, node: &NodeRef<'_>, scene: &scene::Scene) {
+        if let Some(limit) = scene.over {
+            if self.svg_warned.insert(node.key) {
+                self.notes
+                    .push(format!("svg #{}: {limit}; drawing nothing", node.id));
+            }
+        }
+    }
+
     pub(super) fn svg(
         &mut self,
         walk: &mut Walk<'_, '_>,
@@ -334,6 +344,7 @@ impl Painter {
         ts: Transform,
     ) {
         let scene = resolve_svg(walk.scene, node, content.rect, self.dark);
+        self.svg_note(node, &scene);
         if let Some(refusal) = scene.refused {
             // @ref LLP 1055.000 D13 — refused by name, once.
             static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

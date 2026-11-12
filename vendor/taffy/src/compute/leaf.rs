@@ -144,7 +144,8 @@ where
         };
     }
 
-    // Compute available space
+    // Compute available space. EXACT PATCH 25: the parent has already subtracted
+    // this node's margins, so only its padding and border come off here.
     let available_space = Size {
         width: known_dimensions
             .width

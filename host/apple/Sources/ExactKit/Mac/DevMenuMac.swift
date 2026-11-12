@@ -65,7 +65,7 @@ final class EditMenuTarget: NSObject {
 /// refuses; ruled: nothing here may make that harder; the one exception is
 /// the web arm's `openDevTools`, LLP 1020.002 D11). Choosing an entry is
 /// one more route in, to the same router as Launch Services' (LLP 1033 D3).
-final class RecentMenu: NSObject, NSMenuDelegate {
+final class RecentMenu: NSObject, NSMenuDelegate, NSMenuItemValidation {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let urls = NSDocumentController.shared.recentDocumentURLs
@@ -87,6 +87,12 @@ final class RecentMenu: NSObject, NSMenuDelegate {
     }
 
     @objc func clear(_ sender: Any?) { KeptDocuments.clear() }
+
+    /// Clear Menu while there is something to clear, a clear on its way
+    /// counted, as `NSDocumentController` refuses `clearRecentDocuments:`.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        item.action != #selector(clear(_:)) || !KeptDocuments.recent.isEmpty
+    }
 
     @objc func open(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }

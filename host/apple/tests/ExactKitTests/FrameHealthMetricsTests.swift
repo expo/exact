@@ -240,7 +240,7 @@ final class FrameHealthMetricsTests: XCTestCase {
         chart.configure(plots, scale: 1, contentsScale: 2, palette: palette)
         let windows = host.sublayers ?? [], lines = windows.compactMap { $0.sublayers?.first }
         XCTAssertEqual(lines.count, 2, "a layer for each plot")
-        XCTAssertTrue(lines.allSatisfy(\.isOpaque))
+        XCTAssertTrue(lines.allSatisfy { !($0.sublayers ?? []).isEmpty && ($0.sublayers ?? []).allSatisfy(\.isOpaque) }, "of opaque tiles")
         let width = plots[0].plot.right - plots[0].plot.left
         XCTAssertEqual(lines[0].bounds.width, width * 35 / 30, accuracy: 0.01, "wider than its plot by five seconds of axis")
         chart.frame(at: 101)
@@ -299,7 +299,7 @@ final class FrameHealthMetricsTests: XCTestCase {
         XCTAssertTrue(windows.allSatisfy(\.isHidden), "the table or a compact card shows no plot")
         chart.stop()
         XCTAssertTrue(chart.columns.isEmpty && chart.times.isEmpty, "a card that stops reading frees its frames")
-        XCTAssertTrue(lines.allSatisfy { $0.contents == nil })
+        XCTAssertTrue(lines.allSatisfy { $0.contents == nil && ($0.sublayers ?? []).isEmpty }, "nor any picture")
     }
 
     #if os(macOS)
@@ -325,9 +325,50 @@ final class FrameHealthMetricsTests: XCTestCase {
         chart.configure(Self.plots(expanded: 1), scale: 1, contentsScale: 2, palette: Self.palette)
         layers.forEach { $0.displayIfNeeded() }
         CATransaction.flush()
-        XCTAssertTrue(layers.allSatisfy { $0.animationKeys() == nil }, "a new picture, place or size shows at once, never faded or stretched")
+        // The plots' tiles too, which a change of size makes anew
+        func tree(_ layer: CALayer) -> [CALayer] { [layer] + (layer.sublayers ?? []).flatMap(tree) }
+        XCTAssertTrue(layers.flatMap(tree).allSatisfy { $0.animationKeys() == nil }, "a new picture, place or size shows at once, never faded or stretched")
     }
     #endif
+
+    func testTheChartsDrawOnlyTheTilesFramesChangedAndScrollTheRest() {
+        let host = CALayer(), chart = FrameHealthChart(in: host)
+        chart.start()
+        chart.frame(at: 100)
+        chart.configure(Self.plots(), scale: 1, contentsScale: 2, palette: Self.palette)
+        let lines = (host.sublayers ?? []).compactMap { $0.sublayers?.first }
+        lines.forEach { $0.displayIfNeeded() }
+        let tiles = lines[0].sublayers ?? []
+        XCTAssertGreaterThan(tiles.count, 25, "a layer's tiles are about a second of axis each")
+        XCTAssertTrue(tiles.allSatisfy { $0.contents != nil && $0.isOpaque })
+        func pictures() -> [AnyObject?] { tiles.map { $0.contents as AnyObject? } }
+        // A second of frames at 120 FPS, shown as each column ends: each drawing paints only the tiles around the newest
+        // columns
+        var t = 100.0, most = 0
+        for _ in 0..<120 {
+            t += 1 / 120.0
+            let before = pictures()
+            chart.frame(at: t, finished: t + 0.004, deadline: t + 1 / 120.0)
+            chart.present()
+            lines[0].displayIfNeeded()
+            most = max(most, zip(before, pictures()).filter { $0 !== $1 }.count)
+        }
+        XCTAssertGreaterThan(most, 0)
+        XCTAssertLessThanOrEqual(most, 3)
+        // Once the layer has moved the five seconds it reaches, its pictures move left by whole tiles, and only the tiles
+        // that come in are drawn
+        let before = pictures()
+        chart.follow(true)
+        chart.tick(at: 106.2)
+        lines[0].displayIfNeeded()
+        let after = pictures(), count = tiles.count
+        let shift = (1..<count).first { after[0] === before[$0] } ?? 0
+        XCTAssertGreaterThan(shift, 3)
+        XCTAssertTrue((0..<count - shift).allSatisfy { after[$0] === before[$0 + shift] }, "the rest keep their pictures")
+        XCTAssertTrue((count - shift..<count).allSatisfy { index in after[index] != nil && !before.contains { $0 === after[index] } },
+            "the tiles that come in are drawn")
+        chart.follow(false)
+    }
 
     func testColumnsDrawnAgainMatchAWholeDrawing() {
         // Frames redraw only the columns they changed, so the layers must come out as a whole drawing draws them, in

@@ -480,14 +480,19 @@ impl Inline {
         // app has since retired, or cleared, are forgotten.
         self.printed
             .retain(|k| children.iter().any(|c| c.key == *k));
-        let settled = children
-            .iter()
-            .position(|c| c.busy)
-            .unwrap_or(children.len());
         let lead = children
             .iter()
             .take_while(|c| self.printed.contains(&c.key))
             .count();
+        // Rows are printed once: none settles while a picture is still
+        // being read, or it would go to the scrollback as its alt text.
+        let settled = match host.images.loading() {
+            true => lead,
+            false => children
+                .iter()
+                .position(|c| c.busy)
+                .unwrap_or(children.len()),
+        };
         let bottom_of = |n: usize| if n == 0 { 0 } else { children[n - 1].bottom };
         out.push_str("\x1b[?2026h\x1b[?25l");
         // Back to the live region's top-left. After a resize this is still
@@ -734,6 +739,7 @@ mod tests {
         );
         let plan = contract::compile_terminal(&source).unwrap();
         let mut host = Host::boot(plan, (), Mode::Inline, 20, 12).unwrap();
+        host.wait_images(std::time::Duration::from_secs(5));
         for protocol in [Protocol::Kitty, Protocol::Iterm] {
             let writer = Inline::new(protocol);
             let mut whole = String::new();

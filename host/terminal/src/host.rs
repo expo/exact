@@ -229,9 +229,10 @@ impl<D: DataSource> Host<D> {
         cols: usize,
         rows: usize,
     ) -> Result<Host<D>, String> {
-        Self::boot_with_clock(plan, data, mode, cols, rows, false)
+        Self::boot_with_clock(plan, data, mode, cols, rows, false, None)
     }
 
+    /// `assets`: the directory a relative `image` source is read beneath.
     pub(crate) fn boot_with_clock(
         plan: Plan,
         data: D,
@@ -239,6 +240,7 @@ impl<D: DataSource> Host<D> {
         cols: usize,
         rows: usize,
         interactive: bool,
+        assets: Option<std::path::PathBuf>,
     ) -> Result<Host<D>, String> {
         exact_kernel::style::link_segments();
         exact_kernel::timeline::link();
@@ -302,7 +304,7 @@ impl<D: DataSource> Host<D> {
             generation: 0,
             quit: false,
             prevented: false,
-            images: crate::image::Images::default(),
+            images: crate::image::Images::new(assets),
             presented: crate::pointer::Presented::default(),
             requests: crate::requests::Requests::default(),
             outbound: Vec::new(),
@@ -336,12 +338,14 @@ impl<D: DataSource> Host<D> {
     /// thread (LLP 1016.002): the loop then calls [`Host::announced`].
     pub fn listen(&mut self, waker: Arc<dyn Fn() + Send + Sync>) {
         self.requests.listen(waker.clone());
+        self.images.listen(waker.clone());
         self.runner.listen(waker);
     }
 
     /// Apply what the data module announced: the watching resources are
     /// asked again.
     pub fn announced(&mut self) {
+        self.land_images();
         let landed = self.land_requests();
         let (receipts, _) = self.runner.apply_announced();
         if landed || !receipts.is_empty() {
@@ -387,6 +391,7 @@ impl<D: DataSource> Host<D> {
         self.after_commit_inner();
         self.collections.settling = settling;
         self.settle_collections();
+        self.deliver_image_events();
         if !settling {
             let live = self.runner.kernel().live_count().max(64);
             if live <= self.trim_at / 2 {

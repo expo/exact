@@ -85,7 +85,8 @@ extension ControlHost {
         if let owner = presenter.views[node.id] { configureDate(picker, owner) }
         // What it shows, as the web's reply says: the choice, or what the
         // action wrote over it.
-        return ["typed": Int(node.id), "value": DateValue.shown(kind, picker), "delivery": "host-activation", "native": "control"]
+        let shown = (picker as? BoundDatePicker)?.empty == true ? "" : DateValue.shown(kind, typed: text, picker.date)
+        return ["typed": Int(node.id), "value": shown, "delivery": "host-activation", "native": "control"]
     }
 }
 

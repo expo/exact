@@ -29,6 +29,8 @@
 //!   UIKit builds (LLP 1099).
 //! - [`velocity`] — a pointer-velocity estimate for hosts without one.
 //! - [`math`] — pinned transcendentals, so the same input yields the same bits.
+//! - [`word`] — the words of a `transition` or `animation` value, read in any
+//!   ASCII case where CSS reads them so.
 //!
 //! Time is a number the host supplies. Every value is a closed-form function
 //! of that number, so advancing the clock to `t` in one step or in sixty gives
@@ -50,6 +52,7 @@ pub mod spring;
 pub mod transition;
 pub mod uikit;
 pub mod velocity;
+pub mod word;
 
 pub use animation::link as link_animations;
 pub use animation::{

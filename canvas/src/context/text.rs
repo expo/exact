@@ -153,10 +153,10 @@ impl Context2d {
         self.set_enum(v, &font::DIRECTION, |g| &mut g.state.text.direction)
     }
 
-    /// `direction`: `inherit` reads as the canvas node's.
+    /// `direction`, as set: `inherit` resolves to the canvas node's only
+    /// where text is laid out (HTML, "text preparation algorithm").
     pub fn direction(&self) -> String {
-        let g = self.g();
-        font::DIRECTION[if g.rtl() { 1 } else { 0 }].into()
+        font::DIRECTION[self.g().state.text.direction as usize].into()
     }
 
     /// `fontKerning = v`.

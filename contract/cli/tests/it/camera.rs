@@ -36,6 +36,10 @@ component App
 struct App(PathBuf);
 impl App {
     fn new(name: &str) -> Self {
+        Self::with_source(name, APP)
+    }
+
+    fn with_source(name: &str, source: &str) -> Self {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path =
@@ -47,9 +51,184 @@ impl App {
             let to = packages.join(package).canonicalize().unwrap();
             symlink_dir(to, path.join("node_modules/@exact").join(package)).unwrap();
         }
-        std::fs::write(path.join("app.contract"), APP).unwrap();
+        std::fs::write(
+            path.join("package.json"),
+            r#"{"dependencies":{"@exact/camera":"1.0.0"}}"#,
+        )
+        .unwrap();
+        std::fs::write(path.join("app.contract"), source).unwrap();
         Self(path.canonicalize().unwrap())
     }
+}
+
+#[test]
+fn a_camera_view_does_not_capture_an_app_data_source() {
+    for view in [
+        "    exact-camera\n",
+        "    text result\ncomponent Unused\n  view\n    exact-camera\n",
+    ] {
+        let source =
+            format!("component App\n  resource result = picture() as shape string\n  view\n{view}");
+        let app = App::with_source("data-source", &source);
+        let plan = contract::compile_path(&app.0.join("app.contract")).unwrap();
+        assert!(plan.sources.iter().any(|s| plan.str(s.name) == "picture"));
+        assert!(plan.module_named("picture").is_none());
+    }
+    let app = App::with_source(
+        "aliased-source",
+        r#"use picture as cameraPicture, CameraPicture from "@exact/camera"
+component App
+  resource result = picture() as shape string
+  resource fixture = cameraPicture() as shape CameraPicture
+  mutation taken as shape string
+  action take
+    send taken = picture()
+  view
+    exact-camera
+"#,
+    );
+    let plan = contract::compile_path(&app.0.join("app.contract")).unwrap();
+    assert!(plan.module_named("picture").is_none());
+    assert!(plan
+        .modules
+        .iter()
+        .any(|m| plan.str(m.declared) == "picture"));
+}
+
+#[test]
+fn a_view_only_camera_accepts_a_typed_preferred_picture() {
+    let app = App::with_source(
+        "view-only",
+        "component App\n  view\n    exact-camera testId=\"finder\"\n",
+    );
+    let plan = contract::compile_path(&app.0.join("app.contract")).unwrap();
+    assert_eq!(plan.views.len(), 1);
+    assert_eq!(plan.str(plan.views[0].extension), "camera");
+    assert!(plan
+        .modules
+        .iter()
+        .any(|m| plan.str(m.declared) == "picture"));
+    assert!(plan
+        .modules
+        .iter()
+        .all(|m| plan.str(m.extension) == "camera"));
+    let mut r = Runner::boot(
+        plan,
+        Granted,
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let picture = json!({ "path": "assets/test/isbn-9780747532743.png" });
+    let prefer = json!({ "op": "prefer", "extension": { "camera.picture": picture } });
+    let reply = r.extension_agent(&prefer.to_string()).unwrap().1.unwrap();
+    let reply: Json = serde_json::from_str(&reply).unwrap();
+    assert_eq!(reply["extension"]["camera.picture"], picture);
+    assert!(r.take_requests().is_empty(), "no camera source is read");
+
+    let told: Calls = Arc::default();
+    let seen = told.clone();
+    r.native_slot().host(Some(Arc::new(move |body, _reply| {
+        seen.lock()
+            .unwrap()
+            .push(serde_json::from_slice(&body).unwrap());
+    })));
+    r.bind_extensions(&[], &["camera"]);
+    assert_eq!(preferred(&told)["picture"], picture);
+
+    for value in [
+        json!({"path": 7}),
+        json!({"unknown": "x"}),
+        json!(false),
+        Json::Null,
+    ] {
+        let request = json!({ "op": "prefer", "extension": { "camera.picture": value } });
+        assert!(r.extension_agent(&request.to_string()).unwrap().1.is_err());
+    }
+    let unknown = r#"{"op":"prefer","extension":{"camera.unknown":"x"}}"#;
+    assert!(r
+        .extension_agent(unknown)
+        .unwrap()
+        .1
+        .unwrap_err()
+        .contains("no source `camera.unknown`"));
+    assert_eq!(preferred(&told)["picture"], picture);
+
+    let next = json!({ "path": "assets/test/none.png" });
+    let request = json!({ "op": "prefer", "extension": { "camera.picture": next } });
+    r.extension_agent(&request.to_string()).unwrap().1.unwrap();
+    assert_eq!(preferred(&told)["picture"], next);
+    r.extension_agent(r#"{"op":"prefer","extension":{"camera.picture":"clear"}}"#)
+        .unwrap()
+        .1
+        .unwrap();
+    assert_eq!(preferred(&told), json!({}));
+}
+
+fn preferred(told: &Calls) -> Json {
+    told.lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|v| v["extension"] == "camera" && v["preferred"].is_object())
+        .expect("the camera was told its preferred values")["preferred"]
+        .clone()
+}
+
+#[test]
+fn an_unused_camera_view_does_not_admit_preferences() {
+    let app = App::with_source(
+        "unused-view",
+        "component App\n  view\n    text \"plain\"\ncomponent Unused\n  view\n    exact-camera\n",
+    );
+    let plan = contract::compile_path(&app.0.join("app.contract")).unwrap();
+    assert!(plan.modules.is_empty());
+    assert!(plan.views.is_empty());
+    let mut r = Runner::boot(
+        plan,
+        Granted,
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    for key in ["camera.picture", "unknown.picture"] {
+        let request = json!({ "op": "prefer", "extension": { key: { "path": "x.png" } } });
+        let error = r
+            .extension_agent(&request.to_string())
+            .unwrap()
+            .1
+            .unwrap_err();
+        assert!(error.contains(&format!("no source `{key}`")), "{error}");
+    }
+}
+
+#[test]
+fn shelfs_viewfinder_receives_the_preferred_scan_fixture() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../apps/shelf/app.contract");
+    let plan = contract::compile_path(&path).unwrap();
+    assert!(plan.view_named("exact-camera").is_some());
+    let mut r = Runner::boot(
+        plan,
+        Granted,
+        exact_kernel::Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    let told: Calls = Arc::default();
+    let seen = told.clone();
+    r.native_slot().host(Some(Arc::new(move |body, _reply| {
+        seen.lock()
+            .unwrap()
+            .push(serde_json::from_slice(&body).unwrap());
+    })));
+    r.bind_extensions(&[], &["camera"]);
+    let picture = json!({ "path": "assets/test/isbn-9780747532743.png" });
+    let request = json!({ "op": "prefer", "extension": { "camera.picture": picture } });
+    r.extension_agent(&request.to_string()).unwrap().1.unwrap();
+    assert_eq!(preferred(&told)["picture"], picture);
 }
 impl Drop for App {
     fn drop(&mut self) {
@@ -65,6 +244,17 @@ impl exact_runner::DataSource for Granted {
         _: &[exact_runner::Value],
     ) -> Result<exact_runner::Value, exact_runner::DataError> {
         Err(exact_runner::DataError::UnknownSource(source.into()))
+    }
+    fn answer(
+        &mut self,
+        _: &mut exact_runner::Store,
+        _: &str,
+        _: &[exact_runner::Value],
+    ) -> Result<exact_runner::Answer, exact_runner::DataError> {
+        // Shelf's app data stays pending; this fixture drives the module seam.
+        Ok(exact_runner::Answer::Later(exact_runner::Request::native(
+            Vec::new(),
+        )))
     }
     fn grants(&self) -> &str {
         "device.camera purpose.camera\ndevice.microphone purpose.microphone\n"

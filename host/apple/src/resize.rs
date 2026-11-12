@@ -9,7 +9,7 @@ impl<D: DataSource> Host<D> {
     pub fn resize_at(&mut self, width: f32, height: f32, now_ms: f64) -> String {
         self.now_ms = now_ms.max(self.now_ms);
         let (batch, error) = self.settle_resize_clock(Batch::new(), None);
-        self.resize_inner(width, height, batch, error)
+        self.resize_inner(width, height, batch, error, None)
     }
 
     fn settle_resize_clock(
@@ -81,12 +81,14 @@ impl<D: DataSource> Host<D> {
         }
         self.runner.resize_settled();
         // Layout-only batches also owe SVG scenes, even without motion or a commit.
-        self.svg.emit(
+        for note in self.svg.emit(
             self.runner.kernel(),
             &self.engine,
             &self.paint.motion,
             &mut batch,
-        );
+        ) {
+            self.runner.log(note);
+        }
         (batch, error)
     }
 }

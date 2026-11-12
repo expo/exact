@@ -1,8 +1,10 @@
 // Embedded in bound transition mappers. SpringConfig::easing's unit release,
 // sample grid and thinning (motion/src/spring.rs); CSS plays the resulting curve.
+// Its entry is folded to ASCII lower case (style.rs), and a number is CSS's,
+// as motion/src/word.rs reads them.
 entry => {
   const properties = PROPERTIES, all = ALL_PROPERTIES;
-  const number = s => /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(s) ? Number(s) : NaN;
+  const number = s => /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(s) ? Number(s) : NaN;
   const parts = entry.split(/ (?![^(]*\))/).filter(Boolean);
   let property = 'all', named = false, config;
   const times = [];

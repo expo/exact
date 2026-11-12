@@ -272,3 +272,156 @@ fn a_target_appearing_during_a_stationary_press_is_painted() {
         pixel(&mut p, x, y)
     );
 }
+
+#[test]
+fn hover_scale_moves_paint_and_hits_without_moving_layout() {
+    let source = r##"component App
+  state presses = 0
+  action go
+    presses = presses + 1
+  view
+    column padding=50 width=400 height=400
+      box testId="card" press=go width=100 height=100 background-color="#ff0000" transition="scale 150ms linear"
+        :hover
+          scale=1.2
+"##;
+    let mut p = boot_with(source);
+    let k = p.host().kernel();
+    let card = k.node_by_key(k.find_by_test_id("card")[0]).unwrap().id;
+    let frame = p.host.kernel().node(card).unwrap().frame;
+    p.pointer_move(100., 100., 0.).unwrap();
+    p.clock(75.);
+    assert!((p.host.presented(card).scale - 1.1).abs() < 1e-5);
+    assert_eq!(p.host.kernel().node(card).unwrap().frame, frame);
+    p.clock(150.);
+    assert_eq!(
+        p.hit(45., 100.),
+        Some(card),
+        "the grown paint is the hit target"
+    );
+    assert_eq!(pixel(&mut p, 45., 100.), [255, 0, 0]);
+    p.pointer_move(390., 390., 150.).unwrap();
+    p.clock(300.);
+    assert!((p.host.presented(card).scale - 1.).abs() < 1e-5);
+    assert_ne!(p.hit(45., 100.), Some(card));
+}
+
+/// A `:hover` look's `scale` (issue #151's icon button): it stands in for
+/// the node's own while the pointer is over it, moved there and back by the
+/// node's own `transition` for `scale`, with no layout; a press multiplies
+/// onto it. With no transition it snaps.
+#[test]
+fn a_hover_scale_moves_on_the_nodes_transition_and_lays_nothing_out() {
+    let src = r##"component App
+  state n = 0
+  action go
+    n = n + 1
+  view
+    column width=400 height=400
+      box press=go width=100 height=40 scale=1 transition="scale 150ms linear" -exact-press-scale=0.5 testId="eased"
+        :hover
+          scale = 1.2
+      box width=100 height=40 testId="snaps"
+        :hover
+          scale = 2
+"##;
+    let mut p = boot_with(src);
+    let shown = |p: &Presenter<()>, test_id: &str| {
+        let k = p.host.kernel();
+        let id = k.node_by_key(k.find_by_test_id(test_id)[0]).unwrap().id;
+        p.host.presented(id)
+    };
+    let (b, below) = (rect(&mut p, "eased"), rect(&mut p, "snaps"));
+    let (x, y) = (b.0 + b.2 / 2., b.1 + b.3 / 2.);
+    p.pointer_move(x, y, 0.).unwrap();
+    assert_eq!(shown(&p, "eased").scale, 1.);
+    p.clock(75.);
+    assert!((shown(&p, "eased").scale - 1.1).abs() < 1e-4, "halfway");
+    assert_eq!(
+        rect(&mut p, "snaps"),
+        below,
+        "the box below stays: no layout"
+    );
+    p.clock(150.);
+    assert!((shown(&p, "eased").scale - 1.2).abs() < 1e-6);
+    assert!(!p.host.motion(), "settled");
+    // Pressed: the press's factor over the look's scale.
+    assert!(p.pointer_down(x, y, 150.).unwrap());
+    p.clock(300.);
+    let pressed = shown(&p, "eased");
+    assert!(
+        (pressed.scale * pressed.press - 0.6).abs() < 1e-4,
+        "{pressed:?}"
+    );
+    p.pointer_up(x, y, 300.).unwrap();
+    p.clock(450.);
+    // Away midway back: from what shows, not from the target.
+    p.pointer_move(390., 390., 450.).unwrap();
+    p.clock(525.);
+    assert!((shown(&p, "eased").scale - 1.1).abs() < 1e-4);
+    p.clock(600.);
+    assert_eq!(shown(&p, "eased").scale, 1.);
+    // No transition: at once.
+    let s = rect(&mut p, "snaps");
+    p.pointer_move(s.0 + 5., s.1 + 5., 600.).unwrap();
+    assert_eq!(shown(&p, "snaps").scale, 2.);
+}
+
+/// CSS Transitions' reversing shortening (§3.2) on a look's scale: leaving
+/// 75 ms into a 150 ms hover returns in 75 ms, not 150.
+#[test]
+fn leaving_a_hover_scale_midway_returns_in_the_time_it_took() {
+    let src = r##"component App
+  view
+    column width=400 height=400
+      box width=100 height=40 scale=1 transition="scale 150ms linear" testId="eased"
+        :hover
+          scale = 1.2
+"##;
+    let mut p = boot_with(src);
+    let k = p.host.kernel();
+    let id = k.node_by_key(k.find_by_test_id("eased")[0]).unwrap().id;
+    let b = rect(&mut p, "eased");
+    p.pointer_move(b.0 + 50., b.1 + 20., 0.).unwrap();
+    p.clock(75.);
+    assert!((p.host.presented(id).scale - 1.1).abs() < 1e-4);
+    p.pointer_move(390., 390., 75.).unwrap();
+    p.clock(75. + 37.5);
+    let half = p.host.presented(id).scale;
+    assert!(
+        (half - 1.05).abs() < 1e-4,
+        "half the way back at half the shortened time: {half}"
+    );
+    p.clock(150.);
+    assert!(
+        (p.host.presented(id).scale - 1.).abs() < 1e-5,
+        "back by 150 ms, not 225"
+    );
+}
+
+/// A look's scale may be 0: it animates there and back like any other value.
+#[test]
+fn a_zero_scale_look_animates() {
+    let src = r##"component App
+  view
+    column width=400 height=400
+      box width=100 height=40 scale=1 transition="scale 100ms linear" testId="eased"
+        :hover
+          scale = 0
+"##;
+    let mut p = boot_with(src);
+    let k = p.host.kernel();
+    let id = k.node_by_key(k.find_by_test_id("eased")[0]).unwrap().id;
+    let b = rect(&mut p, "eased");
+    p.pointer_move(b.0 + 50., b.1 + 20., 0.).unwrap();
+    p.clock(50.);
+    assert!((p.host.presented(id).scale - 0.5).abs() < 1e-4);
+    p.clock(100.);
+    assert!(p.host.presented(id).scale.abs() < 1e-5);
+    p.pointer_move(390., 390., 100.).unwrap();
+    p.clock(150.);
+    assert!(
+        (p.host.presented(id).scale - 0.5).abs() < 1e-4,
+        "and back from 0"
+    );
+}

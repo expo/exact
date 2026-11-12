@@ -79,6 +79,7 @@ fn boot(source: &str, canvases: &[&str]) -> (Presenter<()>, PathBuf) {
         p.surfaces.canvases.insert(
             view,
             Canvas {
+                performance: false,
                 id: i as u32 + 1,
                 name: (*name).into(),
                 artifact: String::new(),

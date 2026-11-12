@@ -1,4 +1,4 @@
-//! Worker selection and dependencies in the ordered sequence (LLP 1162 D1).
+//! Selection and dependencies in the ordered sequence (LLP 1162 D1).
 use super::*;
 
 pub(super) fn overlaps(r: &RequestOut, work: bool) -> bool {
@@ -50,14 +50,21 @@ pub(super) fn next_job(
     }
     while forget::refuse_crowded(shared, state, 0, 0) {}
     let job = state.jobs[0].front()?;
+    if !job.overlap && worker != 0 {
+        return None;
+    }
+    if !can_start(state, job) {
+        return None;
+    }
+    take_job(state, 0)
+}
+
+pub(super) fn can_start(state: &State, job: &Job) -> bool {
     let class = if job.overlap {
         job.class
     } else {
         RequestClass::Ordered
     };
-    if !job.overlap && worker != 0 {
-        return None;
-    }
     let mut overlapping = 0;
     let mut parallel = 0;
     for run in state.running.iter().filter(|r| r.lane == 0 && r.blocking) {
@@ -67,7 +74,7 @@ pub(super) fn next_job(
             RequestClass::Ordered
         };
         if waits_for(class, before) {
-            return None;
+            return false;
         }
         overlapping += usize::from(run.overlap);
         parallel += usize::from(matches!(before, RequestClass::Parallel(_)));
@@ -78,9 +85,9 @@ pub(super) fn next_job(
         && (overlapping >= INDEPENDENT
             || (matches!(class, RequestClass::Parallel(_)) && parallel >= 3))
     {
-        return None;
+        return false;
     }
-    take_job(state, 0)
+    true
 }
 
 fn take_job(state: &mut State, lane: usize) -> Option<(Job, AbortController)> {
@@ -103,6 +110,7 @@ fn take_job(state: &mut State, lane: usize) -> Option<(Job, AbortController)> {
         started: std::time::Instant::now(),
         ticket: job.ticket,
         lane,
+        transport_lane: lane,
         charge: job.charge,
         limit: job.limit,
         abort: safe_to_forget(&job.request, job.class).then(|| abort.clone()),

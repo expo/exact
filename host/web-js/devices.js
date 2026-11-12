@@ -3,7 +3,9 @@
 // whether an open is exclusive and the record's fields; each name's `device.role` says what it does. The web has no
 // attached list (`attachedPorts` is refused by its `unsupported`) and no permission at open, so neither is here.
 
-const b64 = bytes => btoa(String.fromCharCode(...bytes));
+// Bytes as a binary string, a slice at a time: one `String.fromCharCode(...bytes)` overflows the stack past a few
+// hundred KB.
+const binary = bytes => { let text = ""; for (let i = 0; i < bytes.length; i += 16384) text += String.fromCharCode(...bytes.subarray(i, i + 16384)); return text; };
 const unb64 = text => { try { return Uint8Array.from(atob(text), c => c.charCodeAt(0)); } catch { return null; } };
 
 /** `at` with each `{path}` replaced by the call's value there. */
@@ -117,17 +119,18 @@ export function devices(env) {
         if (!c) return { error: "InvalidStateError", message: "no such connection" };
         if (c.ended) return { error: "InvalidStateError", message: "the stream has ended" };
         const f = fixture(row, c.device), unplugged = !f || f.connected === false;
-        const events = f?.[d.events ?? "input"] ?? [], since = clock.now - c.opened, bytes = [], errors = [];
+        const events = f?.[d.events ?? "input"] ?? [], since = clock.now - c.opened, errors = [];
+        let read = "";
         while (c.delivered < events.length && (events[c.delivered].at ?? 0) <= since) {
           const e = events[c.delivered++], data = e.data != null ? unb64(e.data) : null;
-          if (data) { c.position += data.length; bytes.push(...data); }
+          if (data) { c.position += data.length; read += binary(data); }
           if (e.error) errors.push({ at: c.position, code: e.error });
         }
         const done = !c.open || unplugged;
         if (unplugged && c.open) errors.push({ at: c.position, code: "NetworkError" });
         c.ended = done;
         env.polled(row);
-        return { data: b64(bytes), errors, done, position: c.position };
+        return { data: btoa(read), errors, done, position: c.position };
       }
       case "reports": {
         const c = connections.get(args.connection);

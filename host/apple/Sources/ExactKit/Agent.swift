@@ -1111,7 +1111,11 @@ public final class Agent {
                 return Batch(ops: [], timers: batch.timers, motion: batch.motion, clock: session.clock, error: limit)
             }
         }
-        return advanceRunner(to: to, deadline: deadline, floor: floor)
+        let batch = advanceRunner(to: to, deadline: deadline, floor: floor)
+        if batch.error == nil, let limit = clock.fire(at: session.clock ?? to) {
+            return Batch(ops: [], timers: batch.timers, motion: batch.motion, clock: session.clock, error: limit)
+        }
+        return batch
     }
 
     private func advanceRunner(to: Double, deadline: Date, floor: Double) -> Batch {

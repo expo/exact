@@ -3,6 +3,51 @@
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
+// LLP 1126.002 D4: only the live watch plan's dependencies decide admission.
+// The mixed bake's receipt names Rust ownership without executing either module.
+pub(crate) fn check_watch_sources(
+    app: &Path,
+    out: &Path,
+    target: &str,
+    entries: &std::collections::BTreeMap<String, contract::snapshot::Entry>,
+) -> Result<(), String> {
+    if !target.contains("apple-watchos") || !app.join("app.ts").is_file() {
+        return Ok(());
+    }
+    let Some((watch, plan)) = entries.values().find_map(|entry| {
+        if let contract::snapshot::Declaration::Watch(watch) = &entry.declaration {
+            Some((watch, &entry.plan))
+        } else {
+            None
+        }
+    }) else {
+        return Ok(());
+    };
+    let path = out.join("app.module.json");
+    let metadata: Value = match std::fs::read(&path) {
+        Ok(bytes) => {
+            serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Value::Null,
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let rust = metadata["rustSources"].as_array();
+    let refused: Vec<_> = plan
+        .sources
+        .iter()
+        .map(|row| plan.str(row.name))
+        .filter(|name| !exact_plan::runner_owned_source(name))
+        .filter(|name| plan.module_named(name).is_none())
+        .filter(|name| !rust.is_some_and(|sources| sources.iter().any(|s| s == name)))
+        .map(|name| format!("watch-typescript: watch entry `{}` reaches TypeScript source `{name}` in app.ts; use a Rust source until LLP 1126.001 §5 Q3's watch Hermes gate passes", watch.source))
+        .collect();
+    if refused.is_empty() {
+        Ok(())
+    } else {
+        Err(refused.join("\n"))
+    }
+}
+
 pub(crate) fn emit(
     out: &Path,
     typescript: bool,
@@ -303,6 +348,104 @@ mod tests {
         assert_eq!(plans["watch"]["sha256"], exact_update::sha256_hex(&bytes));
         assert!(assets.iter().any(|c| c["name"] == "plans/watch.plan"));
         assert!(!out.join("plans/widgets.json").exists());
+    }
+
+    #[test]
+    fn watch_bake_refuses_only_sources_owned_by_typescript() {
+        let dir = TempDir(
+            std::env::temp_dir().join(format!("exact-watch-sources-{}", std::process::id())),
+        );
+        let out = dir.0.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let package = dir.0.join("node_modules/@exact/geolocation");
+        std::fs::create_dir_all(package.parent().unwrap()).unwrap();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../packages/geolocation");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(source, package).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(source, package).unwrap();
+        std::fs::write(dir.0.join("app.ts"), "").unwrap();
+        std::fs::write(dir.0.join("app.contract"), "shape Label\n  text: string\ncomponent App\n  resource phone = phoneOnly() as shape Label\n  view\n    text phone.text\n").unwrap();
+        std::fs::write(dir.0.join("app.json"), r#"{"app":{"id":"test.watch","name":"Watch"},"watch":{"source":"watch.contract","component":"Watch"}}"#).unwrap();
+        let manifest = Manifest::read(&dir.0).unwrap();
+        let main = contract::compile_path(&dir.0.join("app.contract")).unwrap();
+        std::fs::write(out.join("app.plan"), main.encode()).unwrap();
+        std::fs::write(out.join("app.hbc"), b"bytecode").unwrap();
+        std::fs::write(
+            out.join("app.module.json"),
+            r#"{"rustSources":["rustValue"]}"#,
+        )
+        .unwrap();
+        let emit = |target: &str| {
+            let entries = contract::snapshot::compile_entries(&dir.0, &manifest).unwrap();
+            let mut compat = crate::Compat {
+                id: "a".repeat(32),
+                inputs: json!({"trust":"development"}),
+                channel: "development".into(),
+                origin: None,
+                activate: "next-launch".into(),
+                target: target.into(),
+                embedded: Value::Null,
+                reach: Value::Null,
+                painter: None,
+                game: false,
+            };
+            crate::receipt::emit(
+                &mut compat,
+                "development",
+                &dir.0,
+                ("ios", target),
+                &manifest,
+                &out,
+                &entries,
+            )
+        };
+        std::fs::write(
+            dir.0.join("face.contract"),
+            "component Face\n  props\n    label: string\n  view\n    text label\n",
+        )
+        .unwrap();
+        let cases = [
+            ("shape Label\n  text: string\ncomponent Watch\n  resource value = rustValue() as shape Label\n  view\n    text value.text\n", None),
+            ("shape Clock\n  epochAtZero: number\ncomponent Watch\n  resource clock = exactTime() as shape Clock\n  view\n    text clock.epochAtZero.toString()\n", None),
+            ("component Watch\n  view\n    text \"Static\"\n", None),
+            ("use geolocationStatus, GeolocationStatus from \"@exact/geolocation\"\ncomponent Watch\n  resource status = geolocationStatus() as shape GeolocationStatus\n  view\n    text status.state\n", None),
+            ("shape Label\n  text: string\ncomponent Watch\n  resource value = typescriptValue() as shape Label\n  view\n    text value.text\n", Some("typescriptValue")),
+            ("shape Label\n  text: string\ncomponent Watch\n  mutation result as shape Label\n  action refresh\n    send result = typescriptValue()\n  view\n    button press=refresh\n      text \"Refresh\"\n", Some("typescriptValue")),
+            ("use Face from \"./face.contract\"\nshape Label\n  text: string\ncomponent Watch\n  resource value = typescriptValue() as shape Label\n  view\n    Face(label=value.text)\n", Some("typescriptValue")),
+        ];
+        for (source, refused) in cases {
+            std::fs::write(dir.0.join("watch.contract"), source).unwrap();
+            emit("aarch64-apple-ios-sim").unwrap();
+            for target in [
+                "aarch64-apple-watchos-sim",
+                "aarch64-apple-watchos",
+                "arm64_32-apple-watchos",
+            ] {
+                let result = emit(target);
+                if let Some(name) = refused {
+                    let refusal = result.unwrap_err();
+                    for word in ["watch.contract", name, "app.ts", "Q3"] {
+                        assert!(refusal.contains(word), "{refusal}");
+                    }
+                    assert!(!refusal.contains("phoneOnly"), "{refusal}");
+                } else {
+                    result.unwrap();
+                    assert!(out.join("plans/watch.plan").is_file());
+                }
+            }
+        }
+        std::fs::write(dir.0.join("watch.contract"), cases[0].0).unwrap();
+        for metadata in [Some("{}"), None] {
+            let path = out.join("app.module.json");
+            if let Some(metadata) = metadata {
+                std::fs::write(&path, metadata).unwrap();
+            } else {
+                std::fs::remove_file(&path).unwrap();
+            }
+            let refusal = emit("aarch64-apple-watchos-sim").unwrap_err();
+            assert!(refusal.contains("rustValue"), "{refusal}");
+        }
     }
 
     #[test]

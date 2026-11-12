@@ -714,9 +714,10 @@ fn number(text: &str) -> Option<(f64, usize)> {
     Some((n.clamp(f64::MIN, f64::MAX), end))
 }
 
-/// Whether CSS gives the row no negative values: a negative literal there is
-/// invalid, and a negative math function is clamped to zero (CSS Values 4
-/// §9.1).
+/// Whether CSS gives the row no negative values: a negative number, length or
+/// literal there is invalid however it is spelled (`-4`, `"-4px"`, `"-1rem"`,
+/// `"-1ch"`), and a negative math function is clamped to zero (CSS Values 4
+/// §9.1). The one list every reader of a sign takes.
 pub fn nonnegative_row(style: crate::StyleId) -> bool {
     use crate::StyleId::*;
     matches!(
@@ -742,6 +743,15 @@ pub fn nonnegative_row(style: crate::StyleId) -> bool {
             | BorderWidthRight
             | BorderWidthBottom
             | BorderWidthLeft
+            | BorderRadiusTopLeft
+            | BorderRadiusTopRight
+            | BorderRadiusBottomRight
+            | BorderRadiusBottomLeft
+            | BorderSpacing
+            | FontSize
+            | LineHeight
+            | ShapeMargin
+            | StrokeWidth
             | HitSlopTop
             | HitSlopRight
             | HitSlopBottom
@@ -770,7 +780,7 @@ pub(crate) fn signed(
         value,
         Dimension::Points(n) | Dimension::Percent(n) | Dimension::Viewport(_, n) if n < 0.0
     );
-    if negative && math && super::no_negative_lengths(style) {
+    if negative && math && nonnegative_row(style) {
         return Ok(match value {
             Dimension::Percent(_) => Dimension::Percent(0.0),
             Dimension::Viewport(unit, _) => Dimension::Viewport(unit, 0.0),

@@ -115,3 +115,22 @@ fn write_symbol_glyphs(w: &mut String, schema: &Schema) {
     }
     writeln!(w, "_ => None, }} }}").unwrap();
 }
+/// @ref LLP 1043.000 §3 D1 — `refused_enum_names`: the keywords of an enum row that the wire
+/// carries and the compiler refuses an author, which `contract vocab` leaves out of what a row
+/// takes.
+fn write_refused_enum_names(w: &mut String, schema: &Schema) {
+    writeln!(
+        w,
+        "    /// Of `enum_names`, those the compiler refuses an author (the schema's `refused`).\n    pub fn refused_enum_names(self) -> &'static [&'static str] {{\n        match self {{"
+    )
+    .unwrap();
+    for row in &schema.styles {
+        if let Codec::Enum(name) = parse_codec(&row.codec) {
+            let refused = &schema.enums[&name].refused;
+            if !refused.is_empty() {
+                writeln!(w, "            StyleId::{} => &{refused:?},", pascal(&row.field)).unwrap();
+            }
+        }
+    }
+    writeln!(w, "            _ => &[],\n        }}\n    }}").unwrap();
+}

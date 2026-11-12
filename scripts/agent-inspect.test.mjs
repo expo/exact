@@ -85,6 +85,17 @@ test('compact reports expose measured stages and preserve unknown evidence', () 
   expect(text).toContain('owner queue 1.000 ms · owner wall 4.000 ms · main wait 2.000 ms · apply 2.000 ms');
   expect(text).toContain('following gap/work unknown / unknown');
   expect(text).toContain('not causal attribution');
+  expect(text).toContain('since reset: ? callbacks · frame intervals ? · missed unknown · late unknown\n  frame time unmeasured · work unmeasured');
+  // Exact's frames as the card's Share gives them beside the screen's: every frame's timing since the reset, and the
+  // other source
+  const shared = { ...report, coreSinceReload: { callbacks: '600', frameIntervals: '599', missedFrames: '2', lateFrames: '3',
+      frameTimeBoundsNs: { median: [16500000, 17000000], p99: [33000000, 33500000], maximum: [48000000, null] },
+      workBoundsNs: { median: [4000000, 4500000], p99: [17000000, 17500000], maximum: [20000000, 20500000] } },
+    otherSources: [{ source: 'ui-update', retainedEvents: 16 }], selection: "one-source; the card's Share gives ui-update as a report of its own" };
+  const sharedText = renderFrameHealthReport(shared);
+  expect(sharedText).toContain('since reset: 600 callbacks · frame intervals 599 · missed 2 · late 3');
+  expect(sharedText).toContain('frame time median 16.50–17.00 ms, p99 33.00–33.50 ms, maximum 48.00–∞ ms · work median 4.00–4.50 ms, p99 17.00–17.50 ms, maximum 20.00–20.50 ms');
+  expect(sharedText).toContain("other sources: ui-update (16 retained) · one-source; the card's Share gives ui-update as a report of its own");
   const powered = structuredClone(report);
   powered.hitches[0][4] += 2 ** 23 + 2 ** 16 + 2 ** 33 + 2 ** 34 + 2 ** 36;
   expect(renderFrameHealthReport(powered)).toContain('workload motion · thermal serious · low power true');
@@ -107,6 +118,9 @@ test("the screen's report gives each late frame's work against its deadline, and
       ['53', '1', '1', 531878, 2 ** 23 + 2, 12258, 13461, 10607, null, null, 0, null, 0, null]] };
   const text = renderFrameHealthReport(report);
   expect(text).toContain("the screen's UI updates against UIKit's deadlines");
+  expect(renderFrameHealthReport({ ...report, coreSinceReload: { callbacks: '3640', lateFrames: '95', frameTimeBoundsNs: null,
+    workBoundsNs: { median: [4000000, 4500000], p99: [17000000, 17500000], maximum: [62000000, 62500000] } } }))
+    .toContain('since reset: 3640 updates · late 95\n  work median 4.00–4.50 ms, p99 17.00–17.50 ms, maximum 62.00–62.50 ms');
   expect(text).toContain('#40 / capture 1 / generation 1 · 1329.860 ms ago · commit seen past its deadline');
   expect(text).toContain("work 39.821 ms · deadline 10.176 ms after its work's effective start, the commit less its work · previous update's work 3.695 ms · next update's effective start 39.830 ms after this one's, work 24.790 ms");
   const waitedPast = structuredClone(report);
@@ -431,4 +445,12 @@ test("tree shows Exact's picture-in-picture window on the floating image's row (
   const window = { presentation: 'window', title: 't3code://app', open: true, frame: [1051, 683, 284, 178], controls: ['minimize', 'back', 'close'], controlsShown: true };
   const text = render('tree', { epoch: 1, incarnation: 1, clock: 0, nodes: [{ id: 7, depth: 0, type: 'Image', props: { testId: 'pip' }, pictureInPicture: window }] });
   expect(text.split('\n')[1]).toBe('Image#7 [pip] pictureInPicture{window "t3code://app" open at 1051,683,284,178 controls minimize,back,close shown}');
+});
+
+test("a world's perf prints its counters; only `state <canvas> draws` is a draw list (#207)", () => {
+  // `state world.0.perf`: there `draws` is the last frame's draw count.
+  const perf = { wallClock: true, pixels: [1280, 720], draws: 15, instances: 11, triangles: 5425 };
+  expect(render('state', perf, { name: 'world.0.perf' }).split('\n')).toEqual(['wallClock true', 'pixels [1280,720]', 'draws 15', 'instances 11', 'triangles 5425']);
+  const draws = { tick: 4, hash: '0x1', draws: [{ pass: 'opaque', draw: 'mesh', winding: 'ccw', writes: 'color' }] };
+  expect(render('state', draws, { name: 'world', look: true })).toBe('tick 4 · hash 0x1\nopaque        · mesh · ccw · writes color');
 });

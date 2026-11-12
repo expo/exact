@@ -197,6 +197,25 @@ final class PlanURLReconnectTests: XCTestCase {
         XCTAssertEqual(PlanURL.brief(""), "the save did not build")
     }
 
+    /// An app with hundreds of assets loads: the envelope names its asset
+    /// index by digest and stays a small pointer card, the index's cards
+    /// resolve against the index's own URL, and every asset is fetched and
+    /// verified before the one apply (issue #91: 537 cards overran 64 KiB).
+    func testAGenerationWhoseIndexNamesSixHundredAssetsIsTakenWhole() throws {
+        let server = try DevServerStub()
+        defer { server.stop() }
+        let assets = (0..<600).map { ("assets/textures/die-\($0).png", Data("texture \($0)".utf8)) }
+        try server.start(program: Self.program, plan: Data("plan one".utf8), assets: assets)
+        let host = Host.open(server.page)
+        defer { host.close() }
+        settle { host.applied.count == 1 }
+        XCTAssertEqual(host.applied, [server.identity(seq: 1)])
+        let asked = server.requests(in: server.epoch)
+        XCTAssertTrue(asked.contains { $0.hasSuffix("/1/assets.json") }, "\(asked.prefix(8))")
+        XCTAssertEqual(asked.filter { $0.contains("/1/assets/textures/") }.count, 600)
+        XCTAssertLessThan(server.envelope(seq: 1).count, 1024)
+    }
+
     /// The pin `revision` replayed on stream `nonce`: a pin frame the host
     /// took on that stream itself, and the status it sent for it, after the
     /// one its hello sent (which names the revision it held already), taken
@@ -276,7 +295,7 @@ final class DevServerStub: @unchecked Sendable {
         var kind: String? { body["kind"] as? String }
         var nonce: String { body["nonce"] as? String ?? "" }
     }
-    private struct Generation { let program: String; let plan: Data; let sha: String; let identity: String }
+    private struct Generation { let program: String; let plan: Data; let sha: String; let identity: String; let assets: [String: Data]; let index: Data? }
 
     private let lock = NSLock()
     private var listener: Int32 = -1
@@ -320,12 +339,12 @@ final class DevServerStub: @unchecked Sendable {
 
     init() throws {}
 
-    func start(program: String, plan: Data) throws {
+    func start(program: String, plan: Data, assets: [(String, Data)] = []) throws {
         try listen(refusing: false) {
             currentEpoch = UUID().uuidString.lowercased()
             generations = []
         }
-        _ = add(program: program, plan: plan)
+        _ = add(program: program, plan: plan, assets: assets)
     }
 
     /// The port down, but watched: each connection is reset unanswered, as
@@ -445,15 +464,35 @@ final class DevServerStub: @unchecked Sendable {
         return seq
     }
 
-    private func add(program: String, plan: Data) -> Int {
-        let sha = SHA256.hash(data: plan).map { String(format: "%02x", $0) }.joined()
+    private func add(program: String, plan: Data, assets: [(String, Data)] = []) -> Int {
+        func hex(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+        let sha = hex(plan)
         // The envelope's identity, as PlanURL and the server compute it: the
-        // canonical manifest of a plan with no assets.
-        let canonical = "{\"assets\":[],\"plan\":{\"bytes\":\(plan.count),\"sha256\":\"\(sha)\"}}"
-        let identity = SHA256.hash(data: Data(canonical.utf8)).map { String(format: "%02x", $0) }.joined()
+        // canonical manifest of the plan and the assets, sorted by name.
+        let sorted = assets.sorted { $0.0.utf8.lexicographicallyPrecedes($1.0.utf8) }
+        let cards = sorted.map { "{\"bytes\":\($0.1.count),\"name\":\"\($0.0)\",\"sha256\":\"\(hex($0.1))\"}" }
+        let canonical = "{\"assets\":[" + cards.joined(separator: ",") + "],\"plan\":{\"bytes\":\(plan.count),\"sha256\":\"\(sha)\"}}"
+        let identity = hex(Data(canonical.utf8))
+        // The index's cards resolve against its own URL, beside the envelope.
+        let rows = sorted.map { "{\"bytes\":\($0.1.count),\"name\":\"\($0.0)\",\"sha256\":\"\(hex($0.1))\",\"url\":\"./\($0.0)\"}" }
+        let index = assets.isEmpty ? nil : Data(("{\"assets\":[" + rows.joined(separator: ",") + "]}").utf8)
         lock.lock(); defer { lock.unlock() }
-        generations.append(Generation(program: program, plan: plan, sha: sha, identity: identity))
+        generations.append(Generation(program: program, plan: plan, sha: sha, identity: identity, assets: Dictionary(uniqueKeysWithValues: assets), index: index))
         return generations.count
+    }
+
+    /// Generation `seq`'s envelope, as served.
+    func envelope(seq: Int) -> Data {
+        lock.lock(); defer { lock.unlock() }
+        let g = generations[seq - 1], dev = announcement(seq)
+        var envelope: [String: Any] = ["exact": 1,
+                                       "plan": ["url": "app.plan", "sha256": g.sha, "bytes": g.plan.count],
+                                       "dev": ["epoch": dev["epoch"]!, "program": g.program, "seq": dev["seq"]!, "generation": g.identity, "events": "/__dev"]]
+        if let index = g.index {
+            let sha = SHA256.hash(data: index).map { String(format: "%02x", $0) }.joined()
+            envelope["assets"] = ["url": "assets.json", "sha256": sha, "bytes": index.count, "count": g.assets.count]
+        }
+        return try! JSONSerialization.data(withJSONObject: envelope)
     }
 
     /// The latest or `seq`'s announcement, as hello and the stream carry it.
@@ -497,19 +536,20 @@ final class DevServerStub: @unchecked Sendable {
             return
         case ("POST", "/__dev/report"):
             report(client, body)
-        case ("GET", _) where parts.count == 5 && parts[0] == "__dev" && parts[1] == "generation":
+        case ("GET", _) where parts.count >= 5 && parts[0] == "__dev" && parts[1] == "generation":
             lock.lock()
             let g = parts[2] == currentEpoch ? Int(parts[3]).flatMap { (1...generations.count).contains($0) ? generations[$0 - 1] : nil } : nil
-            let dev = g.map { _ in announcement(Int(parts[3])!) }
             lock.unlock()
-            guard let g, let dev else { respond(client, "404 Not Found", "text/plain", Data()); break }
-            if parts[4] == "exact.json" {
-                let envelope: [String: Any] = ["exact": 1, "assets": [] as [Any],
-                                               "plan": ["url": "app.plan", "sha256": g.sha, "bytes": g.plan.count],
-                                               "dev": ["epoch": dev["epoch"]!, "program": g.program, "seq": dev["seq"]!, "generation": g.identity, "events": "/__dev"]]
-                respond(client, "200 OK", PlanURL.envelopeType, try! JSONSerialization.data(withJSONObject: envelope))
-            } else if parts[4] == "app.plan" {
+            guard let g else { respond(client, "404 Not Found", "text/plain", Data()); break }
+            let name = parts[4...].joined(separator: "/")
+            if name == "exact.json" {
+                respond(client, "200 OK", PlanURL.envelopeType, envelope(seq: Int(parts[3])!))
+            } else if name == "app.plan" {
                 respond(client, "200 OK", "application/octet-stream", g.plan)
+            } else if name == "assets.json", let index = g.index {
+                respond(client, "200 OK", "application/json", index)
+            } else if let asset = g.assets[name] {
+                respond(client, "200 OK", "application/octet-stream", asset)
             } else {
                 respond(client, "404 Not Found", "text/plain", Data())
             }

@@ -51,9 +51,16 @@ fn action_arguments_cannot_grow_untyped_parameters_through_a_call_chain() {
         let output = child.wait_with_output().unwrap();
         assert_eq!(output.status.code(), Some(1), "{argument}: {output:?}");
         let errors: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(errors[0]["id"], "type-call-action-arg", "{errors}");
         assert_eq!(errors[0]["line"], if argument == "alias" { 4 } else { 3 });
-        assert!(errors[0]["message"].as_str().unwrap().contains("a1"));
+        let message = errors[0]["message"].as_str().unwrap();
+        // A list or an option holding the action is refused before the call.
+        if argument.starts_with(['[', 's']) {
+            assert_eq!(errors[0]["id"], "type-action-held", "{errors}");
+            assert!(message.starts_with("`a0` is an action"), "{message}");
+        } else {
+            assert_eq!(errors[0]["id"], "type-call-action-arg", "{errors}");
+            assert!(message.contains("a1"), "{message}");
+        }
     }
 }
 

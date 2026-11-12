@@ -40,7 +40,8 @@ struct NativeButtonState: Equatable {
         #else
         let layer = owner.layer
         #endif
-        ActivePresentation.apply(style, to: layer, down: down, origin: owner.transformOriginPoint)
+        ActivePresentation.apply(style, to: layer, down: down, origin: owner.transformOriginPoint,
+                                 opacityFactor: owner.filterOpacityFactor, baseOpacity: owner.ownOpacity * owner.filterOpacityFactor)
     }
 }
 
@@ -87,10 +88,13 @@ package enum ActivePresentation {
         layer.removeAnimation(forKey: "nativeActiveOpacity")
         layer.removeAnimation(forKey: "nativeActiveScale")
     }
-    package static func apply(_ style: NodeStyle, to layer: CALayer, down: Bool, origin: CGPoint? = nil) {
-        let opacity = down ? style["press_opacity_to"]?.number.map { Float(min(1, max(0, $0))) }
-            ?? layer.opacity * Float(min(1, max(0, style["press_opacity"]?.number ?? 1))) : layer.opacity
-        let delta = opacity - layer.opacity
+    package static func apply(_ style: NodeStyle, to layer: CALayer, down: Bool, origin: CGPoint? = nil,
+                              opacityFactor: Float = 1, baseOpacity: Float? = nil) {
+        // A style batch can refresh active state before the filter writes its model opacity.
+        let base = baseOpacity ?? layer.opacity
+        let opacity = down ? style["press_opacity_to"]?.number.map { Float(min(1, max(0, $0))) * opacityFactor }
+            ?? base * Float(min(1, max(0, style["press_opacity"]?.number ?? 1))) : base
+        let delta = opacity - base
         if delta == 0 { layer.removeAnimation(forKey: "nativeActiveOpacity") }
         else { hold(layer, key: "nativeActiveOpacity", path: "opacity", value: delta, additive: true) }
         let scale = down ? style["press_scale"]?.number ?? 1 : 1

@@ -582,7 +582,8 @@ pub(super) fn paint(
 /// the box's shorter side in `color`, the tail fading behind the brightest
 /// one (counterclockwise: the indicator turns clockwise). Linux paints on
 /// change, not per frame, so it does not turn; every frame is the same,
-/// which is what the agent's held clock shows on the other hosts.
+/// which is what the agent's held clock shows on the other hosts. Under
+/// the Material look it is Material's indicator ([`material_spinner`]).
 pub(super) fn progress(
     backend: &mut dyn Backend,
     node: &NodeRef<'_>,
@@ -607,6 +608,9 @@ pub(super) fn progress(
     } else {
         accents(authored_accent(node, dark), dark).0
     };
+    if look::material() {
+        return material_spinner(backend, node.key, (cx, cy, s), ink, ts);
+    }
     let (thick, long) = (s * 0.1, s * 0.27);
     let spoke = Shape::new(
         (cx - thick / 2.0, cy - s / 2.0, thick, long),
@@ -617,6 +621,55 @@ pub(super) fn progress(
         c[3] = (c[3] as f32 * (1.0 - i as f32 * 0.1)) as u8;
         let turn = Transform::from_rotate_at(-45.0 * i as f32, cx, cy);
         backend.fill(&spoke, c, ts.pre_concat(turn));
+    }
+}
+
+/// Material's indeterminate circular indicator (LLP 1115.001): a 4 dp
+/// square-capped arc round a 40 dp circle, scaled to the box's shorter side
+/// `s`, whose head and tail chase each other as it turns. The arc is the
+/// first stretch of a dash `[c, c]` along the circle from its top, `c` its
+/// length: a phase `p` leaves `c - p` of it showing. A backend whose reader
+/// plays layers draws it in one, which the reader turns and whose phase it
+/// moves every frame by [`crate::host::lower::spinner_tracks`]; elsewhere,
+/// and before the tracks reach it, it is the arc at its longest.
+fn material_spinner(
+    backend: &mut dyn Backend,
+    key: exact_kernel::NodeKey,
+    (cx, cy, s): (f32, f32, f32),
+    ink: [u8; 4],
+    ts: Transform,
+) {
+    use exact_kernel::svg::{Path, Seg};
+    let width = s / 10.0;
+    let r = (s - width) / 2.0;
+    let k = r * 0.552_284_8;
+    let path = Path(vec![
+        Seg::Move(cx, cy - r),
+        Seg::Cubic(cx + k, cy - r, cx + r, cy - k, cx + r, cy),
+        Seg::Cubic(cx + r, cy + k, cx + k, cy + r, cx, cy + r),
+        Seg::Cubic(cx - k, cy + r, cx - r, cy + k, cx - r, cy),
+        Seg::Cubic(cx - r, cy - k, cx - k, cy - r, cx, cy - r),
+    ]);
+    let c = std::f32::consts::TAU * r;
+    let paint = super::SvgPaint {
+        path: &path,
+        fill: None,
+        even_odd: false,
+        stroke: Some(super::Ink::Solid(ink)),
+        order: [0, 1, 2],
+        width,
+        cap: 2,
+        join: 0,
+        miter: 4.0,
+        dash: vec![c, c],
+        phase: c * crate::host::lower::SPINNER_REST as f32,
+    };
+    let layer = crate::host::lower::spinner_layer(key);
+    let base = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, c];
+    let layered = backend.layer_begin(layer, ts, (cx, cy), base);
+    backend.svg_path(&paint, ts);
+    if layered {
+        backend.layer_end();
     }
 }
 

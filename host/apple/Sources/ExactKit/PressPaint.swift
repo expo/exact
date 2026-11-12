@@ -57,6 +57,7 @@ struct PressPaint {
     var focusShown = false
     /// The opacity the looks that hold show, if one names it.
     var lookOpacity: Float?
+    var lookMotionStates: UInt8 = 0
     /// The text colour the looks that hold show, if one names it, and the
     /// one the views below were last given (`inkLooks`).
     var lookInk: BatchValue?
@@ -103,15 +104,16 @@ extension NodeView {
     private func pressDepth(_ s: NodeStyle) -> Float {
         let shown = pressPaint.lookOpacity ?? ownOpacity
         if let to = s["press_opacity_to"]?.number {
-            return shown - Float(min(1, max(0, to)))
+            return (shown - Float(min(1, max(0, to)))) * filterOpacityFactor
         }
-        return shown * (1 - Float(min(1, max(0, s["press_opacity"]?.number ?? 1))))
+        return shown * (1 - Float(min(1, max(0, s["press_opacity"]?.number ?? 1)))) * filterOpacityFactor
     }
 
     /// The looks again, as they hold now: after a change the flags don't
     /// show (the node's `disabled`, a state held or let go).
     func relook() {
         HeldState.propsChanged() // a node disabled, or under a disabled one, holds no state
+        refreshLookMotion()
         guard let base = pressPaint.lookBase else { return }
         restyleForPress(pressPainted(looked(base)))
         inkLooks()
@@ -120,12 +122,13 @@ extension NodeView {
 
     /// AppKit's layer is optional, UIKit's not.
     private var paintLayer: CALayer? { layer }
-    /// The node's own opacity, as the engine presents it.
-    private var ownOpacity: Float {
+    var filterOpacityFactor: Float { boxFilter?.opacity ?? 1 }
+    /// The engine's opacity before the filter, retained even at `opacity(0)`.
+    var ownOpacity: Float {
         #if os(macOS)
         Float(alphaValue)
         #else
-        Float(alpha)
+        boxFilter?.unfilteredOpacity ?? (layer as? NodeLayer)?.ownOpacity ?? Float(alpha)
         #endif
     }
 
@@ -373,10 +376,13 @@ extension NodeView {
     /// The press's opacity again when what it starts from or goes to moves
     /// (the node's own opacity, a look's, style `s`'s press rows): the fade on
     /// the same ease with the new depth; a press opacity no longer written goes
-    /// at once.
+    /// at once. The look's opacity is held again first, a native button's too.
     func refreshPressOpacity(_ s: NodeStyle? = nil) {
-        if isNativeButton { refreshNativeActivePresentation(); return }
         applyLookOpacity()
+        if isNativeButton { refreshNativeActivePresentation(); return }
+        #if os(iOS)
+        refreshDimOpacity()
+        #endif
         // Held, easing in or easing out: the fade is always `-depth ×
         // progress` on the press's own ease, so what shows moves with it, as
         // on the web and Linux (`shown + (to − shown) × progress`).
@@ -408,9 +414,25 @@ extension NodeView {
         #if os(iOS)
         lookHover(Self.look("hover", in: s) != nil) // a pointer's hover (LookHoverIOS.swift)
         #endif
+        refreshLookMotion()
         let shown = pressPainted(looked(s))
         applyLookOpacity()
         return shown
+    }
+
+    private func refreshLookMotion() {
+        let states: UInt8 = disabled ? 0 : (pressPaint.hovered || holds("hover") ? 1 : 0) | (pressPaint.focusShown || holds("focus-visible") ? 2 : 0)
+        guard states != pressPaint.lookMotionStates else { return }
+        pressPaint.lookMotionStates = states
+        let view = id
+        // A style can be arriving inside a batch. Observe after that batch is applied.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, id == view, let session = presenter?.session else { return }
+            session.whenIdle(bound: true) { [weak self, weak session] in
+                guard let self, id == view, let session else { return }
+                session.applyUnlessEmpty(session.runtime.lookMotion(view, states: pressPaint.lookMotionStates, now: session.now()))
+            }
+        }
     }
 
     private func looked(_ s: NodeStyle) -> NodeStyle {
@@ -438,8 +460,8 @@ extension NodeView {
         guard let to = pressPaint.lookOpacity else { layer.removeAnimation(forKey: "lookOpacity"); return }
         let hold = CABasicAnimation(keyPath: "opacity")
         hold.isAdditive = true
-        hold.fromValue = to - ownOpacity
-        hold.toValue = to - ownOpacity
+        hold.fromValue = (to - ownOpacity) * filterOpacityFactor
+        hold.toValue = hold.fromValue
         hold.duration = .greatestFiniteMagnitude
         hold.isRemovedOnCompletion = false
         hold.fillMode = .both

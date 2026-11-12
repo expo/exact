@@ -223,10 +223,7 @@ pub fn validate_protocols(protocols: &[String]) -> Result<(), HostError> {
                 "a WebSocket protocol must be a non-empty HTTP token".into(),
             ));
         }
-        if protocols[..index]
-            .iter()
-            .any(|other| other.eq_ignore_ascii_case(protocol))
-        {
+        if protocols[..index].iter().any(|other| other == protocol) {
             return Err(HostError::InvalidArgument(
                 "WebSocket protocols must not contain duplicates".into(),
             ));
@@ -256,13 +253,28 @@ pub fn open_gated(
     url: &str,
     max_message: usize,
     signal: &AbortSignal,
+    protocols: &[String],
 ) -> Result<Box<dyn MessageSource>, HostError> {
     signal.check()?;
+    validate_protocols(protocols)?;
     let parsed = parse_and_admit(grants, url)?;
     if let Some(gate) = gate {
         gate.admit(&parsed)?;
     }
-    transport.connect_with_protocols(&parsed, max_message, signal, &[])
+    let socket = transport.connect_with_protocols(&parsed, max_message, signal, protocols)?;
+    check_selection(socket.protocol(), protocols)?;
+    Ok(socket)
+}
+
+fn check_selection(selected: &str, protocols: &[String]) -> Result<(), HostError> {
+    if (!protocols.is_empty() && selected.is_empty())
+        || (!selected.is_empty() && !protocols.iter().any(|p| p == selected))
+    {
+        return Err(HostError::Failed(
+            "the server did not select an offered WebSocket protocol".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Protocol-aware spelling used by the event and JavaScript projections.
@@ -274,10 +286,7 @@ pub fn open_with_protocols(
     signal: &AbortSignal,
     protocols: &[String],
 ) -> Result<Box<dyn MessageSource>, HostError> {
-    signal.check()?;
-    validate_protocols(protocols)?;
-    let parsed = parse_and_admit(grants, url)?;
-    transport.connect_with_protocols(&parsed, max_message, signal, protocols)
+    open_gated(transport, grants, None, url, max_message, signal, protocols)
 }
 
 /// A watch's sending/control handle. It is usable before the opening worker
@@ -511,12 +520,17 @@ fn watch_with_liveness(
 
     let worker_connection = connection.clone();
     std::thread::spawn(move || {
-        let mut source = match transport.connect_with_protocols(
-            &parsed,
-            max_message,
-            &worker_connection.inner.abort.signal(),
-            &protocols,
-        ) {
+        let mut source = match transport
+            .connect_with_protocols(
+                &parsed,
+                max_message,
+                &worker_connection.inner.abort.signal(),
+                &protocols,
+            )
+            .and_then(|source| {
+                check_selection(source.protocol(), &protocols)?;
+                Ok(source)
+            }) {
             Ok(source) => source,
             Err(error) => {
                 if !worker_live.load(Ordering::Acquire) {
@@ -835,9 +849,111 @@ mod tests {
             vec!["".into()],
             vec!["has space".into()],
             vec!["line\nbreak".into()],
-            vec!["same".into(), "SAME".into()],
+            vec!["same".into(), "same".into()],
         ] {
             assert!(validate_protocols(&protocols).is_err(), "{protocols:?}");
+        }
+    }
+
+    #[test]
+    fn every_open_checks_the_selected_protocol() {
+        struct Selected(&'static str);
+        impl MessageSource for Selected {
+            fn next(&mut self) -> Result<Incoming, HostError> {
+                Ok(Incoming::Closed {
+                    code: 1000,
+                    reason: String::new(),
+                })
+            }
+            fn protocol(&self) -> &str {
+                self.0
+            }
+        }
+        impl SocketTransport for Selected {
+            fn connect(
+                &self,
+                _: &url::Url,
+                _: usize,
+                _: &AbortSignal,
+            ) -> Result<Box<dyn MessageSource>, HostError> {
+                Ok(Box::new(Selected(self.0)))
+            }
+            fn connect_with_protocols(
+                &self,
+                url: &url::Url,
+                size: usize,
+                signal: &AbortSignal,
+                _: &[String],
+            ) -> Result<Box<dyn MessageSource>, HostError> {
+                self.connect(url, size, signal)
+            }
+        }
+        for (offered, selected, accepted) in [
+            (vec!["chat".into(), "Chat".into()], "Chat", true),
+            (vec![], "", true),
+            (vec!["chat".into()], "", false),
+            (vec!["chat".into()], "other", false),
+            (vec![], "other", false),
+        ] {
+            let grants = local_grant();
+            let url = "ws://127.0.0.1:9/";
+            let (connection, events, _subscription) = watch(
+                Arc::new(Selected(selected)),
+                grants.clone(),
+                url.into(),
+                offered.clone(),
+                1024,
+            );
+            let first = events
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            if accepted {
+                assert_eq!(
+                    first,
+                    Event::Open {
+                        protocol: selected.into()
+                    }
+                );
+            } else {
+                assert!(matches!(first, Event::Error(_)), "{first:?}");
+                assert_eq!(
+                    events
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .unwrap(),
+                    Event::Close {
+                        code: 1006,
+                        reason: String::new(),
+                        was_clean: false
+                    }
+                );
+                assert_eq!(connection.ready_state(), CLOSED);
+                assert!(events.try_recv().is_err());
+            }
+            assert_eq!(
+                open_with_protocols(
+                    &Selected(selected),
+                    &grants,
+                    url,
+                    1024,
+                    &AbortSignal::default(),
+                    &offered
+                )
+                .is_ok(),
+                accepted
+            );
+            assert_eq!(
+                open_gated(
+                    &Selected(selected),
+                    &grants,
+                    None,
+                    url,
+                    1024,
+                    &AbortSignal::default(),
+                    &offered
+                )
+                .is_ok(),
+                accepted
+            );
         }
     }
 

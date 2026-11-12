@@ -596,3 +596,83 @@ fn status_bar_cache_follows_preferences_and_view_appearance() {
     choice(&p, "light-content", Some("header"), true);
     assert_eq!(resolutions(&p), before);
 }
+
+fn hidden(p: &Presenter<()>, bars: bool, from: Option<&str>) {
+    let bar = p.status_bar();
+    assert_eq!(bar.hidden, bars);
+    assert_eq!(bar.hidden_source, from.map(|name| id(p, name)));
+    assert_eq!(p.chrome().bars_hidden, bars);
+}
+
+/// `system-bars-hidden` resolves by the style's rule and apart from it: a
+/// descendant's `false` over its ancestor's `true`, a later branch over an
+/// earlier one, and a hidden declaration does not compete.
+#[test]
+fn hiding_resolves_as_the_style_does_and_apart_from_it() {
+    let route = r#"status-bar-style="light-content" system-bars-hidden=true"#;
+    let p = screen(route, "", "", "");
+    hidden(&p, true, Some("route"));
+    choice(&p, "light-content", Some("route"), true);
+    let p = screen(route, "system-bars-hidden=false", "", "");
+    hidden(&p, false, Some("header"));
+    choice(&p, "light-content", Some("route"), true);
+    let p = screen(
+        route,
+        "system-bars-hidden=false",
+        "system-bars-hidden=true",
+        "",
+    );
+    hidden(&p, true, Some("overlay"));
+    let p = screen(route, "system-bars-hidden=false", "", r#"display="none""#);
+    hidden(&p, true, Some("route"));
+    let p = screen("", "", "", "");
+    hidden(&p, false, None);
+}
+
+/// A full-screen toy over a stack hides the bars and going back brings them
+/// back; a covering page's scope leaves out the stack's declaration, so a
+/// root that hides them does not reach into a page that says nothing.
+#[test]
+fn a_covering_route_decides_the_bars_and_going_back_restores_them() {
+    for presentation in ["push", "fullscreen", "modal"] {
+        let mut p = routes(presentation, "system-bars-hidden=true");
+        hidden(&p, false, None);
+        let open = id(&p, "open");
+        p.tap(open).unwrap();
+        hidden(&p, true, Some("detail"));
+        let layout: serde_json::Value = serde_json::from_str(&p.layout_json(None, false)).unwrap();
+        assert_eq!(layout["statusBar"]["hidden"], true, "{presentation}");
+        assert_eq!(layout["statusBar"]["hiddenSource"], id(&p, "detail"));
+        assert!(p.system_back(0.));
+        hidden(&p, false, None);
+    }
+    let p = boot(
+        r#"    main navigationKey="cover" navigationBack="back" system-bars-hidden=true
+      box navigationKey="home"
+      box navigationKey="cover" navigationPresentation="fullscreen"
+        text "Cover"
+"#,
+    );
+    hidden(&p, false, None);
+}
+
+/// Bound to state, the bars follow it in the commit that changes it.
+#[test]
+fn bound_hiding_follows_state() {
+    let mut p = source(
+        r#"component App
+  state playing = false
+  action flip
+    playing = not playing
+  view
+    main testId="toy" width="100%" height="100%" system-bars-hidden=playing
+      button "Play" press=flip testId="flip"
+"#,
+    );
+    hidden(&p, false, Some("toy"));
+    let flip = id(&p, "flip");
+    p.tap(flip).unwrap();
+    hidden(&p, true, Some("toy"));
+    p.tap(flip).unwrap();
+    hidden(&p, false, Some("toy"));
+}

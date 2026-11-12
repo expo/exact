@@ -5,7 +5,7 @@
 // when the deploy script names it, and the app's release notes. Stamped into
 // the bundle's Info.plist, so it is baked into the binary, for a normal build
 // and an `--archive` alike. Every key is optional.
-import { spawnSync } from 'node:child_process';
+import { spawnSync } from './toolchain.mjs';
 import { closeSync, existsSync, openSync, readSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { resolve } from 'node:path';

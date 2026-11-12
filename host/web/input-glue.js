@@ -566,7 +566,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   // (A leaving view, `data-exiting`, is gone as it starts to leave.)
   const watch = new MutationObserver(() => { if (!held?.el.isConnected || held.el.closest("[data-exiting]")) letGo("gone"); else if (held.el.closest(DISABLED)) letGo("disabled"); });
   // (Held still as a look's edge is, below: `data-exact-snap`, which the press paint's observer doesn't watch.)
-  const snap = (el, change) => { el.setAttribute("data-exact-snap", ""); change(); getComputedStyle(el).opacity; el.removeAttribute("data-exact-snap"); };
+  const snap = (el, change) => stillThrough([el], change);
   // `reason` null: let go unsaid (a dev loop's new generation, whose tree goes and whose hold the server replays).
   const letGo = (reason) => {
     if (!held) return;
@@ -658,15 +658,8 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
   const crosses = (e) => held.el.contains(e.target) !== held.el.contains(e.relatedTarget);
   for (const type of ["pointerover", "pointerout"]) root.addEventListener(type, e => { if (held?.state === "hover" && crosses(e)) letGo("input"); }, true);
   for (const type of ["focusin", "focusout"]) root.addEventListener(type, e => { if (held?.state === "focus-visible" && crosses(e)) letGo("input"); }, true);
-  // @ref LLP 1121 D8 — a look snaps, an authored transition or not. The browser has already moved `:hover` and
-  // `:focus-visible` when these events come, so an enabled node with a look for the state whose edge this is (the
-  // pointer entering or leaving it where it can hover; its `:focus-visible` turning on or off) takes that style change
-  // with its transitions off (`data-exact-snap`, an attribute the press paint's observer doesn't watch), one forced
-  // style for all of them. A base change still eases as authored; a transition of that node's running across the edge
-  // ends there (CSS can't hold one property still: theme2's 19:55 (b)). A look: the JS target's `data-exact-looks`,
-  // whose rules name their states, or a view the wasm host's looks sheet has rules for. (Not heard: hover that moves
-  // with no event: LLP 1121 §10.)
-  if (!document.getElementById("exact-snap")) document.head.append(Object.assign(document.createElement("style"), { id: "exact-snap", textContent: "[data-exact-snap]{transition:none!important}" }));
+  // Paint looks snap; a scale look uses the author's transition and its transformed hit box.
+  if (!document.getElementById("exact-snap")) document.head.append(Object.assign(document.createElement("style"), { id: "exact-snap", textContent: "[data-exact-snap]{transition:var(--exact-look-transition,none)!important}" }));
   // A JS-target look's states, by its attribute's value, from its rules; read again when a sheet comes or goes.
   const lookStates = new Map();
   new MutationObserver(() => lookStates.clear()).observe(document.head, { childList: true, subtree: true, characterData: true });
@@ -676,20 +669,40 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     if (at == null) return "";
     if (!lookStates.has(at)) {
       let text = "";
-      const sel = `[data-exact-looks="${at}"]`, walk = (rules) => { for (const r of rules) { if (r.selectorText?.includes(sel)) text += r.selectorText; if (r.cssRules) walk(r.cssRules); } };
+      const sel = `[data-exact-looks="${at}"]`, walk = (rules) => { for (const r of rules) { if (r.selectorText?.includes(sel)) text += r.cssText; if (r.cssRules) walk(r.cssRules); } };
       for (const s of document.styleSheets) { try { walk(s.cssRules); } catch { /* another origin's */ } }
       if (!text) return "";
       lookStates.set(at, text);
     }
     return lookStates.get(at);
   };
-  // Held still before any style is read: a read under the authored transition would start the one it holds off. (A
-  // node with no transition of its own takes this as nothing.)
-  const stillThrough = (els) => {
+  const stillThrough = (els, change) => {
     if (!els.length) return;
-    for (const el of els) el.setAttribute("data-exact-snap", "");
+    const kept = els.map(el => {
+      if (!/(?:^|[;{])\s*(?:--exact-)?scale\s*:/.test(looks(el, document.getElementById("exact-looks")))) {
+        el.setAttribute("data-exact-snap", "");
+        return [el, null, ""];
+      }
+      const style = getComputedStyle(el), split = text => text.split(/,(?![^(]*\))/).map(x => x.trim());
+      const props = split(style.transitionProperty), durations = split(style.transitionDuration);
+      const curves = split(style.transitionTimingFunction), delays = split(style.transitionDelay);
+      const rows = ["scale", "--exact-scale"].map(prop => {
+        const i = props.findLastIndex(p => p === prop || p === "all");
+        return i < 0 ? `${prop} 0s` : `${prop} ${durations[i % durations.length]} ${curves[i % curves.length]} ${delays[i % delays.length]}`;
+      });
+      const old = el.style.getPropertyValue("--exact-look-transition"), priority = el.style.getPropertyPriority("--exact-look-transition");
+      el.style.setProperty("--exact-look-transition", rows.join(","));
+      el.setAttribute("data-exact-snap", "");
+      return [el, old, priority];
+    });
+    change?.();
     getComputedStyle(els[0]).opacity;
-    for (const el of els) el.removeAttribute("data-exact-snap");
+    for (const [el, old, priority] of kept) {
+      el.removeAttribute("data-exact-snap");
+      if (old === null) continue;
+      if (old) el.style.setProperty("--exact-look-transition", old, priority);
+      else el.style.removeProperty("--exact-look-transition");
+    }
   };
   // In the page: under `root`, through any shadow root's host.
   const inPage = (el) => { while (el && !root.contains(el)) el = el.getRootNode?.().host; return !!el; };

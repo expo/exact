@@ -146,6 +146,20 @@ impl<D: DataSource> Runner<D> {
                 || json!({ "bound": bound, "preferred": {}, "readers": {}, "held": [] }),
             );
             entry["views"] = json!(views);
+            entry["preferred"] = json!(self
+                .extensions
+                .preferred
+                .iter()
+                .filter_map(|(key, value)| {
+                    Some((
+                        key.strip_prefix(&format!("{extension}."))?.to_owned(),
+                        value.clone(),
+                    ))
+                })
+                .collect::<Map<String, Json>>());
+            if self.extensions.agent.contains(extension) && !bound {
+                entry["agent"] = json!(true);
+            }
         }
         Some(Json::Object(out).to_string())
     }
@@ -313,6 +327,16 @@ impl<D: DataSource> Runner<D> {
             });
             if let Some(row) = row.filter(|r| self.route(r) == Route::Agent) {
                 told.insert(self.plan.str(row.extension).to_owned());
+            } else if self.agent_word(key).is_some()
+                && self.extensions.agent.contains(extension)
+                && !self.extensions.bound.contains(extension)
+                && self
+                    .plan
+                    .views
+                    .iter()
+                    .any(|v| self.plan.str(v.extension) == extension)
+            {
+                told.insert(extension.to_owned());
             }
         }
         for extension in told {
@@ -348,10 +372,22 @@ impl<D: DataSource> Runner<D> {
         if (self.plan.modules.iter()).any(|m| self.key(m) == key) {
             return None;
         }
-        let row = (self.plan.modules.iter()).find(|m| self.plan.str(m.extension) == extension)?;
-        self.substitute(row)["agent"][word]
-            .as_str()
-            .map(str::to_owned)
+        let words = if let Some(row) = self
+            .plan
+            .modules
+            .iter()
+            .find(|m| self.plan.str(m.extension) == extension)
+        {
+            self.substitute(row)["agent"].clone()
+        } else {
+            let view = self
+                .plan
+                .views
+                .iter()
+                .find(|v| self.plan.str(v.extension) == extension)?;
+            serde_json::from_str(self.plan.str(view.agent)).ok()?
+        };
+        words[word].as_str().map(str::to_owned)
     }
 }
 

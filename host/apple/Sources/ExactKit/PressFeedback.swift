@@ -444,6 +444,17 @@ extension NodeView {
         return true
     }
 
+    private var dimOpacityDepth: Float {
+        -(pressPaint.lookOpacity ?? ownOpacity) * filterOpacityFactor * (1 - Self.dimmedOpacity)
+    }
+
+    func refreshDimOpacity() {
+        guard let fade = layer.animation(forKey: "pressDim")?.copy() as? CABasicAnimation else { return }
+        fade.fromValue = dimOpacityDepth
+        if press.dimmedAt != nil { fade.toValue = fade.fromValue }
+        layer.add(fade, forKey: "pressDim")
+    }
+
     /// Dim (`down`) or fade back. `instantly` drops it without the fade.
     func dimPress(_ down: Bool, instantly: Bool = false) {
         let key = "pressDim"
@@ -451,7 +462,7 @@ extension NodeView {
         if down {
             guard press.dimmedAt == nil else { return }
             press.dimmedAt = now
-            let delta = -layer.opacity * (1 - Self.dimmedOpacity)
+            let delta = dimOpacityDepth
             let hold = CABasicAnimation(keyPath: "opacity")
             hold.isAdditive = true
             hold.fromValue = delta

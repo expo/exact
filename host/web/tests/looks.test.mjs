@@ -50,7 +50,9 @@ const page = sheet + `<style id="exact-looks">${rules}</style>
   window.ready = true;
 </script>`;
 
-let server, suite, cdp;
+let server;
+const suite = unavailable ? null : await cdpBrowser({ args: ['--window-size=600,900'] });
+const cdp = suite?.cdp;
 beforeAll(async () => {
   if (unavailable) return;
   server = createServer((req, res) => {
@@ -58,8 +60,6 @@ beforeAll(async () => {
     res.writeHead(200, { 'content-type': 'text/javascript' }); res.end(readFileSync(resolve(WEB, req.url === '/navigation.js' ? 'navigation.js' : 'input-glue.js')));
   });
   await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
-  suite = await cdpBrowser({ args: ['--window-size=600,900'] });
-  ({ cdp } = suite);
 });
 afterAll(async () => {
   await suite?.close();
@@ -243,4 +243,52 @@ check('a hover look composes over the base, under the press paint', async () => 
   } finally {
     await cdp.send('Target.closeTarget', { targetId });
   }
+}, 60000);
+
+check('hover scale transitions its paint and hit target while keeping layout and press composition', async () => {
+  const { targetId, sessionId } = await suite.page();
+  const call = (method, params) => cdp.send(method, params, sessionId);
+  const evaluate = async expression => {
+    const reply = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (reply.exceptionDetails) throw new Error(reply.exceptionDetails.exception?.description ?? reply.exceptionDetails.text);
+    return reply.result.value;
+  };
+  try {
+    await readyPage(cdp, sessionId, `http://127.0.0.1:${server.address().port}/`);
+    // `composed`: a static press (css.rs: an important product, `--exact-scale` transitioned); `computed`: a
+    // bound `-exact-press-scale` (rows.rs: the same product, written as an ordinary declaration), held down at 0.5.
+    for (const kind of ['plain', 'composed', 'computed']) {
+      const composed = kind === 'composed', computed = kind === 'computed';
+      await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 500, y: 800 });
+      await evaluate(`(() => {
+        document.getElementById('scale-card')?.remove();
+        const el = document.createElement('div'); el.id='scale-card'; el.dataset.view='12';
+        el.style.cssText='position:fixed;left:200px;top:200px;width:100px;height:100px;scale:1;transition:scale 150ms linear;background:red';
+        if (${composed}) el.style.cssText += ';--exact-scale:1;--exact-press-factor:0.9;scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important;transition:--exact-scale 150ms linear';
+        if (${computed}) el.style.cssText += ';--exact-press:0.5;--exact-press-factor:0.5;scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))';
+        document.getElementById('exact-root').append(el);
+        const rule='[data-view="12"]:hover${on}{--exact-scale:1.2!important;scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important}';
+        const sheet=document.getElementById('exact-looks'); sheet.textContent += rule; sheet.exactRules.set(12,rule);
+        getComputedStyle(el).scale;
+      })()`);
+      await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 250, y: 250 });
+      const values = await evaluate(`(() => {
+        const e=document.getElementById('scale-card'); getComputedStyle(e).scale;
+        const a=e.getAnimations().find(a => a instanceof CSSTransition && ['scale','--exact-scale'].includes(a.transitionProperty));
+        if (!a) return null;
+        a.pause(); a.currentTime=75;
+        return [e.offsetWidth,e.getBoundingClientRect().width,Number.parseFloat(getComputedStyle(e).scale)];
+      })()`);
+      expect(values).not.toBeNull();
+      expect(values[0]).toBe(100);
+      // Halfway: the look's 1.2 times the press's factor, never the look's 1.2 alone over a computed press.
+      expect(values[1]).toBeCloseTo(composed ? 99 : computed ? 55 : 110, 2);
+      expect(values[2]).toBeCloseTo(composed ? 0.99 : computed ? 0.55 : 1.1, 3);
+      const held = await evaluate(`(() => { const e=document.getElementById('scale-card'); for(const a of e.getAnimations()) a.finish(); return Number.parseFloat(getComputedStyle(e).scale); })()`);
+      expect(held).toBeCloseTo(composed ? 1.08 : computed ? 0.6 : 1.2, 3);
+      await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 500, y: 800 });
+      const left = await evaluate(`(() => { const e=document.getElementById('scale-card'); for(const a of e.getAnimations()) a.finish(); return [e.offsetWidth,Number.parseFloat(getComputedStyle(e).scale)]; })()`);
+      expect(left).toEqual([100, composed ? 0.9 : computed ? 0.5 : 1]);
+    }
+  } finally { await cdp.send('Target.closeTarget', { targetId }); }
 }, 60000);

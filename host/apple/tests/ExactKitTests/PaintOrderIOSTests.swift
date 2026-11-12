@@ -80,6 +80,45 @@ final class PaintOrderIOSTests: XCTestCase {
         XCTAssertEqual(p.views[3]?.paintZPosition, 0)
     }
 
+    func testNativeInspectionPreservesDenseRanksBesideAnUnrankedPlatformView() throws {
+        let p = fixture()
+        p.apply(wireBatch([["op": "rank", "id": 2, "rank": -4_294_967_290],
+                          ["op": "rank", "id": 3, "rank": 1],
+                          ["op": "rank", "id": 4, "rank": 4_294_967_288],
+                          ["op": "rank", "id": 5, "rank": 4_294_967_290]]))
+        let parent = try XCTUnwrap(p.views[1])
+        let platform = PaintView(frame: CGRect(x: 1.234, y: 0, width: 100, height: 100))
+        #if os(macOS)
+        platform.wantsLayer = true
+        #endif
+        parent.container.addSubview(platform)
+        #if os(macOS)
+        let dump = p.inspectionDump(parent, kind: "view", depth: 3, limit: 200) { $0.frame }
+        #else
+        let dump = p.inspectionDump(parent, kind: "view", depth: 3, limit: 200, flatOnly: nil) { view, region in
+            region ?? view.frame
+        }
+        #endif
+        let data = try JSONSerialization.data(withJSONObject: dump)
+        let reply = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let entries = try XCTUnwrap(reply["entries"] as? [[String: Any]])
+        func z(_ entry: [String: Any]) throws -> Double {
+            let layer = try XCTUnwrap(entry["layer"] as? [String: Any])
+            return try XCTUnwrap(layer["zPosition"] as? Double)
+        }
+        let unranked = try XCTUnwrap(entries.first { $0["role"] as? String == "unaccounted" })
+        let origin = try z(unranked)
+        XCTAssertEqual(origin, 0)
+        XCTAssertEqual((unranked["frame"] as? [String: Double])?["x"], 1.23)
+        for (id, expected) in [(1, 0.0), (2, -0.001), (3, 0.001), (4, 0.002), (5, 0.003)] {
+            let entry = try XCTUnwrap(entries.first { $0["node"] as? Int == id })
+            let position = try z(entry)
+            XCTAssertEqual(position, expected, "node #\(id)")
+            if expected > 0 { XCTAssertGreaterThan(position, origin) }
+            if expected < 0 { XCTAssertLessThan(position, origin) }
+        }
+    }
+
     #if os(iOS)
     /// A native navigation container takes rank ½, the positioned route
     /// holders' rank: over its in-flow siblings, among positioned ones where

@@ -764,9 +764,60 @@ fn a_negative_number_after_an_attributes_equals_is_a_number_literal() {
         let e = parse(&format!("component A\n  view\n    input {written}\n")).unwrap_err();
         assert_eq!(e.id, "syntax-unquoted-length", "{written}");
     }
-    // An exponent that overflows is no number.
+    // A literal that overflows a double is no number, with an exponent or without.
     let e = parse("component A\n  view\n    input min=-1e999\n").unwrap_err();
     assert_eq!(e.id, "syntax-bad-number");
+    let src = format!(
+        "component A\n  state n = {}\n  view\n    text \"\"\n",
+        "9".repeat(400)
+    );
+    let e = parse(&src).unwrap_err();
+    assert_eq!(e.id, "syntax-bad-number");
+    assert_eq!((e.span.line, e.span.col), (2, 13), "{e:?}");
+    assert!(e.message.contains("1.8e308"), "{}", e.message);
+}
+
+/// `width=50%` is refused as the unquoted length it is, at the number and the
+/// `%`, whatever follows on its line; a remainder with its operand is not.
+#[test]
+fn an_unquoted_percentage_is_refused_at_itself() {
+    let message = "`width=50%` needs quotes: a value with a unit is a string, `width=\"50%\"` (a bare number is pixels)";
+    for (src, at) in [
+        (
+            "component A\n  view\n    column width=50% testId=\"c\"\n      text \"a\"\n",
+            (3, 18, 21),
+        ),
+        (
+            "component A\n  view\n    column width=50%\n      text \"a\"\n",
+            (3, 18, 21),
+        ),
+        (
+            "component A\n  view\n    column width=50% apple.width=10\n",
+            (3, 18, 21),
+        ),
+        (
+            "component A\n  view\n    column\n      width=50%\n",
+            (4, 13, 16),
+        ),
+        (
+            "style Wide\n  width=50%\ncomponent A\n  view\n    text \"a\" class=\"Wide\"\n",
+            (2, 9, 12),
+        ),
+        (
+            "keyframes Grow\n  to width=50%\ncomponent A\n  view\n    text \"a\"\n",
+            (2, 12, 15),
+        ),
+    ] {
+        let e = parse(src).unwrap_err();
+        assert_eq!(e.id, "syntax-unquoted-length", "{src}\n{e:?}");
+        assert_eq!(e.message, message, "{src}");
+        assert_eq!((e.span.line, e.span.col, e.span.end_col), at, "{src}");
+    }
+    let e = parse("component A\n  view\n    column margin-top=-5%\n").unwrap_err();
+    assert!(e.message.contains("`margin-top=\"-5%\"`"), "{e:?}");
+    // A remainder that has its operand stays one.
+    let src = "component A\n  state a = 1\n  state b = 2\n  view\n    column width=a % b height=10 % b testId=\"c\"\n";
+    parse(src).unwrap();
 }
 
 /// What the negative literal leaves alone: subtraction, a negation of
@@ -837,4 +888,117 @@ fn the_negative_literal_leaves_subtraction_negation_and_exact_names_alone() {
     assert!(matches!(attrs[2].value, Expr::Number(n, _) if n == -8.0));
     // `em` after a number's `e` is a unit, not an exponent.
     assert!(parse("component A\n  view\n    image \"symbol:x\" width=\"2em\"\n").is_ok());
+}
+
+#[test]
+fn update_operators_are_refused_with_alternatives() {
+    for expression in [
+        "--n",
+        "++n",
+        "n--",
+        "n++",
+        "10 - --n",
+        "10--n",
+        "-- n",
+        "++ n",
+        "n --",
+        "n ++",
+        "--3",
+        "++3",
+        "--(n)",
+        "(n)++",
+        "n.field--",
+        "abs(--n)",
+        "[n++]",
+        "true ? --n : n",
+        "`${--n}`",
+        "`${n++}`",
+    ] {
+        for line in [
+            format!("derive x = {expression}"),
+            format!("action down()\n    n = {expression}"),
+        ] {
+            let src = format!("component A\n  state n = 5\n  {line}\n");
+            let error = parse(&src).unwrap_err();
+            assert_eq!(error.id, "syntax-refused-idiom", "{expression}");
+            assert!(error.message.contains("n = n"), "{error}");
+        }
+    }
+}
+
+#[test]
+fn dashed_profiles_and_literal_text_are_not_update_expressions() {
+    let file = parse(
+        r#"color-profile --brand-press src="assets/brand.icc"
+theme
+  ink = "color(--brand-press 0.1 0.2 0.3)"
+  alias = "ink"
+  -exact-secondary-label = "color(--brand-press 0.1 0.2 0.3)"
+component A
+  view
+    text "--n ++n 010 01.02.03" color="var(--ink)"
+    text `--n ++n 010 ${"--brand"}` animation-timeline="--scroll"
+"#,
+    )
+    .unwrap();
+    assert_eq!(file.color_profiles[0].name, "--brand-press");
+}
+
+#[test]
+fn leading_zero_numbers_are_refused_with_alternatives() {
+    for number in ["010", "08", "00", "01.5", "01e2"] {
+        let src = format!("component A\n  derive x = {number}\n");
+        let error = parse(&src).unwrap_err();
+        assert_eq!(error.id, "syntax-bad-number", "{number}");
+        assert!(error.message.contains("decimal"), "{error}");
+    }
+    for expression in [
+        "- -n",
+        "-(-n)",
+        "n- -n",
+        "10 - - -n",
+        "0",
+        "0.5",
+        "0e2",
+        "10",
+    ] {
+        parse(&format!(
+            "component A\n  state n = 5\n  derive x = {expression}\n"
+        ))
+        .unwrap();
+    }
+}
+
+#[test]
+fn unsupported_numeric_spellings_do_not_compile_as_decimal_prefixes() {
+    for number in [
+        "0o10", "0O10", "0x10", "0X10", "0x", "0b10", "0B10", "0b", "1_000", "0_1", "1n", "0n",
+        "0x10n",
+    ] {
+        assert!(
+            parse(&format!("component A\n  derive x = {number}\n")).is_err(),
+            "{number}"
+        );
+    }
+}
+
+#[test]
+fn midi_bytes_keep_leading_zeroes() {
+    parse(
+        r#"test "MIDI"
+  tap midi "keys" 90 00 08
+  expect midi sent "synth" 90 00 08 at 0.5
+"#,
+    )
+    .unwrap();
+    for step in [
+        "tap midi \"keys\" 90 00 08 at 010",
+        "tap midi \"keys\" 90 00 08 clock 010",
+        "expect midi sent \"synth\" 90 00 08 at 010",
+    ] {
+        assert_eq!(
+            parse(&format!("test \"MIDI\"\n  {step}\n")).unwrap_err().id,
+            "syntax-bad-number",
+        );
+    }
 }

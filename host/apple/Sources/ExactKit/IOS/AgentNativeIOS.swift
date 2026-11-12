@@ -282,7 +282,7 @@ extension Presenter {
             guard entries.count < limit else { cut("limit"); return }
             var e: [String: Any] = ["kind": "view", "depth": d, "class": String(describing: Swift.type(of: v)), "frame": AgreementReport.rect(box(v, nil)),
                                     "hidden": v.isHidden, "alpha": Agent.r2(v.alpha), "interactive": v.isUserInteractionEnabled]
-            var l: [String: Any] = ["masksToBounds": v.layer.masksToBounds, "zPosition": Agent.r2(v.layer.zPosition)]
+            var l: [String: Any] = ["masksToBounds": v.layer.masksToBounds, "zPosition": Double(v.layer.zPosition)]
             let t = v.layer.transform
             if !CATransform3DIsIdentity(t) {
                 if CATransform3DIsAffine(t) {

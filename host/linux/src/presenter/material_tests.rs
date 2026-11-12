@@ -76,6 +76,47 @@ fn pixel(p: &mut Presenter<()>, x: f32, y: f32) -> [u8; 4] {
     [c.red(), c.green(), c.blue(), c.alpha()]
 }
 
+/// An indeterminate `progress` is Material's indicator, not UIKit's
+/// spokes: a ring in the colour, a tenth of the box thick, open between 290°
+/// and 360° clockwise from the top, as its still frame (the reader turns it).
+#[test]
+fn materials_indeterminate_progress_is_its_arc() {
+    if !material_process() {
+        return;
+    }
+    let (mut p, error) = Presenter::boot_with(
+        &crate::test_plan(
+            r##"component App
+  view
+    column padding=10 align-items="flex-start"
+      progress aria-label="Loading" width=40 height=40 color="#0000FF" testId="spinner"
+"##,
+        ),
+        (),
+        (400., 600.),
+        2.4375,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let r = p.rect_of(id(&p, "spinner")).unwrap();
+    let (cx, cy, ring) = (r.0 + 20.0, r.1 + 20.0, 18.0);
+    let page = pixel(&mut p, 2.0, 2.0);
+    let at = |degrees: f32| {
+        let a = degrees.to_radians();
+        (cx + ring * a.sin(), cy - ring * a.cos())
+    };
+    for degrees in [10.0, 90.0, 180.0, 270.0] {
+        let (x, y) = at(degrees);
+        assert_eq!(pixel(&mut p, x, y), [0, 0, 255, 255], "{degrees}°");
+    }
+    let (x, y) = at(325.0);
+    assert_eq!(pixel(&mut p, x, y), page, "the gap");
+    assert_eq!(pixel(&mut p, cx, cy), page, "a ring");
+    assert_eq!(pixel(&mut p, cx, cy - 14.0), page, "4 thick");
+}
+
 #[test]
 fn materials_checkbox_and_filled_button_take_its_size_and_colours() {
     if !material_process() {

@@ -15,6 +15,12 @@ impl Surfaces {
         abi.destroy(c.id);
         if c.owner {
             self.error = self.error.take().or(host.surface_record(&c.name, None));
+            if c.performance {
+                self.error = self
+                    .error
+                    .take()
+                    .or(host.canvas_performance_record(&c.name, None));
+            }
         }
         c.owner
     }

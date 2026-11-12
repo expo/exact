@@ -1007,7 +1007,7 @@ package final class Presenter {
                 case "layout": v.layoutOffset = CGPoint(x: x, y: CGFloat(op.y)); v.layoutResize = CGSize(width: CGFloat(op.w), height: CGFloat(op.h)); v.applyTransform(); v.applySurface()
                 case "scale": v.scale = x; v.applyTransform()
                 case "rotate": v.rotate = x; v.applyTransform()
-                case "opacity": v.alpha = x; v.refreshPressOpacity()
+                case "opacity": v.presentOpacity(x)
                 case "flight": presentFlight(id, x)
                 default: break
                 }

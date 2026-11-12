@@ -50,14 +50,17 @@ package enum BorderPaint {
     }
 
     /// A replaced element's content edge: reduce at the border edge first,
-    /// then remove each adjacent border/padding inset from that corner.
+    /// remove each adjacent border/padding inset from that corner, then
+    /// reduce again in the content box, as `paint` reduces the padding
+    /// edge's in the padding box. So the content meets the border's inner
+    /// curve, as in Chrome, which reduces both inner curves.
     static func contentRadii(_ radii: [CGSize], outer: CGRect, inner: CGRect) -> [CGSize] {
         let r = reduced(radii, in: outer)
         let left = inner.minX - outer.minX, right = outer.maxX - inner.maxX
         let top = inner.minY - outer.minY, bottom = outer.maxY - inner.maxY
-        return zip(r, [CGSize(width: left, height: top), CGSize(width: right, height: top),
-                       CGSize(width: right, height: bottom), CGSize(width: left, height: bottom)])
-            .map { CGSize(width: max(0, $0.width - $1.width), height: max(0, $0.height - $1.height)) }
+        return reduced(zip(r, [CGSize(width: left, height: top), CGSize(width: right, height: top),
+                               CGSize(width: right, height: bottom), CGSize(width: left, height: bottom)])
+            .map { CGSize(width: max(0, $0.width - $1.width), height: max(0, $0.height - $1.height)) }, in: inner)
     }
 
     /// Circle-to-cubic control distance for a quarter arc.

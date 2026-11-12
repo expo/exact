@@ -611,6 +611,50 @@ component App
     assert!(r.failed_resources().is_empty());
 }
 
+/// A wake's reply outside its shape is let go as the wake's: what the
+/// release refreshes is asked under the wake's origin, not the app's.
+#[test]
+fn a_refused_wake_reply_releases_its_request_under_the_wakes_origin() {
+    let app = App::new("refused-origin");
+    app.edit_interface(
+        r#""source": "everyTides","#,
+        r#""source": "everyTides", "origin": "app","#,
+    );
+    app.write(
+        "app.contract",
+        r#"
+use everyTides, tide, TideEntry from "@fixture/tide"
+
+shape Pulled
+  tag: string
+
+component App
+  mutation pulled as shape Pulled refreshes sensitive
+  resource sensitive = everyTides() as shape TideEntry[]
+  action ebbed(tag: string)
+    send pulled = pull(tag)
+  view
+    column tide=ebbed
+      text `${sensitive.length}`
+"#,
+    );
+    let mut r = boot(&app);
+    r.raise_wake("tide", "tide", r#"["wake"]"#, WakeHow::default())
+        .unwrap();
+    by(&mut r, 0.0);
+    assert!(r.failed_resources().is_empty());
+    // `Later` answers `{tag: 7}`, outside `Pulled`.
+    answer_pull(&mut r);
+    let logs = logs(&r);
+    assert!(logs.contains("answered outside its shape"), "{logs}");
+    assert!(
+        logs.contains("tide.everyTides: refused, person-required (wake origin)"),
+        "{logs}"
+    );
+    assert_eq!(r.failed_resources().len(), 1, "{logs}");
+    assert_eq!(r.failed_resources()[0].0, "sensitive");
+}
+
 #[test]
 fn an_expired_wake_clears_only_the_stall_of_a_head_it_drops() {
     for wake_is_head in [true, false] {
@@ -1035,4 +1079,49 @@ fn waiting_timers_stay_stopped_during_a_hidden_wake() {
             "{kind}: timers resume after the wake"
         );
     }
+}
+
+#[test]
+fn change_tasks_wait_for_unseen_wakes_and_for_their_expiry_receipts() {
+    let app = App::new("change-wake");
+    let source = std::fs::read_to_string(app.0.join("app.contract")).unwrap();
+    let source = source.replace("  task ticker mount\n    every(1000, tick)\n", "");
+    app.write(
+        "app.contract",
+        &source.replace(
+            "  view\n",
+            r#"  state changed = 0
+  action countChange
+    changed = changed + 1
+  task change when heard != "" key=heard
+    change(countChange)
+  view
+"#,
+        ),
+    );
+    let mut r = boot(&app);
+    r.act("periodic", Vec::new()).unwrap();
+    let reference = entry(&r, "every")["ref"].as_u64().unwrap();
+    by(&mut r, 60_000.0);
+    tap(&mut r, reference).unwrap();
+    by(&mut r, 0.0);
+    assert!(r.page().hidden);
+    assert!(r.land_then().receipts.is_empty());
+    assert_eq!(r.slot("changed"), Some(&Value::Number(0.0)));
+    by(&mut r, 3_000.0);
+    assert_eq!(r.slot("changed"), Some(&Value::Number(0.0)));
+    let expired = r.advance_timed(65_001.0);
+    assert!(expired.error.is_none(), "{:?}", expired.error);
+    assert!(expired.needs_apply);
+    assert!(!expired.receipts.is_empty());
+    assert_eq!(r.slot("changed"), Some(&Value::Number(0.0)));
+    let change = r.advance_timed(65_001.0);
+    assert!(change.error.is_none(), "{:?}", change.error);
+    assert!(change.needs_apply);
+    assert_eq!(r.slot("changed"), Some(&Value::Number(1.0)));
+    assert_eq!(
+        r.now_ms(),
+        65_000.0,
+        "a deferred change never rewinds the clock"
+    );
 }

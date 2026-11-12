@@ -437,3 +437,48 @@ fn a_date_or_time_controls_press_asks_the_shell_for_its_picker_and_its_answer_is
     assert!(!p.answer_request(asked[0].1, Some("2026-12-25")));
     assert_eq!(value(&p, "day"), "2026-12-24");
 }
+
+#[test]
+fn a_reload_drops_the_answer_of_a_picker_left_up() {
+    let (mut p, _) = Presenter::boot_with(
+        &crate::test_plan(DATES),
+        Nothing,
+        (400., 800.),
+        1.,
+        PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    p.serve_requests();
+    tap(&mut p, "day");
+    let asked = decode(p.take_requests());
+    // The new runner numbers its views again: `day`'s old id is `due`'s.
+    let before = id(&p, "day");
+    let plan = crate::test_plan(
+        r#"component App
+  state day = "2026-10-16"
+  state due = "2026-01-01"
+  action setDay(value)
+    day = value
+  action setDue(value)
+    due = value
+  view
+    column
+      input type="date" value=due change=setDue testId="due" height=30
+      input type="date" value=day change=setDay testId="day" height=30
+"#,
+    );
+    assert!(p.reload(&plan, Nothing).unwrap().is_none());
+    assert_eq!(id(&p, "due"), before);
+    assert!(!p.answer_request(asked[0].1, Some("2026-11-02")));
+    p.run_commands(|| Nothing);
+    let value = |name: &str| {
+        let node = p.host().kernel().node(id(&p, name)).unwrap();
+        node.props.str(PropId::Value).unwrap_or("").to_owned()
+    };
+    assert_eq!(
+        (value("due"), value("day")),
+        ("2026-01-01".into(), "2026-10-16".into())
+    );
+    assert_eq!(says(&p, "its answer is dropped"), 1);
+}

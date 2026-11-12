@@ -119,7 +119,7 @@ impl DataSource for Fixture {
     ) -> Result<Answer, DataError> {
         store.observe_external_read();
         match outcome {
-            Outcome::Message(_) | Outcome::Closed { .. } => {
+            Outcome::Message(_) | Outcome::Messages(_) | Outcome::Closed { .. } => {
                 unreachable!("no stream in this fixture")
             }
             Outcome::Response(r) => Ok(Answer::Now(Value::Number(r.status.into()))),
@@ -286,6 +286,7 @@ fn a_long_poll_round_trips_and_bad_terms_are_refused() {
     w.string("https://example.com/changes");
     pairs(&mut w, &[]);
     bytes(&mut w, &[]);
+    w.u32(0); // no WebSocket protocols
     w.string("since");
     w.string("a.b.c");
     w.u8(0);
@@ -775,9 +776,9 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
 
 #[test]
 fn cache_modes_cross_the_rust_module_seam() {
-    assert_eq!(ABI, 7);
+    assert_eq!(ABI, 8);
     let mut old = header(0).into_vec();
-    old[..4].copy_from_slice(&6u32.to_le_bytes());
+    old[..4].copy_from_slice(&7u32.to_le_bytes());
     assert!(matches!(reader(&old), Err(e) if e == "logic ABI version differs"));
     for word in [
         "unspecified",
@@ -831,4 +832,59 @@ fn cache_modes_cross_the_rust_module_seam() {
             end(&reader).unwrap();
         }
     }
+}
+
+#[test]
+fn socket_protocols_and_selection_cross_the_module_seam() {
+    let request = Request::get("wss://example.test")
+        .protocols(["chat.v2", "chat.v1"])
+        .unwrap();
+    let answer = Answer::stream(request);
+    let mut encoded = Writer::default();
+    encode_result(&mut encoded, Ok(answer.clone()));
+    assert_eq!(
+        read_result(&mut Reader::new(&encoded.into_vec())).unwrap(),
+        Ok(answer)
+    );
+    let message = Outcome::Message(exact_runner::Message {
+        event: "open".into(),
+        protocol: "chat.v1".into(),
+        ..Default::default()
+    });
+    let mut encoded = Writer::default();
+    encode_outcome(&mut encoded, &message);
+    assert_eq!(
+        read_outcome(&mut Reader::new(&encoded.into_vec())).unwrap(),
+        message
+    );
+}
+
+/// A listener (LLP 1133.005) and a byte stream have no encoding at the seam:
+/// each is refused, never sent as a stream to its URL.
+#[test]
+fn a_listener_and_a_byte_stream_are_refused_at_the_module_seam() {
+    let listener = || Request::listen("unix:/tmp/probe.sock", Default::default());
+    let refused = |request: Request| {
+        let mut encoded = Writer::default();
+        encode_result(&mut encoded, Ok(Answer::stream(request)));
+        match read_result(&mut Reader::new(&encoded.into_vec())).unwrap() {
+            Err(DataError::Unavailable(why)) => why,
+            other => panic!("crossed: {other:?}"),
+        }
+    };
+    let listening = "a listener's or a child's socket cannot cross the Rust module seam";
+    assert_eq!(refused(listener()), listening);
+    let unmarked = Request {
+        socket: false,
+        ..listener()
+    };
+    assert_eq!(refused(unmarked), listening);
+    let bytes = Request {
+        bytes: true,
+        ..Request::get("https://example.test/screen.avcc").independent_http(4096)
+    };
+    assert_eq!(
+        refused(bytes),
+        "a byte stream cannot cross the Rust module seam yet"
+    );
 }

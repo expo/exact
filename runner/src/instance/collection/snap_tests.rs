@@ -208,7 +208,13 @@ fn snap_font_relative_and_percentage_offsets_need_mounted_layout() {
         view width=150 height=100 font-size=30 position="relative" {property}="{value}" scroll-snap-align=(n == 200 ? "start" : "none")
 "#
             );
-            let h = Harness::from_parts(contract::compile(&source).unwrap(), vec![]);
+            let mut h = Harness::from_parts(contract::compile(&source).unwrap(), vec![]);
+            h.kernel
+                .compute_layout(
+                    h.snapshot().view,
+                    exact_kernel::Offer::definite(300.0, 300.0),
+                )
+                .unwrap();
             assert_eq!(query(&h, 30020.0), None, "{property}={value}");
         }
     }
@@ -244,6 +250,25 @@ fn snap_equal_distance_keeps_the_smaller_offset() {
 "#;
     let h = Harness::from_parts(contract::compile(source).unwrap(), vec![]);
     assert_eq!(query(&h, 2925.0), Some(2850.0));
+}
+
+#[test]
+fn snap_unmounted_roots_contribute_their_own_area_not_their_descendants() {
+    for overflow in ["hidden", "clip", "auto", "scroll"] {
+        for (align, expected) in [("center", Some(29925.0)), ("none", None)] {
+            let source = format!(
+                r#"component App
+  view
+    list virtualized=true display="flex" width=300 height=100 estimated-item-width=150
+      for n in range(400) key=n
+        view width=150 height=100 overflow-x="{overflow}" overflow-y="{overflow}" scroll-snap-align="{align}"
+          view width=600 height=100 scroll-snap-align="start"
+"#
+            );
+            let h = Harness::from_parts(contract::compile(&source).unwrap(), vec![]);
+            assert_eq!(query(&h, 29930.0), expected, "{overflow}, {align}");
+        }
+    }
 }
 
 #[test]
@@ -318,4 +343,35 @@ fn snap_mounted_distance_bounds_candidates_after_their_style_is_read() {
     assert_eq!(query_bounded(&h, 30020.0, 19.0).0, None);
     assert_eq!(query_bounded(&h, 30020.0, 20.0).0, Some(30000.0));
     assert_eq!(query_bounded(&h, 30000.0, 0.0), (None, 0));
+}
+
+#[test]
+fn snap_vertical_and_center_use_the_axis_insets_and_margins() {
+    for horizontal in [false, true] {
+        let list = if horizontal {
+            "display=\"flex\" width=300 height=100 estimated-item-width=150 padding-left=10"
+        } else {
+            "width=100 height=300 estimated-item-height=150 padding-top=10"
+        };
+        let row = if horizontal {
+            "width=130 height=100 margin-left=10 margin-right=10 left=30"
+        } else {
+            "width=100 height=130 margin-top=10 margin-bottom=10 top=30"
+        };
+        for (align, expected) in [("start", 30050.0), ("center", 29965.0), ("end", 29880.0)] {
+            let source = format!("component App\n  view\n    list virtualized=true {list}\n      for n in range(400) key=n\n        view {row} position=\"relative\" scroll-snap-align=(n == 200 ? \"{align}\" : \"none\")\n");
+            let mut h = Harness::from_parts(contract::compile(&source).unwrap(), vec![]);
+            h.kernel
+                .compute_layout(
+                    h.snapshot().view,
+                    exact_kernel::Offer::definite(300.0, 300.0),
+                )
+                .unwrap();
+            assert_eq!(
+                query(&h, 30020.0),
+                Some(expected),
+                "{align}, horizontal={horizontal}"
+            );
+        }
+    }
 }

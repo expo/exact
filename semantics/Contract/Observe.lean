@@ -154,25 +154,34 @@ def advanceTrace (p : Program) (o : Oracle) (c : Config) (t : F64) : (Config × 
       match due c with
       | .none => finish c
       | .some (tm, i) =>
+        if tm.change && n + 1 < timerFireLimit then ((c, .ok), []) else
         let timers := c.timers.set i tm.fired
-        let c := { c with timers, now := tm.next }
+        let c := { c with timers, now := if tm.change && tm.next < c.now then c.now else tm.next }
         match runAction p o c tm.action [] [] with
         | (c, .ok) =>
-          let (result, ran) := go n c
+          let (result, ran) := if tm.change then ((c, .ok), []) else go n c
           (result, ⟨"task", tm.action, .ok⟩ :: ran)
         | (c, out) => ((c, out), [⟨"task", tm.action, out⟩])
   if t < c.now then ((c, .ok), []) else go timerFireLimit c
 
 /-- Land the armed `then`s and queued sends at the current clock, without timers. -/
 def land (p : Program) (o : Oracle) (c : Config) : (Config × Outcome) × List Ran :=
+  let due (c : Config) : Option (Timer × Nat) :=
+    (c.timers.zipIdx).foldl (fun best (tm, i) =>
+      if tm.change && tm.next ≤ c.now then
+        match best with
+        | .none => some (tm, i)
+        | .some (b, j) => if tm.precedes b then some (tm, i) else some (b, j)
+      else best) none
+  let pick (c : Config) := clockPick p c c.now ((due c).map (·.1.next))
   let rec go : Nat → Config → (Config × Outcome) × List Ran
     | 0, c =>
-      match clockPick p c c.now .none with
+      match pick c with
       | .none => ((c, .ok), [])
       | .some _ => ((c, .refused (.refused "too many timer fires")), [])
     | n + 1, c =>
       if c.poisoned then ((c, .refused (.refused "poisoned")), []) else
-      match clockPick p c c.now .none with
+      match pick c with
       | .some (.next m _) =>
         let c := { c with nexts := c.nexts.filter (·.1 != m) }
         match nextCommit p o c m with
@@ -187,7 +196,14 @@ def land (p : Program) (o : Oracle) (c : Config) : (Config × Outcome) × List R
           let (result, ran) := go n c
           (result, ⟨"then", a, .ok⟩ :: ran)
         | (c, out) => ((c.armNexts p, out), [⟨"then", a, out⟩])
-      | .none => ((c, .ok), [])
+      | .none =>
+        match due c with
+        | .none => ((c, .ok), [])
+        | .some (tm, i) =>
+          if n + 1 < timerFireLimit then ((c, .ok), []) else
+          let c := { c with timers := c.timers.set i tm.fired, now := if tm.change && tm.next < c.now then c.now else tm.next }
+          let (c, out) := runAction p o c tm.action [] []
+          ((c, out), [⟨"task", tm.action, out⟩])
   go timerFireLimit c
 
 /-- A commit's outcome uses the same reasons as the step's. -/
@@ -258,9 +274,16 @@ def dispatchAt (p : Program) (o : Oracle) (c : Config) (target event : String)
       | (c₂, .ok) => (c₂, o₁)
       | (c₂, o₂) => (c₂, o₂)
 
+/-- What typing into `target` dispatches: `input` where the element has an
+`input` handler, else `change`, as the hosts and `CompSem.cstep` deliver it. -/
+def typed (c : Config) (target : String) : String :=
+  if ((findTestId target c.view).map fun n => n.handlers.any (·.1 == "input")).getD false then
+    "input"
+  else "change"
+
 def step (p : Program) (o : Oracle) (c : Config) : Event → Config × Outcome
   | .tap t => dispatchAt p o c t "press" .none
-  | .change t s => dispatchAt p o c t "change" (.some (.str s))
+  | .change t s => dispatchAt p o c t (typed c t) (.some (.str s))
   | .clock ms => advance p o c (c.now + ms)
   | .other t e v => dispatchAt p o c t e v
 
@@ -279,7 +302,7 @@ def dispatchAtTrace (p : Program) (o : Oracle) (c : Config) (target event : Stri
 
 def stepTrace (p : Program) (o : Oracle) (c : Config) : Event → (Config × Outcome) × List Ran
   | .tap t => dispatchAtTrace p o c t "press" .none
-  | .change t s => dispatchAtTrace p o c t "change" (.some (.str s))
+  | .change t s => dispatchAtTrace p o c t (typed c t) (.some (.str s))
   | .clock ms => advanceTrace p o c (c.now + ms)
   | .other t e v => dispatchAtTrace p o c t e v
 
@@ -333,6 +356,30 @@ def checkedLines (p : Program) (label : String) (result twin : Config × Outcome
 #guard let c : Config := { (default : Config) with now := F64.ofBits 0x7ff8000000000000 }
   !(checkedLines default "land" (c, .ok) (c, .ok) 0 []).contains "trace disagrees"
 
+/-- An `input` whose handlers are `events`, each calling the action of its name. -/
+private def typingProgram (events : List String) : Program :=
+  { states := [{ name := "text", ty := .string, init := .str "" }],
+    actions := [
+      { name := "input", params := [("value", .string)],
+        body := [.assign "text" (.var "value")] },
+      { name := "change", params := [("value", .string)],
+        body := [.assign "text" (.str "changed")] }],
+    view := [.element "column" [] [] [] [
+      .element "input" [] [("testId", .str "field")]
+        (events.map fun e => (e, e, [])) []]] }
+
+-- Typing reaches an `input` handler first and a `change` handler without one,
+-- in `step` (what LowerCheck replays) and its traced twin alike.
+#guard [(["input"], "typed"), (["change"], "changed"), (["change", "input"], "typed")].all
+  fun (handlers, expected) =>
+    let p := typingProgram handlers
+    let (c, _) := boot p {}
+    let holds (r : Config × Outcome) := match r with
+      | (c, .ok) => (lookup "text" c.slots).any (Value.same (.str expected))
+      | _ => false
+    holds (step p {} c (.change "field" "typed"))
+      && holds (stepTrace p {} c (.change "field" "typed")).1
+
 /-- Boot, then every script event. The originals own the state and outcome;
 a traced twin that disagrees replaces the configuration with a failing line. -/
 def runScript (p : Program) (o : Oracle) (events : List ScriptEvent) : List String := Id.run do
@@ -345,15 +392,9 @@ def runScript (p : Program) (o : Oracle) (events : List ScriptEvent) : List Stri
   for e in events do
     let before := c.commands.length
     let (label, result, twin, ran) := match e.event with
-      | .some authored =>
-        let ev := match authored with
-          | .change target text =>
-            if ((findTestId target c.view).map fun n => n.handlers.any (·.1 == "input")).getD false then
-              .other target "input" (.some (.str text))
-            else authored
-          | _ => authored
+      | .some ev =>
         let (twin, ran) := stepTrace p o c ev
-        (authored.label, step p o c ev, twin, ran)
+        (ev.label, step p o c ev, twin, ran)
       | .none =>
         let (result, ran) := land p o c
         (e.label, result, result, ran)

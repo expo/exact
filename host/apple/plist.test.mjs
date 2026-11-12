@@ -111,6 +111,8 @@ test('an app that grants no device still gets its packages\' keys and dictionari
   withApp('import { requestPreciseLocation } from "@exact/geolocation";\nrequestPreciseLocation({ purposeKey: "nav" });\n', ['geolocation'], (app) => {
     assert.match(flat(infoPlist(app, false, { reach: modulePlist(app, null, 'ios', { geolocation: '@exact/geolocation' }) })),
       /<key>NSLocationTemporaryUsageDescriptionDictionary<\/key><dict><key>nav<\/key><string>Turn-by-turn directions need your precise location.<\/string><\/dict>/);
+    writeFileSync(resolve(app.dir, 'strings/en.json'), JSON.stringify({ nav: '  ' }));
+    assert.throws(() => modulePlist(app, null, 'ios', { geolocation: '@exact/geolocation' }), /names "nav", which strings\/en.json lacks or leaves blank/);
   });
 });
 

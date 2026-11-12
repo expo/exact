@@ -587,3 +587,88 @@ fn a_gradient_read_through_its_captured_values_resolves_as_through_the_table() {
         );
     }
 }
+
+/// A component missing at one end of a segment is the other end's along the
+/// whole segment, its end included (CSS Color 4 §12.4), and a stop with one
+/// is two colours where two segments meet; missing from both, it is 0.
+#[test]
+fn a_missing_component_is_the_other_ends_along_the_whole_segment() {
+    let ramp = |css: &str| parse(css).interpolated(false).unwrap();
+    for (_, c, a) in ramp("linear-gradient(in srgb, color(srgb none 0 0), color(srgb 1 0 0))") {
+        assert_eq!((c, a), ([1.0, 0.0, 0.0], 1.0), "no fade from black");
+    }
+    for (_, _, a) in
+        ramp("linear-gradient(in srgb, color(srgb 1 0 0 / none), color(srgb 0 0 1 / 0.5))")
+    {
+        assert!((a - 0.5).abs() < 1e-12, "{a}");
+    }
+    // Red, then a red-less stop between red and blue: red up to it, black after.
+    let r = ramp(
+        "linear-gradient(in srgb, color(srgb 1 0 0), color(srgb none 0 0) 50%, color(srgb 0 0 1))",
+    );
+    let at_half: Vec<[f64; 3]> = r.iter().filter(|s| s.0 == 0.5).map(|s| s.1).collect();
+    assert_eq!(at_half, [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]]);
+    assert!(r
+        .iter()
+        .filter(|s| s.0 < 0.5)
+        .all(|s| s.1 == [1.0, 0.0, 0.0]));
+    // An inset end stop extends the colour it has in the segment it ends,
+    // not its `none` as 0: each of these is solid red (CSS Images 4 §3.5.2).
+    // Chrome 157 draws the first fading from black over 0–25%, which is not
+    // the first stop's colour.
+    for css in [
+        "linear-gradient(in srgb, color(srgb none 0 0) 25%, red 100%)",
+        "linear-gradient(in srgb, red 0%, color(srgb none 0 0) 75%)",
+        "linear-gradient(in srgb, color(srgb none 0 0) 25%, red 75%)",
+    ] {
+        let r = ramp(css);
+        assert_eq!((r[0].0, r[r.len() - 1].0), (0.0, 1.0), "{css}");
+        for (at, c, a) in r {
+            assert_eq!((c, a), ([1.0, 0.0, 0.0], 1.0), "{css} at {at}");
+        }
+    }
+    // Missing from both ends: 0, not what a conversion made of it.
+    for (_, c, _) in
+        ramp("linear-gradient(in display-p3, color(srgb none 1 0), color(display-p3 none 0 1))")
+    {
+        let p3 = exact_color::MixSpace::DisplayP3.from_linear_srgb(c);
+        assert!(p3[0].abs() < 1e-9, "{p3:?}");
+    }
+}
+
+/// `rgb()`, `hsl()` and `hwb()` stops interpolate as written: a gray's hsl
+/// hue is its own, a `none` takes the other end's (legacy colours in sRGB),
+/// and the text reads back the same gradient. Chrome 156: `color-mix(in hsl,
+/// hsl(30 0% 50%), hsl(120 50% 50%))` is `color(srgb 0.5625 0.625 0.375)`.
+#[test]
+fn legacy_stops_interpolate_as_written() {
+    let g = parse("linear-gradient(in hsl, hsl(30 0% 50%), hsl(120 50% 50%))");
+    let mid = g.interpolated(false).unwrap()[8].1;
+    let srgb = exact_color::MixSpace::Srgb.from_linear_srgb(mid);
+    for (got, want) in srgb.iter().zip([0.5625, 0.625, 0.375]) {
+        assert!((got - want).abs() < 1e-6, "{srgb:?}");
+    }
+    assert!(g.css().contains("hsl(30 0% 50%)"), "{}", g.css());
+    assert_eq!(&parse(&g.css()), &g, "the text round-trips");
+    let none = parse("linear-gradient(rgb(none 0 0), white)");
+    assert_eq!(
+        none.interpolation(false).map(|i| i.space),
+        Some(exact_color::MixSpace::Srgb)
+    );
+    let ramp = none.interpolated(false).unwrap();
+    assert_eq!(ramp[0].1, [1.0, 0.0, 0.0]);
+    // So are a `light-dark()`'s halves, in either appearance: solid red, as
+    // Chrome 157 draws it, not a fade from black.
+    let pair = parse("linear-gradient(in srgb, light-dark(rgb(none 0 0), rgb(none 0 0)), red)");
+    assert!(pair.css().contains("rgb(none 0 0)"), "{}", pair.css());
+    for dark in [false, true] {
+        for (at, c, _) in pair.interpolated(dark).unwrap() {
+            assert_eq!(c, [1.0, 0.0, 0.0], "dark {dark} at {at}");
+        }
+    }
+    // Its bytes are all a hex or a whole rgb() says: unsampled, as before.
+    assert_eq!(
+        parse("linear-gradient(rgb(255 0 0), #00f)").interpolation(false),
+        None
+    );
+}

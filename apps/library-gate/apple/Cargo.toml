@@ -1,0 +1,26 @@
+[package]
+name = "library-gate-apple"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Library gate on Apple platforms: its library component fixture"
+publish = false
+build = "build.rs"
+
+[lib]
+name = "library_gate_apple"
+crate-type = ["rlib"]
+test = false
+bench = false
+
+[dependencies]
+ibex2-sqlite = { path = "../../../vendor/ibex/crates/ibex2-sqlite" }
+exact-logic = { path = "../../../logic" }
+exact-apple = { path = "../../../host/apple" }
+exact-apple-update = { path = "../../../host/apple-update" }
+library-gate-data = { path = "../data" }
+
+[build-dependencies]
+contract = { path = "../../../contract/cli" }
+exact-bake = { path = "../../../bake" }
+library-gate-data = { path = "../data" }

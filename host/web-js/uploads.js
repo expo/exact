@@ -56,12 +56,14 @@ export function uploadAnswer(r, mark, a, { take, fails, release }) {
   }
   return r.value;
 }
-/** `reply`'s callbacks for resource `r`'s ticket `t` (rt.js `res`), the answer's `f` and the failure's `gone`, as given;
- * for an upload, its mark is made now and they keep how it ended. */
+/** `reply`'s callbacks for resource `r`'s ticket `t` (rt.js `res`), the answer's `f` and the failure's `gone`; for an
+ * upload they keep how it ended. Its mark is made now, or, for an answer that opens its upload in a later turn
+ * (ts-data.js `late`), when it does (`t.uploading`). */
 function ends(r, t, f, next, gone) {
-  if (!t.upload) return [f, next, gone];
-  uploadSent(r, t.args, t);
-  return [(p, o) => { f(p, o); if (!o.more) uploadEnded(r, t, { v: p.v }); }, next, (error, code, reason) => { uploadEnded(r, t, { failed: [error, code, reason] }); gone(error, code, reason); }];
+  const marked = () => uploadSent(r, t.args, t);
+  if (t.upload) marked(); else t.uploading = marked;
+  return [(p, o) => { f(p, o); if (t.upload && !o.more) uploadEnded(r, t, { v: p.v }); }, next,
+    (error, code, reason) => { if (t.upload) uploadEnded(r, t, { failed: [error, code, reason] }); gone(error, code, reason); }];
 }
 /** What rt.js's `data.uploads` is once a TypeScript source is installed. */
 export const ledger = {

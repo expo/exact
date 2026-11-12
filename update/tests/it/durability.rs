@@ -69,8 +69,8 @@ fn colliding_or_unportable_asset_names_are_refused_before_download() {
         assert!(refusal.contains(why), "{names:?}: {refusal}");
         assert_eq!(
             origin.asked.len(),
-            1,
-            "{names:?}: only the head was fetched"
+            2,
+            "{names:?}: only the head and its asset index were fetched"
         );
         assert!(entry_names(&temp).is_empty());
     }
@@ -171,6 +171,44 @@ fn a_crash_truncated_record_keeps_the_rollback_floor() {
             serde_json::from_slice(&std::fs::read(&record).unwrap()).unwrap();
         assert_eq!(written["stream"]["seq"], 6);
         assert!(Origin::of(&six).check(&mut store).is_ok());
+    }
+}
+
+/// The floor comes from the signed head alone: an entry whose asset index
+/// was lost or damaged still says which seq was accepted when the record
+/// must be recovered too.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Windows durable store is not qualified (LLP 1026 D11a)"
+)]
+fn a_damaged_asset_index_keeps_the_rollback_floor() {
+    let temp = Temp::new("index-floor");
+    let four = Bundle::new(4, b"plan four").asset("mark.png", b"four");
+    let six = Bundle::new(6, b"plan six").asset("mark.png", b"six");
+    let mut store = open(&temp);
+    let Check::Staged { entry, .. } = Origin::of(&six).check(&mut store).unwrap() else {
+        panic!("stage");
+    };
+    drop(store);
+    let index = temp.path().join("entries").join(&entry).join("assets.json");
+    let record = temp.path().join("record.json");
+    for damage in ["remove", "corrupt"] {
+        // The index is a link to its blob: replaced, not written through.
+        std::fs::remove_file(&index).unwrap();
+        if damage == "corrupt" {
+            std::fs::write(&index, b"{\"assets\":[]}").unwrap();
+        }
+        std::fs::write(&record, b"").unwrap();
+        let mut store = open(&temp);
+        let refusal = Origin::of(&four).check(&mut store).unwrap_err();
+        assert!(
+            refusal.contains("below the accepted seq 6"),
+            "{damage}: {refusal}"
+        );
+        // Staging the accepted head again restores the entry whole.
+        assert!(Origin::of(&six).check(&mut store).is_ok(), "{damage}");
+        assert_eq!(std::fs::read(&index).unwrap(), six.index(), "{damage}");
     }
 }
 
@@ -401,4 +439,59 @@ fn a_current_witness_can_later_supply_a_binary_with_different_embedded_bytes() {
         &*prepared.assets.resolve("mark.png").unwrap().unwrap(),
         b"mark"
     );
+}
+
+/// Assets staged through the index (issue #91): the head stays a pointer
+/// card whatever the count (`envelope.rs` parses an index of 600), the index
+/// it names is staged in the entry beside the assets, and an entry whose
+/// index rotted on disk is refused at launch rather than read as an app with
+/// no assets. A hundred keeps the durable writes quick.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Windows durable store is not qualified (LLP 1026 D11a)"
+)]
+fn assets_stage_through_the_index_and_a_rotten_index_refuses_the_entry() {
+    let temp = Temp::new("index");
+    let mut bundle = Bundle::new(4, b"plan four");
+    for n in 0..100 {
+        bundle = bundle.asset(
+            &format!("textures/die-{n}.png"),
+            format!("die {n}").as_bytes(),
+        );
+    }
+    let (head, _) = bundle.publish();
+    assert!(head.len() < 1024, "the head is {} bytes", head.len());
+    let mut origin = Origin::of(&bundle);
+    let mut store = open(&temp);
+    let Check::Staged { entry, .. } = origin.check(&mut store).unwrap() else {
+        panic!("stage");
+    };
+    assert_eq!(origin.asked.len(), 103, "head, index, plan, every asset");
+    let dir = temp.path().join("entries").join(&entry);
+    assert_eq!(
+        std::fs::read(dir.join("assets.json")).unwrap(),
+        bundle.index()
+    );
+    assert_eq!(
+        std::fs::read(dir.join("assets/textures/die-99.png")).unwrap(),
+        b"die 99"
+    );
+    drop(store);
+    let mut store = open(&temp);
+    assert_eq!(store.select().entry, Some(entry.clone()));
+    let prepared = store.prepare_selected().unwrap().unwrap();
+    assert_eq!(prepared.assets.names().len(), 100);
+    drop(prepared);
+    drop(store);
+
+    // The index is a link to its blob: replaced, not written through.
+    std::fs::remove_file(dir.join("assets.json")).unwrap();
+    std::fs::write(dir.join("assets.json"), b"{\"assets\":[]}").unwrap();
+    let mut store = open(&temp);
+    assert_eq!(store.select().entry, None);
+    let lower = Origin::of(&Bundle::new(3, b"plan three"))
+        .check(&mut store)
+        .unwrap_err();
+    assert!(lower.contains("below the accepted seq 4"), "{lower}");
 }

@@ -2,6 +2,7 @@
 use super::{control, look, rgba, Painter, Rect4, Shape};
 use crate::text::{Paragraph, TextEngine};
 use exact_kernel::generated::metric;
+use exact_kernel::style::relative::{text_style, text_style_size, MEDIUM};
 use exact_kernel::{
     AxisOffer, ButtonFaceStyle, ButtonImagePlacement, ButtonMeasure, ButtonMeasureRequest,
     ControlCornerStyle, ControlSize, Dimension, NodeRef, PropId, StyleId, StyleProps, TextAlign,
@@ -26,9 +27,8 @@ fn active_background(node: &NodeRef<'_>, dark: bool, down: bool) -> Option<[u8; 
 
 /// The neutral look's button type (LLP 1115.000 D17), as the page's sheet
 /// sets it: the size the button inherits, or the one its `controlSize`
-/// names (what a page writes for it at a 16 px root: the subheadline's 14
-/// for mini and small, the body's 16 for medium, 18 for large), at weight
-/// 500 on a line 1.25 of it. A size or weight the author wrote is theirs.
+/// names in rem (LLP 1069.011.001 D8), at weight 500 on a line 1.25 of it.
+/// A size or weight the author wrote is theirs.
 fn neutral_typography(style: &StyleProps, size: Option<f32>) -> StyleProps {
     let mut out = style.clone();
     out.font_family = 0;
@@ -170,15 +170,19 @@ pub(super) fn face_layout(
     };
     let declared = |s: &StyleProps, id| s.mask.union(s.written).has(id);
     let scale = control_scale(rows.button.control_size);
-    let said_size =
-        rows.button
-            .mask
-            .has(StyleId::ControlSize)
-            .then_some(match rows.button.control_size {
-                ControlSize::Mini | ControlSize::Small => 14.0,
-                ControlSize::Medium => 16.0,
-                ControlSize::Large => 18.0,
-            });
+    let said_size = rows.button.mask.has(StyleId::ControlSize).then(|| {
+        let style = match rows.button.control_size {
+            ControlSize::Mini | ControlSize::Small => "-exact-subheadline",
+            ControlSize::Medium | ControlSize::Large => "-exact-body",
+        };
+        let rem = text_style_size(text_style(style).expect("schema text style"), MEDIUM) / MEDIUM;
+        rem * rows.root_font_size
+            * if rows.button.control_size == ControlSize::Large {
+                18.0 / 16.0
+            } else {
+                1.0
+            }
+    });
     let type_of = |s: &StyleProps| {
         if filled || segment {
             material_typography(s, scale)
@@ -217,6 +221,9 @@ pub(super) fn face_layout(
     }
     if !symbol_style.mask.has(StyleId::FontWeight) {
         symbol_style.font_weight = title_style.font_weight;
+    }
+    if let Some((_, size)) = rows.neutral_bar_symbol {
+        symbol_style.font_size = size;
     }
     let mut column = matches!(
         face.placement,
@@ -433,10 +440,11 @@ pub(super) fn face_layout(
         .max(subtitle.as_ref().map_or(0.0, |p| p.width));
     let tw = room.filter(|w| *w > 0.0).unwrap_or(extent);
     let th = title.as_ref().map_or(0.0, |p| p.height) + subtitle.as_ref().map_or(0.0, |p| p.height);
+    let symbol_space = rows.neutral_bar_symbol.map_or(symbol, |(body, _)| body);
     let (w, h) = if column {
-        (tw.max(symbol), th + symbol + gap)
+        (tw.max(symbol_space), th + symbol_space + gap)
     } else {
-        (tw + symbol + gap, th.max(symbol))
+        (tw + symbol_space + gap, th.max(symbol_space))
     };
     let w = w + check;
     FaceLayout {
@@ -881,7 +889,9 @@ impl Painter {
         let room = check.unwrap_or(0.0);
         // The content (a line, or a stack in a column) and the check beside
         // it, in one horizontal line.
-        let (stack, ch) = if layout.column {
+        let (stack, ch) = if let Some((body, _)) = rows.neutral_bar_symbol {
+            (body, body)
+        } else if layout.column {
             (
                 layout.text.0.max(layout.symbol),
                 layout.text.1 + layout.symbol + layout.gap,
@@ -955,6 +965,12 @@ impl Painter {
                 },
                 by + (ch - layout.symbol) / 2.0,
             )
+        };
+        let (sx, sy) = if let Some((body, _)) = rows.neutral_bar_symbol {
+            let margin = (body - layout.symbol) / 2.0;
+            (bx + margin, by + margin)
+        } else {
+            (sx, sy)
         };
         let fade_face =
             neutral && look == "text" && !disabled && !menu_row && self.presses(node.id);
@@ -1089,6 +1105,8 @@ mod tests {
                 ..Default::default()
             },
             style: ButtonFaceStyle {
+                root_font_size: 16.0,
+                neutral_bar_symbol: None,
                 neutral_tab_root: None,
                 neutral_role_floor: false,
                 title: StyleProps::default(),

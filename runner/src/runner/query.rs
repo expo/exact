@@ -99,12 +99,26 @@ impl<D: DataSource> Runner<D> {
                 .map(Answer::Now)
                 .map_err(|error| RunnerError::Data { resource, error });
         }
-        if source == crate::surface_record::SOURCE {
+        if matches!(
+            source.as_str(),
+            crate::surface_record::SOURCE | crate::canvas_performance::SOURCE
+        ) {
             let answer = self.links.surface_answer.ok_or_else(|| RunnerError::Data {
                 resource: resource.clone(),
                 error: DataError::Unavailable("this host links no surfaces".into()),
             })?;
-            return answer(&self.plan, &self.surface_records, i)
+            let records = if source == crate::canvas_performance::SOURCE {
+                crate::canvas_performance::validate(&self.plan, self.resource_row(i).ty).map_err(
+                    |error| RunnerError::Data {
+                        resource: resource.clone(),
+                        error: DataError::Unavailable(error),
+                    },
+                )?;
+                &self.canvas_performance
+            } else {
+                &self.surface_records
+            };
+            return answer(&self.plan, records, i)
                 .map(Answer::Now)
                 .map_err(|error| RunnerError::Data { resource, error });
         }

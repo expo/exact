@@ -433,7 +433,7 @@ theorem observe_step_sound {p : Program} (hcheck : check p = true) {c : Config}
   have hstep : Reachable p (Observe.step p o c e).1 ∧ OutcomeOK (Observe.step p o c e).2 := by
     cases e with
     | tap t => exact at_ t "press" .none
-    | change t s => exact at_ t "change" (.some (.str s))
+    | change t s => exact at_ t (Observe.typed c t) (.some (.str s))
     | clock ms => exact one (.advance (c.now + ms)) h
     | other t ev v => exact at_ t ev v
   exact ⟨hstep.1, reachable_configOK hp hstep.1, hstep.2⟩

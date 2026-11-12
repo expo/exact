@@ -118,8 +118,9 @@ Top-level declarations start in column 1. Use spaces for indentation; two spaces
 per level is the formatter's style. Blank lines and `//` comments are ignored.
 There are no semicolons or braces around declaration bodies.
 
-The top-level forms are `component`, `shape`, `fn`, `style`, `keyframes`, `font`,
-`routes`, `use`, and `test`. A file can contain multiple declarations. Used files
+The top-level forms are `component`, `shape`, `fn`, `style`, `decoration`, `atom`,
+`keyframes`, `timeline`, `font`, `sound`, `theme`, `color-profile`, `routes`,
+`members`, `use`, and `test`. A file can contain multiple declarations. Used files
 may supply reusable declarations; the importing file's first component remains
 its root.
 
@@ -178,9 +179,9 @@ subtraction. `x-1` is still subtraction, but spaces make the intention clearer.
 | Empty list | `[]`, with its element type determined by context |
 
 Use ordinary decimal numbers, double-quoted strings, and backtick templates.
-Single-quoted strings, exponent notation, digit separators, `null`, and
-`undefined` are not the language's literal forms. Strings and template text
-accept the escapes `\n`, `\t`, `\"`, `\\`, ``\` `` and `\$`, and a Unicode code
+Exponent notation is a number (`1e3` is 1000). Single-quoted strings, digit
+separators, `null`, and `undefined` are not the language's literal forms.
+Strings and template text accept the escapes `\n`, `\t`, `\"`, `\\`, ``\` `` and `\$`, and a Unicode code
 point as JavaScript writes it, `\u{2011}` or `\u2011`. Templates can contain
 expressions, quoted strings, and nested templates. Keep an individual string or template on one
 source line.
@@ -250,9 +251,8 @@ derive caption = match selected {
 The `some` branch's binding exists only in that branch. Both arms are required.
 A state initialized to `none` needs enough information elsewhere, usually an
 action's assignment of `some(...)`, to infer the element type, or a declared
-type (`state picked: option<Item> = none`). Actions and the
-view see that type, but derives are typed first: match such a state in the view,
-not in a derive. Similarly, `[]` needs an inferable list element type. A list
+type (`state picked: option<Item> = none`). Actions, derives and the view all see
+that type. Similarly, `[]` needs an inferable list element type. A list
 literal such as `[1, 2]` holds its items, which share one type; a list the screen
 keeps for the session (a selection, open ids) is built in Contract, and a list the
 app keeps across launches comes from the data module.
@@ -315,9 +315,9 @@ blocks. They have no loops, `return`, or `await`. An action calls another action
 of its component, an `action` prop or an injected action as a statement:
 `arrive(path)` runs `arrive`'s statements right there, in the same commit, and
 they too read the state the action started with. So a helper does not see what
-its caller assigned before the call; the compiler refuses such a read and asks
-for the value to be passed (`arrive(next)`). A name that is a host command, such
-as `focus`, stays the command, and calling an action, prop or inject that
+its caller assigned before the call; the compiler warns of such a read
+(`analyze-read-after-assign`) and asks for the value to be passed
+(`arrive(next)`). A name that is a host command, such as `focus`, stays the command, and calling an action, prop or inject that
 shares a host command's name is refused: rename it. A call returns nothing: share calculations through
 `fn`. The compiler infers the state an action writes, through its calls. Do not
 write a `writes` clause.
@@ -350,8 +350,9 @@ component CountLabel
 ```
 
 Functions have no effects, cannot recursively call themselves or form cycles, and
-do not capture component state (they can read `performanceNow()`). Pass values as parameters. Standard-function names
-are reserved against redefinition. See the grammar reference for the complete
+do not capture component state (they can read `performanceNow()`). Pass values as
+parameters. A `fn` with a standard function's name shadows it in free calls
+(`round(1.5)` calls the app's `fn round`). See the grammar reference for the complete
 [standard-function list](contract-grammar.md#standard-functions-and-intrinsics).
 
 The web's string and array methods are written as methods, with their web names
@@ -462,7 +463,7 @@ as in CSS: `scroll-padding-top` the height of that header brings a row to just
 below it, and the first row to the very top. On iOS the row also lands clear of
 the bars UIKit draws the list under (a header, or a composer it lifts into a
 bar), as `scrollToItem(at:at:animated:)` does: `block="end"` puts the newest
-message just above the composer. Other elements refuse it.
+message just above the composer. Any other scroll container takes it too.
 Virtualized lists nest one level deep (an inner vertical list needs a literal
 `height` or `max-height`); deeper nesting, masonry, wrapping, reversed lists, and
 RTL horizontal collections are not supported.
@@ -1085,10 +1086,12 @@ data table and a `dl` as a list, its rows and cells with no role of their
 own. A drawn range —
 `role="progressbar"`, `"slider"`, `"meter"`, `"scrollbar"` or `"spinbutton"` —
 takes `aria-valuenow`, `aria-valuemin` and `aria-valuemax` (numbers; ARIA's 0
-and 100 where a bound is unsaid) and `aria-valuetext`: it is one element, its
-children unread, and its value is the platform's (UIKit's `accessibilityValue`
-as a percentage, "30%", or the text; AppKit's value, minimum and maximum, the
-text its description). A `progress` or `input type="range"` says its own value.
+and 100 where a bound is unsaid, and none for a `spinbutton`) and
+`aria-valuetext`: it is one element, its children unread, and its value is the
+platform's (UIKit's `accessibilityValue` as a percentage, "30%", a
+`spinbutton`'s as its number, "3", or the text; AppKit's value, minimum and
+maximum, the text its description). A `progress` or `input type="range"` says
+its own value.
 Leave font sizes, colours and control metrics unsaid and the platform supplies them;
 what you set on a node wins.
 
@@ -1201,7 +1204,7 @@ scrolling, and delivery commands. Commands are distinct from pure functions:
 `openURL` does not return a Contract value, and a `fn` cannot issue it; to hear
 whether the URL opened, name an element, `openURL(url, "opened")`, whose `change`
 hears `opened` or `failed`. The compiler does not check most commands'
-arguments, and hosts differ: headless Linux carries neither `focus` nor
+arguments, and hosts differ: headless Linux does not carry
 `openURL`. Check the host you target.
 
 A file `input` with no `accept`, an empty `accept`, or `accept="*/*"` offers any
@@ -1416,9 +1419,15 @@ nothing from it. On iOS every viewport unit (`vw`, `vh`, `vmin`, `vmax` and thei
 smaller and larger side), as CSS's `vh` is the viewport's and never a
 dialog's, so `height: 50vh` is half the screen at any sheet height
 and `min-height: 100vh` opens the sheet at its tallest. A route that scrolls itself is measured by what it scrolls,
-laid out in the sheet, so give its rows `flex-shrink: 0`. macOS, the web and
-Linux show a modal route as authored and ignore the detent
-(LLP 1075.003 §9.11).
+laid out in the sheet, so give its rows `flex-shrink: 0`. On a window narrower
+than 900 pixels the web's sheet opens at the height iOS opens it at, its foot on
+the window's, and stays there: it has no grabber and is not dragged between
+heights. A route pushed inside it stays in it at that height, as in UIKit's
+sheet. It is the tallest sheet in a window under 480 pixels tall (UIKit's compact
+height), and on a touch screen while a text field in it has the focus, as UIKit
+raises a sheet over the keyboard. A wider window shows the card it always does.
+macOS and Linux show a modal route as authored and ignore the detent
+(LLP 1075.003 §9.11, LLP 1115.000 D4.8).
 
 `path("item", value)` checks the route and encodes its parameters. Always build
 locations with it: a template literal as a location is refused and a string
@@ -1548,8 +1557,8 @@ and [Spark](../apps/spark/app.contract) for complete bindings.
 
 `frame("id")` reads the last laid-out border box where the viewer sees it, as
 `getBoundingClientRect` does: in the viewport, every scroll offset above it
-applied (the page's too), but without transforms. `measure("id")` asks for its
-height-auto layout, at the same origin, under its
+applied (the page's too), and every transform, its own and its ancestors'.
+`measure("id")` asks for its height-auto layout, at the same origin, under its
 current offer; its id is literal. Both are action-only and return `Geometry`,
 including `unavailable` and `provisional`; handle those flags rather than assuming
 layout already happened. Geometry reads are not reactive view expressions.
@@ -1642,7 +1651,12 @@ such as `t("greeting", name=person.name)`, with `{name}` in the table value. The
 key must be a literal; keys and placeholder names are checked at compilation. The
 base table is `en` unless `app.json` sets `strings.base`, and a translation may
 omit keys but not add them. The locale comes from the host; lookup falls back from
-the exact tag to shorter tags, then to the base. See
+the exact tag to shorter tags, then to the base. An app's own language setting
+calls `setLocale("de")` in its action, and `setLocale("")` for "System": the
+choice stands over the host's locale, is kept across launches, and applies before
+the next launch's first frame, so the setting needs no mount task.
+`exactTime().resolvedLocale` follows it; `locale` and `formatLocale` stay the
+device's. See
 [the locale fixture](../host/web-js/conformance/locale) and
 [the string tests](../contract/cli/tests/it/strings.rs).
 

@@ -37,7 +37,8 @@ const RUNNER_ROWS: [&str; 6] = [
 /// The rows `:hover` and `:focus-visible` take. Their `color` reaches the
 /// subtree as the node's own does (a descendant that writes its own keeps
 /// it); the web and Apple show it, and Linux's looks paint the box only.
-const HOST_ROWS: [&str; 5] = [
+const HOST_ROWS: [&str; 6] = [
+    "scale",
     "background-color",
     "color",
     "border-color",

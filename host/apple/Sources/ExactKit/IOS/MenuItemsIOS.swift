@@ -3,7 +3,7 @@ import UIKit
 
 extension MenuHost {
     func rejectActiveMenuProperties(in pop: NodeView) {
-        for case let row as NodeView in pop.container.subviews where row.props["contextPreview"] != "true" && row.props["popover"] == nil {
+        for row in pop.menuRowsThroughSections {
             row.rejectNativeActiveProperties(on: "UIAction")
         }
     }
@@ -12,40 +12,41 @@ extension MenuHost {
     }
     /// The menu grammar, extracted (LLP 1021 D3): button rows become
     /// actions, a row that opens another menu its submenu (§5,
-    /// "Submenus"); any other row is a section boundary. A row's action
+    /// "Submenus"), a `role="group"` row an inline section of its own rows
+    /// titled by its `aria-label`; any other row is a section boundary. A row's action
     /// presses it, then presents the confirmation or dialog it opens, or any other popover as
     /// if by `opener`, the menu's own invoker (exact2's menu rule, LLP 1021: the menu closing
     /// doesn't take it along). `path` holds the popovers above `pop`, whose rows opened it.
     func items(of pop: NodeView, path: [NodeView] = [], opener: NodeView? = nil) -> [UIMenuElement] {
-        var sections: [[UIMenuElement]] = [[]]
+        var sections: [(title: String?, items: [UIMenuElement])] = [(nil, [])]
         // Under the agent, what UIKit was given, in order (`given`).
-        var rows: [GivenRow] = []
-        defer { if ExactEnv.agentMode { given[pop.id] = rows } }
-        if ExactEnv.agentMode {
+        var rows: [GivenRow] = [], headers: Set<String> = []
+        defer { if recordsGiven { given[pop.id] = rows; givenHeaders[pop.id] = headers } }
+        if recordsGiven {
             if path.isEmpty { presentedMenu = [:] }
             presentedMenu[pop.id] = pop.incarnation
         }
-        for case let row as NodeView in pop.container.subviews {
-            if row.props["contextPreview"] == "true" { continue }
-            if row.props["popover"] != nil { continue }
+        // The item `row` is, appended to the last section; false for no item.
+        func add(_ row: NodeView) -> Bool {
             row.rejectNativeActiveProperties(on: "UIAction")
             let face = label(of: row)
             if let children = submenu(of: row, path: path + [pop], opener: opener) {
-                // UIMenu has no disabled state: a disabled opener is a dimmed action.
-                let element: UIMenuElement = row.props["disabled"] == "true"
+                // UIMenu has no disabled state: a disabled or inert opener is a dimmed action.
+                let element: UIMenuElement = row.disabled || row.authoredInert
                     ? UIAction(title: face.title, image: image(of: row), attributes: .disabled) { _ in }
                     : UIMenu(title: face.title, image: image(of: row), children: children)
                 element.subtitle = face.subtitle
-                sections[sections.count - 1].append(element)
+                sections[sections.count - 1].items.append(element)
                 rows.append(GivenRow(row, title: element.title, subtitle: element.subtitle))
+                return true
             } else if row.handlers.contains("press") || opensConfirmation(row) || presenter?.invocation(of: row).map({ $0.opens && $0.target.props["accessibilityRole"] != "menu" }) == true {
                 let id = row.id, token = row.incarnation
                 let image = image(of: row)
                 let action = UIAction(title: face.title, image: image) { [weak self] action in
                     // The row this menu showed, not a recycled view's next node,
-                    // and still enabled: a disabled button does nothing (HTML)
+                    // and still enabled: a disabled or inert button does nothing (HTML)
                     func current() -> NodeView? {
-                        guard let row = self?.presenter?.views[id], row.incarnation == token, !row.disabled else { return nil }
+                        guard let row = self?.presenter?.views[id], row.incarnation == token, !row.disabled, !row.authoredInert else { return nil }
                         return row
                     }
                     guard let self, let presenter = self.presenter, let row = current() else { return }
@@ -72,17 +73,28 @@ extension MenuHost {
                 }
                 action.subtitle = face.subtitle
                 if row.props["accessibilityChecked"] == "true" { action.state = .on }
-                if row.props["disabled"] == "true" { action.attributes.insert(.disabled) }
+                // As the Mac's menu and iOS's alert have it: an inert row is shown, never chosen.
+                if row.disabled || row.authoredInert { action.attributes.insert(.disabled) }
                 if row.props["destructive"] == "true" { action.attributes.insert(.destructive) }
-                sections[sections.count - 1].append(action)
+                sections[sections.count - 1].items.append(action)
                 rows.append(GivenRow(row, title: action.title, subtitle: action.subtitle))
-            } else if !(sections.last?.isEmpty ?? true) {
-                sections.append([])
+                return true
+            }
+            return false
+        }
+        for row in pop.menuRows {
+            if row.isMenuSection {
+                sections.append((row.menuSectionTitle, []))
+                for inner in row.menuRows { _ = add(inner) }
+                sections.append((nil, []))
+            } else if !add(row), !(sections.last?.items.isEmpty ?? true) {
+                sections.append((nil, []))
             }
         }
-        let filled = sections.filter { !$0.isEmpty }
-        if filled.count <= 1 { return filled.first ?? [] }
-        return filled.map { UIMenu(options: .displayInline, children: $0) }
+        let filled = sections.filter { !$0.items.isEmpty }
+        if filled.count <= 1, filled.first?.title == nil { return filled.first?.items ?? [] }
+        headers = Set(filled.compactMap(\.title).filter { !$0.isEmpty })
+        return filled.map { UIMenu(title: $0.title ?? "", options: .displayInline, children: $0.items) }
     }
     /// The items of the popover `row` opens as a submenu: a menu it shows or
     /// toggles (`Invocation`), not a confirmation, not on `path` (a cycle is

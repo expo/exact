@@ -1,14 +1,15 @@
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { GLOBAL, Graph, Repo, auditProfile, cargoTests, commands, jsSources, rustLiterals, rustSource, select, suites } from './affected.mjs';
 import { classesReached } from '../host/apple/xctest.mjs';
 
-/** A repository of `files` (path → text) and Cargo packages (`{ name, dir, deps }`), with its metadata given. */
+/** A repository of `files` (path → text) and Cargo packages (`{ name, dir, deps }`), with its metadata given; a package
+ * with a `build.rs` among the files has a build script. */
 function fixture(files, packages) {
-  const root = mkdtempSync(resolve(tmpdir(), 'affected-'));
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'affected-')));
   for (const [path, text] of Object.entries(files)) {
     mkdirSync(dirname(resolve(root, path)), { recursive: true });
     writeFileSync(resolve(root, path), text);
@@ -16,7 +17,8 @@ function fixture(files, packages) {
   const id = name => `path+file://${name}`;
   const metadata = {
     workspace_members: packages.map(p => id(p.name)),
-    packages: packages.map(p => ({ id: id(p.name), name: p.name, source: null, manifest_path: resolve(root, p.dir, 'Cargo.toml'), targets: [{ kind: ['lib'], test: true, src_path: resolve(root, p.dir, 'src/lib.rs') }], dependencies: [] })),
+    packages: packages.map(p => ({ id: id(p.name), name: p.name, source: null, manifest_path: resolve(root, p.dir, 'Cargo.toml'), targets: [{ kind: ['lib'], test: true, src_path: resolve(root, p.dir, 'src/lib.rs') },
+      ...(`${p.dir}/build.rs` in files ? [{ kind: ['custom-build'], test: false, src_path: resolve(root, p.dir, 'build.rs') }] : [])], dependencies: [] })),
     resolve: { nodes: packages.map(p => ({ id: id(p.name), deps: (p.deps ?? []).map(d => ({ pkg: id(d), dep_kinds: [{ kind: null }] })) })) },
   };
   const all = { ...files, ...Object.fromEntries(packages.map(p => [`${p.dir}/Cargo.toml`, ''])), 'Cargo.toml': '' };
@@ -110,10 +112,13 @@ test("Rust's test modules, #[path] and include_str! are what they say; a deleted
     expect([later.library.map(l => l.text), later.test]).toEqual([['../x.json'], []]);
   }
   const { graph, done } = fixture({
-    'core/src/lib.rs': 'mod test_steps;\npub mod model;\nmod presenter;\n#[cfg(test)]\nmod more_tests;\n',
+    'core/src/lib.rs': 'mod test_steps;\npub mod model;\nmod presenter;\n#[cfg(test)]\nmod more_tests;\nconst S: &str = include_str!("shipped.txt");\n',
+    'core/src/shipped.txt': '',
     // (A library module's directory holds its own test modules: those stay test code.)
     'core/src/presenter.rs': '#[cfg(test)]\nmod presenter_tests;\n', 'core/src/presenter/presenter_tests.rs': '', 'core/src/test_steps.rs': '', 'core/src/more_tests.rs': 'mod helper;\n',
     'core/src/more_tests/helper.rs': '', 'core/src/model.rs': '', 'core/tests/it.rs': '#[path = "../src/model.rs"]\nmod model;\n',
+    // (A module the build script declares, which a test includes too, is the build script's.)
+    'core/build.rs': 'mod engine_os;\nfn main() {}\n', 'core/engine_os.rs': '', 'core/tests/os.rs': '#[path = "../engine_os.rs"]\nmod engine_os;\n',
     'user/src/lib.rs': '', 'scripts/gone.test.mjs': "import { test } from 'bun:test';\ntest('g', () => readFileSync(resolve(ROOT, 'scripts/fixtures/gone.contract')));\n",
   }, [{ name: 'core', dir: 'core' }, { name: 'user', dir: 'user', deps: ['core'] }]);
   try {
@@ -124,6 +129,10 @@ test("Rust's test modules, #[path] and include_str! are what they say; a deleted
     expect(ids(graph, ['core/src/model.rs'])).toEqual(['cargo:core', 'cargo:user']);
     expect(ids(graph, ['core/src/presenter/presenter_tests.rs'])).toEqual(['cargo:core']);
     expect(ids(graph, ['core/src/test_steps.rs'])).toEqual(['cargo:core', 'cargo:user']);
+    // An include's bare name is beside the including file, and what the library includes a dependent's input
+    expect(ids(graph, ['core/src/shipped.txt'])).toEqual(['cargo:core', 'cargo:user']);
+    expect(ids(graph, ['core/engine_os.rs'])).toEqual(ids(graph, ['core/build.rs']));
+    expect(ids(graph, ['core/engine_os.rs'])).toEqual(['cargo:core', 'cargo:user']);
   } finally { done(); }
   const deleted = fixture({ 'scripts/gone.test.mjs': "import { test } from 'bun:test';\ntest('g', () => readFileSync(resolve(ROOT, 'scripts/fixtures/gone.contract')));\n" }, []);
   try {
@@ -191,7 +200,7 @@ test("an app's tests read every crate its build compiles for their host, and its
 
 // What the lane runs a selection's Rust tests by gives each test binary what Cargo gives it.
 test('a selected package\'s tests run as Cargo runs them, and a failure is said as Cargo says it', () => {
-  const root = mkdtempSync(resolve(tmpdir(), 'affected-cargo-'));
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'affected-cargo-')));
   try {
     const crate = (name, failing) => {
       mkdirSync(resolve(root, name, 'src'), { recursive: true });
@@ -231,7 +240,7 @@ test('an environment variable a suite reads stands for the build it names', () =
 });
 
 test("a change to Swift test files alone reaches their classes and those of the files that name them, per platform", () => {
-  const dir = mkdtempSync(resolve(tmpdir(), 'affected-xctest-'));
+  const dir = realpathSync(mkdtempSync(resolve(tmpdir(), 'affected-xctest-')));
   const files = {
     'A.swift': 'import XCTest\n\nfinal class ATests: XCTestCase {\n    static let shared = 1\n}\n',
     'Uses.swift': 'final class UsesTests: XCTestCase {\n    func testIt() { XCTAssertEqual(ATests.shared, 1) }\n}\n',
@@ -284,7 +293,7 @@ test('the commands run each workspace once, the Bun files together and every app
 });
 
 function commandFixture() {
-  const root = mkdtempSync(resolve(tmpdir(), 'affected-commands-'));
+  const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'affected-commands-')));
   const files = ['Cargo.toml', 'game/Cargo.toml', 'core/src/lib.rs', 'game/src/lib.rs', 'scripts/sample.test.mjs',
     'apps/demo/web/src/lib.rs', 'apps/demo/first.test.contract', 'apps/demo/second.test.contract'];
   for (const file of files) {
@@ -347,7 +356,7 @@ test('--run executes later Cargo and Bun commands after a failure and retains fa
     expect(missing.ran.map(c => c[0]), missing.stderr).toEqual(['cargo', 'cargo']);
     expect(missing.status, missing.stderr).toBe(1);
   } finally { done(); }
-});
+}, 60_000); // It spawns Cargo and Bun, which a loaded machine starts slowly
 
 test('--audit executes every app test command after a failure', () => {
   const { run, done } = commandFixture();
@@ -358,7 +367,7 @@ test('--audit executes every app test command after a failure', () => {
       expect(result.status, result.stderr).toBe(status);
     }
   } finally { done(); }
-});
+}, 60_000); // It spawns Cargo and Bun, which a loaded machine starts slowly
 
 test('an audit makes every unit outside the inputs unreadable, Cargo manifests aside', () => {
   const { repo, root, done } = fixture({ 'apps/demo/app.contract': '', 'apps/other/app.contract': '', 'host/apple/A.swift': '', 'kernel/lib.rs': '' }, []);

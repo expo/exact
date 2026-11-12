@@ -157,7 +157,7 @@ pub struct Cache {
     final_layout_entry: Option<CacheEntry<LayoutOutput>>,
     /// The cache entries for the node's preliminary size measurements.
     ///
-    /// EXACT PATCH 59: the slots used so far, in slot order, of the `CACHE_SIZE`
+    /// EXACT PATCH 60: the slots used so far, in slot order, of the `CACHE_SIZE`
     /// upstream holds inline (360 of a cache's 448 bytes, for a box measured
     /// under one or two inputs). Slots fill in cursor order and the cursor
     /// wraps only past the last, so slot `i` exists for every `i < len()`.
@@ -290,7 +290,7 @@ impl Cache {
     }
 }
 
-/// EXACT PATCH 30: tree-owned cache storage, allocated after a result is cached. Inline
+/// EXACT PATCH 31: tree-owned cache storage, allocated after a result is cached. Inline
 /// text runs have engine nodes but their paragraph is the measured box, so
 /// they never need the nine-entry layout cache. Keep an allocated cache when
 /// cleared: active boxes reuse it across edits without another allocation.

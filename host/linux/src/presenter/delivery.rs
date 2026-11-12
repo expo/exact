@@ -235,9 +235,26 @@ impl<D: DataSource> Presenter<D> {
         self.connect_hatches();
     }
 
+    /// First pixel for a window that is not shown (a login item's hidden
+    /// launch, LLP 1133.025 D6): a frame painted to pixels that nothing
+    /// presents stands for it, since a hidden window takes no present. The
+    /// window's own picture is drawn when it shows. Called again while the
+    /// data module activates, as [`Presenter::first_pixel`] is.
+    pub fn first_pixel_unshown(&mut self) {
+        if self.painted && !self.module_pending() {
+            return;
+        }
+        let _ = self.frame_for(crate::paint::FrameTarget::Pixels);
+        if self.display.blocked() || !self.last_frame_succeeded || self.activation_failed.is_some()
+        {
+            return;
+        }
+        self.activate_first_pixel();
+        self.connect_hatches();
+    }
+
     /// First pixel has been acknowledged ([`Presenter::first_pixel`]).
-    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
-    pub(crate) fn first_pixel_told(&self) -> bool {
+    pub fn first_pixel_told(&self) -> bool {
         self.painted
     }
 

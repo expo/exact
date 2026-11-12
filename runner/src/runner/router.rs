@@ -876,11 +876,16 @@ impl<D: DataSource> Runner<D> {
                 continue;
             }
             self.init_slot(i, carried)?;
-            // Where the viewer is, known at launch (`launching_with`): the
-            // locale `set_place` writes, before any initializer calls `t`.
-            if Some(i) == locale && crate::time::launch_place().is_some() {
-                if let Some(resolved) = self.plan.resolve_locale(&self.place.locale) {
-                    self.slots[i] = Value::str(resolved);
+            // The language the app chose (`setLocale`), else where the
+            // viewer is, known at launch (`launching_with`): the locale
+            // `set_place` writes, before any initializer calls `t`.
+            if Some(i) == locale {
+                let chosen = self.chosen_locale();
+                if chosen.is_some() || crate::time::launch_place().is_some() {
+                    let requested = chosen.unwrap_or_else(|| self.place.locale.clone());
+                    if let Some(resolved) = self.plan.resolve_locale(&requested) {
+                        self.slots[i] = Value::str(resolved);
+                    }
                 }
             }
         }

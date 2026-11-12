@@ -8,6 +8,19 @@ import UIKit
 @testable import ExactKit
 
 final class HatchClockTests: XCTestCase {
+    func testCoalescedAftersDoNotDriveSeeksOrSettlement() {
+        let clock = HatchClock()
+        clock.after(1, ms: 100, coalescing: true)
+        XCTAssertNil(clock.nextAfter)
+        XCTAssertNil(clock.nextInstant)
+        clock.after(2, ms: 200)
+        XCTAssertEqual(clock.nextAfter, 200)
+        XCTAssertEqual(clock.nextInstant, 200)
+        clock.after(2, ms: -1)
+        XCTAssertNil(clock.nextAfter)
+        XCTAssertNil(clock.nextInstant)
+    }
+
     func testAfterFiresWhileTracking() {
         XCTAssertTrue(Thread.isMainThread)
         #if os(macOS)
@@ -31,6 +44,24 @@ final class HatchClockTests: XCTestCase {
             RunLoop.main.run(mode: mode, before: min(end, Date(timeIntervalSinceNow: 0.01)))
         }
         XCTAssertNil(clock.nextAfter, "a due hatch after must fire before tracking ends")
+    }
+
+    /// A session's end stops its display link although a module's frame
+    /// ticket was live and motion ran.
+    func testDestroyStopsTheLinkATicketKept() {
+        #if os(macOS)
+        _ = NSApplication.shared
+        #endif
+        let session = ExactApp.shared.makeSession()
+        session.clock = nil
+        let clock = session.natives.hatchClock
+        clock.natives = session.natives
+        clock.frames(1, on: true)
+        XCTAssertNotNil(session.frames.link, "a ticket runs the link")
+        session.frames.motion = true
+        session.destroy()
+        XCTAssertEqual(clock.liveTickets, 0)
+        XCTAssertNil(session.frames.link, "destroy left the display link running")
     }
 
     /// On the wall the hatch clock's 4,096-call bound is one presented frame's

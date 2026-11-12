@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { chromium as installed, suiteBrowser } from '../../../scripts/agent-launch.mjs';
 import { buildEditor } from '../../web-js/module.mjs';
 import { browserMissing } from '../../../scripts/agent-playwright.mjs';
-import { need } from '../../../scripts/coverage.mjs';
+import { need, notApplicable } from '../../../scripts/coverage.mjs';
 import { fileURLToPath } from 'node:url';
 
 const WEB = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -814,4 +814,58 @@ engineTest.chromium('chromium: Markdown editing escapes an inert ancestor at an 
       }, target)).toEqual([false, 'hello']);
     }
   }, true);
+}, 60000);
+
+// A file saved as "UTF-8 with BOM" and decoded with `String::from_utf8` keeps
+// U+FEFF; every offset the editor reports counts it.
+engineTest.chromium('chromium: a Markdown source that starts with a byte order mark draws and edits as written', async () => {
+  const source = '\ufeff# Title\nfirst line\nsecond line';
+  await editor('chromium', source, async (page, field) => {
+    expect(await field.evaluate(el => el.value)).toBe(source);
+    expect(await field.locator('.md-line').allTextContents()).toEqual(['\ufeff# Title', 'first line', 'second line']);
+    await field.focus();
+    await field.evaluate((el, end) => el.setSelectionRange(end, end), source.length);
+    await settle(page);
+    await page.keyboard.insertText('!');
+    expect(await field.evaluate(el => el.value)).toBe(source + '!');
+    expect(only(await heard(page), 'input').map(e => e[0])).toEqual([source + '!']);
+  });
+}, 60000);
+
+// On a Mac the editor's chords are ⌘'s, and Control with a letter is the text
+// system's binding, as in a plain field: Playwright sends each with the AppKit
+// command Chrome attaches for a real keyboard (⌃A moveToBeginningOfParagraph:,
+// ⌃B moveBackward:, ⌃K deleteToEndOfParagraph:, ⌃Y yank:).
+const onAMac = process.platform === 'darwin' ? engineTest.chromium : notApplicable('Control is the command key off a Mac');
+onAMac('chromium: on a Mac, Control chords in a Markdown editor are the text bindings', async () => {
+  const source = 'alpha beta gamma\nsecond line here';
+  await editor('chromium', source, async (page, field) => {
+    // The editor reads a moved caret at `selectionchange`, after the key.
+    const state = async () => { await settle(page); return field.evaluate(el => [el.value, el.selectionStart, el.selectionEnd]); };
+    const at = async (from, to = from) => { await field.evaluate((el, [from, to]) => el.setSelectionRange(from, to), [from, to]); await settle(page); };
+    await field.focus();
+    await at(16);
+    await page.keyboard.press('Control+A');
+    expect(await state()).toEqual([source, 0, 0]);
+    await at(6, 10);
+    await page.keyboard.press('Control+B');
+    expect((await state())[0]).toBe(source);
+    await at(6, 10);
+    await page.keyboard.press('Control+I');
+    expect((await state())[0]).toBe(source);
+    await at(5);
+    await page.keyboard.press('Control+K');
+    expect(await state()).toEqual(['alpha\nsecond line here', 5, 5]);
+    await at(0);
+    await page.keyboard.press('Control+Y');
+    expect(await state()).toEqual([' beta gammaalpha\nsecond line here', 11, 11]);
+    await page.keyboard.press('Control+K');
+    await page.keyboard.press('Control+K');
+    expect(await state()).toEqual([' beta gammasecond line here', 11, 11]);
+    await page.keyboard.press('Control+Z');
+    expect((await state())[0]).toBe(' beta gammasecond line here');
+    await at(1, 5);
+    await page.keyboard.press('Meta+B');
+    expect((await state())[0]).toBe(' **beta** gammasecond line here');
+  });
 }, 60000);

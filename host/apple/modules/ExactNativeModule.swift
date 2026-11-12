@@ -94,7 +94,7 @@ public final class ExactModuleContext: @unchecked Sendable {
     // has the hatch table (before its hatches are called), and what each token calls.
     typealias FramesFn = @convention(c) (UnsafeMutableRawPointer?, UInt64, Int32) -> Void
     typealias AfterFn = @convention(c) (UnsafeMutableRawPointer?, UInt64, Double) -> Void
-    var framesFn: FramesFn?, afterFn: AfterFn?
+    var framesFn: FramesFn?, afterFn: AfterFn?, coalescingAfterFn: AfterFn?
     var ticks: [UInt64: (ExactFrame) -> Void] = [:], afters: [UInt64: () -> Void] = [:]
     private var nextToken: UInt64 = 1
 
@@ -144,10 +144,15 @@ public final class ExactModuleContext: @unchecked Sendable {
     /// agent, where a seek fires it at its own instant. `stop()` before then
     /// and it never runs. Main thread.
     @discardableResult
-    public func after(_ ms: Double, _ body: @escaping () -> Void) -> ExactTicket {
+    public func after(_ ms: Double, _ body: @escaping () -> Void) -> ExactTicket { after(ms, coalescing: false, body) }
+
+    /// A coalescing callback runs at the next clock instant at or past its
+    /// deadline, without adding a seek stop or advancing settlement.
+    @discardableResult
+    public func after(_ ms: Double, coalescing: Bool, _ body: @escaping () -> Void) -> ExactTicket {
         let token = nextToken
         nextToken += 1
-        guard let afterFn else { return ExactTicket {} }
+        guard let afterFn = coalescing ? coalescingAfterFn : afterFn else { return ExactTicket {} }
         afters[token] = body
         afterFn(host, token, max(0, ms))
         return ExactTicket { [weak self] in
@@ -577,6 +582,8 @@ final class ExactHatches {
     let arrangementFn: ArrangementFn?
     /// One of 184 or more: a module's service query (ExactServices.swift).
     let serviceFn: ServiceFn?
+    /// One of 192 or more: an after that coalesces across a seek.
+    let coalescingAfterFn: ExactModuleContext.AfterFn?
     #if os(iOS) || os(tvOS)
     var navigations: [ObjectIdentifier: ExactNavigation] = [:]
     var routes: [String: ExactRoute] = [:]
@@ -628,6 +635,8 @@ final class ExactHatches {
             ? table.load(fromByteOffset: 168, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: ArrangementFn.self) } : nil
         serviceFn = table.load(as: UInt32.self) >= 184
             ? table.load(fromByteOffset: 176, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: ServiceFn.self) } : nil
+        coalescingAfterFn = table.load(as: UInt32.self) >= 192
+            ? table.load(fromByteOffset: 184, as: UnsafeRawPointer?.self).map { unsafeBitCast($0, to: ExactModuleContext.AfterFn.self) } : nil
     }
 
     /// A package picture changed (0) or revoked (1): the host's raster loader acts on it.
@@ -1081,6 +1090,7 @@ private let moduleConnect: @convention(c) (UnsafeMutableRawPointer?, UnsafeRawPo
     m.context.diagnostics.recordFn = m.hatches?.recordFn
     m.context.framesFn = m.hatches?.framesFn
     m.context.afterFn = m.hatches?.afterFn
+    m.context.coalescingAfterFn = m.hatches?.coalescingAfterFn
 }
 
 /// `tamber(module)`: a batch moved what a binding reads (LLP 1121 D12); each

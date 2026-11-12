@@ -14,7 +14,7 @@ import { perfDelta } from './agent-inspect.mjs';
 import { driveStore, faultSpecOf, launchFacts } from './agent-launch.mjs';
 import { resolveApp, webDist as defaultWebDist } from './app.mjs';
 import { onThisMachine, serverUrl } from './verify.mjs';
-import { backendOrigin, backendOriginSelection, staticFacts } from '../js/bake/src/typescript.mjs';
+import { backendOrigin, backendOriginSelection, literalBackendOrigin, staticFacts } from '../js/bake/src/typescript.mjs';
 import { declaredSettings, inlineSettings, settingValues } from '../js/bake/src/__exact_env.mjs';
 import { createRequire } from 'node:module';
 // Snapback's client (snapback4/) is optional: a checkout without it builds every app that does not mount it.
@@ -1104,10 +1104,11 @@ export async function runTests({ host, browser, file, plan, app, size, env, webD
  * build evaluates them, a setting's value (`import.meta.env.API_BASE_URL`, LLP 1153 D4) in place of its read. */
 export function nativeFetchOrigins(dir, env = process.env) {
   let code; try { code = readFileSync(resolve(dir, 'app.ts'), 'utf8'); } catch { return []; }
-  const origin = backendOrigin(dir, env) ?? /const origin\s*=\s*['"`](https?:\/\/[^'"`]+)['"`]/.exec(code)?.[1];
+  const parse = createRequire(import.meta.url)('rolldown/utils').parseSync;
+  const origin = backendOrigin(dir, env) ?? literalBackendOrigin(code, parse);
   if (origin) return [origin];
   let grants = '';
-  try { const parse = createRequire(import.meta.url)('rolldown/utils').parseSync; grants = staticFacts(inlineSettings(code, dir, parse, env).code, parse).grants ?? ''; }
+  try { grants = staticFacts(inlineSettings(code, dir, parse, env).code, parse).grants ?? ''; }
   catch { return []; } // the bake refuses it, and says why when it builds
   return [...new Set(grants.split('\n').map(line => /^\s*(?:development\s+)?net\.fetch\s+(https?:\/\/[^/\s]+)/.exec(line)?.[1]).filter(Boolean))];
 }

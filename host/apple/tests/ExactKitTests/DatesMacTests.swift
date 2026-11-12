@@ -80,6 +80,25 @@ final class DatesMacTests: XCTestCase {
         XCTAssertEqual(p.controls.shownDate(field, "date"), held)
     }
 
+    /// The agent's `type` replies with the value the app heard, and a later
+    /// change keeps the seconds it gave (#275): the picker had written
+    /// minutes only.
+    func testATypedLocalDateAndTimeKeepsItsSeconds() throws {
+        let (p, field) = try fixture("datetime-local")
+        var values: [String] = []
+        p.onControlValue = { _, value, _, _ in values.append(value) }
+        let node = try XCTUnwrap(p.views[2])
+        let reply = p.controls.typeDate(field, node, "2026-03-04T10:30:45.500")
+        XCTAssertEqual(values, ["2026-03-04T10:30:45.500"])
+        XCTAssertEqual(reply["value"] as? String, "2026-03-04T10:30:45.500")
+        XCTAssertEqual(p.controls.shownDate(field, "datetime-local"), "2026-03-04T10:30:45.5")
+        try key(field, "\u{F700}", 126)
+        XCTAssertEqual(values.count, 2)
+        XCTAssertTrue(values[1].hasSuffix(":45.5"), values[1])
+        XCTAssertNotNil(p.controls.typeDate(field, node, "2026-03-04T10:30:45junk")["error"])
+        XCTAssertEqual(values.count, 2, "a refused value reports nothing")
+    }
+
     func testANativeDateChangeReportsOnce() throws {
         let (p, field) = try fixture("date")
         var values: [String] = []

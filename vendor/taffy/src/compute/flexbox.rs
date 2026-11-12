@@ -976,7 +976,7 @@ fn generate_anonymous_flex_items(
 /// For each dimension, if that dimension of the flex container’s content box is a definite size, use that;
 /// if that dimension of the flex container is being sized under a min or max-content constraint, the available space in that dimension is that constraint;
 /// otherwise, subtract border and padding from the border-box space supplied by the parent.
-/// The parent has already subtracted this container's margins.
+/// EXACT PATCH 25: the parent has already subtracted this container's margins.
 /// **This might result in an infinite value**.
 #[inline]
 #[must_use]
@@ -2179,8 +2179,8 @@ fn determine_hypothetical_cross_size(
     available_space: Size<AvailableSpace>,
 ) {
     for child in line.items.iter_mut() {
-        // EXACT PATCH 54: retain Patch 50's content floor, transferring the
-        // used height rather than the preferred height (Flexbox §9.4).
+        // EXACT PATCH 54: transfer the used height (Flexbox §9.4). The
+        // content probe keeps height bounds when the preferred height is auto.
         if constants.is_column {
             if let Some(width) = crate::compute::ratio::minimum_ratio_width(
                 tree, child.node, constants.node_inner_size, Some(child.target_size.height),

@@ -279,6 +279,7 @@ mod tests {
             .abis
             .insert(String::new(), Abi::open_path(&path, &compat, "").unwrap());
         let surface = |id: u32, name: &str| Canvas {
+            performance: false,
             id,
             name: name.into(),
             artifact: String::new(),

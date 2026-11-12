@@ -117,10 +117,10 @@ pub fn compute_root_layout(tree: &mut impl LayoutPartialTree, root: NodeId, avai
     );
     // An automatic width fills, within the limits the ratio transferred; the ratio then gives the
     // height from it.
-    // HTML form controls with an automatic inline size shrink to fit even
-    // when they are the document's one root child. Exact carries that
-    // distinction on Taffy's existing table marker (patch 21), as block
-    // child layout does below the root.
+    // EXACT PATCH 21: HTML form controls with an automatic inline size shrink
+    // to fit even when they are the document's one root child. Exact carries
+    // that distinction on Taffy's existing table marker, as block child layout
+    // does below the root.
     let fills = in_flow
         && !style.is_table_item()
         && style_size.width.is_none()

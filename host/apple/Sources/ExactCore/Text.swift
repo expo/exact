@@ -1315,25 +1315,20 @@ package final class TextEngine {
         // one; this measure does not make one resident.
         // `text-indent` applies to the first line only (CSS Text 3 §8.1), so
         // only to the first piece. A run's own indent (a list item's) applies to
-        // each of its pieces.
+        // each piece that starts in it.
         let resident = residency.shape(TextShapeKey(identity: identity, paint: TextPaint(spec)))
         let source = resident?.attributed ?? attributed(spec)
         let typesetter = resident?.typesetter ?? CTTypesetterCreateWithAttributedString(source)
         var indent = spec.textIndent
-        var offset = 0
+        let text = source.string as NSString
         let emergencyEnds = Set(spec.emergencyBreaks.map { $0 + 1 })
-        for r in spec.runs {
-            let text = r.text as NSString
-            defer { offset += text.length }
-            guard !r.hang else { continue }
-            let boundaries = lineBoundaries(text, length: text.length).filter { !emergencyEnds.contains(offset + $0) }
-            for piece in Self.pieceRanges(text, boundaries: boundaries) {
-                let range = CFRange(location: offset + piece.range.location, length: piece.range.length)
-                var line = CTTypesetterCreateLine(typesetter, range)
-                if piece.hyphenated { line = Self.inkedSoftHyphen(line, source: source, range: range) }
-                widest = max(widest, CSSLineBox.layoutWidth(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))) + indent + r.indent)
-                indent = 0
-            }
+        let boundaries = (resident?.lineBreakBoundaries ?? lineBoundaries(text, length: text.length)).filter { !emergencyEnds.contains($0) }
+        for piece in Self.paragraphPieces(text, runs: spec.runs, boundaries: boundaries) {
+            let range = CFRange(location: piece.range.location, length: piece.range.length)
+            var line = CTTypesetterCreateLine(typesetter, range)
+            if piece.hyphenated { line = Self.inkedSoftHyphen(line, source: source, range: range) }
+            widest = max(widest, CSSLineBox.layoutWidth(CGFloat(CTLineGetTypographicBounds(line, nil, nil, nil))) + indent + piece.indent)
+            indent = 0
         }
         residency.putMinimum(identity, width: widest)
         return widest

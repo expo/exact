@@ -377,7 +377,7 @@ test('presence binding probes read the committed clock and release their depende
       // Moving the clock alone does not publish a new committed time.
       rt.clock.now = 2000;
       for (let i = 0; i < 3; i++) bindings.captureExits();
-      const result = { exit: bindings.exitOf(exit), gains: bindings.gains().length, listeners: signal.n.obs.size - listeners };
+      const result = { exit: rt.exitOf(exit), gains: bindings.gains().length, listeners: signal.n.obs.size - listeners };
       rt.end(own); exit.remove(); layout.remove();
       return result;
     });
@@ -405,7 +405,7 @@ test('presence row maps stay cached until their subject or key dependencies chan
       });
       const capture = () => {
         bindings.captureExits();
-        const result = [keys, bindings.exitOf(exit)];
+        const result = [keys, rt.exitOf(exit)];
         keys = 0;
         return result;
       };
@@ -507,6 +507,41 @@ ${region === 'match' ? '        case none\n          text "Gone"\n' : ''}      l
       } finally { document.startViewTransition = start; }
     });
     expect(observed).toEqual({ deferred: true, waiting: '1', after: '2', heard: ['reachstart', 'reachend', 'report done'] });
+  } finally { await app.close(); }
+}, 30000);
+
+// The stand-in that paints a box while its size moves carries the box's own translate as the box resolves it: 50% of
+// its `transform-box`, here its content box (200px less 20px padding and 5px border a side: 150px), so 75px, not 50%
+// of the stand-in's own border box.
+test('a resizing box\'s stand-in paints at its translate, resolved in the box\'s transform-box', async () => {
+  const app = await exitApp('chromium', `component App
+  state tall = false
+  action grow
+    tall = not tall
+  view
+    column
+      button "grow" press=grow testId="grow"
+      box testId="card" width=200 height=(tall ? 160 : 100) box-sizing="border-box" padding="10px 20px" border="5px solid #333" background-color="#4a90d9" transform-box="content-box" translate="50% 0" -exact-layout-transition="2000ms linear"
+`);
+  try {
+    const { page } = app;
+    const at = await page.evaluate(async () => {
+      const card = document.querySelector('[data-testid="card"]');
+      const rest = card.getBoundingClientRect().left;
+      document.querySelector('[data-testid="grow"]').click();
+      await new Promise(resolve => setTimeout(resolve));
+      const stand = card.previousElementSibling?.hasAttribute('data-exiting') ? card.previousElementSibling.firstElementChild : null;
+      const animations = [card, ...(stand ? [stand.parentElement, stand] : [])].flatMap(node => node.getAnimations());
+      await Promise.all(animations.map(async animation => { animation.pause(); await animation.ready; animation.currentTime = 1000; }));
+      const result = { rest, card: card.getBoundingClientRect().left, surface: stand?.getBoundingClientRect().left ?? null,
+        height: stand?.getBoundingClientRect().height ?? null };
+      await Promise.all(animations.map(animation => (animation.finish(), animation.finished)));
+      return result;
+    });
+    // Mid-transition the card is where it rests, and its stand-in, half grown, paints over it.
+    expect(at.card).toBeCloseTo(at.rest, 1);
+    expect(at.height).toBeCloseTo(130, 1);
+    expect(at.surface).toBeCloseTo(at.card, 1);
   } finally { await app.close(); }
 }, 30000);
 

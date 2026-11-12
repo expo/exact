@@ -14,7 +14,7 @@
 use super::*;
 
 /// The keys a platform's own words sit under (LLP 1133 D2).
-const PLATFORM_KEYS: [&str; 5] = ["apple", "android", "windows", "linux", "web"];
+pub(super) const PLATFORM_KEYS: [&str; 5] = ["apple", "android", "windows", "linux", "web"];
 
 /// The words no binder may be.
 pub(super) const RESERVED: [&str; 16] = [

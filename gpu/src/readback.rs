@@ -175,6 +175,13 @@ impl Module {
         match result {
             Ok(()) => {
                 inst.dirty = false;
+                // A canvas with no target of its own is shown by its host
+                // composing these pixels (Linux's display baseline): a
+                // complete frame is presented. One with a target is only
+                // being captured.
+                if inst.presentation.is_none() && !inst.has_ring() && inst.surface.frame_ready() {
+                    inst.presented.now();
+                }
                 Some(wants)
             }
             Err(e) => {

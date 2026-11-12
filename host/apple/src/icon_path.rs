@@ -71,10 +71,9 @@ pub(crate) fn push_json(source: Option<&str>, json: &mut String) {
 /// source form `source` (after `symbol:`), from the plan's icons table,
 /// which keeps every icon a literal or a computed source names. The form
 /// carries no name (the compiler and the runner's bridge expand the name
-/// away), so two tokens with the same source (`icon.reply` and
-/// `icon.respond` on one SVG) are told apart by nothing the host gets: the
-/// first declared is the best known. Keeping the chosen name would move the
-/// source form or the plan (theme2's to rule). `None` for no icon or no row.
+/// away). Aliases share that form and report the first retained name;
+/// independent declarations with identical forms are refused at build.
+/// `None` for no icon or no row.
 pub(crate) fn icon_name<'a>(plan: &'a exact_plan::Plan, source: &str) -> Option<&'a str> {
     let icon = exact_kernel::Icon::parse(source)?;
     let s = |id| plan.strings.get(id as usize).unwrap_or("");

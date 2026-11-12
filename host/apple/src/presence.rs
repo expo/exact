@@ -47,6 +47,7 @@ struct Leaving {
 /// What the host keeps for exits and layout transitions.
 #[derive(Debug, Default)]
 pub(crate) struct Presence {
+    pub(super) looks: exact_kernel::motion::LookMotion,
     leaving: Vec<Leaving>,
     /// Views whose destroy waits for a leaving view's end.
     held: IdSet<ViewId>,
@@ -71,6 +72,19 @@ pub(crate) struct Presence {
 }
 
 impl<D: DataSource> Host<D> {
+    /// A host-known look changes scale through the same motion engine as authored targets.
+    pub fn look_motion(&mut self, view: ViewId, states: u8, now_ms: f64) -> String {
+        self.now_ms = self.now_ms.max(now_ms);
+        let mut batch = Batch::new();
+        let _ = self.engine.advance(self.engine_time(self.now_ms));
+        if let Some(node) = self.runner.kernel().node(view) {
+            let result = self.presence.looks.observe(&node, states, &mut self.engine);
+            debug_assert!(result.is_ok());
+        }
+        self.present(&mut batch, false);
+        self.finish(batch, None)
+    }
+
     /// A receipt's exits, before its destroys reach the batch: each leaving
     /// view and everything under it stay with the presenter. A view this
     /// batch created was never presented, so it simply goes.
@@ -200,7 +214,7 @@ impl<D: DataSource> Host<D> {
             self.runner.canvas_frame();
             // A commit that sent stops the jump: the next send would drop
             // its reply (LLP 1016 D5).
-            let stopped = a.error.is_some() || a.stopped_on_request || step >= to;
+            let stopped = a.error.is_some() || a.stopped_on_request || a.needs_apply || step >= to;
             let failed = error.or(a.error.map(|e| format!("{e:?}")));
             (batch, error) = self.commit_tree(&a.receipts, failed, batch);
             if let Some(e) = self.arrange_after_commit(&mut batch) {

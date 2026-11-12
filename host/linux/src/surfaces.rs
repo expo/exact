@@ -21,6 +21,7 @@ use std::{
 mod android;
 #[cfg(any(target_os = "android", test))]
 mod fingers;
+mod performance;
 #[cfg(any(target_os = "android", test))]
 mod retry;
 #[cfg(target_os = "android")]
@@ -35,6 +36,7 @@ pub(crate) mod apple;
 pub(crate) mod controls;
 mod pixels;
 mod shaders;
+mod size;
 #[cfg(windows)]
 pub(crate) mod window;
 
@@ -129,6 +131,8 @@ impl Abi {
                 "gpu_wants_input",
                 "gpu_presentation_flags",
                 "gpu_published",
+                "gpu_performance_reporting",
+                "gpu_performance",
                 "gpu_assets",
                 "gpu_asset",
                 "gpu_messages",
@@ -176,7 +180,7 @@ impl Abi {
         }
         #[cfg(target_os = "android")]
         if load {
-            android::load(&abi)?;
+            android::load(&abi, artifact.is_empty())?;
         }
         #[cfg(not(target_os = "android"))]
         let _ = load;
@@ -381,6 +385,7 @@ struct Canvas {
     /// The artifact that created it (LLP 1009 D6): "" the primary.
     artifact: String,
     owner: bool,
+    performance: bool,
     since: u64,
     held: BTreeSet<String>,
     restored_controls: Option<Vec<Value>>,
@@ -442,12 +447,15 @@ pub(crate) struct Surfaces {
     abis: BTreeMap<String, Abi>,
     attempted: BTreeSet<String>,
     canvases: BTreeMap<u32, Canvas>,
+    performance_due: Option<std::time::Instant>,
     edits_admitted: bool,
     restore: Option<Result<Vec<u8>, String>>,
     restore_read: bool,
     pub(crate) error: Option<String>,
     work: Vec<RequestOut>,
     outcomes: Vec<(u64, Outcome)>,
+    /// Records taken after a frame presented, for the next sync (`owe_records`).
+    owed: Vec<(String, String)>,
     /// The canvas pointer's last event (canvas, viewport point), for its motion.
     pointer: Option<(u32, f32, f32)>,
     /// The device's motion for the next canvas pointer event, when it has one.
@@ -529,7 +537,7 @@ impl Surfaces {
         compat: &str,
         assets: &crate::image::Assets,
     ) -> bool {
-        let mut changed = false;
+        let mut changed = self.forward_owed(host);
         let dead: Vec<_> = self
             .canvases
             .keys()
@@ -640,6 +648,12 @@ impl Surfaces {
                 }
                 self.initial_lifecycle(abi, id);
                 let owner = !self.canvases.values().any(|c| c.name == update.name);
+                let performance = owner && host.runner().wants_canvas_performance(&update.name);
+                if performance {
+                    abi.enable_performance(id);
+                    self.performance_due
+                        .get_or_insert_with(std::time::Instant::now);
+                }
                 if !owner {
                     host.log(format!(
                         "surface {}: duplicate canvas cannot publish",
@@ -653,6 +667,7 @@ impl Surfaces {
                         name: update.name.clone(),
                         artifact,
                         owner,
+                        performance,
                         since: 0,
                         held: BTreeSet::new(),
                         restored_controls: None,
@@ -665,6 +680,7 @@ impl Surfaces {
             }
             let c = self.canvases.get_mut(&update.view).unwrap();
             let values = update.arguments_json();
+            size::give(abi, host, update.view, c.id, &update.name);
             let code = unsafe {
                 abi.symbol::<unsafe extern "C" fn(u32, *const u8, usize, f64) -> u32>(
                     b"gpu_bind_at",

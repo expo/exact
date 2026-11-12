@@ -49,6 +49,35 @@ for (const engine of ['chromium', 'firefox', 'webkit']) {
   }, 30000);
 }
 
+test('state world.0.perf prints numeric counters while requested draw lists retain their formatter', async () => {
+  const say = console.log, lines = [];
+  console.log = text => lines.push(text);
+  try {
+    for (const draws of [0, 15]) {
+      const calls = [], perf = { draws, instances: 11, triangles: 5425 };
+      const list = draws ? [{ pass: 'main', draw: 'mesh', writes: 'color' }] : [];
+      const session = {
+        async state(target, under, pose, busy, page = {}) {
+          calls.push([target, page]);
+          if (page.draws) return { tick: 2, hash: 'abc', draws: list };
+          if (target) throw new Error(`no view matches ${target}`);
+          return { slots: {}, world: [{ perf }] };
+        },
+        close() {},
+      };
+      assert.equal(await main(['web', 'state world.0.perf', 'state world draws'], {
+        open: async () => session, driveServer: async () => null,
+      }), 0);
+      assert.deepEqual(calls.filter(([target]) => target !== undefined), [['world.0.perf', {}], ['world', { draws: true, world: true }]]);
+      assert.equal(lines.shift(), `draws ${draws}\ninstances 11\ntriangles 5425`);
+      const look = lines.shift();
+      if (draws) assert.match(look, /^tick 2 · hash abc\nmain\s+ · mesh · writes color$/);
+      else assert.equal(look, 'tick 2 · hash abc');
+      assert.equal(lines.length, 0);
+    }
+  } finally { console.log = say; }
+});
+
 test('a web frame fallback settles its evaluate request when two RAFs do not complete', async () => {
   for (const completed of [0, 1, 2]) {
     const frames = new Map(), timers = new Map(); let next = 0, inFlight = 0;

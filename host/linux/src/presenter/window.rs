@@ -54,6 +54,9 @@ pub struct Chrome {
     pub dark: bool,
     /// Light status bar icons, resolved independently of the scheme (LLP 1105 D7).
     pub status_light_icons: bool,
+    /// Whether the system bars give way to the page (`system-bars-hidden`,
+    /// resolved as the style is).
+    pub bars_hidden: bool,
 }
 
 /// What a software keyboard does to the page (`interactive-widget`).
@@ -240,6 +243,7 @@ impl<D: DataSource> Presenter<D> {
             background: authored.unwrap_or_else(|| crate::paint::page_color(dark)),
             dark,
             status_light_icons: self.status_bar().light_icons,
+            bars_hidden: self.status_bar().hidden,
         }
     }
 

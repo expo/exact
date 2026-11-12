@@ -235,7 +235,10 @@ export function createFileStore(appId) {
       const { contents, modifiedMs, version } = await run(false, records => file(records, path), path);
       const size = contents.byteLength ?? contents.size;
       if (size > maxBytes) throw failure(`${label}: too-large: ${size} bytes is over ${maxBytes}`, 'too-large');
-      return { blob: contents instanceof Blob ? contents : new Blob([contents], { type }), modifiedMs, version };
+      // A stored Blob with no type (an `exactBodyTo` reply's) takes the caller's, as bytes do.
+      const blob = !(contents instanceof Blob) ? new Blob([contents], { type })
+        : contents.type || !type ? contents : contents.slice(0, contents.size, type);
+      return { blob, modifiedMs, version };
     },
     // Trusted host only: a picked file's entry, backed by the browser's File
     // rather than bytes read into memory (LLP 1069.002 D5).
@@ -335,7 +338,9 @@ export function createFileStore(appId) {
         directory(records, parentOf(to));
         if (from === to) throw failure('copy requires distinct regular files');
         if (records.has(to)) file(records, to);
-        changes.put({ path: to, kind: 'file', contents: source.contents.slice(0), modifiedMs: now() });
+        // `Blob.slice` with no type gives an untyped Blob: a picked file's copy keeps its type, as an append does.
+        const { contents } = source;
+        changes.put({ path: to, kind: 'file', contents: contents instanceof Blob ? contents.slice(0, contents.size, contents.type) : contents.slice(0), modifiedMs: now() });
         changes.touch(parentOf(to));
       }, [from, to, parentOf(to)]);
     },

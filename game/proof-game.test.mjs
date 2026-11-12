@@ -5,6 +5,27 @@ import {resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {completedWorldFrame, proofGame, worldPixels} from './proof.mjs';
 import {encodePng} from '../scripts/png.mjs';
+import {storedSessions} from './games/beacons/proof.mjs';
+
+test('Beacons proofs isolate their stores and keep binding preferences across relaunches', async () => {
+  const launch = async options => ({options, clock:async () => {}});
+  const first = storedSessions(launch), second = storedSessions(launch);
+  const defaults = await Promise.all([first(), second()]);
+  expect(defaults[0].options.storage).not.toBe(defaults[1].options.storage);
+  for (const s of defaults) expect(s.options.env.EXACT_AGENT_STORAGE_FRESH).toBe('1');
+  const bindings = await Promise.all([first, second].map(async open => {
+    const start = await open({storage:'binding-preference', env:{EXACT_AGENT_STORAGE_FRESH:'1'}});
+    const restore = await open({storage:'binding-preference'});
+    const relaunch = await open({storage:'binding-preference'});
+    expect(restore.options.storage).toBe(start.options.storage);
+    expect(relaunch.options.storage).toBe(start.options.storage);
+    expect(start.options.env.EXACT_AGENT_STORAGE_FRESH).toBe('1');
+    expect(restore.options.env.EXACT_AGENT_STORAGE_FRESH).toBeUndefined();
+    expect(relaunch.options.env.EXACT_AGENT_STORAGE_FRESH).toBeUndefined();
+    return start.options.storage;
+  }));
+  expect(new Set([...defaults.map(s => s.options.storage), ...bindings]).size).toBe(4);
+});
 
 // LLP 1132 D7: a proof script need not sit at the game's root.
 test('a proof script finds the game above it, or the one --app names', () => {

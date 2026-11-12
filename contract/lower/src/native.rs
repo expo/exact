@@ -205,6 +205,13 @@ const CONTROL_PROPS: [&str; 20] = [
 /// Every module tag the file's views name, with where: the driver checks
 /// them against the app's roster (`bake-unknown-module`).
 pub fn module_tags(file: &File) -> Vec<(String, Span)> {
+    file.components
+        .iter()
+        .flat_map(|c| module_tags_in(&c.view))
+        .collect()
+}
+
+pub(crate) fn module_tags_in(nodes: &[Node]) -> Vec<(String, Span)> {
     fn walk(nodes: &[Node], out: &mut Vec<(String, Span)>) {
         for n in nodes {
             match n {
@@ -236,9 +243,7 @@ pub fn module_tags(file: &File) -> Vec<(String, Span)> {
         }
     }
     let mut out = Vec::new();
-    for c in &file.components {
-        walk(&c.view, &mut out);
-    }
+    walk(nodes, &mut out);
     out
 }
 

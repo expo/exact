@@ -267,8 +267,22 @@ export function typeControl(el, request, inertAncestor, settleValue) {
       return { handled: true, error: `select ${id} has no enabled option ${JSON.stringify(text)}${labelled.length > 1 ? " (that label is on more than one option: choose by value)" : ""} (options: ${enabled.map((o) => `${JSON.stringify(o.value)} ${JSON.stringify(o.label)}`).join(", ")})` };
   }
   if (el.type === "range" && !(text.trim() !== "" && Number.isFinite(Number(text)))) return { handled: true, error: `${JSON.stringify(text)} is not a number` };
+  const previous = el.value;
   el.value = text;
-  if (el.value !== text && el instanceof HTMLInputElement && el.type !== "range") return settleValue(el), { handled: true, error: `${JSON.stringify(text)} is not a value an input type=${el.type} takes; it sanitized to ${JSON.stringify(el.value)}` };
+  if (el instanceof HTMLInputElement) {
+    // HTML sanitizes valid dates, colors and text too. Only a lost typed
+    // value (or a color replaced by the default) is a refusal.
+    const refused = /^(date|time|datetime-local|month|week|number)$/.test(el.type)
+      ? text !== "" && el.value === ""
+      : el.type === "color" ? el.value.toLowerCase() !== text.toLowerCase()
+      : !/^(range|text|search|tel|email|url|password)$/.test(el.type) && el.value !== text;
+    if (refused) {
+      const sanitized = el.value;
+      el.value = previous;
+      settleValue(el);
+      return { handled: true, error: `${JSON.stringify(text)} is not a value an input type=${el.type} takes; it sanitized to ${JSON.stringify(sanitized)}` };
+    }
+  }
   el.dispatchEvent(new Event("input", { bubbles: true }));
   el.dispatchEvent(new Event("change", { bubbles: true }));
   return { typed: id, value: el.value, delivery: "recognized", handled: true };

@@ -127,7 +127,9 @@ test('the event-stream line ceiling counts invalid UTF-8 as received bytes', asy
   }
 });
 
-test('a stream delivers each read as its newest event, then its end', async () => {
+// LLP 1016.000 D4: every event, in order; those of one read are one batch,
+// each but its last marked `more`.
+test('a stream delivers every event of each read as one batch, then its end', async () => {
   const { request } = await import('./http-body.js');
   let push;
   const body = new ReadableStream({ start(c) { push = c; } });
@@ -136,7 +138,7 @@ test('a stream delivers each read as its newest event, then its end', async () =
   const done = request(op, {
     grantSet: normalized('net.fetch https://example.test'), controllers: new Set(),
     moduleLoader: { claim: (url, init) => { sent.push(init.headers); return Promise.resolve(new Response(body, { headers: { 'content-type': 'text/event-stream' } })); } },
-    message: (m) => sent.push(m),
+    message: ({ received, ...m }) => { assert.equal(typeof received, 'number'); sent.push(m); },
   });
   const enc = (s) => new TextEncoder().encode(s);
   const tick = () => new Promise((r) => setTimeout(r, 5));
@@ -150,7 +152,9 @@ test('a stream delivers each read as its newest event, then its end', async () =
   assert.deepEqual(sent, [
     [['accept', 'text/event-stream']],
     { event: '', id: '1', data: 'a', coalesced: 0 },
-    { event: '', id: '4', data: 'd', coalesced: 2 },
+    { event: '', id: '2', data: 'b', coalesced: 0, more: true },
+    { event: '', id: '3', data: 'c', coalesced: 0, more: true },
+    { event: '', id: '4', data: 'd', coalesced: 0 },
   ]);
   assert.equal(end.kind, 1);
   assert.equal(new TextDecoder().decode(end.body), 'the event stream ended');
@@ -236,7 +240,7 @@ async function socketPeer() {
   return { url: `ws://127.0.0.1:${server.address().port}`, closed, next: path => steps.get(path).shift()(), close: () => server.close() };
 }
 
-test('a socket delivers text messages, coalescing a burst, then its close (LLP 1069.004)', async () => {
+test('a socket delivers every text message, a burst as one batch, then its close (LLP 1069.004)', async () => {
   const { request } = await import('./http-body.js');
   const peer = await socketPeer();
   const open = (path, sent, controller = new AbortController()) => request(
@@ -247,10 +251,9 @@ test('a socket delivers text messages, coalescing a burst, then its close (LLP 1
   try {
     // The burst once `a` is delivered, and the close once `d` is, so that neither arrives with what came before
     const sent = [];
-    const end = await open('/three', { push: (m) => { sent.push(m); if (m.data === 'a' || m.data === 'd') peer.next('/three'); } });
-    assert.deepEqual(sent[0], { event: '', id: '', data: 'a', coalesced: 0 });
-    assert.equal(sent.at(-1).data, 'd', 'the newest of a burst');
-    assert.equal(sent.reduce((n, m) => n + 1 + m.coalesced, 0), 4, 'every message delivered or counted');
+    const end = await open('/three', { push: ({ received, ...m }) => { sent.push(m); if (m.data === 'a' || m.data === 'd') peer.next('/three'); } });
+    assert.deepEqual(sent[0], { event: '', id: '', data: 'a', coalesced: 0, protocol: '' });
+    assert.deepEqual(sent.map(m => [m.data, m.coalesced, !!m.more]), [['a', 0, false], ['b', 0, true], ['c', 0, true], ['d', 0, false]], 'every message, in order');
     assert.deepEqual([end.kind, text(end)], [1, 'the socket closed (1000)']);
     const binary = await open('/binary', []);
     assert.deepEqual([binary.kind, text(binary)], [2, "a binary message: a socket's messages are text"]);
@@ -275,8 +278,8 @@ test('the JS target opens a socket under net.websocket, never net.fetch', async 
   const text = (r) => new TextDecoder().decode(r.body);
   try {
     const sent = [];
-    const end = await streamed({ method: 'GET', url: `${peer.url}/three`, headers: [], maxResponseBytes: 64 }, normalized(`net.websocket ${peer.url}`), (m) => { sent.push(m); if (m.data === 'a' || m.data === 'd') peer.next('/three'); }, new AbortController());
-    assert.deepEqual(sent[0], { event: '', id: '', data: 'a', coalesced: 0 });
+    const end = await streamed({ method: 'GET', url: `${peer.url}/three`, headers: [], maxResponseBytes: 64 }, normalized(`net.websocket ${peer.url}`), ({ received, ...m }) => { sent.push(m); if (m.data === 'a' || m.data === 'd') peer.next('/three'); }, new AbortController());
+    assert.deepEqual(sent[0], { event: '', id: '', data: 'a', coalesced: 0, protocol: '' });
     assert.deepEqual([end.kind, text(end)], [1, 'the socket closed (1000)']);
     const refused = await streamed({ url: `${peer.url}/three`, maxResponseBytes: 64 }, normalized(`net.fetch ${peer.url.replace('ws:', 'http:')}`), () => {}, new AbortController());
     assert.deepEqual([refused.kind, text(refused)], [2, "outside the app's grants (net.websocket)"]);
@@ -437,6 +440,29 @@ test('a long poll waits out Retry-After, shows retrying, and a drop ends the wai
   assert.equal(controller.retrying, undefined);
   assert.equal(s.asked.length, 3, 'not asked again');
   s.server.stop(true);
+});
+
+test('a long poll sets its cursor where it is, or appends it, and keeps every other parameter as written', async () => {
+  // As the native hosts' `with_query_value` does (host/apple/src/executor_longpoll.rs): the value is
+  // %XX outside the unreserved set, and no other pair is re-serialised as a form.
+  const cases = [
+    ['?wait=25&path=/a/b&tags=x,y&q=hello%20world&flag', 'a b', '?wait=25&path=/a/b&tags=x,y&q=hello%20world&flag&since=a%20b'],
+    ['?since=0&wait=25&since=1', "7!'()*", '?since=7%21%27%28%29%2A&wait=25'],
+    ['?%73ince=0&wait=25', '-_.~', '?since=-_.~&wait=25'],
+    // Empty fields stay, and a name that begins with U+FEFF is not the cursor's.
+    ['?&wait=25&&flag&since=0&', '1', '?&wait=25&&flag&since=1&'],
+    ['?%EF%BB%BFsince=0&since=0', '1', '?%EF%BB%BFsince=0&since=1'],
+    ['?%EF%BB%BFsince=0&since=0', '1', '?%EF%BB%BFsince=1&since=0', '\uFEFFsince'],
+    ['?wait=25&', '1', '?wait=25&&since=1'],
+  ];
+  for (const [query, next, expected, cursor = 'since'] of cases) {
+    const s = standIn([{ body: JSON.stringify({ seq: next }) }]);
+    const controller = new AbortController(), sent = [];
+    const done = longPoll(s, controller, sent, { cursor }, { url: `${s.origin}/changes${query}`, maxResponseBytes: 256 });
+    await until(() => s.held.length === 1);
+    assert.deepEqual(s.asked, [query, expected]);
+    controller.abort(); await done; s.server.stop(true);
+  }
 });
 
 test('what is not a poll reply ends a long poll, and only a bodiless GET is one', async () => {

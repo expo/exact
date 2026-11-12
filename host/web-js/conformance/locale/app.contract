@@ -4,7 +4,9 @@
 // resolvedLocale names that table, and formatLocale is the locale (the agent
 // gives no Region of its own); exactPage and exactDelivery are answered
 // by the runtime, and exactSurface with no surface publishing is its shape's
-// zero record.
+// zero record. `setLocale` chooses Arabic (its table, `rtl`, resolvedLocale)
+// over the agent's locale, and `setLocale("")` hands it back; a bad tag is
+// journaled and chooses nothing.
 shape Time
   locale: string
   formatLocale: string
@@ -31,6 +33,8 @@ component Locale
   state greeting = t("title")
   action more
     n = n + 1
+  action choose(tag: string)
+    setLocale(tag)
   view
     column testId="root" padding=10
       text greeting testId="greeting"
@@ -42,3 +46,9 @@ component Locale
       text `${hud.score} [${hud.label}] ${hud.tags.length}` testId="hud"
       button press=more testId="more"
         text t("more")
+      button press=choose("ar") testId="arabic"
+        text "Arabic"
+      button press=choose("") testId="system"
+        text "System"
+      button press=choose("a b") testId="bad"
+        text "Bad"

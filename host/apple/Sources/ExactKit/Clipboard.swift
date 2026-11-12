@@ -160,6 +160,16 @@ extension NodeView {
 }
 
 #if os(macOS)
+extension NodeView: NSMenuItemValidation {
+    /// Edit ▸ Copy while text is selected or a node from this one up hears
+    /// it, as an `NSTextView` dims Copy for an empty selection and iOS's
+    /// `canPerformAction` answers; any other item as if unvalidated.
+    package func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(copy(_:)) else { return true }
+        return clipboardTarget(#selector(copy(_:))) != nil || presenter?.selection.selectedText().isEmpty == false
+    }
+}
+
 /// Edit ▸ Cut, Copy, Paste and Paste and Match Style while nothing holds the
 /// focus (the window is its own first responder, or the session's view is):
 /// the DOM sends them to `<body>`, so the first root's `cut`, `copy` or

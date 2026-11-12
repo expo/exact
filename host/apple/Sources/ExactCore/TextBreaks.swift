@@ -265,4 +265,39 @@ extension TextEngine {
         }
         return pieces
     }
+    /// Min-content's pieces of a paragraph: `pieceRanges` over the runs'
+    /// joined `text`, from `boundaries` taken over the whole of it, so a run's
+    /// end inside a word is no break (CSS Text 3, "Line Breaking Details").
+    /// A hung run (a list marker) is no piece and ends the pieces before it.
+    /// Each piece carries the indent of the run it starts in.
+    package static func paragraphPieces(_ text: NSString, runs: [Run], boundaries: [Int]) -> [(range: NSRange, hyphenated: Bool, indent: CGFloat)] {
+        var pieces: [(range: NSRange, hyphenated: Bool, indent: CGFloat)] = []
+        var starts: [(at: Int, indent: CGFloat)] = []
+        var spanStart = 0, offset = 0, next = 0, run = 0
+        func flush(_ end: Int) {
+            guard end > spanStart else { return }
+            while next < boundaries.count, boundaries[next] <= spanStart { next += 1 }
+            var inside: [Int] = []
+            while next < boundaries.count, boundaries[next] < end { inside.append(boundaries[next] - spanStart); next += 1 }
+            inside.append(end - spanStart)
+            let span = text.substring(with: NSRange(location: spanStart, length: end - spanStart)) as NSString
+            for piece in pieceRanges(span, boundaries: inside) {
+                let at = spanStart + piece.range.location
+                while run + 1 < starts.count, starts[run + 1].at <= at { run += 1 }
+                pieces.append((NSRange(location: at, length: piece.range.length), piece.hyphenated, starts[run].indent))
+            }
+        }
+        for r in runs {
+            let end = offset + (r.text as NSString).length
+            if r.hang {
+                flush(offset)
+                spanStart = end
+            } else {
+                starts.append((offset, r.indent))
+            }
+            offset = end
+        }
+        flush(offset)
+        return pieces
+    }
 }

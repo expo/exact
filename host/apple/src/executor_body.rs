@@ -326,7 +326,9 @@ pub(super) fn read_at_most(
 /// Run `job` on a reader thread of its own, holding one of the process's
 /// [`MAX_READERS`] places until it ends; refused, as today's fifth reader
 /// is, when none is free or no thread can be made (LLP 1120 D4).
-pub(super) fn reader(job: impl FnOnce() + Send + 'static) -> Result<(), Outcome> {
+pub(super) fn reader(
+    job: impl FnOnce() + Send + 'static,
+) -> Result<std::thread::JoinHandle<()>, Outcome> {
     use std::sync::atomic::Ordering;
     if READERS
         .0
@@ -346,7 +348,6 @@ pub(super) fn reader(job: impl FnOnce() + Send + 'static) -> Result<(), Outcome>
             let _place = place;
             job();
         })
-        .map(|_| ())
         .map_err(|e| refused(format!("exactBodyFrom: the read could not start: {e}")))
 }
 

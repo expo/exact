@@ -147,7 +147,9 @@ package final class Runtime {
         guard !destroyed else { return }
         destroyed = true
         let rt = rt
-        on { exact_destroy(rt) }
+        // From a callback the owner waits on (a native module's `call` that
+        // ends its session), after the owner's current job (LLP 1072 T5, §8.4).
+        Owner.shared.syncOrLater { exact_destroy(rt) }
     }
 
     // @ref LLP 1072 T1/T2 — every runtime lives on the owner thread; each
@@ -299,12 +301,12 @@ package final class Runtime {
     }
     /// Boot a snapshot entry's plan by its kind (LLP 1126 D2): the headless
     /// session's boot, which a running host's `bootPlan` refuses.
-    package func bootEntry(_ bytes: Data, kind: String, props: Data? = nil, width: CGFloat, height: CGFloat) -> Batch {
+    package func bootEntry(_ bytes: Data, kind: String, props: Data? = nil, configuration: Data? = nil, width: CGFloat, height: CGFloat) -> Batch {
         let batch = on { () -> Batch in
             let name = Data(kind.utf8)
-            var payload = bytes; payload.append(name); payload.append(props ?? Data())
+            var payload = bytes; payload.append(name); payload.append(props ?? Data()); payload.append(configuration ?? Data())
             _ = write(payload)
-            return read(exact_boot_entry(rt, bytes.count, name.count, props?.count ?? 0, Float(width), Float(height)))
+            return read(exact_boot_entry(rt, bytes.count, name.count, props?.count ?? 0, configuration?.count ?? 0, Float(width), Float(height)))
         }
         return islands(batch)
     }
@@ -390,6 +392,7 @@ package final class Runtime {
     }
     /// The pointer over the view (`true`) or gone from it.
     package func hover(_ view: UInt32, over: Bool, now: Double) -> Batch { on { read(exact_dispatch(rt, view, over ? 2 : 3, 0, now)) } }
+    package func lookMotion(_ view: UInt32, states: UInt8, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 64, write(String(states)), now)) } }
     package func focus(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 4, 0, now)) } }
     package func blur(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 5, 0, now)) } }
     package func focusEvent(_ view: UInt32, entering: Bool, target: String, related: String?, now: Double) -> Batch {
@@ -598,6 +601,12 @@ package final class Runtime {
             let n = write(name + (json.map { "\0" + $0 } ?? ""))
             return read(exact_surface_record(rt, n))
         }
+    }
+    package func canvasPerformanceRequested(_ name: String) -> Bool {
+        on(busy: false) { exact_canvas_performance_requested(rt, write(name)) != 0 }
+    }
+    package func canvasPerformanceRecord(_ name: String, _ json: String?) -> Batch {
+        on { read(exact_canvas_performance_record(rt, write(name + (json.map { "\0" + $0 } ?? "")))) }
     }
     package func message(_ view: UInt32, _ value: String, now: Double) -> Batch {
         return on {
@@ -846,9 +855,9 @@ package final class Runtime {
     package func bindExtensions(_ names: [String]) { on { exact_bind_extensions(rt, write(names.joined(separator: "\n"))) } }
     /// A package picture's admission (LLP 1133.019 D11 item 1): nil for a
     /// source of no package's scheme.
-    package func picture(_ source: String) -> [String: Any]? {
+    package func picture(_ source: String, count: Bool = true) -> [String: Any]? {
         on(busy: ["error": "NotAllowedError", "message": "busy"]) {
-            let len = exact_picture(rt, write(source))
+            let len = exact_picture(rt, write(source), count ? 1 : 0)
             guard len > 0 else { return nil }
             let data = Data(bytes: exact_out(rt), count: Int(len))
             return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? ["error": "NotAllowedError"]
