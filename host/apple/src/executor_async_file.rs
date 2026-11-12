@@ -7,6 +7,7 @@ use super::*;
 pub(in super::super) enum ReaderPhase {
     Spawn,
     Size,
+    Decision,
     Read,
     Finished(bool),
 }
@@ -79,11 +80,12 @@ impl Machine {
                 state.book.deciders.insert(run, decide);
             }
             state.book.files.insert(run, file);
+            state.book.readers.insert(run);
             find(&mut state.running, run).expect("open").live += 1;
             size.flatten()
         };
         let m = self.clone();
-        let ended = Ended(m.clone(), lane, run);
+        let ended = ReaderEnded(m.clone(), lane, run);
         let job = move || {
             let (_stop, _retiring, _ended) = (stop, retiring, ended);
             let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -103,6 +105,8 @@ impl Machine {
                         {
                             m.post(lane, Event::Sized(run, answer));
                         }
+                        #[cfg(test)]
+                        m.reader_phase(ReaderPhase::Decision, run)?;
                         match (ok, decision.recv()) {
                             (Some(size), Ok(Decision::Read)) => Some(size),
                             _ => None,
@@ -147,9 +151,12 @@ impl Machine {
             .and_then(|_| body::reader(job));
         #[cfg(not(test))]
         let spawn = body::reader(job);
-        if let Err(outcome) = spawn {
-            self.shared.state.lock().unwrap().book.deciders.remove(&run);
-            self.answer(lane, run, outcome);
+        match spawn {
+            Ok(thread) => self.threads.lock().unwrap().push(thread),
+            Err(outcome) => {
+                self.shared.state.lock().unwrap().book.deciders.remove(&run);
+                self.answer(lane, run, outcome);
+            }
         }
     }
 
@@ -224,6 +231,7 @@ impl Machine {
             .position(|r| (r.ticket, r.generation) == run)
             .expect("found");
         let r = state.running.swap_remove(at);
+        state.book.downloads.remove(&run);
         if r.blocking {
             state.book.blocking = false;
         }
@@ -331,6 +339,13 @@ impl Machine {
         let origin = Some(origin(&url));
         state.book.hops[lane].push_back(Hop { run, origin, start });
         None
+    }
+}
+
+struct ReaderEnded(Arc<Machine>, usize, Run);
+impl Drop for ReaderEnded {
+    fn drop(&mut self) {
+        self.0.post(self.1, Event::ReaderEnded(self.2));
     }
 }
 

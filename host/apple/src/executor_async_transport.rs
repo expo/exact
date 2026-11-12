@@ -8,15 +8,24 @@ impl AsyncTransport for Tracked {
         let sends = request.body.is_some();
         {
             let mut state = self.machine.shared.state.lock().unwrap();
+            if state.retired {
+                return Err(ibex2::stdlib::fetch_async::aborted());
+            }
             let book = &mut state.book;
             // The places the starter held, the origin's too when it was
             // not known then (a redirect's).
             match book.reserved.remove(&self.run) {
                 Some(Some(_)) => {}
-                Some(None) => *book.origins[self.lane].entry(origin.clone()).or_default() += 1,
+                Some(None) => {
+                    *book.origins[self.transport_lane]
+                        .entry(origin.clone())
+                        .or_default() += 1
+                }
                 None => {
-                    *book.origins[self.lane].entry(origin.clone()).or_default() += 1;
-                    if self.lane == 1 {
+                    *book.origins[self.transport_lane]
+                        .entry(origin.clone())
+                        .or_default() += 1;
+                    if self.transport_lane == 1 {
                         book.in_flight += 1;
                     }
                 }
@@ -35,6 +44,16 @@ impl AsyncTransport for Tracked {
             run: self.run,
             origin: Some(origin.clone()),
             sends,
+            redirect: false,
+            file: self
+                .machine
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .book
+                .downloads
+                .contains(&self.run),
         });
         // The sink owns the physical hold before calling opaque transport
         // code, including refusal or unwind before an exchange is returned.
@@ -78,20 +97,27 @@ struct TrackedSink {
     origin: Option<String>,
     /// It sends the run's upload.
     sends: bool,
+    file: bool,
+    redirect: bool,
 }
 
 impl Sink for TrackedSink {
     fn head(&mut self, head: Head) -> Flow {
-        self.inner.head(head)
+        let flow = self.inner.head(head);
+        self.redirect = flow == Flow::Skip;
+        flow
     }
     fn data(&mut self, bytes: &[u8]) -> Flow {
         self.inner.data(bytes)
     }
     fn end(&mut self, result: Result<(), HostError>) {
-        // The release is the finisher's; posted before the task hears the
-        // end, so a next hop is queued after it.
-        self.release();
+        // A file destination publishes or cleans up during `end`; its places
+        // outlive that work (LLP 1162 D1). Other hops release before a redirect.
+        if !self.file {
+            self.release();
+        }
         self.inner.end(result);
+        self.release();
     }
     fn metrics(&mut self, metrics: HopMetrics) {
         self.inner.metrics(metrics);
@@ -104,8 +130,10 @@ impl Sink for TrackedSink {
 impl TrackedSink {
     fn release(&mut self) {
         if let Some(origin) = self.origin.take() {
-            self.machine
-                .post(self.lane, Event::Ended(self.run, Some(origin), self.sends));
+            self.machine.post(
+                self.lane,
+                Event::Ended(self.run, Some(origin), self.sends, !self.redirect),
+            );
         }
     }
 }

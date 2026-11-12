@@ -12,7 +12,7 @@ impl Core {
         waiting: bool,
     ) -> Result<(), (&'static str, Option<OwnedWork>)> {
         let ordered = r.request.is_ordered();
-        let overlap = self.machine.is_none() && reads::overlaps(&r, work.is_some());
+        let overlap = reads::overlaps(&r, work.is_some());
         let mut state = self.shared.state.lock().unwrap();
         // A deadline on work that cannot take one (a stream but an upload, a continuation, native work), or a
         // long poll that is no stream's HTTP GET (LLP 1016.000 D8), is refused here, before any path.
@@ -144,7 +144,15 @@ impl Core {
             match r
                 .request
                 .timeout_ms
-                .map(|ms| forget::QueuedDeadline::arm(&self.shared, lane, r.ticket, ms))
+                .map(|ms| match &self.machine {
+                    Some(machine) => Ok(forget::QueuedDeadline::on_machine(
+                        machine.timer.clone(),
+                        lane,
+                        r.ticket,
+                        ms,
+                    )),
+                    None => forget::QueuedDeadline::arm(&self.shared, lane, r.ticket, ms),
+                })
                 .transpose()
             {
                 Ok(deadline) => deadline,
@@ -174,6 +182,7 @@ impl Core {
                 started: std::time::Instant::now(),
                 ticket: r.ticket,
                 lane,
+                transport_lane: lane,
                 charge: if waits || one_shot { 0 } else { charge },
                 limit,
                 abort: Some(abort.clone()),

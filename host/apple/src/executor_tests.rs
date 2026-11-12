@@ -141,7 +141,7 @@ fn setup_with_grants(grants: &str) -> (Core, Arc<Fixture>, Receiver<()>) {
         woke,
     )
 }
-fn job(ticket: u64, request: Request) -> RequestOut {
+pub(super) fn job(ticket: u64, request: Request) -> RequestOut {
     RequestOut {
         class: exact_runner::RequestClass::Ordered,
         ticket,
@@ -150,7 +150,7 @@ fn job(ticket: u64, request: Request) -> RequestOut {
         forced: false,
     }
 }
-fn collect(core: &Core, woke: &Receiver<()>, count: usize) -> Vec<(u64, Outcome)> {
+pub(super) fn collect(core: &Core, woke: &Receiver<()>, count: usize) -> Vec<(u64, Outcome)> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut outcomes = vec![];
     while outcomes.len() < count {
@@ -1474,7 +1474,7 @@ mod again;
 mod body_from;
 
 #[path = "executor_body_to_tests.rs"]
-mod body_to;
+pub(super) mod body_to;
 
 #[path = "executor_abort_tests.rs"]
 pub(crate) mod abort;

@@ -775,3 +775,34 @@ it reports `head`. Both call the embedder outside the task's lock, since what
 it calls may abort the fetch.
 
 Replay all of it on a refresh.
+
+## Local patch 32, an asynchronous fetch's reply body destination
+
+`stdlib::fetch::Request::response_body` optionally names a `BodyDestination`
+and an error-body allowance. `FetchTask` sends only the final 2xx body's
+chunks there and calls `finish` for its response metadata, outside its lock.
+The transport's serial sink context calls both: on the bounded blocking
+adapter, its worker thread may write a file; a native delegate queue must
+arrange a different execution context before using a disk destination.
+Other statuses collect at most the error allowance, and redirects skip their
+bodies. Abort retains the destination through the physical end; its last
+release cleans up any unpublished file. Unset, nothing changes.
+
+`Staged::publish_if` syncs before asking its caller to admit the rename.
+Exact uses that boundary to arbitrate abort and deadline against publication
+(LLP 1162 D1). The existing `publish` admits unconditionally.
+
+Replay both on a refresh.
+
+## Local patch 33, asynchronous transport retirement
+
+`AsyncTransport::retire` releases a lane's idle resources while accepted
+exchanges retain their physical owners (LLP 1162 D8). `BlockingAdapter`
+forwards retirement to its `WorkerService`. Exact's service closes its
+bounded pool; reserved and running jobs keep their workers until they return.
+The bounded pool also supports retirement while its service handle is retained.
+`DarwinLane` serializes preparation against retirement and invalidates its
+session with `invalidateAndCancel`, even when callers retain the lane.
+Retirement refuses further preparation and task completions still arrive.
+
+Replay these lifecycle methods and the retained-pool and lane tests on a refresh.
