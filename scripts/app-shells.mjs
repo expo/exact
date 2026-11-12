@@ -160,7 +160,8 @@ exact-js = ${dep('js')}
 
 ${build}`,
     'build.rs': appleBuildScript(app),
-    'src/lib.rs': `//! ${title} on Apple: the Contract UI and the TypeScript data module.
+    // Names no app: a change to only its identity leaves the compiled archive fresh (linked-plan.mjs compiledBakeDir).
+    'src/lib.rs': `//! The app on Apple: the Contract UI and the TypeScript data module.
 
 ${includes(false)}
 ${module(false)}include!(concat!(env!("OUT_DIR"), "/logic.rs"));

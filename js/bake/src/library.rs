@@ -13,13 +13,25 @@ use std::path::{Path, PathBuf};
 
 /// Print the link of the app's package library for Cargo's `TARGET`; nothing for a web bake or when the package that
 /// fills the native slot declares none.
-pub(crate) fn link(app: &Path, platform: &str) -> Result<(), String> {
+pub(crate) fn link(app: &Path, platform: &str, linked: bool) -> Result<(), String> {
     let target = std::env::var("TARGET").map_err(|_| "build requires TARGET".to_string())?;
     if platform == "web" || target.starts_with("wasm32-") {
         return Ok(());
     }
     let selection = contract::native::native_slot(app)?;
-    for file in &selection.watched {
+    // `linked`: a TypeScript app's bake ran outside Cargo (EXACT_BAKED) and
+    // watched these, and the slot it chose is in the module.rs EXACT_BAKED
+    // names, so a change of slot is a new EXACT_BAKED; watching them all here
+    // too would rerun this script (and compile the archive again) for apps
+    // whose generated Rust is the same. The slot's own `exact.json` is still
+    // watched: its `native.link` and `native.library` reach only the lines
+    // printed below, never module.rs.
+    let watched = match (&selection.slot, linked) {
+        (_, false) => selection.watched.iter().collect::<Vec<_>>(),
+        (Some(slot), true) => vec![&slot.declaration],
+        (None, true) => Vec::new(),
+    };
+    for file in watched {
         println!("cargo:rerun-if-changed={}", file.display());
     }
     let Some(slot) = selection.slot else {
