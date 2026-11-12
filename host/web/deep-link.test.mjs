@@ -80,6 +80,14 @@ test('prefersMarkdown names text/markdown no lower than the most specific range 
   expect(prefersMarkdown(undefined)).toBe(false);
 });
 
+test.each([
+  'application/json;profile="a,text/markdown,b", text/html',
+  'text/markdown;charset="utf-8,iso-8859-1";q=0.1, text/html',
+  String.raw`application/json;profile="a\",text/markdown,b", text/html`,
+])('Markdown negotiation ignores quoted delimiters: %s', accept => {
+  expect(prefersMarkdown(accept)).toBe(false);
+});
+
 // Use the compiler's wire format, so the server's route reader is checked
 // against what both web targets actually ship.
 const sourceFor = pattern => `routes nav

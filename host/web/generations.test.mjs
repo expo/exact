@@ -6,8 +6,9 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { takeLock } from './build-lock.mjs';
-import { buildTreeFile, replaceBuild } from './serve.mjs';
+import { buildTreeFile, replaceBuild, serveBuildTree } from './serve.mjs';
 import { GENERATION, foreignBeside, generationFile, generationOf, generationPath, leaseGeneration, leasedGenerations, reapGenerations, servedFile } from './generations.mjs';
 import { BESIDE, STAGE, beside } from './beside.mjs';
 import { fileURLToPath } from 'node:url';
@@ -244,4 +245,30 @@ test('what a build keeps beside its directory is its own, or the directory is re
     for (const name of [...BESIDE.map((n) => `dist.${n}`), `dist.${STAGE}a1b2c3`]) expect(beside(name), name).toBe(true);
     for (const name of ['dist', `dist.${STAGE}`, 'dist.config.ts', 'distance.json']) expect(beside(name), name).toBe(false);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test('Markdown home pages negotiate within current and retained generations', async () => {
+  const { root, dist, stage } = workspace();
+  const server = createServer((req, res) => serveBuildTree(dist, req, res));
+  try {
+    const first = stage(1); writeFileSync(join(first, 'index.md'), '# First\n');
+    replaceBuild(first, dist);
+    const before = generationOf(dist);
+    const second = stage(2); writeFileSync(join(second, 'index.md'), '# Second\n');
+    replaceBuild(second, dist);
+    await new Promise(ok => server.listen(0, '127.0.0.1', ok));
+    const seen = [];
+    for (const id of [generationOf(dist), before]) {
+      const r = await fetch(`http://127.0.0.1:${server.address().port}/.exact/gen/${id}/`, { headers: { accept: 'text/markdown' } });
+      seen.push([r.status, r.headers.get('content-type'), r.headers.get('vary'), await r.text()]);
+    }
+    expect(seen).toEqual([
+      [200, 'text/markdown; charset=utf-8', 'Accept', '# Second\n'],
+      [200, 'text/markdown; charset=utf-8', 'Accept', '# First\n'],
+    ]);
+  } finally {
+    server.closeAllConnections(); await new Promise(ok => server.close(ok));
+    rmSync(root, { recursive: true, force: true });
+  }
 });
