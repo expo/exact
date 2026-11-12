@@ -31,11 +31,15 @@ impl<D: DataSource> Host<D> {
             })
             .collect();
         while let Some((ticket, outcome, timing)) = next(&mut self.runner) {
+            let preload = self.preloads.as_ref().and_then(|p| p.fulfilled(ticket));
             match self.runner.fulfill_measured(ticket, outcome, timing) {
-                Ok(Some(receipt)) => receipts.push(Timed {
-                    at_ms: self.now_ms,
-                    receipt,
-                }),
+                Ok(Some(receipt)) => {
+                    self.preload_content.extend(preload);
+                    receipts.push(Timed {
+                        at_ms: self.now_ms,
+                        receipt,
+                    });
+                }
                 Ok(None) => {}
                 Err(e) => {
                     error = Some(format!("{e:?}"));

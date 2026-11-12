@@ -2,7 +2,7 @@
 ///
 /// `$data` is the app's `DataSource` type (constructed with `Default`, or
 /// the sixth argument's factory for a deferred bytecode module);
-/// `$plan` a `&'static [u8]` of baked plan bytes. Every export takes the
+/// `$plan` a `&'static [u8]` of baked plan bytes. Session exports take the
 /// runtime handle `exact_create` returned (LLP 1031 D2).
 #[macro_export]
 macro_rules! host {
@@ -49,6 +49,36 @@ macro_rules! host {
         /// What every boot links, made from the entry's set in a `const` so
         /// the linker sees nothing else (LLP 1047.001 D3).
         const EXACT_LINKS: $crate::link::Links<$data> = $crate::link::Links::of($linked);
+        /// First statement of main; a prewarmed process reads and sends nothing.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_begin(prewarm: u32) {
+            if EXACT_LINKS.io.is_some() { $crate::launch_preloads::begin(prewarm != 0, $new); }
+        }
+        /// The app delegate initializer, including after prewarming.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_launched() {
+            if EXACT_LINKS.io.is_some() { $crate::launch_preloads::launched($new); }
+        }
+        /// A foreground launch known to have been opened by a person.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_opened() {
+            if EXACT_LINKS.io.is_some() { $crate::launch_preloads::opened($new); }
+        }
+        /// Number of definitions in the launch marks.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_count() -> u32 {
+            $crate::launch_preloads::current().map_or(0, |p| p.count() as u32)
+        }
+        /// One definition's monotonic seconds and first carrying commit.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_mark(index: u32) -> $crate::launch_preloads::LaunchMark {
+            $crate::launch_preloads::current().and_then(|p| p.mark(index as usize)).map_or_else(Default::default, |(_, m)| m)
+        }
+        /// Copy a definition's name; returns the full UTF-8 byte count.
+        #[no_mangle]
+        pub extern "C" fn exact_preloads_name(index: u32, out: *mut u8, capacity: usize) -> usize {
+            $crate::launch_preloads::copy_name(index as usize, out, capacity)
+        }
         $crate::pan_velocity_exports!();
         $crate::frame_health_exports!();
 

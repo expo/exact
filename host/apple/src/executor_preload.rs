@@ -27,6 +27,8 @@ pub struct Definition {
 pub enum Event {
     /// Handed to the repository fetch client.
     Sent,
+    /// The device could not supply a named secret.
+    MissingSecret,
     /// The first hop or a redirect exceeded the grants.
     RefusedGrant,
     /// The definition was not a bounded plain HTTP request.
@@ -79,6 +81,7 @@ pub(super) struct Held {
     taken: bool,
     started: Instant,
     answered_at: Arc<Mutex<Option<Instant>>>,
+    observer: Option<Observer>,
 }
 #[derive(Default, PartialEq, Eq)]
 struct Equal {
@@ -119,6 +122,19 @@ impl Held {
     }
 }
 
+/// Launch measurements, independent of executor adoption (LLP 1162.000 D4).
+#[derive(Clone, Copy)]
+pub enum Observation {
+    /// The request was handed to the fetch client.
+    Handed,
+    /// A complete reply arrived.
+    Complete,
+    /// A read took the reply; the host records its successful commit.
+    Taken(u64),
+}
+/// A bounded, nonblocking launch measurement sink.
+pub type Observer = Arc<dyn Fn(&str, Observation) + Send + Sync>;
+
 struct Location {
     state: Mutex<Destination>,
     #[cfg(test)]
@@ -153,6 +169,7 @@ enum Destination {
 enum Message {
     Reply(usize, Result<Collected, HostError>, Instant),
     Hop(Box<dyn FnOnce() + Send>),
+    Start(std::ops::Range<usize>, String),
     Tick,
     Stop,
 }
@@ -200,6 +217,7 @@ impl Preloads {
                     taken: false,
                     started: Instant::now(),
                     answered_at: Arc::new(Mutex::new(None)),
+                    observer: None,
                     reply: ReplyState::Pending {
                         abort: AbortController::new(),
                         due: now + deadline,
@@ -207,6 +225,7 @@ impl Preloads {
                 }
             })
             .collect();
+        let count = cache.preloads.len();
         let destination = Arc::new(Location {
             state: Mutex::new(Destination::Staging(Box::new(cache))),
             #[cfg(test)]
@@ -229,7 +248,7 @@ impl Preloads {
             .spawn(move || {
                 #[cfg(test)]
                 let _guard = thread_guard;
-                run(&destination, &send, receive, &host, &launch_grants)
+                run(&destination, &send, receive, &host, &launch_grants, count)
             });
         if spawned.is_err() {
             update(&set.destination, cancel_all);
@@ -247,6 +266,115 @@ impl Preloads {
             std::mem::take(&mut cache.journal)
         })
         .unwrap_or_default()
+    }
+}
+/// A launch's control remains usable after the executor adopts its owner.
+#[derive(Clone)]
+pub struct Control {
+    destination: Arc<Location>,
+    send: mpsc::Sender<Message>,
+}
+impl Preloads {
+    /// Keep cancellation, settlement and late foreground starts across adoption.
+    pub fn control(&self) -> Control {
+        Control {
+            destination: self.destination.clone(),
+            send: self.send.clone(),
+        }
+    }
+}
+impl Control {
+    /// A boot can dispatch before its launch thread has read the definitions;
+    /// hold those reads without delaying its first batch (LLP 1162.000 D4).
+    pub fn definitions_pending(&self, pending: bool) {
+        update(&self.destination, |cache| cache.preload_starting = pending);
+        let _ = self.send.send(Message::Tick);
+    }
+    #[cfg(test)]
+    pub(crate) fn wait_definitions(&self) {
+        let state = self.destination.state.lock().unwrap();
+        let (state, timeout) = self
+            .destination
+            .changed
+            .wait_timeout_while(
+                state,
+                Duration::from_secs(10),
+                |s| matches!(s, Destination::Staging(cache) if cache.preload_starting),
+            )
+            .unwrap();
+        drop(state);
+        assert!(!timeout.timed_out(), "launch definitions did not finish");
+    }
+    #[cfg(test)]
+    pub(crate) fn wait_ready(&self, count: usize) {
+        let state = self.destination.state.lock().unwrap();
+        let (state, timeout) = self.destination.changed.wait_timeout_while(state, Duration::from_secs(10), |s| {
+            matches!(s, Destination::Staging(cache) if cache.preloads.iter().filter(|p| matches!(p.reply, ReplyState::Ready(_))).count() < count)
+        }).unwrap();
+        drop(state);
+        assert!(!timeout.timed_out(), "launch replies did not finish");
+    }
+
+    /// Add launch definitions on their launch thread, including after adoption.
+    pub fn extend(&self, definitions: Vec<Definition>, grants: &str, observer: Observer) {
+        if let Destination::Staging(cache) = &mut *self.destination.state.lock().unwrap() {
+            cache.grants = grants.into();
+        }
+        let range = update(&self.destination, |cache| {
+            let first = cache.preloads.len();
+            for definition in definitions.into_iter().take(MAX_PRELOADS - first) {
+                let now = (cache.clock)();
+                let deadline = definition
+                    .deadline_ms
+                    .or(definition.request.timeout_ms)
+                    .map_or(DEFAULT_DEADLINE, |ms| Duration::from_millis(ms.into()));
+                cache.preloads.push(Held {
+                    key: Equal::of(&definition.request),
+                    definition,
+                    taken: false,
+                    started: Instant::now(),
+                    answered_at: Arc::new(Mutex::new(None)),
+                    observer: Some(observer.clone()),
+                    reply: ReplyState::Pending {
+                        abort: AbortController::new(),
+                        due: now + deadline,
+                    },
+                });
+            }
+            first..cache.preloads.len()
+        });
+        if let Some(range) = range {
+            if self
+                .send
+                .send(Message::Start(range, grants.into()))
+                .is_err()
+            {
+                update(&self.destination, |cache| {
+                    cache.preload_starting = false;
+                    cancel_all(cache);
+                });
+            }
+        }
+    }
+    /// Cancel uses of a changed secret before returning.
+    pub fn drop_secret(&self, name: &str) {
+        update(&self.destination, |cache| drop_secret(cache, name));
+        let _ = self.send.send(Message::Tick);
+    }
+    /// Drain facts before or after adoption.
+    pub fn take_journal(&self) -> Vec<Fact> {
+        update(&self.destination, |cache| {
+            std::mem::take(&mut cache.journal)
+        })
+        .unwrap_or_default()
+    }
+    /// Settle a complete reply without an executor or a wait.
+    pub fn settle(&self, request: &RequestOut) -> Option<(Outcome, CompletionTiming)> {
+        let mut destination = self.destination.state.lock().unwrap();
+        match &mut *destination {
+            Destination::Staging(cache) => settle(cache, request),
+            _ => None,
+        }
     }
 }
 impl Drop for Preloads {
@@ -342,45 +470,51 @@ impl Core {
                 return None;
             }
         }
-        let checked = reach::admit_cached(&r.request);
         let mut state = self.shared.state.lock().unwrap();
         if state.retired || state.dispatched || state.counts != [0, 0] || state.ordered_barrier {
             return None;
         }
-        let cache = state.cache.as_mut()?;
-        expire(cache);
-        let i = find(cache, &r.request)?;
-        if !matches!(cache.preloads[i].reply, ReplyState::Ready(_)) {
-            return None;
-        }
-        let (_, _, limit) = reads::reservation(&r.request, true).ok()?;
-        let outcome = match checked {
-            Err(e) => fetch_failure(e, &AbortController::new()),
-            Ok(()) => match cache::granted(&cache.grants, &r.request) {
-                Err(outcome) => outcome,
-                Ok(()) => {
-                    let ReplyState::Ready(ready) = &cache.preloads[i].reply else {
-                        unreachable!()
-                    };
-                    if response_bytes(&ready.response) + std::mem::size_of::<Completed>() > limit {
-                        return None;
-                    }
-                    let response = ready.response.clone();
-                    taken(cache, i);
-                    Outcome::Response(response)
-                }
-            },
-        };
-        let cached = matches!(outcome, Outcome::Response(_));
-        Some((
-            outcome,
-            CompletionTiming {
-                cached,
-                elapsed_ms: 0,
-                delivery_wait_ms: 0,
-            },
-        ))
+        settle(state.cache.as_mut()?, r)
     }
+}
+
+fn settle(cache: &mut cache::Cache, r: &RequestOut) -> Option<(Outcome, CompletionTiming)> {
+    if !eligible(&r.request, r.class, r.forced, false) || r.request.timeout_refusal().is_some() {
+        return None;
+    }
+    expire(cache);
+    let i = find(cache, &r.request)?;
+    if !matches!(cache.preloads[i].reply, ReplyState::Ready(_)) {
+        return None;
+    }
+    let checked = reach::admit_cached(&r.request);
+    let (_, _, limit) = reads::reservation(&r.request, true).ok()?;
+    let outcome = match checked {
+        Err(e) => fetch_failure(e, &AbortController::new()),
+        Ok(()) => match cache::granted(&cache.grants, &r.request) {
+            Err(outcome) => outcome,
+            Ok(()) => {
+                let ReplyState::Ready(ready) = &cache.preloads[i].reply else {
+                    unreachable!()
+                };
+                if response_bytes(&ready.response) + std::mem::size_of::<Completed>() > limit {
+                    return None;
+                }
+                let response = ready.response.clone();
+                taken(cache, i, r.ticket);
+                Outcome::Response(response)
+            }
+        },
+    };
+    let cached = matches!(outcome, Outcome::Response(_));
+    Some((
+        outcome,
+        CompletionTiming {
+            cached,
+            elapsed_ms: 0,
+            delivery_wait_ms: 0,
+        },
+    ))
 }
 
 fn eligible(request: &Request, class: RequestClass, forced: bool, work: bool) -> bool {
@@ -418,14 +552,14 @@ fn matching(cache: &cache::Cache, request: &Request, equal_body: bool) -> Option
 }
 pub(super) fn matches(cache: Option<&cache::Cache>, r: &RequestOut, work: bool) -> bool {
     eligible(&r.request, r.class, r.forced, work)
-        && cache.is_some_and(|c| find(c, &r.request).is_some())
+        && cache.is_some_and(|c| c.preload_starting || find(c, &r.request).is_some())
 }
 pub(super) fn waiting(state: &State, job: &Job) -> bool {
     eligible(&job.request, job.class, job.forced, job.work.is_some())
         && state
             .cache
             .as_ref()
-            .is_some_and(|c| find(c, &job.request).is_some())
+            .is_some_and(|c| c.preload_starting || find(c, &job.request).is_some())
 }
 // The earliest queued request keeps room to finish before later replies
 // can fill its lane. A preload failure still needs that room (D1).
@@ -448,7 +582,11 @@ pub(super) fn reserve_front(state: &mut State) -> bool {
 }
 pub(super) fn effect_count(state: &State) -> usize {
     let effects = state.counts[0] - state.light;
-    if state.cache.as_ref().is_none_or(|c| c.preloads.is_empty()) {
+    if state
+        .cache
+        .as_ref()
+        .is_none_or(|c| !c.preload_starting && c.preloads.is_empty())
+    {
         return effects;
     }
     effects
@@ -505,7 +643,7 @@ pub(super) fn serve_ready(state: &mut State) {
                     break;
                 }
                 let response = ready.response.clone();
-                taken(cache, i);
+                taken(cache, i, job.ticket);
                 Outcome::Response(response)
             }
         };
@@ -544,7 +682,13 @@ fn response_bytes(response: &Response) -> usize {
             .map(|(k, v)| k.len() + v.len())
             .sum::<usize>()
 }
-fn taken(cache: &mut cache::Cache, i: usize) {
+fn taken(cache: &mut cache::Cache, i: usize, ticket: u64) {
+    if let Some(observer) = &cache.preloads[i].observer {
+        observer(
+            &cache.preloads[i].definition.name,
+            Observation::Taken(ticket),
+        );
+    }
     let used = cache.touch();
     let held = &mut cache.preloads[i];
     if let ReplyState::Ready(r) = &mut held.reply {
@@ -626,11 +770,17 @@ struct Events {
     index: usize,
     clock: Arc<dyn Fn() -> Instant + Send + Sync>,
     answered_at: Arc<Mutex<Option<Instant>>>,
+    observed: Option<(String, Observer)>,
 }
 impl FetchEvents for Events {
     fn outcome(&self, result: Result<Collected, HostError>) {
         let at = (self.clock)();
         *self.answered_at.lock().unwrap() = Some(at);
+        if result.is_ok() {
+            if let Some((name, observer)) = &self.observed {
+                observer(name, Observation::Complete);
+            }
+        }
         let _ = self.send.send(Message::Reply(self.index, result, at));
     }
     fn next_hop(&self, start: Box<dyn FnOnce() + Send>) {
@@ -702,6 +852,7 @@ fn run(
     receive: mpsc::Receiver<Message>,
     host: &StreamHost,
     launch_grants: &str,
+    count: usize,
 ) {
     // Adapt the binding itself so every host honours its supplied transport (D4).
     #[cfg(test)]
@@ -720,61 +871,7 @@ fn run(
             return;
         }
     };
-    let count = update(destination, |c| c.preloads.len()).unwrap_or(0);
-    for i in 0..count {
-        let start = update(destination, |cache| {
-            expire(cache);
-            let held = &cache.preloads[i];
-            let ReplyState::Pending { abort, .. } = &held.reply else {
-                return None;
-            };
-            let request = &held.definition.request;
-            if request.body.len() > MAX_BODY_BYTES || !request.is_plain_http() {
-                drop_held(cache, i, Event::Refused);
-                return None;
-            }
-            if cache::granted(launch_grants, request).is_err() {
-                drop_held(cache, i, Event::RefusedGrant);
-                return None;
-            }
-            let start = (
-                request.clone(),
-                abort.clone(),
-                launch_grants.to_owned(),
-                cache.clock.clone(),
-                held.answered_at.clone(),
-            );
-            cache.journal.push(held.fact(Event::Sent));
-            Some(start)
-        })
-        .flatten();
-        let Some((request, abort, grants, clock, answered_at)) = start else {
-            continue;
-        };
-        let grants = exact_data::storage::scope(&grants, request.grants.as_deref())
-            .and_then(|s| ibex2::grant::GrantSet::parse(&exact_runner::io_grants(s)))
-            .expect("checked grants");
-        let fetch = reach::gate_fetch(host().endow(grants).fetch, request.reach);
-        let transport = Arc::new(fetch.blocking_adapter(workers.clone()));
-        let mut req = fetch_request(request, false);
-        req.max_body = Some(cache::MAX_ENTRY);
-        fetch.start_async(
-            transport.clone(),
-            req,
-            None,
-            abort.signal(),
-            HeaderCaps {
-                bytes: MAX_HEADERS,
-                entries: 1024,
-            },
-            Arc::new(Events {
-                send: send.clone(),
-                index: i,
-                clock,
-                answered_at,
-            }),
-        );
-    }
+    start_indices(destination, send, host, launch_grants, &workers, 0..count);
     loop {
         let delay = update(destination, |cache| {
             expire(cache);
@@ -800,6 +897,9 @@ fn run(
                 .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
         };
         match message {
+            Ok(Message::Start(indices, grants)) => {
+                start_indices(destination, send, host, &grants, &workers, indices)
+            }
             Ok(Message::Reply(i, result, at)) => {
                 update(destination, |c| finish(c, i, result, at));
             }
@@ -807,6 +907,77 @@ fn run(
             Ok(Message::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
             Ok(Message::Tick) | Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
+    }
+}
+
+fn start_indices(
+    destination: &Arc<Location>,
+    send: &mpsc::Sender<Message>,
+    host: &StreamHost,
+    launch_grants: &str,
+    workers: &Arc<ibex2::stdlib::fetch_async::BoundedWorkerPool>,
+    indices: std::ops::Range<usize>,
+) {
+    for i in indices {
+        let start = update(destination, |cache| {
+            expire(cache);
+            let held = &cache.preloads[i];
+            let ReplyState::Pending { abort, .. } = &held.reply else {
+                return None;
+            };
+            let request = &held.definition.request;
+            if request.body.len() > MAX_BODY_BYTES || !request.is_plain_http() {
+                drop_held(cache, i, Event::Refused);
+                return None;
+            }
+            if cache::granted(launch_grants, request).is_err() {
+                drop_held(cache, i, Event::RefusedGrant);
+                return None;
+            }
+            let start = (
+                request.clone(),
+                abort.clone(),
+                launch_grants.to_owned(),
+                cache.clock.clone(),
+                held.answered_at.clone(),
+                held.observer
+                    .clone()
+                    .map(|o| (held.definition.name.clone(), o)),
+            );
+            cache.journal.push(held.fact(Event::Sent));
+            Some(start)
+        })
+        .flatten();
+        let Some((request, abort, grants, clock, answered_at, observed)) = start else {
+            continue;
+        };
+        let grants = exact_data::storage::scope(&grants, request.grants.as_deref())
+            .and_then(|s| ibex2::grant::GrantSet::parse(&exact_runner::io_grants(s)))
+            .expect("checked grants");
+        let fetch = reach::gate_fetch(host().endow(grants).fetch, request.reach);
+        let transport = Arc::new(fetch.blocking_adapter(workers.clone()));
+        let mut req = fetch_request(request, false);
+        req.max_body = Some(cache::MAX_ENTRY);
+        if let Some((name, observer)) = &observed {
+            observer(name, Observation::Handed);
+        }
+        fetch.start_async(
+            transport.clone(),
+            req,
+            None,
+            abort.signal(),
+            HeaderCaps {
+                bytes: MAX_HEADERS,
+                entries: 1024,
+            },
+            Arc::new(Events {
+                send: send.clone(),
+                index: i,
+                clock,
+                answered_at,
+                observed,
+            }),
+        );
     }
 }
 

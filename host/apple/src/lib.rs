@@ -58,6 +58,7 @@ pub mod geometry;
 pub mod gradient;
 pub mod host;
 mod icon_path;
+pub mod launch_preloads;
 pub mod link;
 mod looks;
 pub mod markup;

@@ -42,6 +42,18 @@ impl<D: DataSource> Host<D> {
     /// layout's own batch also loses its motion samples; later batches keep
     /// theirs, as nothing would send them again.
     pub(super) fn write(&mut self, mut batch: Batch, error: Option<&str>) -> String {
+        if let Some(preloads) = &self.preloads {
+            if self.preload_accepted {
+                preloads.committed(std::mem::take(&mut self.preload_content), self.runner.seq());
+            }
+            for fact in preloads.journal() {
+                self.runner.log(format!(
+                    "preload {} {} {:?}",
+                    fact.name, fact.origin, fact.outcome
+                ));
+            }
+            batch.journal.extend(self.runner.take_journal());
+        }
         if batch.layout_provisional {
             self.withhold_layout();
         }

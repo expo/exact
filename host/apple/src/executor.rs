@@ -6,7 +6,8 @@ use std::ffi::c_void;
 #[path = "executor_core.rs"]
 mod core;
 pub use core::preload::{
-    Definition as Preload, Event as PreloadEvent, Fact as PreloadFact, Preloads,
+    Control as PreloadControl, Definition as Preload, Event as PreloadEvent, Fact as PreloadFact,
+    Observation as PreloadObservation, Observer as PreloadObserver, Preloads,
 };
 #[path = "executor_pump.rs"]
 pub mod pump;
@@ -203,6 +204,10 @@ impl Executor {
 /// own methods, behind a trait so that an archive that links no I/O names
 /// none of them, nor the transports and stores they reach.
 pub trait Io {
+    /// Adopt launch requests before dispatch.
+    fn adopt_preloads(&self, preloads: Preloads) -> Result<(), Preloads> {
+        Err(preloads)
+    }
     /// [`Executor::set_app_roots`].
     fn set_app_roots(&self, roots: [std::path::PathBuf; 3]);
     /// [`Executor::ordered_idle`].
@@ -242,6 +247,9 @@ pub trait Io {
 }
 
 impl Io for Executor {
+    fn adopt_preloads(&self, preloads: Preloads) -> Result<(), Preloads> {
+        Executor::adopt_preloads(self, preloads)
+    }
     fn set_app_roots(&self, roots: [std::path::PathBuf; 3]) {
         Executor::set_app_roots(self, roots)
     }

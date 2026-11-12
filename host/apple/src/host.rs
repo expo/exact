@@ -167,6 +167,10 @@ pub(crate) struct Mirror {
 
 /// One runner, one presenter.
 pub struct Host<D: DataSource> {
+    pub(crate) preloads: Option<crate::launch_preloads::LaunchPreloads>,
+    boot_requests: Vec<RequestOut>,
+    preload_content: Vec<String>,
+    preload_accepted: bool,
     runner: Runner<D>,
     admitting_frame: bool,
     font_hook: Option<(crate::measure::FontsFn, *mut std::ffi::c_void, usize)>,
@@ -513,7 +517,17 @@ impl<D: DataSource> Host<D> {
             .nodes
             .iter()
             .any(|n| n.node_type == NodeType::Head as u8);
+        let preloads = links.io.and_then(|io| (io.preloads)());
+        let (boot_requests, preload_content) = preloads
+            .as_ref()
+            .map(|p| p.settle(&mut runner))
+            .transpose()?
+            .unwrap_or_default();
         let mut host = Host {
+            preloads,
+            boot_requests,
+            preload_content,
+            preload_accepted: false,
             has_heads,
             head_title: None,
             head_edited: false,
@@ -668,6 +682,10 @@ impl<D: DataSource> Host<D> {
             self.runner.log(note);
         }
         self.persist();
+        self.preload_accepted = true;
+        if let Some(preloads) = &self.preloads {
+            preloads.committed(std::mem::take(&mut self.preload_content), self.runner.seq());
+        }
     }
 
     /// The runner.
@@ -832,7 +850,9 @@ impl<D: DataSource> Host<D> {
     /// The requests the runner handed out since the last take (LLP 1016 D2):
     /// the bridge gives them to the executor; nothing reaches the presenter.
     pub fn take_requests(&mut self) -> Vec<RequestOut> {
-        self.runner.take_requests()
+        let mut requests = std::mem::take(&mut self.boot_requests);
+        requests.extend(self.runner.take_requests());
+        requests
     }
 
     /// Admission failures remain on the runner's current tickets, not a queue.
