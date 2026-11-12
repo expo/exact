@@ -201,26 +201,36 @@ export function tools(table) {
   // ---- WebMCP (D8)
   const context = globalThis.document?.modelContext;
   if (context?.registerTool) {
-    const offered = new Map();
+    // `turnedDown`: tools the browser refused, offered again only after they have been unavailable, so a
+    // refusal that stands (a name another script holds) is not retried at every commit.
+    const offered = new Map(), turnedDown = new Set();
     const offer = () => {
       for (const [name, [, params, consequence, , description, , , available, face]] of Object.entries(table)) {
         if (!face || (face.doors && !face.doors.includes("web"))) continue;
         const on = !(available && available() === false);
+        if (!on) turnedDown.delete(name);
+        else if (turnedDown.has(name)) continue;
         if (on === offered.has(name)) continue;
         if (!on) { offered.get(name).abort(); offered.delete(name); say(`webmcp ${name}: withdrawn`); continue; }
         const input = schema(params);
         for (const [p, words] of Object.entries(face.parameters ?? {})) if (input.properties[p]) input.properties[p] = schema(params[p], words);
         const signal = new AbortController();
         offered.set(name, signal);
-        context.registerTool({
+        // A refusal (Chrome's InvalidStateError for a bad or duplicate name, an empty description) leaves the tool
+        // unoffered until it has been unavailable; a rejection with the signal's reason is its own withdrawal (§4.2).
+        const refused = e => {
+          if (signal.signal.aborted && e === signal.signal.reason) return;
+          say(`webmcp ${name}: refused: ${e?.name}: ${e?.message}`);
+          if (offered.get(name) === signal) { offered.delete(name); turnedDown.add(name); }
+        };
+        Promise.resolve(context.registerTool({
           name, title: face.title ?? name, description, inputSchema: input,
           annotations: { readOnlyHint: consequence === "reads", consequentialHint: consequence !== "reads" },
           execute: input => new Promise(resolve => {
             const r = call({ tool: name, args: input ?? {}, door: "web", digest: face.digest }, resolve);
             if (r.error) resolve({ outcome: "refused", certainty: "none", message: r.error });
           }).then(e => e.outcome === "ok" ? e.value ?? { outcome: "ok" } : { outcome: e.outcome, certainty: e.certainty, reason: e.reason, message: e.message }),
-        }, { signal: signal.signal });
-        say(`webmcp ${name}: registered`);
+        }, { signal: signal.signal })).then(() => say(`webmcp ${name}: registered`), refused);
       }
     };
     After.push(offer);

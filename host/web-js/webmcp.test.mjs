@@ -89,3 +89,42 @@ test('faced tools on the web door are registered, described, withdrawn while una
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a refused registration is journalled, and offered again only after the tool has been unavailable', async () => {
+  const old = { document: globalThis.document, exact: globalThis.exact };
+  const unhandled = [], listen = e => unhandled.push(e);
+  process.on('unhandledRejection', listen);
+  // The first registration is refused, as Chrome refuses a duplicate name; later ones are accepted at once, as
+  // Chrome accepts them.
+  const browser = fake((_, n) => n === 1 ? Promise.reject(new DOMException('Duplicate tool name', 'InvalidStateError')) : Promise.resolve(undefined));
+  const { dir, tools, rt, settle, commit } = await load(browser.registerTool);
+  const lines = () => rt.journal.filter(l => l.startsWith('webmcp'));
+  try {
+    let open = true;
+    tools({ look: [() => () => {}, {}, 'reads', flags, 'Look.', null, null, () => open, face(['web'])] });
+    await settle();
+    expect(lines()).toEqual(['webmcp look: refused: InvalidStateError: Duplicate tool name']);
+    // A refusal that stands is not retried at every commit.
+    await commit();
+    await commit();
+    expect(browser.named('look')).toHaveLength(1);
+    expect(lines()).toHaveLength(1);
+    // Once the tool has been unavailable, it is offered again.
+    open = false;
+    await commit();
+    open = true;
+    await commit();
+    expect(browser.named('look')).toHaveLength(2);
+    expect(lines().at(-1)).toBe('webmcp look: registered');
+    // A withdrawal aborts the signal and is not a refusal.
+    open = false;
+    await commit();
+    expect(browser.named('look')[1].options.signal.aborted).toBe(true);
+    expect(lines().slice(-2)).toEqual(['webmcp look: registered', 'webmcp look: withdrawn']);
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off('unhandledRejection', listen);
+    Object.assign(globalThis, old);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
