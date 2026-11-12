@@ -123,7 +123,8 @@ let iosFloor: String = {
     let floor = [17, 0]
     guard let asked = ProcessInfo.processInfo.environment["EXACT_IOS_DEPLOYMENT"], !asked.isEmpty else { return "17.0" }
     let parts = asked.split(separator: ".").map { Int($0) ?? 0 }
-    return parts.lexicographicallyPrecedes(floor) ? "17.0" : asked
+    // `.iOS(_:)` takes two or three components; app.json may write "18".
+    return parts.lexicographicallyPrecedes(floor) ? "17.0" : parts.count == 1 ? "\(asked).0" : asked
 }()
 
 let package = Package(
