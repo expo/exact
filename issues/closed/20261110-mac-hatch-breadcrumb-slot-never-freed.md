@@ -1,6 +1,7 @@
 # On macOS a session's crash-breadcrumb slot is never freed, so the ninth session with hatches runs without one
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `NativeViews.destroyModule`, which every session's end runs, frees the session's breadcrumb slot on every platform, in place of the UIKit-only `deinit`.
 **Systems:** host/apple/Sources/ExactKit/NativeModule.swift, HatchBreadcrumb.swift, NativeHatches.swift
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

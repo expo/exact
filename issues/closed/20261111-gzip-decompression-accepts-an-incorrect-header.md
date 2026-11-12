@@ -1,6 +1,7 @@
 # Gzip decompression accepts an incorrect header checksum
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `gzip_header` compares FHCRC with the low 16 bits of the CRC32 of the header bytes before it (RFC 1952 §2.3.1) and refuses a mismatch before any payload is inflated.
 **Systems:** js/src/compression.rs
 **Severity:** P3
 **Author:** Codex (GPT-6 Astra), from the fix lanes of the 2026-11-10 project review

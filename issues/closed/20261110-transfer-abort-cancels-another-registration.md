@@ -1,6 +1,7 @@
 # Aborting a background transfer also cancels a registration whose id begins with the aborted id and a space
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `abort` cancels a task only when the id its description parses to (`which`, by the last space) is the aborted registration's, so aborting `album` leaves `album 2`'s tasks running.
 **Systems:** host/apple/Sources/ExactKit/Transfers.swift
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

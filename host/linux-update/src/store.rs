@@ -6,8 +6,9 @@
 //! one byte on a socketpair the display loop polls beside the executor's,
 //! the line on a channel the presenter drains (`Presenter::poll_update`).
 //!
-//! Where the store lives: `$XDG_DATA_HOME/exact/<app id>/update`, else
-//! `~/.local/share/exact/<app id>/update`; `EXACT_UPDATE_DIR` and
+//! Where the store lives: `<data home>/exact/<app id>/update`, the data home
+//! as the app's own directories take it (`exact_linux::picker::xdg_base`),
+//! and no store without one; `EXACT_UPDATE_DIR` and
 //! `EXACT_UPDATE_ORIGIN` as `exact_update::client` documents, and under
 //! `EXACT_AGENT=1` a fresh temporary directory. The store is opened before
 //! the boot, since the boot is what it selects (`app.rs`); first pixel is
@@ -50,17 +51,6 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The platform's data directory: `$XDG_DATA_HOME`, else `~/.local/share`.
-fn data_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("XDG_DATA_HOME").filter(|v| !v.is_empty()) {
-        return PathBuf::from(dir);
-    }
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join(".local/share")
-}
-
 impl Updates {
     pub(crate) fn pin(&mut self, generation: Generation) {
         self.generation = generation;
@@ -71,9 +61,11 @@ impl Updates {
 
     /// Open the store for the binary whose `compat.json` and baked plan are
     /// given, with `assets` as what it embeds by name. Refused when the
-    /// binary links no store, or the directory cannot be made.
+    /// binary links no store, the directory cannot be made, or there is no
+    /// data directory to put it in and no override names one.
     pub fn open(compat: &str, plan: &[u8], assets: &Path) -> Result<Updates, String> {
-        let client = Client::open(&data_dir(), assets, compat, plan)?;
+        let base = exact_linux::picker::xdg_base("XDG_DATA_HOME", ".local/share");
+        let client = Client::open(base.as_deref(), assets, compat, plan)?;
         Updates::from_client(client)
     }
 

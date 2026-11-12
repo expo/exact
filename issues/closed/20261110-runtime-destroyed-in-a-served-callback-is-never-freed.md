@@ -1,6 +1,7 @@
 # A session destroyed while main serves an owner callback marks its runtime destroyed and never frees it
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `Runtime.destroy` sends `exact_destroy` through `Owner.syncOrLater`, so a destroy from a served callback frees the runtime after the owner's current job instead of being refused.
 **Systems:** host/apple/Sources/ExactCore/Bridge.swift (`Runtime.destroy`), host/apple/Sources/ExactCore/Owner.swift, host/apple/Sources/ExactKit/Session.swift (`ExactSession.destroy`)
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

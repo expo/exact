@@ -216,7 +216,7 @@ pub fn open(len: usize, compat: &str, plan: &[u8]) -> u32 {
     else {
         return emit(b"exact_update_open: the payload names no base and assets".to_vec());
     };
-    match Client::open(Path::new(&base), Path::new(&assets), compat, plan) {
+    match Client::open(Some(Path::new(&base)), Path::new(&assets), compat, plan) {
         Ok(client) => {
             refresh(&client);
             *lock(&CLIENT) = Some(client);

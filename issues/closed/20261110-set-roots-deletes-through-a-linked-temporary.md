@@ -1,6 +1,7 @@
 # Activation empties `picked` and `shared` through `app:/tmp` when that root is a symbolic link
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Before emptying `picked` and `shared`, both hosts look for a symbolic link at `app:/tmp` or between it and the cache base, as `unlinked` does for a scratch tree, and when they find one they leave both directories and say so on standard error; a link swapped in between the check and the delete is still followed, as the issue's handle-relative delete would not.
 **Systems:** host/linux/src/picker.rs (Linux and Windows), host/apple/src/picker.rs
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from Grok 4.7's whole-project review (2026-11-10)

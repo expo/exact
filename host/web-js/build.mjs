@@ -14,9 +14,9 @@ import { launchModules } from '../../scripts/launch-modules.mjs';
 //    module, everything needed to be interactive.
 // 3. `index.html` carries the web host's own base stylesheet (from
 //    `host/web/index.html`), the app's static classes, and the module, with a
-//    `modulepreload` in the head for it and its static imports, so a served
-//    page (host/render/src/page.rs `page_js`) fetches its runtime while the
-//    document streams.
+//    `modulepreload` in the head for every emitted chunk, so a served page
+//    (host/render/src/page.rs `page_js`) fetches its runtime while the document
+//    streams, including pieces it may first use offline.
 // A data module loaded after first pixel (`rust-data.js`) and the agent
 // adapter (`agent.js`, only under `?agent`) are separate files.
 import { spawn, spawnSync } from 'node:child_process';
@@ -825,6 +825,7 @@ if (how !== 'none' || markdownReaders) {
 // minifier leaves the entry 6–10% smaller than Bun's after brotli (RealWorld
 // 25.8 → 23.6 KB, the feed bench's 30.9 → 27.9, the grid's 19.3 → 18.1),
 // bytes a page downloads before its runtime is up.
+const preloadModules = [];
 {
   const b = await rolldown({ input: resolve(gen, 'main.js'), ...(ts ? { tsconfig: resolve(tsStage, '__exact_tsconfig.json') } : {}), transform: { ...bundleOptions.transform, define: { ...bundleOptions.transform.define, 'globalThis.__exactRender': 'false' } },
     plugins: scopedPlugins(), logLevel: 'warn', onLog });
@@ -847,12 +848,25 @@ if (how !== 'none' || markdownReaders) {
   const built = await b.write({ dir: out, format: 'esm', minify: true, comments: false, entryFileNames: 'app.js', chunkFileNames: '[name]-[hash].js',
     postBanner: (chunk) => chunk.isEntry ? '//# allFunctionsCalledOnLoad' : undefined,
     ...(devReload && ts ? { manualChunks: (id, { getModuleInfo }) => fromData(id, getModuleInfo) ? 'dev-data' : undefined } : {}) });
+  preloadModules.push(...built.output.filter(file => file.type === 'chunk').map(file => file.fileName));
   if (devReload && ts) for (const chunk of built.output.filter(file => file.type === 'chunk' && Object.keys(file.modules).includes(pageAppTs))) {
     devLogic.push(['typescript', createHash('sha256').update(readFileSync(resolve(out, chunk.fileName))).digest('hex')]);
   }
+  const entry = built.output.find(file => file.type === 'chunk' && file.isEntry);
+  // Interaction-activated documents omit the head's preloads. Starting their
+  // runtime prepares the same chunks without executing them.
+  const deferred = preloadModules.filter(name => name !== entry.fileName);
+  if (deferred.length) writeFileSync(resolve(out, entry.fileName), entry.code + `
+{
+  const prepared = new Set([...document.querySelectorAll('link[rel="modulepreload"]')].map(link => link.href));
+  for (const name of ${JSON.stringify(deferred)}) {
+    const href = new URL(name, ${args.includes('--inline') ? 'document.baseURI' : 'import.meta.url'}).href;
+    if (!prepared.has(href)) document.head.append(Object.assign(document.createElement('link'), { rel: 'modulepreload', href }));
+  }
+}
+`);
   // The entry's bytes by source module, as Rolldown rendered them before minification (shares, not a ledger), for
   // `scripts/metrics.mjs --web-bytes` (LLP 1047.002 D5): what of the runtime an app's plan reached.
-  const entry = built.output.find(file => file.type === 'chunk' && file.isEntry);
   const moduleName = (id) => { const name = relative(gen, id); return name.startsWith('..') ? basename(id) : name; };
   writeFileSync(resolve(gen, 'modules.json'), JSON.stringify(Object.fromEntries(Object.entries(entry.modules).map(([id, m]) => [moduleName(id), m.renderedLength]).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]))));
   await b.close();
@@ -870,12 +884,12 @@ const attr = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').repla
 const icon = webIconLinks(manifest, appDir, shell.match(/<link rel="icon"[^>]*>/)[0]);
 const css = readFileSync(resolve(gen, 'app.css'), 'utf8');
 const viewport = existsSync(resolve(gen, 'viewport.txt')) ? readFileSync(resolve(gen, 'viewport.txt'), 'utf8') : 'width=device-width, initial-scale=1';
-// The entry and the chunks it imports statically (none, unless a split
-// shares one with a loaded piece): what a page preloads from its head.
-const statics = ['app.js', ...new Set([...readFileSync(resolve(out, 'app.js'), 'utf8').matchAll(/(?:^|[;}\s])import(?:[^"'();]*?from)?\s*["']\.\/([^"']+\.js)["']/g)].map(m => m[1]))];
 // Declared fonts: a preload each, from the head (LLP 1019; the faces are in app.css).
 const fonts = existsSync(resolve(gen, 'preloads.html')) ? readFileSync(resolve(gen, 'preloads.html'), 'utf8') : '';
-const preloads = fonts + (args.includes('--inline') ? '' : statics.map(f => `<link rel="modulepreload" href="./${f}">\n`).join(''));
+// modulepreload fills the document's module map without evaluating the pieces
+// that import() activates later, even when HTTP caching is disabled.
+const preloads = fonts + preloadModules.filter(f => !args.includes('--inline') || f !== 'app.js')
+  .map(f => `<link rel="modulepreload" href="./${f}">\n`).join('');
 // A rendered page carries only the rules its document can match (page-style.mjs, LLP 1048.007 D4); the runtime adds
 // the whole sheet before its first render (main.js), from style.css.
 writeFileSync(resolve(out, 'style.css'), base + css);

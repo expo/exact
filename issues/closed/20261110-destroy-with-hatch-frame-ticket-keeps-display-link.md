@@ -1,6 +1,7 @@
 # A session destroyed while a hatch frame ticket is live keeps its display link
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `ExactSession.destroy` drops the hatch clock's tickets before `frames.run(false)`, so the display link stops whatever frame tickets were live.
 **Systems:** host/apple/Sources/ExactKit/Session.swift (`destroy`), Frames.swift, HatchClock.swift, NativeModule.swift (`destroyModule`)
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

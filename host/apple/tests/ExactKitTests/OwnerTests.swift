@@ -1,3 +1,4 @@
+import CExact
 import Foundation
 import XCTest
 #if os(macOS)
@@ -101,6 +102,16 @@ final class OwnerTests: XCTestCase {
         // queued behind it.
         Owner.shared.sync { order.append("next") }
         XCTAssertEqual(order, ["served", "job", "later", "next"])
+    }
+
+    /// A native module's `call` that ends its session runs as a served
+    /// callback: the runtime is freed after the owner's current job.
+    func testADestroyFromAServedCallbackFreesTheRuntime() {
+        let session = ExactApp.shared.makeSession(label: "destroy-in-callback")
+        let rt = session.runtime.rt
+        Owner.shared.sync { Owner.shared.callMain { session.destroy() } }
+        XCTAssertTrue(session.runtime.destroyed)
+        XCTAssertFalse(Owner.shared.sync { exact_in(rt, 1) != nil }, "the library still holds the runtime")
     }
 
     func testCallMainFromAnAsynchronousOwnerJobIsServedByTheMainQueue() {

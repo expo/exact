@@ -1,6 +1,7 @@
 # The Linux update store takes a relative `XDG_DATA_HOME`, and the temporary directory when `HOME` is unset
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The Linux update store takes its base from `exact_linux::picker::xdg_base`, which the app's own directories and the recent-files list now share: an absolute `XDG_DATA_HOME`, else `$HOME/.local/share` with `HOME` absolute, else no store unless `EXACT_UPDATE_DIR` or the agent names one.
 **Systems:** host/linux-update/src/store.rs, update/src/client.rs
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from Grok 4.7's whole-project review (2026-11-10)

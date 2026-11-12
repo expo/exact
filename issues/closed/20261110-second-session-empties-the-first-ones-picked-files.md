@@ -1,6 +1,7 @@
 # On Apple a second session's activation deletes the files the first one picked or was shared
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `set_roots` empties `app:/tmp/picked/` and `app:/tmp/shared/` once a process for each `app:/tmp` root, on Apple and on Linux and Windows, so another session's activation or a restart with carry leaves the files this launch picked or was shared.
 **Systems:** host/apple/src/picker.rs, host/apple/src/host.rs, host/apple/src/activation.rs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

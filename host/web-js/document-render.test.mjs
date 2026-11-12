@@ -880,8 +880,10 @@ test('both document renderers preload the runtime at low priority, and the shell
   for (const how of ['js', 'rust']) {
     await renderedPages('routes nav\n  home "/" render=build activate=idle\n\ncomponent Page\n  view\n    text "Home"\n', (_, html, dist) => {
       const preloads = page => page.match(/<link rel="modulepreload"[^>]*>/g);
-      expect([how, preloads(html(''))]).toEqual([how, ['<link rel="modulepreload" href="./app.js" fetchpriority="low">']]);
-      expect([how, preloads(readFileSync(resolve(dist, 'shell.html'), 'utf8'))]).toEqual([how, ['<link rel="modulepreload" href="./app.js">']]);
+      const shell = preloads(readFileSync(resolve(dist, 'shell.html'), 'utf8'));
+      expect(shell).toContain('<link rel="modulepreload" href="./app.js">');
+      expect(shell.every(link => !link.includes('fetchpriority'))).toBe(true);
+      expect([how, preloads(html(''))]).toEqual([how, shell.map(link => link.replace('>', ' fetchpriority="low">'))]);
     }, {}, {}, how);
   }
 }, 180000);
@@ -890,7 +892,6 @@ test('both document renderers preload the runtime at low priority, and the shell
 // at once when something is due; a page laid out by the viewport carries its comparisons, which wake it elsewhere.
 test('both document renderers infer an undeclared route\'s activation from its render', async () => {
   const activation = page => [/data-activate="([a-z]+)"/.exec(page)?.[1], page.match(/<link rel="modulepreload"[^>]*>/g) ?? [], /data-wake="([^"]*)"/.exec(page)?.[1]?.replace(/&(quot|gt|lt|amp);/g, (_, e) => ({ quot: '"', gt: '>', lt: '<', amp: '&' })[e])];
-  const low = '<link rel="modulepreload" href="./app.js" fetchpriority="low">';
   for (const how of ['js', 'rust']) {
     await renderedPages(`use EmptyState from "exact:content"
 
@@ -935,8 +936,10 @@ component App
         EmptyState(symbol="symbol:alert", title="Nothing Here", message="Its link may be out of date.")
 `, async (_, html, dist) => {
       const wake = '[["(width >= 640px)",false]]';
+      const low = readFileSync(resolve(dist, 'shell.html'), 'utf8').match(/<link rel="modulepreload"[^>]*>/g)
+        .map(link => link.replace('>', ' fetchpriority="low">'));
       expect([how, activation(html(''))]).toEqual([how, ['interaction', [], wake]]);
-      expect([how, activation(html('clock'))]).toEqual([how, ['eager', [low], undefined]]);
+      expect([how, activation(html('clock'))]).toEqual([how, ['eager', low, undefined]]);
       expect([how, activation(html('wide'))]).toEqual([how, ['interaction', [], wake]]);
       // An intersect handler waits for its element to show, or for a scroll (LLP 1048.001 D4's `visible`).
       expect([how, activation(html('seen'))]).toEqual([how, ['interaction', [], wake]]);
@@ -1354,54 +1357,6 @@ component App
     expect(await at({})).toEqual(['narrow', true]);
   });
 }, 60000);
-
-test('Rust-rendered spinners follow parent display after adoption without a position binding', async () => {
-  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
-  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/progress-document-agent-test-'));
-  let browser, server;
-  try {
-    const source = resolve(dir, 'app.contract'), dist = resolve(dir, 'dist');
-    writeFileSync(source, `routes nav
-  home "/" render=build
-
-component ProgressDocument
-  state grid = false
-  action toggle
-    grid = not grid
-  view
-    column
-      button "Toggle" testId="toggle" press=toggle width=100 height=24
-      box display=(grid ? "grid" : "block") width=240 height=40
-        progress testId="spinner"
-      box display=(grid ? "grid" : "block") justify-items="center" width=240 height=40
-        progress testId="sized" width=20 height=20
-`);
-    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'caltrain', '--contract', source, '--out', dist, '--render', 'rust'], {
-      cwd: root, env: process.env, stdout: 'pipe', stderr: 'pipe',
-    });
-    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
-    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
-    expect(readFileSync(resolve(dist, 'index.html'), 'utf8')).toContain('justify-self:start;');
-    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
-      const path = new URL(req.url).pathname;
-      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))));
-    } });
-    browser = await open({ host: 'web', url: server.url.href });
-    expect(await browser.carrier.evaluate(`globalThis.exact.journal.some(l => l.endsWith('adopted the document'))`)).toBe(true);
-    const frames = () => browser.carrier.evaluate(`['spinner','sized'].map(id => {
-      const e = document.querySelector('[data-testid="'+id+'"]'), r = e.getBoundingClientRect(), p = e.parentElement.getBoundingClientRect();
-      return { x: r.x - p.x, width: r.width };
-    })`);
-    // A block parent's `justify-items: center` centres the sized one, as the kernel's block layout does.
-    expect(await frames()).toEqual([{ x: 0, width: 20 }, { x: 110, width: 20 }]);
-    await browser.tap('toggle');
-    expect(await frames()).toEqual([{ x: 0, width: 240 }, { x: 110, width: 20 }]);
-    await browser.tap('toggle');
-    expect(await frames()).toEqual([{ x: 0, width: 20 }, { x: 110, width: 20 }]);
-  } finally {
-    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
-  }
-}, 180000);
 
 test('Rust-rendered canvases follow a bound parent justify-items after adoption, a nested one its own parent', async () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');

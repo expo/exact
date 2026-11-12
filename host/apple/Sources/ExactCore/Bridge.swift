@@ -147,7 +147,9 @@ package final class Runtime {
         guard !destroyed else { return }
         destroyed = true
         let rt = rt
-        on { exact_destroy(rt) }
+        // From a callback the owner waits on (a native module's `call` that
+        // ends its session), after the owner's current job (LLP 1072 T5, §8.4).
+        Owner.shared.syncOrLater { exact_destroy(rt) }
     }
 
     // @ref LLP 1072 T1/T2 — every runtime lives on the owner thread; each

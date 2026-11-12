@@ -578,3 +578,42 @@ fn the_login_shell_answers_the_named_variables_between_markers() {
     assert_eq!(out.as_deref(), Some("hi\n"));
     assert!(started.elapsed() < BOUND, "{:?}", started.elapsed());
 }
+
+#[test]
+fn writes_to_a_child_that_closed_its_stdin_are_dropped_and_drain() {
+    let (core, woke, _) = core("process.spawn /bin/sh");
+    core.run(
+        request(1, sh("exec 0<&-; echo closed; sleep 120"), true),
+        None,
+    )
+    .unwrap();
+    let out = collect(&core, &woke, |o| o.len() >= 2);
+    let leader = spawned_pid(&out);
+    assert_eq!(event(&out[1]), "stdout closed\n");
+    // Together past the 1 MiB queue: each is dropped (EPIPE), not held.
+    for i in 0..5 {
+        let batch = SocketSend {
+            origin: SocketOrigin::Mutation("send".into()),
+            ops: vec![(
+                1,
+                "server".into(),
+                SocketOp::Process {
+                    incarnation: 1,
+                    op: ProcessOp::Write {
+                        data: vec![b'x'; 300_000],
+                        drain: true,
+                    },
+                },
+            )],
+        };
+        let queued = core.socket(&batch);
+        assert!(queued.is_ok(), "write {i}: {queued:?}");
+        let seen: Vec<String> = collect(&core, &woke, |o| !o.is_empty())
+            .iter()
+            .map(event)
+            .collect();
+        assert_eq!(seen, ["drain"], "write {i}");
+    }
+    core.forget(|_| false);
+    until_gone(leader, "the group outlived its release");
+}

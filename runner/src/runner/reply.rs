@@ -168,7 +168,11 @@ impl<D: DataSource> Runner<D> {
                 if self.hold_overrun_reply(ticket, target, e) {
                     return Ok(None);
                 }
-                return self.release_failed(ticket, target, crate::failure::Failure::of(e));
+                return self.release_failed_as_asked(
+                    ticket,
+                    target,
+                    crate::failure::Failure::of(e),
+                );
             }
         }
         result.map(Some)
@@ -232,7 +236,7 @@ impl<D: DataSource> Runner<D> {
             self.log(sockets::refused(&crate::SocketOrigin::Mapper(name), &why));
         }
         if let (Err(e), true) = (&result, self.holds(ticket)) {
-            return self.release_failed(ticket, target, crate::failure::Failure::of(e));
+            return self.release_failed_as_asked(ticket, target, crate::failure::Failure::of(e));
         }
         result.map(Some)
     }

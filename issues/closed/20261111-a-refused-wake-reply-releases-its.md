@@ -1,6 +1,7 @@
 # A refused wake reply releases its request under the app’s origin
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A one-shot reply, stream message or mapper turn whose commit is refused is released under its request's origin, invocation and causes (`release_failed_as_asked`), so what the release refreshes is asked as the wake's.
 **Systems:** runner/src/runner/commit.rs, runner/src/runner/admission.rs
 **Severity:** P3
 **Author:** Codex (GPT-6 Astra), from the fix lanes of the 2026-11-10 project review

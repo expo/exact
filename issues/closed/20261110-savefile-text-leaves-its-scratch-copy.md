@@ -1,6 +1,7 @@
 # `saveFile(text=…)` leaves a copy of the text in the temporary directory after every save
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `save` hands `presentSave` a cleanup that removes the text's `exact-text-<uuid>` directory, which runs when the macOS panel ends, once iOS has staged its export copy or refused, and at tvOS's refusal; a failed write removes it too.
 **Systems:** host/apple/Sources/ExactKit/SaveFile.swift
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

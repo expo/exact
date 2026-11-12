@@ -11,6 +11,75 @@ import { spawnOwned } from '../../scripts/test-children.mjs';
 import { open } from '../../scripts/agent.mjs';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
 
+test.each([[false, false], [true, false], [true, true]])('a list first opened offline uses prepared chunks without evaluating them at boot (production: %s, interaction: %s)', async (production, interaction) => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/offline-list-'));
+  const dist = resolve(dir, 'dist');
+  let browser, server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Offline List', app: { id: 'test.offline-list', name: 'Offline List' }, host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), (interaction ? 'routes nav\n  home "/" render=build activate=interaction\n\n' : '') + `component OfflineList
+  state wakes = 0
+  state shown = false
+  state items = [${Array.from({ length: 100 }, (_, i) => i).join(', ')}]
+  action boot
+    wakes = wakes + 1
+  action reveal
+    shown = true
+  view
+    column
+      button \`Wake \${wakes}\` press=boot testId="boot"
+      button "Show list" press=reveal testId="reveal"
+      if shown
+        list virtualized=true estimated-item-height=40 height=120 width=320 testId="rows"
+          for item in items key=item
+            text \`Row \${item}\` height=40 testId=\`row-\${item}\`
+`);
+    const built = spawnSync(process.execPath, ['host/web-js/build.mjs', 'offline-list', '--out', dist, '--render', interaction ? 'js' : 'none',
+      ...(production ? ['--production'] : [])], { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8' });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    const collection = readdirSync(dist).find(name => /^collection-glue-.*\.js$/.test(name));
+    expect(collection).toBeDefined();
+    // A probe in the deferred chunk distinguishes preparation from evaluation.
+    writeFileSync(resolve(dist, collection), 'globalThis.collectionEvaluated = true;\n' + readFileSync(resolve(dist, collection), 'utf8'));
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
+      const path = new URL(request.url).pathname;
+      return new Response(Bun.file(resolve(dist, path === '/' ? 'index.html' : path.slice(1))), { headers: { 'cache-control': 'no-store' } });
+    } });
+    browser = await suiteBrowser();
+    const page = await browser.newPage(), errors = [], failed = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('requestfailed', request => failed.push(request.url()));
+    await page.addInitScript(() => {
+      globalThis.preparedModules = [];
+      document.addEventListener('load', event => {
+        if (event.target instanceof HTMLLinkElement && event.target.rel === 'modulepreload') preparedModules.push(event.target.href);
+      }, true);
+    });
+    await page.goto(server.url.href);
+    await page.getByTestId('reveal').waitFor();
+    if (interaction) {
+      await page.getByTestId('boot').dispatchEvent('click');
+      await page.waitForFunction(() => document.querySelector('[data-testid=boot]')?.textContent === 'Wake 1');
+    }
+    await page.waitForFunction(() => [...document.querySelectorAll('link[rel=modulepreload]')].every(link => preparedModules.includes(link.href)));
+    expect(await page.evaluate(() => globalThis.collectionEvaluated)).toBeUndefined();
+    expect(await page.getByTestId('rows').count()).toBe(0);
+    await page.context().setOffline(true);
+    await page.getByTestId('reveal').dispatchEvent('click');
+    await page.evaluate(() => exact.lists.pending());
+    expect(errors).toEqual([]);
+    expect(failed).toEqual([]);
+    expect(await page.evaluate(() => globalThis.collectionEvaluated)).toBe(true);
+    await page.getByTestId('rows').evaluate(el => { el.scrollTop = 3600; });
+    await page.getByTestId('row-90').waitFor();
+    expect(await page.getByTestId('row-0').count()).toBe(0);
+  } finally {
+    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
+  }
+}, 60000);
+
 test('the production starter stays within its 45 KiB budget and its header button works', async () => {
   if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
   const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/starter-bytes-'));

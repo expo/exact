@@ -1,6 +1,7 @@
 # Writes to a child that closed its stdin pile up until every batch is refused
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The stdin thread keeps running after `EPIPE` and drops each queued and later write, so the queue drains and `drain` follows instead of the count growing until writes are refused.
 **Systems:** host/apple/src/executor_process_real.rs, host/apple/src/executor_process.rs, desktop processes (LLP 1133.007 D2)
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

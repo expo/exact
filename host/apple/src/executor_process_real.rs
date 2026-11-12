@@ -430,7 +430,8 @@ fn write(fd: OwnedFd, n: u32, ctl: Arc<ChildCtl>) -> Arc<Stdin> {
     let _ = std::thread::Builder::new()
         .name("exact-child-stdin".into())
         .spawn(move || {
-            let mut file = std::fs::File::from(fd);
+            // `None` once the child closed its stdin (`EPIPE`).
+            let mut file = Some(std::fs::File::from(fd));
             loop {
                 let next = {
                     let mut q = queue.queue.lock().unwrap();
@@ -447,12 +448,10 @@ fn write(fd: OwnedFd, n: u32, ctl: Arc<ChildCtl>) -> Arc<Stdin> {
                 let Some(bytes) = next else {
                     break;
                 };
-                if file.write_all(&bytes).is_err() {
-                    // The child closed its stdin: what is queued is dropped.
-                    queue.queue.lock().unwrap().0.clear();
-                    queue.queued.store(0, Ordering::Release);
-                    ctl.send(Input::Child(n, Seen::Drained));
-                    break;
+                // Once the child closed its stdin, what is queued and every
+                // later write is dropped, so the queue still drains.
+                if file.as_mut().is_some_and(|f| f.write_all(&bytes).is_err()) {
+                    file = None;
                 }
                 let after = queue.queued.fetch_sub(bytes.len() as u64, Ordering::AcqRel)
                     - bytes.len() as u64;

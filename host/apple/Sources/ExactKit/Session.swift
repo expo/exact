@@ -400,7 +400,7 @@ public final class ExactSession {
     /// The view presenting this session, while one is mounted (D1).
     weak package var view: ExactView? { didSet { if view !== oldValue { natives.sessionViewChanged() } } }
     #if os(iOS) || os(tvOS)
-    private var systemDark = false
+    var systemDark = false
     var launchViewport: (plan: Data?, cover: Bool)?
     #endif
     /// This session's agent, once a carrier asked for it (`Agent.swift`).
@@ -1305,19 +1305,6 @@ public final class ExactSession {
         _ = runtime.setPreferences(preferenceBits())
     }
     var displayModeOverride: UInt32?
-    func preferenceBits() -> UInt32 {
-        #if os(iOS) || os(tvOS)
-        // The scene owns system appearance; a window's app override does not.
-        if let scene = view?.window?.windowScene {
-            systemDark = scene.traitCollection.userInterfaceStyle == .dark
-        }
-        let dark = systemDark
-        #else
-        let dark = DisplayPreferences.systemDark
-        #endif
-        let bits = DisplayPreferences.bits(systemDark: dark, view: view)
-        return displayModeOverride.map { (bits & ~(7 << 11)) | ($0 << 11) } ?? bits
-    }
     public func resize(_ size: CGSize) { guard booted, state != .destroyed else { return }; apply(runtime.resize(width: size.width, height: size.height)) }
     public func insets(top: CGFloat, right: CGFloat, bottom: CGFloat, left: CGFloat) { guard booted, state != .destroyed else { return }; apply(runtime.insets(top: top, right: right, bottom: bottom, left: left)) }
     /// What changed of the view (`Runtime.ViewChange`); the window's size is what every viewport unit resolves against everywhere (LLP 1075.003 §9.11).
@@ -1474,6 +1461,8 @@ public final class ExactSession {
         cancelAuthSessions()
         taskTimers.cancel(); clockTimer?.invalidate(); timerAdmissions.takeover()
         clockTimer = nil
+        // A live hatch frame ticket would keep the link on through `run(false)`.
+        natives.hatchClock.reset()
         frames.run(false)
         sampler?.stop(); releaseSampler()
         frameHealth.destroy()
