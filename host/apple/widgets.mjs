@@ -259,15 +259,15 @@ function syncFile(from, to) {
 const writeIfChanged = (path, text) => { if (!existsSync(path) || readFileSync(path, 'utf8') !== text) writeFileSync(path, text); };
 /** The reload artifact has no app-specific inputs. Reuse it until its source or target changes. */
 export function widgetReload({ directory, triple, sdk, device, platform = 'ios', production = false, runApple, source = resolve(pkg, 'Sources/ExactCore/WidgetContainer.swift') }) {
-  const digest = createHash('sha256').update(readFileSync(source)).update(JSON.stringify([triple, sdk, production])).digest('hex');
-  const binary = resolve(directory, 'libexact_widget_reload.dylib'), stamp = resolve(directory, 'widget-reload.sha256');
-  if (existsSync(binary) && existsSync(stamp) && readFileSync(stamp, 'utf8') === digest) return binary;
-  mkdirSync(directory, { recursive: true });
+  // One file per digest: apps sharing `directory` may ask for different triples at once.
+  const digest = createHash('sha256').update(readFileSync(source)).update(JSON.stringify([triple, sdk, production])).digest('hex').slice(0, 16);
+  const binary = resolve(directory, `widget-reload-${digest}`, 'libexact_widget_reload.dylib');
+  if (existsSync(binary)) return binary;
+  mkdirSync(dirname(binary), { recursive: true });
   runApple('xcrun', ['--sdk', platform === 'macos' ? 'macosx' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', '-O',
     '-D', 'EXACT_WIDGET_RELOAD', ...(!production ? ['-D', 'EXACT_INSPECT'] : []), '-module-name', 'ExactWidgetReload', '-target', triple, '-sdk', sdk,
     '-module-cache-path', extensionModuleCache, source, '-o', `${binary}.${process.pid}.tmp`]);
   renameSync(`${binary}.${process.pid}.tmp`, binary);
-  writeFileSync(stamp, digest);
   return binary;
 }
 /** The extension's generated Swift: one `Widget` per entry, static or, with a `configuration`, an
