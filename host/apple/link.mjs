@@ -120,7 +120,8 @@ export function dylibInstallNames(executable) {
 
 /** Load commands bounded by their own slice, so build checks need no host's Mach-O tools. */
 function machoCommands(executable) {
-  const bytes = readFileSync(executable);
+  let bytes;
+  try { bytes = readFileSync(executable); } catch (e) { throw new Error(`host/apple: cannot read ${executable}: ${e.message}`); }
   const invalid = () => { throw new Error(`host/apple: ${basename(executable)} has an invalid 64-bit Mach-O`); };
   const slice = (at, size) => {
     if (!Number.isSafeInteger(at) || !Number.isSafeInteger(size) || at < 0 || size < 32 || at + size > bytes.length) invalid();
@@ -181,7 +182,8 @@ export function assertLinkedSdk(executable, expected) {
     const versions = commands.filter(({ cmd }) => cmd === 0x32);
     const command = versions.length === 1 ? versions[0].bytes : null;
     const sdk = command?.length >= 24 ? command.readUInt32LE(16) : null;
-    const recorded = sdk == null ? null : `${sdk >>> 16}.${(sdk >>> 8) & 255}.${sdk & 255}`;
+    // As vtool prints it: the patch only when it is not 0.
+    const recorded = sdk == null ? null : `${sdk >>> 16}.${(sdk >>> 8) & 255}${sdk & 255 ? `.${sdk & 255}` : ''}`;
     if (!recorded || majorMinor(recorded) !== majorMinor(expected)) {
       throw new Error(`host/apple: ${basename(executable)} records SDK ${recorded ?? '(none)'}, not ${expected}: AppKit would draw it in another design`);
     }

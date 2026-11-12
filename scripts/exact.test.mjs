@@ -701,7 +701,7 @@ test.skipIf(!tools)('an executable whose name ends in parentheses is read as a f
   assertLinkedSdk(executable, '15.0');
   assert.throws(() => assertLinkedSdk(executable, '27.0'), /Demo \(Beta\) records SDK 15\.0, not 27\.0/);
   // A file the tool cannot read says so, not that it records no SDK.
-  assert.throws(() => assertLinkedSdk(resolve(dir, 'Gone (Beta)'), '15.0'), /vtool -show-build failed .*Gone \(Beta\)/);
+  assert.throws(() => assertLinkedSdk(resolve(dir, 'Gone (Beta)'), '15.0'), /cannot read .*Gone \(Beta\)/);
   // dsymutil and strip take the same path as a file.
   const { saved } = stripForDistribution(executable, resolve(dir, 'Demo (Beta).dSYM'));
   assert.ok(existsSync(resolve(dir, 'Demo (Beta).dSYM/Contents/Resources/DWARF/Demo (Beta)')), 'dsymutil wrote the dSYM');

@@ -198,3 +198,29 @@ test('help is the one read: the verbs and the forms a build uses, in one screen,
   // Without a verb's forms (a game's own verbs have none), the index is the verbs.
   assert.doesNotMatch(indexText({ verbs: ['lock'] }), /The forms a build uses/);
 });
+
+test('unsigned device builds and archives refuse incompatible options before building', async () => {
+  const { appleBuildRefusal } = await import('./help.mjs');
+  for (const signed of [false, true]) for (let mask = 0; mask < 32; mask++) {
+    const flags = ['--unsigned', '--archive', '--run', '--device', '--host'];
+    const args = flags.filter((_, bit) => mask & (1 << bit));
+    const [unsigned, archive, run, device, host] = flags.map(flag => args.includes(flag));
+    const env = signed ? { EXACT_PROFILE: 'profile', EXACT_IDENTITY: 'identity' } : {};
+    const refusal = appleBuildRefusal(args, env, 'darwin');
+    assert.equal(refusal == null, !(unsigned && (!device || run) || archive && (!device || run || host || !unsigned && !signed)), JSON.stringify({ args, signed, refusal }));
+  }
+  assert.match(appleBuildRefusal(['--device', '--unsigned', '--run'], {}, 'darwin'), /ad-hoc signed device bundle cannot launch on a stock device/);
+  for (const args of [['--watchos', '--unsigned'], ['--watchos', '--device', '--unsigned']]) assert.match(appleBuildRefusal(args, {}, 'darwin'), /--unsigned takes no --watchos/);
+  for (const args of [['--device', '--development'], ['--device', '--unsigned', '--development'], ['--device', '--archive', 'a.ipa', '--development']]) assert.match(appleBuildRefusal(args, {}, 'darwin'), /--development needs --archive and --unsigned/);
+  const development = ['--device', '--archive', 'a.ipa', '--unsigned', '--development'];
+  assert.equal(appleBuildRefusal(development, {}, 'darwin'), null);
+  for (const [args, env] of [[[...development, '--release'], {}], [development, { EXACT_UPDATE_TRUST: 'production' }]]) assert.match(appleBuildRefusal(args, env, 'darwin'), /takes neither --release/);
+  assert.match(appleBuildRefusal(['--ios', '--run'], {}, 'linux'), /Linux has neither/);
+  assert.match(appleBuildRefusal(['--device', '--unsigned'], {}, 'linux'), /--device on Linux needs --archive/);
+  assert.equal(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned'], {}, 'linux'), null);
+  assert.equal(appleBuildRefusal(['--ios'], {}, 'linux'), null);
+  const result = spawnSync(process.execPath, ['host/apple/build.mjs', '--device', '--unsigned', '--run', 'no-such-app'], { encoding: 'utf8' });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, process.platform === 'linux' ? /--run needs an iOS simulator/ : /--unsigned takes no --run/);
+  assert.doesNotMatch(result.stderr, /no app at/);
+});
