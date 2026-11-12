@@ -475,6 +475,12 @@ data_source! {
         let _ = owner;
     }
 
+    /// This source answers a process that renders the web's pages, at build
+    /// or while serving: what it renders must be what the browser's bundle
+    /// reads, so a setting a launch may give reads the build's value (LLP
+    /// 1153.002 D2). Called before activation; a wrapper passes it on.
+    fn render_web(&mut self) {}
+
     /// Host-selected application directories. Configuration records paths only;
     /// implementations must defer opening storage until after first pixel.
     fn configure_storage(

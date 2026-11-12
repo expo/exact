@@ -15,6 +15,8 @@ import { resolve, relative, dirname, basename, join, sep, isAbsolute, toNamespac
 import { moduleBinding, languageModelToolCheck, languageModelToolNote, languageModelTools, languageModelToolSources, TOOL_CHECK, unownedTools } from './__exact_binding.mjs';
 // And the settings' reader beside it (resident.rs `ENV`).
 import { envReads, inlineSettings } from './__exact_env.mjs';
+import { grantsDeclaration, launchGrants as grantsWithLaunches, launchModule, launchSource } from './__exact_launch_setting.mjs';
+export { launchModule, launchSource };
 // And the check of what package code may use (resident.rs `PORTABLE`).
 import { bare, lineColumn, packageRefusals, propertyName, walkRuntime } from './__exact_portable.mjs';
 
@@ -252,17 +254,14 @@ export function developmentGrants(code, parse, env=process.env) {
   const marker=/^([ \t]*)development[ \t]+(?=\S)/;
   const grants=staticFacts(code,parse).grants;
   if (grants===undefined || !grants.split('\n').some(line=>marker.test(line))) return code;
-  // The binding exported as `grants`, as `staticFacts` reads it.
-  const body=parsed.program.body;
-  const local=body.flatMap(s=>s.type==='ExportNamedDeclaration' && !s.source ? (s.specifiers ?? []) : [])
-    .find(x=>(x.exported.name ?? x.exported.value)==='grants')?.local;
-  const name=local ? local.name ?? local.value : 'grants';
-  const declaration=body.map(s=>s.type==='ExportNamedDeclaration' ? s.declaration : s)
-    .flatMap(s=>s?.type==='VariableDeclaration' ? s.declarations : []).find(d=>d.id.type==='Identifier' && d.id.name===name);
+  const declaration=grantsDeclaration(parsed.program.body);
   const development=developmentTrust(env);
   const lines=grants.split('\n').flatMap(line=>!marker.test(line) ? [line] : development ? [line.replace(marker,'$1')] : []);
   return code.slice(0,declaration.init.start)+JSON.stringify(lines.join('\n'))+code.slice(declaration.init.end);
 }
+
+/** `launchGrants` (__exact_launch_setting.mjs) over the grants as `staticFacts` evaluates them. */
+export const launchGrants=(code,parse,names)=>grantsWithLaunches(code,parse,names,staticFacts);
 
 // Rolldown IDs are file paths, not URL or slash-normalized strings. Both
 // producers enforce the same captured-file boundary (LLP 1027 D5). A
@@ -619,7 +618,7 @@ export function asyncContext() {
 /** The native bundle of a data module, the same for the one-shot producer
  * and the resident compiler. */
 export const dataBundle=(stage)=>({...bundleOptions, transform:{...bundleOptions.transform, ...lowered},
-  plugins:[asyncContext(), capturedSources(stage)]});
+  plugins:[launchSource(stage), asyncContext(), capturedSources(stage)]});
 /** The captured graph's Rolldown plugin, the same in every producer: app
  * files load only from the stage, package code only from its capture, and
  * the clock (`ambientRefusals`) or what no executor has (`packageRefusals`)
@@ -964,14 +963,16 @@ export function staticFacts(code, parse) {
   return { appId: value('appId'), grants: value('grants'), exported: [...exported.keys()] };
 }
 
-export function configure(stage, incremental=false, parse) {
+/** With `web`, for the web's bundles: a setting a launch may give is inlined as any other, as no launch gives one
+ * there (LLP 1153.002 D2). */
+export function configure(stage, incremental=false, parse, web=false) {
   const app=capturedOrigins(stage).at(-1)[1], modulePath=resolve(stage,'app.ts');
   if (existsSync(modulePath)) {
     const before=readFileSync(modulePath,'utf8'), original=resolve(stage,'__exact_backend_source.json');
     const authored=existsSync(original) ? JSON.parse(readFileSync(original,'utf8')) : before;
     const selection=backendOriginSelection(app,process.env,parse), warning=backendOriginWarning(authored,selection,parse);
     // `import.meta.env` first: a `const origin` it sets is a literal the backend selection may then override.
-    const settings=inlineSettings(authored,app,parse);
+    const settings=inlineSettings(authored,app,parse,process.env,{launches:!web});
     writeFileSync(resolve(stage,'__exact_env.json'), JSON.stringify(settings.record));
     let injected;
     try { injected=injectBackendOrigin(settings.code,selection?.origin ?? null,parse); }
@@ -979,7 +980,9 @@ export function configure(stage, incremental=false, parse) {
       if (!selection) throw error;
       throw Object.assign(new Error(`${selection.source}: ${error.message.replace(/^EXACT_BACKEND_ORIGIN: /,'')}`),{code:'backend-selection'});
     }
-    const after=developmentGrants(injected,parse);
+    const launched=Object.keys(settings.record).filter(name=>settings.record[name].launch);
+    launchModule(stage,web ? [] : launched);
+    const after=developmentGrants(launchGrants(injected,parse,launched),parse);
     writeFileSync(resolve(stage,'__exact_backend.json'), JSON.stringify({origin:literalBackendOrigin(after,parse),warning}));
     if (before!==after) writeFileSync(modulePath,after);
     // Every producer refuses alike what the web build cannot read without running it.

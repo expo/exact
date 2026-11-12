@@ -300,6 +300,12 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         }
     }
 
+    fn render_web(&mut self) {
+        if let Some(embedded) = &mut self.embedded {
+            embedded.render_web();
+        }
+    }
+
     fn preload(&self) -> Result<bool, DataError> {
         if let Some(embedded) = &self.embedded {
             return embedded.preload();

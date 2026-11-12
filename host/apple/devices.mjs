@@ -221,6 +221,15 @@ export function forwardedEnv(env = process.env) {
   return Object.fromEntries(['EXACT_STORE', 'EXACT_AGENT_PADS'].filter((k) => env[k]).map((k) => [k, env[k]]));
 }
 
+/** What `simctl launch` gives the app of `env`: each `SIMCTL_CHILD_` variable, without the prefix. */
+export const simulatorChildEnv = (env = process.env) =>
+  Object.fromEntries(Object.entries(env).filter(([k]) => k.startsWith('SIMCTL_CHILD_')).map(([k, v]) => [k.slice('SIMCTL_CHILD_'.length), v]));
+
+/** The environment a drive's simulator launch gives the app (agent-ios.mjs): `env`'s `SIMCTL_CHILD_` variables, then
+ * `forwardedEnv()`, then `extra`, the names the drive sets. A freshness check on the way to that launch reads it
+ * (LLP 1153.002 D2). */
+export const simulatorLaunch = (extra = {}, env = process.env) => ({ ...simulatorChildEnv(env), ...forwardedEnv(env), ...extra });
+
 /** A page capture (`path`) whose area holds glass or a blur, its pixels then the display's there too: the app names
  *  that area only then (`r.materials`: x, y, width and height in window points), and `window(p)` takes a window
  *  capture into `p` through `withDisplay`. Where that capture's pixels are the display's, the page's area is cut from
