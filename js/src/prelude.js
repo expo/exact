@@ -13,10 +13,11 @@
   // (op, a, b) -> string | undefined, js/src/door.rs's ops: 1 a request, 2-4 and 18-20 the store, 5 storage,
   // 6 native, 7 pure, 8 secure randomness drawn, 9/10 canvas, 11 the agent's random bytes, 12 auth, 13 a journal line,
   // 16 a request withdrawn unsent, 21 the runner's clock as the call began, 22 module work's state (binary.js), 23 a handed-out
-  // request the app aborted.
+  // request the app aborted, 27 a setting's value from the launch.
   var host = global.__exact_host;
   delete global.__exact_host;
   var browserSecrets = global.__exact_browser_secrets; delete global.__exact_browser_secrets;
+  var launchRefusal = global.__exact_launch_refusal || (fixed(global, "__exact_launch", Object.freeze(Object.create(null))), function (failed) { return failed; }); delete global.__exact_launch_refusal; // js/src/launch.js (LLP 1153.002 D3); a realm without it (the wasm target's page) has no launch, and no package can give it one
   // The seam's bytes (binary.js): base64, UTF-8 lengths, a stream message's data.
   var binary = global.__exact_binary;
   delete global.__exact_binary;
@@ -661,7 +662,7 @@
     return new Promise(function (resolve, reject) {
       // `early`: made while its answer was still in flight (its body, or its
       // own continuation), so that answer's own, whoever else is pending.
-      var p = { resolve: resolve, reject: reject, call: call, claimed: false, stream: !!stream, signal: signal, timed: timed, release: function () {}, early: call.status === "pending", set: !stream && !poll && !upload && bodyFrom === undefined && bodyTo === undefined && /^https?:/i.test(url), bodyTo: bodyTo, head: method === "HEAD" };
+      var p = { resolve: resolve, reject: reject, call: call, claimed: false, stream: !!stream, signal: signal, timed: timed, release: function () {}, early: call.status === "pending", set: !stream && !poll && !upload && bodyFrom === undefined && bodyTo === undefined && /^https?:/i.test(url), bodyTo: bodyTo, head: method === "HEAD", url: url };
       pending.set(ticket, p);
       // The caller's abort also makes its socket handle stale (D7); the
       // stream itself runs until the runner lets its ticket go.
@@ -1488,7 +1489,7 @@
     // A browser realm's abort listener can be stopped by an earlier one;
     // the signal itself still says so.
     if (p.signal && p.signal.aborted) p.reject(p.signal.reason);
-    else if (o.failed) p.reject(new FetchError(o.failed));
+    else if (o.failed) p.reject(new FetchError(launchRefusal(o.failed, p.url)));
     else p.resolve(hostReply(o.response, p.bodyTo, p.head));
   };
 })(globalThis);

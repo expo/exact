@@ -212,6 +212,9 @@ impl exact_runner::DataSourceWrapper for Seeded<'_> {
     fn set_document_owner(&mut self, owner: u64) {
         self.module.set_document_owner(owner)
     }
+    fn render_web(&mut self) {
+        self.module.render_web()
+    }
     fn configure_storage(
         &mut self,
         data: std::path::PathBuf,

@@ -1286,6 +1286,11 @@ test('a native build is stale when a setting its module inlined has another valu
     } finally { delete process.env[name]; }
     // Unset now, and in no file: the build's value is gone too.
     expect(receiptChanges(receipt,app)).toEqual([`import.meta.env.${name}`]);
+    // LLP 1153.002 D2: a Mac or Windows drive starts the app with this environment, so a marked name it sets (empty too) is the launch's; an iOS drive's never reaches the app.
+    for (const [platform,stale] of [['macos',[]],['windows',[]],['ios',[`import.meta.env.${name}`]]]) for (const given of ['http://launch.example','']) {
+      writeFileSync(receipt,JSON.stringify({target:'aarch64-apple-darwin',started:builtTime.toISOString(),build:{compat:{inputs:{platform}},binary:{inputs:[],missing:[],directories:[]},settings:{dir,env:{[name]:{value:'http://a.example',source:'environment',launch:true}}}}})); utimesSync(receipt,builtTime,builtTime); process.env[name]=given;
+      try { expect(receiptChanges(receipt,app)).toEqual(stale); } finally { delete process.env[name]; }
+    }
   } finally {
     if (before===undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR=before;
     rmSync(dir,{recursive:true,force:true});
@@ -1348,6 +1353,17 @@ test('a Linux or Android build is stale when a setting the executable holds has 
       // A build that finished records what it linked.
       recordBuiltSettings(bin,app); recordBuiltSettings(apk,app,out);
       expect(changes()).toEqual([[],[]]);
+      // A setting a launch may give (LLP 1153.002 D2): where a launch gives it (a Linux executable) the environment's
+      // value, empty or not, is the launch's and no change; where the build's value runs (Android) it is one. Unset,
+      // the build's own value counts again.
+      writeFileSync(resolve(out,'app.module.json'),JSON.stringify({env:{[name]:{value:'http://b.example',source:'environment',launch:true}}}));
+      recordBuiltSettings(bin,app); recordBuiltSettings(apk,app,out);
+      for (const given of ['http://launch.example','']) {
+        process.env[name]=given;
+        expect([bakedSettingChanges(bin,app,{launch:true}),bakedSettingChanges(apk,app)]).toEqual([[],[key]]);
+      }
+      delete process.env[name];
+      expect(bakedSettingChanges(bin,app,{launch:true})).toEqual([key]);
     } finally { delete process.env[name]; }
     // An app that declares no setting has none to compare.
     expect(bakedSettingChanges(bin,{dir,manifest:{}})).toEqual([]);

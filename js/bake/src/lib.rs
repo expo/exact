@@ -1179,6 +1179,13 @@ fn bake_in(
     let grants = module.grants().to_owned();
     exact_runner::auth::session_grant_refusal(&grants)
         .map_or(Ok(()), |refusal| Err(format!("app.ts: {refusal}")))?;
+    // The settings app.ts read (`import.meta.env`, LLP 1153 D4), each with the
+    // value inlined and its source (`typescript.mjs` `configure`; none without app.ts).
+    let settings: serde_json::Value = match std::fs::read(stage.join("__exact_env.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| e.to_string())?,
+        Err(_) => serde_json::Value::Null,
+    };
+    launch_grants(&grants, &settings)?;
     let surfaces: serde_json::Map<String, serde_json::Value> = module
         .canvas_roster()
         .iter()
@@ -1241,14 +1248,9 @@ fn bake_in(
     if !packages.is_empty() {
         receipt["packages"] = packages.into();
     }
-    // The settings app.ts read (`import.meta.env`, LLP 1153 D4), each with the
-    // value inlined and its source (`typescript.mjs` `configure`; absent with none).
-    if let Ok(bytes) = std::fs::read(stage.join("__exact_env.json")) {
-        let settings: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if settings.as_object().is_some_and(|s| !s.is_empty()) {
-            receipt["env"] = settings;
-        }
+    // The settings, in the receipt (absent with none).
+    if settings.as_object().is_some_and(|s| !s.is_empty()) {
+        receipt["env"] = settings;
     }
     let receipt = receipt.to_string();
     Ok(Baked {
@@ -1261,6 +1263,44 @@ fn bake_in(
         warnings,
         entries,
     })
+}
+
+/// A host answers a launch's value only for a name the module's grants carry
+/// (`env.launch`, LLP 1153.002 D2), so the module's grants, as it evaluated
+/// them, carry exactly the names app.json marks, which the bake wrote:
+/// a line that reached them another way is refused.
+fn launch_grants(grants: &str, settings: &serde_json::Value) -> Result<(), String> {
+    let marked: std::collections::BTreeSet<&str> = (settings.as_object().into_iter().flatten())
+        .filter(|(_, setting)| setting["launch"] == true)
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let carried: std::collections::BTreeSet<&str> =
+        exact_runner::grants::launch_names(grants).collect();
+    let stray: Vec<_> = carried
+        .difference(&marked)
+        .map(|n| format!("`env.launch {n}`"))
+        .collect();
+    let missing: Vec<_> = marked
+        .difference(&carried)
+        .map(|n| format!("`env.launch {n}`"))
+        .collect();
+    match (stray.is_empty(), missing.is_empty()) {
+        (true, true) => Ok(()),
+        (false, _) => Err(format!("app.ts: the module's grants carry {}, which app.json's \"env\" does not mark \"launch\": true; only the bake writes these lines", stray.join(", "))),
+        (_, false) => Err(format!("app.ts: the module's grants lack {}, which the bake writes for each name app.json marks", missing.join(", "))),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn the_module_grants_carry_exactly_the_names_app_json_marks() {
+    let settings = serde_json::json!({"API": {"value": "x", "source": "default", "launch": true}, "PLAIN": {"value": "y", "source": "default"}});
+    assert!(launch_grants("net.fetch https:\nenv.launch API", &settings).is_ok());
+    let stray = launch_grants("env.launch API\nenv.launch HOME", &settings).unwrap_err();
+    assert!(stray.contains("carry `env.launch HOME`"), "{stray}");
+    let missing = launch_grants("net.fetch https:", &settings).unwrap_err();
+    assert!(missing.contains("lack `env.launch API`"), "{missing}");
+    assert!(launch_grants("env.launch HOME", &serde_json::Value::Null).is_err());
 }
 
 /// The module's optional members, read from its namespace however app.ts exports them, as the web

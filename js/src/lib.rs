@@ -62,6 +62,7 @@ mod compression;
 mod crypto;
 mod door;
 mod engine;
+mod launch;
 mod module_work;
 mod native;
 mod native_storage;
@@ -294,6 +295,8 @@ struct HostState {
     kept: Option<u64>,
     /// The bake's module ([`Module::inspect`]): storage refuses as `bake`.
     baking: bool,
+    /// The settings a launch may give this module: its grants' `env.launch` names (LLP 1153.002).
+    launch: Vec<String>,
     /// A replacement candidate must answer successfully before it can be installed.
     validating: bool,
     readonly_secrets: bool,
@@ -412,6 +415,7 @@ impl Module {
     ) -> Module {
         let grants = grants.into();
         let auth_callback = exact_runner::auth::carrier_callback(&grants, None);
+        let launch = (exact_runner::grants::launch_names(&grants).map(str::to_owned)).collect();
         let module = Module {
             revision: std::sync::OnceLock::new(),
             bytecode: bytecode.into(),
@@ -426,6 +430,7 @@ impl Module {
             directories: None,
             host: Box::new(HostState {
                 auth_callback,
+                launch,
                 ..HostState::default()
             }),
             native_factory: None,
@@ -536,10 +541,13 @@ impl Module {
         let watch = template.watch.clone();
         let native_slot = template.native_slot.clone();
         let secrets = template.host.secrets.clone();
+        let launch = template.host.launch.clone();
         Box::new(move || {
             let mut module = Module::new(bytecode, app_id, grants)
                 .with_agent_seed(agent_seed)
                 .with_preloads(preloads);
+            // A render's template reads no launch's value (`render_web`), nor does its instance.
+            module.host.launch = launch;
             // Before `activate`, which loads: a worker's answers wait for
             // their storage (LLP 1097 D6).
             module.main_thread = false;

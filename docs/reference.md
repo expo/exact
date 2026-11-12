@@ -3312,6 +3312,35 @@ An agent drive refuses an occupied fixture port unless its launch record and lis
 process belong to this app directory and origin. Choose a free port with `--backend`
 or `PORT` when another checkout holds it. Ordinary app servers keep their authored ports.
 
+**A setting a launch gives** (LLP 1153.002). Beside a name, app.json's `env` takes
+`{ "name": "API_BASE_URL", "launch": true }`, and app.ts reads it as any setting, in a
+top-level `const API = import.meta.env.API_BASE_URL ?? '…'`. Its build's value (the
+environment, `.env.local`, `.env`, the default) is what the web and Android read (the web's
+bundles inline it), what a process that renders the web's pages reads, at build or while
+serving, and what the bake's own evaluation reads, so the first frame it compiles. On Apple (iOS, macOS, tvOS), Linux
+and Windows, a non-empty value in the launched process's environment replaces it, read once as
+the module loads, so every instance in that launch (a worker's, a reload's, an update's)
+reads the same: `SIMCTL_CHILD_API_BASE_URL=… xcrun simctl launch <udid> <bundle-id>` on a
+simulator, an XCUITest's `app.launchEnvironment["API_BASE_URL"]`, `xcrun devicectl device
+process launch --environment-variables '{"API_BASE_URL": "…"}'` (or
+`DEVICECTL_CHILD_API_BASE_URL`) on a phone, the process's environment on a desktop. A native
+module is not the way to read one: this read holds the value before the module's first
+request. Grants are fixed at build, so a grant over a marked name is refused at bake: grant
+what a launch may name (`net.fetch https:`, `net.fetch http:`, or each origin), and a `fetch`
+outside them is refused naming the setting its origin came from (a socket's refusal does not
+name it). The bake adds `env.launch <NAME>` to the module's grants for each marked name, and a
+host answers a launch's value only for a name its grants carry, so nothing else of the
+environment is read; app.ts may not write the line, and an update that marks a new name changes
+the grants, which takes a new binary. A name that begins with `EXACT_` is the host's and cannot
+be marked. The build's record (`.exact-build.json`'s and the receipt's `env`) says `"launch":
+true` beside the value and its source. A module that reads one needs `typescriptRuntime` 13: an
+older binary's prelude cannot give it the launch's value, so a signed update of it goes to no
+such binary. A drive that sets a marked name for the app it starts gives a launch's value, so
+the Linux, macOS and Windows drives, which start the app with their environment, do not count a
+marked name the environment sets as a change to the build; the iOS, Android and web drives count
+it (an iOS drive gives one with `SIMCTL_CHILD_<NAME>`). A value Bun loaded from `.env` is the
+build's, and one a command or a launcher sets in its place is the launch's.
+
 The producer captures local imports, type-checks, bundles with Rolldown, compiles HBC, and
 bakes with an empty store. It writes `app.plan`, `app.js`, `app.hbc`, generated
 types, and an `app.module.json` pairing receipt into a **new** directory; it

@@ -1489,3 +1489,6 @@ mod exports;
 
 #[path = "producer/cli.rs"]
 mod cli;
+
+#[path = "producer/launch.rs"]
+mod launch;

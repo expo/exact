@@ -75,7 +75,11 @@ pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// module whose grants admit `sqlite.open` needs 10 ([`typescript_runtime_of`]).
 /// 11: Fetch's `cache` (LLP 1162 D4), which an older prelude ignores.
 /// 12: `exactProtocols`, which an older prelude would ignore (LLP 1016.000).
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 12;
+/// 13: the settings a launch may give (LLP 1153.002), which the bundle's first
+/// line asks the prelude for (`__exact_launch_settings`): an older prelude
+/// has none, so the module would not load, and a binary without it would
+/// give the module the build's value whatever the launch set.
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 13;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -86,7 +90,8 @@ pub(crate) const TYPESCRIPT_RUNTIME: u32 = 12;
 /// `Response` now needs 8, as do constructors whose readable side can become
 /// a request body. `structuredClone` names none of them. 10 is read from the
 /// grants, not the bundle.
-const RUNTIME_OPTIONS: [(u32, &str); 25] = [
+const RUNTIME_OPTIONS: [(u32, &str); 26] = [
+    (13, "__exact_launch_settings"),
     (12, "exactProtocols"),
     (11, "cache"),
     (9, "exactIdleTimeout"),

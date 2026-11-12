@@ -51,6 +51,12 @@ impl DataSource for Module {
         self.document_owner = owner;
     }
 
+    /// No launch's value: a render reads the build's, as the browser does
+    /// (door 27 answers no name; LLP 1153.002 D2).
+    fn render_web(&mut self) {
+        self.host.launch.clear();
+    }
+
     fn take_logs(&mut self) -> Vec<String> {
         self.journal_lines()
     }

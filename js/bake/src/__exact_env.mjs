@@ -1,6 +1,7 @@
 // The settings an app reads at build (LLP 1153 D4): `import.meta.env.NAME` in a top-level const of app.ts, each name
 // declared in app.json's `env`, its value from the environment, then `.env.local`, then `.env` beside app.json, else
-// the const's `??` default. The value is inlined into the captured copy, so every host runs the same module. The
+// the const's `??` default. The value is inlined into the captured copy, so every host runs the same module; a name
+// marked `"launch": true` keeps the build's value as the one a launch's replaces (LLP 1153.002). The
 // native bake writes this file into its stage beside `__exact_config.mjs`, which imports it
 // (js/bake/src/resident.rs `ENV`); the web build and the scripts import it from here.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -13,12 +14,25 @@ import { dlopen, FFIType } from 'bun:ffi';
 export const ENV_FILES = ['.env.local', '.env'];
 const NAME = /^[A-Z][A-Z0-9_]*$/;
 
-/** The names app.json's `env` declares in the app directory `app` (none without one). */
-export function declaredSettings(app) {
+// An entry of app.json's `env`: a name, or `{ "name": "API_BASE_URL", "launch": true }`, a name a launch may give
+// (LLP 1153.002 D1). `"launch": false`, or an object with only its name, is the bare name.
+const entryName = entry => entry !== null && typeof entry === 'object' && !Array.isArray(entry) && typeof entry.name === 'string'
+  && Object.keys(entry).every(key => key === 'name' || key === 'launch') && ['boolean', 'undefined'].includes(typeof entry.launch) ? entry.name : entry;
+const manifestEnv = app => {
   let manifest = {};
   try { manifest = JSON.parse(readFileSync(resolve(app, 'app.json'), 'utf8')); } catch { /* no manifest: none declared */ }
-  return [...new Set(Array.isArray(manifest?.env) ? manifest.env : [])];
+  return Array.isArray(manifest?.env) ? manifest.env : [];
+};
+
+/** The names app.json's `env` declares in the app directory `app` (none without one); an entry of no shape it takes
+ * is kept as written, for `inlineSettings` to refuse. */
+export function declaredSettings(app) {
+  return settingNames(manifestEnv(app));
 }
+/** The names of `env`, a manifest's list. */
+export const settingNames = env => [...new Set((env ?? []).map(entryName))];
+/** The names of `env`, a manifest's list, that a launch may give (`"launch": true`, LLP 1153.002 D1). */
+export const launchNames = env => new Set((env ?? []).filter(entry => entry?.launch === true && typeof entryName(entry) === 'string').map(entryName));
 
 // A file's assignments in Node's dotenv grammar (`util.parseEnv`: `NAME=value`, `#` comments, quoted values, taken as
 // written, with no `$` expansion; https://nodejs.org/api/util.html#utilparseenvcontent). An absent file assigns none.
@@ -32,10 +46,12 @@ const assignments = (app, file) => { const path = resolve(app, file); return exi
 // and on Windows the process's environment block (GetEnvironmentVariableW, which a script's own assignment to
 // `process.env` does reach, so only names in Bun's files are asked of it). So the first exact2 script of a command
 // (scripts/app.mjs and the app's launcher call `noteBunLoaded`) notes in EXACT_BUN_LOADED each name Bun loaded, one set
-// in `process.env` but not in the environment it was given, and every process below inherits the note: those names'
-// values are Bun's, never the environment's, whatever the files say later (a dev loop builds long after it started).
-// A variable the command was given is the environment's whether or not a file holds the same value. On any other
-// system nothing is noted, and a value Bun loaded counts as the environment's.
+// in `process.env` but not in the environment it was given, with the SHA-256 of the value it loaded
+// (`NAME=<hex>,…`), and every process below inherits the note: a name that still holds that value holds Bun's, never
+// the environment's, whatever the files say later (a dev loop builds long after it started); another value is one a
+// command or a launcher set below, the environment's (js/src/launch.rs reads the note alike). A variable the command
+// was given is the environment's whether or not a file holds the same value. On any other system nothing is noted,
+// and a value Bun loaded counts as the environment's.
 const bunLoaded = (dir, env) => {
   const mode = env.NODE_ENV || 'development';
   return Object.assign({}, ...['.env', `.env.${mode}`, ...mode === 'test' ? [] : ['.env.local']].map(file => assignments(dir, file)));
@@ -70,21 +86,27 @@ const loadedHere = () => {
   const has = candidates.length ? given() : null;
   return has ? candidates.filter(name => !has(name)) : [];
 };
-// The names whose values in `env` are Bun's: those noted above, and, in `process.env`, those this process loaded.
-const bunNames = env => new Set([...(env.EXACT_BUN_LOADED ?? '').split(',').filter(Boolean), ...env === process.env ? loadedHere() : []]);
+const valueDigest = value => createHash('sha256').update(value).digest('hex');
+// The values Bun loaded, as a digest by name: those noted above, and, in `process.env`, those this process loaded.
+const bunValues = env => new Map([
+  ...(env.EXACT_BUN_LOADED ?? '').split(',').filter(Boolean).map(entry => { const at = entry.indexOf('='); return at < 0 ? [entry, null] : [entry.slice(0, at), entry.slice(at + 1)]; }),
+  ...env === process.env ? loadedHere().map(name => [name, valueDigest(process.env[name])]) : [],
+]);
+// Whether `env`'s value for `name` is the one Bun loaded: a command or a launcher that set another gave it.
+const fromBun = (bun, env, name) => bun.get(name) === valueDigest(env[name] ?? '');
 
-/** Adds to EXACT_BUN_LOADED, which every process this one starts inherits, the names Bun loaded into this process from
- * `.env` files. Each exact2 script calls it before it starts a process (scripts/app.mjs on import), so the first
- * one's note reaches every process below it. */
+/** Adds to EXACT_BUN_LOADED, which every process this one starts inherits, each name Bun loaded into this process from
+ * `.env` files and the digest of its value. Each exact2 script calls it before it starts a process (scripts/app.mjs on
+ * import), so the first one's note reaches every process below it. */
 export function noteBunLoaded() {
-  process.env.EXACT_BUN_LOADED = [...bunNames(process.env)].sort().join(',');
+  process.env.EXACT_BUN_LOADED = [...bunValues(process.env)].map(([name, digest]) => `${name}=${digest}`).sort().join(',');
 }
 
 /** Each of `names` with its value and source (`environment`, `.env.local` or `.env`), or null where none sets it. */
 export function settingValues(app, names, env = process.env) {
-  const files = Object.fromEntries(ENV_FILES.map(file => [file, assignments(app, file)])), bun = bunNames(env);
+  const files = Object.fromEntries(ENV_FILES.map(file => [file, assignments(app, file)])), bun = bunValues(env);
   return Object.fromEntries(names.map(name => {
-    if (env[name] !== undefined && !bun.has(name)) return [name, { value: env[name], source: 'environment' }];
+    if (env[name] !== undefined && !fromBun(bun, env, name)) return [name, { value: env[name], source: 'environment' }];
     const file = ENV_FILES.find(f => Object.hasOwn(files[f], name));
     return [name, file ? { value: files[file][name], source: file } : null];
   }));
@@ -94,7 +116,7 @@ export function settingValues(app, names, env = process.env) {
  * `import.meta.env.NAME`, with what the bake inlines for it (its value and source, a default included) as JSON, or
  * null where it would refuse. `parse` (Rolldown's) reads app.ts's defaults; without it, a default is not seen. */
 export function settingInputs(app, env = process.env, parse = null) {
-  const names = [...new Set(app.manifest?.env ?? [])], values = settingValues(app.dir, names, env);
+  const names = settingNames(app.manifest?.env), values = settingValues(app.dir, names, env);
   let record = {};
   try { if (parse && names.length) record = inlineSettings(readFileSync(resolve(app.dir, 'app.ts'), 'utf8'), app.dir, parse, env).record; } catch { /* refused, or no app.ts: what the sources give */ }
   return Object.fromEntries(names.map(name => { const setting = record[name] ?? values[name]; return [`import.meta.env.${name}`, setting ? JSON.stringify(setting) : null]; }));
@@ -121,18 +143,57 @@ const metaEnvs = (ast) => {
 const lineColumn = code => offset => { const lines = code.slice(0, offset).split(/\r\n?|\n|\u2028|\u2029/); return `${lines.length}:${lines.at(-1).length + 1}`; };
 const READ = 'import.meta.env is read only in a top-level const of app.ts: const API = import.meta.env.API_BASE_URL, with ?? \'a default\' or without, then API where it is used';
 
+/** The expression a read of `name`, which a launch may give (LLP 1153.002 D2), becomes in a native build's module: the
+ * launch's value, which the bundle's first line asked the prelude for (`typescript.mjs` `launchIntro`), else `value`,
+ * the build's. Where nothing asked (the web, the bake), `globalThis.__exact_launch` is absent and `value` is read. */
+const launchRead = (name, value) => `(globalThis as unknown as { readonly __exact_launch?: { readonly [name: string]: string } }).__exact_launch?.[${JSON.stringify(name)}] ?? ${JSON.stringify(value)}`;
+// The top-level consts the binding `name`'s value reads, however deep: through a template, `+`, `.join`, another const.
+const constsRead = (body, name) => {
+  const consts = new Map();
+  for (const statement of body) {
+    const s = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement;
+    if (s?.type === 'VariableDeclaration') for (const d of s.declarations) if (d.id.type === 'Identifier') consts.set(d.id.name, d.init);
+  }
+  const seen = new Set();
+  const walk = node => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    if (node.type === 'Identifier' && consts.has(node.name)) { if (!seen.has(node.name)) { seen.add(node.name); walk(consts.get(node.name)); } return; }
+    for (const k in node) if (k !== 'parent' && !(k === 'property' && node.type === 'MemberExpression' && !node.computed) && !(k === 'key' && node.type === 'Property' && !node.computed)) walk(node[k]);
+  };
+  walk(consts.get(name));
+  return { seen, init: consts.get(name) };
+};
+// The local name of the binding app.ts exports as `grants`, as `staticFacts` reads it.
+const grantsBinding = body => {
+  for (const statement of body) {
+    if (statement.type !== 'ExportNamedDeclaration' || statement.source) continue;
+    if (statement.declaration?.declarations?.some(d => d.id.name === 'grants')) return 'grants';
+    const named = (statement.specifiers ?? []).find(x => (x.exported.name ?? x.exported.value) === 'grants');
+    if (named) return named.local.name ?? named.local.value;
+  }
+  return null;
+};
+
 /** `code` (app.ts) with each top-level `const X = import.meta.env.NAME`, or `… ?? 'default'`, holding its value, and
- * `record`, each name's value and source (`default` where the default was taken). Every refusal is said at once: a
- * read anywhere else, a name app.json's `env` does not declare, one it declares that app.ts never reads, one with no
- * value and no default. `parse` is Rolldown's. */
-export function inlineSettings(code, app, parse, env = process.env) {
-  const declared = declaredSettings(app);
+ * `record`, each name's value and source (`default` where the default was taken). A name app.json marks `"launch":
+ * true` (LLP 1153.002) holds the launch's value where the launch gave one (`launchRead`), and its record says
+ * `launch: true`. Every refusal is said at once: a read anywhere else, a name app.json's `env` does not declare, one
+ * it declares that app.ts never reads, one with no value and no default, a marked name of the host's (`EXACT_…`), and
+ * grants that read a marked name's const. `parse` is Rolldown's. Without `launches` (the web's bundles, which no
+ * launch gives a value) a marked name is inlined as any other, and its record still says `launch: true`. */
+export function inlineSettings(code, app, parse, env = process.env, { launches = true } = {}) {
+  const entries = manifestEnv(app), declared = settingNames(entries), launch = launchNames(entries);
   if (!declared.length && !/\bimport\b/.test(code)) return { code, record: {} };
   const parsed = parse('app.ts', code);
   // The type check says what does not parse.
   if (parsed.errors?.length) return { code, record: {} };
   const at = lineColumn(code);
-  const refusals = declared.filter(name => typeof name !== 'string' || !NAME.test(name)).map(name => `app.json's "env": ${JSON.stringify(name)} is not a setting's name (import.meta.env names are [A-Z][A-Z0-9_]*)`);
+  const refusals = declared.filter(name => typeof name !== 'string' || !NAME.test(name)).map(name => typeof name === 'object' && name !== null
+    ? `app.json's "env": ${JSON.stringify(name)} is not a setting: write its name, or { "name": "API_BASE_URL", "launch": true } for one a launch may give`
+    : `app.json's "env": ${JSON.stringify(name)} is not a setting's name (import.meta.env names are [A-Z][A-Z0-9_]*)`);
+  for (const name of launch) if (name.startsWith('EXACT_')) refusals.push(`app.json's "env": ${name} is marked "launch": true, and a name that begins with EXACT_ is the host's: rename the setting`);
+  for (const name of launch) if (entries.some(entry => entry === name || entryName(entry) === name && entry.launch !== true)) refusals.push(`app.json's "env" names ${name} twice, once marked "launch": true: name it once`);
   const reads = [], allowed = new Set();
   for (const statement of parsed.program.body) {
     const s = statement.type === 'ExportNamedDeclaration' ? statement.declaration : statement;
@@ -142,8 +203,15 @@ export function inlineSettings(code, app, parse, env = process.env) {
       const read = fallback ? bare(init.left) : init;
       if (d.id.type !== 'Identifier' || read?.type !== 'MemberExpression' || !metaEnv(bare(read.object)) || key(read) === null) continue;
       allowed.add(bare(read.object).start);
-      reads.push({ name: key(read), node: d.init, fallback, at: at(read.start) });
+      reads.push({ name: key(read), id: d.id.name, node: d.init, fallback, at: at(read.start) });
     }
+  }
+  // Grants are the build's (LLP 1153.002 D3): over a marked name's const they would hold the build's value, which a
+  // launch replaces. Keyed grants select by `const origin`.
+  const grants = grantsBinding(parsed.program.body), reached = grants ? constsRead(parsed.program.body, grants) : null;
+  for (const read of reads) {
+    if (!launch.has(read.name) || !reached || !(reached.seen.has(read.id) || read.id === 'origin' && bare(reached.init)?.type === 'ObjectExpression')) continue;
+    refusals.push(`app.ts:${read.at}: grants read ${read.id}, and import.meta.env.${read.name} is one a launch may give ("launch": true in app.json), while grants are fixed at build: grant what a launch may name (net.fetch https:, net.fetch http:, or each origin it may give) without ${read.id}`);
   }
   for (const node of metaEnvs(parsed.program)) if (!allowed.has(node.start)) refusals.push(`app.ts:${at(node.start)}: ${READ}`);
   // Read twice, a name takes the one default: else the record would say one value and the module hold two.
@@ -162,8 +230,8 @@ export function inlineSettings(code, app, parse, env = process.env) {
     if (fallback && given === null) { refusals.push(`app.ts:${at}: import.meta.env.${name}'s default after ?? must be a string literal`); continue; }
     const setting = values[name] ?? (fallback ? { value: given, source: 'default' } : null);
     if (!setting) { if (!refusals.some(r => r.startsWith(`import.meta.env.${name} has no value`))) refusals.push(`import.meta.env.${name} has no value: set it in the environment, in .env.local or in .env beside app.json (read in that order), or write a default: import.meta.env.${name} ?? '…'`); continue; }
-    record[name] ??= setting;
-    edits.push([node.start, node.end, JSON.stringify(setting.value)]);
+    record[name] ??= launch.has(name) ? { ...setting, launch: true } : setting;
+    edits.push([node.start, node.end, launches && launch.has(name) ? launchRead(name, setting.value) : JSON.stringify(setting.value)]);
   }
   if (refusals.length) throw new Error(refusals.join('\n'));
   for (const [start, end, value] of edits.sort((a, b) => b[0] - a[0])) code = code.slice(0, start) + value + code.slice(end);
@@ -185,12 +253,15 @@ export const strayReads = (...args) => envReads(...args).map(read => read.why);
 /** Each setting of `record` (name to the value and source a build inlined) whose value its sources give otherwise
  * now, as `{ name, built, now }` (a setting, or null where none is set). With `app`, the app's directory beside the
  * build, each is read again from `env` and the app's files; without it (a build copied away from them) only `env` can
- * change one, and a name it leaves unset keeps the build's value. */
-export function settingChanges(record, env = process.env, app = null) {
-  const read = app ? settingValues(app, Object.keys(record), env) : {}, bun = bunNames(env);
+ * change one, and a name it leaves unset keeps the build's value. With `launch`, the build runs where a launch gives
+ * a marked name's value (Apple, Linux, Windows; LLP 1153.002 D2): a value `env` gives one, empty or not, is the
+ * launch's (an empty one reads the build's), not a source of the build, and the name is not counted. */
+export function settingChanges(record, env = process.env, app = null, { launch = false } = {}) {
+  const read = app ? settingValues(app, Object.keys(record), env) : {}, bun = bunValues(env);
   return Object.entries(record).flatMap(([name, was]) => {
+    if (launch && was?.launch && env[name] !== undefined && !fromBun(bun, env, name)) return [];
     const now = app ? read[name] ?? (was?.source === 'default' ? was : null)
-      : env[name] !== undefined && !bun.has(name) ? { value: env[name], source: 'environment' } : was;
+      : env[name] !== undefined && !fromBun(bun, env, name) ? { value: env[name], source: 'environment' } : was;
     return now?.value === was?.value ? [] : [{ name, built: was, now }];
   });
 }
@@ -252,5 +323,6 @@ export function builtSettings(out) {
   return Object.keys(record).length ? { env: record } : {};
 }
 
-/** What the agent's `logs` and the build say of each setting a build inlined: `import.meta.env.NAME = "value" (source)`. */
-export const settingLines = (record) => Object.entries(record ?? {}).map(([name, { value, source }]) => `import.meta.env.${name} = ${JSON.stringify(value)} (${source})`);
+/** What the agent's `logs` and the build say of each setting a build inlined: `import.meta.env.NAME = "value" (source)`,
+ * and of one a launch may give, that a launch's value replaces it natively. */
+export const settingLines = (record) => Object.entries(record ?? {}).map(([name, { value, source, launch }]) => `import.meta.env.${name} = ${JSON.stringify(value)} (${source}${launch ? '; a launch that sets it replaces it, except on Android and the web' : ''})`);

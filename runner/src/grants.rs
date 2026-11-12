@@ -60,7 +60,10 @@ pub fn parse_with(spec: &str, link: GrantsLink) -> Result<Grants<'_>, Vec<String
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        if let Some(why) = own(line).then(|| listen_refusal(line)).flatten() {
+        if let Some(why) = own(line)
+            .then(|| listen_refusal(line).or_else(|| launch_refusal(line)))
+            .flatten()
+        {
             errors.push(format!("line {}: {why}", index + 1));
         } else if exact_grants::process::is_process_line(line) {
             match exact_grants::process::validate(line) {
@@ -184,8 +187,9 @@ pub fn refusal(errors: &[String]) -> String {
 /// (`payment.*`, LLP 1133.034 D13), never by the I/O executor's grammar;
 /// and the desktop-process lines (`process.spawn`, `env.read login:`,
 /// `secret.hold`, LLP 1133.007 §6), which the runner and the data executor
-/// read with `exact_grants::process`, and `net.listen`, which the listener
-/// checks (LLP 1133.005 D11).
+/// read with `exact_grants::process`, `net.listen`, which the listener
+/// checks (LLP 1133.005 D11), and `env.launch`, which the data executor
+/// reads ([`launch_names`]).
 pub(crate) fn own(line: &str) -> bool {
     line == "doc.keep"
         || exact_grants::process::is_process_line(line)
@@ -199,6 +203,42 @@ pub(crate) fn own(line: &str) -> bool {
         || crate::device::is_device_line(line)
         || crate::hardened::is_runtime_line(line)
         || line.starts_with("auth.")
+        || line.split_whitespace().next() == Some(LAUNCH)
+}
+
+/// A setting a launch may give (LLP 1153.002 D2): `env.launch <NAME>`, one
+/// line for each name app.json's `env` marks, which the bake writes (an
+/// authored one is refused there). A host answers a launch's value only for
+/// a name its module's grants carry, so no other variable of the process is
+/// read, and an update, which carries exactly the binary's grants, adds none.
+pub const LAUNCH: &str = "env.launch";
+
+/// The names `spec`'s `env.launch` lines carry.
+pub fn launch_names(spec: &str) -> impl Iterator<Item = &str> {
+    spec.lines().filter_map(|line| {
+        let mut words = line.split_whitespace();
+        (words.next() == Some(LAUNCH))
+            .then(|| words.next())
+            .flatten()
+    })
+}
+
+/// Why an `env.launch` line is not one, if it is not: its one target is a
+/// setting's name (`[A-Z][A-Z0-9_]*`) and not the host's (`EXACT_…`).
+fn launch_refusal(line: &str) -> Option<String> {
+    let mut words = line.split_whitespace();
+    if words.next() != Some(LAUNCH) {
+        return None;
+    }
+    let name = words.next().unwrap_or_default();
+    let setting = name.starts_with(|c: char| c.is_ascii_uppercase())
+        && (name.chars()).all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && !name.starts_with("EXACT_");
+    (!setting || words.next().is_some()).then(|| {
+        format!(
+            "`{line}`: `{LAUNCH}` takes one setting's name, `[A-Z][A-Z0-9_]*` and not `EXACT_…`"
+        )
+    })
 }
 
 /// Why an own line naming `net.listen` is not one, if it is not.
@@ -413,6 +453,30 @@ pub fn normalized_json(spec: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::normalized_json;
+
+    /// LLP 1153.002 D2: the bake's line for a setting a launch may give is
+    /// exact2's own, no I/O grant, and names one setting.
+    #[test]
+    fn an_env_launch_line_names_one_setting_and_is_no_io_grant() {
+        let spec = "net.fetch https:\nenv.launch API_BASE_URL\nenv.launch PICTURES";
+        assert!(super::parse(spec).is_ok());
+        let names: Vec<&str> = super::launch_names(spec).collect();
+        assert_eq!(names, ["API_BASE_URL", "PICTURES"]);
+        assert_eq!(crate::io_grants(spec), "net.fetch https:");
+        assert!(normalized_json(spec).contains(r#"[2,"env.launch API_BASE_URL",null,null]"#));
+        for bad in [
+            "env.launch",
+            "env.launch lower",
+            "env.launch EXACT_AGENT",
+            "env.launch A B",
+        ] {
+            let errors = super::parse(bad).unwrap_err();
+            assert!(
+                errors[0].contains("takes one setting's name"),
+                "{bad}: {errors:?}"
+            );
+        }
+    }
 
     #[test]
     fn a_redacted_url_has_no_userinfo_query_or_fragment() {

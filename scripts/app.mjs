@@ -1408,7 +1408,7 @@ export function pendingBuildInputs(build, { includeSources = false } = {}) {
     catch {changed.push(file.name);}
   }
   for(const path of [...build.binary.missing, ...(build.optionalInputs ?? [])])if(existsSync(path))changed.push(path);
-  for(const {name} of build.settings?settingChanges(build.settings.env,process.env,build.settings.dir):[])changed.push(`import.meta.env.${name}`); // a setting the module inlined, as its sources give it now (LLP 1153 D4)
+  for(const {name} of build.settings?settingChanges(build.settings.env,process.env,build.settings.dir,{launch:['macos','windows'].includes(build.compat?.inputs?.platform)}):[])changed.push(`import.meta.env.${name}`); // a setting the module inlined, as its sources give it now (LLP 1153 D4); on a Mac or Windows, whose drive starts the app with this environment, a marked name it sets is the launch's (LLP 1153.002 D2)
   for(const {path,names} of build.binary.directories) {
     try {if(!statSync(path).isDirectory()||canonicalBuild(directoryInputNames(path))!==canonicalBuild(names))changed.push(path);}
     catch {changed.push(path);}

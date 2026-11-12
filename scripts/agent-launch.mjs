@@ -875,12 +875,14 @@ export const depInfoChanges = bin => existsSync(bin) ? depInfoNewer(statSync(bin
 /** The settings the native build `bin` of `app` inlined (LLP 1153 D4) whose sources give them otherwise now, as
  * `import.meta.env.NAME`: a change no file shows, which only a rebuild takes in. What it inlined is the record bound to
  * this executable (`boundSettings`); an app that declares settings and has none bound, an executable another build
- * made, has its record named as the change, so the drive says to build again. */
-export function bakedSettingChanges(bin, app) {
+ * made, has its record named as the change, so the drive says to build again. With `launch` (a Linux executable,
+ * which the drive starts with its environment), a marked name the environment sets is the launch's value, not a change
+ * (LLP 1153.002 D2); an Android build reads the build's value, so it counts there. */
+export function bakedSettingChanges(bin, app, { launch = false } = {}) {
   if (!app.manifest?.env?.length) return [];
   const record = boundSettings(bin);
   if (!record) return [`${bin}.settings.json (none, or another build's)`];
-  return settingChanges(record.env, process.env, app.dir).map(({ name }) => `import.meta.env.${name}`);
+  return settingChanges(record.env, process.env, app.dir, { launch }).map(({ name }) => `import.meta.env.${name}`);
 }
 
 /** A packaged Windows app keeps compiler provenance in the private bake cache.

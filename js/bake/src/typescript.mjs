@@ -241,16 +241,37 @@ export function developmentGrants(code, parse, env=process.env) {
   const marker=/^([ \t]*)development[ \t]+(?=\S)/;
   const grants=staticFacts(code,parse).grants;
   if (grants===undefined || !grants.split('\n').some(line=>marker.test(line))) return code;
-  // The binding exported as `grants`, as `staticFacts` reads it.
-  const body=parsed.program.body;
-  const local=body.flatMap(s=>s.type==='ExportNamedDeclaration' && !s.source ? (s.specifiers ?? []) : [])
-    .find(x=>(x.exported.name ?? x.exported.value)==='grants')?.local;
-  const name=local ? local.name ?? local.value : 'grants';
-  const declaration=body.map(s=>s.type==='ExportNamedDeclaration' ? s.declaration : s)
-    .flatMap(s=>s?.type==='VariableDeclaration' ? s.declarations : []).find(d=>d.id.type==='Identifier' && d.id.name===name);
+  const declaration=grantsDeclaration(parsed.program.body);
   const development=developmentTrust(env);
   const lines=grants.split('\n').flatMap(line=>!marker.test(line) ? [line] : development ? [line.replace(marker,'$1')] : []);
   return code.slice(0,declaration.init.start)+JSON.stringify(lines.join('\n'))+code.slice(declaration.init.end);
+}
+
+// The declaration of the binding app.ts exports as `grants`, as `staticFacts` reads it.
+function grantsDeclaration(body) {
+  const local=body.flatMap(s=>s.type==='ExportNamedDeclaration' && !s.source ? (s.specifiers ?? []) : [])
+    .find(x=>(x.exported.name ?? x.exported.value)==='grants')?.local;
+  const name=local ? local.name ?? local.value : 'grants';
+  return body.map(s=>s.type==='ExportNamedDeclaration' ? s.declaration : s)
+    .flatMap(s=>s?.type==='VariableDeclaration' ? s.declarations : []).find(d=>d.id.type==='Identifier' && d.id.name===name);
+}
+
+/** `code` (app.ts) with an `env.launch <NAME>` grant line for each of `names`, the settings app.json marks a launch
+ * may give (LLP 1153.002 D2): a host answers a launch's value only for a name the module's grants carry, so the lines
+ * are the bake's, and one app.ts writes itself is refused (the native bake checks the module's grants again,
+ * js/bake/src/lib.rs). Only the captured copy is rewritten, before `developmentGrants`, so every producer and host
+ * reads the same grants. */
+export function launchGrants(code, parse, names) {
+  const parsed=parse('app.ts',code);
+  if (parsed.errors.length) return code;
+  // The grants as evaluated, however they are spelled (`'env.' + 'launch HOME'`), a development build's line included.
+  const grants=staticFacts(code,parse).grants;
+  const written=(grants ?? '').split('\n').map(line=>line.trim()).filter(line=>/^(?:development\s+)?env\.launch(?:\s|$)/.test(line));
+  if (written.length) throw new Error(written.map(line=>`app.ts: grants \`${line}\`: an env.launch line is the bake's, written for each name app.json's "env" marks { "name": "NAME", "launch": true }; mark the setting there and remove the line`).join('\n'));
+  if (!names.length) return code;
+  const value=JSON.stringify([...grants ? [grants] : [], ...names.map(name=>`env.launch ${name}`)].join('\n'));
+  const declaration=grantsDeclaration(parsed.program.body);
+  return declaration ? code.slice(0,declaration.init.start)+value+code.slice(declaration.init.end) : `${code}\nexport const grants = ${value};\n`;
 }
 
 // Rolldown IDs are file paths, not URL or slash-normalized strings. Both
@@ -536,7 +557,23 @@ export function asyncContext() {
 /** The native bundle of a data module, the same for the one-shot producer
  * and the resident compiler. */
 export const dataBundle=(stage)=>({...bundleOptions, transform:{...bundleOptions.transform, ...lowered},
-  plugins:[asyncContext(), capturedSources(stage)]});
+  plugins:[asyncContext(), capturedSources(stage), launchIntro(stage)]});
+/** Where app.ts reads a setting a launch may give (LLP 1153.002, the
+ * record `configure` wrote), the bundle's first line, before any module's
+ * code: the prelude's `__exact_launch_settings` (js/src/launch.js) asks the
+ * host once for those names and holds what the launch gave in
+ * `globalThis.__exact_launch`, which app.ts's reads take before the build's
+ * value. A realm without it (the wasm target's page, an older binary) reads
+ * the build's value; the receipt asks for the runtime that has it
+ * (`bake/src/compat.rs`), so an update goes to no older binary. */
+export function launchIntro(stage) {
+  return { name:'exact-launch-settings', intro() {
+    let record={};
+    try { record=JSON.parse(readFileSync(resolve(stage,'__exact_env.json'),'utf8')); } catch { /* no app.ts: no settings */ }
+    const names=Object.keys(record).filter(name=>record[name].launch);
+    return names.length ? `globalThis.__exact_launch_settings?.(${JSON.stringify(names)});` : '';
+  } };
+}
 /** The captured graph's Rolldown plugin, the same in every producer: app
  * files load only from the stage, package code only from its capture, and
  * the clock (`ambientRefusals`) or what no executor has (`packageRefusals`)
@@ -880,16 +917,19 @@ export function staticFacts(code, parse) {
   return { appId: value('appId'), grants: value('grants'), exported: [...exported.keys()] };
 }
 
-export function configure(stage, incremental=false, parse) {
+/** With `web`, for the web's bundles: a setting a launch may give is inlined as any other, as no launch gives one
+ * there (LLP 1153.002 D2). */
+export function configure(stage, incremental=false, parse, web=false) {
   const app=capturedOrigins(stage).at(-1)[1], modulePath=resolve(stage,'app.ts');
   if (existsSync(modulePath)) {
     const before=readFileSync(modulePath,'utf8'), original=resolve(stage,'__exact_backend_source.json');
     const authored=existsSync(original) ? JSON.parse(readFileSync(original,'utf8')) : before;
     const selection=backendOriginSelection(app,process.env,parse), warning=backendOriginWarning(authored,selection,parse);
     // `import.meta.env` first: a `const origin` it sets is a literal the backend selection may then override.
-    const settings=inlineSettings(authored,app,parse);
+    const settings=inlineSettings(authored,app,parse,process.env,{launches:!web});
     writeFileSync(resolve(stage,'__exact_env.json'), JSON.stringify(settings.record));
-    const after=developmentGrants(injectBackendOrigin(settings.code,selection?.origin ?? null,parse),parse);
+    const launched=Object.keys(settings.record).filter(name=>settings.record[name].launch);
+    const after=developmentGrants(launchGrants(injectBackendOrigin(settings.code,selection?.origin ?? null,parse),parse,launched),parse);
     writeFileSync(resolve(stage,'__exact_backend.json'), JSON.stringify({origin:literalBackendOrigin(after,parse),warning}));
     if (before!==after) writeFileSync(modulePath,after);
     // Every producer refuses alike what the web build cannot read without running it.

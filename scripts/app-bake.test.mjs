@@ -1327,8 +1327,8 @@ test('a linked bake follows a setting whose value stays but whose source moved',
     const first = bakedAt();
     bakeOutside(app, 'macos', target, env);
     assert.equal(bakedAt(), first, 'nothing changed: the bake is reused');
-    // The command was not given it this time: Bun loaded the same value, and the note says so.
-    env.EXACT_BUN_LOADED = 'API_BASE_URL';
+    // The command was not given it this time: Bun loaded the same value, and the note says so (its digest).
+    env.EXACT_BUN_LOADED = `API_BASE_URL=${createHash('sha256').update('http://a.example').digest('hex')}`;
     bakeOutside(app, 'macos', target, env);
     assert.deepEqual(inlined(), { value: 'http://b.example', source: 'default' });
   } finally { rmSync(root, { recursive: true, force: true }); }

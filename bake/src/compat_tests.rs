@@ -978,6 +978,11 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
         needs(b"fetch(u, {exactStream: m, exactProtocols: names})"),
         12
     );
+    // LLP 1153.002: the bundle's first line asks for the settings a launch may give.
+    assert_eq!(
+        needs(b"var exact = (function(exports) {\n__exact_launch_settings([\"API_BASE_URL\"]);"),
+        13
+    );
     // A transaction's options are data: what decides 10 is the grant.
     assert_eq!(needs(b"await db.transaction(m.commands, m.options)"), 0);
     let with = |grants: &str| {
