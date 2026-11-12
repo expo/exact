@@ -317,3 +317,19 @@ fn a_send_that_refreshes_a_list_at_activation_refreshes_its_members() {
     assert_eq!(requests.len(), 1, "{requests:?}");
     assert!(requests[0].forced, "the send's declared refresh");
 }
+
+#[test]
+fn a_refresh_made_while_the_source_is_away_ends_a_waiting_launch_asks_exemption() {
+    let mut r = launch();
+    r.data().ready = true;
+    r.data().overruns = 1;
+    r.data_ready().unwrap();
+    assert!(r.take_requests().is_empty());
+    r.data().ready = false;
+    r.act("again", vec![]).unwrap();
+    assert!(r.take_requests().is_empty(), "the source is away");
+    r.data().ready = true;
+    let due = r.reask_due_ms().expect("a held re-ask");
+    r.advance(due).unwrap();
+    assert!(one_request(&mut r).forced, "the app's refresh");
+}
