@@ -1,5 +1,8 @@
 import { sendRequest } from "./request-send.js";
 import { markdownText } from './markdown.js';
+import { captureExits, exitBinding, exitOf, gains, restyled, presenceArm, presenceRows } from './presence-bindings.js';
+export { px, lt } from './presence-bindings.js';
+import { inOrder, rowKey } from './rows.js';
 import { resourceInspection } from "./resource-inspection.js"; export { canvasColor } from "./said.js";
 import { oneActivation, suppressedInvocation, imageEvent, releaseAsset as rel } from "./elements.js"; import { reloadOnGone } from "./generation-reload.js"; import { rt as Link } from "./rt-link.js";
 export { liveTime } from "./live-time.js";
@@ -62,7 +65,7 @@ function stale(n, state) {
 }
 function write(n, v) {
   if (eq(n.v, v)) return;
-  n.v = v; Rev++;
+  n.v = v; if (!CatchingUp) Rev++;
   for (const o of n.obs) stale(o, DIRTY);
 }
 /** A row's new item: an effect `fm` marked re-runs only if a field it reads changed (LLP 1071.000 D3). */
@@ -71,9 +74,13 @@ export function writeItem(n, v) {
   if (eq(o, v)) return;
   let m = -1;
   if (Array.isArray(o) && Array.isArray(v) && o.length === v.length) { m = 0; for (let k = 0; k < v.length && k < 31; k++) if (!eq(o[k], v[k])) m |= 1 << k; }
-  n.v = v; Rev++;
+  n.v = v; if (!CatchingUp) Rev++;
   for (const x of n.obs) if (!x.m || x.m & m) stale(x, DIRTY);
 }
+/** Writes in `f` publish what an earlier commit already made, to a row or arm whose region's update is still queued
+ * (presence-bindings.js): they are no change of this commit's, so `rev` does not count them. */
+let CatchingUp = false;
+export function catchUp(f) { const was = CatchingUp; CatchingUp = true; try { return f(); } finally { CatchingUp = was; } }
 let Mask = 0; // effects made in `fm`'s `g` read a row's item only as the fields in `m`
 export function fm(m, g) { const o = Mask; Mask = m; try { g(); } finally { Mask = o; } }
 function flush() {
@@ -118,6 +125,8 @@ export function memo(fn, t, name) {
   Settle.add(n);
   const g = () => read(n); g.n = n; return g;
 }
+/** A binding probe's lazy cache; settlement leaves its errors to the tree update. */
+export function bindingMemo(fn) { const n = node(fn); return () => read(n); }
 export function effect(fn) { const n = node(fn, undefined, 1); if (Mask) n.m = Mask; fresh(n); return n; }
 /** A scope whose effects `dispose` ends, owned by `parent` (a region's
  * arms and rows belong to the region's scope, never to its effect, which
@@ -162,6 +171,7 @@ function settle() { for (const n of Settle) if (!n.gone) fresh(n); }
 export function commit(f, what = "commit", finished) {
   if (Writes) { if (finished) Finishes.push(finished); return f(); }
   if (Poisoned) return say(`refused ${what}: the runner is poisoned; reload`);
+  captureExits();
   Writes = []; Commands = []; Out = []; Landed = []; Sends = []; Refresh = []; Finishes = finished ? [finished] : []; Refused = null; Why = ""; time();
   const was = Now.v, undo = [], saved = Resources.map(r => r.save()), held = Mutations.map(m => [m.ticket, m.tickets, m.concluded]), store = Store.save(), queued = Sched?.save(), writes = Ov.save();
   let ok = true, step = Booting ? "building the view" : `running the ${what}`; // where a refusal stops it (`Why`)
@@ -792,7 +802,11 @@ export function nm(e) {
     .finally(() => setTimeout(() => inflight.n--));
 }
 export const mapped = (v, map, clear) => typeof v === "string" && !v.trim() ? clear === undefined ? map(null) : clear : map(v);
-export function S(e, prop, unit, f) { let rendered = Adopt; effect(() => { css(e, prop, unit, f(), rendered); rendered = false; }); }
+export function S(e, prop, unit, f) {
+  exitBinding(e, prop, unit, f);
+  let rendered = Adopt;
+  effect(() => { css(e, prop, unit, f(), rendered); rendered = false; });
+}
 let Scratch = null;
 const Normal = new Map(), same = v => v.replace(/\btransparent\b/g, "rgba(0, 0, 0, 0)");
 export function normal(prop, t) {
@@ -829,6 +843,7 @@ export function css(e, prop, unit, v, rendered) {
  * name not yet in the tree is resolved again after the commit builds it. */
 let Refs = null;
 export function Sr(e, prop, unit, f) {
+  exitBinding(e, prop, unit, f);
   effect(() => {
     const v = f(), write = () => {
       let missing = false;
@@ -853,6 +868,7 @@ export const Hooks = {};
 /** `S` on a node the motion engine follows (`mo`): while a hold owns it, a
  * write goes to the authored style the hold restores. */
 export function Sm(e, prop, unit, f) {
+  exitBinding(e, prop, unit, f);
   effect(() => {
     const v = f();
     // Held: the hold's authored style takes it, and what css() last wrote no longer says what shows.
@@ -948,19 +964,7 @@ export const pieces = () => Promise.all([Motion, Inputs, Presence, Flow, Native,
 /** A virtualized list's row wrapper `el` leaves with the exit its row's `root` declares (list.js): whether it stays,
  * leaving, for presence-glue.js to remove. */
 export function exitView(el, root) { const css = root && exitOf(root); if (!Pres || !css) return false; Pres.exit(el, css); return exiting(el); }
-// Keep each bound exit's value from the start of the commit, which a removal in that commit plays whichever write came
-// first: the runner ends an arm without updating its bindings (region.rs)
-let Exits = null;
-export function px(e) {
-  if (!Exits) { Exits = new Set(); Before.push(() => { for (const x of Exits) x.$exit = x.style.getPropertyValue(EXIT); }); }
-  Exits.add(e); onEnd(() => Exits.delete(e)); pr(e);
-}
-const EXIT = "--exact-exit-animation", exitOf = n => (n.$exit ?? n.style.getPropertyValue(EXIT)).trim();
-const Created = [], Bound = new Map(), LT = "--exact-layout-transition";
-export function lt(e, declaring, f) { Bound.set(e, () => { const d = node(null), [l, o] = [Listener, Owner]; Listener = Owner = d; try { return declaring.includes(f()); } catch { return false; } finally { Listener = l; Owner = o; drop(d); } }); onEnd(() => Bound.delete(e)); pr(e); } // a bound layout transition (GitHub #809): whether its binding names a value that declares it, read as its effect reads (the committed clock)
-// As wasm's ops: before the tree update a view gaining the row; after, each whose declaration changed (a create: not a restyle, as paint.js keeps a ghost parent's isolation).
-const gains = () => { const ops = []; for (const [e, will] of Bound) { e.$lt = !!e.style.getPropertyValue(LT); if (!e.$lt && e.isConnected && will()) ops.push({ op: "style", id: viewId(e), css: LT }); } return ops; };
-const restyled = () => { const ops = []; for (const e of Bound.keys()) { const now = !!e.style.getPropertyValue(LT); if (e.isConnected && e.$lt !== now) ops.push({ op: "create", id: viewId(e) }); e.$lt = now; } return ops; };
+const Created = [];
 export function pr(e) {
   Created.push(e);
   if (Presence || typeof requestAnimationFrame !== "function" || globalThis.__exactRender) return;
@@ -1176,8 +1180,9 @@ export function when(p, subject, a0, a1) {
     const want = subject() ? 0 : a1 ? 1 : -1;
     if (want === arm) return;
     arm = want;
-    if (!b) return untracked(() => { [s, b] = adoptArm(p, want < 0 ? null : want ? a1 : a0, own); });
-    untracked(() => { if (s) end(s); clear(a, b); s = want < 0 ? null : build(b, want ? a1 : a0, own); });
+    const view = presenceArm(want < 0 ? null : want ? a1 : a0, subject, want);
+    if (!b) return untracked(() => { [s, b] = adoptArm(p, view, own); });
+    untracked(() => { if (s) end(s); clear(a, b); s = view ? build(b, view, own) : null; });
   }).$r = () => [a, b]; // the region's range, for shared.js
 }
 /** `match`: arm 0 with the bound value while the subject is `some`, else arm 1. */
@@ -1190,13 +1195,15 @@ export function match(p, subject, a0, a1) {
     if (v != null) write(bound.n, v);
     if (want === arm) return;
     arm = want;
-    if (!b) return untracked(() => { [s, b] = adoptArm(p, want < 0 ? null : want ? a1 : p2 => a0(p2, bound), own); });
-    untracked(() => { if (s) end(s); clear(a, b); s = want < 0 ? null : build(b, want ? a1 : p2 => a0(p2, bound), own); });
+    const view = presenceArm(want < 0 ? null : want ? a1 : p2 => a0(p2, bound), subject, want, bound);
+    if (!b) return untracked(() => { [s, b] = adoptArm(p, view, own); });
+    untracked(() => { if (s) end(s); clear(a, b); s = view ? build(b, view, own) : null; });
   }).$r = () => [a, b]; // the region's range, for shared.js
 }
 /** `each`: rows by key in item order; a kept row keeps its elements, its
  * item and position are signals its bindings read. */
 export function each(p, list, key, row, pure) {
+  row = presenceRows(row, list, key);
   let [a, b] = range(p), own = Owner;
   let rows = new Map(), single = false, order = null;
   effect(() => {
@@ -1215,7 +1222,7 @@ export function each(p, list, key, row, pure) {
           const item = items[i], r = order[i];
           if (r.item.n.v === item) continue;
           const k = keyAt(i);
-          if (typeof k + ":" + (Object.is(k, -0) ? 0 : k) !== r.k) break;
+          if (rowKey(k) !== r.k) break;
           writeItem(r.item.n, item);
         }
         if (i === items.length) return;
@@ -1223,16 +1230,13 @@ export function each(p, list, key, row, pure) {
       // A row's place in the last pass is its `at`; repeats count once a key repeats.
       const next = new Map(), seen = new Map();
       items.forEach((item, i) => {
-        let k = keyAt(i);
-        // A key is a string, a finite number or a bool, or the runner cannot build the rows (`key_text`, InstanceError::KeyKind): it poisons.
-        if (!(typeof k === "string" || typeof k === "boolean" || (typeof k === "number" && isFinite(k)))) throw new Error(`a row key that is not a string, finite number or bool: ${k}`);
-        k = typeof k + ":" + (Object.is(k, -0) ? 0 : k);
-        if (next.has(k)) { const n = seen.get(k) ?? 1; seen.set(k, n + 1); k = "d" + n + ":" + k; journal.push(`each: repeated key ${k}`); }
+        const k = rowKey(keyAt(i), next, seen);
+        if (k.startsWith("d")) journal.push(`each: repeated key ${k}`);
         let r = rows.get(k);
         if (r) { rows.delete(k); r.old = r.at; if (!Object.is(r.item.n.v, item)) writeItem(r.item.n, item); if (r.index.n.v !== i) write(r.index.n, i); }
         else if (!b) {
           // Adopting: the row's elements are in place, in item order.
-          r = { item: sig(item), index: sig(i) }; AdoptedLists.add(p);
+          r = { k, item: sig(item), index: sig(i) }; AdoptedLists.add(p);
           if (single && i && performance.now() > AdoptBy) {
             // Past the adoption's budget, a row of one element waits for a
             // slice (`lazy`); a press on it or any commit adopts it first.
@@ -1244,7 +1248,7 @@ export function each(p, list, key, row, pure) {
             lazy([p, r, row, own]);
           } else {
             const next = at(p), last = next ? next.previousSibling : p.lastChild;
-            r.s = scope(() => row(p, r.item, r.index), own);
+            r.s = scope(() => row(p, r.item, r.index, r.k), own);
             // A row of one element is that element, as a fresh build keeps it
             // (a region at its top would have put its own anchors beside it).
             const first = last ? last.nextSibling : p.firstChild;
@@ -1254,9 +1258,9 @@ export function each(p, list, key, row, pure) {
           }
         }
         else {
-          r = { item: sig(item), index: sig(i) };
+          r = { k, item: sig(item), index: sig(i) };
           const frag = document.createDocumentFragment(); frag.$listOwner = listOwner(parent);
-          r.s = scope(() => row(frag, r.item, r.index), own);
+          r.s = scope(() => row(frag, r.item, r.index, r.k), own);
           // A row of one element is that element (a region at its top would
           // have put its own anchors beside it); any other is bracketed.
           if (frag.childNodes.length === 1 && frag.firstChild.nodeType === 1) r.start = r.end = frag.firstChild;
@@ -1299,22 +1303,6 @@ export function each(p, list, key, row, pure) {
     });
   }).$r = () => [a, b]; // the region's range, for shared.js
 }
-/** The indices of `list`'s kept rows (`old`, their former places) on a
- * longest run in increasing former order: the rows that need not move. */
-function inOrder(list) {
-  const tails = [], prev = new Array(list.length);
-  for (let i = 0; i < list.length; i++) {
-    const o = list[i].old;
-    if (o === undefined) continue;
-    let lo = 0, hi = tails.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (list[tails[mid]].old < o) lo = mid + 1; else hi = mid; }
-    prev[i] = lo ? tails[lo - 1] : -1;
-    tails[lo] = i;
-  }
-  const stay = new Set();
-  for (let i = tails.length ? tails[tails.length - 1] : -1; i >= 0; i = prev[i]) stay.add(i);
-  return stay;
-}
 // Adoption in slices (LLP 1048.001): a keyed list's rows adopt in the
 // adoption's own task until its budget runs out, then in tasks of a few
 // milliseconds after it, so no one task holds the page. A press, key or
@@ -1337,13 +1325,13 @@ function adoptLazy(x) {
   if (r.s || own?.gone || !r.start.isConnected) return;
   const save = p.$n, a = Adopt;
   p.$n = r.start; Adopt = true;
-  try { r.s = scope(() => row(p, r.item, r.index), own); }
+  try { r.s = scope(() => row(p, r.item, r.index, r.k), own); }
   catch (e) {
     if (!(e instanceof Mismatch)) throw e;
     say(`each: a row built afresh: ${e.message}`);
     Adopt = false;
     const frag = document.createDocumentFragment(), old = r.start; frag.$listOwner = listOwner(p);
-    r.s = scope(() => row(frag, r.item, r.index), own);
+    r.s = scope(() => row(frag, r.item, r.index, r.k), own);
     if (frag.childNodes.length === 1 && frag.firstChild.nodeType === 1) r.start = r.end = frag.firstChild;
     else { r.start = document.createComment(""); r.end = document.createComment(""); frag.prepend(r.start); frag.append(r.end); }
     old.replaceWith(frag);

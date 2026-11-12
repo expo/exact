@@ -1615,11 +1615,11 @@ component Composer
 
 The web, macOS and iOS draw atoms in the editor and the reader (on Apple the
 reader's pill draws no icon, border, ring or `:hover` paint, and UIKit's smart
-delete takes one of the two spaces an atom's deletion leaves). VoiceOver on macOS and iOS reads
-an atom's label in place and its role only from its own element, which the
-next-item command passes over on macOS and reaches after the field on iOS
-(LLP 1045.000 §10 Q10). Linux, Windows and Android show the source in the
-editor and the link text in the reader, with no `atompress`. The driver's
+delete takes one of the two spaces an atom's deletion leaves). In the editor,
+VoiceOver on macOS and iOS reads an atom's accessible name in place and its
+role from its element after the field. The next-item command reaches each
+atom in source order (LLP 1045.000 §10 Q10). Linux, Windows and Android show
+the source in the editor and the link text in the reader, with no `atompress`. The driver's
 `state atoms` lists each one: its node, kind, source, range, label and frame from the node's top
 left, where `tap <node> at <x> <y>` presses it.
 

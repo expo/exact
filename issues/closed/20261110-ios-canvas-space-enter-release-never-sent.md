@@ -1,6 +1,7 @@
 # On iOS a canvas never hears Space or Enter released, so the key stays held in its world
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The iOS canvas leaves its held keys alone while it asks the surface controls about Space or Enter, so a release no control takes reaches the world, as on the Mac.
 **Systems:** host/apple/Sources/ExactSurfaces/CanvasInputIOS.swift, GPU canvas input (LLP 1046.002 §3)
 **Severity:** P2
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review
