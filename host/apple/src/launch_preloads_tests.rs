@@ -269,6 +269,7 @@ fn memory_endow(grants: &str, _: &str, _: bool) -> crate::store::Endowed {
     crate::store::Endowed {
         bindings: Some(bindings),
         snapshot: Vec::new(),
+        unread_kept: Vec::new(),
         secrets: Some(Box::new(secrets)),
         unbound: None,
         presence: None,
