@@ -49,16 +49,16 @@ component App
 - **Exit:** plays when an `if` arm or `for` row leaves, and must end (`infinite` and
   `paused` are refused). The node leaves layout at once, inert; others move by their layout
   transition. Not inside a screen being popped, nor on Linux.
-- **Layout transition:** a transition without a property. It moves the box and resizes its
-  surface; children jump to their place, unscaled. `sharedElement=` flies between boxes on
-  iOS, macOS and the web, not Linux.
+- **Layout:** `-exact-layout-transition` moves and resizes a box; children jump,
+  unscaled. `sharedElement=` flies on iOS, macOS, Android and web, not desktop Linux.
+  Android excludes native dialogs and presentation zooms; flights stay in-page.
 - **JS target:** a bound exit or layout value must be one of the binding's literals; one
   built at runtime clears the row with a diagnostic.
 - **Stagger** with delays (`"a 200ms both, b 300ms 200ms both"`). A state change when a
   motion ends is a gated task's `after(ms, action)`; a `sequence` is sound and haptics, not
   motion.
-- **Reduced motion:** transitions and keyframes run unless the app gates them on
-  `exactViewport()`, as above (a shared-element flight on iOS and macOS lands at once); drive it
-  with `prefer prefers-reduced-motion reduce`.
+- **Reduced motion:** gate transitions and keyframes with `exactViewport()`, as above.
+  Shared flights on iOS, macOS and Android snap. Drive with
+  `prefer prefers-reduced-motion reduce`.
 - **Check it:** `clock settle` ends the motion; `screenshot .exact/m.png over 600 every 50`
   films it.

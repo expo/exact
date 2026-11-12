@@ -201,6 +201,8 @@ mod journal;
 mod keys;
 #[path = "canvas/layer.rs"]
 mod layer;
+#[cfg(test)]
+pub(crate) use layer::ALIVE as LIVE_LAYERS;
 #[path = "canvas/legacy.rs"]
 pub mod legacy;
 #[cfg(target_os = "android")]
@@ -221,6 +223,7 @@ mod requests;
 mod scroll;
 #[path = "canvas/shadow.rs"]
 mod shadow;
+mod shared;
 #[path = "canvas/slot.rs"]
 mod slot;
 #[path = "canvas/stream.rs"]
@@ -308,6 +311,7 @@ pub struct Recorder {
     again: Option<slot::Again>,
     /// Nodes the reader animates, apart (`crate::host::lower`).
     layers: layer::Layers,
+    shared: shared::Shared,
     /// The blur the next glyphs are drawn through, local units (`glyphs.rs`).
     blur: f32,
 }
@@ -367,6 +371,7 @@ impl Recorder {
             slot_contexts: HashMap::new(),
             again: None,
             layers: Default::default(),
+            shared: Default::default(),
             blur: 0.0,
         }
     }
@@ -874,6 +879,15 @@ impl Backend for Recorder {
     fn layer_end(&mut self) {
         self.layer_close();
     }
+    fn shared_frame(&mut self, s: &crate::paint::SharedState) {
+        self.shared_state(s);
+    }
+    fn shared_begin(&mut self, e: &crate::paint::SharedElement<'_>) -> bool {
+        self.shared_open(e)
+    }
+    fn shared_end(&mut self) {
+        self.shared_close();
+    }
 
     fn row_culled(&self, bounds: Rect4) -> bool {
         // A scroller's rows all draw so a move needs no paint, unless its
@@ -901,6 +915,7 @@ impl Backend for Recorder {
     }
 
     fn row_draw(&mut self, id: u32, origin: (f32, f32), bounds: Rect4) {
+        self.layers.row_draw(id);
         // Just recorded and in view: the reader makes it before this frame.
         if let Some((_, at)) = self.recorded.take().filter(|(r, _)| *r == id) {
             if !self.culled(Some(bounds)) {

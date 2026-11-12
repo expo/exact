@@ -61,6 +61,9 @@ struct Open {
 }
 
 impl Layers {
+    pub(super) fn shared_ancestors(&self) -> Vec<u32> {
+        self.open.iter().map(|layer| layer.id).collect()
+    }
     pub(super) fn needs_world(&self) -> bool {
         self.sent
             .values()
@@ -87,6 +90,13 @@ impl Layers {
     /// Kept row `id` is gone.
     pub(super) fn row_free(&mut self, id: u32) {
         self.rows.remove(&id);
+    }
+
+    /// An unretained row still draws this frame before its recording is freed.
+    pub(super) fn row_draw(&mut self, id: u32) {
+        if let Some(layers) = self.rows.get(&id) {
+            self.frame.extend(layers);
+        }
     }
 
     /// The innermost open layer is recorded again by its reader in a colour

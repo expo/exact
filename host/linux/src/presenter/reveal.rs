@@ -17,6 +17,20 @@ pub(super) enum Cause {
 }
 
 impl<D: DataSource> Presenter<D> {
+    pub(super) fn reveal_flights(&mut self) {
+        let arrivals = std::mem::take(&mut self.host.flights.reveal);
+        for key in arrivals {
+            let Some(id) = self.host.kernel().node_by_key(key).map(|n| n.id) else {
+                continue;
+            };
+            self.scroll_into(id, false, true, |t, p| {
+                (
+                    aligned("nearest", t.0, t.0 + t.2, p.0, p.2) - p.0,
+                    aligned("nearest", t.1, t.1 + t.3, p.1, p.3) - p.1,
+                )
+            });
+        }
+    }
     /// `{"revealed":id,"scrolled":…}`, with the observed middle before and after the request.
     pub fn reveal(&mut self, id: ViewId) -> Result<String, String> {
         // The page under an open box is not scrolled: a tap there dismisses

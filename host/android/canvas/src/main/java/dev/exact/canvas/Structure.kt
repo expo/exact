@@ -76,6 +76,8 @@ internal class Structure {
         46 -> i + 1
         47 -> i + 2
         48 -> i + 10
+        49, 50 -> i + 2 + b.get(i + 1)
+        51 -> i + 3
         else -> throw IllegalStateException("op ${b.get(i)} at $i")
     }
 
@@ -122,6 +124,7 @@ internal class Structure {
                     put(21)
                 }
                 28 -> { opaque = true; copy(b, i, j) }
+                49, 50, 51 -> { opaque = true; copy(b, i, j) }
                 else -> copy(b, i, j)
             }
             i = j

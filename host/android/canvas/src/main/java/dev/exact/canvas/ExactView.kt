@@ -97,6 +97,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
     private val main: Player = Player(fonts).also { p ->
         p.dotsAtOnce = (context as Activity).intent.getStringExtra("dots") != "0"
         p.layer = { layers.lookup(it) }
+        p.shared = { shared.node(it) }
         p.image = { images[it] }
         p.animated = { animated[it] }
         p.native = { natives?.node(it) ?: fields?.node(it) }
@@ -106,6 +107,9 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         p.slot = { slots.nodes[it] }
     }
     private val background = Player(fonts)
+    private val shared = SharedElements(main, { images[it] }, layers::mapShared) { id, rect ->
+        groups[id]?.let { rect.offset(it.translationX, it.translationY) }
+    }
     /** Each picture's slot; its own Player records one again while [main] may be mid-replay. */
     private val slots = Slots(Player(fonts).also { p -> p.image = { images[it] }; p.animated = { animated[it] } },
         { images.containsKey(it) }).also { it.changed = { heldCopy = null } }
@@ -464,6 +468,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         if (owned) takeOwned() else if (taken) taken = false else take()
         android.os.Trace.beginSection("exact replay")
         ops?.let { main.replay(canvas, it, 0, it.limit()) }
+        shared.draw(canvas)
         android.os.Trace.endSection()
         // First content is this frame: its mark goes before any turn this frame schedules.
         // Asynchronous: a traversal this frame schedules (rows made on the worker draw at the next) holds posted
@@ -972,6 +977,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
 
     /** A new paint: what it announces made, then replayed by [onDraw]. */
     private fun applyStream(stream: IntBuffer) {
+        shared.begin(stream)
         streamFrame = true
         for (g in groups.values) { g.translationX = 0f; g.translationY = 0f }
         ops = stream
@@ -987,6 +993,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         // A row's platform view waits for [feedRows] to say where the row is (it gives every one its view when it cannot).
         natives?.lazy = lazyOn
         ingest(stream, 0, stream.limit())
+        shared.finish()
+        shared.releaseImages { id -> ingest(IntBuffer.wrap(intArrayOf(12, id)), 0, 2) }
         if (layers.playing()) { layers.sample(System.nanoTime()); playLayers() }
         // After the stream: a row drawn again under a new id names its elements before the old row lets them go.
         natives?.let { n -> for (id in freed) n.rowFreed(id); n.unrowed(unrowedSeen) }
@@ -1097,6 +1105,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     i += 4
                 }
                 12 -> {
+                    if (shared.holdImage(b.get(i + 1))) { i += 2; continue }
                     owner?.made?.remove(b.get(i + 1))?.recycle()
                     // Slots still drawing it draw nothing from now on (their rows are gone or about to change).
                     slots.pictureFreed(b.get(i + 1))
@@ -1177,7 +1186,11 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     } else makeRow(b, i, shown)
                     i = j
                 }
-                17 -> { if (ingestRow == 0) { rowTop.put(b.get(i + 1), b.get(i + 3)); rowGroup.put(b.get(i + 1), ingestGroup) }; i += 4 }
+                17 -> {
+                    shared.placeRow(b.get(i + 1), f(b, i + 2), f(b, i + 3))
+                    if (ingestRow == 0) { rowTop.put(b.get(i + 1), b.get(i + 3)); rowGroup.put(b.get(i + 1), ingestGroup) }
+                    i += 4
+                }
                 18 -> { freeing.add(b.get(i + 1)); i += 2 }
                 20 -> { if (ingestRow == 0) ingestGroup = b.get(i + 1); i += 2 }
                 21 -> { if (ingestRow == 0) ingestGroup = 0; i += 1 }
@@ -1230,6 +1243,8 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
                     slots.set(id, b, i + 3, i + 3 + len, main)
                     i += 3 + len
                 }
+                50 -> { shared.define(b, i) { from, end -> ingest(b, from, end) }; i += 2 + b.get(i + 1) }
+                51 -> { shared.node(SharedElements.key(b, i + 1)); i += 3 }
                 else -> i = structure.end(b, i)
             }
         }
@@ -1388,6 +1403,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         val hosted = fields?.snapshot() ?: emptyMap()
         val held = heldCopy ?: HashMap(slots.nodes).also { heldCopy = it }
         val animating = layers.nodes()
+        val named = shared.nodes()
         pending[id] = previous
         if (coverTrace) definedAt[id] = System.nanoTime()
         val replacing = previous != 0
@@ -1399,6 +1415,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
             background.native = { elements[it] ?: hosted[it] }
             background.slot = { held[it] }
             background.layer = { animating[it] }
+            background.shared = { named[it] }
             val c = node.beginRecording()
             background.replay(c, IntBuffer.wrap(copy), 0, copy.size)
             node.endRecording()

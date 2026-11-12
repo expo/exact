@@ -1311,14 +1311,14 @@ impl<D: DataSource> Presenter<D> {
             .map(|id| self.inline_hit(id, x, y).unwrap_or(id))
     }
 
-    /// The deepest box of the latest paint under a point, as [`Self::hit`]
-    /// finds it once the boxes are fresh and the page takes a press.
+    /// Hit-test the latest paint; [`Self::hit`] refreshes its boxes first.
     pub(super) fn painted_hit(&self, x: f32, y: f32, current: bool) -> Option<ViewId> {
         self.boxes
             .iter()
             .rev()
             .filter(|b| {
                 self.alert_allows(b.id)
+                    && !self.host.flying(b.id)
                     && (b.contains(x, y) && crate::paint::hits(self.host.kernel(), b, x, y)
                         || crate::paint::slop_hits(self.host.kernel(), b, x, y))
                     && !self.host.route_visibility(b.id).1

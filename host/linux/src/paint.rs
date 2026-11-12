@@ -66,6 +66,8 @@ pub use native::NativeKind;
 mod order;
 mod placed;
 mod presented;
+mod shared;
+pub use shared::{SharedElement, SharedState};
 mod region;
 pub mod rows;
 mod shadow;
@@ -518,6 +520,7 @@ pub struct Painter {
     cpu_ms: Option<f64>,
     /// What a reorder lifts: a row in its list, or a ghost over everything.
     pub(crate) lift: Lift,
+    pub(crate) shared: SharedState,
     // Accepted owners retain their paragraph leases while a subsequent backend frame fails.
     accepted_text: BTreeMap<exact_kernel::NodeKey, Rc<Paragraph>>,
     pub(crate) field_text: HashMap<ViewId, Rc<field::PaintedField>>,
@@ -626,6 +629,7 @@ impl Painter {
             ranks: Rc::default(),
             accepted_text: BTreeMap::new(),
             lift: Lift::default(),
+            shared: SharedState::default(),
             region_picture: None,
             region_frame: None,
             damage: Default::default(),
@@ -842,6 +846,7 @@ impl Painter {
             self.backend.begin(viewport.0, viewport.1, self.scale);
             false
         };
+        self.backend.shared_frame(&self.shared);
         if partial {
             self.damage.last = self.damage.next.clone();
         } else {
@@ -927,7 +932,7 @@ impl Painter {
         })
     }
 
-    fn node_at(
+    fn node_content(
         &mut self,
         walk: &mut Walk<'_, '_>,
         id: ViewId,
@@ -1090,9 +1095,11 @@ impl Painter {
             .states(node, &shown, self.dark);
         self.split_row(node, &mut paint);
         self.clipped = Some((node.id, paint.background));
-        let geometry = paint.geometry(rect);
+        let mut geometry = paint.geometry(rect);
         // @ref LLP 1063 — a layout transition's size is the surface's alone.
-        let surface = paint.geometry(shown.surface(rect));
+        let mut surface = paint.geometry(shown.surface(rect));
+        self.flight_geometry(node, &mut geometry);
+        self.flight_geometry(node, &mut surface);
         // A hidden box paints none of its own chrome. Children still do,
         // and a text node still walks its runs so a visible inline paints.
         if paints_self {

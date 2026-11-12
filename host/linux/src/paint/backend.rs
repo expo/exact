@@ -359,6 +359,14 @@ pub trait Backend {
     }
     /// The layer ends.
     fn layer_end(&mut self) {}
+    /// Shared-element identity and engine progress, before this frame's destroys.
+    fn shared_frame(&mut self, _state: &super::SharedState) {}
+    /// Keep this live subtree apart from its normal slot on a native reader.
+    fn shared_begin(&mut self, _element: &super::SharedElement<'_>) -> bool {
+        false
+    }
+    /// Finish a named live subtree.
+    fn shared_end(&mut self) {}
     /// The last frame's (encode + render, readback) milliseconds, on a
     /// backend that has them.
     fn last_frame_ms(&self) -> Option<(f64, f64)> {

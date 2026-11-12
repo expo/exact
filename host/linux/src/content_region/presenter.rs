@@ -64,6 +64,7 @@ impl<D: DataSource> Presenter<D> {
     }
 
     pub(crate) fn frame_for(&mut self, target: FrameTarget) -> Option<Arc<Pixmap>> {
+        self.reveal_flights();
         #[cfg(windows)]
         let window_damage = self.surfaces.direct_window.is_some() && self.dirty();
         // Its session's roles, whatever else lives on the thread (LLP 1121 stage 5).
@@ -90,6 +91,7 @@ impl<D: DataSource> Presenter<D> {
         self.last_frame_succeeded
     }
     fn paint_frame(&mut self, target: FrameTarget) -> Option<Arc<Pixmap>> {
+        self.brush.shared.update(&self.host);
         self.brush.composition = self.ime_paint();
         self.alert_sync();
         self.prepare_overlay();

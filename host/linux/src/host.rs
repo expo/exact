@@ -27,6 +27,8 @@ mod bars;
 mod content;
 #[path = "host_error.rs"]
 mod error;
+#[path = "flights.rs"]
+pub(crate) mod flights;
 #[path = "hatches/host.rs"]
 mod hatch;
 #[path = "height.rs"]
@@ -134,6 +136,7 @@ pub struct Host<D: DataSource> {
     router_op: Option<exact_runner::RouterChange>,
     pub(crate) navigation: crate::navigation::Navigation,
     presence: presence::Presence,
+    pub(crate) flights: flights::Flights,
     presses: BTreeMap<NodeKey, press::Feedback>,
     /// The 2D canvases' bitmaps (LLP 1056 D7).
     canvas2d: crate::canvas2d::Canvases,
@@ -334,6 +337,7 @@ impl<D: DataSource> Host<D> {
             router_op: None,
             navigation: Default::default(),
             presence: Default::default(),
+            flights: Default::default(),
             presses: Default::default(),
             canvas2d: Default::default(),
             renewed: Vec::new(),
@@ -352,6 +356,7 @@ impl<D: DataSource> Host<D> {
         // The engine hears the whole tree once: values, no transitions; an
         // `animation` starts now, as a browser starts one on a new element.
         host.lowering_from_env();
+        host.flights.enabled = cfg!(target_os = "android");
         let mut sync = MotionSync::default();
         host.discover_height_handles();
         host.discover_transform_handles();
@@ -1389,6 +1394,7 @@ impl<D: DataSource> Host<D> {
             debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");
             self.lower_eligibility(&sync);
             self.sync_paint(&t.receipt);
+            self.start_flights(&t.receipt);
             if let Err(error) = self.sync_height_owner() {
                 self.log(error);
                 paint = true;

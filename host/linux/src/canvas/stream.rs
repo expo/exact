@@ -100,6 +100,8 @@ pub(super) fn end(b: &[u32], i: usize) -> Option<usize> {
         RING => i + 26,
         SLOT_SET | LAYER_SET | TRACKS => i + 3 + at(2)?,
         CLOCK => i + 3,
+        shared::STATE | shared::SET => i + 2 + at(1)?,
+        shared::DRAW => i + 3,
         _ => return None,
     })
 }
@@ -117,6 +119,7 @@ pub(super) fn needs_world(b: &[u32]) -> bool {
             ROW_BEGIN if needs_world(&b[i + 6..j - 1]) => return true,
             SLOT_SET if needs_world(&b[i + 3..j]) => return true,
             LAYER_SET if needs_world(&b[i + 19..j]) => return true,
+            shared::SET | shared::DRAW => return true,
             _ => (),
         }
         i = j;
@@ -139,6 +142,8 @@ fn defines(op: u32) -> bool {
             | TRACKS
             | LAYER_FREE
             | CLOCK
+            | shared::STATE
+            | shared::SET
     )
 }
 
@@ -166,6 +171,9 @@ fn carry_definitions(older: &[u32], newer: &mut Vec<u32>) -> bool {
     let mut row_sets = false;
     let mut i = 0;
     while i < older.len() {
+        if older[i] == shared::STATE {
+            return false;
+        }
         let Some(j) = end(older, i).filter(|j| *j <= older.len()) else {
             return false;
         };

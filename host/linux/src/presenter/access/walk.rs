@@ -19,6 +19,7 @@ impl<D: DataSource> Presenter<D> {
         let (hidden, inert) = self.host.route_visibility(id);
         if hidden
             || inert
+            || self.host.flying(id)
             || node.style.display == Display::None
             || node.props.bool(PropId::AccessibilityElementsHidden) == Some(true)
         {

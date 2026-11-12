@@ -73,6 +73,7 @@ internal class Player(private val fonts: Map<Int, Font>) {
     var slot: (Int) -> android.graphics.RenderNode? = { null }
     /** A node exact2's reader animates (op 29, [Layers]). */
     var layer: (Int) -> android.graphics.RenderNode? = { null }
+    var shared: (Long) -> android.graphics.RenderNode? = { null }
     var group: ((Int) -> android.graphics.RenderNode)? = null
     /** What is drawn in place of a scroller's own node, for one whose edge the reader stretches ([Scrolling]). */
     var holder: ((Int) -> android.graphics.RenderNode?)? = null
@@ -916,6 +917,11 @@ internal class Player(private val fonts: Map<Int, Font>) {
                 30, 31 -> i += 3 + b.get(i + 2)
                 32 -> i += 2
                 33 -> i += 3
+                49, 50 -> i += 2 + b.get(i + 1)
+                51 -> {
+                    shared(SharedElements.key(b, i + 1))?.let { s -> c.save(); matrix.setTranslate(-shiftX, -shiftY); c.setMatrix(matrix); c.drawRenderNode(s); c.restore() }
+                    i += 3
+                }
                 20 -> {
                     // A scroller's rows: their own node, so a move only translates it.
                     val g = group!!(b.get(i + 1))

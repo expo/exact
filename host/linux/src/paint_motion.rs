@@ -220,6 +220,10 @@ impl<D: DataSource> Host<D> {
         self.play_transitions();
         let mut changed = self.lowered_epoch != epoch;
         for p in self.engine.frame() {
+            if self.present_flight(&p) {
+                changed = true;
+                continue;
+            }
             let key = node_key(p.node);
             let Some(view) = self.keys.get(&key).copied() else {
                 continue;
@@ -264,7 +268,7 @@ impl<D: DataSource> Host<D> {
                 _ => unreachable!("height is projected through layout; paint is above"),
             }
         }
-        changed
+        self.land_flights() || changed
     }
 
     /// A step sampler can restate its value on unrelated timer turns. Such a
