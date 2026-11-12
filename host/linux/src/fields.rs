@@ -42,6 +42,9 @@ pub struct FieldFace {
     /// 'wdth' 87.5`): the weight, `font-stretch` on `wdth` and the run's own
     /// settings after them (LLP 1019 D9); empty when only the weight is set.
     pub axes: String,
+    /// Effective OpenType features, as Android's `fontFeatureSettings`
+    /// reads them; empty restores the font's defaults.
+    pub features: String,
 }
 
 /// The shell's own text field, asked during layout.
@@ -136,6 +139,18 @@ pub(crate) fn face(
         line: style.line_height.map_or(0.0, |h| (h * scale).max(0.0)),
         family: family(engine, style, italic),
         axes: axes(style),
+        features: Run::from_style("", *style)
+            .features()
+            .iter()
+            .map(|f| {
+                format!(
+                    "'{}' {}",
+                    String::from_utf8_lossy(&f.tag.to_bytes()),
+                    f.value
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
     }
 }
 

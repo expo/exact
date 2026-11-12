@@ -134,7 +134,7 @@ pub(crate) fn style_json_rows(
         let size = matches!(name, "width" | "height");
         if matches!(
             name,
-            "translate" | "scale" | "rotate" | "opacity" | "animation"
+            "translate" | "translate_velocity" | "scale" | "rotate" | "opacity" | "animation"
         ) || !keep.has(id) && (presenter_ignores(name) || size)
         {
             // A size is layout's and an animation the engine's; that its

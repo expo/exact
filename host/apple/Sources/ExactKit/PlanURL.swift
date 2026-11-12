@@ -130,6 +130,29 @@ public struct ExactDevelopmentPlan {
             return "local generation refused: \(error.localizedDescription)"
         }
     }
+
+    /// The dev loop's file form (LLP 1007 §6): every 100 ms, a changed
+    /// revision is applied to `app`. A module pair starts unseen, so the
+    /// first tick applies it. Keep the timer for as long as the watch runs.
+    public func watch(_ app: ExactApp) -> DispatchSourceTimer {
+        var last = hasModule ? [] : revision
+        let t = DispatchSource.makeTimerSource(queue: .main)
+        t.schedule(deadline: .now() + 0.1, repeating: 0.1)
+        t.setEventHandler {
+            last = Self.seen(revision, last: last, apply: { apply(to: app) }, pending: { app.generationPending })
+        }
+        t.resume()
+        return t
+    }
+
+    /// The revision seen after a tick. A candidate refused while a
+    /// generation is pending (a module still preparing, a request in
+    /// flight) stays unseen, so the next tick asks again, as the URL form
+    /// does; one applied, or refused otherwise, waits for its files to change.
+    static func seen(_ revision: [Double], last: [Double], apply: () -> Bool, pending: () -> Bool) -> [Double] {
+        guard revision != last else { return last }
+        return apply() || !pending() ? revision : last
+    }
 }
 
 /// Explicit development-only opening action (LLP 1030.000 §7). The locator
@@ -323,6 +346,8 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
     static let devStatusType = "application/vnd.exact.dev-status+json"
     static let pageLimit = 64 * 1024
     static let envelopeLimit = 64 * 1024
+    /// The asset index the envelope names (update/src/lib.rs `MAX_ASSET_INDEX_BYTES`).
+    static let assetIndexLimit = 4 * 1024 * 1024
     static let planLimit = 64 * 1024 * 1024
     static let assetLimit = 64 * 1024 * 1024
     /// One event frame: 1 MiB, the design server's own line limit, since a large plan's copies (tamber/1.17 `inspect`)
@@ -621,28 +646,27 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
         return true
     }
 
+    /// An envelope's cards, read before its asset index arrives.
+    private struct Head {
+        let json: [String: Any]
+        let base: URL
+        let plan: FileCard
+        let module: [String: FileCard]
+        let moduleCanonical: String
+        let rust: [String: FileCard]
+        let rustCanonical: String
+        let total: Int
+    }
+
     private func takeEnvelope(_ data: Data, base: URL, subscribe shouldSubscribe: Bool, generation: UInt64, expected: Revision?) {
         loopDone()
         guard data.count <= PlanURL.envelopeLimit, PlanURL.sameOrigin(base, page),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any], PlanURL.count(json["exact"]) == 1,
-              let planRow = json["plan"] as? [String: Any], let plan = card(planRow, name: "", base: base),
-              let assetRows = json["assets"] as? [[String: Any]] else {
+              let planRow = json["plan"] as? [String: Any], let plan = card(planRow, name: "", base: base) else {
             failed("invalid or unsupported envelope at \(base)", generation: generation)
             return
         }
-        var assets: [FileCard] = []
-        var names = Set<String>()
         var total = plan.count
-        for row in assetRows {
-            guard let name = row["name"] as? String, PlanURL.safeName(name), names.insert(name).inserted,
-                  let asset = card(row, name: name, base: base), asset.count <= PlanURL.generationLimit - total else {
-                failed("invalid, duplicate, or oversized asset manifest at \(base)", generation: generation)
-                return
-            }
-            total += asset.count
-            assets.append(asset)
-        }
-        assets.sort { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
         var module: [String: FileCard] = [:]
         if let row = json["module"] {
             guard let rows = row as? [String: Any], Set(rows.keys) == Set(["native", "receipt", "web"]) else {
@@ -695,15 +719,63 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
             }
             rustCanonical = ",\"rust\":{" + canonicalVariants.joined(separator: ",") + "}"
         }
-        let canonical = "{\"assets\":[" + assets.map(\.canonical).joined(separator: ",") + "]" + moduleCanonical + ",\"plan\":" + plan.canonical + rustCanonical + "}"
+        let head = Head(json: json, base: base, plan: plan, module: module, moduleCanonical: moduleCanonical, rust: rustModule, rustCanonical: rustCanonical, total: total)
+        // The asset cards are in the index the envelope names, and resolve
+        // against the URL it names the index by, not a redirect's target, as
+        // the update store and the web clients resolve them
+        // (update/src/envelope.rs). No index, no assets.
+        guard let indexRow = json["assets"] else {
+            takeRoster([], base: base, head: head, subscribe: shouldSubscribe, generation: generation, expected: expected)
+            return
+        }
+        guard let row = indexRow as? [String: Any], let index = card(row, name: "assets.json", base: base),
+              let count = PlanURL.count(row["count"]), index.count <= PlanURL.assetIndexLimit else {
+            failed("invalid or oversized asset index card at \(base)", generation: generation)
+            return
+        }
+        var request = URLRequest(url: index.url)
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        fetch(request, limit: index.count, generation: generation) { [weak self] result in
+            guard let self else { return }
+            guard case let .success((body, response)) = result, response.statusCode == 200,
+                  body.count == index.count, PlanURL.hash(body) == index.sha,
+                  let list = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["assets"] as? [[String: Any]],
+                  list.count == count else {
+                self.failed("cannot verify the asset index \(index.url)", generation: generation)
+                return
+            }
+            self.takeRoster(list, base: index.url, head: head, subscribe: shouldSubscribe, generation: generation, expected: expected)
+        }
+    }
+
+    private func takeRoster(_ rows: [[String: Any]], base: URL, head: Head, subscribe shouldSubscribe: Bool, generation: UInt64, expected: Revision?) {
+        guard PlanURL.sameOrigin(base, page) else {
+            failed("the asset index at \(base) is not on \(page)", generation: generation)
+            return
+        }
+        var assets: [FileCard] = []
+        var names = Set<String>()
+        var total = head.total
+        for row in rows {
+            guard let name = row["name"] as? String, PlanURL.safeName(name), names.insert(name).inserted,
+                  let asset = card(row, name: name, base: base), asset.count <= PlanURL.generationLimit - total else {
+                failed("invalid, duplicate, or oversized asset manifest at \(base)", generation: generation)
+                return
+            }
+            total += asset.count
+            assets.append(asset)
+        }
+        assets.sort { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
+        let json = head.json, plan = head.plan
+        let canonical = "{\"assets\":[" + assets.map(\.canonical).joined(separator: ",") + "]" + head.moduleCanonical + ",\"plan\":" + plan.canonical + head.rustCanonical + "}"
         let identity = PlanURL.hash(Data(canonical.utf8))
         if let dev = json["dev"] as? [String: Any] {
             // A valid envelope first, so a refused one pins no program.
             guard let revision = PlanURL.revision(dev), revision.identity == identity,
                   expected == nil || revision == expected,
-                  let path = dev["events"] as? String, let events = URL(string: path, relativeTo: base)?.absoluteURL,
+                  let path = dev["events"] as? String, let events = URL(string: path, relativeTo: head.base)?.absoluteURL,
                   PlanURL.sameOrigin(events, page) else {
-                failed("invalid or obsolete dev generation at \(base)", generation: generation)
+                failed("invalid or obsolete dev generation at \(head.base)", generation: generation)
                 return
             }
             guard observe(revision) else {
@@ -711,19 +783,19 @@ final class PlanURL: NSObject, URLSessionDataDelegate {
                 // stream, so the build stays registered and takes the next
                 // one for its own.
                 if terminal != nil { if shouldSubscribe { subscribe(events) }; return }
-                failed("invalid or obsolete dev generation at \(base)", generation: generation)
+                failed("invalid or obsolete dev generation at \(head.base)", generation: generation)
                 return
             }
             pending = revision
             if shouldSubscribe { subscribe(events) }
         } else if json["dev"] != nil || expected != nil {
-            failed("missing dev generation identity at \(base)", generation: generation)
+            failed("missing dev generation identity at \(head.base)", generation: generation)
             return
         }
         // Subscribe before payloads finish: hello repairs an edit between
         // discovery and the stream opening, including an asset-only edit.
         guard currentGeneration() != identity else { refused = nil; pending = nil; return }
-        fetchGeneration(plan: plan, assets: assets, module: module, rust: rustModule, identity: identity, generation: generation)
+        fetchGeneration(plan: plan, assets: assets, module: head.module, rust: head.rust, identity: identity, generation: generation)
     }
 
     /// At most four payloads are in flight. Every card still has its own byte

@@ -105,6 +105,23 @@ final class OverflowWrapTests: XCTestCase {
         XCTAssertEqual(engine.unbreakablePieces("two\u{00A0}words here"), ["two\u{00A0}words", "here"], "a no-break space joins")
     }
 
+    /// A run's end inside a word is no break (CSS Text 3, "Line Breaking
+    /// Details"): a word a span cuts has the min-content of the same text in
+    /// one run, as in Chrome, and a `break-word` paragraph laid out at it
+    /// keeps the word whole.
+    func testMinContentDoesNotBreakAWordAtARunBoundary() {
+        for (text, split, expected) in [
+            ("See example.", ["See ", "example", "."], ["See ", "example."]),
+            ("an unbreakable word", ["an un", "break", "able word"], ["an ", "unbreakable ", "word"]),
+        ] {
+            let whole = engine.minContentWidth(spec(text, wrap: 1))
+            var s = spec(text, wrap: 1)
+            s.runs = split.map { var r = s.runs[0]; r.text = $0; return r }
+            XCTAssertEqual(engine.minContentWidth(s), whole, accuracy: 0.01, "\(split)")
+            XCTAssertEqual(lines(s, width: engine.minContentWidth(s)), expected)
+        }
+    }
+
     /// #128: a path under `pre-wrap` breaks where Chrome's does. No line ends
     /// after a solidus before a letter (CFStringTokenizer's and CoreText's
     /// opportunity); a word too long for its line breaks inside at the room

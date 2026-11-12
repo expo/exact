@@ -294,7 +294,8 @@ complete frame for the current generation, false again after a restore or a
 lost device. The app binds its own pause and loading cover to it; `PENDING`
 still permits ticks and the runtime adds no barrier. The Minecraft consumer,
 whose player took damage before its terrain drew, is the consumer. Take: none
-offered; waived by Charlie. It follows Nathan Schroeder's #967.
+offered; waived by Charlie. It follows Nathan Schroeder's #967. Built
+2026-11-12 as every canvas's `presented` (LLP 1009 D9, expo/exact#75).
 
 **Expanded (Charlie, 2026-09-23: "ok let's do pre-rendering etc."; "let's use
 Interview as our website"):** web rendering across the curve (LLP 1048), with
@@ -516,8 +517,8 @@ WebMCP), each arriving as a URL at the navigation root or as a tool call of
 origin `tool`. Consumer: Shelf's Add Book, Continue Reading, books in
 Spotlight and Log Pages. Unblocks reaching an app's screens and writes
 without opening it. Take: none named; the ruling is its own waiver. Still
-out, each until a consumer asks (LLP 1133.023 §13): App Intents in widgets,
-controls and Live Activities; interactive snippets and
+out, each until a consumer asks (LLP 1133.023 §13): further App Intents in
+widgets beyond the fixed enum configuration below; controls and Live Activities; interactive snippets and
 `requestConfirmation`'s snippet content; assistant schemas; `IndexedEntity`
 and Spotlight's semantic index; `NSUserActivity` and Handoff; long-running
 intents; an App Intents extension; a structured `returns` through a face;
@@ -525,6 +526,15 @@ entities that are not content-index entries; Android's App Actions built-in
 intents; the web's Launch Handler; Windows' and Linux's system search and
 Windows App Actions; a content index larger than 5,000 entries; and remote
 icons.
+
+**Expanded (Charlie, 2026-11-12, #212; LLP 1126 and LLP 1133.023):**
+Apple widgets declare fixed enum parameters for Edit Widget and watchOS
+complication recommendations. Each placement's choices reach only its snapshot
+render; refresh and its cache remain shared.
+The Categories consumer unblocks this first stage. Take: none named; Charlie's
+2026-11-12 decision to the maintainers' agent waives the trade for enum-only
+configuration on Apple. Data-backed options, entity queries and
+configuration-dependent refresh stay deferred.
 
 **Admitted (Charlie, 2026-10-06: "this is pretty great. commit and push this
 and document that TUI is now an officially supported platform for Exact2";
@@ -635,6 +645,17 @@ host applies the hover colour too: a look the author writes that a host
 with a pointer drops would be a tell. Still out: a look's `color` on
 Linux.
 
+**Expanded (expo/exact#151, 2026-11-12; LLP 1121 D8 as amended that day):**
+`:hover` and `:focus-visible` take `scale`, CSS's individual transform,
+which stands in for the node's own `scale` while the look holds and moves
+there on the node's own `transition`, as a browser moves a `:hover` rule's
+value. It never lays out. Consumer: hirbod's port, whose icon buttons grow
+1.08 and 1.12 on hover. Every host with a pointer shows it: the web, the Mac,
+an iPad's pointer, and Linux and Windows through the painted presenter. Take:
+none offered; waived by Charlie's ask (2026-11-12: work the open issues through
+to the ideal end state). Still out: `rotate` and `translate` in a look, and
+`scale` in `:disabled` or `:checked`.
+
 **Runtime**
 
 **Expanded (Charlie, 2026-10-13, issue-program ruling 10):** runner-owned
@@ -644,8 +665,8 @@ subscribe/Ack/Ping protocol and queued Supabase/Convex consumers justify the
 expansion. No take named; the approved feature ruling admits it. Ambient
 WebSocket globals remain refused. TypeScript on the web JS target and the
 native hosts has it; D7 lists the host deviations and what remains. Rust
-sources on the native hosts have it from a mutation and their own mapper
-(Charlie, 2026-11-11, "Fix it", on issue #92; LLP 1016.003). D7's
+sources on the native hosts and the web JS target have it from a mutation
+and their own mapper (Charlie, 2026-11-11, "Fix it", on issue #92; LLP 1016.003). D7's
 amendments let the mapper answer its own frames (2026-10-16) and an answer
 in flight send its own requests (2026-10-18).
 
@@ -1448,7 +1469,17 @@ reading. Nothing that isn't HTML is added by it.
   moves to Later. Still out, each until a consumer asks: `read` and
   `readText` outside a paste, `text/html` and RTF, custom formats, file
   promises, several items in one write, a Contract `write`, a
-  clipboard-change event, and the Linux, Windows and Android cells.
+  clipboard-change event, and the Linux and Android cells.
+  **Built (maintainers' agent, 2026-11-12, #196;
+  LLP 1133.006 D7):** Windows
+  writes a PNG by `app:/` path, sanitized within the same 64 MiB file and
+  64-million-pixel bounds, as registered `PNG` and, for sRGB or untagged
+  input, alpha-bearing `CF_DIBV5`, with Unicode text beside it when supplied.
+  Other colour information stays in PNG without a bitmap fallback.
+  This provides Windows PNG-file writes. The screenshot consumer in #196
+  still has no raw-pixel input: its Rust source must encode a PNG into an
+  `app:/` file before calling the package. In-memory image input and the
+  Linux clipboard carrier remain out.
 - ~~No gradient style rows. A gradient with anything on it is a canvas surface with
   children (LLP 1014 §5 — the take for widening `canvas`; the three rows return when a
   host earns them).~~ Moved 2026-09-26 (Seth Webster, for grnl; LLP 1066): one CSS
@@ -1602,9 +1633,16 @@ browser as the oracle, the same shape layout already has. In exchange, not in v1
   gate changes. Consumers: ledger2's undo toast, chat's and chat2's bots and
   toasts, trivia's round (their diaries' Top-5). Unblocks an app that does
   no work at rest while nothing is showing. Take: none offered. Still out:
-  a reaction to a state change (LLP 1017 P4c's `task … when [dep]`),
+  an implicit reaction to a state change (LLP 1017 P4c's `task … when [dep]`),
   component-scoped and action-started timers, computed intervals, a gate
   that reads `performanceNow()`, and cancelling a queued send.
+  **Expanded (Charlie, 2026-11-12, request to implement Hirbod's open issues;
+  #177):** a root `task NAME [when COND] key=EXPR` may use `change(action)`
+  to queue one action after the host applies the current commit, without a timer
+  delay. It runs on first activation, coalesces pending key changes and refuses
+  cycles through its trigger inputs. This unblocks layout reads and host commands
+  following state or resource changes in the dice game. Take waived by the request;
+  implicit dependency tracking, component reactions and another value graph stay out.
   **Expanded (user request, 2026-10-27/28; LLP 1147):** root timers accept `wait=frame|update|scrollend|idle` and bounded scroll or idle waits, or `tolerance=` for wake coalescing. The request explicitly includes all host platforms and deterministic coverage; the follow-up admits wake tolerance. Computed intervals, combined waits and per-node timer callbacks remain deferred.
   **Qualification deferred (user request, 2026-10-28; LLP 1147):** actual energy-savings measurements, including iPhone battery and full-app Mac power measurements, and timer qualification with GPU rendering. Timer correctness, cancellation, admission instrumentation and `wait=update` performance remain in scope; Windows JavaScript qualification is not deferred.
 - **A second value graph.** No shared-value plane, derived values, bindings, or
@@ -1903,3 +1941,10 @@ Consumer: T3 sidebar subscriptions and timeline minimap. LLP 1005 records the
 bounded event, browser executors and the shared AppKit/UIKit/Linux geometry
 slice; native qualification remains open. Container
 queries, derive-time frame and general live-position feedback stay deferred.
+
+**EAS Build compatibility (Charlie, 2026-11-12, #48; LLP 1030.003 D6, D8):**
+"Def want to make Exact work well w EAS Build" ([issue comment](https://github.com/expo/exact/issues/48#issuecomment-6807074446)).
+The owner admitted unattended native build commands, signing/version inputs,
+Android App Bundle output and one EAS recipe per platform on 2026-11-12. This unblocks an app repository's
+custom EAS build. Provider adapters and automatic account, credential and
+store provisioning remain deferred.

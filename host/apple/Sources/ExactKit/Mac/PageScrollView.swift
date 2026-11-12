@@ -163,6 +163,7 @@ package final class PageScrollView: NSScrollView {
     package override func tile() {
         super.tile()
         pinInsets()
+        insetScrollersFromChrome()
         syncElasticity()
         let size = contentView.bounds.size
         if visibleSize != size {
@@ -192,6 +193,33 @@ package final class PageScrollView: NSScrollView {
         if automaticallyAdjustsContentInsets { automaticallyAdjustsContentInsets = false }
         if contentInsets.top != 0 || contentInsets.left != 0 || contentInsets.bottom != 0 || contentInsets.right != 0 {
             contentInsets = NSEdgeInsetsZero
+        }
+    }
+}
+
+extension NSScrollView {
+    /// The scrollers keep clear of the window's title bar and toolbar, as
+    /// in a window with a full-size content view whose scroll view AppKit
+    /// insets (`automaticallyAdjustsContentInsets`), while the content
+    /// still scrolls beneath them: `viewport-fit=cover`'s page, or a
+    /// `scroll` node in it. Only the scrollers move (`scrollerInsets`); the
+    /// content insets stay zero, so the clip, the document and the kernel's
+    /// viewport are as CSS lays them out. The inset on each side is how far
+    /// this view reaches into the window outside `contentLayoutRect`.
+    func insetScrollersFromChrome() {
+        var insets = NSEdgeInsetsZero
+        if let window, window.styleMask.contains(.fullSizeContentView), !isHiddenOrHasHiddenAncestor {
+            let safe = convert(window.contentLayoutRect, from: nil), box = bounds
+            let above = max(0, box.maxY - max(safe.maxY, box.minY)), below = max(0, min(safe.minY, box.maxY) - box.minY)
+            insets.top = isFlipped ? below : above
+            insets.bottom = isFlipped ? above : below
+            insets.left = max(0, min(safe.minX, box.maxX) - box.minX)
+            insets.right = max(0, box.maxX - max(safe.maxX, box.minX))
+        }
+        let now = scrollerInsets
+        // Setting the insets tiles again, which asks here again: equal, it stops.
+        if now.top != insets.top || now.left != insets.left || now.bottom != insets.bottom || now.right != insets.right {
+            scrollerInsets = insets
         }
     }
 }

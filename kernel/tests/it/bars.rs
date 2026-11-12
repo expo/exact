@@ -673,6 +673,83 @@ fn a_hosts_own_mirror_of_the_tree_reads_the_same_rule() {
     assert_eq!(bars::header_shape_words(&[0], 0), None);
 }
 
+/// A child the web does not show (`display: none`), or one inside a box
+/// that is, is no item and no heading: the bar is the header's without it.
+#[test]
+fn a_headers_hidden_children_are_left_out_of_the_rule() {
+    let h1 = fact::HEADING | 1 << fact::LEVEL;
+    // route > header > [back button, heading, hidden button]
+    let button = [
+        0,
+        1,
+        fact::HEADER,
+        3,
+        fact::PRESS | fact::BACK,
+        0,
+        h1,
+        0,
+        fact::PRESS | fact::HIDDEN,
+        0,
+    ];
+    // One leading item and one button: Back.
+    assert_eq!(
+        bars::header_shape_words(&button, 0),
+        Some(vec![1, 3, 1, 0, 0, 0, 1, 0, 1, 2, 2])
+    );
+    // route > header > [heading, hidden box > [button, heading]]
+    let boxed = [
+        0,
+        1,
+        fact::HEADER,
+        2,
+        h1,
+        0,
+        fact::HIDDEN,
+        2,
+        fact::PRESS,
+        0,
+        fact::HEADING,
+        0,
+    ];
+    assert_eq!(
+        bars::header_shape_words(&boxed, 0),
+        Some(vec![1, 2, 1, 0, 0, 0, 0, 0, 0])
+    );
+    // route > header > [heading, hidden heading]: one heading shown.
+    let headings = [
+        0,
+        1,
+        fact::HEADER,
+        2,
+        h1,
+        0,
+        fact::HEADING | fact::HIDDEN,
+        0,
+    ];
+    assert_eq!(
+        bars::header_shape_words(&headings, 0),
+        Some(vec![1, 2, 1, 0, 0, 0, 0, 0, 0])
+    );
+    // A pressable around a hidden heading is an item, not the title's tap.
+    // route > header > [heading, button > hidden heading]
+    let tap = [
+        0,
+        1,
+        fact::HEADER,
+        2,
+        h1,
+        0,
+        fact::PRESS,
+        1,
+        fact::HEADING | fact::HIDDEN,
+        0,
+    ];
+    assert_eq!(
+        bars::header_shape_words(&tap, 0),
+        Some(vec![1, 2, 1, 0, 0, 0, 0, 1, 1, 3, 3])
+    );
+}
+
 #[test]
 fn what_a_route_shows_of_the_bar() {
     assert_eq!(

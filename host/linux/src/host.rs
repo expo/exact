@@ -61,9 +61,9 @@ pub use error::{HostError, LET_GO_AFTER};
 
 pub use store_writer::drain as drain_store_writes;
 pub use store_writer::take_warnings as take_store_warnings;
+use system::{physical_memory, store_read};
 #[cfg(test)]
-use system::StoreWrites;
-use system::{physical_memory, store_snapshot};
+use system::{store_snapshot, StoreWrites};
 
 /// Caller-owned plan bytes, or linked bytes whose data pool stays in place.
 #[derive(Clone, Copy)]
@@ -260,7 +260,7 @@ impl<D: DataSource> Host<D> {
         crate::picker::know_roots(data.app_id());
         // A named drive's secrets, read before the runner takes the source.
         // A carried reload keeps its memory store and does not touch the files.
-        let mut store_snapshot = store_snapshot(data.app_id(), carried.is_some());
+        let (mut store_snapshot, unread_kept) = store_read(data.app_id(), carried.is_some());
         // Locked secrets' backend, reconciled before boot (LLP 1133.010 D4).
         let presence = crate::presence_secrets::backend(data.app_id(), data.grants());
         presence
@@ -293,6 +293,7 @@ impl<D: DataSource> Host<D> {
         drop(boot_trace);
         #[cfg(any(windows, target_os = "macos"))]
         crate::app::boot_phase(c"runner-ready");
+        runner.forget_unread_kept(&unread_kept);
         if let Some(p) = presence {
             runner.install_presence(p.backend, p.keystore);
         }
@@ -1039,10 +1040,29 @@ impl<D: DataSource> Host<D> {
             left,
             ..kernel.env().clone()
         };
-        match kernel.set_env(env) {
-            Ok(true) => self.layout_unauthored().map(|_| true),
-            Ok(false) => Ok(false),
-            Err(e) => Err(format!("safe area: {e:?}")),
+        let restyled = kernel
+            .set_env(env)
+            .map_err(|e| format!("safe area: {e:?}"))?;
+        match self
+            .runner
+            .refresh_viewport_geometry()
+            .map_err(|e| format!("safe area: {e:?}"))?
+        {
+            Some(receipt) => {
+                self.presence.unauthored |= restyled;
+                match self.commit(
+                    &[Timed {
+                        at_ms: self.now_ms,
+                        receipt,
+                    }],
+                    None,
+                ) {
+                    Some(error) => Err(error),
+                    None => Ok(true),
+                }
+            }
+            None if restyled => self.layout_unauthored().map(|_| true),
+            None => Ok(false),
         }
     }
 
@@ -1096,7 +1116,9 @@ impl<D: DataSource> Host<D> {
                 {
                     continue;
                 }
-                let size = node.computed_row(exact_kernel::StyleId::FontSize, |s| s.font_size);
+                let size = node.bar_symbol_size().unwrap_or_else(|| {
+                    node.computed_row(exact_kernel::StyleId::FontSize, |s| s.font_size)
+                });
                 sizes.push((node.id, (size > 0.).then_some((size, size))));
             }
         }
@@ -1203,7 +1225,7 @@ impl<D: DataSource> Host<D> {
         };
         match self.runner.set_fold(fold) {
             Ok(Some(receipt)) => {
-                self.presence.unauthored = restyled;
+                self.presence.unauthored |= restyled;
                 self.commit(
                     &[Timed {
                         at_ms: self.now_ms,
@@ -1351,7 +1373,10 @@ impl<D: DataSource> Host<D> {
                 .engine
                 .advance((t.at_ms.min(self.now_ms) / 1000.0).max(self.engine.now()));
             debug_assert!(seek.is_ok(), "the clock never runs backwards here");
-            let sync = self.runner.kernel().motion_sync(&t.receipt);
+            let mut sync = self.runner.kernel().motion_sync(&t.receipt);
+            self.looks_shown
+                .motion
+                .apply(self.runner.kernel(), &mut sync);
             let applied = sync.apply(&mut self.engine);
             debug_assert!(applied.is_ok(), "kernel rows are always valid engine input");
             self.lower_eligibility(&sync);

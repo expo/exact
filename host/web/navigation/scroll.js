@@ -72,14 +72,17 @@ export function scrollFollowers(positionContexts) {
 export function scrollDrag(el, listen, began, ended) {
   const o = { passive: true };
   let down = 0, finger = null, dragging = false, from = [0, 0], seen = [];
+  // `touches` is every finger on the surface; one outside `el` is no part of its drag, and its lift is never heard here.
+  const own = (e) => [...e.touches].filter((t) => el.contains(t.target));
   const follow = (e) => {
     if (!down) {
       from = [el.scrollLeft, el.scrollTop];
       finger = null;
     }
-    down = e.touches.length;
-    if (![...e.touches].some((t) => t.identifier === finger)) {
-      finger = e.touches[0]?.identifier ?? null;
+    const touches = own(e);
+    down = touches.length;
+    if (!touches.some((t) => t.identifier === finger)) {
+      finger = touches[0]?.identifier ?? null;
       seen = [];
     }
   };
@@ -107,7 +110,7 @@ export function scrollDrag(el, listen, began, ended) {
     }
   }, o);
   const lift = (e) => {
-    if (e.touches.length) {
+    if (own(e).length) {
       return follow(e);
     }
     down = 0;

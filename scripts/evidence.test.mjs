@@ -1,10 +1,12 @@
 // What has been run against an app's current sources (LLP 1146 D2).
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { resolveApp } from './app.mjs';
 import { changedPaths, hostsTouched, standing } from './evidence.mjs';
+import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
 
 const ROOT = resolve(import.meta.dir, '..');
 const allHosts = ['web', 'macos', 'ios', 'tvos', 'linux', 'windows', 'android'];
@@ -31,6 +33,32 @@ test('a run is current while its build is the host\'s and fresh', () => {
     ['ios', 'stale', 'a later build replaced the one it ran on'],
     ['linux', 'unchecked', 'a linux build is not identified yet'],
   ]);
+});
+
+test('evidence lists native runs whose receipts predate backend metadata', () => {
+  mkdirSync(resolve(ROOT, 'target'), { recursive: true });
+  const dir = mkdtempSync(resolve(ROOT, 'target/evidence-backend-'));
+  const put = (path, text = '') => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text); };
+  try {
+    put(resolve(dir, 'app.contract'), 'component App\n  text "hello"\n');
+    put(resolve(dir, 'app.json'), JSON.stringify({ name: 'evidence-backend', app: { id: 'com.exact.evidence-backend', name: 'Evidence Backend' } }));
+    put(resolve(dir, 'app.ts'), "const origin = 'http://127.0.0.1:4400';\n");
+    const app = resolveApp(dir), all = [];
+    for (const host of ['macos', 'ios']) {
+      const paths = appleArtifacts(app, { destination: host === 'ios' ? 'ios-simulator' : 'macos' });
+      const receipt = resolve(host === 'ios' ? paths.bundle : paths.products, 'receipt.json');
+      const text = JSON.stringify({ target: paths.target, build: { trust: 'development' } });
+      put(receipt, text);
+      if (host === 'macos') {
+        put(appleRunBinary(app));
+        put(resolve(paths.bundle, 'Contents/Resources/receipt.json'), text);
+      }
+      const future = new Date(Date.now() + 60_000);
+      utimesSync(receipt, future, future);
+      all.push({ host, build: createHash('sha256').update(text).digest('hex').slice(0, 16), what: 'test fixture' });
+    }
+    expect(standing(app, all).map(r => r.standing)).toEqual(['current', 'current']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('a change touches the hosts whose code it is', () => {

@@ -1,5 +1,5 @@
 //! A reply's body written to an app file (`Request::body_to`, TypeScript's
-//! `exactBodyTo`; LLP 1108 D6 R2, 2026-10-26): the worker stages the file
+//! `exactBodyTo`; LLP 1108 D6 R2): both cores stage the file
 //! under `fs.write` before sending, writes a 2xx body as it arrives, and
 //! replaces the target only when the body is complete.
 use super::*;
@@ -15,18 +15,16 @@ fn byte(offset: usize) -> u8 {
 }
 
 /// A body of `size` bytes made as it is read, at most 7919 bytes a read
-/// (chunked); `stall` makes every read after the first 256 KiB slow.
+/// (chunked); `interrupted` fails after the first 256 KiB.
 struct Made {
     at: usize,
     size: usize,
-    stall: bool,
+    interrupted: bool,
 }
 impl BodySource for Made {
     fn read(&mut self, out: &mut [u8]) -> Result<usize, HostError> {
-        if self.stall && self.at >= 256 << 10 {
-            std::thread::sleep(Duration::from_millis(20));
-            out[0] = 0;
-            return Ok(1);
+        if self.interrupted && self.at >= 256 << 10 {
+            return Err(HostError::Failed("interrupted body".into()));
         }
         let n = out.len().min(7919).min(self.size - self.at);
         // The pattern repeats every 128 KiB; bulk copies keep large scripted
@@ -42,8 +40,7 @@ impl BodySource for Made {
     }
 }
 
-/// Serves `/bytes/<n>` as 200 with n made bytes, `/stall` as 200 with a body
-/// that never ends, and anything else as 404 with a short body.
+/// Serves generated bodies, a declared length, an interrupted body and a 404.
 struct Server(Opened);
 impl Transport for Server {
     fn open(
@@ -53,33 +50,56 @@ impl Transport for Server {
     ) -> Result<StreamingResponse, HostError> {
         self.0.lock().unwrap().push(request.url.clone());
         let path = request.url.trim_start_matches("https://example.test");
-        let (status, source): (u16, Box<dyn BodySource>) =
-            match path.strip_prefix("/bytes/").map(str::parse) {
-                Some(Ok(size)) => (
-                    200,
-                    Box::new(Made {
-                        at: 0,
-                        size,
-                        stall: false,
-                    }),
-                ),
-                _ if path == "/stall" => (
-                    200,
-                    Box::new(Made {
-                        at: 0,
-                        size: usize::MAX,
-                        stall: true,
-                    }),
-                ),
-                _ => (
-                    404,
-                    Box::new(std::io::Cursor::new(b"no such thing".to_vec())),
-                ),
-            };
+        let (status, source): (u16, Box<dyn BodySource>) = match path
+            .strip_prefix("/bytes/")
+            .or_else(|| path.strip_prefix("/declared/"))
+            .or_else(|| path.strip_prefix("/error/"))
+            .map(str::parse)
+        {
+            Some(Ok(size)) => (
+                200,
+                Box::new(Made {
+                    at: 0,
+                    size,
+                    interrupted: false,
+                }),
+            ),
+            _ if path == "/interrupted" => (
+                200,
+                Box::new(Made {
+                    at: 0,
+                    size: usize::MAX,
+                    interrupted: true,
+                }),
+            ),
+            _ => (
+                404,
+                Box::new(std::io::Cursor::new(b"no such thing".to_vec())),
+            ),
+        };
         let mut headers = Headers::default();
         headers.set_response("content-type", "application/octet-stream");
+        if let Some(size) = path.strip_prefix("/declared/") {
+            headers.set_response("content-length", size);
+            if request.redirect != ibex2::stdlib::fetch::RedirectMode::Manual
+                && size.parse::<u64>().unwrap() > request.body_limit() as u64
+            {
+                return Err(ibex2::stdlib::fetch::over_limit(request.body_limit()));
+            }
+        }
+        if path == "/redirect" {
+            headers.set_response("location", "https://example.test/bytes/17");
+        } else if path == "/redirect-denied" {
+            headers.set_response("location", "https://denied.test/");
+        }
         Ok(StreamingResponse {
-            status,
+            status: if path.starts_with("/redirect") {
+                302
+            } else if path.starts_with("/error/") {
+                404
+            } else {
+                status
+            },
             status_text: String::new(),
             headers,
             body: Body::new(source, request.body_limit(), signal.clone()),
@@ -89,9 +109,9 @@ impl Transport for Server {
     }
 }
 
-struct Files(std::path::PathBuf);
+pub(in super::super) struct Files(pub(in super::super) std::path::PathBuf);
 impl Files {
-    fn new() -> Files {
+    pub(in super::super) fn new() -> Files {
         let root = std::env::temp_dir().join(format!(
             "exact-body-to-{}-{}",
             std::process::id(),
@@ -102,11 +122,11 @@ impl Files {
         }
         Files(root)
     }
-    fn roots(&self) -> [std::path::PathBuf; 3] {
+    pub(in super::super) fn roots(&self) -> [std::path::PathBuf; 3] {
         ["data", "cache", "tmp"].map(|dir| self.0.join(dir))
     }
     /// The names in `app:/cache`: no staging file is left behind.
-    fn cache(&self) -> Vec<String> {
+    pub(in super::super) fn cache(&self) -> Vec<String> {
         let mut names: Vec<_> = std::fs::read_dir(self.0.join("cache"))
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
@@ -121,15 +141,14 @@ impl Drop for Files {
     }
 }
 
-const GRANTS: &str = "net.fetch https://example.test\nfs.write app:/cache";
+pub(in super::super) const GRANTS: &str = "net.fetch https://example.test\nfs.write app:/cache";
 
-/// A core on workers, whatever `EXACT_HTTP_ASYNC` says (the asynchronous
-/// core refuses a body to a file: below), its transports [`Server`]s.
+/// The workers, regardless of the process switch.
 fn serving(grants: &str) -> (Core, Opened, Receiver<()>) {
     serving_on(grants, false)
 }
 
-fn serving_on(grants: &str, switched: bool) -> (Core, Opened, Receiver<()>) {
+pub(in super::super) fn serving_on(grants: &str, switched: bool) -> (Core, Opened, Receiver<()>) {
     let opened = Opened::default();
     let owners = (0..WORKERS)
         .map(|_| {
@@ -144,194 +163,259 @@ fn serving_on(grants: &str, switched: bool) -> (Core, Opened, Receiver<()>) {
     let wake: Wake = Box::new(move || {
         let _ = wake.send(());
     });
-    let core = if switched {
-        Core::with_owners(owners, grants, wake)
-    } else {
-        Core::with_owners_on(owners, grants, wake, Arc::new(ibex2::host::Host::new))
-    };
+    let core = Core::with_owners_lanes(
+        owners,
+        grants,
+        wake,
+        Arc::new(crate::executor::core::tests::lane_host),
+        switched.then(asynch::asynch_lanes),
+    );
     (core, opened, woke)
 }
 
-fn download(path: &str, to: &str) -> Request {
+pub(in super::super) fn download(path: &str, to: &str) -> Request {
     Request::get(&format!("https://example.test{path}")).body_to(to)
+}
+
+pub(in super::super) fn physically_ended(core: &Core) {
+    if core.machine.is_some() {
+        let state = core.shared.state.lock().unwrap();
+        let (state, _) = core
+            .shared
+            .ready
+            .wait_timeout_while(state, Duration::from_secs(30), |s| !s.running.is_empty())
+            .unwrap();
+        assert!(state.running.is_empty(), "file requests still live");
+    }
 }
 
 #[test]
 fn a_2xx_body_is_written_whole_to_the_file_and_the_response_names_its_size() {
-    let files = Files::new();
-    std::fs::write(files.0.join("cache/big"), b"old").unwrap();
-    let (core, _opened, woke) = serving(GRANTS);
-    core.set_app_roots(files.roots());
-    // Over 16 MiB on the ordered lane (no ceiling named: 1 GiB), and a
-    // smaller one on the independent lane, a chunk at a time.
-    let big = (20 << 20) + 3;
-    core.run(
-        job(1, download(&format!("/bytes/{big}"), "app:/cache/big")),
-        None,
-    )
-    .unwrap();
-    core.run(
-        job(
-            2,
-            download("/bytes/100000", "app:/cache/small").independent_http(100_000),
-        ),
-        None,
-    )
-    .unwrap();
-    for (ticket, outcome) in collect(&core, &woke, 2) {
-        let Outcome::Response(r) = outcome else {
-            panic!("{ticket}: {outcome:?}")
-        };
-        assert_eq!(r.status, 200);
-        assert!(r.body.is_empty(), "{ticket}: the body entered the response");
-        let (name, size) = if ticket == 1 {
-            ("big", big)
-        } else {
-            ("small", 100_000)
-        };
-        assert_eq!(r.body_written(), Some(size as u64));
-        let written = std::fs::read(files.0.join("cache").join(name)).unwrap();
-        assert_eq!(written.len(), size);
-        assert!(
-            written.iter().enumerate().all(|(i, b)| *b == byte(i)),
-            "{name} differs"
-        );
+    for switched in [false, true] {
+        let files = Files::new();
+        std::fs::write(files.0.join("cache/big"), b"old").unwrap();
+        let (core, _opened, woke) = serving_on(GRANTS, switched);
+        core.set_app_roots(files.roots());
+        // Over 16 MiB on the ordered lane (no ceiling named: 1 GiB), and a
+        // smaller one on the independent lane, a chunk at a time.
+        let big = (20 << 20) + 3;
+        core.run(
+            job(1, download(&format!("/bytes/{big}"), "app:/cache/big")),
+            None,
+        )
+        .unwrap();
+        core.run(
+            job(
+                2,
+                download("/bytes/100000", "app:/cache/small").independent_http(100_000),
+            ),
+            None,
+        )
+        .unwrap();
+        for (ticket, outcome) in collect(&core, &woke, 2) {
+            let Outcome::Response(r) = outcome else {
+                panic!("{ticket}: {outcome:?}")
+            };
+            assert_eq!(r.status, 200);
+            assert!(r.body.is_empty(), "{ticket}: the body entered the response");
+            let (name, size) = if ticket == 1 {
+                ("big", big)
+            } else {
+                ("small", 100_000)
+            };
+            assert_eq!(r.body_written(), Some(size as u64));
+            let written = std::fs::read(files.0.join("cache").join(name)).unwrap();
+            assert_eq!(written.len(), size);
+            assert!(
+                written.iter().enumerate().all(|(i, b)| *b == byte(i)),
+                "{name} differs"
+            );
+        }
+        physically_ended(&core);
+        assert_eq!(files.cache(), ["big", "small"]);
     }
-    assert_eq!(files.cache(), ["big", "small"]);
 }
 
 #[test]
 fn a_reply_that_is_not_2xx_is_the_response_and_leaves_the_file() {
-    let files = Files::new();
-    std::fs::write(files.0.join("cache/a"), b"old").unwrap();
-    let (core, _opened, woke) = serving(GRANTS);
-    core.set_app_roots(files.roots());
-    core.run(job(1, download("/missing", "app:/cache/a")), None)
-        .unwrap();
-    let outcomes = collect(&core, &woke, 1);
-    let Outcome::Response(r) = &outcomes[0].1 else {
-        panic!("{outcomes:?}")
-    };
-    assert_eq!(
-        (r.status, &r.body[..], r.body_written()),
-        (404, &b"no such thing"[..], None)
-    );
-    assert_eq!(std::fs::read(files.0.join("cache/a")).unwrap(), b"old");
-    assert_eq!(files.cache(), ["a"]);
+    for switched in [false, true] {
+        let files = Files::new();
+        std::fs::write(files.0.join("cache/a"), b"old").unwrap();
+        let (core, _opened, woke) = serving_on(GRANTS, switched);
+        core.set_app_roots(files.roots());
+        core.run(job(1, download("/missing", "app:/cache/a")), None)
+            .unwrap();
+        let outcomes = collect(&core, &woke, 1);
+        let Outcome::Response(r) = &outcomes[0].1 else {
+            panic!("{outcomes:?}")
+        };
+        assert_eq!(
+            (r.status, &r.body[..], r.body_written()),
+            (404, &b"no such thing"[..], None)
+        );
+        assert_eq!(std::fs::read(files.0.join("cache/a")).unwrap(), b"old");
+        physically_ended(&core);
+        assert_eq!(files.cache(), ["a"]);
+    }
 }
 
 #[test]
 fn a_body_to_a_file_is_refused_unsent_without_its_grant_parent_or_app_files() {
-    let files = Files::new();
-    let (core, opened, woke) = serving(GRANTS);
-    core.set_app_roots(files.roots());
-    // No `fs.write` over app:/data; a source scope without it; no parent.
-    core.run(job(1, download("/bytes/10", "app:/data/a")), None)
-        .unwrap();
-    let mut scoped = download("/bytes/10", "app:/cache/a");
-    scoped.grants = Some("net.fetch https://example.test".into());
-    core.run(job(2, scoped), None).unwrap();
-    core.run(job(3, download("/bytes/10", "app:/cache/none/a")), None)
-        .unwrap();
-    for (ticket, outcome) in collect(&core, &woke, 3) {
-        let Outcome::Failed { kind, message } = outcome else {
-            panic!("{ticket}: {outcome:?}")
-        };
-        assert_eq!(kind, FailureKind::Refused, "{ticket}: {message}");
-        assert!(
-            message.starts_with("exactBodyTo app:/"),
-            "{ticket}: {message}"
-        );
-        if ticket < 3 {
+    for switched in [false, true] {
+        let files = Files::new();
+        let (core, opened, woke) = serving_on(GRANTS, switched);
+        core.set_app_roots(files.roots());
+        // No `fs.write` over app:/data; a source scope without it; no parent.
+        core.run(job(1, download("/bytes/10", "app:/data/a")), None)
+            .unwrap();
+        let mut scoped = download("/bytes/10", "app:/cache/a");
+        scoped.grants = Some("net.fetch https://example.test".into());
+        core.run(job(2, scoped), None).unwrap();
+        core.run(job(3, download("/bytes/10", "app:/cache/none/a")), None)
+            .unwrap();
+        for (ticket, outcome) in collect(&core, &woke, 3) {
+            let Outcome::Failed { kind, message } = outcome else {
+                panic!("{ticket}: {outcome:?}")
+            };
+            assert_eq!(kind, FailureKind::Refused, "{ticket}: {message}");
             assert!(
-                message.contains(": denied: fs.write "),
+                message.starts_with("exactBodyTo app:/"),
                 "{ticket}: {message}"
             );
+            if ticket < 3 {
+                assert!(
+                    message.contains(": denied: fs.write "),
+                    "{ticket}: {message}"
+                );
+            }
         }
-    }
-    // A host that names no app files.
-    let (bare, _, bare_woke) = serving(GRANTS);
-    bare.run(job(4, download("/bytes/10", "app:/cache/a")), None)
-        .unwrap();
-    let outcomes = collect(&bare, &bare_woke, 1);
-    assert!(
-        matches!(
-            &outcomes[0].1,
+        std::fs::create_dir(files.0.join("cache/folder")).unwrap();
+        core.run(job(7, download("/bytes/10", "app:/cache/folder")), None)
+            .unwrap();
+        assert!(matches!(
+            &collect(&core, &woke, 1)[0].1,
             Outcome::Failed {
-                kind: FailureKind::Unsupported,
+                kind: FailureKind::Refused,
                 ..
             }
-        ),
-        "{outcomes:?}"
-    );
-    // A path with a `..` segment, and a stream, are refused at admission.
-    assert!(core
-        .run(job(5, download("/bytes/10", "app:/cache/../data/a")), None)
-        .unwrap_err()
-        .contains(". or .."));
-    let Answer::Later(stream) = Answer::stream(download("/bytes/10", "app:/cache/a")) else {
-        unreachable!()
-    };
-    assert!(core
-        .run(job(6, stream), None)
-        .unwrap_err()
-        .contains("stream"));
-    assert!(
-        opened.lock().unwrap().is_empty(),
-        "a refused request was sent"
-    );
-    assert!(files.cache().is_empty(), "a refused request made a file");
+        ));
+        std::fs::remove_dir(files.0.join("cache/folder")).unwrap();
+        #[cfg(unix)]
+        {
+            let linked = Files::new();
+            std::fs::remove_dir(linked.0.join("cache")).unwrap();
+            std::os::unix::fs::symlink(linked.0.join("tmp"), linked.0.join("cache")).unwrap();
+            let (bad_root, bad_opened, bad_woke) = serving_on(GRANTS, switched);
+            bad_root.set_app_roots(linked.roots());
+            bad_root
+                .run(job(8, download("/bytes/10", "app:/cache/a")), None)
+                .unwrap();
+            assert!(matches!(&collect(&bad_root, &bad_woke, 1)[0].1,
+            Outcome::Failed { kind: FailureKind::Refused, message } if message.contains("symbolic link")));
+            physically_ended(&bad_root);
+            assert!(bad_opened.lock().unwrap().is_empty());
+        }
+        // A host that names no app files.
+        let (bare, _, bare_woke) = serving_on(GRANTS, switched);
+        bare.run(job(4, download("/bytes/10", "app:/cache/a")), None)
+            .unwrap();
+        let outcomes = collect(&bare, &bare_woke, 1);
+        assert!(
+            matches!(
+                &outcomes[0].1,
+                Outcome::Failed {
+                    kind: FailureKind::Unsupported,
+                    ..
+                }
+            ),
+            "{outcomes:?}"
+        );
+        // A path with a `..` segment, and a stream, are refused at admission.
+        assert!(core
+            .run(job(5, download("/bytes/10", "app:/cache/../data/a")), None)
+            .unwrap_err()
+            .contains(". or .."));
+        let Answer::Later(stream) = Answer::stream(download("/bytes/10", "app:/cache/a")) else {
+            unreachable!()
+        };
+        assert!(core
+            .run(job(6, stream), None)
+            .unwrap_err()
+            .contains("stream"));
+        assert!(
+            opened.lock().unwrap().is_empty(),
+            "a refused request was sent"
+        );
+        physically_ended(&core);
+        assert!(
+            files.cache().is_empty(),
+            "core async={switched}: refused request made {:?}",
+            files.cache()
+        );
+    }
 }
 
 #[test]
 fn a_body_over_its_ceiling_leaves_the_target() {
-    let files = Files::new();
-    std::fs::write(files.0.join("cache/a"), b"old").unwrap();
-    let (core, _opened, woke) = serving(GRANTS);
-    core.set_app_roots(files.roots());
-    core.run(
-        job(
-            1,
-            download("/bytes/2000000", "app:/cache/a").independent_http(1 << 20),
-        ),
-        None,
-    )
-    .unwrap();
-    let outcomes = collect(&core, &woke, 1);
-    assert!(
-        matches!(&outcomes[0].1, Outcome::Failed { kind: FailureKind::Refused, message }
+    for switched in [false, true] {
+        for path in [
+            "/bytes/2000000",
+            "/declared/2000000",
+            "/declared/1073741825",
+        ] {
+            let files = Files::new();
+            std::fs::write(files.0.join("cache/a"), b"old").unwrap();
+            let (core, _opened, woke) = serving_on(GRANTS, switched);
+            core.set_app_roots(files.roots());
+            core.run(
+                job(
+                    1,
+                    if path.ends_with("1073741825") {
+                        download(path, "app:/cache/a")
+                    } else {
+                        download(path, "app:/cache/a").independent_http(1 << 20)
+                    },
+                ),
+                None,
+            )
+            .unwrap();
+            let outcomes = collect(&core, &woke, 1);
+            assert!(
+                matches!(&outcomes[0].1, Outcome::Failed { kind: FailureKind::Refused, message }
             if message == "HTTP response exceeds limit"),
-        "{outcomes:?}"
-    );
-    assert_eq!(std::fs::read(files.0.join("cache/a")).unwrap(), b"old");
-    assert_eq!(files.cache(), ["a"], "a staging file was left");
+                "{outcomes:?}"
+            );
+            assert_eq!(std::fs::read(files.0.join("cache/a")).unwrap(), b"old");
+            physically_ended(&core);
+            assert_eq!(files.cache(), ["a"], "a staging file was left");
+        }
+    }
 }
 
 #[test]
-#[ignore = "async lane: waits on the wall clock (a 300 ms deadline ends a body mid-way); bun scripts/async.mjs runs it"]
 fn a_body_ended_mid_way_leaves_the_target() {
-    let files = Files::new();
-    std::fs::write(files.0.join("cache/a"), b"old").unwrap();
-    let (core, _opened, woke) = serving(GRANTS);
-    core.set_app_roots(files.roots());
-    core.run(
-        job(1, download("/stall", "app:/cache/a").timeout(300)),
-        None,
-    )
-    .unwrap();
-    let outcomes = collect(&core, &woke, 1);
-    assert!(
-        matches!(
-            &outcomes[0].1,
-            Outcome::Failed {
-                kind: FailureKind::Timeout,
-                ..
-            }
-        ),
-        "{outcomes:?}"
-    );
-    assert_eq!(std::fs::read(files.0.join("cache/a")).unwrap(), b"old");
-    assert_eq!(files.cache(), ["a"], "a staging file was left");
+    for switched in [false, true] {
+        let files = Files::new();
+        std::fs::write(files.0.join("cache/a"), b"old").unwrap();
+        let (core, _opened, woke) = serving_on(GRANTS, switched);
+        core.set_app_roots(files.roots());
+        core.run(job(1, download("/interrupted", "app:/cache/a")), None)
+            .unwrap();
+        let outcomes = collect(&core, &woke, 1);
+        assert!(
+            matches!(
+                &outcomes[0].1,
+                Outcome::Failed {
+                    kind: FailureKind::Network,
+                    ..
+                }
+            ),
+            "{outcomes:?}"
+        );
+        assert_eq!(std::fs::read(files.0.join("cache/a")).unwrap(), b"old");
+        physically_ended(&core);
+        assert_eq!(files.cache(), ["a"], "a staging file was left");
+    }
 }
 
 /// The lane is charged what the request can hold in memory, not the 1 GiB it
@@ -345,33 +429,37 @@ fn a_body_to_a_file_is_charged_a_bounded_allowance() {
     assert!(limit < 3 << 20, "charged {limit}");
     let plain = Request::get("https://example.test/bytes/1").independent_http(1 << 30);
     assert!(reservation(&plain).is_err());
+    for switched in [false, true] {
+        let files = Files::new();
+        let (core, _, woke) = serving_on(GRANTS, switched);
+        core.set_app_roots(files.roots());
+        core.run(job(1, request.clone()), None).unwrap();
+        assert!(matches!(&collect(&core, &woke, 1)[0].1,
+            Outcome::Response(r) if r.body_written() == Some(1)));
+        physically_ended(&core);
+        assert_eq!(files.cache(), ["a"]);
+    }
 }
 
-/// The asynchronous core (LLP 1120; `EXACT_HTTP_ASYNC`, off) does not write a
-/// body to a file yet: it refuses one, sending nothing, never reading it into
-/// memory instead. Run in the executor suite's rerun on that core.
+/// A native delegate must return promptly, so its disk destination is deferred
+/// to the Apple slice (LLP 1162 D8).
 #[test]
-fn the_asynchronous_core_refuses_a_body_to_a_file() {
-    if !asynch::asynchronous() {
-        return;
-    }
+fn the_native_darwin_lane_refuses_a_body_to_a_file_before_contact() {
     let files = Files::new();
-    let (core, opened, woke) = serving_on(GRANTS, true);
+    let script = Arc::new(super::async_tests::Script::default());
+    let (core, woke) = super::async_tests::core(&script, GRANTS);
     core.set_app_roots(files.roots());
     core.run(job(1, download("/bytes/10", "app:/cache/a")), None)
         .unwrap();
     let outcomes = collect(&core, &woke, 1);
     assert!(
-        matches!(
-            &outcomes[0].1,
-            Outcome::Failed {
-                kind: FailureKind::Unsupported,
-                ..
-            }
-        ),
+        matches!(&outcomes[0].1,
+        Outcome::Failed { kind: FailureKind::Unsupported, message }
+        if message.contains("DarwinLane") && message.contains("URLSession")),
         "{outcomes:?}"
     );
-    assert!(opened.lock().unwrap().is_empty());
+    physically_ended(&core);
+    assert_eq!(script.wait(0), 0);
     assert!(files.cache().is_empty());
 }
 
@@ -449,6 +537,34 @@ fn a_ceiling_open_streams_leave_no_room_for_is_refused_when_made() {
         "{outcomes:?}"
     );
     fixture.release();
+}
+
+#[test]
+fn a_non_2xx_body_is_held_only_within_its_allowance() {
+    for switched in [false, true] {
+        let files = Files::new();
+        std::fs::write(files.0.join("cache/a"), b"old").unwrap();
+        let (core, _, woke) = serving_on(GRANTS, switched);
+        core.set_app_roots(files.roots());
+        let size = exact_runner::BODY_TO_HELD_BYTES + 1;
+        core.run(
+            job(
+                1,
+                download(&format!("/error/{size}"), "app:/cache/a").independent_http(1 << 30),
+            ),
+            None,
+        )
+        .unwrap();
+        let done = collect(&core, &woke, 1);
+        assert!(
+            matches!(&done[0].1, Outcome::Failed { kind: FailureKind::Refused, message }
+            if message == "HTTP response exceeds limit"),
+            "{done:?}"
+        );
+        physically_ended(&core);
+        assert_eq!(std::fs::read(files.0.join("cache/a")).unwrap(), b"old");
+        assert_eq!(files.cache(), ["a"]);
+    }
 }
 
 #[test]
@@ -560,7 +676,7 @@ fn an_upload_reserving_room_wakes_queued_reads_before_its_first_event() {
             Box::new(move || {
                 let _ = wake.send(());
             }),
-            Arc::new(ibex2::host::Host::new),
+            Arc::new(crate::executor::core::tests::lane_host),
             lanes,
         );
         let (opening, opened) = channel();

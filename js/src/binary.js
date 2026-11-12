@@ -93,6 +93,21 @@
   }
   // `exactIdleTimeout` (LLP 1016.000 D11): why it is refused, if it is. `socket`: a WebSocket stream that is no
   // listener, child, upload or long poll.
+// Protocol names, never credentials (LLP 1016.000; RFC 7230 token).
+function socketProtocols(value, socket) {
+  if (value === undefined) return [];
+  if (!socket) throw new TypeError('exactProtocols: only a WebSocket stream takes protocols');
+  if (!Array.isArray(value)) throw new TypeError('exactProtocols must be an array of protocol names');
+  var names = [];
+  for (var name of value) {
+    if (typeof name !== 'string' || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
+      throw new TypeError(`invalid WebSocket protocol ${JSON.stringify(name)}: expected a non-empty RFC 7230 token`);
+    if (names.includes(name)) throw new TypeError(`duplicate WebSocket protocol ${JSON.stringify(name)}`);
+    names.push(name);
+  }
+  return names;
+}
+
   function idleRefusal(idle, socket) {
     if (idle === undefined) return undefined;
     if (!Number.isInteger(idle) || idle < 1 || idle > 3600000) return "exactIdleTimeout must be an integer number of milliseconds from 1 to 3600000";
@@ -850,6 +865,7 @@
     longPollOf: longPollOf,
     uploadOf: uploadOf,
     idleRefusal: idleRefusal,
+    socketProtocols: socketProtocols,
     uploadEvent: uploadEvent,
     presence: presence,
     sockets: sockets,

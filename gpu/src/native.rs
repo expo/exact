@@ -349,6 +349,13 @@ pub fn buffer(id: u32, out: &mut [u32; 3]) -> *mut c_void {
     }
 }
 
+/// Whether canvas `id` has a complete frame [`buffer`] has not published
+/// yet: a presenter keeps calling it until it has.
+#[cfg(target_os = "android")]
+pub fn unpublished(id: u32) -> bool {
+    with(|m| m.unpublished(id)).unwrap_or(false)
+}
+
 /// Drop canvas `id`'s window target; its state stays.
 pub fn detach(id: u32) {
     with(|m| m.detach(id));
@@ -617,10 +624,28 @@ pub fn published(id: u32) -> Option<String> {
     with(|m| m.take_published(id)).flatten()
 }
 
+/// Enable or disable bounded HUD performance reporting.
+pub fn set_performance_reporting(id: u32, enabled: bool) -> bool {
+    with(|m| m.set_performance_reporting(id, enabled)).unwrap_or(false)
+}
+
+/// Take one metrics snapshot, at most once per second on the host clock.
+pub fn performance(id: u32, now_ms: f64) -> Option<String> {
+    with(|m| m.take_performance(id, now_ms)).flatten()
+}
+
 /// Drain posted messages as a JSON array.
 pub fn messages(id: u32) -> Option<String> {
     let messages = with(|m| m.take_messages(id)).unwrap_or_default();
     (!messages.is_empty()).then(|| json::strings(&messages))
+}
+
+/// The canvas's size in points, before a bind. Returns 0 on success.
+pub fn size(id: u32, width: f32, height: f32) -> u32 {
+    match with(|m| m.size(id, width, height)) {
+        Some(true) => 0,
+        _ => 1,
+    }
 }
 
 /// Ask the surface; an empty string means no answer.
@@ -698,9 +723,10 @@ pub fn seen(id: u32) -> bool {
     with(|m| m.seen(id)).unwrap_or(false)
 }
 
-/// Register the presenter's callback for a canvas's first frame: on Metal it
-/// runs on the thread that scheduled the frame, and the presenter asks
-/// [`seen`] on its own thread. `None` removes it.
+/// Register the presenter's callback for a canvas's first frame, or the
+/// first of its current picture: on Metal it runs on the thread that
+/// scheduled the frame, and the presenter asks [`seen`] and [`published`]
+/// (whose `presented` changed) on its own thread. `None` removes it.
 pub fn on_presented(callback: Option<extern "C" fn()>) {
     crate::frame::on_presented(callback);
 }
@@ -818,6 +844,11 @@ macro_rules! module {
         #[no_mangle]
         pub unsafe extern "C" fn gpu_buffer(id: u32, out: *mut u32) -> *mut ::std::ffi::c_void { $crate::native::buffer(id, &mut *out.cast::<[u32; 3]>()) }
 
+        /// Whether the canvas has a complete frame `gpu_buffer` has not published yet.
+        #[cfg(target_os = "android")]
+        #[no_mangle]
+        pub extern "C" fn gpu_unpublished(id: u32) -> u32 { u32::from($crate::native::unpublished(id)) }
+
         /// Clear the previous complete shader namespace after app acceptance.
         #[no_mangle]
         pub extern "C" fn gpu_shaders_clear() { $crate::shaders::clear_shaders(); }
@@ -863,6 +894,12 @@ macro_rules! module {
             let Some(text) = (unsafe { $crate::native::bytes("gpu_bind_at", values, len) }) else { return 1 };
             let Ok(text) = ::std::str::from_utf8(text) else { $crate::native::refuse("gpu_bind_at: the values are not UTF-8"); return 1 };
             $crate::native::bind_at(id, text, Some(at_ms))
+        }
+
+        /// The canvas's size in points, before a bind: 0 on success.
+        #[no_mangle]
+        pub extern "C" fn gpu_size(id: u32, width: f32, height: f32) -> u32 {
+            $crate::native::size(id, width, height)
         }
 
         /// Record one frame (shown at `gpu_flush`): 1 = wants another, 0 = done, 2 = failed.
@@ -1086,6 +1123,21 @@ macro_rules! module {
             }
         }
 
+        /// Enable or disable bounded HUD performance reporting.
+        #[no_mangle]
+        pub extern "C" fn gpu_performance_reporting(id: u32, enabled: bool) -> bool {
+            $crate::native::set_performance_reporting(id, enabled)
+        }
+
+        /// Metrics in the output buffer; u32::MAX means unchanged or disabled.
+        #[no_mangle]
+        pub extern "C" fn gpu_performance(id: u32, now_ms: f64) -> u32 {
+            match $crate::native::performance(id, now_ms) {
+                Some(text) => EXACT_GPU_OUT.with(|b| { *b.borrow_mut() = text.into_bytes(); b.borrow().len() as u32 }),
+                None => u32::MAX,
+            }
+        }
+
         /// Drain messages into the output buffer; u32::MAX means no messages.
         #[no_mangle]
         pub extern "C" fn gpu_messages(id: u32) -> u32 {
@@ -1186,8 +1238,9 @@ macro_rules! module {
             u32::from($crate::native::seen(id))
         }
 
-        /// The presenter's callback for a canvas's first frame, called on
-        /// the thread that scheduled it; null removes it.
+        /// The presenter's callback for a canvas's first frame, or the first
+        /// of its current picture, called on the thread that scheduled it;
+        /// null removes it.
         #[no_mangle]
         pub extern "C" fn gpu_on_presented(callback: Option<extern "C" fn()>) {
             $crate::native::on_presented(callback)

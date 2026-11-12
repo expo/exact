@@ -1,4 +1,6 @@
 import { test, expect, mock } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { glueDeclarations } from '../web/tests/glue-fixture.mjs';
 
 mock.module('./rt.js', () => ({
   journal: [], clock: { now: 0, agent: true }, nextTicket: () => 1,
@@ -102,4 +104,47 @@ test('app files reach navigator.share as typed Files, guarded by canShare', asyn
     expect(await api.share({}, [{ path: 'app:/data/missing.txt' }])).toBe('share: refused: this page has no app files');
     expect(shared.length).toBe(1);
   } finally { Object.defineProperty(globalThis, 'navigator', was); }
+});
+
+// These tables run in separate Rust, bundled-JS and lazy-glue artifacts.
+// Check every entry in both directions so adding a type to only one fails.
+test('picker admission and delivery agree on every filename MIME type', async () => {
+  const rust = readFileSync(new URL('../../runner/src/runner/picker.rs', import.meta.url), 'utf8');
+  const body = rust.slice(rust.indexOf('pub fn mime_for('), rust.indexOf('/// Whether `accept`'));
+  const native = {};
+  for (const [, extensions, mime] of body.matchAll(/((?:"[a-z0-9]+"\s*\|?\s*)+) => "([^"]+)"/g))
+    for (const [, ext] of extensions.matchAll(/"([a-z0-9]+)"/g)) native[ext] = mime;
+  const js = readFileSync(new URL('./files.js', import.meta.url), 'utf8');
+  const table = new Function(glueDeclarations(js, ['MIME']) + '; return MIME;')();
+  const source = readFileSync(new URL('../web/picker-glue.js', import.meta.url), 'utf8');
+  const bodyJS = glueDeclarations(source, ['typeFor']);
+  const typeFor = new Function(bodyJS + '; return typeFor;')();
+  const delivered = Object.fromEntries([...bodyJS.matchAll(/\b(\w+): '/g)].map(([, ext]) => [ext, typeFor('file.' + ext)]));
+  expect(Object.keys(native).length).toBeGreaterThan(30);
+  expect(table).toEqual(native);
+  expect(delivered).toEqual(native);
+  globalThis.exact ??= {};
+  await import('../web/picker-glue.js');
+  const sent = [];
+  const picker = exact.picker({appId: 'mime-test', pickedPath: name => 'app:/tmp/picked/' + name,
+    dispatch: (id, kind, payload) => sent.push(payload), log() {}});
+  for (const [ext, mime] of Object.entries(native)) {
+    const name = 'file.' + ext.toUpperCase();
+    await picker.answer(1, [{name, bytes: btoa('fixture')}]);
+    expect(sent.at(-1).split('\t')[2].split(';', 1)[0], name).toBe(mime);
+    expect(accepts([mime], name, table[ext])).toBe(true);
+    expect(accepts([mime.split('/')[0] + '/*'], name, table[ext])).toBe(true);
+  }
+  for (const name of ['unknown.xyz', 'png', 'file.constructor', 'file.__proto__'])
+    expect(typeFor(name)).toBe('application/octet-stream');
+});
+
+test('agent TIFF and Markdown picks deliver the type admitted by their names', async () => {
+  globalThis.exact ??= {};
+  await import('../web/picker-glue.js');
+  const sent = [];
+  const picker = exact.picker({appId: 'mime-test', pickedPath: name => 'app:/tmp/picked/' + name,
+    dispatch: (id, kind, payload) => sent.push(payload), log() {}});
+  await picker.answer(1, ['scan.tiff', 'scan.TIF', 'notes.markdown'].map(name => ({name, bytes: btoa('fixture')})));
+  expect(sent[0].split('\n').map(line => line.split('\t')[2])).toEqual(['image/tiff', 'image/tiff', 'text/markdown']);
 });

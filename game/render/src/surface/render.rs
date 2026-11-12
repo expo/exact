@@ -263,7 +263,10 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         if ASSETS && !sim.device_assets_ready() {
             return sim.assets_pending();
         }
-        sim.viewport(frame.width, frame.height);
+        // A new world's first size runs `Game::first_frame`: this frame shows it.
+        if sim.viewport(frame.width, frame.height) {
+            self.dirty = true;
+        }
         self.look.points = (frame.width, frame.height);
         self.look.held = Some(*frame);
         if self.format != Some(format) {
@@ -385,6 +388,11 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         if feed.mouse_look() {
             feed.unshown_motion(sim.unshown_motion());
         }
+        let pointer = feed.pointer_pan().and_then(|id| sim.frame_pointer(id));
+        feed.pointer_sample(pointer);
+        if let Some(trace) = &mut self.trace {
+            trace.pointer = pointer;
+        }
         let mut input = feed.frame_pixels(sim.world(), sim.alpha(), (frame.width, frame.height));
         if let Some(rung) = self.rung {
             let authored = sim.world().try_resource::<exact_game::Shadows>().is_some();
@@ -482,6 +490,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         if let Some(start) = start {
             let ms = start.elapsed();
             self.perf.encode.push(ms);
+            if let Some(report) = &mut self.perf.reporting {
+                report.phases[2].push(ms);
+            }
             if let Some(trace) = &mut self.trace {
                 trace.times[2] = ms;
             }
@@ -496,7 +507,7 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
                 frame.now_ms,
                 sim.alpha(),
                 ticks,
-                feed.trace_camera(sim.alpha()),
+                input.camera_position.to_array().map(f64::from),
                 trace.times,
             );
             trace.times = [0.; 3];
@@ -582,6 +593,9 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
             return;
         };
         renderer.submitted();
+        if let Some(report) = &mut self.perf.reporting {
+            report.submitted();
+        }
         // `Game::PREPARE`'s pipelines, after the frame that sets their keys is
         // on its way: their time counts in the next frame's `pipelineMs`.
         if ASSETS && !G::PREPARE.is_empty() && self.ready_work.is_some() {

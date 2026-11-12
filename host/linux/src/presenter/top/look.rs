@@ -11,7 +11,7 @@
 //! the person's font scale, taken linearly: Android's own scaling is
 //! non-linear above 100%, and comes with the reported type ramp (D4, S2).
 //! The face is the page's default family.
-use super::shape::{Plan, Row};
+use super::shape::{Entry, Plan, Row};
 use crate::paint::{rgba, Backend, Ink, Rect4, Shape, SvgPaint};
 use crate::text::{Paragraph, RunPaint, TextEngine};
 use exact_kernel::style::roles;
@@ -89,6 +89,10 @@ const MENU_ROW: f32 = 48.0;
 const MENU_INSET: f32 = 12.0;
 const MENU_SYMBOL: f32 = 24.0;
 const MENU_RULE: (f32, f32) = (1.0, 8.0);
+/// A section's title is a 32 dp line of label type, inset as an item's
+/// label, in the variant's colour: it names the items under it and takes no
+/// press.
+const MENU_HEADER: f32 = 32.0;
 /// Material's state layer under a press or a keyboard's focus.
 pub(in crate::presenter) const STATE_LAYER: f32 = 0.10;
 
@@ -516,13 +520,9 @@ fn alert(
 
 /// Material's menu: 48 dp rows, each a label with a leading symbol where
 /// its button has one (a check where it is `aria-checked`), a destructive
-/// row in the error role, and a line where the author wrote a separator.
-fn menu(
-    engine: &mut TextEngine,
-    entries: &[Option<Row>],
-    inputs: &Inputs,
-    desktop: bool,
-) -> Layout {
+/// row in the error role, a line where the author wrote a separator, and a
+/// section's title over its rows.
+fn menu(engine: &mut TextEngine, entries: &[Entry], inputs: &Inputs, desktop: bool) -> Layout {
     let (dark, scale) = (inputs.dark, inputs.font_scale);
     // WinUI's MenuFlyout_themeresources.xaml: narrow input padding, 16 px
     // icons, 28 px placeholder, and a 4,2,4,2 item margin.
@@ -539,7 +539,13 @@ fn menu(
         (None, true) => Some("checkmark".to_string()),
         (None, false) => None,
     };
-    let has_symbols = entries.iter().flatten().any(|r| lead(r).is_some());
+    let rows = || {
+        entries.iter().filter_map(|e| match e {
+            Entry::Item(row) => Some(row),
+            _ => None,
+        })
+    };
+    let has_symbols = rows().any(|r| lead(r).is_some());
     let indent = |row: &Row| {
         if desktop {
             if has_symbols {
@@ -554,30 +560,61 @@ fn menu(
             }
         }
     };
+    // WinUI's MenuFlyout has no section title: one in its caption type.
+    let header = if desktop {
+        Type(12., 16., 600, 0.)
+    } else {
+        LABEL_LARGE
+    };
     let labels: Vec<Option<Rc<Paragraph>>> = (entries.iter())
         .map(|entry| {
-            let row = entry.as_ref()?;
-            let room = widest - 2.0 * inset - indent(row);
-            Some(if desktop {
-                let p = paragraph(engine, &row.title, Type(14., 20., 400, 0.), scale, None);
-                p.ellipsized(room.max(1.)).unwrap_or(p)
-            } else {
-                label(engine, &row.title, scale, room.max(1.0))
+            let room = |indent: f32| (widest - 2.0 * inset - indent).max(1.);
+            Some(match entry {
+                Entry::Item(row) if desktop => {
+                    let p = paragraph(engine, &row.title, Type(14., 20., 400, 0.), scale, None);
+                    p.ellipsized(room(indent(row))).unwrap_or(p)
+                }
+                Entry::Item(row) => label(engine, &row.title, scale, room(indent(row))),
+                Entry::Header(title, _) => {
+                    let p = paragraph(engine, title, header, scale, None);
+                    p.ellipsized(room(0.)).unwrap_or(p)
+                }
+                Entry::Separator => return None,
             })
         })
         .collect();
     let content = (entries.iter().zip(&labels))
-        .filter_map(|(entry, p)| Some(indent(entry.as_ref()?) + p.as_ref()?.width))
+        .filter_map(|(entry, p)| {
+            let indent = match entry {
+                Entry::Item(row) => indent(row),
+                _ => 0.,
+            };
+            Some(indent + p.as_ref()?.width)
+        })
         .fold(0.0, f32::max);
     let width = (content + 2.0 * inset).clamp(range.0.min(widest), widest);
     let (mut items, mut targets) = (Vec::new(), Vec::new());
     let mut y = padding;
     for (entry, p) in entries.iter().zip(labels) {
-        let (Some(row), Some(p)) = (entry, p) else {
-            let line = (0.0, y + rule.1, width, rule.0);
-            items.push(Item::Rule(line, Role::OutlineVariant.color(dark)));
-            y += rule.0 + 2.0 * rule.1;
-            continue;
+        let (row, p) = match (entry, p) {
+            (Entry::Item(row), Some(p)) => (row, p),
+            (Entry::Header(_, node), Some(p)) => {
+                let tall = (p.height + 12.).max(if desktop { 28. } else { MENU_HEADER });
+                let ink = inputs.contrast.filter(|_| desktop).map_or_else(
+                    || Role::OnSurfaceVariant.color(dark),
+                    |palette| palette.text,
+                );
+                let at = (inset, y + (tall - p.height) / 2.0);
+                items.push(Item::Text(p, at, ink, *node));
+                y += tall;
+                continue;
+            }
+            _ => {
+                let line = (0.0, y + rule.1, width, rule.0);
+                items.push(Item::Rule(line, Role::OutlineVariant.color(dark)));
+                y += rule.0 + 2.0 * rule.1;
+                continue;
+            }
         };
         y += margin;
         let tall = if desktop {

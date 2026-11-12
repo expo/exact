@@ -116,6 +116,12 @@ impl Drop for Held {
 }
 
 impl Uploads {
+    pub(in super::super) fn retire(&self) -> impl Send {
+        let mut budget = self.0.lock().unwrap();
+        budget.waiting_bodies = 0;
+        budget.started.clear();
+        std::mem::take(&mut budget.queue)
+    }
     /// Uploads waiting now, and the bytes those going out hold.
     #[cfg(test)]
     pub(in super::super) fn waiting(&self) -> (usize, usize) {
@@ -245,7 +251,16 @@ pub(in super::super) fn start(shared: &Arc<Shared>) {
             starting.push(next);
         }
         if state.retired {
-            budget.queue.clear();
+            if state.book.retiring {
+                state
+                    .book
+                    .trash
+                    .push(Box::new(std::mem::take(&mut budget.queue)));
+                budget.started.clear();
+                shared.ready.notify_all();
+            } else {
+                budget.queue.clear();
+            }
             budget.waiting_bodies = 0;
         }
         if !starting.is_empty() {
@@ -347,7 +362,7 @@ pub(super) fn timed_out(end: Outcome, passed: bool, ms: u32) -> Outcome {
 
 /// An upload's hooks: each count of the body's bytes sent that the
 /// transport reports is a message, which a newer one replaces while the
-/// runner has not taken it (D4). Its start, when the hop loop has admitted
+/// runner has not taken it (D10). Its start, when the hop loop has admitted
 /// it, goes out only while `signal` has not aborted, and is then recorded
 /// here and a message no other replaces (`exact:sending`). The check and
 /// the record share the lock the host reads them under, after it aborts
@@ -357,7 +372,7 @@ pub(super) fn progress(shared: &Arc<Shared>, ticket: u64, signal: AbortSignal) -
     let (sending, shared) = (shared.clone(), shared.clone());
     Sent(
         Arc::new(move |loaded, total| {
-            super::message(&shared, ticket, Message::upload_progress(loaded, total));
+            super::message(&shared, ticket, Message::upload_progress(loaded, total), 0);
         }),
         Some(Arc::new(move || {
             {
@@ -367,7 +382,7 @@ pub(super) fn progress(shared: &Arc<Shared>, ticket: u64, signal: AbortSignal) -
                 }
                 budget.started.insert(ticket);
             }
-            super::message(&sending, ticket, Message::upload_start());
+            super::message(&sending, ticket, Message::upload_start(), 0);
             true
         })),
     )

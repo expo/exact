@@ -6,39 +6,53 @@ impl AsyncTransport for Tracked {
     fn start(&self, request: HopRequest, sink: Box<dyn Sink>) -> Result<Exchange, HostError> {
         let origin = origin(&request.url);
         let sends = request.body.is_some();
-        {
+        let transport_lane = {
             let mut state = self.machine.shared.state.lock().unwrap();
-            let book = &mut state.book;
-            // The places the starter held, the origin's too when it was
-            // not known then (a redirect's).
-            match book.reserved.remove(&self.run) {
-                Some(Some(_)) => {}
-                Some(None) => *book.origins[self.lane].entry(origin.clone()).or_default() += 1,
-                None => {
-                    *book.origins[self.lane].entry(origin.clone()).or_default() += 1;
-                    if self.lane == 1 {
-                        book.in_flight += 1;
-                    }
-                }
+            if state.retired
+                || !find(&mut state.running, self.run)
+                    .is_some_and(|r| !r.terminal && r.claim == Claim::None)
+            {
+                return Err(ibex2::stdlib::fetch_async::aborted());
             }
-            if let Some(r) = find(&mut state.running, self.run) {
-                r.live += 1;
-            }
+            let (transport_lane, held_origin) = state
+                .book
+                .reserved
+                .remove(&self.run)
+                .expect("a hop is admitted before transport preparation");
+            debug_assert_eq!(held_origin, origin);
+            find(&mut state.running, self.run).expect("open run").live += 1;
             if let Some(u) = state.book.uploads.get_mut(&self.run).filter(|_| sends) {
                 u.hops += 1;
             }
-        }
+            transport_lane
+        };
         let sink = Box::new(TrackedSink {
             inner: sink,
             machine: self.machine.clone(),
             lane: self.lane,
             run: self.run,
-            origin: Some(origin.clone()),
+            origin,
+            transport_lane,
+            ended: false,
             sends,
+            redirect: false,
+            file: self
+                .machine
+                .shared
+                .state
+                .lock()
+                .unwrap()
+                .book
+                .downloads
+                .contains(&self.run),
         });
         // The sink owns the physical hold before calling opaque transport
         // code, including refusal or unwind before an exchange is returned.
-        let exchange = Arc::new(self.inner.start(request, sink)?);
+        let inner = self.machine.transports.lock().unwrap()[transport_lane]
+            .as_ref()
+            .map(|(transport, _)| transport.clone())
+            .ok_or_else(ibex2::stdlib::fetch_async::aborted)?;
+        let exchange = Arc::new(inner.start(request, sink)?);
         let first = self.deadline.lock().unwrap().take();
         let (machine, lane, run) = (self.machine.clone(), self.lane, self.run);
         let activate = exchange.clone();
@@ -75,25 +89,51 @@ struct TrackedSink {
     machine: Arc<Machine>,
     lane: usize,
     run: Run,
-    origin: Option<String>,
+    origin: String,
+    transport_lane: usize,
+    ended: bool,
     /// It sends the run's upload.
     sends: bool,
+    file: bool,
+    redirect: bool,
 }
 
 impl Sink for TrackedSink {
     fn head(&mut self, head: Head) -> Flow {
-        self.inner.head(head)
+        let flow = self.inner.head(head);
+        self.redirect = flow == Flow::Skip;
+        flow
     }
     fn data(&mut self, bytes: &[u8]) -> Flow {
         self.inner.data(bytes)
     }
     fn end(&mut self, result: Result<(), HostError>) {
-        // The release is the finisher's; posted before the task hears the
-        // end, so a next hop is queued after it.
-        self.release();
+        // A file destination publishes or cleans up during `end`; its places
+        // outlive that work (LLP 1162 D1). Other hops release before a redirect.
+        if !self.file {
+            self.release();
+        }
         self.inner.end(result);
+        #[cfg(test)]
+        if self.file {
+            self.machine.body_to_phase(
+                if self.redirect {
+                    body_to::Phase::RedirectEnded
+                } else {
+                    body_to::Phase::ReplyEnded
+                },
+                self.run,
+            );
+        }
+        self.release();
     }
     fn metrics(&mut self, metrics: HopMetrics) {
+        if let Some(protocol) = &metrics.protocol {
+            self.machine.post(
+                self.lane,
+                Event::Protocol(self.transport_lane, self.origin.clone(), protocol.clone()),
+            );
+        }
         self.inner.metrics(metrics);
     }
     fn observed(&mut self, status: u16, headers: &ibex2::stdlib::fetch::Headers) {
@@ -103,9 +143,17 @@ impl Sink for TrackedSink {
 
 impl TrackedSink {
     fn release(&mut self) {
-        if let Some(origin) = self.origin.take() {
-            self.machine
-                .post(self.lane, Event::Ended(self.run, Some(origin), self.sends));
+        if !self.ended {
+            self.ended = true;
+            self.machine.post(
+                self.lane,
+                Event::Ended(
+                    self.run,
+                    Some((self.transport_lane, self.origin.clone())),
+                    self.sends,
+                    !self.redirect,
+                ),
+            );
         }
     }
 }

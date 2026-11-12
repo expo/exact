@@ -54,20 +54,20 @@ NDK (`ANDROID_NDK_HOME`, else the newest under the SDK), a JDK (17 or newer) and
    crate::exact_hatches())`, with a build script that bakes the plan and calls `contract::native::android_entry`,
    which writes the app's hatches' install (`hatches.rs`) and the plan's uses (`uses.txt`) beside it; `apps/caltrain/android` is the one to copy for an app whose data is Rust and
    `apps/shelf/android` for one whose data is TypeScript (three files each, and a line in the root `Cargo.toml`'s
-   `members`). A game's is generated in its `.shells/` (`game/app/shells.mjs`). An app with a GPU module (LLP 1009;
-   every game) is built as a Linux bake is (`buildBake`): the module first, then the crate, whose bake records the
+   `members`). A game's is generated in its `.shells/` (`game/app/shells.mjs`). An app with GPU modules (LLP 1009;
+   every game) is built as a Linux bake is (`buildBake`): the modules first, then the crate, whose bake records each
    module's product digest. The shared Linux/Android loader checks baked cards against that digest: on
    macOS, signed 64-bit Mach-O code omits the signature and normalizes its three size fields, matching
    the definition in `update/src/gpu.rs` through a parity-tested host copy; other files hash whole. Completed development receipts always
    bind the whole file. Both the process cache and Android's persistent cache distinguish these digests;
-3. copies the library to `app/build/<app>/rust/jniLibs/arm64-v8a/libexactcanvas.so`, the GPU module beside it under
-   its own name, the app's `assets/` to `app/build/<app>/rust/assets/app/assets/`, and a GPU module's shaders
+3. copies the library to `app/build/<app>/rust/jniLibs/arm64-v8a/libexactcanvas.so`, the GPU module and each of
+   `gpu.modules` beside it under its own name, the app's `assets/` to `app/build/<app>/rust/assets/app/assets/`, and a GPU module's shaders
    (`gpu/shaders/*.wgsl`, as a Linux bake packs them) to `app/build/<app>/rust/assets/app/shaders/`, where the host
    registers them from before a canvas is made;
 4. runs `./gradlew :app:assembleRelease -Papp=<app> -PappDir=<the app's directory>` here (a game's `.shells/`, whose
    `app.json` is resolved), with `-PappIcon` and `-PappBanner` naming the icon and banner it wrote, with
-   `-PgpuModule=<file>` for a module: the APK then extracts its libraries and leaves
-   the module unstripped, since the host opens it by path and checks its digest; with `-Pcompose=1` when the plan's
+   `-PgpuModules=<file>,<file>…` naming the GPU modules: the APK then extracts its libraries and leaves
+   the modules unstripped, since the host opens each by path and checks its digest; with `-Pcompose=1` when the plan's
    uses name `dates` (a date or time control), which links Compose Material 3 for its pickers; and with the Kotlin
    in the app's `modules/android`, its hatches and module roster, compiled in,
 
@@ -176,8 +176,20 @@ journal to logcat as the host comes to hold each line, with the milliseconds sin
 above were read (`adb logcat -v time`, from ActivityManager's "Start proc" line). Without it nothing is read or
 written.
 
-Not there: `Intl` in a module (the bundle has ICU's Unicode and no Intl, LLP 1107 §4.1), and a picture from a URL
-(below, "Not done").
+The published v5 Hermes bundle has ICU Unicode support but no `Intl` (LLP 1107 §4.1).
+An Intl-enabled bundle with receipt-bound English ICU data enables Ibex's
+`NumberFormat` and `DateTimeFormat` and Hermes's ICU `Collator`. Build one with
+`IBEX_DIR=/path/to/patched/ibex bun scripts/hermes-android.mjs build --intl`;
+the Ibex builder must support `IBEX_ANDROID_INTL=true` and the ICU data tiers.
+The local build targets API 29. Before `build` or `install` changes the current
+bundle, the Rust resolver checks the receipt schema, all listed archives and
+headers, the bundled compiler and ICU filters against their digests, even when
+Intl is disabled. JSI, Boost and base ICU archives must be listed. The candidate’s bytecode
+version must match the cached host compiler.
+Run `exact setup` first to install that compiler. The published bundle continues
+to build without Intl; the bake does not warn about a top-level Intl use.
+
+Not there: a picture from a URL (below, "Not done").
 
 ## Driving the reader (LLP 1107 D1)
 
@@ -262,7 +274,8 @@ open class BenchActivity(private val key: String) : ExactActivity() {
 `drive` is called once in `onCreate`, where the reader used to construct the benchmark's `Driver` (the host has
 begun to boot, the view is not made yet), with the call that scrolls the feed by a distance in pixels
 (`ExactView.scrollBy`, `Native.scroll`: the scroller under the viewport's centre, or the one a finger last moved).
-The `Drive` it returns is told when the first content has been drawn. The default returns null.
+The `Drive` it returns is told once, after the first frame following successful startup, even when the page is empty
+or only bars draw. The default returns null.
 
 Without a driver the activity no longer does what `Driver` did: show over the keyguard, turn the screen on, keep the
 screen on, ask for a 120 Hz display mode, and call `reportFullyDrawn()`. The shell's manifest asks for none of them
@@ -525,7 +538,8 @@ group's does, `dispose(ids)` for the handles of a reply the runner dropped, `for
 the foreground or leaves it, `preferred(values)` for the agent's values, and `resumed()` when the activity is in front
 again, which is where it reads again what the person changed in Settings, since Android sends no event for it. Its
 `ExtensionContext` gives the application, the activity in front, `agent`, `now()` (the session's clock, the agent's
-under the agent), `foreground`, `changed(topic)`, which asks the topic's readers again, `wake(event, args, id,
+under the agent), `label` (`main`, the same at every launch), `data`, `cache` and `temporary` (the directories behind
+`app:/data`, `app:/cache` and `app:/tmp`, the drive's store under the agent), `foreground`, `changed(topic)`, which asks the topic's readers again, `wake(event, args, id,
 ended)`, which raises one of the interface's wake events and hears its outcome (LLP 1133.017 D8; `woke(id, outcome)`
 too), and
 `requestPermissions(permissions, done)`: one platform request, answered by `onRequestPermissionsResult`, or by the
@@ -603,14 +617,14 @@ is the `EditText`'s to say: when the kernel measures a text control's text it as
 nothing), and on Android that calls up into the reader, from the thread layout runs on, and has the answer before
 it returns:
 
-    Fields.measure(size px, weight, flags, tracking em, line px, font file, text, width px): Long
+    Fields.measure(size px, weight, flags, tracking em, line px, font file, axes, features, text, width px): Long
 
 An `EditText` of that thread's own, never attached, is set as the field is (no background, no padding, no font
-padding, the field's size, weight, slant, tracking, line height and face) and measured; the answer is its width,
-height and first baseline in pixels. A single line is as long as its text; a `textarea` wraps at the width
-offered. Each distinct question is asked once (a form of twenty fields in one font asks two). It is no request (D5):
-that queue is taken after the frame. The container's own insets are still the painter's (its border and padding,
-`field_chrome`); the `EditText` has none.
+padding, the field's size, weight, slant, tracking, line height, face, axes and OpenType features) and measured;
+the answer is its width, height and first baseline in pixels. A single line is as long as its text; a `textarea`
+wraps at the width offered. Each distinct question is asked once (a form of twenty fields in one font asks two).
+It is no request (D5): that queue is taken after the frame. The container's own insets are still the painter's
+(its border and padding, `field_chrome`); the `EditText` has none.
 
 **What exact2 tells** (`Native.fields(): IntArray?`, null while nothing changed; taken with each stream, before the
 stream is drawn). A count, then for each live field, in tree order:
@@ -633,8 +647,11 @@ stream is drawn). A count, then for each live field, in tree order:
   `caret-color` or `accent-color` winning); its font's size in pixels, weight, tracking and line height (the
   computed font, whose own starting size is 16 by the device's font scale); and the revision, start and end of
   the selection a command last set (`setSelectionRange`, `select()`);
-- four strings: its placeholder, its `autocomplete`, its font's file and its axes (`'wght' 650, 'wdth' 75`;
-  empty for none).
+- five strings: its placeholder, its `autocomplete`, its font's file, its axes (`'wght' 650, 'wdth' 75`;
+  empty for none), and its effective OpenType features (`'tnum' 1`). The features combine
+  `font-variant-numeric` and `font-variant-ligatures` with `font-feature-settings`, whose values win for tags
+  they name. Measurement and displayed fields use the same features; an empty features string clears
+  `fontFeatureSettings`, restoring the font's defaults.
 
 A field a statement leaves out is gone, and its view with it. A field that was not painted (its row is out of the
 page's view) keeps its view, its focus and its keyboard, out of sight.
@@ -887,7 +904,8 @@ Not built of D10:
   `alertdialog` today, so the two cannot be told apart (LLP 1115.000 D13.4).
 - The arrow keys reach a surface; nothing else of D7.6's hardware keys is built for the page.
 
-Not seen on a phone: Shelf itself (it has no `android/` crate; the fixture uses its shapes); an `alertdialog`
+Not checked on a phone in this menu/dialog qualification: Shelf itself (its Android crate is
+`apps/shelf/android`; the fixture uses its shapes); an `alertdialog`
 written as a popover, and an `aria-checked` row (neither is in a test either); a font scale changed with a menu
 open; rotation with a surface open; a second display; TalkBack. The dialog's width between
 its limits is the window less 24 dp a side, which was not compared with a Compose dialog on the same phone, and no
@@ -1293,7 +1311,17 @@ The cut was the smallest one. Left in the reader:
     view's scope. There is no native sheet detent, compact-width trait or zoom presentation to consult:
     iOS leaves the bar to the screen behind a medium sheet or an iPad sheet.
     There is also no native navigation/presentation transition completion to wait for, so the request changes
-    with committed state. `status-bar-animation` and `system-bars-hidden` are not applied on Android.
+    with committed state. `status-bar-animation` is not applied on Android.
+
+    `system-bars-hidden` resolves by the same walk, apart from the style: `false` is a declaration, so a
+    descendant's `false` shows the bars its ancestor hides, and a covering page that declares nothing shows them.
+    Bit 2 of the sixth chrome word carries it. `ExactActivity` hides the status and navigation bars with
+    `WindowInsetsController.hide(systemBars())` and `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE`, as a hand-built
+    immersive screen does (API 29: `Legacy`'s sticky immersive flags), and shows them again when no declaration
+    hides them; it acts on a change only, so a chrome that moves the page does not hide bars a swipe has just
+    shown. The insets are the system's: hidden bars report none, so the safe area keeps only the display cutout's
+    and the page grows into the space the bars left (API 29's stable insets keep the bars'). `layout.statusBar`
+    reports `hidden` and `hiddenSource` beside the style.
 
     The software keyboard ends the page at its top, and the field being edited stays in view (once the page has been painted in the
     viewport the keyboard left: the boxes a reveal goes by are the last paint's). The keyboard's own slide is not followed

@@ -285,7 +285,7 @@ impl<D: DataSource> Bridge<D> {
     }
 
     /// A package picture's admission (`exact_picture`), on this target.
-    pub fn picture(&mut self, len: usize) -> u32 {
+    pub fn picture(&mut self, len: usize, count: bool) -> u32 {
         let source = std::str::from_utf8(&self.input[..len.min(self.input.len())])
             .unwrap_or("")
             .to_owned();
@@ -295,7 +295,13 @@ impl<D: DataSource> Bridge<D> {
             "ios"
         };
         let out = (self.host.as_mut())
-            .and_then(|h| h.runner_mut().admit_picture(&source, target))
+            .and_then(|h| {
+                if count {
+                    h.runner_mut().admit_picture(&source, target)
+                } else {
+                    h.runner_mut().check_picture(&source, target)
+                }
+            })
             .map(|v| v.to_string())
             .unwrap_or_default();
         self.emit(out)

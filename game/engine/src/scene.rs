@@ -109,7 +109,7 @@ pub enum Projection {
     },
 }
 /// Perspective or orthographic camera, sharing projection math with spatial reads.
-#[derive(Clone, Copy, Debug, PartialEq, Component)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
     /// Projection choice; always encoded, including perspective.
     pub projection: Projection,
@@ -121,6 +121,9 @@ pub struct Camera {
     pub far: f32,
     /// Whether this camera is eligible for presentation.
     pub active: bool,
+    /// Image displacement in normalized device coordinates: positive X is right,
+    /// positive Y is up. Independent of depth, aspect ratio and camera pose.
+    pub shift: crate::Vec2,
 }
 impl Default for Camera {
     fn default() -> Self {
@@ -130,6 +133,7 @@ impl Default for Camera {
             near: 0.1,
             far: 1000.0,
             active: true,
+            shift: crate::Vec2::ZERO,
         }
     }
 }
@@ -164,79 +168,7 @@ impl MouseLook {
     }
 }
 
-impl Camera {
-    /// Orthographic vertical extent in world units, looking along negative Z.
-    pub fn orthographic(height: f32) -> Self {
-        Self {
-            projection: Projection::Orthographic {
-                height,
-                integer_scale: false,
-            },
-            ..Self::default()
-        }
-    }
-    /// Snap the orthographic ratio down to whole CSS pixels per world unit. Extra world
-    /// area becomes visible at noninteger ratios; smaller canvases crop at 1x.
-    pub fn integer_scale(mut self) -> Self {
-        if let Projection::Orthographic { integer_scale, .. } = &mut self.projection {
-            *integer_scale = true;
-        }
-        self
-    }
-    /// Validate camera selection in both the renderer and spatial reads.
-    pub fn valid(self) -> bool {
-        self.active
-            && self.near.is_finite()
-            && self.far.is_finite()
-            && self.near > 0.
-            && self.far > self.near
-            && match self.projection {
-                Projection::Perspective => self.fov_y_degrees > 0. && self.fov_y_degrees < 180.,
-                Projection::Orthographic { height, .. } => height.is_finite() && height > 0.,
-            }
-    }
-    /// Shared WebGPU-depth projection. Size is the CSS-pixel viewport on every
-    /// surface, so layout/pick and rendering agree across display scales.
-    pub fn matrix(self, size: crate::Vec2) -> glam::Mat4 {
-        match self.projection {
-            Projection::Perspective => glam::camera::rh::proj::directx::perspective(
-                self.fov_y_degrees.to_radians(),
-                size.x / size.y,
-                self.near,
-                self.far,
-            ),
-            Projection::Orthographic {
-                height,
-                integer_scale,
-            } => {
-                let height = if integer_scale {
-                    size.y / crate::math::floor(size.y / height).max(1.)
-                } else {
-                    height
-                };
-                let width = height * size.x / size.y;
-                glam::Mat4::from_cols_array(&[
-                    2. / width,
-                    0.,
-                    0.,
-                    0.,
-                    0.,
-                    2. / height,
-                    0.,
-                    0.,
-                    0.,
-                    0.,
-                    1. / (self.near - self.far),
-                    0.,
-                    0.,
-                    0.,
-                    self.near / (self.near - self.far),
-                    1.,
-                ])
-            }
-        }
-    }
-}
+mod camera;
 
 /// Dimensioned geometry. Metres, Y up, centred on the origin; capsules and
 /// cylinders run along Y and height is tip to tip. Planes lie in XZ facing +Y.
@@ -1030,6 +962,8 @@ impl World {
     }
 }
 
+mod pan;
+pub use pan::PointerPan;
 mod globals;
 pub use globals::Globals;
 mod hierarchy;

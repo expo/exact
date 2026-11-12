@@ -213,5 +213,53 @@ final class FieldClipboardMacTests: XCTestCase {
         edits.leave(window)
         XCTAssertNil(window.nextResponder)
     }
+
+    /// The menu's `item`, enabled or not as AppKit validates it at `target`.
+    private func enabled(_ action: Selector, at target: AnyObject) -> Bool {
+        let menu = NSMenu(), item = menu.addItem(withTitle: "", action: action, keyEquivalent: "")
+        item.target = target
+        menu.update()
+        return item.isEnabled
+    }
+
+    /// Edit ▸ Copy at a focused node is enabled only while text is selected
+    /// or a `copy` handler at the node or above hears it, as an `NSTextView`
+    /// dims it with nothing selected.
+    func testCopyAtAFocusedNodeWantsASelectionOrAHearer() throws {
+        let p = presenter(textarea: [])
+        p.apply(wireBatch([
+            ["op": "create", "id": 4, "kind": "text", "props": ["text": "Alpha"]],
+            ["op": "children", "id": 1, "ids": [2, 3, 4]],
+            ["op": "frame", "id": 4, "x": 0.0, "y": 140.0, "w": 300.0, "h": 20.0],
+        ]))
+        let paragraph = try XCTUnwrap(p.views[4]), box = try XCTUnwrap(p.views[1])
+        let copy = #selector(NSText.copy(_:))
+        XCTAssertFalse(enabled(copy, at: paragraph), "nothing selected and no handler")
+        box.handlers = ["copy"]
+        XCTAssertTrue(enabled(copy, at: paragraph), "an ancestor hears it")
+        box.handlers = []
+        p.selection.selectAll()
+        XCTAssertEqual(p.selection.selectedText(), "Alpha")
+        XCTAssertTrue(enabled(copy, at: paragraph), "text is selected")
+    }
+
+    /// The session's view answers Copy the same way, where its first root's
+    /// handler stands for the focused node's.
+    func testTheSessionViewsCopyWantsASelectionOrARootsHandler() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "copy-validation")
+        defer { session.destroy() }
+        let view = ExactView(session: session)
+        let copy = #selector(NSText.copy(_:))
+        XCTAssertFalse(enabled(copy, at: view), "an empty page")
+        session.presenter.apply(wireBatch([
+            ["op": "create", "id": 1, "kind": "text", "props": ["text": "Alpha"]],
+            ["op": "roots", "ids": [1]],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 300.0, "h": 20.0],
+        ]))
+        XCTAssertFalse(enabled(copy, at: view), "nothing selected")
+        session.presenter.selection.selectAll()
+        XCTAssertTrue(enabled(copy, at: view), "text is selected")
+    }
 }
 #endif

@@ -323,6 +323,18 @@ fn settled(core: &Core) -> bool {
 }
 
 #[test]
+fn protocols_on_an_http_stream_are_refused_before_opening() {
+    let (core, script, _) = setup();
+    let mut request = stream(1, "/plain", 4096);
+    request.request.protocols = vec!["events.v1".into()];
+    assert_eq!(
+        core.run_owned(request, None).unwrap_err(),
+        "exactProtocols: only a WebSocket stream takes protocols"
+    );
+    assert!(script.feeds.lock().unwrap().is_empty());
+}
+
+#[test]
 fn three_messages_then_a_close_and_the_worker_stays_free() {
     let (core, script, woke) = setup();
     core.run_owned(stream(1, "/events", 4096), None).unwrap();
@@ -370,23 +382,86 @@ fn three_messages_then_a_close_and_the_worker_stays_free() {
     }
 }
 
+/// Wait until `ticket` has `n` messages waiting for the runner, or ended.
+fn until_waiting(core: &Core, ticket: u64, n: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = core.shared.state.lock().unwrap();
+        let done = state
+            .completed
+            .iter()
+            .flatten()
+            .filter(|d| d.ticket == ticket);
+        let count = |(n, end), d: &super::super::Completed| {
+            (n + d.outcome.messages().len(), end || !d.message)
+        };
+        let (waiting, ended) = done.fold((0, false), count);
+        assert!(
+            waiting >= n || ended || Instant::now() < deadline,
+            "{waiting} of {n} waiting"
+        );
+        if waiting >= n || ended {
+            return;
+        }
+        drop(state);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+fn texts(outcome: &Outcome) -> Vec<(&str, u32)> {
+    (outcome.messages().iter())
+        .map(|m| (m.data.as_str(), m.coalesced))
+        .collect()
+}
+
 #[test]
-#[ignore = "async lane: waits 50 ms of wall clock for the reader to fold each message; bun scripts/async.mjs runs it"]
-fn undelivered_messages_coalesce_to_the_newest() {
+fn events_the_runner_has_not_taken_reach_it_together_in_order() {
     let (core, script, woke) = setup();
     core.run_owned(stream(1, "/events", 4096), None).unwrap();
     let tx = feed(&script, 0);
-    let burst: String = (1..=5).map(|n| format!("data: {n}\n\n")).collect();
-    tx.send(burst.into_bytes()).unwrap();
-    std::thread::sleep(Duration::from_millis(50));
+    // Three in one read, then two more reads, before the runner takes any. A
+    // server's event named as the long poll's reply is an ordinary event.
+    tx.send(b"event: exact:reply\ndata: 1\n\ndata: 2\n\ndata: 3\n\n".to_vec())
+        .unwrap();
+    tx.send(b"data: 4\n\n".to_vec()).unwrap();
+    tx.send(b"data: 5\n\n".to_vec()).unwrap();
+    until_waiting(&core, 1, 5);
+    let (ticket, batch) = next(&core, &woke);
+    assert_eq!(ticket, 1);
+    assert!(matches!(&batch, Outcome::Messages(m) if m[0].event == "exact:reply"));
+    assert_eq!(
+        texts(&batch),
+        [("1", 0), ("2", 0), ("3", 0), ("4", 0), ("5", 0)]
+    );
+    // One that waits alone is one message.
     tx.send(b"data: 6\n\n".to_vec()).unwrap();
-    std::thread::sleep(Duration::from_millis(50));
-    let (_, newest) = next(&core, &woke);
-    assert_eq!(data(&newest), ("6", 5), "five dropped for the sixth");
-    tx.send(b"data: 7\n\n".to_vec()).unwrap();
-    assert_eq!(data(&next(&core, &woke).1), ("7", 0));
+    assert!(matches!(next(&core, &woke).1, Outcome::Message(m) if m.data == "6"));
     drop(tx);
     assert!(matches!(next(&core, &woke).1, Outcome::Failed { .. }));
+}
+
+#[test]
+fn events_past_the_waiting_bound_end_the_stream_after_those_waiting() {
+    let (core, script, woke) = setup();
+    core.run_owned(stream(1, "/events", 4096), None).unwrap();
+    let tx = feed(&script, 0);
+    // 4097 events, in reads under the reader's 16 KiB, none taken.
+    let events: Vec<String> = (1..=4097).map(|n| format!("data: {n}\n\n")).collect();
+    for read in events.chunks(1000) {
+        tx.send(read.concat().into_bytes()).unwrap();
+    }
+    until_waiting(&core, 1, usize::MAX);
+    let (_, batch) = next(&core, &woke);
+    let got = batch.messages();
+    assert_eq!(got.len(), 4096, "every event waiting, none dropped");
+    assert!((got.iter().zip(1..)).all(|(m, n)| m.data == n.to_string() && m.coalesced == 0));
+    let (ticket, end) = next(&core, &woke);
+    assert_eq!(ticket, 1);
+    assert!(
+        matches!(&end, Outcome::Failed { kind: FailureKind::Refused, message }
+            if message == "event stream receive queue exceeds 4096 events or 1 MiB"),
+        "{end:?}"
+    );
 }
 
 #[test]
@@ -555,6 +630,7 @@ fn the_parser_reads_lines_fields_and_cursors_as_html_does() {
                 id: "7".into(),
                 data: "{\"a\":\n1}".into(),
                 coalesced: 0,
+                protocol: Box::default(),
                 binary: None,
             },
             Message {
@@ -932,23 +1008,6 @@ fn a_byte_stream_with_no_body_is_one_answer_as_on_the_web() {
         "{outcome:?}"
     );
     assert!(settled(&core));
-}
-
-#[test]
-#[ignore = "async lane: waits 50 ms of wall clock for the reader to fold each message; bun scripts/async.mjs runs it"]
-fn a_server_event_named_as_the_long_poll_reply_is_an_ordinary_event() {
-    let (core, script, woke) = setup();
-    core.run_owned(stream(1, "/events", 4096), None).unwrap();
-    let tx = feed(&script, 0);
-    tx.send(b"event: exact:reply\ndata: 1\n\n".to_vec())
-        .unwrap();
-    std::thread::sleep(Duration::from_millis(50));
-    tx.send(b"data: 2\n\n".to_vec()).unwrap();
-    std::thread::sleep(Duration::from_millis(50));
-    // Folded as any two events: the newest lands, counting the one it replaced.
-    assert_eq!(data(&next(&core, &woke).1), ("2", 1));
-    drop(tx);
-    assert!(matches!(next(&core, &woke).1, Outcome::Failed { .. }));
 }
 
 #[test]

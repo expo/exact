@@ -405,6 +405,7 @@ impl<D: DataSource> Presenter<D> {
             || self.arrange_edge().is_some()
             || self.group_needs_frame()
             || self.brush.moving()
+            || self.surfaces.owes_records()
     }
     pub(super) fn arrange_edge(&self) -> Option<(ViewId, f64, f64)> {
         let s = self.arrange.as_ref()?;

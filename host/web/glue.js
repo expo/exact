@@ -455,6 +455,11 @@ export const pageFacts = pageReporter(agentMode), pageChanged = () => {
     if (host.wasm.exact_set_display_scale) {
       applyBatch(JSON.parse(readOut(host.wasm.exact_set_display_scale(pageFacts.displayScale()))));
     }
+    if (host.wasm.exact_set_viewport_geometry && document.body) {
+      const env = environment();
+      const insets = ["top", "right", "bottom", "left"].map(edge => env[`safe-area-inset-${edge}`]);
+      applyBatch(JSON.parse(readOut(host.wasm.exact_set_viewport_geometry(writeIn(JSON.stringify([insets, fold().rects]))))));
+    }
   }
 };
 pageFacts.onChange(pageChanged);
@@ -464,6 +469,7 @@ const mediaChanged = () => {
   if (host.wasm && host.incarnation && innerWidth > 0 && innerHeight > 0) {
     applyBatch(presence.resize(JSON.parse(readOut(host.wasm.exact_resize(innerWidth, innerHeight, now(), preferences() | foldBits())))));
   }
+  pageChanged();
   requestAnimationFrame(positionContexts);
 };
 addEventListener("resize", mediaChanged);
@@ -471,7 +477,7 @@ onPreferences(mediaChanged);
 export const foldChanged = mediaChanged;
 onFold(foldChanged);
 // @ref LLP 1078 D6 — the posture and the segment counts ride the facts word beside the preferences; the browser resolves the `env(viewport-segment-*)` lengths itself
-visualViewport?.addEventListener("resize", () => requestAnimationFrame(positionContexts));
+visualViewport?.addEventListener("resize", () => { pageChanged(); requestAnimationFrame(positionContexts); });
 const symbolStyle = document.createElement("style");
 document.head.append(symbolStyle);
 // @ref LLP 1081 stage 2 — a symbol is drawn in its `color`: a zero-specificity default, so a native face's or a bar's own ink wins. LLP 1116.003 D3.2: the nearest authored accent (`--exact-accent`), as the role is (LLP 1116.001 D2) and UIKit's inherited tint. LLP 1121 stage 9 B: one whose `color` its author wrote (`data-symbol-color`, element.rs) draws in it.

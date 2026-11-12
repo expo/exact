@@ -18,6 +18,7 @@ mod lengths;
 mod lists;
 mod looks;
 mod modes;
+mod namespace;
 mod navigation;
 mod page;
 mod paint_order;

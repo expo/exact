@@ -2,7 +2,7 @@
 import { resolve } from 'node:path';
 import { MalformedOperation } from './agent-keys.mjs';
 
-const VALUES = new Set(['--app', '--storage', '--sim', '--session', '--open', '--world', '--plan', '--backend', '--browser', '--size', '--scale', '--test', '--url', '--seed', '--locale', '--format-locale', '--time-zone', '--epoch', '--timing', '--touch', '--chrome', '--phone', '--port', '--fail-fetch', '--family', '--mode', '--scheme', '--props', '--placement', '--state', '--permission', '--bind', '--notification', '--wake', '--call']);
+const VALUES = new Set(['--app', '--storage', '--sim', '--session', '--open', '--world', '--plan', '--backend', '--browser', '--size', '--scale', '--test', '--url', '--seed', '--locale', '--format-locale', '--time-zone', '--epoch', '--timing', '--touch', '--chrome', '--phone', '--port', '--fail-fetch', '--family', '--mode', '--scheme', '--props', '--configuration', '--placement', '--state', '--permission', '--bind', '--notification', '--wake', '--call']);
 const supported = 'widget: tree, state, "screenshot <png>" or "clock <ms|+ms|settle|data>"; screenshot film, window and compare options are unavailable';
 
 export function widgetArguments(input) {
@@ -19,7 +19,7 @@ export function widgetArguments(input) {
   const widget = { entry };
   argv.splice(at, 2);
   for (let i = 0; i < argv.length;) {
-    const local = kind === 'activity' ? ['--placement', '--scheme', '--state', '--scale'].includes(argv[i]) : ['--family', '--mode', '--scheme', '--size', '--props', '--scale'].includes(argv[i]);
+    const local = kind === 'activity' ? ['--placement', '--scheme', '--state', '--scale'].includes(argv[i]) : ['--family', '--mode', '--scheme', '--size', '--props', '--configuration', '--scale'].includes(argv[i]);
     if (local) {
       const flag = argv[i], value = argv[i + 1];
       if (!value || value.startsWith('--')) throw new Error(`${flag} needs a value`);
@@ -33,6 +33,13 @@ export function widgetArguments(input) {
     let props;
     try { props = JSON.parse(widget[jsonFlag]); } catch { throw new Error(`${kind} --${jsonFlag}: expected a JSON object`); }
     if (!props || Array.isArray(props) || typeof props !== 'object') throw new Error(`${kind} --${jsonFlag}: expected a JSON object`);
+  }
+  if (widget.configuration !== undefined) {
+    let chosen;
+    try { chosen = JSON.parse(widget.configuration); } catch { /* refused below */ }
+    if (!chosen || Array.isArray(chosen) || typeof chosen !== 'object' || Object.values(chosen).some(v => typeof v !== 'string')) {
+      throw new Error(`widget --configuration: expected a JSON object of parameter names to values, as '{"categories":"three"}'`);
+    }
   }
   if (widget.mode === 'full-color') widget.mode = 'fullColor';
   // The stand-in renders one pixel per point unless asked: a device's 2 or 3 shows the picture as the widget draws it.

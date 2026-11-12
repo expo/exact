@@ -341,6 +341,35 @@ fn white_on_an_accent_fill_is_not_one_scheme() {
             > 0,
         "only white"
     );
+    // The fill a `style` gives, with the white in the style or on the text.
+    let styled = |style: &str, body: &str| {
+        let src = format!("style Primary\n{style}component App\n  view\n    column\n      box class=Primary\n{body}");
+        let (result, warnings) = contract::compile_warned(&src);
+        result.unwrap();
+        warnings
+            .iter()
+            .filter(|w| w.id == "lower-colour-one-scheme")
+            .count()
+    };
+    let fill = "  background-color=\"AccentColor\"\n";
+    let text = "        text \"Go\"\n";
+    assert_eq!(
+        styled(&format!("{fill}  color=\"#fff\"\n"), text),
+        0,
+        "both in the style"
+    );
+    assert_eq!(
+        styled(fill, "        text \"Go\" color=\"white\"\n"),
+        0,
+        "the class's fill over it"
+    );
+    assert!(
+        styled(
+            "  background-color=\"-exact-fill\"\n  color=\"#fff\"\n",
+            text
+        ) > 0,
+        "a style's other fill"
+    );
 }
 
 /// A plan with no overrides booted after one with them leaves the first

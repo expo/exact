@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join as joinPath } from 'node:path';
 import { buildChannel, selectRequest } from './tamber-builds.mjs';
-import { correspondingSite, current, editable, join, plainAt, rowRung, stateRung, mapCard, mapFor, paramsOf, published, pullMap, sitesAt, levelsUp, copiesOf, decodeCopies, COPIED_SITES, COPIES_BYTES, staleMap } from './tamber-inspect.mjs';
+import { correspondingSite, current, editable, join, plainAt, rowRung, stateRung, mapCard, paramsOf, published, pullMap, sitesAt, levelsUp, copiesOf, decodeCopies, COPIED_SITES, COPIES_BYTES, staleMap } from './tamber-inspect.mjs';
 import { fileURLToPath } from 'node:url';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
@@ -22,8 +22,6 @@ test('a selection is joined to its site\'s source, each row\'s origin and editab
       { file: card, line: 2, col: 7, end_col: 20, component: 'Card', chain: [{ file: app, line: 4, col: 7, end_col: 11, component: 'App' }], bindings: [{ row: 'background_color', origin: 'own' }, { row: 'padding', origin: 'class:Panel' }] },
       { file: card, line: 2, col: 7, end_col: 20, component: 'Card', chain: [{ file: app, line: 5, col: 7, end_col: 11, component: 'App' }], bindings: [] },
     ] };
-    expect(mapFor(Buffer.from(JSON.stringify(map)), 'p1')).toEqual(map);
-    expect(mapFor(Buffer.from(JSON.stringify(map)), 'p2')).toBe(null);
     const selected = { node: 7, site: 1, instance: [], tuple: { 'dark-style': 'dim' }, rows: [
       { name: 'background_color', value: '#fff', source: 'authored', token: { names: ['surface.card'], text: 'surface.card', modes: 'dark-style=dim', implied: false } },
       { name: 'padding', value: 12, source: 'authored' },
@@ -590,7 +588,7 @@ test('a stale selection is refused and the build asked again; a current one is j
     send: e => events.push(e),
     selected: (build, report, ask) => {
       if (!current(build, report)) { ask({ kind: 'inspect', refresh: true }); return { status: 409, body: { message: 'stale' } }; }
-      const s = join(build, report.selected, mapFor(Buffer.from(JSON.stringify(map)), report.selected.planDigest));
+      const s = join(build, report.selected, report.selected.planDigest === map.digest ? map : null);
       events.push({ event: 'selection', ...s });
       channel.outline('tool', () => ({ sites: sitesAt(map, s.source), plan: map.digest }));
       return null;

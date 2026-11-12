@@ -19,6 +19,28 @@ struct WidgetEntry {
     let families: [String]
     let preview: [String: Any]
     let assets: AssetResolver
+    /// A configured widget's parameters (app.json `configuration`), in the Edit Widget sheet's order.
+    var parameters: [WidgetParameter] = []
+    /// Each parameter at its default: what an unconfigured widget renders.
+    var defaults: [String: String] { Dictionary(uniqueKeysWithValues: parameters.map { ($0.name, $0.defaultValue) }) }
+    /// The defaults with `supplied` over them, refusing a name or value the configuration does not declare.
+    func configuration(_ supplied: [String: String]) throws -> [String: String] {
+        for (name, value) in supplied {
+            guard let parameter = parameters.first(where: { $0.name == name }) else {
+                throw HeadlessSession.Failure(description: parameters.isEmpty ? "widget \(kind) has no configuration" : "widget --configuration: \(kind) has no parameter \(name); parameters: \(parameters.map(\.name).joined(separator: ", "))")
+            }
+            guard parameter.values.contains(value) else {
+                throw HeadlessSession.Failure(description: "widget --configuration: \(name) is one of \(parameter.values.joined(separator: ", "))")
+            }
+        }
+        return defaults.merging(supplied) { $1 }
+    }
+}
+
+struct WidgetParameter {
+    let name: String
+    let values: [String]
+    let defaultValue: String
 }
 
 struct WidgetVariant: Hashable, Identifiable {
@@ -29,6 +51,8 @@ struct WidgetVariant: Hashable, Identifiable {
     var size = "large"
     /// Pixels per point of the rendered picture: 1 unless asked, a device's 2 or 3.
     var scale: CGFloat = 1
+    /// A configured widget's chosen values; empty renders its defaults.
+    var configuration: [String: String] = [:]
     var id: Self { self }
     var typeSize: DynamicTypeSize { size == "xxxl" ? .xxxLarge : .large }
     var displaySize: CGSize {
@@ -53,6 +77,8 @@ final class WidgetPreview: ObservableObject {
     let session: HeadlessSession
     let environment: SnapshotEnvironment
     let props: [String: Any]
+    /// The configuration rendered: the variant's choices over the defaults.
+    let configuration: [String: String]
     let refresh: String
     let refreshReason: String?
     let clock: Double
@@ -93,7 +119,9 @@ final class WidgetPreview: ObservableObject {
         refresh = suppliedProps != nil ? "props" : first != nil ? "timeline" : result["entryRefresh"] as? String == "timeline" ? "empty" : result["entryRefresh"] as? String ?? "preview"
         refreshReason = result["reason"] as? String
         let bytes = try JSONSerialization.data(withJSONObject: props, options: [.sortedKeys])
-        let rendered = try HeadlessSession(plan: plan, entry: entry.kind, props: bytes, size: variant.contentSize, facts: facts, assets: entry.assets)
+        configuration = try entry.configuration(variant.configuration)
+        let chosen = entry.parameters.isEmpty ? nil : try JSONSerialization.data(withJSONObject: configuration, options: [.sortedKeys])
+        let rendered = try HeadlessSession(plan: plan, entry: entry.kind, props: bytes, configuration: chosen, size: variant.contentSize, facts: facts, assets: entry.assets)
         do { try rendered.advance(to: clock) } catch { rendered.close(); throw error }
         session = rendered
         let entryDate = (first?["date"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) } ?? date
@@ -146,7 +174,7 @@ private struct WidgetGalleryCell: View {
     @State private var failure: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(variant.family) · \(variant.mode) · \(variant.scheme) · \(variant.size)").font(.caption)
+            Text(([variant.family, variant.mode, variant.scheme, variant.size] + variant.configuration.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }).joined(separator: " · ")).font(.caption)
             if let preview {
                 WidgetPreviewView(preview: preview)
                 Text((preview.refresh == "timeline" ? "First timeline entry" : "Preview · \(preview.refresh)") + " · no saved data or requests").font(.caption).foregroundStyle(.secondary)
@@ -431,6 +459,14 @@ private struct WidgetGalleryView: View {
                                     }
                                 }
                             }
+                            // Each configuration choice apart from the defaults, in full colour.
+                            ForEach(WidgetGallery.choices(entry), id: \.self) { choice in
+                                ForEach(entry.families, id: \.self) { family in
+                                    ForEach(["light", "dark"], id: \.self) { scheme in
+                                        WidgetGalleryCell(variant: WidgetVariant(entry: entry.kind, family: family, scheme: scheme, configuration: choice), entry: entry, appSession: appSession)
+                                    }
+                                }
+                            }
                         }
                         ForEach(activities, id: \.kind) { entry in
                             Text("\(entry.kind) (Live Activity)").font(.title2)
@@ -458,7 +494,19 @@ enum WidgetGallery {
         return values.compactMap { value in
             guard let kind = value["kind"] as? String, let families = value[familyKey] as? [String],
                   let preview = value["preview"] as? [String: Any] else { return nil }
-            return WidgetEntry(kind: kind, families: families, preview: preview, assets: assets)
+            let rows = (value["configuration"] as? [String: Any])?["parameters"] as? [[String: Any]] ?? []
+            let parameters = rows.compactMap { row -> WidgetParameter? in
+                guard let name = row["name"] as? String, let values = row["values"] as? [[String: Any]],
+                      let defaultValue = row["default"] as? String else { return nil }
+                return WidgetParameter(name: name, values: values.compactMap { $0["value"] as? String }, defaultValue: defaultValue)
+            }
+            return WidgetEntry(kind: kind, families: families, preview: preview, assets: assets, parameters: parameters)
+        }
+    }
+    /// One configuration per value a parameter takes other than its default, the others at theirs.
+    static func choices(_ entry: WidgetEntry) -> [[String: String]] {
+        entry.parameters.flatMap { parameter in
+            parameter.values.filter { $0 != parameter.defaultValue }.map { [parameter.name: $0] }
         }
     }
     static func activities(in assets: AssetResolver) -> [ActivityEntry] {
@@ -502,9 +550,16 @@ enum WidgetGallery {
                       let entry = entries.first(where: { $0.kind == kind }) else {
                     throw HeadlessSession.Failure(description: "unknown widget; available: \(entries.map(\.kind).joined(separator: ", "))")
                 }
+                var configuration: [String: String] = [:]
+                if let supplied = address["configuration"] {
+                    guard let object = try JSONSerialization.jsonObject(with: Data(supplied.utf8)) as? [String: String] else {
+                        throw HeadlessSession.Failure(description: "widget --configuration: expected a JSON object of parameter names to values")
+                    }
+                    configuration = object
+                }
                 let variant = WidgetVariant(entry: kind, family: address["family"] ?? entry.families.first ?? "systemSmall",
                     mode: address["mode"] ?? "fullColor", scheme: address["scheme"] ?? "light", size: address["size"] ?? "large",
-                    scale: CGFloat(Int(address["scale"] ?? "1") ?? 0))
+                    scale: CGFloat(Int(address["scale"] ?? "1") ?? 0), configuration: configuration)
                 guard entry.families.contains(variant.family), SnapshotEnvironment.Family(rawValue: variant.family) != nil,
                       ["fullColor", "accented", "vibrant"].contains(variant.mode), ["light", "dark"].contains(variant.scheme),
                       ["large", "xxxl"].contains(variant.size), [1, 2, 3].contains(variant.scale) else {
@@ -521,6 +576,7 @@ enum WidgetGallery {
                 }
                 let preview = agent.widgetPreview!
                 var result: [String: Any] = ["widget": ["entry": variant.entry, "family": variant.family, "mode": variant.mode, "scheme": variant.scheme, "size": variant.size]]
+                if !entry.parameters.isEmpty { result["configuration"] = preview.configuration }
                 if preview.refreshed { result["storage"] = WidgetPreview.refreshWithoutStorage }
                 switch op {
                 case "tree":
@@ -537,7 +593,8 @@ enum WidgetGallery {
                     for root in snapshot.roots { visit(root, parent: nil, depth: 0) }
                     result["roots"] = snapshot.roots; result["nodes"] = nodes
                 case "state":
-                    result["props"] = preview.props; result["slots"] = ["snapshot_props": preview.props]
+                    result["props"] = preview.props
+                    result["slots"] = entry.parameters.isEmpty ? ["snapshot_props": preview.props] : ["snapshot_props": preview.props, "snapshot_configuration": preview.configuration]
                     result["refresh"] = preview.refresh; result["refreshReason"] = preview.refreshReason
                 case "screenshot":
                     guard let path = request["path"] as? String else { throw HeadlessSession.Failure(description: "screenshot needs a path") }

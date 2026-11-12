@@ -204,11 +204,43 @@ export function runCaps(root = process.cwd()) {
     counted.push(`recipes: ${recipes.length} files, largest ${largest.f.slice(13)} at ${largest.bytes} bytes, ${over} over their caps`);
   }
 
+  windowsNames(files);
   harnesses(root, files);
   helps(root);
   wasm(root);
 
   return { problems, counted };
+}
+
+/**
+ * Every tracked path must be one Windows can create, or Git for Windows refuses the whole checkout ("invalid path").
+ * Windows reserves the device names CON, PRN, AUX, NUL, COM0-9 and LPT0-9 (and with a superscript 1, 2 or 3) whatever
+ * extension follows, the characters < > : " \ | ? * and 0-31, and a trailing space or period:
+ * https://learn.microsoft.com/windows/win32/fileio/naming-a-file#naming-conventions
+ */
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])$/i;
+const WINDOWS_CHARACTER = /[<>:"\\|?*\x00-\x1f]/;
+
+function windowsRefusal(name) {
+  if (WINDOWS_DEVICE.test(name.split('.')[0].trimEnd())) return 'a reserved device name';
+  if (WINDOWS_CHARACTER.test(name)) return 'a character Windows reserves';
+  if (/[ .]$/.test(name)) return 'a trailing space or period';
+  return null;
+}
+
+function windowsNames(files) {
+  let refused = 0;
+  for (const f of files) {
+    for (const name of f.split('/')) {
+      const why = windowsRefusal(name);
+      if (!why) continue;
+      refused += 1;
+      fail('path:windows', `${f} has ${why} in "${name}", which a Windows checkout cannot create.`,
+        'Git for Windows then stops the whole clone. Rename it and update what refers to it.');
+      break;
+    }
+  }
+  counted.push(`paths a Windows checkout cannot create: ${refused} of ${files.length}`);
 }
 
 /**

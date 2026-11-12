@@ -156,6 +156,10 @@ pub const HOST_COMMANDS: &[&str] = &[
     "setSelectionRange",
     "setRangeText",
     "setScheme",
+    // `setLocale("de")`: the language the app's strings read, over the
+    // host's locale and kept across launches; `setLocale("")` hands it
+    // back. The runner's own.
+    "setLocale",
     // @ref LLP 1069.000 D3 — `:root { font-size }`: `setRootFontSize(px)`
     // sets the root size `rem` follows, over the host's; `"medium"` hands it
     // back. The runner's own; the web also sets it on the document.
@@ -225,6 +229,11 @@ pub const HOST_COMMANDS: &[&str] = &[
     // drawn at that opacity, 0 to 1, as Electron's `BrowserWindow.setOpacity`.
     // The Mac's; the web refuses it (a page has no window to fade).
     "setWindowOpacity",
+    // @ref LLP 1133.025 D4 — `hideWindow()`: the session's window is put
+    // away as a person's close puts it away under `keepRunning` or a placed
+    // status item, the app still running, as Electron's `BrowserWindow.hide`.
+    // The Mac's; a host or an app that cannot keep running refuses it.
+    "hideWindow",
     // @ref LLP 1096 D2 — `playSound(src, at=, gain=, group=, playbackRate=, pan=)`,
     // `playSounds(hits)` and `stopSounds(group=)`: the runner keeps the voice
     // table, so every host skips them as the runner's own.

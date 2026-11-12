@@ -250,7 +250,7 @@ mod seams {
     use exact_gpu::{wgpu, Frame, InputEvent, Registry, Surface, SurfaceError, Value};
     use std::cell::{Cell, RefCell};
     thread_local! { static FRAMES: RefCell<Vec<Frame>> = const { RefCell::new(Vec::new()) }; }
-    /// `gpu_drew` after `fed`'s last render, before its flush
+    // `gpu_drew` after `fed`'s last render, before its flush
     thread_local! { static DREW: Cell<u32> = const { Cell::new(0) }; }
     thread_local! { static BINDS: RefCell<Vec<Option<f64>>> = const { RefCell::new(Vec::new()) }; }
     /// A live-clock render once the canvas's drawable, acquired off this
@@ -392,7 +392,7 @@ mod seams {
         BINDS.with(|b| assert_eq!(*b.borrow(), [None, Some(500.0)]));
         assert_eq!(
             exact_gpu::native::published(id).as_deref(),
-            Some(r#"{"phase":"bind"}"#)
+            Some(r#"{"phase":"bind","presented":false}"#)
         );
         assert_eq!(gpu_published(id), u32::MAX);
         gpu_seekable(true);
@@ -419,7 +419,7 @@ mod seams {
         assert_ne!(n, u32::MAX);
         assert_eq!(
             unsafe { std::slice::from_raw_parts(gpu_out_ptr(), n as usize) },
-            br#"{"phase":"agent"}"#
+            br#"{"phase":"agent","presented":false}"#
         );
         assert_eq!(gpu_published(id), u32::MAX);
         assert_eq!(unsafe { gpu_agent(id, b"{}".as_ptr(), 2) }, 0);
@@ -465,7 +465,7 @@ mod seams {
         assert_eq!(gpu_dirty(id), 1);
         assert_eq!(
             exact_gpu::native::published(id).as_deref(),
-            Some(r#"{"phase":"restore"}"#)
+            Some(r#"{"phase":"restore","presented":false}"#)
         );
         assert_eq!(exact_gpu::native::carry(id).unwrap(), Some(vec![3, 4, 5]));
         assert_eq!(
@@ -545,6 +545,83 @@ mod seams {
         gpu_destroy(id);
         exact_gpu::native::unload();
     }
+}
+
+/// A full bind gives each argument it omits its default; a changed bind gives
+/// it the value of the last accepted bind, so a host sends only what changed.
+#[test]
+fn a_changed_bind_keeps_the_arguments_it_omits_at_their_last_accepted_values() {
+    use exact_gpu::{wgpu, Frame, Surface, SurfaceError, Value};
+    #[derive(Default)]
+    struct Probe(Vec<Value>);
+    impl Surface for Probe {
+        fn arguments(&self) -> Vec<(&'static str, Value)> {
+            vec![
+                ("saved", Value::str("")),
+                ("count", Value::Number(0.)),
+                ("on", Value::Bool(false)),
+            ]
+        }
+        fn bind(&mut self, values: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
+            if values[1] == Value::Number(-1.) {
+                return Err(SurfaceError("count: negative".into()));
+            }
+            self.0 = values.to_vec();
+            Ok(())
+        }
+        fn render(
+            &mut self,
+            _: &Frame,
+            _: &wgpu::Device,
+            _: &wgpu::Queue,
+            _: &mut wgpu::CommandEncoder,
+            _: &wgpu::TextureView,
+            _: wgpu::TextureFormat,
+        ) -> bool {
+            false
+        }
+        fn agent(&mut self, _: &str) -> Option<String> {
+            Some(format!("{:?}", self.0))
+        }
+    }
+    static REGISTRY: Registry = Registry {
+        surfaces: &[("probe", 0, || Box::new(Probe::default()))],
+        shaders: &[],
+    };
+    let mut m = Module::new(&REGISTRY);
+    let id = m.create_headless("probe").unwrap();
+    let bound = |m: &mut Module| m.agent(id, "").unwrap();
+    assert!(!m.bind_changed_json(id, r#"{"count":1}"#, None));
+    assert_eq!(m.take_error(), "a changed bind follows an accepted bind");
+    assert!(m.bind_json(id, r#"{"saved":"big","count":1,"on":true}"#, None));
+    let full = bound(&mut m);
+    assert!(m.bind_changed_json(id, r#"{"count":2}"#, Some(5.)));
+    assert_eq!(bound(&mut m), full.replace("Number(1.0)", "Number(2.0)"));
+    assert!(m.bind_changed_json(id, "{}", Some(6.)));
+    assert_eq!(bound(&mut m), full.replace("Number(1.0)", "Number(2.0)"));
+    // Refused, by the module or the surface: what was bound stays the baseline.
+    assert!(!m.bind_changed_json(id, "[3]", None));
+    assert_eq!(m.take_error(), "a changed bind names its arguments");
+    assert!(!m.bind_changed_json(id, r#"{"nope":3}"#, None));
+    assert_eq!(m.take_error(), "unknown surface argument `nope`");
+    assert!(!m.bind_changed_json(id, r#"{"count":-1}"#, None));
+    assert_eq!(m.take_error(), "count: negative");
+    assert!(m.bind_changed_json(id, r#"{"on":false}"#, None));
+    assert_eq!(
+        bound(&mut m),
+        full.replace("Number(1.0)", "Number(2.0)")
+            .replace("Bool(true)", "Bool(false)")
+    );
+    // A full bind still resets what it omits.
+    assert!(m.bind_json(id, r#"{"count":3}"#, None));
+    assert!(m.bind_changed_json(id, r#"{"on":true}"#, None));
+    assert_eq!(
+        bound(&mut m),
+        format!(
+            "{:?}",
+            [Value::str(""), Value::Number(3.), Value::Bool(true)]
+        )
+    );
 }
 
 #[test]
@@ -642,11 +719,13 @@ fn headless_ownership_keeps_every_non_drawing_seam() {
     assert!(m.input(id, &InputEvent::Blur { at_ms: 23. }));
     assert!(!m.take_messages(id).is_empty());
     assert!(m.take_messages(id).is_empty());
-    assert_eq!(m.take_published(id).as_deref(), Some("{}"));
+    // The module's `presented` rides in every record (LLP 1009 D9).
+    let unpresented = Some(r#"{"presented":false}"#);
+    assert_eq!(m.take_published(id).as_deref(), unpresented);
     assert!(m.take_published(id).is_none());
     assert!(m.restore(id, &[1, 2, 3], exact_gpu::Restore::Open));
     assert_eq!(m.carry(id).unwrap(), Some(vec![1, 2, 3]));
-    assert_eq!(m.take_published(id).as_deref(), Some("{}"));
+    assert_eq!(m.take_published(id).as_deref(), unpresented);
     let f = Frame {
         width: 10.,
         height: 10.,
@@ -1107,4 +1186,53 @@ fn child_count_shrink_retires_each_index_exactly_once() {
     assert_eq!(module.agent(id, ""), Some("[1, 2, 3]".into()));
     assert!(module.children_count(id, 0));
     assert_eq!(module.agent(id, ""), Some("[1, 2, 3, 0]".into()));
+}
+
+#[test]
+fn a_canvas_size_reaches_its_surface_and_a_non_size_is_refused() {
+    use exact_gpu::{wgpu, Frame, Surface, SurfaceError, Value};
+    #[derive(Default)]
+    struct Sized(Vec<(f32, f32)>);
+    impl Surface for Sized {
+        fn bind(&mut self, _: &[Value], _: Option<f64>) -> Result<(), SurfaceError> {
+            Ok(())
+        }
+        fn size(&mut self, width: f32, height: f32) -> bool {
+            self.0.push((width, height));
+            false
+        }
+        fn agent(&mut self, _: &str) -> Option<String> {
+            Some(format!("{:?}", self.0))
+        }
+        fn render(
+            &mut self,
+            _: &Frame,
+            _: &wgpu::Device,
+            _: &wgpu::Queue,
+            _: &mut wgpu::CommandEncoder,
+            _: &wgpu::TextureView,
+            _: wgpu::TextureFormat,
+        ) -> bool {
+            false
+        }
+    }
+    static REGISTRY: Registry = Registry {
+        surfaces: &[("sized", 0, || Box::<Sized>::default())],
+        shaders: &[],
+    };
+    let mut module = Module::new(&REGISTRY);
+    let id = module.create_headless("sized").unwrap();
+    assert!(module.size(id, 240., 360.));
+    for (width, height) in [
+        (0., 360.),
+        (240., -1.),
+        (f32::NAN, 360.),
+        (240., f32::INFINITY),
+    ] {
+        assert!(!module.size(id, width, height));
+        assert!(module.take_error().contains("not a canvas size"));
+    }
+    assert!(!module.size(id + 1, 240., 360.));
+    assert_eq!(module.take_error(), "no such canvas");
+    assert_eq!(module.agent(id, ""), Some("[(240.0, 360.0)]".into()));
 }

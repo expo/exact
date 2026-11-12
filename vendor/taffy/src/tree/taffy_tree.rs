@@ -124,7 +124,7 @@ struct NodeData {
     /// subtree's algorithms read (`tree/memo.rs`).
     pub(crate) memo_root: bool,
 
-    /// EXACT PATCH 30: cached layout results, allocated on their first store.
+    /// EXACT PATCH 31: cached layout results, allocated on their first store.
     pub(crate) cache: super::cache::LazyCache,
 
     /// The computation result from layout algorithm
@@ -1211,6 +1211,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
     /// Drops all nodes in the tree
     pub fn clear(&mut self) {
         self.nodes.clear();
+        // EXACT PATCH 32: a node's context goes with it.
         self.node_context_data.clear();
         self.children.clear();
         self.parents.clear();
@@ -1245,6 +1246,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
         let _ = self.children.remove(key);
         let _ = self.parents.remove(key);
         let _ = self.nodes.remove(key);
+        // EXACT PATCH 32: a node's context goes with it.
         self.node_context_data.remove(key);
         self.layout_inputs.remove(key);
         self.hoisted_absolutes.remove(key);
@@ -1584,7 +1586,7 @@ impl<NodeContext> TaffyTree<NodeContext> {
         self.grid_origins.get(node.into()).copied()
     }
 
-    /// Forget recorded layouts when a calc handle's environment changes.
+    /// EXACT PATCH 34: forget recorded layouts when a calc handle's environment changes.
     pub fn forget_memo(&mut self) {
         self.memo.clear();
     }

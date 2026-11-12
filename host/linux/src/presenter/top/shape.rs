@@ -11,8 +11,9 @@
 //! **A menu** (LLP 1021 D3) is a popover that is no confirmation: each
 //! `button` row with a `press` is an item (its title, its symbol, whether it
 //! is destructive, disabled or checked), a row that opens another menu is
-//! that menu's opener, and any other row is a separator (`hr`), as
-//! `MenusIOS.swift`'s `items(of:)` reads it.
+//! that menu's opener, a `role="group"` row is a section of its own items
+//! headed by its `aria-label`, and any other row is a separator (`hr`), as
+//! `MenuItemsIOS.swift`'s `items(of:)` reads it.
 //!
 //! The rule itself, what counts as an alert and what its words are, is the
 //! kernel's (`exact_kernel::confirmation`), which lowering and the Apple
@@ -65,8 +66,20 @@ pub enum Plan {
         /// A tap outside dismisses it (`closedby` is `any`).
         outside: bool,
     },
-    /// Material's menu: its items, `None` where the author wrote a separator.
-    Menu(Vec<Option<Row>>),
+    /// Material's menu.
+    Menu(Vec<Entry>),
+}
+
+/// One line of a menu.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Entry {
+    /// A row a person can choose.
+    Item(Row),
+    /// A line where the author wrote a separator, or around a section.
+    Separator,
+    /// A section's title (a `role="group"` row's `aria-label`), and the
+    /// group's node.
+    Header(String, ViewId),
 }
 
 impl Plan {
@@ -74,7 +87,12 @@ impl Plan {
     pub fn rows(&self) -> impl Iterator<Item = &Row> {
         match self {
             Plan::Alert { rows, .. } => rows.iter().collect::<Vec<_>>(),
-            Plan::Menu(entries) => entries.iter().flatten().collect(),
+            Plan::Menu(entries) => (entries.iter())
+                .filter_map(|e| match e {
+                    Entry::Item(row) => Some(row),
+                    _ => None,
+                })
+                .collect(),
         }
         .into_iter()
     }
@@ -226,34 +244,106 @@ pub fn menu(kernel: &Kernel, pop: ViewId, pressed: &dyn Fn(ViewId) -> bool) -> O
     if is_confirmation(&pop) {
         return None;
     }
-    let mut entries: Vec<Option<Row>> = Vec::new();
-    for child in pop.children() {
-        let Some(node) = kernel.node(child) else {
-            continue;
-        };
-        // A context menu's preview and a submenu written inside its parent
-        // are no rows of it.
-        if node.props.bool(PropId::ContextPreview) == Some(true)
-            || node.props.str(PropId::Popover).is_some()
-        {
-            continue;
-        }
+    // A context menu's preview and a submenu written inside its parent are
+    // no rows of it, nor is what titles a section (`section_title`).
+    let rows = |node: &NodeRef<'_>| -> Vec<ViewId> {
+        let titles: Vec<&str> = (node.props.str(PropId::AccessibilityLabelledBy))
+            .filter(|_| is_section(node))
+            .map_or_else(Vec::new, |refs| refs.split_whitespace().collect());
+        (node.children().into_iter())
+            .filter(|id| {
+                kernel.node(*id).is_some_and(|n| {
+                    n.props.bool(PropId::ContextPreview) != Some(true)
+                        && n.props.str(PropId::Popover).is_none()
+                        && !n
+                            .props
+                            .str(PropId::Id)
+                            .is_some_and(|id| titles.contains(&id))
+                })
+            })
+            .collect()
+    };
+    // The item a row is, if it is one.
+    let item = |id: ViewId| -> Option<Row> {
+        let node = kernel.node(id)?;
         // What a row opens: another popover, or a dialog by `show-modal`.
         let opens = (Invocation::of(kernel, &node))
             .filter(|i| i.opens() && i.target != pop.key)
             .map(|i| i.target);
-        if is_button(&node) && (pressed(node.id) || opens.is_some()) {
-            let mut item = row(kernel, &node, false);
-            item.opens = opens;
-            entries.push(Some(item));
-        } else if entries.last().is_some_and(Option::is_some) {
-            entries.push(None);
+        (is_button(&node) && (pressed(node.id) || opens.is_some())).then(|| Row {
+            opens,
+            ..row(kernel, &node, false)
+        })
+    };
+    let rule = |entries: &mut Vec<Entry>| {
+        if entries.last().is_some_and(|e| *e != Entry::Separator) {
+            entries.push(Entry::Separator);
+        }
+    };
+    let mut entries: Vec<Entry> = Vec::new();
+    for id in rows(&pop) {
+        let Some(node) = kernel.node(id) else {
+            continue;
+        };
+        if is_section(&node) {
+            // A section holds button rows only. Anything else in it, a
+            // field or another group, keeps the popover from being a menu,
+            // so it is painted as written, as Apple's `menuShaped` rules.
+            let rows = rows(&node);
+            if !(rows.iter()).all(|id| kernel.node(*id).is_some_and(|n| is_button(&n))) {
+                return None;
+            }
+            let items: Vec<Entry> = rows.into_iter().filter_map(item).map(Entry::Item).collect();
+            if items.is_empty() {
+                continue;
+            }
+            rule(&mut entries);
+            if let Some(title) = section_title(kernel, &node) {
+                entries.push(Entry::Header(title, node.id));
+            }
+            entries.extend(items);
+            entries.push(Entry::Separator);
+        } else if let Some(row) = item(id) {
+            entries.push(Entry::Item(row));
+        } else {
+            rule(&mut entries);
         }
     }
-    if entries.last().is_some_and(Option::is_none) {
+    if entries.last() == Some(&Entry::Separator) {
         entries.pop();
     }
     (!entries.is_empty()).then_some(Plan::Menu(entries))
+}
+
+/// Whether a row of a menu is a section of rows (`role="group"`, as
+/// WAI-ARIA's menu pattern groups items; LLP 1021 D3, amended 2026-11-12).
+fn is_section(node: &NodeRef<'_>) -> bool {
+    !is_button(node) && node.props.str(PropId::AccessibilityRole) == Some("group")
+}
+
+/// A section's title, its accessible name as accname's first steps give
+/// it: the text of what its `aria-labelledby` names (each by its own
+/// `aria-label`, else its text), else its `aria-label`; `None` for neither.
+/// A title written in the section and named so is drawn by the web as
+/// written, and is no row here.
+fn section_title(kernel: &Kernel, node: &NodeRef<'_>) -> Option<String> {
+    let named = node.props.str(PropId::AccessibilityLabelledBy).map(|refs| {
+        (refs.split_whitespace())
+            .filter_map(|name| kernel.find_by_id(name).into_iter().next())
+            .filter_map(|key| kernel.node_by_key(key))
+            .map(|n| match n.props.str(PropId::AccessibilityLabel) {
+                Some(own) if !own.is_empty() => own.to_owned(),
+                _ => text_of(kernel, &n),
+            })
+            .filter(|words| !words.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+    });
+    let label = node
+        .props
+        .str(PropId::AccessibilityLabel)
+        .map(str::to_owned);
+    (named.into_iter().chain(label)).find(|words| !words.is_empty())
 }
 
 #[cfg(test)]

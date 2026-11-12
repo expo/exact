@@ -78,6 +78,7 @@ pub mod save_file;
 pub use runner::picker as picker_support;
 /// A received share's helpers a host shares (LLP 1133.024 D2, D3).
 pub use runner::picker::shared as share_in;
+pub mod canvas_performance;
 pub mod machine;
 pub mod midi;
 pub mod rows;

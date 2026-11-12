@@ -80,7 +80,14 @@ extension NodeView {
     /// A different class on AppKit, so a changed `type` or appearance remakes
     /// the field in place, keeping its editing and selection.
     func remakeFieldIfNeeded() {
-        guard let f = field, pageField == nil else { return }
+        guard let f = field else { return }
+        // A field lent to an alert is remade there, in its accessory view
+        // (`AlertHost.relend`); the toolbar's header takes back a field that
+        // is no longer a search field's (HeaderMac.swift).
+        if pageField != nil {
+            if FieldClass(f) != wantedFieldClass.lentToAlert { presenter?.alerts.relend(self) }
+            return
+        }
         let wanted = wantedFieldClass
         guard FieldClass(f) != wanted else { return }
         let n = makeField(wanted)
@@ -88,12 +95,29 @@ extension NodeView {
         n.stringValue = f.stringValue
         n.font = f.font
         n.textColor = f.textColor
-        let selection = editingEditor.map { presenter?.fieldSelections.current(self) ?? FieldSelection($0.selectedRange()) }
-        keepingEditing(f) {
+        // A style can remake it (`appearance`), and a style's pass assigns
+        // no props.
+        applyPlaceholder(n)
+        applyFieldProps(n)
+        replaceField(f, with: n) {
             f.removeFromSuperview()
             (clipBox ?? self).addSubview(n)
+        }
+    }
+    /// What the field's props say of it besides its value and placeholder.
+    func applyFieldProps(_ f: NSTextField) {
+        f.contentType = Autofill.contentType(props["autocomplete"], fallback: nil) // LLP 1102 §3.6
+        f.isEnabled = !disabled
+        f.isEditable = !disabled && props["editable"] != "false"
+    }
+    /// `n` in `f`'s place, which `install` puts it in, keeping the editing
+    /// and its selection.
+    func replaceField(_ f: NSTextField, with n: NSTextField, install: () -> Void) {
+        let selection = editingEditor.map { presenter?.fieldSelections.current(self) ?? FieldSelection($0.selectedRange()) }
+        keepingEditing(f) {
+            install()
             field = n
-            if let selection, window?.makeFirstResponder(n) == true {
+            if let selection, n.window?.makeFirstResponder(n) == true {
                 if let selections = presenter?.fieldSelections { selections.restore(self, selection) }
                 else { _ = showSelection(selection.range) }
             }
@@ -227,6 +251,9 @@ enum FieldClass {
     init(_ field: NSTextField) { self = field is NSSecureTextField ? .secure : field is NSSearchField ? .search : .plain }
     /// The kernel's `FieldKind` code, which keys `FieldChromeCache`.
     var chromeKind: UInt8 { switch self { case .plain: 0; case .secure: 1; case .search: 2 } }
+    /// The class of the field an alert's accessory view holds for an input
+    /// of this class: a secure field for a password, a plain one otherwise.
+    var lentToAlert: FieldClass { self == .secure ? .secure : .plain }
 }
 
 /// A search field's cell, as `FieldCell` (Accessibility.swift): its text in
@@ -299,20 +326,26 @@ extension NodeView {
     /// delegate and its editor the session's, AppKit's to draw and place.
     func lendFieldToAlert() -> NSTextField? {
         guard pageField == nil, let page = field else { return nil }
-        let lent: NSTextField = page is NSSecureTextField ? SecureField(frame: .zero) : Field(frame: .zero)
-        lent.delegate = self
-        lent.formatter = TextInputFormatter(self)
-        lent.stringValue = page.stringValue
-        lent.isEnabled = page.isEnabled
-        lent.isEditable = page.isEditable
-        lent.contentType = page.contentType // `autocomplete` (LLP 1102 §3.6)
-        lent.cell?.isScrollable = true
-        lent.cell?.wraps = false
-        lent.cell?.usesSingleLineMode = true
+        let lent = makeAlertField(like: page)
         pageField = page
         field = lent
         syncFieldSide()
         syncBarField()
+        return lent
+    }
+    /// A field for an alert's accessory view, of the class this input's
+    /// type wants there, holding what `field` holds.
+    func makeAlertField(like field: NSTextField) -> NSTextField {
+        let lent: NSTextField = wantedFieldClass.lentToAlert == .secure ? SecureField(frame: .zero) : Field(frame: .zero)
+        lent.delegate = self
+        lent.formatter = TextInputFormatter(self)
+        lent.stringValue = field.stringValue
+        lent.isEnabled = field.isEnabled
+        lent.isEditable = field.isEditable
+        lent.contentType = field.contentType // `autocomplete` (LLP 1102 §3.6)
+        lent.cell?.isScrollable = true
+        lent.cell?.wraps = false
+        lent.cell?.usesSingleLineMode = true
         return lent
     }
     /// The page has its field again, holding what the toolbar's or the

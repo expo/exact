@@ -332,11 +332,15 @@ impl<D: DataSource> Presenter<D> {
     /// `focus(id)` selects a surface row or a live, eligible page node.
     /// A refusal goes to the journal, as it does on the web host.
     pub(crate) fn focus_command(&mut self, args: &[exact_plan::Value]) -> Option<ViewId> {
-        // Bare `focus()` is the window's (LLP 1133.025 §8): this host brings
-        // none forward yet (LLP 1133.005 D10).
+        // Bare `focus()` is the window's (LLP 1133.025 §8): the headless and
+        // DRM hosts bring none forward (LLP 1133.005 D10).
         if args.is_empty() {
-            self.host
-                .log("focus window: unsupported: this host brings no window forward");
+            match &self.window_focuser {
+                Some(focus) => focus(),
+                None => self
+                    .host
+                    .log("focus window: unsupported: this host brings no window forward"),
+            }
             return None;
         }
         let Some(name) = args.first().and_then(exact_plan::Value::as_str) else {

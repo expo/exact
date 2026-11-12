@@ -500,6 +500,7 @@ impl<D: DataSource> Bridge<D> {
         let crate::store::Endowed {
             bindings,
             snapshot,
+            unread_kept,
             secrets,
             unbound,
             presence,
@@ -549,6 +550,7 @@ impl<D: DataSource> Bridge<D> {
                 if let Some(why) = unbound {
                     host.log(&format!("{why}; every request is refused"));
                 }
+                host.runner_mut().forget_unread_kept(&unread_kept);
                 if let Some((backend, keystore)) = presence {
                     host.runner_mut().install_presence(backend, keystore);
                 }
@@ -835,6 +837,7 @@ impl<D: DataSource> Bridge<D> {
         let crate::store::Endowed {
             bindings,
             snapshot,
+            unread_kept,
             secrets,
             unbound,
             presence,
@@ -884,6 +887,7 @@ impl<D: DataSource> Bridge<D> {
                 if let Some(why) = unbound {
                     host.log(&format!("{why}; every request is refused"));
                 }
+                host.runner_mut().forget_unread_kept(&unread_kept);
                 if let Some((backend, keystore)) = presence {
                     host.runner_mut().install_presence(backend, keystore);
                 }
@@ -980,15 +984,16 @@ impl<D: DataSource> Bridge<D> {
     /// 8 = load, 9 = message (the payload — a change's text, a key's chord
     /// (`Event::key`), or a guest message — is the input buffer's first `len`
     /// bytes, UTF-8).
-    /// Kinds 43/44 are `keyup`/`keycapture`; 46/47 are `focusin`/`focusout` (#283).
-    /// Kind 14 is navigate: one UTF-8 location at the navigation root (LLP 1038 D8).
-    /// Kind 23 is a text field's `input`; 24 and 25 a checkbox's `change`
-    /// and `input`, the payload `true` or `false` (LLP 1069.001 D4); 40 and
-    /// 41 a text field's `input` and `change` with its selection, 42 its
-    /// `select` (`start,end,direction,text`; x2apps codeedit #2).
+    /// Event kinds and payloads are declared in `include/exact.h`.
     pub fn dispatch(&mut self, view: u32, kind: u32, len: usize, now_ms: f64) -> u32 {
         let payload =
             String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
+        if kind == 64 {
+            let out = self.host.as_mut().map_or_else(not_booted, |h| {
+                h.look_motion(view, payload.parse::<u8>().unwrap_or(0) & 3, now_ms)
+            });
+            return self.emit(out);
+        }
         let event = match kind {
             // A press, with the modifiers held as a chord prefix (gallery F20).
             0 => {
@@ -1250,21 +1255,6 @@ impl<D: DataSource> Bridge<D> {
         self.emit(out)
     }
 
-    /// A name alone clears a surface; name NUL JSON publishes it, even if empty.
-    pub fn surface_record(&mut self, len: usize) -> u32 {
-        let Ok(text) = std::str::from_utf8(&self.input[..len.min(self.input.len())]) else {
-            return self.refuse("surface record: invalid UTF-8");
-        };
-        let (name, json) = text
-            .split_once('\0')
-            .map_or((text, None), |(name, json)| (name, Some(json)));
-        let out = self
-            .host
-            .as_mut()
-            .map_or_else(not_booted, |host| host.surface_record(name, json));
-        self.emit(out)
-    }
-
     /// The viewport changed.
     pub fn resize(&mut self, width: f32, height: f32) -> u32 {
         let observed = self.live_clock.map(|clock| clock());
@@ -1460,6 +1450,7 @@ fn escape(s: &str) -> String {
 pub type Cell<D> = RefCell<Bridge<D>>;
 
 mod boot;
+mod canvas_performance;
 use boot::PreparedHost;
 mod colors;
 mod preparation;

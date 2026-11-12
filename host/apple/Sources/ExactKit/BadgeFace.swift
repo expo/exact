@@ -75,8 +75,10 @@ struct BadgeFace: Equatable {
             context.setFillColor(TextEngine.color(colours[0]).cgColor)
             context.fillPath()
             let ink = TextEngine.color(colours[1])
-            if let symbol = self.symbol, let glyph = FaceSymbol.image(symbol, points: self.size * 0.42)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [ink])) {
+            // A palette colours a symbol; a path's template image is drawn through in the ink.
+            if let symbol = self.symbol, let glyph = FaceSymbol.image(symbol, points: self.size * 0.42).flatMap({
+                FaceSymbol.isPath(symbol) ? FaceSymbol.tinted($0, ink) : $0.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [ink]))
+            }) {
                 glyph.draw(in: CGRect(x: (rect.width - glyph.size.width) / 2, y: (rect.height - glyph.size.height) / 2, width: glyph.size.width, height: glyph.size.height))
             } else {
                 let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: self.size * 0.42, weight: .medium), .foregroundColor: ink]

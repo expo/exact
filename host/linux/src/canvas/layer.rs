@@ -84,6 +84,18 @@ impl Layers {
         self.rows.insert(id, std::mem::take(&mut self.row));
     }
 
+    /// Row `id` is drawn this frame: its layers are alive while the reader
+    /// draws it, which it does until the next stream even when the row is
+    /// freed in this one (a row the painter could not keep: one with a
+    /// hosted field or a caret is recorded again at every paint and freed
+    /// at its end). Counted by the row's freeing alone, such a row's layers
+    /// were freed in the stream that set them, and got no tracks.
+    pub(super) fn row_drawn(&mut self, id: u32) {
+        if let Some(layers) = self.rows.get(&id) {
+            self.frame.extend(layers);
+        }
+    }
+
     /// Kept row `id` is gone.
     pub(super) fn row_free(&mut self, id: u32) {
         self.rows.remove(&id);
@@ -119,6 +131,14 @@ impl Recorder {
         pivot: (f32, f32),
         base: [f32; 7],
     ) {
+        // The clips around the layer stay where they are while the reader
+        // moves it: written before it, never in its drawing, where the
+        // first drawing that needs them would put them (a clipped spinner
+        // turned its container's clip with it). Written whole, not as the
+        // drawing's bounds need: the layer moves past them.
+        if !self.clips.is_empty() {
+            self.materialize(self.clips.len() - 1);
+        }
         let l = &mut self.layers;
         let id = *l.ids.entry(key).or_insert_with(|| {
             l.next += 1;
@@ -220,5 +240,144 @@ impl Recorder {
             .map(|(id, (key, base))| (*id, *key, *base))
             .collect();
         ALIVE.with(|a| *a.borrow_mut() = list);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{stream::end, Recorder, Shape, FINISHED};
+    use super::*;
+    use crate::paint::Backend;
+
+    /// One frame: a row drawing a layer (kept, or freed at the frame's end
+    /// as a row with a hosted field is); the stream's layer ops and the
+    /// layers alive after it.
+    fn frame(r: &mut Recorder, keep: bool) -> (Vec<u32>, Vec<u32>) {
+        r.begin(400.0, 400.0, 1.0);
+        r.row_begin(7, (0.0, 0.0), None);
+        assert!(r.layer_begin(
+            42,
+            Transform::identity(),
+            (10.0, 10.0),
+            [0., 0., 1., 0., 1., 0., 0.]
+        ));
+        r.fill(
+            &Shape::rect((0.0, 0.0, 20.0, 20.0)),
+            [255, 0, 0, 255],
+            Transform::identity(),
+        );
+        r.layer_end();
+        let row = r.row_end((0.0, 0.0, 20.0, 20.0));
+        r.row_draw(row, (0.0, 0.0), (0.0, 0.0, 20.0, 20.0));
+        if !keep {
+            r.row_free(row);
+        }
+        let _ = r.finish();
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let mut layers = Vec::new();
+        let mut at = 0;
+        while at < ops.len() {
+            if matches!(ops[at], LAYER_SET | LAYER_FREE) {
+                layers.push(ops[at]);
+            }
+            at = end(&ops, at).unwrap();
+        }
+        let alive = ALIVE.with(|a| a.borrow().iter().map(|l| l.0).collect());
+        (layers, alive)
+    }
+
+    /// A layer in a row the painter cannot keep stays alive while the
+    /// reader draws that row: it gets its tracks, and it is not freed in the
+    /// stream that sets it (issue #83's spinner beside hosted fields).
+    #[test]
+    fn a_layer_in_a_row_freed_after_its_frame_lives_while_the_row_is_drawn() {
+        for keep in [true, false] {
+            let mut r = Recorder::new();
+            let (ops, alive) = frame(&mut r, keep);
+            assert_eq!(ops, [LAYER_SET], "kept: {keep}");
+            assert_eq!(alive.len(), 1, "kept: {keep}");
+            // Recorded again the next frame: the same layer, not set again.
+            let (ops, again) = frame(&mut r, keep);
+            assert_eq!((ops, again), (vec![], alive), "kept: {keep}");
+        }
+    }
+
+    /// The ops a stream draws, rows' bodies in place, and each layer's
+    /// drawing apart.
+    fn walk(b: &[u32], drawn: &mut Vec<u32>, layers: &mut Vec<Vec<u32>>) {
+        use super::super::ROW_BEGIN;
+        let mut i = 0;
+        while i < b.len() {
+            let j = end(b, i).unwrap();
+            match b[i] {
+                ROW_BEGIN => walk(&b[i + 6..j - 1], drawn, layers),
+                LAYER_SET => {
+                    let mut body = Vec::new();
+                    walk(&b[i + 19..j], &mut body, layers);
+                    layers.push(body);
+                }
+                op => drawn.push(op),
+            }
+            i = j;
+        }
+    }
+
+    /// Material's indicator (the Material look, so a process of its own) in
+    /// a container that clips half of it: the container's clip is written
+    /// around the indicator's layer, not inside the drawing the reader
+    /// turns, where the clip turned with it and let the clipped half show.
+    #[test]
+    fn a_spinner_turns_inside_its_containers_clip() {
+        use super::super::{clip::CLIP_UNION, CLIP_PATH, CLIP_RRECT, STROKE};
+        use crate::presenter::{PainterChoice, Presenter};
+        const CHILD: &str = "EXACT_MATERIAL_LOOK_TEST";
+        if std::env::var_os(CHILD).is_none() {
+            let name = std::thread::current().name().unwrap().to_owned();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &name, "--nocapture"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        crate::app::show_material_look();
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(
+                r##"component App
+  view
+    column padding=10
+      box width=20 height=40 overflow="hidden"
+        progress aria-label="Loading" width=40 height=40
+"##,
+            ),
+            (),
+            (400., 400.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.brush.replace_backend(Box::new(Recorder::new()));
+        p.frame();
+        let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+        let (mut drawn, mut layers) = (Vec::new(), Vec::new());
+        walk(&ops, &mut drawn, &mut layers);
+        let clip = |op: &u32| matches!(*op, CLIP_RRECT | CLIP_PATH | CLIP_UNION);
+        let spinner = layers
+            .iter()
+            .find(|l| l.contains(&STROKE))
+            .expect("its layer");
+        assert!(
+            !spinner.iter().any(clip),
+            "the container's clip turns with it"
+        );
+        let at = drawn.iter().position(|op| *op == LAYER_REF).unwrap();
+        assert!(drawn[..at].iter().any(clip), "no clip around it: {drawn:?}");
     }
 }

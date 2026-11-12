@@ -1,6 +1,6 @@
 // The app's icon and asset catalog, from its manifest, for an Apple bundle
 // (host/apple/build.mjs assembles it).
-import { spawnSync } from 'node:child_process';
+import { spawnSync } from './toolchain.mjs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, relative, resolve, isAbsolute } from 'node:path';
@@ -268,7 +268,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
       // What the compile itself writes: a cache from before `--accent-color` named no accent,
       // one from before `ExactLaunchImageSource` no launch image's source or digest,
       // one from before `digest` launch assets under fixed names
-      'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets'])).digest('hex').slice(0, 16);
+      'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets'])).digest('hex').slice(0, 16);
     const made = resolve(kept.dir, `assets-${platform}-${key}`);
     if (!existsSync(resolve(made, 'keys.json'))) {
       const making = `${made}.${process.pid}.tmp`;
@@ -327,6 +327,10 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
       run('xcrun', ['actool', ...sources, '--compile', dir, '--platform', target, '--minimum-deployment-target', minimum,
         ...{ macos: [], ios: ['iphone', 'ipad'], tvos: ['tv'], watchos: ['watch'] }[platform].flatMap(family => ['--target-device', family]),
         ...(iconName ? ['--app-icon', iconName] : []),
+        ...(selected && platform === 'ios' && process.platform === 'linux' ? (() => {
+          const fallback = (app.manifest.icons ?? []).find(icon => /^([0-9]+)x\1$/.test(icon.sizes ?? '') && Number(icon.sizes.split('x')[0]) >= 512 && icon.src?.toLowerCase().endsWith('.png'));
+          return fallback ? ['--exact-icon-fallback', resolve(app.dir, fallback.src)] : [];
+        })() : []),
         ...alternateIcons.flatMap(name => ['--alternate-app-icon', name]),
         ...(accent ? ['--accent-color', 'AccentColor'] : []),
         '--output-partial-info-plist', partial, '--output-format', 'human-readable-text'], { stdio: 'ignore' });
@@ -711,6 +715,15 @@ export function shareIosResources(manifest, from, to) {
     cpSync(root, resolve(to, IOS_RESOURCE_ROOT), { recursive: true });
 }
 
+/** The fallback PNGs actool writes beside Assets.car for the `CFBundleIconFiles` of the icon keys it returned
+ *  (`AppIcon60x60@2x.png`, `AppIcon76x76@2x~ipad.png`, an alternate's), by name in `dir`: a bundle that takes
+ *  those keys (the App Clip's) takes these files too, since iOS looks for them in the bundle that names them. */
+export function iconFiles(keys, dir) {
+  const names = [keys.CFBundleIcons, keys['CFBundleIcons~ipad']].flatMap(icons => icons ? [icons.CFBundlePrimaryIcon, ...Object.values(icons.CFBundleAlternateIcons ?? {})] : [])
+    .flatMap(icon => icon?.CFBundleIconFiles ?? []);
+  return readdirSync(dir).filter(file => names.some(name => file.startsWith(name) && /^(@[0-9]x)?(~ipad)?\.png$/.test(file.slice(name.length))));
+}
+
 /** Validate links before copying. Relative links stay inside their declared
  * tree, so a copied helper cannot accidentally depend on the producer machine.
  * An iOS tree holds neither links, which `bundle:` follows none of, nor
@@ -804,6 +817,26 @@ export function frameworkLayout(dir, name, platform) {
     }
   }
   return { binary: resolve(version, name), modules: resolve(version, 'Modules'), info: resolve(resources, 'Info.plist') };
+}
+
+/** The shared runtime has one architecture and SDK per build. SwiftPM reads this standard XCFramework layout. */
+export function singleFramework(framework, output, triple) {
+  const target = /^(arm64(?:_32)?|x86_64)-apple-(ios|macosx|watchos)[\d.]+(-simulator)?$/.exec(triple);
+  if (!target) throw new Error(`host/apple: cannot package a framework for ${triple}`);
+  const [, arch, os, variant] = target, platform = os === 'macosx' ? 'macos' : os;
+  const identifier = `${platform}-${arch}${variant ?? ''}`, name = basename(framework, '.framework');
+  // A directory without its Info.plist is an interrupted run's: start again.
+  if (existsSync(output) && !existsSync(resolve(output, 'Info.plist'))) rmSync(output, { recursive: true, force: true });
+  if (existsSync(output)) throw new Error(`host/apple: framework output already exists: ${output}`);
+  mkdirSync(output, { recursive: true });
+  try {
+    cpSync(framework, resolve(output, identifier, basename(framework)), { recursive: true, verbatimSymlinks: true });
+    writeFileSync(resolve(output, 'Info.plist'), plistFile({ CFBundlePackageType: 'XFWK', XCFrameworkFormatVersion: '1.0', AvailableLibraries: [{
+      BinaryPath: `${name}.framework/${platform === 'macos' ? 'Versions/A/' : ''}${name}`, LibraryIdentifier: identifier,
+      LibraryPath: `${name}.framework`, SupportedArchitectures: [arch], SupportedPlatform: platform,
+      ...(variant ? { SupportedPlatformVariant: 'simulator' } : {}),
+    }] }));
+  } catch (error) { rmSync(output, { recursive: true, force: true }); throw error; }
 }
 
 /** A loose `Frameworks/lib….dylib` as `Frameworks/<name>.framework/<name>`,

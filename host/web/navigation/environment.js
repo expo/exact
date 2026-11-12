@@ -29,7 +29,7 @@ function readFold() {
       s.y,
       s.width,
       s.height
-    ]);
+    ]).sort((a, b) => a[1] - b[1] || a[0] - b[0]);
     return {
       posture,
       cols: new Set(rects.map((r) => r[0])).size,
@@ -230,7 +230,18 @@ export const preferences = () => {
 // a dev pin's scheme is the system's (LLP 1122 D4; dev.js), else the manifest's fixed `userInterfaceStyle` (the shell's `<meta name="color-scheme">`, look.mjs), as `UIUserInterfaceStyle` is an iOS app's
 export const displayMode = () => DISPLAY_MODES[preferences() >>> 29 & 7];
 /** A phone-sized screen (its short side under 600 CSS px): the GPU tier's class when the adapter says nothing it knows, and never `high` (LLP 1139.003 D2). */ export const handheld = (platform = globalThis) => Math.min(platform.screen?.width ?? Infinity, platform.screen?.height ?? Infinity) < 600;
-export const onPreferences = (changed) => queries().forEach(([q]) => q.addEventListener("change", changed));
+export const onPreferences = (changed) => {
+  queries().forEach(([q]) => q.addEventListener("change", changed));
+  // A window can move between displays without changing its logical size.
+  let resolution;
+  const watch = () => {
+    resolution?.removeEventListener?.("change", rescaled);
+    resolution = globalThis.matchMedia?.(`(resolution: ${globalThis.devicePixelRatio || 1}dppx)`);
+    resolution?.addEventListener("change", rescaled);
+  };
+  const rescaled = () => { watch(); changed(); };
+  watch();
+};
 // LLP 1069.000 D2/D6: pack page facts; agent preferences replace browser readings except display scale.
 // Picture sharing is agent-only; persisted pageshow events count back/forward cache restores.
 export function pageReporter(agent, platform = globalThis) {

@@ -15,6 +15,7 @@ fn widget() -> Widget {
         props: "Props".into(),
         refresh: "refreshCard".into(),
         preview: json!({"title":"Next train"}),
+        configuration: None,
     }
 }
 
@@ -441,7 +442,7 @@ fn caltrain_entry_reaches_only_its_departure_card() {
     assert_eq!(entry.resources.len(), 1);
     assert_eq!(entry.str(entry.resources[0].source), "exactViewport");
     assert_eq!(entry.actions.len(), 0);
-    assert_eq!(entry.slots.len(), 1);
+    assert_eq!(entry.slots.len(), 2);
 }
 
 struct TempDir(std::path::PathBuf);
@@ -1225,4 +1226,222 @@ fn a_source_text_entry_names_no_members_file() {
     );
     let errors = compile(&block, &widget()).unwrap_err();
     assert_eq!(errors[0].id, "contract-members-unlisted", "{errors:?}");
+}
+
+fn configured() -> Widget {
+    let manifest = Manifest {
+        json: json!({"widgets":[{"kind":"next-trains","families":["systemSmall","systemLarge"],"component":"Card",
+            "props":"Props","refresh":"refreshCard","preview":{"title":"Next train"},
+            "configuration":{"title":"Next trains","parameters":[{"name":"rows","type":"enum","title":"Rows",
+                "values":[{"value":"automatic","title":"Automatic"},{"value":"one","title":"1"},{"value":"three","title":"3"}]}]}}]}),
+        id: "test.app".into(),
+        name: "Test".into(),
+        declared: true,
+    };
+    manifest.widgets().unwrap().remove(0)
+}
+
+#[test]
+fn watch_configuration_refuses_more_than_64_recommendations() {
+    let values = (0..8)
+        .map(|i| json!({"value":i.to_string(),"title":i.to_string()}))
+        .collect::<Vec<_>>();
+    let mut manifest = Manifest {
+        json: json!({"widgets":[{"kind":"card","families":["systemSmall"],"watchFamilies":["accessoryRectangular"],
+            "component":"Card","props":"Props","refresh":"refreshCard","preview":{},
+            "configuration":{"title":"Card","parameters":[
+                {"name":"rows","type":"enum","title":"Rows","values":values},
+                {"name":"detail","type":"enum","title":"Detail","values":values}]}}]}),
+        id: "test.app".into(),
+        name: "Test".into(),
+        declared: true,
+    };
+    assert!(manifest.widgets().is_ok(), "64 combinations fit");
+    manifest.json["widgets"][0]["configuration"]["parameters"][0]["values"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"value":"extra","title":"Extra"}));
+    let error = manifest.widgets().unwrap_err();
+    assert!(
+        error.contains("at most 64 watch recommendations"),
+        "{error}"
+    );
+    manifest.json["widgets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("watchFamilies");
+    assert!(
+        manifest.widgets().is_ok(),
+        "widgets with no watch families need no recommendations"
+    );
+    manifest.json["widgets"][0]["families"] = json!(["accessoryRectangular"]);
+    assert!(
+        manifest.widgets().is_err(),
+        "implicit watch families have the same bound"
+    );
+}
+
+#[test]
+fn a_configuration_is_read_fills_its_defaults_and_refuses_with_an_edit() {
+    let widget = configured();
+    let configuration = widget.configuration.clone().unwrap();
+    assert_eq!(configuration.description, None);
+    assert_eq!(
+        configuration.parameters[0].default, "automatic",
+        "the first value"
+    );
+    assert_eq!(
+        configuration.json()["parameters"][0]["values"][1],
+        json!({"value":"one","title":"1"})
+    );
+    let manifest = |configuration: serde_json::Value| Manifest {
+        json: json!({"widgets":[{"kind":"card","families":["systemSmall"],"component":"Card","props":"Props",
+            "refresh":"refreshCard","preview":{"title":"Preview"},"configuration":configuration}]}),
+        id: "test.app".into(),
+        name: "Test".into(),
+        declared: true,
+    };
+    let row = |row: serde_json::Value| json!({"title":"Card","parameters":[row]});
+    for (configuration, edit) in [
+        (json!([]), "configuration must be an object"),
+        (json!({"parameters":[]}), "title is required"),
+        (
+            json!({"title":"Card","parameters":[]}),
+            "parameters must be a nonempty array",
+        ),
+        (
+            json!({"title":"Card","parameters":[],"kind":"enum"}),
+            "configuration.kind is unknown",
+        ),
+        (
+            row(
+                json!({"name":"Rows","type":"enum","title":"Rows","values":[{"value":"a","title":"A"}]}),
+            ),
+            "lowerCamelCase",
+        ),
+        (
+            row(json!({"name":"rows","type":"enum","values":[{"value":"a","title":"A"}]})),
+            "parameters[0].title is required",
+        ),
+        (
+            row(json!({"name":"rows","type":"enum","title":"Rows","values":[]})),
+            "values must be a nonempty array",
+        ),
+        (
+            row(
+                json!({"name":"rows","type":"enum","title":"Rows","values":[{"value":"a","title":"A"},{"value":"a","title":"B"}]}),
+            ),
+            "repeats a",
+        ),
+        (
+            row(json!({"name":"rows","type":"enum","title":"Rows","values":[{"value":"a"}]})),
+            "values[0].title is required",
+        ),
+        (
+            row(
+                json!({"name":"rows","type":"enum","title":"Rows","values":[{"value":"a","title":"A"}],"default":"b"}),
+            ),
+            "default must be one of its values",
+        ),
+        (
+            row(
+                json!({"name":"rows","type":"entity","title":"Rows","values":[{"value":"a","title":"A"}]}),
+            ),
+            "parameters[0].type must be `enum`",
+        ),
+        (
+            row(
+                json!({"name":"rows","type":"enum","title":"Rows\nWide","values":[{"value":"a","title":"A"}]}),
+            ),
+            "without control characters",
+        ),
+    ] {
+        let error = manifest(configuration.clone()).widgets().unwrap_err();
+        assert!(error.contains(edit), "{configuration}: {error}");
+    }
+
+    // The inject reads the slot the wrapper holds at the defaults.
+    for field in ["string", "enum<\"automatic\", \"one\", \"three\">"] {
+        let src = source(
+            "    text `${title} ${snapshot_configuration.rows}`",
+            &format!("shape Configuration\n  rows: {field}"),
+            "  inject\n    snapshot_configuration: Configuration\n",
+        );
+        let plan = compile(&src, &widget).unwrap();
+        let slot = plan
+            .slots
+            .iter()
+            .find(|s| plan.str(s.name) == CONFIGURATION_SLOT)
+            .expect("configuration slot");
+        assert!(slot.owner.is_none(), "{field}");
+        assert!(plan.strings.iter().any(|s| s == "automatic"), "{field}");
+        // The app's plan is untouched by the entry's slot.
+        assert!(!crate::compile(&src)
+            .unwrap()
+            .slots
+            .iter()
+            .any(|s| crate::compile(&src).unwrap().str(s.name) == CONFIGURATION_SLOT));
+    }
+    let inject = "  inject\n    snapshot_configuration: Configuration\n";
+    for (shape, members, widget, edit) in [
+        (
+            "shape Configuration\n  rows: string",
+            inject,
+            super::tests::widget(),
+            "the widget does not declare",
+        ),
+        ("", "", configured(), "is read by no component"),
+        (
+            "shape Configuration\n  count: string",
+            inject,
+            configured(),
+            "has no field `rows`",
+        ),
+        (
+            "shape Configuration\n  rows: string\n  more: string",
+            inject,
+            configured(),
+            "exactly the configuration's parameters",
+        ),
+        (
+            "shape Configuration\n  rows: number",
+            inject,
+            configured(),
+            "as `string` or `enum<\"automatic\", \"one\", \"three\">`",
+        ),
+        (
+            "shape Configuration\n  rows: enum<\"automatic\", \"one\">",
+            inject,
+            configured(),
+            "the parameter's values",
+        ),
+        (
+            "",
+            "  inject\n    snapshot_configuration: string\n",
+            configured(),
+            "takes a shape",
+        ),
+    ] {
+        let errors = compile(&source("    text title", shape, members), &widget).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.id == "snapshot-configuration" && e.message.contains(edit)),
+            "{shape} {members}: {errors:?}"
+        );
+    }
+    // The slot's name is the reader's.
+    let errors = compile(
+        &source(
+            "    text title",
+            "",
+            "  state snapshot_configuration = \"\"\n",
+        ),
+        &super::tests::widget(),
+    )
+    .unwrap_err();
+    assert!(
+        errors.iter().any(|e| e.id == "snapshot-props-name"),
+        "{errors:?}"
+    );
 }

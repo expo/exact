@@ -328,52 +328,20 @@ impl Lowerer<'_> {
         rows::note(std::mem::take(&mut said.rows));
         // D7's retention, left for the design server before the design is
         // folded, as it does not depend on the fold.
-        let mut words = std::mem::take(&mut said.words);
         // A component that isn't Contract reads its params outside the views:
-        // its declaration keeps each (D15), with every token its default
-        // reads, through any chain.
-        // A package design's components too (stage 12 B1).
+        // its declaration keeps each (D15), a package design's too (stage
+        // 12 B1). Cache the roots; their closure is the current design's.
         let designed = file
             .design
             .iter()
             .chain(&file.package_designs)
             .flat_map(|d| crate::params::design_tokens(d).0);
-        let mut kept: Vec<String> = designed.map(|p| p.token).collect();
-        let mut roots = std::collections::BTreeSet::new();
-        // A role's spelling in any case, as the fold reads one: the tokens
-        // and icons by their names lowercased, once (linear: the checker
-        // bound's sweep).
-        let mut by_lower: std::collections::HashMap<String, Vec<&tamber::Token>> =
-            std::collections::HashMap::new();
-        for t in design.tokens.iter().chain(&design.icons) {
-            by_lower
-                .entry(t.name.value.to_ascii_lowercase())
-                .or_default()
-                .push(t);
-        }
-        // Each spelling kept; each lowercased name's tokens read once, however
-        // many spellings reach it (round 1 of the checker sweep).
-        let mut expanded = std::collections::HashSet::new();
-        while let Some(name) = kept.pop() {
-            if !roots.insert(name.clone()) {
-                continue;
-            }
-            words.insert(name.clone());
-            let lower = name.to_ascii_lowercase();
-            if !expanded.insert(lower.clone()) {
-                continue;
-            }
-            for t in by_lower.get(&lower).into_iter().flatten() {
-                let read =
-                    std::iter::once(&t.value.value).chain(t.whens.iter().map(|w| &w.value.value));
-                kept.extend(read.flat_map(|v| scan::words(v)).map(str::to_string));
-            }
-        }
-        let retention = tamber::Retention {
+        let mut retention = tamber::Retention {
             bindable,
             computed: said.computed,
             computed_measure: said.computed_measure,
-            words,
+            words: std::mem::take(&mut said.words),
+            native_params: designed.map(|p| p.token).collect(),
             folded: said.folded.clone(),
         };
         RETENTION.with(|r| *r.borrow_mut() = Some(retention.clone()));
@@ -387,6 +355,7 @@ impl Lowerer<'_> {
         if retained::stops_at_retention() {
             return exact_kernel::style::theme::declarations([]);
         }
+        let roots = retention.retain_native_params(&design);
         let profiled = profiles(self, &mut design, &origin);
         // An expression over a profile's colour is not the build's to fold.
         said.synthetic.retain(|s| {
@@ -572,8 +541,8 @@ thread_local! {
     /// The design's length and number tokens while its styles are lowered
     /// (LLP 1121 D3): each name, kind and distinct values over the tuples.
     static MEASURES: std::cell::RefCell<Vec<(String, tamber::Kind, Vec<String>)>> = const { std::cell::RefCell::new(Vec::new()) };
-    /// The retention the last design lowered on this thread kept its
-    /// tokens by (D7): what the design server classes an edit with.
+    /// The last design's view retention and native-param roots (D7): what
+    /// the design server closes over each proposed design.
     static RETENTION: std::cell::RefCell<Option<tamber::Retention>> = const { std::cell::RefCell::new(None) };
     /// The design's duration and easing tokens while its styles are lowered
     /// (D3): each name and its value, which the build writes in its place.
@@ -623,8 +592,9 @@ pub fn synthetic_candidates() -> Vec<(String, bool)> {
     CANDIDATES.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
-/// The retention the last build on this thread kept its design's tokens by
-/// (D7), taken: none when it stopped before its design.
+/// The last build's view retention and native-param roots (D7), taken:
+/// none when it stopped before its design. Close the roots over the current
+/// design with [`tamber::Retention::retain_native_params`] before querying it.
 pub fn retention() -> Option<tamber::Retention> {
     RETENTION.with(|r| r.borrow_mut().take())
 }

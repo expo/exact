@@ -388,9 +388,15 @@ impl CompletionQueue {
 /// refers to.
 pub struct RuntimeState {
     pub queue: CompletionQueue,
-    #[cfg(all(feature = "intl", any(target_os = "linux", windows)))]
+    #[cfg(all(
+        feature = "intl",
+        any(target_os = "linux", ibex2_android_intl, windows)
+    ))]
     pub(crate) intl: crate::stdlib::intl::Registry,
-    #[cfg(all(feature = "intl", any(target_os = "linux", windows)))]
+    #[cfg(all(
+        feature = "intl",
+        any(target_os = "linux", ibex2_android_intl, windows)
+    ))]
     pub(crate) intl_datetime: crate::stdlib::intl_datetime::Registry,
     pub(crate) sqlite: crate::sqlite_abi::Registry,
     /// The advisory locks this runtime's code holds, by handle (exact2 LLP
@@ -565,9 +571,15 @@ impl RuntimeState {
         }
         let state = Self {
             queue: CompletionQueue::new(),
-            #[cfg(all(feature = "intl", any(target_os = "linux", windows)))]
+            #[cfg(all(
+                feature = "intl",
+                any(target_os = "linux", ibex2_android_intl, windows)
+            ))]
             intl: crate::stdlib::intl::Registry::new(),
-            #[cfg(all(feature = "intl", any(target_os = "linux", windows)))]
+            #[cfg(all(
+                feature = "intl",
+                any(target_os = "linux", ibex2_android_intl, windows)
+            ))]
             intl_datetime: crate::stdlib::intl_datetime::Registry::new(),
             sqlite: crate::sqlite_abi::Registry::default(),
             file_locks: Mutex::new((0, HashMap::new())),

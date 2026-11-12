@@ -271,9 +271,10 @@ fn main() {
     const shell = resolve(root, kind);
     // A cached build script can run from either the game or its deeper proof copy.
     const levelBake = resolve(source, 'bake/src/files.rs');
-    // These adapters contain entry points only; tests live in authored crates.
+    const tests = kind === 'linux' && existsSync(resolve(appDir, 'linux/tests'))
+      ? readdirSync(resolve(appDir, 'linux/tests')).filter(file => file.endsWith('.rs')).sort() : [];
     const target = ['linux', 'windows'].includes(kind)
-      ? `[[bin]]\nname = "${name}-${kind}"\npath = "src/main.rs"\ntest = false`
+      ? `[[bin]]\nname = "${name}-${kind}"\npath = "src/main.rs"${tests.length ? '' : '\ntest = false'}`
       : `[lib]\ncrate-type = ["${kind === 'apple' ? 'staticlib' : 'cdylib'}"]\ntest = false\ndoctest = false`
         // A game with data of its own bakes with it in the web dev loop, as an app's web crate does: host/web/dev.mjs
         // takes a web crate's `<app>-dev` bin, else the generic compiler, which has no game's data.
@@ -289,7 +290,8 @@ fn main() {
       : `${kind === 'web' ? '' : 'ibex2-sqlite.workspace = true\nexact-logic.workspace = true\n'}exact-runner.workspace = true\nexact-${kind}.workspace = true\n${kind === 'web' ? 'exact-web-capabilities.workspace = true\n' : kind === 'windows' ? 'exact-linux.workspace = true\n' : ''}${dataDependency}\n[build-dependencies]\nexact-game-app.workspace = true\n${dataBuildDependency}`;
     const files = {
       ...(kind === 'web' && data ? { [`src/bin/${name}-dev.rs`]: `//! The resident dev driver for the game's web shell: \`${name}-dev <source> <out>\`, baking with its data.\n\nfn main() -> std::process::ExitCode {\n    exact_web::dev::main::<app_data::${data.type}>()\n}\n` } : {}),
-      'Cargo.toml': header + dependencies,
+      'Cargo.toml': header + dependencies + (tests.length ? `\n[dev-dependencies]\nserde_json.workspace = true\nexact-update = { path = ${JSON.stringify(relative(shell, resolve(gameRoot, '../update')))} }\n` : ''),
+      ...Object.fromEntries(tests.map(file => [`tests/${file}`, readFileSync(resolve(appDir, 'linux/tests', file), 'utf8')])),
       [['linux', 'windows'].includes(kind) ? 'src/main.rs' : 'src/lib.rs']: kind === 'gpu' ? `exact_game_render::module!(game_logic::${type}${app.game.audio === true ? ", audio" : ""}${app.game.assets === true ? ", assets" : ""}${render ? `, hooks = game_render::${render.hooks}${render.shaders ? `, shaders = game_render::${render.shaders}` : ''}` : ''});\n` : (kind === 'windows' ? '#![cfg_attr(\n    all(target_os = "windows", not(debug_assertions)),\n    windows_subsystem = "windows"\n)]\n' : '') + 'include!(concat!(env!("OUT_DIR"), "/entry.rs"));\n',
       'build.rs': kind === 'gpu'
         ? `use exact_game::{Args, Game, Value};
@@ -344,7 +346,9 @@ ${bakeArt ? `    exact_game_bake::bake_art(${JSON.stringify(relative(shell, appD
           ? `fn main() {\n    exact_game_app::bake_data_declaration::<app_data::${data.type}>("${kind}", ${JSON.stringify(relative(shell, appDir))}, "app_data::${data.type}");\n}\n`
           : `fn main() {\n    exact_game_app::bake_declaration("${kind}", ${JSON.stringify(relative(shell, appDir))});\n}\n`,
     };
-    if (Object.entries(files).every(([file, bytes]) => existsSync(resolve(shell, file)) && readFileSync(resolve(shell, file), 'utf8') === bytes)) continue;
+    const generatedTests = existsSync(resolve(shell, 'tests')) ? readdirSync(resolve(shell, 'tests')).sort() : [];
+    const sameTests = tests.length === generatedTests.length && tests.every((file, i) => file === generatedTests[i]);
+    if (sameTests && Object.entries(files).every(([file, bytes]) => existsSync(resolve(shell, file)) && readFileSync(resolve(shell, file), 'utf8') === bytes)) continue;
     const stage = mkdtempSync(resolve(root, '.shell-stage-'));
     try {
       const replacement = resolve(stage, 'new'), backup = resolve(stage, 'old');
@@ -749,8 +753,15 @@ if (import.meta.main) {
         const env = {...process.env, CARGO_TARGET_DIR:process.env.CARGO_TARGET_DIR ?? resolve(dir,'target')};
         bakeGameArt(dir, env);
         try { lintGame(dir, game, {env}); } catch (error) { console.error(error.message); failed = true; }
-        // The author's crates only: generated adapters are products, built by bakes.
-        const result=spawnSync('cargo',['test',...[game.crate, game.data?.crate, game.render?.crate].filter(Boolean).flatMap(crate => ['-p', crate]),'--locked','--offline','--no-fail-fast'], {
+        const name = game.crate.slice(0, -'-logic'.length);
+        const linuxTests = existsSync(resolve(dir, '.shells/linux/tests'));
+        if (linuxTests) {
+          const built = spawnSync('cargo', ['build', '-p', `${name}-gpu`, '--locked', '--offline', '--keep-going'], {
+            cwd:resolve(dir, '.shells'), env, stdio:'inherit',
+          });
+          failed ||= built.status !== 0;
+        }
+        const result=spawnSync('cargo',['test',...[game.crate, game.data?.crate, game.render?.crate, linuxTests ? `${name}-linux` : null].filter(Boolean).flatMap(crate => ['-p', crate]),'--locked','--offline','--no-fail-fast'], {
           cwd:resolve(dir,'.shells'),env,stdio:'inherit',
         });
         failed ||= result.status !== 0;

@@ -134,7 +134,7 @@ fn side(
     vocab: &Vocab,
 ) -> Option<(Half, Option<(&'static str, String)>)> {
     let pick = |pair: [String; 2]| match exact_color::parse(&pair[usize::from(dark)])? {
-        Parsed::Legacy(c) => Some(Half::legacy(c)),
+        Parsed::Legacy(c, _) => Some(Half::legacy(c)),
         Parsed::Wide(w) => Some(Half::Wide(w)),
         _ => None,
     };
@@ -171,9 +171,13 @@ fn in_range(w: &Wide) -> bool {
         Space::Lch => (0.0..=100.0).contains(&w.c[0]) && w.c[1] >= 0.0,
         Space::Oklab => unit(w.c[0]),
         Space::Oklch => unit(w.c[0]) && w.c[1] >= 0.0,
-        Space::DisplayP3Linear | Space::Rec2100Pq | Space::Rec2100Hlg | Space::Rec2100Linear => {
-            false
-        }
+        // A legacy colour is exported from its bytes, in sRGB.
+        Space::DisplayP3Linear
+        | Space::Rec2100Pq
+        | Space::Rec2100Hlg
+        | Space::Rec2100Linear
+        | Space::Hsl
+        | Space::Hwb => false,
     }
 }
 
@@ -191,6 +195,7 @@ fn colour_json(h: Half) -> (Value, bool) {
             space: Space::Oklab,
             c: [l.clamp(0.0, 1.0), a, b],
             alpha: w.alpha,
+            missing: [false; 4],
         };
     }
     if matches!(w.space, Space::Lch | Space::Oklch) {
@@ -232,7 +237,7 @@ fn reads_as(value: &Value, h: Half) -> bool {
         return false;
     };
     let read = match read {
-        Parsed::Legacy(c) => Half::legacy(c).wide(),
+        Parsed::Legacy(c, _) => Half::legacy(c).wide(),
         Parsed::Wide(w) => w,
         _ => return false,
     };

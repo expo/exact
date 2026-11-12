@@ -330,10 +330,14 @@ async function drive(code, c, hostSources) {
       const e = find(id);
       // What a browser can deliver, as the runner holds a host to it
       // (runner/src/runner/control.rs): a select reports one of its enabled
-      // options, a checkbox or a radio no text.
+      // options, a checkbox or a radio no text. An option's value is its
+      // `value` attribute, else its text with HTML's ASCII whitespace
+      // stripped and collapsed (HTML, "the option element"; kernel
+      // `option_label`): a nonbreaking space stays.
       const options = e?.localName === 'select' ? e.getElementsByTagName('option') : null;
+      const optionValue = o => o.getAttribute('value') ?? o.textContent.split(/[\t\n\f\r ]+/).filter(Boolean).join(' ');
       const deliverable = e && e.type !== 'checkbox' && e.type !== 'radio' && datetime(e, text)
-        && (!options || options.some(o => !o.hasAttribute('disabled') && (o.getAttribute('value') ?? o.textContent) === text));
+        && (!options || options.some(o => !o.hasAttribute('disabled') && optionValue(o) === text));
       const event = e?.$listeners?.input?.length ? 'input' : 'change';
       if (!deliverable || !e.$listeners?.[event]?.length) refused = true; else { e.value = text; fire(e, event); }
     } else if (ev.land) {

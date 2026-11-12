@@ -194,7 +194,12 @@ fn corpus_files(
     let mut everything = false;
     for f in watched {
         if f.starts_with("semantics/corpus/") {
-            let p = root.join(f.as_str());
+            // A property sidecar is no program: its program reads it
+            // (property_corpus.rs), so that is the one to run.
+            let p = match f.strip_suffix(".test.contract") {
+                Some(stem) => root.join(format!("{stem}.contract")),
+                None => root.join(f.as_str()),
+            };
             if p.is_file() && f.ends_with(".contract") {
                 files.push(p);
             }
@@ -352,6 +357,13 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_property_sidecar_change_selects_its_program() {
+        let program = leanrun::project().join("corpus/properties/holds.contract");
+        let selected = selected_corpus_files("semantics/corpus/properties/holds.test.contract");
+        assert!(selected.contains(&program), "selected {selected:?}");
     }
 
     #[test]

@@ -104,7 +104,7 @@ fn a_worker_or_async_starter_treats_a_read_after_a_refresh_as_a_miss() {
 }
 
 #[test]
-fn a_later_read_uses_the_network_beside_a_workers_refresh_and_never_returns_the_old_hit() {
+fn a_later_read_uses_the_network_beside_a_refresh_and_never_returns_the_old_hit() {
     for asynchronous in [false, true] {
         for mode in [CacheMode::Reload, CacheMode::NoCache, CacheMode::Default] {
             let server = Server::new();
@@ -124,7 +124,7 @@ fn a_later_read_uses_the_network_beside_a_workers_refresh_and_never_returns_the_
             let stale = core.shared.state.lock().unwrap().completed[0]
                 .iter()
                 .any(|d| d.ticket == 3 && d.cached);
-            if !asynchronous && !stale {
+            if !stale {
                 server.seen(3);
             }
             release.send(()).unwrap();

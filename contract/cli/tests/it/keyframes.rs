@@ -698,3 +698,45 @@ fn a_class_choice_without_animation_on_one_side_bakes_from_either() {
         }
     }
 }
+
+/// #49: a keyframes declaration's selectors, units and keywords read in any
+/// ASCII case, as CSS's do, through the compiler to the row the runner
+/// resolves; the keyframes name keeps its case.
+#[test]
+fn a_keyframes_declaration_reads_in_any_ascii_case() {
+    let app = |frames: &str, animation: &str| {
+        format!("keyframes Spin\n{frames}component App\n  view\n    view animation=\"{animation}\" testId=\"mark\"\n")
+    };
+    let cased = app(
+        "  FROM opacity=0 translate=\"10PX 50%\" rotate=\"45DEG\" font-weight=\"BOLD\" box-shadow=\"NONE\"\n  50%, To opacity=1 translate=\"0Px 0%\" rotate=\"90Deg\" font-weight=\"Normal\" box-shadow=\"0px 2PX 4Px Red\"\n",
+        "Spin 2S EASE-IN-OUT INFINITE",
+    );
+    let lower = app(
+        "  from opacity=0 translate=\"10px 50%\" rotate=\"45deg\" font-weight=\"bold\" box-shadow=\"none\"\n  50%, to opacity=1 translate=\"0px 0%\" rotate=\"90deg\" font-weight=\"normal\" box-shadow=\"0px 2px 4px red\"\n",
+        "Spin 2s ease-in-out infinite",
+    );
+    let boot = |src: &str| {
+        let plan = contract::compile(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+        let r = Runner::boot(
+            Plan::decode(&plan.encode()).unwrap(),
+            NoData,
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        animation(&r, "mark").1
+    };
+    let (row, expected) = (boot(&cased), boot(&lower));
+    assert_eq!(row, expected);
+    let [a] = row.0.as_slice() else {
+        panic!("{row:?}")
+    };
+    assert_eq!(a.name, "Spin");
+    assert_eq!(a.easing, Easing::EaseInOut);
+    let offsets: Vec<f64> = a.keyframes.0.iter().map(|k| k.offset).collect();
+    assert_eq!(offsets, [0.0, 0.5, 1.0]);
+    assert!(a.keyframes.0[0]
+        .values
+        .contains(&(Property::Rotate, Value::scalar(45.0))));
+}

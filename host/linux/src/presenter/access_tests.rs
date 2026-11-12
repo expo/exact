@@ -993,6 +993,25 @@ fn a_table_and_a_description_list_are_their_roles() {
     assert_eq!(parent("Electric").map(|n| n.role), Some(role::DEFINITION));
 }
 
+/// HTML's `title` describes what something else names, and names what
+/// nothing else does (accname's step 2I; HTML-AAM's description); a title
+/// that is already the name is not said twice.
+#[test]
+fn a_title_describes_or_names() {
+    let source = "component App\n  view\n    column\n      button title=\"Saves the file\" aria-label=\"Save\"\n        text \"S\"\n      button title=\"Undo (Ctrl+Z)\"\n        image \"undo.png\" width=16 height=16\n      button title=\"Redo\"\n        text \"Redo\"\n";
+    let mut p = boot(source, (320., 600.), 0);
+    let nodes = read(&mut p);
+    let hint = |name: &str| {
+        let node = nodes.iter().find(|n| n.name == name);
+        node.unwrap_or_else(|| panic!("no {name} in {:?}", names(&nodes)))
+            .hint
+            .clone()
+    };
+    assert_eq!(hint("Save"), "Saves the file");
+    assert_eq!(hint("Undo (Ctrl+Z)"), "");
+    assert_eq!(hint("Redo"), "");
+}
+
 /// A Markdown text is read as its reader draws it (LLP 1045,
 /// "Accessibility"): syntax hidden, a link by its text, a footnote by its
 /// `[n]`, a rule by its line, and an atom, which this reader draws as its

@@ -705,7 +705,7 @@ mod tests {
     }
 
     fn head(seq: u64, plan: &[u8]) -> Vec<u8> {
-        format!(r#"{{"exact":1,"app":{{"id":"com.exact.host-cache"}},"plan":{{"url":"./app.plan","sha256":"{}","bytes":{}}},"assets":[],"stream":{{"channel":"prod","compatibilityId":"abc","seq":{seq}}}}}"#, exact_update::sha256_hex(plan), plan.len()).into_bytes()
+        format!(r#"{{"exact":1,"app":{{"id":"com.exact.host-cache"}},"plan":{{"url":"./app.plan","sha256":"{}","bytes":{}}},"stream":{{"channel":"prod","compatibilityId":"abc","seq":{seq}}}}}"#, exact_update::sha256_hex(plan), plan.len()).into_bytes()
     }
 
     #[test]
@@ -838,12 +838,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let plan_bytes = b"verified plan";
         let asset_bytes = b"verified asset";
+        // The asset card is in the index the head names, beside it.
+        let index = format!("{{\"assets\":[{{\"name\":\"assets/a\",\"url\":\"./assets/a\",\"sha256\":\"{}\",\"bytes\":{}}}]}}", exact_update::sha256_hex(asset_bytes), asset_bytes.len());
         let header = String::from_utf8(head(1, plan_bytes)).unwrap().replace(
-            "\"assets\":[]", &format!("\"assets\":[{{\"name\":\"assets/a\",\"url\":\"./assets/a\",\"sha256\":\"{}\",\"bytes\":{}}}]", exact_update::sha256_hex(asset_bytes), asset_bytes.len()));
+            "\"stream\"", &format!("\"assets\":{{\"url\":\"./assets.json\",\"sha256\":\"{}\",\"bytes\":{},\"count\":1}},\"stream\"", exact_update::sha256_hex(index.as_bytes()), index.len()));
         let mut client = Client::open_at(&base, &base, COMPAT, b"embedded", Some(ORIGIN)).unwrap();
         assert!(matches!(
             client.check(&mut |url| Ok(if url.ends_with("exact.json") {
                 header.as_bytes().to_vec()
+            } else if url.ends_with("assets.json") {
+                index.as_bytes().to_vec()
             } else if url.ends_with("app.plan") {
                 plan_bytes.to_vec()
             } else {

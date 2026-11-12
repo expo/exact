@@ -580,6 +580,57 @@ final class AlertMacTests: XCTestCase {
         window.close()
     }
 
+    /// A prompt's input whose `type` becomes `password` while its field is
+    /// lent and focused: the accessory view holds a secure field, which
+    /// keeps the editing, its selection and the alert's sizing, and back.
+    func testAPromptsFieldTakesTheClassOfAChangedType() throws {
+        let p = fixture(label: "Rename", lines: [], actions: ["Save"], props: [:], field: true)
+        let node = try XCTUnwrap(p.views[51])
+        var events: [String] = []
+        p.onChange = { id, value in events.append("change \(id) \(value)") }
+        p.onFocus = { events.append("focus \($0)") }
+        p.onBlur = { events.append("blur \($0)") }
+        p.press(2)
+        let owner = try XCTUnwrap(p.alerts.presented)
+        let stack = try XCTUnwrap(owner.alert.accessoryView as? NSStackView)
+        let sheet = owner.alert.window
+        XCTAssertTrue(sheet.makeFirstResponder(try XCTUnwrap(node.field)))
+        XCTAssertNotNil(node.editingEditor)
+        events.removeAll()
+
+        let plain = try XCTUnwrap(node.field)
+        p.apply(wireBatch([["op": "props", "id": 51, "set": ["type": "password", "value": "secret"]]]))
+        p.alerts.sync()
+        let secure = try XCTUnwrap(node.field)
+        XCTAssertTrue(secure is NSSecureTextField, "a password's field is secure: \(type(of: secure))")
+        XCTAssertTrue(stack.arrangedSubviews == [secure], "the accessory view holds the new field alone")
+        XCTAssertNil(plain.superview)
+        XCTAssertTrue(secure.delegate === node)
+        XCTAssertEqual(secure.stringValue, "secret")
+        XCTAssertTrue(sheet.initialFirstResponder === secure, "\(String(describing: sheet.initialFirstResponder)) \(String(describing: secure))")
+        XCTAssertEqual(owner.widths.map { $0.firstItem as? NSTextField }, [secure], "the alert sizes the field it shows")
+        XCTAssertTrue(owner.widths.allSatisfy(\.isActive))
+        let editor = try XCTUnwrap(node.editingEditor, "the new field is being edited")
+        XCTAssertTrue(sheet.firstResponder === editor)
+        XCTAssertTrue(p.alerts.presented === owner, "the alert stays")
+        XCTAssertEqual(events, [], "the input keeps its focus: no blur, change or focus")
+
+        editor.setSelectedRange(NSRange(location: 2, length: 3))
+        p.apply(wireBatch([["op": "props", "id": 51, "set": ["type": "text"]]]))
+        p.alerts.sync()
+        let back = try XCTUnwrap(node.field)
+        XCTAssertFalse(back is NSSecureTextField)
+        XCTAssertTrue(stack.arrangedSubviews == [back])
+        let current = try XCTUnwrap(node.editingEditor)
+        XCTAssertEqual(current.selectedRange(), NSRange(location: 2, length: 3), "its selection kept")
+        XCTAssertEqual(events, [])
+        current.insertText("X", replacementRange: current.selectedRange())
+        p.alerts.reset()
+        XCTAssertEqual(events.first, "change 51 seXt", "typing goes on in the new field, and the alert's end is its change")
+        XCTAssertFalse(node.field === back, "the page has its field again")
+        window.close()
+    }
+
     /// Any other shape is no alert: more than three buttons or no cancel is
     /// the chooser's menu (ChooserMacTests), and a `dialog` holding anything
     /// but text and buttons, or with no text, is a sheet that holds the

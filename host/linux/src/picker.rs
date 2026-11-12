@@ -289,9 +289,10 @@ pub fn know_roots(app_id: &str) {
     }
 }
 
-/// A scripted drive without a scratch store has no app directories; its
-/// picks land in a directory of this process's own.
-fn roots() -> [PathBuf; 3] {
+/// The app's `data`, `cache` and `tmp` directories. A scripted drive
+/// without a scratch store has none; its picks land in a directory of this
+/// process's own.
+pub fn roots() -> [PathBuf; 3] {
     if let Some(r) = ROOTS.lock().unwrap_or_else(|e| e.into_inner()).clone() {
         return r;
     }

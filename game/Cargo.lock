@@ -251,6 +251,9 @@ dependencies = [
 [[package]]
 name = "contract-syntax"
 version = "0.1.0"
+dependencies = [
+ "exact-motion",
+]
 
 [[package]]
 name = "contract-types"
@@ -477,6 +480,7 @@ dependencies = [
  "exact-filesystem",
  "exact-gpu-reflect",
  "exact-kernel",
+ "exact-logic-abi",
  "exact-plan",
  "exact-runner",
  "exact-svg-file",
@@ -607,6 +611,7 @@ dependencies = [
  "exact-gpu-reflect",
  "exact-plan",
  "objc2",
+ "objc2-foundation",
  "objc2-metal",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -656,6 +661,14 @@ dependencies = [
  "sha2",
  "smol_str",
  "taffy",
+]
+
+[[package]]
+name = "exact-logic-abi"
+version = "0.1.0"
+dependencies = [
+ "exact-plan",
+ "exact-runner",
 ]
 
 [[package]]

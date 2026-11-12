@@ -449,6 +449,17 @@ impl Store {
         }
     }
 
+    /// Forget a kept answer the host has and did not read: nothing in
+    /// memory, so only the write for the host to persist.
+    pub(crate) fn forget_unread_kept(&mut self, name: &str) {
+        debug_assert!(Store::is_kept(name) && !self.values.contains_key(name));
+        self.writes.push(StoreWrite {
+            durable: false,
+            name: name.to_string(),
+            value: None,
+        });
+    }
+
     /// Whether the snapshot this store opened with held a granted secret:
     /// then an empty-store answer the bake computed does not describe this
     /// device (LLP 1027 D4, 2026-10-10). Uncounted, the runner's question.

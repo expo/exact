@@ -1,18 +1,27 @@
 // @ref LLP 1126.001 WP9 — ActivityKit stays outside the app's load commands.
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { copyFileSync, existsSync, readdirSync, readFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { wrapFramework } from './assets.mjs';
 import { activityEntries } from './widgets.mjs';
+import { extensionModuleCache } from './extensions.mjs';
 // The checkout's root: an app outside it builds from its own directory.
 const root = fileURLToPath(new URL('../..', import.meta.url));
-export function packageActivityArm({ app, bundle, directory, triple, sdk, device, runApple }) {
-  const binary = resolve(directory, 'libexact_activity.dylib');
-  // The system identifies the attributes by their module and type name. Compile the
-  // existing envelope in ExactSnapshot, without linking its driver or ExactCore.
-  runApple('xcrun', ['--sdk', device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', '-O', '-module-name', 'ExactSnapshot', '-target', triple, '-sdk', sdk,
-    '-module-cache-path', resolve(directory, 'cache'),
-    resolve(root, 'host/apple/Sources/ExactSnapshot/ActivityEnvelope.swift'), resolve(root, 'host/apple/activityarm/ActivityArm.swift'), '-o', binary]);
+/** The arm has no app-specific inputs: it is compiled once per source and target into `shared.base`,
+ * which every app of the widget scratch shares. */
+export function packageActivityArm({ app, bundle, shared, triple, sdk, device, runApple }) {
+  const sources = [resolve(root, 'host/apple/Sources/ExactSnapshot/ActivityEnvelope.swift'), resolve(root, 'host/apple/activityarm/ActivityArm.swift')];
+  const digest = sources.reduce((hash, file) => hash.update(readFileSync(file)), createHash('sha256')).update(JSON.stringify([triple, sdk, device])).digest('hex').slice(0, 16);
+  const binary = resolve(shared.base, `activity-${digest}`, 'libexact_activity.dylib');
+  if (!existsSync(binary)) {
+    mkdirSync(dirname(binary), { recursive: true });
+    // The system identifies the attributes by their module and type name. Compile the
+    // existing envelope in ExactSnapshot, without linking its driver or ExactCore.
+    runApple('xcrun', ['--sdk', device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-emit-library', '-O', '-module-name', 'ExactSnapshot', '-target', triple, '-sdk', sdk,
+      '-module-cache-path', extensionModuleCache, ...sources, '-o', `${binary}.${process.pid}.tmp`]);
+    renameSync(`${binary}.${process.pid}.tmp`, binary);
+  }
   const frameworks = resolve(bundle, 'Frameworks');
   copyFileSync(binary, resolve(frameworks, 'libexact_activity.dylib'));
   wrapFramework(frameworks, 'libexact_activity.dylib', 'ExactActivity', app, device ? 'iPhoneOS' : 'iPhoneSimulator');

@@ -110,3 +110,35 @@ fn swipeleft_mirrors_swiperight_with_its_arguments() {
     r.dispatch(row, Event::Swipeleft).unwrap();
     assert_eq!(seen(&r), "left;right;left;");
 }
+
+#[test]
+fn scroll_snap_compiles_both_axes_and_center() {
+    for axis in ["x", "y"] {
+        let source = format!("component App\n  view\n    scroll height=100 width=300 scroll-snap-type=\"{axis} mandatory\"\n      view scroll-snap-align=\"center\"\n");
+        let plan = contract::compile(&source).unwrap();
+        let r = Runner::boot(plan, (), Kernel::with_monospace(), Default::default(), "/").unwrap();
+        let node = r.kernel().node(r.roots()[0]).unwrap();
+        assert_eq!(
+            node.style.scroll_snap_type.name(),
+            format!("{axis} mandatory")
+        );
+        assert_eq!(
+            r.kernel()
+                .node(node.children()[0])
+                .unwrap()
+                .style
+                .scroll_snap_align
+                .name(),
+            "center"
+        );
+    }
+    for attr in [
+        "scroll-snap-type=\"x proximity\"",
+        "scroll-snap-stop=\"always\"",
+    ] {
+        assert!(contract::compile(&format!(
+            "component App\n  view\n    scroll height=100 {attr}\n"
+        ))
+        .is_err());
+    }
+}

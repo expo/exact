@@ -2,8 +2,8 @@
 
 - **Upstream:** `taffy` 0.14.0, crates.io package supplied offline at
   `~/Library/Caches/exact2-textflow/taffy-0.14.0/` (M8, 2026-09-18).
-  Its `.cargo_vcs_info.json` pins commit `77f385683c1d698c91a23a259f87fdddf26925fb`.
-- **Why vendored:** patches 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70 and 71 below remain. `[patch.crates-io]`
+  The archive's `.cargo_vcs_info.json` pins commit `77f385683c1d698c91a23a259f87fdddf26925fb`.
+- **Why vendored:** patches 3, 4, 5, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70 and 71 below remain. `[patch.crates-io]`
   selects this copy; the kernel declares `taffy = "0.14"`.
 - **Owner:** Charlie Cheever (kernel/layout).
 - **Features:** std, taffy_tree, flexbox, grid, block_layout, content_size, calc.
@@ -327,7 +327,8 @@ machine. The measure-count and sparse-work assertions remain unchanged.
 
 Reconcile every `EXACT PATCH` marker with this inventory, compare against the
 selected upstream package, and run the available upstream tests and Exact's
-five checks. The crates.io package does not include the generated browser
+checks. Each remaining patch carries at least one marker, and there are no
+patches 22 to 24. The crates.io package does not include the generated browser
 conformance corpus. Do not describe those absent fixtures as tested.
 
 ## Patch 9: sparse layout writes and caller-proven boundary replay (S6)
@@ -901,9 +902,8 @@ the text in two lines spilling out. Patch 25's fit-content clamp held only for
 the final layout. The base-size and minimum-content probes now pass a
 fit-content cross size measured from the item's own max- and min-content
 contributions, clamped to its min and max and floored at its padding and
-border, through the helper and condition determine_hypothetical_cross_size already
-uses for the final width (`common::fit_content_width`; a column, an auto
-cross size, no ratio, not a compressible replaced element), so the two agree.
+border (`common::fit_content_width`). Non-ratio items use that helper for
+their final width too; a ratio item's final width follows its flexed height.
 That helper's clamp is corrected to CSS's order, max(min-content,
 min(max-content, available)): it let max-content win when a negative margin
 inverts the two, where Chrome takes the min-content (patch 25's grid, column
@@ -912,9 +912,10 @@ when a probe needs it. A leaf is measured so too: a leaf wraps to the space
 only while its min-content fits it, and a word that only `overflow-wrap:
 break-word` breaks makes its fit-content width its `max-width`; measured at
 the space, a padded chat bubble at `max-width: 100%` of a 75% column was two
-lines taller than its text (chat-rooms, round 26). Stretched items, sizing
-keywords and items with a ratio are as before; a wrapping column in a row (an item whose own main axis is
-the parent's cross axis) is not covered.
+lines taller than its text (chat-rooms, round 26). Stretched items and sizing
+keywords retain their own paths; non-replaced ratio items use the same
+fit-content width for main-size measurement. A wrapping column in a row
+(an item whose own main axis is the parent's cross axis) is not covered.
 
 **Held by** `browser_flex::a_fit_content_flex_item_in_a_column_is_as_tall_as_its_wrapped_lines`
 (six Chrome 154 cases through the web host: the row holding a wrapping row
@@ -1686,9 +1687,12 @@ Patch 12 still excludes a provisional stretched width in wrapping columns.
 Cross sizing derives the width from the flexed height ([§9.4](https://www.w3.org/TR/css-flexbox-1/#cross-sizing)).
 Patch 50's automatic inline minimum is resolved at this stage for columns:
 `minimum_ratio_width` accepts the used border-box height and keeps the larger
-of its transferred width and the content's min-content width. Other layout
-callers retain the preferred-height calculation. Final stretch still uses
-authored width bounds, preserving Patch 50's intrinsic-width protection.
+of its transferred width and the content's min-content width. With an auto
+preferred height, that content probe retains the width cap transferred from
+`max-height`; flexing supplies the ratio transfer without making the probe
+definite. Other layout callers retain the preferred-height calculation.
+Final stretch still uses authored width bounds, preserving Patch 50's
+intrinsic-width protection.
 
 **Held by** `browser_position::positioned_boxes_roots_and_ratios_match_chrome`:
 32 literal `Chrome 151 ratio column shrink` cases measured with Chrome
@@ -1778,8 +1782,7 @@ A non-replaced container's `ContentSize` probe with a supplied height keeps
 its authored maximum width instead of the width transferred from `max-height`.
 The automatic inline minimum's container probe supplies its clamped definite
 height; an indefinite-height probe retains the transferred cap, including
-for a flex basis. A leaf's probe leaves both dimensions unknown so it reaches
-its text measurer: supplying a height would derive a width and return early.
+for a flex basis. Leaves use the same height distinction (Patch 64).
 The minimum combines that independent content width with the height transfer.
 Block uses the same ratio-aware content measurement as flex and grid: a
 derived width is an automatic minimum that wider content can exceed, unless
@@ -1791,8 +1794,9 @@ A row item with a definite height keeps that wider content minimum when
 flex chooses its automatic minimum. Specified widths and maximum widths
 still cap it. When flex chooses its main-axis automatic minimum, auto-height
 rows, columns and replaced elements retain the transferred cap; the
-hypothetical-size clamp is unchanged. A column item's inline minimum can
-still exceed its transferred width cap, as in block, absolute and root layout.
+hypothetical-size clamp is unchanged. A column item with a definite preferred
+height can still exceed its transferred width cap, as in block, absolute and
+root layout.
 This follows Chrome 151.0.7922.34, measured on 2026-10-19.
 [Flexbox §4.5](https://www.w3.org/TR/css-flexbox-1/#min-size-auto) defines a
 converted cross-axis maximum for the content suggestion of non-replaced
@@ -2030,23 +2034,26 @@ The flex basis then agrees with the hypothetical size instead of exceeding
 it and freezing growth under [Flexbox §9.7](https://www.w3.org/TR/css-flexbox-1/#resolve-flexible-lengths).
 The flexible-length freeze rule is unchanged.
 
-`minimum_ratio_width` now supplies the clamped height to leaves as well as
-containers. For this min-content probe, the shared helper makes the width
-transfer a floor and removes the transferred width cap, so wider text is
-still measured independently. This replaces Patch 57's leaf-only
-unknown-height probe: omitting the height would now cap the text minimum.
+When the preferred height is definite, `minimum_ratio_width` supplies the
+clamped height to leaves as well as containers. For this min-content probe,
+the shared helper makes the width transfer a floor and removes the
+transferred width cap, so wider text is still measured independently. When
+the preferred height is auto, the probe leaves height unknown so its
+transferred cap still bounds the content minimum, even when a flex column
+supplies a used height for the ratio transfer.
 Cross-size resolution with a supplied height keeps the ratio-derived
 preferred width so text wraps at that width. Replaced leaves, vertical
 probes and probes with a known width retain their existing sizing path.
 
 **Held by** `browser_position::positioned_boxes_roots_and_ratios_match_chrome`:
-18 literal `Chrome 151 ratio text growth` cases, measured with Chrome
+literal `Chrome 151 ratio text growth` cases, measured with Chrome
 151.0.7922.34 on 2026-10-24, with the monospace advance normalized to 10px.
 Ten frames in nine cases failed before the patch: the reported
 leaf changes from 60×60 to 200×60, and content-box padding from 80×80 to
 200×80. Controls cover a zero basis, explicit minima, hidden overflow,
 a width cap, ratio 2, both box-sizing modes, definite heights, stretch,
-a growing sibling, and no ratio or height cap. The existing block
+a growing sibling, auto-height columns with auto and zero height minima,
+and no ratio or height cap. The existing block
 growth, definite-height inline minima, replaced-element, percentage-height
 and exclusion-height tests remain passing.
 
@@ -2055,8 +2062,11 @@ normalizing both letters and spaces to 10px. Seven failed when the helper
 also handled column cross-size resolution: the reported leaf measured
 130×100 instead of 100×100. They cover flexed and percentage heights,
 ratios and box sizing, with stretch, overflow, inline bounds, row, block
-and absolute controls. The auto-height column with a 100px height cap
-already measured 60×60 before Patch 64; it remains an owed case in `QUEUE.md`.
+and absolute controls. Main-size measurement resolves an auto-height
+column item's fit-content width before deriving its ratio height. The
+100px height cap gives a 100×100 box even though the text wraps into
+60px-wide lines; the 60px cap, definite-height and flexed-height cases
+retain their measured frames.
 
 ## Cargo workspace boundary
 

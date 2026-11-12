@@ -263,6 +263,17 @@ impl WebSocket {
         max_message: usize,
         signal: &crate::stdlib::abort::AbortSignal,
     ) -> Result<Box<dyn MessageSource>, HostError> {
+        self.open_with_protocols(url, max_message, signal, &[])
+    }
+
+    /// Open with ordered subprotocols, retaining the host's network gate.
+    pub fn open_with_protocols(
+        &self,
+        url: &str,
+        max_message: usize,
+        signal: &crate::stdlib::abort::AbortSignal,
+        protocols: &[String],
+    ) -> Result<Box<dyn MessageSource>, HostError> {
         websocket::open_gated(
             self.transport.as_ref(),
             &self.grants,
@@ -270,6 +281,7 @@ impl WebSocket {
             url,
             max_message,
             signal,
+            protocols,
         )
     }
 
@@ -451,6 +463,16 @@ impl Fetch {
     pub fn with_gate(mut self, gate: Arc<dyn crate::boundary::HopGate>) -> Self {
         self.gate = Some(gate);
         self
+    }
+
+    /// This binding's transport and gate under `grants` instead (Exact
+    /// patch 36): a narrower scope rides the connections the transport keeps.
+    pub fn with_grants(&self, grants: GrantSet) -> Self {
+        Self {
+            transport: Arc::clone(&self.transport),
+            grants: Arc::new(grants),
+            gate: self.gate.clone(),
+        }
     }
 
     /// Adapt this binding's configured blocking transport to caller-supplied

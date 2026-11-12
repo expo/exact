@@ -1,5 +1,13 @@
 use super::*;
 
+/// A legacy colour's 8-bit value.
+fn bytes(s: &str) -> Option<Rgba8> {
+    match parse(s) {
+        Some(Parsed::Legacy(c, _)) => Some(c),
+        _ => None,
+    }
+}
+
 fn wide(s: &str) -> Wide {
     match parse(s) {
         Some(Parsed::Wide(w)) => w,
@@ -68,21 +76,27 @@ fn the_matrices_are_the_standards_primaries() {
 fn every_form_parses_into_its_own_space_and_serialises() {
     assert_eq!(
         parse("red"),
-        Some(Parsed::Legacy(Rgba8 {
-            r: 255,
-            g: 0,
-            b: 0,
-            a: 1.0
-        }))
+        Some(Parsed::Legacy(
+            Rgba8 {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 1.0
+            },
+            Wide::new(Space::Srgb, [1.0, 0.0, 0.0], 1.0)
+        ))
     );
     assert_eq!(
         parse("hsl(120 100% 50%)"),
-        Some(Parsed::Legacy(Rgba8 {
-            r: 0,
-            g: 255,
-            b: 0,
-            a: 1.0
-        }))
+        Some(Parsed::Legacy(
+            Rgba8 {
+                r: 0,
+                g: 255,
+                b: 0,
+                a: 1.0
+            },
+            Wide::new(Space::Hsl, [120.0, 100.0, 50.0], 1.0)
+        ))
     );
     assert_eq!(parse("currentColor"), Some(Parsed::Current));
     for (text, space, c) in [
@@ -138,6 +152,11 @@ fn every_form_parses_into_its_own_space_and_serialises() {
     );
     assert_eq!(wide("lab(50% 40 59.5)").css(), "lab(50 40 59.5)");
     assert_eq!(wide("color(xyz 0 0 0)").css(), "color(xyz-d65 0 0 0)");
+    // Components are written as JavaScript's `String(n)` writes them.
+    assert_eq!(
+        wide("color(xyz 1e-7 0.5 1.5e21)").css(),
+        "color(xyz-d65 1e-7 0.5 1.5e+21)"
+    );
 }
 
 #[test]
@@ -235,11 +254,11 @@ fn a_form_css_refuses_is_not_a_colour() {
     }
     assert_eq!(parse_profiled("color(--rec709 1. 0 0)"), None);
     assert_eq!(parse("rgb(--1 0 0)"), None);
-    let legacy = |r, g, b, a| Some(Parsed::Legacy(Rgba8 { r, g, b, a }));
-    assert_eq!(parse("rgb(none 0 0 / none)"), legacy(0, 0, 0, 0.0));
-    assert_eq!(parse("RGB(.5e1 +0 -0)"), legacy(5, 0, 0, 1.0));
-    assert_eq!(parse(" rgb(1e2 0 0) "), legacy(100, 0, 0, 1.0));
-    assert_eq!(parse("rgb( 255 , 0 , 0 , 50% )"), legacy(255, 0, 0, 0.5));
+    let legacy = |r, g, b, a| Some(Rgba8 { r, g, b, a });
+    assert_eq!(bytes("rgb(none 0 0 / none)"), legacy(0, 0, 0, 0.0));
+    assert_eq!(bytes("RGB(.5e1 +0 -0)"), legacy(5, 0, 0, 1.0));
+    assert_eq!(bytes(" rgb(1e2 0 0) "), legacy(100, 0, 0, 1.0));
+    assert_eq!(bytes("rgb( 255 , 0 , 0 , 50% )"), legacy(255, 0, 0, 0.5));
     assert_eq!(refusal("rgb(255 0 0 / 0.5)"), None);
     assert_eq!(refusal("not a colour"), None);
     // A rule is named only when it is certainly the one broken; any other
@@ -387,6 +406,7 @@ fn srgb(r: f64, g: f64, b: f64, alpha: f64) -> Wide {
         space: Space::Srgb,
         c: [r, g, b],
         alpha,
+        missing: [false; 4],
     }
 }
 
@@ -406,6 +426,7 @@ fn folding_keeps_the_same_bits_on_every_host() {
                 space: Space::Srgb,
                 c: rgb.map(|v| v / 255.0),
                 alpha: 1.0,
+                missing: [false; 4],
             }
             .linear_srgb(),
         )
@@ -494,6 +515,7 @@ fn hue_methods_go_round_as_css_says() {
         space: Space::Oklch,
         c: [0.7, 0.1, h],
         alpha: 1.0,
+        missing: [false; 4],
     };
     let hue = |v: [f64; 3]| crate::mix::MixSpace::Oklch.from_linear_srgb(v)[2];
     let (shorter, _) = mix(&at(10.0), &at(350.0), 0.5, how(HueMethod::Shorter));
@@ -512,17 +534,9 @@ fn hue_methods_go_round_as_css_says() {
     assert!(hue(increasing) < 1.0 || hue(increasing) > 359.0);
     let (decreasing, _) = mix(&at(350.0), &at(10.0), 0.5, how(HueMethod::Decreasing));
     assert!((hue(decreasing) - 180.0).abs() < 0.5);
-    // A gray has no hue: white to blue keeps blue's hue all the way.
-    let blue = Wide {
-        space: Space::Oklch,
-        c: [0.45, 0.3, 264.0],
-        alpha: 1.0,
-    };
-    let white = Wide {
-        space: Space::Oklch,
-        c: [1.0, 0.0, 0.0],
-        alpha: 1.0,
-    };
+    // A converted gray has no hue: white to blue keeps blue's hue all the way.
+    let blue = Wide::new(Space::Oklch, [0.45, 0.3, 264.0], 1.0);
+    let white = srgb(1.0, 1.0, 1.0, 1.0);
     let (m, _) = mix(&white, &blue, 0.5, how(HueMethod::Shorter));
     assert!((hue(m) - 264.0).abs() < 0.5, "{}", hue(m));
 }
@@ -536,6 +550,7 @@ fn opposite_hues_go_round_from_the_first() {
         space: Space::Lch,
         c: [70.0, 30.0, h],
         alpha: 1.0,
+        missing: [false; 4],
     };
     let lch_hue = |v: [f64; 3]| crate::mix::MixSpace::Lch.from_linear_srgb(v)[2];
     for method in [HueMethod::Shorter, HueMethod::Longer] {
@@ -599,7 +614,7 @@ fn display_p3_bytes_are_css_conversion_clipped() {
             let c = w.display_p3_8();
             [c.r, c.g, c.b]
         }
-        Some(Parsed::Legacy(c)) => {
+        Some(Parsed::Legacy(c, _)) => {
             let c = srgb8_to_p3(c);
             [c.r, c.g, c.b]
         }
@@ -660,6 +675,7 @@ fn rec2100_components_round_trip_through_linear_srgb() {
                 space,
                 c,
                 alpha: 1.0,
+                missing: [false; 4],
             };
             let back = crate::rec2100_from_linear_srgb(space, w.linear_srgb()).unwrap();
             for i in 0..3 {
@@ -668,4 +684,201 @@ fn rec2100_components_round_trip_through_linear_srgb() {
         }
     }
     assert_eq!(crate::rec2100_from_linear_srgb(Space::Srgb, [0.0; 3]), None);
+}
+
+/// A colour as `mix` takes it: as written.
+fn mixable(s: &str) -> Wide {
+    match parse(s) {
+        Some(Parsed::Wide(w) | Parsed::Legacy(_, w)) => w,
+        other => panic!("{s}: {other:?}"),
+    }
+}
+
+/// `color-mix(in <space>, a, b)` against Chrome 156's computed value, in the
+/// mix space's components (sRGB's for hsl and hwb, which Chrome serialises
+/// as `color(srgb …)`), each within `tolerance` of the larger of 1 and its
+/// size.
+fn chrome_mixes(cases: &[(&str, &str, MixSpace, [f64; 3], f64)], tolerance: f64) {
+    for &(a, b, space, want, alpha) in cases {
+        let how = Interpolation {
+            space,
+            hue: HueMethod::Shorter,
+        };
+        let (mid, got_alpha) = mix(&mixable(a), &mixable(b), 0.5, how);
+        let shown = match space {
+            MixSpace::Hsl | MixSpace::Hwb => MixSpace::Srgb,
+            _ => space,
+        };
+        let mut got = shown.from_linear_srgb(mid);
+        if matches!(space, MixSpace::Lch | MixSpace::Oklch) && got[1] < 1e-4 {
+            got[2] = want[2]; // no hue to compare on a gray
+        }
+        let near = got
+            .iter()
+            .zip(want)
+            .all(|(g, w)| (g - w).abs() <= tolerance * w.abs().max(1.0));
+        assert!(
+            near && (got_alpha - alpha).abs() < 1e-9,
+            "color-mix(in {space:?}, {a}, {b}): {got:?} / {got_alpha}, Chrome {want:?} / {alpha}"
+        );
+    }
+}
+
+/// A hue written on a gray acts as normal (CSS Color 4 §4.4.1); only the hue
+/// a conversion gives an achromatic colour is powerless. Chrome: `color-mix(in
+/// oklch, oklch(0.7 0 0), oklch(0.7 0.2 120))` is `oklch(0.7 0.1 60)`, where
+/// white, converted, keeps the other's hue.
+#[test]
+fn a_written_hue_on_a_gray_is_interpolated() {
+    use MixSpace::{Lch, Oklch};
+    #[rustfmt::skip]
+    let cases = [
+        ("oklch(0.7 0 0)", "oklch(0.7 0.2 120)", Oklch, [0.7, 0.1, 60.0], 1.0),
+        ("oklch(1 0 0)", "oklch(0.45 0.3 264)", Oklch, [0.725, 0.15, 312.0], 1.0),
+        ("lch(50 0 0)", "lch(50 50 180)", Lch, [50.0, 25.0, 90.0], 1.0),
+        ("oklch(0.7 0.0000001 30)", "oklch(0.7 0.2 120)", Oklch, [0.7, 0.1, 75.0], 1.0),
+        ("white", "oklch(0.7 0.2 120)", Oklch, [0.849997, 0.100025, 120.0], 1.0),
+        ("rgb(128 128 128)", "oklch(0.7 0.2 120)", Oklch, [0.649934, 0.100015, 120.0], 1.0),
+        ("lab(50 0 0)", "oklch(0.7 0.2 120)", Oklch, [0.634482, 0.100007, 120.0], 1.0),
+        // Written in oklch, but converted to lch: powerless there.
+        ("oklch(0.7 0 30)", "lch(50 30 120)", Lch, [57.6, 15.0033, 120.0], 1.0),
+    ];
+    // Chrome's conversions differ from these in the fourth significant digit.
+    chrome_mixes(&cases, 5e-4);
+    let how = Interpolation {
+        space: Oklch,
+        hue: HueMethod::Longer,
+    };
+    let (mid, _) = mix(
+        &wide("oklch(0.7 0 0)"),
+        &wide("oklch(0.7 0.2 120)"),
+        0.5,
+        how,
+    );
+    let hue = Oklch.from_linear_srgb(mid)[2];
+    assert!((hue - 240.0).abs() < 0.01, "longer: {hue}, Chrome 240");
+}
+
+/// `none` is a missing component (CSS Color 4 §4.4): it acts as 0, but an
+/// interpolation takes the other colour's, carried to the analogous
+/// component of the mix space when the colour is converted (§12.4), and so
+/// is a missing alpha. Chrome 156's values.
+#[test]
+fn a_missing_component_takes_the_other_colours() {
+    use MixSpace::*;
+    let w = wide("oklch(0.7 0 none)");
+    assert_eq!(
+        (w.c, w.missing),
+        ([0.7, 0.0, 0.0], [false, false, true, false])
+    );
+    assert_eq!(w.css(), "oklch(0.7 0 none)");
+    assert_eq!(
+        wide("oklch(0.7 0.1 120 / none)").css(),
+        "oklch(0.7 0.1 120 / none)"
+    );
+    assert_eq!(wide("lab(none 20 20)").css(), "lab(none 20 20)");
+    assert_eq!(
+        wide("color(srgb none 0.5 0.5)").css(),
+        "color(srgb none 0.5 0.5)"
+    );
+    #[rustfmt::skip]
+    let cases = [
+        ("oklch(0.7 0 none)", "oklch(0.7 0.2 120)", Oklch, [0.7, 0.1, 120.0], 1.0),
+        ("oklch(0.7 0.1 none)", "oklch(0.7 0.2 120)", Oklch, [0.7, 0.15, 120.0], 1.0),
+        ("oklch(none 0.1 30)", "oklch(0.5 0.2 120)", Oklch, [0.5, 0.15, 75.0], 1.0),
+        ("oklch(0.7 none 30)", "oklch(0.5 0.2 120)", Oklch, [0.6, 0.2, 75.0], 1.0),
+        ("oklch(none 0.1 30)", "oklab(0.5 0.1 0.1)", Oklab, [0.5, 0.0933013, 0.075], 1.0),
+        // A hue has no analogue in oklab: converted as 0.
+        ("oklch(0.6 0.1 none)", "oklab(0.5 0.1 0.1)", Oklab, [0.55, 0.1, 0.05], 1.0),
+        ("oklch(0.6 0.1 none)", "lch(50 30 120)", Lch, [51.1711, 31.4999, 120.0], 1.0),
+        ("oklch(none 0.1 30)", "lch(50 30 120)", Lch, [50.0, 15.4552, 103.987], 1.0),
+        ("oklch(0.6 none 30)", "lch(50 30 120)", Lch, [51.8, 30.0, 120.0], 1.0),
+        ("lab(none 20 20)", "oklch(0.5 0.1 120)", Oklch, [0.5, 0.286536, 66.1934], 1.0),
+        ("lab(50 none 20)", "oklch(0.5 0.1 120)", Oklch, [0.533497, 0.0749323, 106.68], 1.0),
+        ("lab(50 none 20)", "oklab(0.5 0.1 0.1)", Oklab, [0.533497, 0.1, 0.0748895], 1.0),
+        ("oklab(0.5 none 0.1)", "lab(50 20 20)", Lab, [46.1105, 20.0, 33.6962], 1.0),
+        ("color(srgb none 0.5 0.5)", "color(srgb 1 0 0)", Srgb, [1.0, 0.25, 0.25], 1.0),
+        ("color(srgb none 0.5 0.5)", "color(srgb 1 0 0)", SrgbLinear, [1.0, 0.107021, 0.107021], 1.0),
+        ("color(srgb none 0.5 0.5)", "color(xyz 0.5 0.2 0.1)", XyzD65, [0.5, 0.184259, 0.164467], 1.0),
+        ("color(xyz none 0.2 0.1)", "color(srgb 1 0 0)", XyzD65, [0.412426, 0.206324, 0.0596587], 1.0),
+        ("color(xyz none 0.2 0.1)", "color(srgb 1 0 0)", Srgb, [1.0, 0.324738, 0.141292], 1.0),
+        ("color(srgb none 0.5 0.5)", "color(display-p3 1 0 0)", DisplayP3, [1.0, 0.246113, 0.247999], 1.0),
+        ("oklch(0.6 0.1 none)", "hsl(120 50% 50%)", Hsl, [0.326454, 0.719118, 0.326454], 1.0),
+        ("oklch(0.6 0.1 none)", "hwb(120 20% 20%)", Hwb, [0.299436, 0.746137, 0.299436], 1.0),
+        ("oklch(none 0.1 30)", "hwb(120 20% 20%)", Hwb, [0.295405, 0.401894, 0.0958323], 1.0),
+        ("oklch(0.7 0.1 120 / none)", "oklch(0.5 0.1 120 / 0.5)", Oklch, [0.6, 0.1, 120.0], 0.5),
+        ("oklch(0.7 0.1 120 / none)", "oklch(0.5 0.1 120)", Oklch, [0.6, 0.1, 120.0], 1.0),
+    ];
+    chrome_mixes(&cases, 5e-4);
+}
+
+/// `hwb()` clamps no whiteness or blackness above 100% (CSS Color 4 §8),
+/// scaling a sum over 100% down; `hsl()` clamps. Chrome paints
+/// `hwb(0 200% 100%)` as rgb(170, 170, 170), 200 / 300.
+#[test]
+fn hwb_whiteness_and_blackness_are_not_clamped_above_100() {
+    for (text, v) in [
+        ("hwb(0 200% 100%)", [170; 3]),
+        ("hwb(0 50% 150%)", [64; 3]),
+        ("hwb(200 120% 30%)", [204; 3]),
+        ("hwb(200 -20% 30%)", [0, 119, 179]),
+        ("hwb(none 20% 30%)", [179, 51, 51]),
+        ("hsl(200 150% 50%)", [0, 170, 255]),
+        ("hsl(200 50% 150%)", [255; 3]),
+    ] {
+        let [r, g, b] = v;
+        assert_eq!(bytes(text), Some(Rgba8 { r, g, b, a: 1.0 }), "{text}");
+    }
+}
+
+/// `rgb()`, `hsl()` and `hwb()` mix as written (CSS Color 4 §12): unrounded,
+/// in their own components, a gray's written hue acting as normal and `none`
+/// missing, as Chrome 156 mixes them.
+#[test]
+fn legacy_forms_mix_as_written() {
+    use MixSpace::*;
+    let w = mixable("hsl(none 50% 50% / none)");
+    assert_eq!(
+        (w.space, w.missing),
+        (Space::Hsl, [true, false, false, true])
+    );
+    assert_eq!(w.css(), "hsl(none 50% 50% / none)");
+    #[rustfmt::skip]
+    let cases = [
+        ("hsl(30 0% 50%)", "hsl(120 50% 50%)", Hsl, [0.5625, 0.625, 0.375], 1.0),
+        ("hwb(30 60% 40%)", "hwb(120 20% 20%)", Hwb, [0.625, 0.7, 0.4], 1.0),
+        ("hsl(none 50% 50%)", "hsl(120 50% 50%)", Hsl, [0.25, 0.75, 0.25], 1.0),
+        ("hsl(10 50% 50%)", "hsl(120 50% 50%)", Hsl, [0.708333, 0.75, 0.25], 1.0),
+        ("hsl(30 none 50%)", "hsl(120 50% 50%)", Hsl, [0.625, 0.75, 0.25], 1.0),
+        ("hsl(none 50% 50%)", "oklch(0.7 0.1 120)", Oklch, [0.626172, 0.131846, 120.0], 1.0),
+        ("hsl(30 50% none)", "oklch(0.7 0.1 120)", Oklch, [0.7, 0.05, 120.0], 1.0),
+        ("hsl(30 none 50%)", "oklch(0.7 0.1 120)", Oklch, [0.649089, 0.1, 120.0], 1.0),
+        ("hwb(none 20% 30%)", "lch(50 30 120)", Lch, [46.0317, 45.3977, 120.0], 1.0),
+        ("hwb(30 none 30%)", "hwb(120 20% 20%)", Hwb, [0.6125, 0.75, 0.2], 1.0),
+        ("hwb(none 20% 30%)", "hsl(120 50% 50%)", Hsl, [0.224306, 0.725694, 0.224306], 1.0),
+        ("hwb(0 200% 100%)", "hwb(0 0% 0%)", Hwb, [0.666667, 0.666667, 0.666667], 1.0),
+        ("rgb(none 0 0)", "rgb(255 255 255)", Srgb, [1.0, 0.5, 0.5], 1.0),
+        ("rgb(none 0 0 / none)", "rgb(255 255 255 / 0.5)", Srgb, [1.0, 0.5, 0.5], 0.5),
+        ("rgb(none 0 0)", "rgb(255 255 255)", Oklab, [0.499997, 0.0000227839, 0.0000100434], 1.0),
+        ("rgb(none 128 0)", "color(srgb 1 0 0)", SrgbLinear, [1.0, 0.10793, 0.0], 1.0),
+        ("red", "hsl(120 50% 50%)", Hsl, [0.875, 0.875, 0.125], 1.0),
+        ("rgb(12.6 0 0)", "hsl(120 50% 50%)", Hsl, [0.459118, 0.459118, 0.0655882], 1.0),
+    ];
+    chrome_mixes(&cases, 5e-4);
+}
+
+/// A component missing from both colours stays missing, so 0, whatever a
+/// conversion made of it (CSS Color 4 §12.4). Chrome 156: `color-mix(in
+/// display-p3, color(srgb none 1 0), color(display-p3 none 0 1))` is
+/// `color(display-p3 none 0.492614 0.649132)`.
+#[test]
+fn a_component_missing_from_both_stays_missing() {
+    use MixSpace::*;
+    #[rustfmt::skip]
+    let cases = [
+        ("color(srgb none 1 0)", "color(display-p3 none 0 1)", DisplayP3, [0.0, 0.492614, 0.649132], 1.0),
+        ("color(srgb none 1 0)", "color(display-p3 none 0 1)", Srgb, [0.0, 0.500073, 0.521041], 1.0),
+        ("oklch(none 0.1 30)", "lab(none 20 20)", Oklch, [0.0, 0.286536, 21.1934], 1.0),
+    ];
+    chrome_mixes(&cases, 5e-4);
 }

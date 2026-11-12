@@ -71,7 +71,7 @@ fn color(hex: &str) -> Material {
         .starts_with('#')
         .then(|| exact_color::parse(hex))
         .flatten();
-    let Some(exact_color::Parsed::Legacy(c)) = parsed else {
+    let Some(exact_color::Parsed::Legacy(c, _)) = parsed else {
         panic!("prop.color: expected #rgb, #rgba, #rrggbb or #rrggbbaa, got `{hex}`");
     };
     let [r, g, b] =

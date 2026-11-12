@@ -57,6 +57,7 @@
 //! @ref LLP 1125 D2–D5, D7, D9
 
 use crate::agent::num;
+use crate::compare;
 use crate::midi::{Midi, Queued, HOLD, TICKS_PER_SECOND};
 use crate::sound::{Added, By, Cut, Sounds};
 use exact_plan::{ActionsId, Plan, Value, HAPTIC_KINDS};
@@ -230,24 +231,6 @@ fn items(v: Option<&Value>) -> &[Value] {
     match v {
         Some(Value::List(i) | Value::Record(i)) => i,
         _ => &[],
-    }
-}
-
-/// Two values the same: numbers bit for bit (so `NaN` is itself), a shared
-/// list at once.
-pub(crate) fn same(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Number(x), Value::Number(y)) => x.to_bits() == y.to_bits(),
-        (Value::List(x), Value::List(y)) | (Value::Record(x), Value::Record(y)) => {
-            exact_plan::Items::ptr_eq(x, y)
-                || (x.len() == y.len() && x.iter().zip(y.iter()).all(|(a, b)| same(a, b)))
-        }
-        (Value::Option(x), Value::Option(y)) => match (x, y) {
-            (Some(x), Some(y)) => same(x, y),
-            (None, None) => true,
-            _ => false,
-        },
-        _ => a == b,
     }
 }
 
@@ -809,9 +792,7 @@ impl Transport {
                     out.midi.retract_seq(t, Cut::At(t), "edit", log);
                     out.midi.end_seq(t, log);
                     self.arm(plan, out, i, t, live, s.args, log);
-                } else if self.raw.len() != s.args.len()
-                    || !self.raw.iter().zip(&s.args).all(|(a, b)| same(a, b))
-                {
+                } else if !compare::equivalent_all(&self.raw, &s.args) {
                     self.edit(plan, out, t, live, s.args, log);
                 }
             } else if rising {

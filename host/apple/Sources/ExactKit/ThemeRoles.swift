@@ -133,7 +133,7 @@ extension Presenter {
         navigation.retheme()
         #else
         // The page's ground where the app sets none (LLP 1115 D2).
-        viewport.backgroundColor = ThemeRoles.color("background", in: root) ?? ThemeRoles.color("Canvas", in: root, or: .windowBackgroundColor)
+        paintCanvas(canvasColor())
         // AppKit has no tint: what names it, here and in what the presenter
         // shows outside its root, resolves the theme's `AccentColor` again
         // (a live edit, LLP 1121 stage 5).

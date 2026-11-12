@@ -589,8 +589,36 @@ package final class Presenter {
     }
     /// The first root's frame size, zero before the first batch.
     var rootSize: CGSize { root.subviews.first?.frame.size ?? .zero }
-    /// The page's canvas colour: the first root's background (white when unset).
-    var pageBackground: NSColor { viewport.backgroundColor }
+    /// The page's canvas colour as the viewport draws it: the first root's
+    /// opaque background, the window background when unset, and clear when
+    /// the root's is translucent, which the viewport leaves undrawn.
+    var pageBackground: NSColor { viewport.drawsBackground ? viewport.backgroundColor : .clear }
+    /// What covers the page where a route paints no ground of its own: the
+    /// canvas, or the window background behind a translucent one.
+    var opaqueGround: NSColor { viewport.drawsBackground ? viewport.backgroundColor : .windowBackgroundColor }
+
+    /// The page's canvas: the first root's background, else the theme's, else
+    /// the platform's (LLP 1115 D2).
+    func canvasColor() -> NSColor {
+        let ground = ThemeRoles.color("background", in: root) ?? ThemeRoles.color("Canvas", in: root, or: .windowBackgroundColor)
+        return (root.subviews.first as? NodeView)?.color("background_color", ground) ?? ground
+    }
+
+    /// The viewport draws the canvas only where it is opaque. A translucent
+    /// one draws nothing, so what is behind the view shows through: the
+    /// window's background in the app's own window, and the containing
+    /// app's views behind an embedded `ExactView` (LLP 1031 D3). With
+    /// `drawsBackground` on, AppKit takes the scroll view for opaque and
+    /// backs it with the window background whatever the colour's alpha.
+    func paintCanvas(_ color: NSColor) {
+        var alpha: CGFloat = 1
+        viewport.effectiveAppearance.performAsCurrentDrawingAppearance { alpha = color.alphaComponent }
+        let draws = alpha >= 1
+        guard viewport.backgroundColor != color || viewport.drawsBackground != draws else { return }
+        viewport.backgroundColor = color
+        viewport.drawsBackground = draws
+        navigation.groundChanged()
+    }
 
     /// An asset's bytes changed (LLP 1030 D10): every image showing it loads
     /// it again — the old picture stays until the new one is decoded, as a
@@ -757,7 +785,6 @@ package final class Presenter {
     var onScrolled: ((UInt32?, Double, Double) -> Void)?
     var onListIndex: ((UInt32, String) -> Int?)?
     var onListText: ((UInt32, (String, Int, Int)?, (String, Int, Int)?) -> String)?
-    var interacting: UInt32 = 0
     private(set) var listViews: [UInt32: NodeView] = [:]
 
     /// Everything kept for `id`, out of the maps (not out of the window);
@@ -1230,9 +1257,8 @@ package final class Presenter {
         // shows beyond a document shorter than the viewport, as a browser
         // paints the root element's background over the whole canvas.
         // Unset, the platform's window background (LLP 1115 D2).
-        let ground = ThemeRoles.color("background", in: root) ?? ThemeRoles.color("Canvas", in: root, or: .windowBackgroundColor)
-        let color = (root.subviews.first as? NodeView)?.color("background_color", ground) ?? ground
-        if viewport.backgroundColor != color { viewport.backgroundColor = color; navigation.groundChanged() }
+        paintCanvas(canvasColor())
+        insetScrollersFromChrome()
         let first = root.subviews.first as? NodeView
         let fit = first?.props["viewportFit"]
         if fit != viewportFit { viewportFit = fit; onViewportFit?() }

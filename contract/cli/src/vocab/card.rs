@@ -235,9 +235,18 @@ pub fn card() -> String {
             .collect::<Vec<_>>()
             .join(" ")
     );
+    // A filled state is named once, by its outline's role, which keeps the card under its size.
+    let roles = exact_kernel::generated::SYMBOL_ROLES;
+    let (filled, outlines): (Vec<&str>, Vec<&str>) =
+        roles.iter().partition(|role| role.ends_with("-fill"));
     out += &format!(
-        "symbol roles: {}\n",
-        exact_kernel::generated::SYMBOL_ROLES.join(" ")
+        "symbol roles: {}; with a <role>-fill: {}\n",
+        outlines.join(" "),
+        filled
+            .iter()
+            .map(|role| role.trim_end_matches("-fill"))
+            .collect::<Vec<_>>()
+            .join(" ")
     );
     out
 }

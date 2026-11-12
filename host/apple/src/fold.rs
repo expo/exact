@@ -73,13 +73,82 @@ impl<D: DataSource> Host<D> {
     }
 
     pub(super) fn set_environment(&mut self, env: Env) -> String {
+        let previous = self.runner.kernel().env();
         let mut batch = Batch::new();
-        let error = match self.environment_into(env, None, &mut batch) {
-            Ok(false) => None,
-            Ok(true) => self.layout(&mut batch).err(),
-            Err(e) => Some(e),
-        };
+        let changed = self.environment_into(env, None, &mut batch);
+        let mut error = changed.as_ref().err().cloned();
+        if error.is_none() {
+            match self.runner.refresh_viewport_geometry() {
+                Ok(Some(receipt)) => {
+                    return self.commit_into(
+                        &[Timed {
+                            at_ms: self.now_ms,
+                            receipt,
+                        }],
+                        None,
+                        batch,
+                    )
+                }
+                Err(e) => {
+                    return self
+                        .geometry_refused(format!("viewport geometry: {e:?}"), Some(previous))
+                }
+                Ok(None) => {}
+            }
+            if changed == Ok(true) {
+                error = self.layout(&mut batch).err();
+            }
+        }
         self.finish(batch, error)
+    }
+
+    pub(super) fn geometry_refused(&mut self, mut error: String, previous: Option<Env>) -> String {
+        if let Some(env) = previous {
+            let kernel = self.runner.kernel_mut();
+            let _ = kernel.set_env(env.clone());
+            let _ = kernel.set_segments(env.cols, env.rows, env.segments);
+        }
+        // Rebuild dictionaries after the runner restores a refused environment.
+        let mut batch = Batch::new();
+        for id in self.preorder() {
+            self.update(id, &mut batch);
+        }
+        self.emit_paragraphs(&mut batch);
+        if let Err(layout) = self.layout(&mut batch) {
+            error.push_str(&format!("; restored layout: {layout}"));
+        }
+        self.finish(batch, Some(error))
+    }
+
+    /// The viewport's change into `batch`, after what it holds (`set_view`).
+    pub(super) fn resize_inner(
+        &mut self,
+        width: f32,
+        height: f32,
+        mut batch: Batch,
+        error: Option<String>,
+        previous: Option<Env>,
+    ) -> String {
+        let _roles = self.runner.bind_roles(); // Its own (LLP 1121 stage 5).
+                                               // @ref LLP 1039 D2 — merge re-answer and relayout, once.
+        let receipt = match self.runner.set_viewport(width as f64, height as f64) {
+            Ok(receipt) => receipt,
+            Err(e) => {
+                return self.geometry_refused(
+                    error.unwrap_or_else(|| format!("viewport: {e:?}")),
+                    previous,
+                )
+            }
+        };
+        self.viewport = (width, height);
+        self.height_targets_dirty = true;
+        self.presence.snap = true;
+        if let Some(receipt) = receipt {
+            let at_ms = self.now_ms;
+            return self.commit_into(&[Timed { at_ms, receipt }], error, batch);
+        }
+        let laid_out = self.layout(&mut batch).err();
+        self.finish(batch, error.or(laid_out))
     }
 
     /// `env` set, and the segments' rects on the kernel's grid when given,
@@ -130,7 +199,8 @@ impl<D: DataSource> Host<D> {
         size: Option<(f32, f32)>,
         segments: Option<Vec<exact_kernel::Rect>>,
     ) -> String {
-        let mut env = self.runner.kernel().env();
+        let previous = self.runner.kernel().env();
+        let mut env = previous.clone();
         if let Some(screen) = screen {
             env = env.with_screen(screen);
         }
@@ -139,6 +209,19 @@ impl<D: DataSource> Host<D> {
         }
         if let Some(regions) = regions {
             env = env.with_regions(regions);
+        }
+        if !env.is_finite() {
+            return self.finish(Batch::new(), Some("view: invalid environment".into()));
+        }
+        if let Some((width, height)) = size {
+            let candidate = exact_runner::Viewport {
+                width: width as f64,
+                height: height as f64,
+                ..self.runner.viewport()
+            };
+            if let Err(e) = candidate.validate() {
+                return self.finish(Batch::new(), Some(format!("viewport: {e:?}")));
+            }
         }
         // Rects off the kernel's grid are refused before anything changes.
         if let Some(rects) = &segments {
@@ -149,14 +232,35 @@ impl<D: DataSource> Host<D> {
         }
         let mut batch = Batch::new();
         let changed = self.environment_into(env, segments, &mut batch);
-        let error = changed.as_ref().err().cloned();
+        if let Err(error) = changed {
+            return self.geometry_refused(error, Some(previous));
+        }
         match size {
-            Some((width, height)) => self.resize_inner(width, height, batch, error),
-            None if changed == Ok(true) => {
+            Some((width, height)) => self.resize_inner(width, height, batch, None, Some(previous)),
+            None => {
+                match self.runner.refresh_viewport_geometry() {
+                    Ok(Some(receipt)) => {
+                        return self.commit_into(
+                            &[Timed {
+                                at_ms: self.now_ms,
+                                receipt,
+                            }],
+                            None,
+                            batch,
+                        )
+                    }
+                    Err(e) => {
+                        return self
+                            .geometry_refused(format!("viewport geometry: {e:?}"), Some(previous))
+                    }
+                    Ok(None) => {}
+                }
+                if changed != Ok(true) {
+                    return self.finish(batch, None);
+                }
                 let laid_out = self.layout(&mut batch).err();
                 self.finish(batch, laid_out)
             }
-            None => self.finish(batch, error),
         }
     }
 
@@ -213,7 +317,7 @@ impl<D: DataSource> Host<D> {
                 self.finish(batch, error)
             }
             Ok(None) => self.finish(batch, None),
-            Err(e) => self.finish(batch, Some(format!("segments: {e:?}"))),
+            Err(e) => self.geometry_refused(format!("segments: {e:?}"), None),
         }
     }
 }

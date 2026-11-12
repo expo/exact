@@ -68,6 +68,70 @@ the web, Android, Linux and Windows report unknown.
 | Android | yes | `gpu_due` per canvas | none |
 | Linux, Windows (readback and window frame) | no: a rendered canvas repaints every display frame | no | none |
 
+## Performance
+
+Three things decide what a shader-heavy module costs on a phone. The figures
+below are one reporter's, from a Solana Seeker (Android 16, Mali, 120 Hz), and
+were not measured here (#300).
+
+**Shader runtime checks.** `Device::create_shader_module` compiles with every
+runtime check of wgpu's [`ShaderRuntimeChecks`](https://docs.rs/wgpu-types/30.0.1/wgpu_types/struct.ShaderRuntimeChecks.html)
+on. `force_loop_bounding` puts a counter in every loop so that a loop that never
+ends cannot hang the GPU, and a long ray march pays for it on each iteration.
+`unsafe { device.create_shader_module_trusted(desc, checks) }` with only that
+check off is sound only when every loop in the module ends for every input the
+shader can see, uniforms and textures included: wgpu's documentation lets a
+backend compiler treat a loop that does not as unreachable, which is undefined
+behaviour. Keep the other checks (`bounds_checks`, `int_div_checks`) on unless
+you hold their own conditions. Turning off loop bounding alone took the
+reporter's gallery of ray-marched models from 54 to 63 fps (p90 24.9 ms to
+16.6 ms); bounds checks cost nothing measurable there. The browser ignores
+these settings and applies WebGPU's own.
+
+**`Surface::opaque`.** A full-window canvas that returns `true` (and not
+`high_dynamic_range`) is presented on Android in a `SurfaceView` beneath the UI,
+a layer the system compositor takes as it is. Otherwise the canvas is composed
+into the window, so each frame it draws makes HWUI's RenderThread redraw the
+window: the reporter's full-window gallery cost 32 % of a CPU core there until
+it declared itself opaque. Return `true` when every pixel the surface writes
+has alpha one.
+
+**The pipeline cache.** `exact_gpu::PipelineCache::new(device)` gives a renderer
+the cache Exact installs for its module's device. Pass its `handle` as the
+`cache` of every render and compute pipeline descriptor, and after each submit
+call `save(work)` with the number of pipelines the renderer has created so far;
+a write happens on a worker thread only when that number has grown. On Android
+(Vulkan) the cache is kept on disk per app build and GPU, so a warm launch
+builds its pipelines from it: the reporter's 90 pipelines took 0.32 s warm and
+5.9 s cold; the log says `GPU module pipeline cache: loaded`, `miss` or
+`unavailable` when the module loads. On Vulkan elsewhere the cache lives only in
+memory. Other backends have no wgpu cache `handle`; Apple uses the Metal archive
+below through the same `PipelineCache` owner. `game/render` is a whole user
+(`pipeline.rs`, `renderer/draw.rs`).
+
+### Metal pipeline archives
+
+Apple GPU modules keep a Metal binary archive in the app's cache directory,
+shared by its surfaces and written after submitted frames. The cache key includes
+the module name/version, app identity, GPU registry identity, OS build and archive
+encoding version. Metal matches shader functions and complete pipeline descriptors;
+a shader or specialization change misses the archive and compiles normally.
+Invalid or incompatible data falls back to an empty archive. Writes use the same
+checksummed envelope and atomic replacement as Vulkan's pipeline cache.
+
+On Apple, the default directory is `~/Library/Caches/exact-gpu-<app hash>`;
+`XDG_CACHE_HOME` replaces its parent for a controlled run. To preseed a matching
+installation, copy its `exact-*.bin` files into the app bundle's resources under
+`exact-pipelines/`, or point `EXACT_GPU_CACHE_SEED` at that directory. The seed is
+read-only and is used when no valid writable cache exists. It must match the cache
+key, including device and OS build; this is not a portable archive for every GPU.
+A fresh installation without a matching seed still compiles its initial pipelines.
+Render and compute pipelines participate; mesh-shader pipelines do not yet.
+
+The backend's `BinaryArchive::counts` reports successful binary lookups and misses.
+The process-isolated Metal test renders and reads pixels after both cold and warm
+loads, and covers a seed, a changed shader, a changed key and corrupt data.
+
 ## A module's own audio output
 
 A surface posts the string `"exact:audio"` through `Surface::messages` to ask
@@ -90,4 +154,6 @@ Canvas 2D, an app with no GPU canvas, or the driver's frozen clock, which
 makes surfaces seekable and opens no output. Under `EXACT_AGENT_TIMING=platform`
 the owner prepares too: surfaces can open output, but the driver drops
 `exact:audio` requests, so they do not raise the prepared ambient session.
-macOS, the web and Linux consume the request without configuring a session.
+macOS, the web, Linux and Android consume the request without configuring a session.
+On Android that means a module's output gets no audio focus and no interruption
+report from Exact: the module asks Android for focus and handles its loss itself.

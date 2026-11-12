@@ -151,6 +151,29 @@ fn widget_gallery_labels_require_a_new_binary_cohort() {
         build(&watch).id,
         "watch families are generated Swift"
     );
+    let mut configured = manifest.clone();
+    configured.json["widgets"][0]["configuration"] = serde_json::json!({"title":"Card",
+        "parameters":[{"name":"rows","type":"enum","title":"Rows","values":[{"value":"one","title":"1"}]}]});
+    assert_ne!(
+        original.id,
+        build(&configured).id,
+        "a configuration is a generated intent"
+    );
+    let implicit = build(&configured).id;
+    configured.json["widgets"][0]["configuration"]["parameters"][0]["default"] =
+        serde_json::json!("one");
+    assert_eq!(
+        implicit,
+        build(&configured).id,
+        "an omitted default is normalized"
+    );
+    configured.json["widgets"][0]["configuration"]["parameters"][0]["values"][0]["title"] =
+        serde_json::json!("One row");
+    assert_ne!(
+        implicit,
+        build(&configured).id,
+        "the option's label is generated metadata"
+    );
     manifest.json["widgets"][0]["preview"] = serde_json::json!({"title":"new preview"});
     assert_eq!(
         original.id,
@@ -716,7 +739,7 @@ fn an_executor_is_linked_only_for_a_named_module() {
 
 #[test]
 fn rust_capability_receipts_bind_executor_abi_target_and_module() {
-    assert_eq!(super::RUST_ABI, 7);
+    assert_eq!(super::RUST_ABI, 8);
     let dir = app("rust-capabilities");
     let mut manifest = Manifest::read(&dir).unwrap();
     let mut ids = Vec::new();
@@ -936,6 +959,10 @@ fn a_bundle_needs_the_runtime_of_the_newest_option_it_names() {
     assert_eq!(
         needs(b"fetch(u, {exactStream: m, exactIdleTimeout: 6e4})"),
         9
+    );
+    assert_eq!(
+        needs(b"fetch(u, {exactStream: m, exactProtocols: names})"),
+        12
     );
     // A transaction's options are data: what decides 10 is the grant.
     assert_eq!(needs(b"await db.transaction(m.commands, m.options)"), 0);

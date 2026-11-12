@@ -46,6 +46,7 @@ pub(crate) fn emit(
     entries: &std::collections::BTreeMap<String, contract::snapshot::Entry>,
 ) -> Result<(), String> {
     let (platform, target) = destination;
+    crate::widgets::check_watch_sources(app, out, target, entries)?;
     for name in [
         "EXACT_UPDATE_RECEIPT",
         "EXACT_UPDATE_GENESIS",
@@ -56,6 +57,7 @@ pub(crate) fn emit(
         "EXACT_GPU_PRODUCT",
         "EXACT_GPU_MODULES",
         "EXACT_GPU_DEVELOPMENT",
+        "EXACT_GPU_WEB_PRODUCTS",
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -120,8 +122,9 @@ pub(crate) fn emit(
     // The GPU product is built (and on Apple, signed) before the host. Its
     // exact bytes belong to this app/cohort; a sibling filename is not identity.
     if platform != "web" {
+        let mut declared = Declared::new();
         let product = std::env::var_os("EXACT_GPU_PRODUCT")
-            .map(|path| gpu_product(Path::new(&path)))
+            .map(|path| gpu_product(Path::new(&path), &mut declared))
             .transpose()?;
         let development = std::env::var("EXACT_GPU_DEVELOPMENT").ok();
         if let Some(card) = gpu_card(&manifest.id, &compat.id, trust, development, product) {
@@ -135,13 +138,27 @@ pub(crate) fn emit(
             let mut cards = serde_json::Map::new();
             for (name, path) in products {
                 let path = path.as_str().ok_or("EXACT_GPU_MODULES: a product path")?;
-                let product = Some(gpu_product(Path::new(path))?);
+                let product = Some(gpu_product(Path::new(path), &mut declared)?);
                 if let Some(card) = gpu_card(&manifest.id, &compat.id, trust, None, product) {
                     cards.insert(name, card);
                 }
             }
             compat.embedded["gpuModules"] = Value::Object(cards);
         }
+        surface_arguments(&plan, &declared)?;
+    } else if let Ok(products) = std::env::var("EXACT_GPU_WEB_PRODUCTS") {
+        // The web binds no GPU digest (its wasm and its files are one build),
+        // but its GPU products compile before this bake too.
+        let paths: Vec<PathBuf> =
+            serde_json::from_str(&products).map_err(|e| format!("EXACT_GPU_WEB_PRODUCTS: {e}"))?;
+        let mut declared = Declared::new();
+        for path in paths {
+            println!("cargo:rerun-if-changed={}", path.display());
+            let bytes =
+                std::fs::read(&path).map_err(|e| format!("GPU product {}: {e}", path.display()))?;
+            declare(&path, &bytes, &mut declared)?;
+        }
+        surface_arguments(&plan, &declared)?;
     }
     // A binary without an updater has no stream or rollback floor.
     // Native L=A artifacts still require authenticated sequence provenance.
@@ -208,26 +225,30 @@ fn gpu_card(
     }
 }
 
-// LLP 1030.002 D1: inventory one file at a time through the copy gate's
-// owned-directory walk. Only shader discovery needs the JavaScript tooling.
+// The same directory-owned gate used by copying, including direct Cargo
+// bakes. This tooling process does not link Unix filesystem code into a wasm
+// consumer of `contract`; its Cargo cache is distinct from the calling build.
 fn asset_cards(app: &Path, out: &Path, manifest: &Manifest) -> Result<Vec<Value>, String> {
     let gate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/filesystem.mjs");
     println!("cargo:rerun-if-changed={}", gate.display());
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/app.mjs");
-    println!("cargo:rerun-if-changed={}", script.display());
     let code = r#"
         import {pathToFileURL} from 'node:url';
         import {resolve} from 'node:path';
         import {createHash} from 'node:crypto';
-        const {shaderFiles,shaderRoots,shaderPreludeFiles} = await import(pathToFileURL(process.argv[1]));
-        const app={dir:resolve(process.argv[2]),manifest:JSON.parse(process.argv[3])};
+        const {filesystem} = await import(pathToFileURL(process.argv[1]));
+        const {shaderFiles,shaderRoots,shaderPreludeFiles} = await import(pathToFileURL(resolve(process.argv[1],'../app.mjs')));
+        const app={dir:process.argv[2],manifest:JSON.parse(process.argv[3])};
         const cards=[];
+        for (const [source,prefix] of [['assets','assets'],['deck','deck']]) {
+            const tree=filesystem({op:'inventory',root:resolve(process.argv[2],source),optionalRoot:true});
+            for (const [name,card] of Object.entries(tree??{})) cards.push({name:`${prefix}/${name}`,...card});
+        }
         for (const [name,bytes] of shaderFiles(app)) cards.push({name:`shaders/${name}`,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length});
-        process.stdout.write(JSON.stringify({dir:app.dir,cards,roots:[...shaderRoots(app),...shaderPreludeFiles(app)]}));
+        process.stdout.write(JSON.stringify({cards:cards.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0),roots:[...shaderRoots(app),...shaderPreludeFiles(app)]}));
     "#;
     let output = crate::bun()
         .args(["--input-type=module", "-e", code])
-        .arg(script)
+        .arg(gate)
         .arg(app)
         .arg(manifest.json.to_string())
         .output()
@@ -240,32 +261,10 @@ fn asset_cards(app: &Path, out: &Path, manifest: &Manifest) -> Result<Vec<Value>
     }
     let inventory: Value =
         serde_json::from_slice(&output.stdout).map_err(|e| format!("bake asset inventory: {e}"))?;
-    let mut cards = inventory["cards"]
+    let cards = inventory["cards"]
         .as_array()
         .ok_or("missing bake cards")?
         .clone();
-    let root = inventory["dir"]
-        .as_str()
-        .ok_or("missing bake app directory")?;
-    for prefix in ["assets", "deck"] {
-        let path = Path::new(root).join(prefix);
-        let refuse = |e| format!("bake asset gate: {}: {e}", path.display());
-        let dir = match exact_filesystem::Directory::root(
-            path.to_str().ok_or("bake asset gate: non-UTF8 path")?,
-            false,
-        ) {
-            Ok(dir) => dir,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(refuse(e)),
-        };
-        dir.visit_files(&format!("{prefix}/"), &mut |name, parent, leaf| {
-            let bytes = parent.read(leaf)?;
-            cards.push(json!({"name":name,"sha256":hash(&bytes),"bytes":bytes.len()}));
-            Ok(())
-        })
-        .map_err(refuse)?;
-    }
-    cards.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     // Every client must stage these as distinct files, APFS included; the
     // publisher and every client parse refuse the same names.
     exact_update::check_asset_names(cards.iter().filter_map(|c| c["name"].as_str()))
@@ -611,7 +610,7 @@ fn artifact_graph(
         } else {
             target.to_string()
         };
-        json!({"rustMode":mode,"rustAbi":2,"rustTarget":target,"grantCeiling":inputs["grantCeiling"],"rustGrants":inputs["rustGrants"]})
+        json!({"rustMode":mode,"rustAbi":crate::compat::RUST_ABI,"rustTarget":target,"grantCeiling":inputs["grantCeiling"],"rustGrants":inputs["rustGrants"]})
     } else {
         json!({})
     };
@@ -814,8 +813,15 @@ pub fn write_development_artifacts(plan: &exact_plan::Plan) -> Result<(), String
 fn apply_release(compat: &mut Compat, bytes: &[u8], plan: &[u8]) -> Result<(), String> {
     let receipt: Value =
         serde_json::from_slice(bytes).map_err(|e| format!("publisher receipt is not JSON: {e}"))?;
-    let envelope =
+    let mut envelope =
         Envelope::parse(&serde_json::to_vec(&receipt["envelope"]).map_err(|e| e.to_string())?)?;
+    if envelope.index.is_some() {
+        // The record carries the asset index as JSON; its blob is that
+        // value's canonical bytes, which the signed head names by digest.
+        let index = exact_update::canonical_bytes(&receipt["assets"].to_string())
+            .map_err(|e| format!("publisher receipt's asset index: {e}"))?;
+        envelope.read_index(&index)?;
+    }
     let baked = Baked::from_compat(&compat.to_json(), plan)?;
     envelope.verify(&baked.embedded.verification_keys)?;
     if envelope.app_id != baked.embedded.app_id
@@ -840,7 +846,7 @@ fn apply_release(compat: &mut Compat, bytes: &[u8], plan: &[u8]) -> Result<(), S
         return Err("publisher receipt does not name the exact embedded plan bytes".into());
     }
     let mut named = envelope
-        .assets
+        .assets()?
         .iter()
         .map(|a| json!({"name":a.name,"sha256":a.sha256,"bytes":a.bytes}))
         .collect::<Vec<_>>();
@@ -854,15 +860,64 @@ fn apply_release(compat: &mut Compat, bytes: &[u8], plan: &[u8]) -> Result<(), S
     Ok(())
 }
 
+/// Each surface a GPU product declares the named arguments of, with them and
+/// the product's file name.
+type Declared = std::collections::BTreeMap<String, (Vec<String>, String)>;
+
 /// A signed GPU product's file name and digest, watched by the bake: its code
 /// belongs to this app and cohort, which the loader checks before opening it.
-fn gpu_product(path: &Path) -> Result<(String, String), String> {
+/// The surfaces it declares the arguments of go into `declared`.
+fn gpu_product(path: &Path, declared: &mut Declared) -> Result<(String, String), String> {
     println!("cargo:rerun-if-changed={}", path.display());
     let bytes = std::fs::read(path).map_err(|e| format!("GPU product {}: {e}", path.display()))?;
-    let name = path.file_name().and_then(|n| n.to_str());
-    Ok((
-        name.ok_or("GPU product filename is not UTF-8")?.to_string(),
-        code_digest(&bytes),
+    let name = declare(path, &bytes, declared)?;
+    Ok((name, code_digest(&bytes)))
+}
+
+/// The product's file name, after adding the surfaces whose arguments its
+/// `bytes` declare to `declared`.
+fn declare(path: &Path, bytes: &[u8], declared: &mut Declared) -> Result<String, String> {
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("GPU product filename is not UTF-8")?
+        .to_string();
+    let surfaces = exact_plan::surface_arguments::declared(bytes)
+        .map_err(|e| format!("GPU product {}: {e}", path.display()))?;
+    for (surface, arguments) in surfaces {
+        declared.insert(surface, (arguments, name.clone()));
+    }
+    Ok(name)
+}
+
+/// Refuse a plan whose canvas passes a named argument that its surface's GPU
+/// product, bound beside the plan, does not declare, or more values by position
+/// than it has arguments (expo/exact#176). The product
+/// compiles before this bake reads the Contract, so the two disagree only
+/// when a source changed in between; at run time the canvas would fail to
+/// bind.
+fn surface_arguments(plan: &exact_plan::Plan, declared: &Declared) -> Result<(), String> {
+    let arguments = declared
+        .iter()
+        .map(|(surface, (names, _))| (surface.clone(), names.clone()))
+        .collect();
+    let missing = exact_plan::surface_arguments::undeclared(plan, &arguments);
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let each = missing.iter().map(|found| {
+        use exact_plan::surface_arguments::Undeclared;
+        let surface = found.surface();
+        let (names, product) = &declared[surface];
+        let has = if names.is_empty() { "none".to_owned() } else { names.join(", ") };
+        match found {
+            Undeclared::Name { argument, .. } => format!("canvas surface `{surface}` passes `{argument}`, which the GPU product {product} does not declare (it declares {has})"),
+            Undeclared::Arity { passed, .. } => format!("canvas surface `{surface}` passes {passed} values by position, and the GPU product {product} declares {} argument{} ({has})", names.len(), if names.len() == 1 { "" } else { "s" }),
+        }
+    });
+    Err(format!(
+        "{}: a source changed after the GPU product compiled and before the Contract bake read it (an edit while the build ran); build again",
+        each.collect::<Vec<_>>().join("; ")
     ))
 }
 

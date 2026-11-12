@@ -543,7 +543,7 @@ pub fn fallback(value: &Folded, vocab: &Vocab) -> Option<[String; 2]> {
             })
             .map(|r| {
                 r.fallback.clone().map(|c| match exact_color::parse(&c) {
-                    Some(exact_color::Parsed::Legacy(c)) => Half::legacy(c).clip(),
+                    Some(exact_color::Parsed::Legacy(c, _)) => Half::legacy(c).clip(),
                     _ => c,
                 })
             }),

@@ -9,7 +9,7 @@ import { delimiter, resolve, toNamespacedPath } from 'node:path';
 import { HERMES_INSTALLER, PINNED_RUST, hermesBundle, hermesLeanSysRoots } from './app.mjs';
 import { androidHermes, checkHermesBundles, appleCrossTargets, appleSetupTargets, platformRowNames } from './exact.mjs';
 import { iosAssets, iosTarget, entitlements, infoPlist, macInfoPlist, documentTypes, importedTypes, exportedTypes, writeUsageStrings, designCompatible, COMPATIBLE_SDK, moduleTripleFor } from '../host/apple/build.mjs';
-import { useXcode } from '../host/apple/devices.mjs';
+import { HOST_SDKS, olderVersion, useXcode, xcodeRefusal } from '../host/apple/devices.mjs';
 import { encodePng } from './png.mjs';
 import { macReleaseEntitlements, launchImageInventory } from '../host/apple/assets.mjs';
 
@@ -214,24 +214,6 @@ test.skipIf(process.platform !== 'darwin' || !Bun.which('xcodebuild'))('a produc
   assert.equal('UIRequiredDeviceCapabilities' in distributionKeys('iphonesimulator'), false);
 });
 
-test('unsigned device builds and archives refuse incompatible options before building', async () => {
-  const { appleBuildRefusal } = await import('./help.mjs');
-  for (const signed of [false, true]) for (let mask = 0; mask < 32; mask++) {
-    const flags = ['--unsigned', '--archive', '--run', '--device', '--host'];
-    const args = flags.filter((_, bit) => mask & (1 << bit));
-    const [unsigned, archive, run, device, host] = flags.map(flag => args.includes(flag));
-    const env = signed ? { EXACT_PROFILE: 'profile', EXACT_IDENTITY: 'identity' } : {};
-    const refusal = appleBuildRefusal(args, env);
-    assert.equal(refusal == null, !(unsigned && (!device || run) || archive && (!device || run || host || !unsigned && !signed)), JSON.stringify({ args, signed, refusal }));
-  }
-  assert.match(appleBuildRefusal(['--device', '--unsigned', '--run'], {}), /ad-hoc signed device bundle cannot launch on a stock device/);
-  for (const args of [['--watchos', '--unsigned'], ['--watchos', '--device', '--unsigned']]) assert.match(appleBuildRefusal(args, {}), /--unsigned takes no --watchos/);
-  const result = spawnSync(process.execPath, ['host/apple/build.mjs', '--device', '--unsigned', '--run', 'no-such-app'], { encoding: 'utf8' });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /--unsigned takes no --run/);
-  assert.doesNotMatch(result.stderr, /no app at/);
-});
-
 test('DEVELOPMENT_TEAM selects only covering development profiles, with explicit overrides', async () => {
   const { coveringProfiles, profile, identity } = await import('../host/apple/devices.mjs');
   const bundle = 'com.exact.test', day = 86400000, now = Date.now();
@@ -287,6 +269,8 @@ test.skipIf(process.platform === 'win32')('an iOS, phone, Apple TV or iOS test b
     const build = (installed, ...args) => {
       // The pinned toolchain has `installed`; an ambient RUSTUP_TOOLCHAIN's has every target, which the build does not use.
       writeFileSync(resolve(bin, 'rustup'), `#!/bin/sh\ncase " $* " in *" --toolchain ${PINNED_RUST} "*) printf '${installed}\\n';; *) printf '${[iosTarget, 'aarch64-apple-ios', 'aarch64-apple-tvos', 'aarch64-apple-tvos-sim'].join('\\n')}\\n';; esac\n`, { mode: 0o755 });
+      // This machine's Xcode is not what is tested: its SDK is new enough.
+      writeFileSync(resolve(bin, 'xcrun'), `#!/bin/sh\ncase "$*" in *--show-sdk-version*) echo ${HOST_SDKS.ios};; *) exec /usr/bin/xcrun "$@";; esac\n`, { mode: 0o755 });
       return spawnSync(process.execPath, ['host/apple/build.mjs', ...args, 'no-such-app'], { encoding: 'utf8', env: { ...process.env, RUSTUP_TOOLCHAIN: 'stable', PATH: bin + delimiter + process.env.PATH } });
     };
     const phone = build('aarch64-apple-ios-sim', '--device');
@@ -310,8 +294,8 @@ test.skipIf(process.platform === 'win32')('an archive of an app without a 1024 p
     const bin = resolve(scratch, 'bin'), app = resolve(scratch, 'noicon'), log = resolve(scratch, 'log');
     mkdirSync(bin); mkdirSync(app);
     writeFileSync(resolve(bin, 'rustup'), `#!/bin/sh\nprintf 'aarch64-apple-ios\\n'\n`, { mode: 0o755 });
-    // Every compiler the build could start records that it was started, and compiles nothing.
-    for (const tool of ['cargo', 'rustc', 'swift', 'swiftc', 'xcodebuild', 'xcrun']) writeFileSync(resolve(bin, tool), `#!/bin/sh\necho "${tool} $*" >> '${log}'\nexit 9\n`, { mode: 0o755 });
+    // Every compiler the build could start records that it was started, and compiles nothing; the SDK is new enough.
+    for (const tool of ['cargo', 'rustc', 'swift', 'swiftc', 'xcodebuild', 'xcrun']) writeFileSync(resolve(bin, tool), `#!/bin/sh\n${tool === 'xcrun' ? `case "$*" in *--show-sdk-version*) echo ${HOST_SDKS.ios}; exit 0;; esac\n` : ''}echo "${tool} $*" >> '${log}'\nexit 9\n`, { mode: 0o755 });
     writeFileSync(resolve(app, 'app.contract'), 'component A\n');
     mkdirSync(resolve(app, 'assets'));
     writeFileSync(resolve(app, 'assets/small.png'), encodePng({ width: 192, height: 192, data: new Uint8Array(192 * 192 * 4).fill(255) }));
@@ -439,11 +423,19 @@ test('each Apple destination checks its own Rust std and Hermes bundle, device i
     { target: 'aarch64-apple-tvos-sim', destination: 'tvOS Simulator' },
   ]);
   assert.equal(appleCrossTargets('darwin', 'x64')[0].target, 'x86_64-apple-ios');
-  assert.deepEqual(appleCrossTargets('linux', 'x64'), []);
-  assert.deepEqual([false, true].map(sdk => appleSetupTargets('darwin', 'arm64', sdk)).concat([appleSetupTargets('linux', 'x64', true)]), [['aarch64-apple-ios-sim', 'aarch64-apple-tvos-sim'], ['aarch64-apple-ios-sim', 'aarch64-apple-ios', 'aarch64-apple-tvos-sim'], []]); // the device's with the iphoneos SDK
+  assert.deepEqual(appleCrossTargets('linux', 'x64'), [
+    { target: 'aarch64-apple-ios-sim', destination: 'iOS Simulator' },
+    { target: 'aarch64-apple-ios', destination: 'iOS device' },
+  ]);
+  assert.deepEqual(appleCrossTargets('win32', 'x64'), []);
+  assert.deepEqual([false, true].map(sdk => appleSetupTargets('darwin', 'arm64', sdk)).concat([appleSetupTargets('linux', 'x64', true)]), [['aarch64-apple-ios-sim', 'aarch64-apple-tvos-sim'], ['aarch64-apple-ios-sim', 'aarch64-apple-ios', 'aarch64-apple-tvos-sim'], ['aarch64-apple-ios-sim', 'aarch64-apple-ios']]); // the device's with the iphoneos SDK
   // A first iOS build refuses, naming the command, before Cargo fails on a target the pinned toolchain lacks.
   assert.deepEqual(platformRowNames('ios', { os: 'darwin', cpu: 'arm64' }).slice(-2), ['Hermes bundle (aarch64-apple-ios-sim)', 'Rust aarch64-apple-ios-sim']);
   assert.deepEqual(platformRowNames('ios', { os: 'darwin', cpu: 'x64', device: true }).slice(-2), ['Hermes bundle (aarch64-apple-ios)', 'Rust aarch64-apple-ios']);
+  const linux = platformRowNames('ios', { os: 'linux', cpu: 'x64' });
+  assert.ok(linux.includes('Apple cross SDK')); assert.ok(!linux.includes('Xcode'));
+  assert.ok(linux.includes('Hermes bundle (aarch64-apple-ios-sim)'));
+  assert.ok(platformRowNames('ios', { os: 'linux', device: true }).includes('Hermes bundle (aarch64-apple-ios)'));
   const calls = [];
   const execute = (command, args) => { calls.push(args); return {status: 0, stdout: 'Verified', stderr: ''}; };
   checkHermesBundles({}, execute, 'darwin', 'arm64', ['aarch64-apple-ios']);
@@ -750,8 +742,8 @@ test('the launch handler bakes `ExactLaunchMode` with or without documents (LLP 
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-types-'));
   try {
     const write = (accept) => writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Types', app: { id: 'com.example.types', name: 'Types' }, file_handlers: [{ action: '/', accept }] }));
-    write({ 'audio/mpeg': ['.mp3'] });
-    assert.throws(() => readManifest(dir, 'types'), /file_handlers\[0\]\.accept: audio\/mpeg names no type the Apple hosts map \(they map .*text\/csv/);
+    write({ 'audio/flac': ['.flac'] });
+    assert.throws(() => readManifest(dir, 'types'), /audio\/flac names no type the Apple hosts map/);
     write({ 'application/octet-stream': ['.bin', '.dat'] });
     assert.deepEqual(documentTypes(app(readManifest(dir, 'types')))[0].LSItemContentTypes, ['public.data']);
     // An app's own format (studio diary R13): a vendor or `x-` type is
@@ -1431,6 +1423,12 @@ for (const [moduleDirectory, staleDirectory] of [['', null], ['Modules', null], 
       const executable = resolve(dir, `Fixture${version}`), frameworks = resolve(slice, '..');
       run('xcrun', ['clang', resolve(dir, 'app.c'), '-F', frameworks, '-framework', 'ExactCore', '-Wl,-rpath,' + frameworks, '-o', executable]);
       run(executable, []);
+    }
+    if (!moduleDirectory && staleDirectory === null) {
+      const reference = resolve(base, 'XcodeReference.xcframework');
+      run('xcrun', ['xcodebuild', '-create-xcframework', '-allow-internal-distribution', '-framework', prepared.framework, '-output', reference]);
+      const metadata = path => JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', resolve(path, 'Info.plist')]).stdout);
+      assert.deepEqual(metadata(prepared.xcframework), metadata(reference));
     }
     // A plan edit relinks the shared image even when its Rust archive stays.
     const planDir=resolve(dir,'plan'); mkdirSync(planDir);

@@ -66,6 +66,8 @@ shape Activities
   linked: bool
   activities: ActivityFact[]
   frequentPushesEnabled: bool
+shape Clock
+  epochAtZero: number
 
 component Caltrain
   // The seeded schedule's day; `tick` reads the clock from it, so a tick a
@@ -99,9 +101,13 @@ component Caltrain
   mutation alertSend as shape ActivityHandle
   state alertStarted = false
   resource activities = exactActivities() as shape Activities
+  // The system draws an activity on the real clock, so its instants are the
+  // seeded day's moved onto it, as the watch entry's are.
+  resource clock = exactTime() as shape Clock
+  derive realOffset = clock.epochAtZero - seededEpoch
   derive tracked = first(activities.activities.filter(a => a.kind == "departure" and (a.activityState == "active" or a.activityState == "stale")))
   derive trackedId = match tracked { case some(a) => a.id, case none => following ? match activitySend { case some(a) => a.id, case none => "" } : "" }
-  derive departureState = DepartureState(station=station.name, headsign="San Francisco", train=101, at=seededEpoch + 600000 + trainDelay, status=(trainDelay > 0 ? "Delayed by 10 minutes" : "On time"))
+  derive departureState = DepartureState(station=station.name, headsign="San Francisco", train=101, at=seededEpoch + 600000 + trainDelay + realOffset, status=(trainDelay > 0 ? "Delayed by 10 minutes" : "On time"))
   action startTracking
     send activitySend = startActivity("departure", departureState)
     following = true
@@ -117,10 +123,10 @@ component Caltrain
   derive alertId = match trackedAlert { case some(a) => a.id, case none => alertStarted ? match alertSend { case some(a) => a.id, case none => "" } : "" }
   derive alertFollowing = alertId != ""
   action startAlert
-    send alertSend = startActivity("service-alert", ServiceAlertState(title="Delay", message="Northbound trains delayed by 10 minutes.", updatedAt=seededEpoch))
+    send alertSend = startActivity("service-alert", ServiceAlertState(title="Delay", message="Northbound trains delayed by 10 minutes.", updatedAt=nowMs + realOffset))
     alertStarted = true
   action endAlert
-    send alertSend = endActivity(alertId, ServiceAlertState(title="Service restored", message="Trains are running normally.", updatedAt=seededEpoch), "immediate")
+    send alertSend = endActivity(alertId, ServiceAlertState(title="Service restored", message="Trains are running normally.", updatedAt=nowMs + realOffset), "immediate")
     alertStarted = false
 
   resource location = defaultLocation() as shape Location

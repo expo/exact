@@ -68,8 +68,9 @@ object Native {
      * takes no touch and no focus) and the scroller whose rows it was painted among (0: none); as float bits its
      * content box and the clip it shows through (x, y, width, height each; a negative clip width: none); the count
      * of the reader's edits that reached exact2 and the value the app shows as of it (a string: its bytes' count,
-     * then UTF-8 padded to whole words); its look, eighteen words (`Presenter::reader_fields` lists them), and four
-     * strings: its placeholder, its `autocomplete`, its font's file and its axes. A field it leaves out is gone. */
+     * then UTF-8 padded to whole words); its look, eighteen words (`Presenter::reader_fields` lists them), and five
+     * strings: its placeholder, its `autocomplete`, its font's file, its axes and its OpenType features. A field it
+     * leaves out is gone. */
     @JvmStatic external fun fields(): IntArray?
     /** Hosted field [id], known at [generation], took the focus (a finger tapped it) or lost it. On the host's
      * thread, as every `field` call is; what one says of a generation exact2 has moved on from is dropped. */
@@ -217,6 +218,8 @@ object Native {
 
     /** The file an `app:/data|cache|tmp/…` path names, or null (`ExtensionContext.file`). */
     @JvmStatic external fun appFile(path: String): String?
+    /** The app's directory [index] names: 0 `data`, 1 `cache`, 2 `tmp` ([ExtensionContext.data]). */
+    @JvmStatic external fun appRoot(index: Int): String?
     /** Whether extension [name] is told it runs under the agent ([ExtensionContext.agent]). Any thread. */
     @JvmStatic external fun underAgent(name: String): Boolean
     /** A package's call of the app's handler, `{"extension", "handle", "handler", "args"}` (LLP 1133.016 D15 item 1):

@@ -24,6 +24,8 @@ test.each([false, true])('built wasm host admits agent parameters only in develo
     const read = new Function('location', `${declarations}\nreturn agentMode;`);
     expect(read({ href: 'https://example.test/?agent' })).toBe(!production);
     const navigation = await import(join(root, 'navigation.js'));
+    const admission = await import(join(root, 'grant-admission.js'));
+    expect(admission.socketProtocols(['chat.v2', 'chat.v1'])).toEqual(['chat.v2', 'chat.v1']);
     const params = new URLSearchParams('agent&epoch=1&seed=3&locale=de&timeZone=UTC');
     const platform = {
       Date: class extends Date { static now() { return 1000; } getTimezoneOffset() { return 60; } },

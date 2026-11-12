@@ -739,9 +739,22 @@ impl<D: DataSource> Presenter<D> {
     /// item now, so that picker's answer is not its (a list's row given
     /// another item while it was up).
     pub(crate) fn picks_renewed(&mut self, renewed: &[ViewId]) {
+        self.drop_picks(|node| renewed.contains(&node));
+        // And one held for the agent.
+        let kinds = ["date", "time", "datetime-local"];
+        self.host.runner_mut().retire_holds_on(renewed, &kinds);
+    }
+
+    /// A new runner (`replaced`) numbers its views from the start again, so
+    /// no node of its tree is the one a picker that is up was opened for.
+    pub(super) fn picks_replaced(&mut self) {
+        self.drop_picks(|_| true);
+    }
+
+    fn drop_picks(&mut self, stale: impl Fn(ViewId) -> bool) {
         let stale: Vec<(u32, ViewId)> = (self.requests.waiting.iter())
             .filter_map(|(id, w)| match w {
-                Waiting::Pick(node) if renewed.contains(node) => Some((*id, *node)),
+                Waiting::Pick(node) if stale(*node) => Some((*id, *node)),
                 _ => None,
             })
             .collect();
@@ -751,9 +764,6 @@ impl<D: DataSource> Presenter<D> {
                 "picker: {node} was made again; its answer is dropped"
             ));
         }
-        // And one held for the agent.
-        let kinds = ["date", "time", "datetime-local"];
-        self.host.runner_mut().retire_holds_on(renewed, &kinds);
     }
 
     /// `id`'s kind, where it is a date or time control a person can change:

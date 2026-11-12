@@ -7,6 +7,12 @@ an Xbox pad) jumps, the west button (X) lights and the left shoulder sprints. Th
 on-screen Move, Jump and Light controls also feed the engine input. Pause freezes the world;
 Play again reconstructs it from seed 7.
 
+On the title or pause screen, “Use J to jump in new games” saves a jump-key
+preference in app storage. New games use J when it is on and Space when it is
+off; the gamepad's south button still jumps. Changing the preference leaves the
+current game and restored saves' controls intact. Pause → New game starts over
+with the current preference.
+
 The game is `logic/src/lib.rs`, `movement.json`, `app.contract`, `proof.mjs`, its hostless tests
 in `logic/tests/` and the proof's `pins.json`. From the repository root:
 

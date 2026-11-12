@@ -115,6 +115,8 @@ pub struct Request {
     /// coalesced, and a [`Outcome::Closed`] end; mutations send on it
     /// ([`SocketSend`]). Unset, a socket only listens, as in D4.
     pub socket: bool,
+    /// Ordered WebSocket protocol names (LLP 1016.000); set with [`Request::protocols`].
+    pub protocols: Vec<String>,
     /// An HTTP stream whose body, when it is not `text/event-stream`,
     /// arrives as bytes (LLP 1016.000, the byte stream of 2026-10-23): each
     /// [`Message`] is `binary`, the bytes read since the runner took the
@@ -296,6 +298,7 @@ impl Request {
             body,
             stream: false,
             socket: false,
+            protocols: Vec::new(),
             bytes: false,
             upload_progress: false,
             long_poll: None,
@@ -402,6 +405,7 @@ impl Request {
             body: Vec::new(),
             stream: false,
             socket: false,
+            protocols: Vec::new(),
             bytes: false,
             upload_progress: false,
             long_poll: None,
@@ -447,6 +451,7 @@ impl Request {
             body: json.as_bytes().to_vec(),
             stream: false,
             socket: false,
+            protocols: Vec::new(),
             bytes: false,
             upload_progress: false,
             long_poll: None,
@@ -895,10 +900,12 @@ pub struct Message {
     pub id: String,
     /// The event's data (`data:` lines joined by newlines).
     pub data: String,
-    /// Messages the host dropped for this one because the runner had not
-    /// taken them yet (LLP 1016.000 D4: display data coalesces to the
-    /// newest). Non-zero is a gap a log re-asks across from its cursor.
+    /// Messages the host folded into this one because the runner had not
+    /// taken them yet. Only an upload's progress folds (LLP 1016.000 D10);
+    /// every other message reaches the source (D4), so this is 0 for it.
     pub coalesced: u32,
+    /// The negotiated WebSocket protocol; empty for other streams or no offer.
+    pub protocol: Box<str>,
     /// A two-way socket's binary frame (LLP 1016.000 D7): its bytes, with
     /// `data` empty. `None` for text and for every server-sent event.
     pub binary: Option<Vec<u8>>,
@@ -1029,6 +1036,11 @@ pub enum Outcome {
     /// One message of a stream (LLP 1016.000 D1): the stream stays open.
     /// Every other outcome delivered to a stream's ticket ends it.
     Message(Message),
+    /// Messages of one stream that waited for the runner together, in
+    /// arrival order (LLP 1016.000 D4): the source parses each in turn, and
+    /// they commit once, as the last one's answer. Only a host delivers
+    /// this; a source's `parse` is never given it.
+    Messages(Vec<Message>),
     /// A two-way socket's end (LLP 1016.000 D7): the closing handshake's
     /// code and reason, or 1006 when the connection dropped without one.
     Closed {
@@ -1049,6 +1061,16 @@ pub enum Outcome {
 }
 
 impl Outcome {
+    /// The stream messages it carries, in arrival order: none unless it is
+    /// a [`Outcome::Message`] or [`Outcome::Messages`].
+    pub fn messages(&self) -> &[Message] {
+        match self {
+            Outcome::Message(m) => std::slice::from_ref(m),
+            Outcome::Messages(ms) => ms,
+            _ => &[],
+        }
+    }
+
     /// What came back, for the journal: a status and a size, or why nothing
     /// did, cut to 200 characters — never a body. A failure the app catches
     /// is still on the record (LLP 1016 D4).
@@ -1061,6 +1083,11 @@ impl Outcome {
             Outcome::Message(m) => text!(
                 "message, {} bytes",
                 m.binary.as_ref().map_or(m.data.len(), Vec::len)
+            ),
+            Outcome::Messages(ms) => text!(
+                "{} messages, {} bytes",
+                ms.len(),
+                ms.iter().map(|m| m.data.len()).sum::<usize>()
             ),
             Outcome::Closed { code, reason, .. } if reason.is_empty() => {
                 text!("socket closed ({})", code)
@@ -1449,3 +1476,6 @@ mod scheduling_tests {
 #[cfg(test)]
 #[path = "request_tests.rs"]
 mod tests;
+
+#[path = "request_socket.rs"]
+mod socket_protocols;

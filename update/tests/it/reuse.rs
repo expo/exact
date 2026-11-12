@@ -16,8 +16,8 @@ fn compat(id: &str) -> String {
     )
 }
 
-/// Cohort `cohort`'s head at `seq` naming `plan` and `assets` (name, bytes),
-/// and every file the origin serves for it by URL.
+/// Cohort `cohort`'s head at `seq` naming `plan` and an index of `assets`
+/// (name, bytes), and every file the origin serves for it by URL.
 fn publish(
     cohort: &str,
     seq: u64,
@@ -25,13 +25,17 @@ fn publish(
     assets: &[(&str, &[u8])],
 ) -> Vec<(String, Vec<u8>)> {
     let base = format!("{CLIENT_ORIGIN}/.exact/prod/{cohort}");
-    let head = serde_json::json!({
-        "exact": 1, "app": {"id": "com.exact.t"},
-        "plan": {"url": "./app.plan", "sha256": sha256_hex(plan), "bytes": plan.len()},
+    let index = serde_json::to_vec(&serde_json::json!({
         "assets": assets.iter().map(|(name, bytes)| serde_json::json!({
             "name": name, "url": format!("./{name}"),
             "sha256": sha256_hex(bytes), "bytes": bytes.len(),
         })).collect::<Vec<_>>(),
+    }))
+    .unwrap();
+    let head = serde_json::json!({
+        "exact": 1, "app": {"id": "com.exact.t"},
+        "plan": {"url": "./app.plan", "sha256": sha256_hex(plan), "bytes": plan.len()},
+        "assets": {"url": "./assets.json", "sha256": sha256_hex(&index), "bytes": index.len(), "count": assets.len()},
         "stream": {"channel": "prod", "compatibilityId": cohort, "seq": seq},
     });
     let mut files = vec![
@@ -39,6 +43,7 @@ fn publish(
             format!("{base}/exact.json"),
             serde_json::to_vec(&head).unwrap(),
         ),
+        (format!("{base}/assets.json"), index),
         (format!("{base}/app.plan"), plan.to_vec()),
     ];
     files.extend(
@@ -110,7 +115,12 @@ fn the_first_update_takes_unchanged_assets_from_the_bundle() {
         (outcome.to_string(), asked),
         (
             "staged seq 1".to_string(),
-            vec!["exact.json".into(), "app.plan".into(), "a3.png".into()]
+            vec![
+                "exact.json".into(),
+                "assets.json".into(),
+                "app.plan".into(),
+                "a3.png".into()
+            ]
         )
     );
     let candidate = client.prepare_activation().unwrap().unwrap();
@@ -152,7 +162,10 @@ fn an_embedded_file_changed_after_it_was_hashed_is_fetched() {
     let Ok(Check::Staged { .. }) = store.check(&head, &mut fetch, &mut embedded) else {
         panic!("the head should have staged");
     };
-    assert_eq!(origin.asked, ["exact.json", "app.plan", "mark.png"]);
+    assert_eq!(
+        origin.asked,
+        ["exact.json", "assets.json", "app.plan", "mark.png"]
+    );
     let candidate = store.prepare_activation().unwrap().unwrap();
     assert_eq!(
         candidate.assets.resolve("mark.png").unwrap().as_deref(),
@@ -206,7 +219,10 @@ fn an_interrupted_download_resumes_at_the_next_launch() {
     let mut client = launch(&base, "abc");
     assert_eq!(
         summary(check_losing(&mut client, &files, Some("/a3"))),
-        expect("refused", &["exact.json", "app.plan", "a1", "a2", "a3"])
+        expect(
+            "refused",
+            &["exact.json", "assets.json", "app.plan", "a1", "a2", "a3"]
+        )
     );
     let blobs = client.dir().join("blobs");
     drop(client);
@@ -250,7 +266,7 @@ fn a_new_cohort_reuses_the_files_an_old_one_fetched() {
         summary(check(&mut client, &publish("abc", 1, b"plan v2", &assets))),
         expect(
             "staged seq 1",
-            &["exact.json", "app.plan", "a1", "a2", "a3"]
+            &["exact.json", "assets.json", "app.plan", "a1", "a2", "a3"]
         )
     );
     drop(client);

@@ -492,12 +492,13 @@ pub(super) fn unknown_function(
             | "exactPage"
             | "exactDelivery"
             | "exactSurface"
+            | "exactCanvasPerformance"
             | "exactTransport"
             | "exactMIDI"
             | "exactActivities"
     ) {
-        let call = if name == "exactSurface" {
-            "exactSurface(\"world\")".to_string()
+        let call = if matches!(name, "exactSurface" | "exactCanvasPerformance") {
+            format!("{name}(\"world\")")
         } else {
             format!("{name}()")
         };

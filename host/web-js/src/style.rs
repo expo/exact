@@ -801,10 +801,12 @@ fn ramp_rem(text: &str) -> Option<String> {
 
 /// A computed `transition`'s entries as an author's (LLP 1081 D5), shared by
 /// the ordinary and the pressed mappers: comments go (CSS removes them, so a
-/// check must too); springs on non-physics properties become `linear()`;
-/// an entry naming the host's `--exact-*` or an old spelling is dropped,
-/// as the native parser refuses it. `-exact-tint-color` becomes the property
-/// the browser animates, `--exact-tint`. `p` is the list of kept entries.
+/// check must too); each entry is folded to ASCII lower case, as the native
+/// parser reads its words in any case (motion/src/word.rs); springs on
+/// non-physics properties become `linear()`; an entry naming the host's
+/// `--exact-*` or an old spelling is dropped, as the native parser refuses it.
+/// `-exact-tint-color` becomes the property the browser animates,
+/// `--exact-tint`. `p` is the list of kept entries.
 pub static TRANSITION_ENTRIES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     use exact_motion::Property;
     let mut properties: std::collections::BTreeMap<_, Vec<&str>> = Property::ALL
@@ -840,7 +842,7 @@ pub static TRANSITION_ENTRIES: std::sync::LazyLock<String> = std::sync::LazyLock
     let spring = include_str!("../transition-spring.js")
         .replace("ALL_PROPERTIES", &serde_json::to_string(&all).unwrap())
         .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap());
-    format!("const spring={spring};const p=v.replace(/\\/\\*[\\s\\S]*?\\*\\//g,\" \").split(/,(?![^(]*\\))/).map(t=>t.trim()).filter(t=>t&&!/(^|\\s)(--exact-\\S*|tint-color|exit-animation|layout-transition|press-scale|drag-timeline|symbol-rendering|symbol-palette|symbol-value|symbol-effect|press-haptic|content-transition|scroll-edge-effect|hover-effect|smart-invert|animation-trigger)(?=\\s|$)/i.test(t)).flatMap(t=>/spring\\(/i.test(t)?spring(t):[t]).map(t=>t.replace(/(^|\\s)-exact-tint-color(?=\\s|$)/i,\"$1--exact-tint\"));")
+    format!("const spring={spring};const p=v.replace(/\\/\\*[\\s\\S]*?\\*\\//g,\" \").split(/,(?![^(]*\\))/).map(t=>t.trim().replace(/[A-Z]+/g,c=>c.toLowerCase())).filter(t=>t&&!/(^|\\s)(--exact-\\S*|tint-color|exit-animation|layout-transition|press-scale|drag-timeline|symbol-rendering|symbol-palette|symbol-value|symbol-effect|press-haptic|content-transition|scroll-edge-effect|hover-effect|smart-invert|animation-trigger)(?=\\s|$)/i.test(t)).flatMap(t=>/spring\\(/i.test(t)?spring(t):[t]).map(t=>t.replace(/(^|\\s)-exact-tint-color(?=\\s|$)/i,\"$1--exact-tint\"));")
 });
 
 /// A computed `transition`, as the browser takes it: [`TRANSITION_ENTRIES`].
@@ -1264,6 +1266,9 @@ pub fn style_writes(id: u16, timeline: bool, written: bool) -> Result<Vec<Write>
 /// css.rs names it, its logical side.
 pub fn style_row(id: u16, written: bool) -> Result<(String, String), String> {
     let row = StyleId::from_bit(id as u32).ok_or("unknown style row")?;
+    if row == StyleId::TranslateVelocity {
+        return Ok(("--exact-translate-velocity".into(), String::new()));
+    }
     // `translate` is one declaration of the author's two lengths (css.rs
     // `lowered`): written as the author wrote them.
     if row == StyleId::Translate {

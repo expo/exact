@@ -195,6 +195,7 @@ final class AppleModel {
         }
         guard r.state == "generating", m.admitInput(r, extra: measured) else { return }
         if r.overflowed { s.stale = true }
+        m.disclose()
         var output = false
         while r.live {
             do {
@@ -207,12 +208,14 @@ final class AppleModel {
                         guard r.live else { return }
                         output = true
                         r.text = snapshot.rawContent.jsonString
+                        m.disclose()
                     }
                 } else {
                     for try await snapshot in session.streamResponse(to: input, options: options) {
                         guard r.live else { return }
                         output = true
                         r.text = snapshot.content
+                        m.disclose()
                     }
                 }
                 guard r.live else { return }
@@ -225,6 +228,7 @@ final class AppleModel {
                 if case FoundationModels.LanguageModelSession.GenerationError.exceededContextWindowSize = error, !output, r.calls.isEmpty, s.turns.first !== r.turn {
                     s.turns.removeFirst()
                     s.overflowed = true; r.overflowed = true; s.stale = true
+                    m.disclose()
                     m.say("\(r.id): over the context window; the oldest turn evicted, asked again")
                     continue
                 }

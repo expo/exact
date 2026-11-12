@@ -47,6 +47,70 @@ fn simultaneous_page_and_index_requests_read_one_corpus_snapshot() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// The sidebar's rows over the corpus at `root`, `(number, depth)`.
+fn index_rows(root: &std::path::Path, query: &str, newest: bool) -> Vec<(String, f64)> {
+    use exact_plan::Value;
+    use exact_runner::{Answer, DataSource, Store};
+    let mut data = llp_data::Llp::new();
+    let mut store = Store::new("", []);
+    let args = [
+        Value::str(&root.to_string_lossy()),
+        Value::str(query),
+        Value::str(""),
+        Value::Bool(newest),
+    ];
+    let Answer::Later(request) = data.answer(&mut store, "index", &args).unwrap() else {
+        panic!("the corpus should load on a worker");
+    };
+    let loaded = data.continuation(request.continuation.unwrap()).unwrap()();
+    let Answer::Now(Value::Record(index)) = data.parse(&mut store, "index", &args, loaded).unwrap()
+    else {
+        panic!("the corpus is ready");
+    };
+    let Value::List(rows) = &index[4] else {
+        panic!("the index lists its rows");
+    };
+    rows.iter()
+        .map(|row| {
+            let Value::Record(row) = row else {
+                panic!("a row is a record")
+            };
+            (
+                row[1].as_str().unwrap().to_string(),
+                row[6].as_number().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn newest_first_keeps_each_sub_document_under_its_parent() {
+    let root = std::env::temp_dir().join(format!("llp-newest-corpus-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for (name, title) in [
+        ("1030-a.plan.md", "A"),
+        ("1030.000-a-one.plan.md", "A one"),
+        ("1030.001-a-two.plan.md", "A two"),
+        ("1031-b.plan.md", "B"),
+        ("1031.000-b-one.plan.md", "B one"),
+    ] {
+        std::fs::write(root.join(name), format!("# {title}\n\nText.")).unwrap();
+    }
+    let rows = |query: &str| {
+        index_rows(&root, query, true)
+            .into_iter()
+            .map(|(number, depth)| format!("{}{number}", " ".repeat(depth as usize)))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        rows(""),
+        ["1031", " 1031.000", "1030", " 1030.000", " 1030.001"]
+    );
+    // A sub-document shown without its parent stays with its own number.
+    assert_eq!(rows("one"), [" 1031.000", " 1030.000"]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn corpus_text_keeps_document_boundaries_and_survives_its_index() {
     let root = std::env::temp_dir().join(format!("llp-text-corpus-{}", std::process::id()));

@@ -1,0 +1,46 @@
+component App
+  state key = 1
+  state enabled = true
+  state seen = 0
+  state count = 0
+  state time = -1
+  action follow
+    seen = key
+    count = count + 1
+    time = performanceNow()
+  action next
+    key = key + 1
+  action toggle
+    enabled = not enabled
+  task follow when enabled key=key
+    change(follow)
+  view
+    column
+      text `${seen}` testId="seen"
+      button "next" press=next testId="next"
+      button "toggle" press=toggle testId="toggle"
+
+test "first activation is a separate commit at the same time"
+  clock +0
+  expect state seen == 1
+  expect state count == 1
+  expect state time == 0
+  clock +0
+  expect state count == 1
+  tap "next"
+  clock +0
+  expect state seen == 2
+  expect state count == 2
+  expect state time == 0
+
+test "a closed gate does no work and reopening uses the current key"
+  clock +0
+  tap "toggle"
+  tap "next"
+  clock +100
+  expect state count == 1
+  tap "toggle"
+  clock +0
+  expect state seen == 2
+  expect state count == 2
+  expect state time == 100

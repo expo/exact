@@ -36,6 +36,16 @@ impl<D: DataSource> Runner<D> {
     /// picture, or `{"error", "message"}`, which the host shows as an
     /// unresolved image. `None` for a source of no package's scheme.
     pub fn admit_picture(&mut self, source: &str, target: &str) -> Option<Json> {
+        self.picture_admission(source, target, true)
+    }
+
+    /// Admission without counting a draw: hosts recheck refused pictures
+    /// after commits that may have changed admission.
+    pub fn check_picture(&mut self, source: &str, target: &str) -> Option<Json> {
+        self.picture_admission(source, target, false)
+    }
+
+    fn picture_admission(&mut self, source: &str, target: &str, count: bool) -> Option<Json> {
         let scheme = source.split_once(':')?.0;
         let row = (self.plan.modules.iter())
             .find(|m| self.substitute(m)["images"]["scheme"] == scheme)?
@@ -43,30 +53,34 @@ impl<D: DataSource> Runner<D> {
         let extension = self.plan.str(row.extension).to_owned();
         let images = self.substitute(&row)["images"].clone();
         let decided = self.picture_decision(&row, &images, target);
-        let counts = self
-            .extensions
-            .pictures
-            .counts
-            .entry(extension.clone())
-            .or_default();
-        match &decided {
-            Ok(_) => counts.0 += 1,
-            Err(why) => {
-                counts.1 += 1;
-                // One line per change of reason, not per cell of a grid.
-                let last = self
-                    .extensions
-                    .pictures
-                    .last_refusal
-                    .insert(extension.clone(), why.clone());
-                if last.as_deref() != Some(why.as_str()) {
-                    self.log(format!("{extension}: picture refused, {why}"));
+        if count {
+            let counts = self
+                .extensions
+                .pictures
+                .counts
+                .entry(extension.clone())
+                .or_default();
+            match &decided {
+                Ok(_) => counts.0 += 1,
+                Err(why) => {
+                    counts.1 += 1;
+                    // One line per change of reason, not per cell of a grid.
+                    let last = self
+                        .extensions
+                        .pictures
+                        .last_refusal
+                        .insert(extension.clone(), why.clone());
+                    if last.as_deref() != Some(why.as_str()) {
+                        self.log(format!("{extension}: picture refused, {why}"));
+                    }
                 }
             }
         }
         Some(match decided {
             Ok(owned) => {
-                self.extensions.pictures.last_refusal.remove(&extension);
+                if count {
+                    self.extensions.pictures.last_refusal.remove(&extension);
+                }
                 let agent = self.route(&row) == Route::Agent;
                 let mut out = json!({ "extension": extension, "scheme": scheme, "agent": agent });
                 if owned {

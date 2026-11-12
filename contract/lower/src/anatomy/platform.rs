@@ -12,7 +12,7 @@ use crate::LowerError;
 use contract_syntax::{Component, Expr, File, Node, Span, Stmt, TemplatePart};
 
 /// The host sources a library may not read (D6).
-const HOST: [&str; 2] = ["exactDelivery", "exactSurface"];
+const HOST: [&str; 3] = ["exactDelivery", "exactSurface", "exactCanvasPerformance"];
 
 /// Each host read in the components of `file` that are a library
 /// package's, each with its package (`lower-library-platform`).

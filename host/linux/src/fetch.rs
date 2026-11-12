@@ -41,9 +41,22 @@ struct Envelope {
     #[allow(dead_code)]
     app: Option<AppCard>,
     plan: PlanCard,
+    /// The asset index card. This loader boots the plan alone and fetches no
+    /// assets; the field is typed so the envelope's old form, a list of asset
+    /// cards, is refused here as every other reader refuses it.
+    assets: Option<AssetIndexCard>,
     rust: Option<std::collections::BTreeMap<String, RustVariant>>,
     seq: Option<u64>,
     events: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct AssetIndexCard {
+    url: String,
+    sha256: String,
+    bytes: u64,
+    count: u64,
 }
 
 #[derive(Deserialize)]
@@ -477,13 +490,18 @@ fn fetch_unless(
             let compat: serde_json::Value =
                 serde_json::from_str(compat).map_err(|e| e.to_string())?;
             let mode = compat["inputs"]["rustMode"].as_str().unwrap_or("off");
-            if variants.keys().any(|k| k != "native" && k != "wasm") {
+            // The producer offers every executor the app's policy names
+            // (LLP 1029.000 §4.1); this binary takes its own and ignores the rest.
+            if variants
+                .keys()
+                .any(|k| !matches!(k.as_str(), "native" | "tiered" | "wasm"))
+            {
                 return Err("invalid Rust executor manifest".into());
             }
             let variant = variants
                 .get(mode)
                 .ok_or("no Rust replacement matching this binary's executor")?;
-            if mode == "native" && variant.target.as_deref() != compat["target"].as_str() {
+            if mode != "wasm" && variant.target.as_deref() != compat["target"].as_str() {
                 return Err("Rust replacement target does not match this binary".into());
             }
             Some(variant)
@@ -866,7 +884,7 @@ mod tests {
           "plan": { "kernelSchema": "00", "bytes": 12, "url": "./a\u002eplan", "sha256": "abcd", "formatVersion": 2, "compression": "none" },
           "exact": 1,
           "app": { "name": "Example", "id": "com.example", "subtitle": "future" },
-          "assets": [{ "name": "mark.png", "url": "./mark.png" }],
+          "assets": { "url": "./assets.json", "sha256": "abcd", "bytes": 120, "count": 1 },
           "seq": 41,
           "events": "./__dev",
           "future": { "enabled": true }
@@ -889,6 +907,11 @@ mod tests {
         .is_err());
         assert!(decode_envelope(b"not json").is_err());
         assert!(decode_envelope(&vec![b' '; 64 * 1024 + 1]).is_err());
+        // The old form, asset cards listed in the envelope, is refused.
+        assert!(decode_envelope(
+            br#"{"exact":1,"plan":{"url":"a","sha256":"b","bytes":1},"assets":[{"name":"mark.png","url":"./mark.png"}]}"#
+        )
+        .is_err());
     }
     #[test]
     fn polling_a_rust_generation_skips_unchanged_artifacts_and_fetches_new_pairs() {
@@ -968,5 +991,88 @@ mod tests {
             "only the envelope, for a held generation and an unrunnable one"
         );
         server.join().unwrap();
+    }
+
+    /// The dev envelope offers each executor the app's policy asks for
+    /// (LLP 1029.000 §4.1: `tiered` beside native and Wasm): the binary takes
+    /// the one its mode and target name and ignores the others.
+    #[test]
+    fn a_dev_envelope_offering_tiered_serves_each_executor_its_own_variant() {
+        use sha2::Digest;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let page = format!("http://{}/", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let path = read_request_path(&mut stream);
+                let card = |url: &str, bytes: &[u8]| serde_json::json!({"url":url, "bytes":bytes.len(), "sha256":format!("{:x}", sha2::Sha256::digest(bytes))});
+                let variant = |key: &str, target: Option<&str>| {
+                    let mut row = serde_json::json!({
+                        "receipt": card(&format!("/{key}.json"), key.as_bytes()),
+                        "module": card(&format!("/{key}.module"), format!("{key} module").as_bytes()),
+                    });
+                    if let Some(target) = target {
+                        row["target"] = target.into();
+                    }
+                    row
+                };
+                let mut rust = serde_json::json!({
+                    "wasm": variant("wasm", None),
+                    "native": variant("native", Some("aarch64-apple-darwin")),
+                    "tiered": variant("tiered", Some("aarch64-apple-darwin")),
+                });
+                if path.starts_with("/unknown/") {
+                    rust["jit"] = variant("jit", Some("aarch64-apple-darwin"));
+                }
+                let body = match path.rsplit('/').next().unwrap() {
+                    "" => serde_json::to_vec(
+                        &serde_json::json!({"exact":1, "plan":card("/app.plan", b"plan"), "rust":rust}),
+                    )
+                    .unwrap(),
+                    "app.plan" => b"plan".to_vec(),
+                    file => match file.split_once('.') {
+                        Some((key, "json")) => key.as_bytes().to_vec(),
+                        Some((key, "module")) => format!("{key} module").into_bytes(),
+                        _ => panic!("unexpected path {path}"),
+                    },
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(&body);
+            }
+        });
+        let binary = |mode: &str, target: &str| {
+            format!(r#"{{"target":"{target}","inputs":{{"rustMode":"{mode}"}}}}"#)
+        };
+        for (mode, target) in [
+            ("wasm", "x86_64-unknown-linux-gnu"),
+            ("native", "aarch64-apple-darwin"),
+            ("tiered", "aarch64-apple-darwin"),
+        ] {
+            let generation = fetch_changed(&page, &binary(mode, target), None)
+                .unwrap_or_else(|e| panic!("{mode}: {e}"))
+                .unwrap();
+            let module = generation.module.unwrap();
+            assert_eq!(module.receipt, mode);
+            assert_eq!(module.bytes, format!("{mode} module").into_bytes());
+        }
+        for mode in ["native", "tiered"] {
+            assert_eq!(
+                fetch_changed(&page, &binary(mode, "x86_64-unknown-linux-gnu"), None).err(),
+                Some("Rust replacement target does not match this binary".into()),
+                "{mode}"
+            );
+        }
+        assert_eq!(
+            fetch_changed(
+                &format!("{page}unknown/"),
+                &binary("wasm", "x86_64-unknown-linux-gnu"),
+                None
+            )
+            .err(),
+            Some("invalid Rust executor manifest".into())
+        );
     }
 }

@@ -162,18 +162,21 @@ fn id(outcome: &Outcome) -> (&str, &str) {
 }
 
 /// The messages up to the one with cursor `last`, each with how many it
-/// replaced (a reply the runner had not taken yet coalesces, as any stream's).
+/// replaced (none: replies the runner had not taken yet wait together).
 fn until_cursor(core: &Core, woke: &Receiver<()>, last: &str) -> Vec<(String, u32)> {
     let mut got = Vec::new();
     loop {
         let (ticket, outcome) = next(core, woke);
         assert_eq!(ticket, 1);
-        let Outcome::Message(m) = outcome else {
-            panic!("expected a message, got {outcome:?}")
-        };
-        got.push((m.id.clone(), m.coalesced));
-        if m.id == last {
-            return got;
+        assert!(
+            !outcome.messages().is_empty(),
+            "expected a message, got {outcome:?}"
+        );
+        for m in outcome.messages() {
+            got.push((m.id.clone(), m.coalesced));
+            if m.id == last {
+                return got;
+            }
         }
     }
 }
@@ -281,22 +284,20 @@ fn under_same_cursor_event_a_reply_with_the_cursor_asked_with_is_delivered() {
     ]);
     core.run_owned(poll(1, true, 4096), None).unwrap();
     until_asked(&script, 3);
-    let (_, newest) = next(&core, &woke);
-    let Outcome::Message(m) = &newest else {
-        panic!("{newest:?}")
-    };
+    let mut got = next(&core, &woke).1.messages().to_vec();
+    while got.len() < 2 {
+        got.extend_from_slice(next(&core, &woke).1.messages());
+    }
+    let got: Vec<_> = (got.iter())
+        .map(|m| (m.id.as_str(), m.data.as_str(), m.coalesced))
+        .collect();
     assert_eq!(
-        (m.id.as_str(), m.data.as_str()),
-        ("1", r#"{"seq":1,"n":2}"#)
-    );
-    let earlier = std::iter::from_fn(|| {
-        core.begin_pump();
-        core.drain().pop()
-    });
-    assert_eq!(
-        1 + m.coalesced as usize + earlier.count(),
-        2,
-        "both replies were events"
+        got,
+        [
+            ("1", r#"{"seq":1,"n":1}"#, 0),
+            ("1", r#"{"seq":1,"n":2}"#, 0)
+        ],
+        "both replies were events, in order"
     );
     core.forget(|_| false);
     until_settled(&core);

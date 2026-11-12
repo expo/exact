@@ -495,42 +495,6 @@ impl std::fmt::Debug for Comparison {
     }
 }
 
-/// Whether a row takes no negative length in CSS: sizes, padding, radii, an
-/// SVG radius and a column's width (margins and insets take one). A math
-/// function's result is clamped to 0 there (CSS Values 4 §9.1).
-pub(super) fn no_negative_lengths(style: StyleId) -> bool {
-    matches!(
-        style,
-        StyleId::Width
-            | StyleId::Height
-            | StyleId::MinWidth
-            | StyleId::MinHeight
-            | StyleId::MaxWidth
-            | StyleId::MaxHeight
-            | StyleId::PaddingTop
-            | StyleId::PaddingRight
-            | StyleId::PaddingBottom
-            | StyleId::PaddingLeft
-            | StyleId::FlexBasis
-            | StyleId::BorderRadiusTopLeft
-            | StyleId::BorderRadiusTopRight
-            | StyleId::BorderRadiusBottomRight
-            | StyleId::BorderRadiusBottomLeft
-            | StyleId::R
-            | StyleId::Rx
-            | StyleId::Ry
-            | StyleId::ColumnWidth
-            | StyleId::HitSlopTop
-            | StyleId::HitSlopRight
-            | StyleId::HitSlopBottom
-            | StyleId::HitSlopLeft
-            | StyleId::ScrollPaddingTop
-            | StyleId::ScrollPaddingRight
-            | StyleId::ScrollPaddingBottom
-            | StyleId::ScrollPaddingLeft
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

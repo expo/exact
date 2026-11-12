@@ -14,6 +14,14 @@ const MOTION: [StyleId; 4] = [
     StyleId::ExitAnimation,
 ];
 
+/// `motion-words.js`, its one placeholder filled.
+fn motion_words() -> String {
+    include_str!("../motion-words.js").replace(
+        "MAX_LINEAR_STOPS",
+        &exact_motion::easing::MAX_LINEAR_STOPS.to_string(),
+    )
+}
+
 fn own(style: &StyleProps) -> paint_order::Own {
     paint_order::own_from(paint_order::Facts {
         style,
@@ -221,9 +229,9 @@ pub fn binding(plan: &Plan, kind: NodeType, b: &BindingsRow) -> Option<(String, 
                 })
                 .collect();
             let predicate = include_str!("../transition-paint.js")
-                .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap())
                 .replace("MAX_TRANSITIONS", &exact_motion::MAX_TRANSITIONS.to_string())
-                .replace("MAX_LINEAR_STOPS", &exact_motion::easing::MAX_LINEAR_STOPS.to_string());
+                .replace("WORDS", &motion_words())
+                .replace("PROPERTIES", &serde_json::to_string(&properties).unwrap());
             return flag(POLICY, &format!("({predicate})(v)"));
         }
         StyleId::Animation => {
@@ -248,13 +256,15 @@ pub fn binding(plan: &Plan, kind: NodeType, b: &BindingsRow) -> Option<(String, 
                 })
                 .map(|k| plan.str(k.name))
                 .collect();
-            return flag(
-                POLICY,
-                &format!(
-                    "v!=null&&String(v).split(/[\\s,]+/).some(n=>{}.includes(n))",
-                    serde_json::to_string(&names).unwrap()
-                ),
-            );
+            // Which word is the name is the shorthand's grammar's to say:
+            // `1s EASE` plays no keyframes `EASE` (LLP 1055 D5). The names
+            // are the author's, so they go in last: a keyframes named
+            // `MAX_ANIMATIONS` must not be read as a placeholder.
+            let predicate = include_str!("../animation-paint.js")
+                .replace("MAX_ANIMATIONS", &exact_motion::MAX_ANIMATIONS.to_string())
+                .replace("WORDS", &motion_words())
+                .replace("NAMES", &serde_json::to_string(&names).unwrap());
+            return flag(POLICY, &format!("({predicate})(v)"));
         }
         // A number token's name (LLP 1121 D7) stands for its value: one that
         // varies may be below 1; a name no token has is unset, 1.

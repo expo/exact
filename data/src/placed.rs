@@ -708,6 +708,20 @@ fn turn<D: DataSource>(
                 }
                 return Err(unavailable(request.long_poll_refusal().unwrap_or_default()));
             }
+            // A Rust source's two-way socket (`Request::socket`, LLP 1016.003): its turns
+            // are the main thread's, so it is refused rather than opened to only listen.
+            // A TypeScript module's socket, whose request names its fetch, listens as
+            // LLP 1016.000 D7 declares for a worker.
+            Ok(Some(Answer::Later(request)))
+                if request.socket
+                    && request.fetch.is_none()
+                    && request.listen.is_none()
+                    && !request.is_process() =>
+            {
+                return Err(unavailable(
+                    "Request::socket is unavailable in a worker-placed source; place it on main",
+                ));
+            }
             // A wait for the answer's own timer is the runner's to keep
             // until due (LLP 1027.000 D1): it yields, as a fetch does.
             Ok(Some(Answer::Later(request)))

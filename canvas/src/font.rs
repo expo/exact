@@ -16,9 +16,6 @@
 
 use std::fmt::Write as _;
 
-/// A number as JavaScript's `String(n)` writes it (the colour parser's).
-pub use exact_motion::color::css::js_number;
-
 /// `fontVariantCaps`'s values; the list's `caps` operand is the index.
 pub const CAPS: [&str; 7] = [
     "normal",
@@ -137,7 +134,7 @@ impl Font {
         if self.caps == 1 {
             s.push_str("small-caps ");
         }
-        let _ = write!(s, "{}px ", js_number(self.size));
+        let _ = write!(s, "{}px ", exact_num::js(self.size));
         let families: Vec<String> = self.families.iter().map(|f| quote_family(f)).collect();
         s.push_str(&families.join(", "));
         s

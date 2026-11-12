@@ -46,6 +46,16 @@ impl<D: DataSource> Runner<D> {
         let answering: std::collections::BTreeSet<String> = (self.plan.modules.iter())
             .filter(|m| self.route(m) == Route::Agent)
             .map(|m| self.plan.str(m.extension).to_owned())
+            .chain(
+                self.plan
+                    .views
+                    .iter()
+                    .map(|v| self.plan.str(v.extension))
+                    .filter(|e| {
+                        self.extensions.agent.contains(*e) && !self.extensions.bound.contains(*e)
+                    })
+                    .map(str::to_owned),
+            )
             .collect();
         if !answering.is_empty() {
             let names: Vec<&str> = answering.iter().map(String::as_str).collect();

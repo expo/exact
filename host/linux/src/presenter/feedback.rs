@@ -132,6 +132,7 @@ impl<D: DataSource> Presenter<D> {
             self.host.flow_damage.repaint();
         }
         for id in moved {
+            self.host.look_motion(id);
             if let Some(node) = self.host.kernel().node(id) {
                 let key = node.key;
                 self.host.row_dirty.node(key);

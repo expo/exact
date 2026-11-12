@@ -121,7 +121,10 @@ function functional(name, body) {
   }
   if (name === "hsl" || name === "hsla" || name === "hwb") {
     if (c[0].pct !== undefined) return null;
-    const frac = (x) => (x.pct !== undefined ? Math.min(1, Math.max(0, x.pct / 100)) : !legacy ? Math.min(1, Math.max(0, x.num / 100)) : null);
+    // hsl() clamps its saturation and lightness to 100%; hwb()'s whiteness and blackness
+    // have no upper bound, a sum over 100% scaled down below (CSS Color 4 §7, §8).
+    const top = name === "hwb" ? Infinity : 1;
+    const frac = (x) => (x.pct !== undefined ? Math.min(top, Math.max(0, x.pct / 100)) : !legacy ? Math.min(top, Math.max(0, x.num / 100)) : null);
     const s = frac(c[1]), l = frac(c[2]);
     if (s === null || l === null) return null;
     let rgb;
@@ -197,7 +200,10 @@ function wide(name, body) {
     : mul3(XYZ_TO_SRGB, mul3(D50_TO_D65, v));
   const out = [...lin.map((x) => channel(fromLinear(x) * 255)), Math.round(alpha * 255) / 255];
   out.lin = lin;
-  out.text = `${space ? `color(${space} ` : `${name}(`}${v.map(jsNumber).join(" ")}${alpha < 1 ? ` / ${jsNumber(alpha)}` : ""})`;
+  // A component written `none` is missing (CSS Color 4 §4.4): 0 in the pixels, `none` in the text.
+  const shown = (t, n) => (t.trim() === "none" ? "none" : jsNumber(n));
+  const alphaText = a !== undefined && a.trim() === "none" ? " / none" : alpha < 1 ? ` / ${jsNumber(alpha)}` : "";
+  out.text = `${space ? `color(${space} ` : `${name}(`}${v.map((n, i) => shown(parts[i], n)).join(" ")}${alphaText})`;
   return out;
 }
 // A `display-p3` canvas's colours (LLP 1100 D12a; color/src/lib.rs
@@ -1011,7 +1017,7 @@ export class Recorder {
   set textAlign(v) { const k = ALIGN.indexOf(v); if (k >= 0) this._.state.text.align = k; }
   get textBaseline() { return BASELINE[this._.state.text.baseline]; }
   set textBaseline(v) { const k = BASELINE.indexOf(v); if (k >= 0) this._.state.text.baseline = k; }
-  get direction() { return this._.rtl() ? "rtl" : "ltr"; }
+  get direction() { return DIRECTION[this._.state.text.direction]; }
   set direction(v) { const k = DIRECTION.indexOf(v); if (k >= 0) this._.state.text.direction = k; }
   get fontKerning() { return KERNING[this._.state.text.kerning]; }
   set fontKerning(v) { const k = KERNING.indexOf(v); if (k >= 0) this._.state.text.kerning = k; }

@@ -469,3 +469,23 @@ fn aligned_live_input_is_drawn_one_frame_before_seekable_interpolation() {
     }
     assert_eq!(first, [4, 5]);
 }
+#[test]
+fn paused_input_follows_device_events_queued_before_the_pause() {
+    // A key goes down after the last frame, the app pauses and the key lifts,
+    // all before the next frame: the release must not overtake the press.
+    let mut s = live(60.0);
+    s.advance(16.7, Clock::Live);
+    key(&mut s, "KeyE", true, 19.7);
+    s.bind(&CounterArgs { paused: true }.values(), None)
+        .unwrap();
+    key(&mut s, "KeyE", false, 25.0);
+    s.advance(33.4, Clock::Live);
+    s.advance(50.1, Clock::Live);
+    s.bind(&CounterArgs::default().values(), None).unwrap();
+    for frame in 4..64 {
+        s.advance(frame as f64 * 16.7, Clock::Live);
+    }
+    assert_eq!(s.world().resource::<Counts>().held, 0);
+    let state = s.agent(r#"{"op":"state"}"#);
+    assert!(state.contains(r#""held":[],"forwarded":[]"#), "{state}");
+}
