@@ -29,6 +29,9 @@ open class ExactActivity : Activity() {
     /** The app's `video` player ([VideoPlayer]); none for an app without video. */
     protected open val video: ((Context) -> VideoPlayer)? = null
     private var natives: Natives? = null
+    private var nativeState: Bundle? = null
+    private var nativeStarted = false
+    private var nativeResumed = false
     /** The app's text fields, each the platform's own ([Fields], LLP 1115.001 D8). */
     private var fields: Fields? = null
     /** The row pitch `start=N` scrolls by (0: the app's plan scrolls to it itself). */
@@ -80,6 +83,7 @@ open class ExactActivity : Activity() {
         // once (decoded pictures otherwise stay held).
         if (!again) android.system.Os.setenv("MIMALLOC_PURGE_DELAY", "0", false)
         super.onCreate(state)
+        nativeState = state?.getBundle("exact.hosted")
         hatchReader?.activity = this
         // The starting window goes the moment the first frame is drawn, not after its exit fade (splashfade=1: the
         // platform's fade, to compare): the first frame is what shows.
@@ -260,7 +264,7 @@ open class ExactActivity : Activity() {
      * sent it. A new one adopts the host, which paints everything again for it; the app is as it was.
      */
     private fun read() {
-        natives?.destroyAll()
+        natives?.let { nativeState = it.lifecycle.save(); it.destroyAll() }
         fields?.leaving()
         root.removeAllViews()
         // Before the host boots: its first layout measures the app's text fields in a field of this activity's
@@ -325,6 +329,10 @@ open class ExactActivity : Activity() {
         if (input) view.keys = Keys(view)
         val elements = Natives(this, File(storage, "app"), Extensions.withViews(modules), video)
         natives = elements
+        elements.lifecycle.restore(nativeState)
+        nativeState = null
+        if (nativeStarted) elements.lifecycle.event(ViewLifecycle.START)
+        if (nativeResumed) elements.lifecycle.event(ViewLifecycle.RESUME)
         elements.hatched = { node, context -> hatchReader?.made(node, context) }
         view.natives = elements
         // The app's text fields (LLP 1115.001 D8) outlive a reader made again: a field keeps its view, and with it
@@ -503,11 +511,13 @@ open class ExactActivity : Activity() {
      * stop makes the reader again ([read]). */
     override fun onStart() {
         super.onStart()
+        nativeStarted = true
         if (stopped) { stopped = false; read() }
         contentResolver.registerContentObserver(android.provider.Settings.Global.getUriFor(android.provider.Settings.Global.ANIMATOR_DURATION_SCALE), false, settings)
         contentResolver.registerContentObserver(android.provider.Settings.System.getUriFor(android.provider.Settings.System.TIME_12_24), false, settings)
         // What changed while the activity was stopped and is no configuration change.
         configure()
+        natives?.lifecycle?.event(ViewLifecycle.START)
         view.running(true)
         Exact.hidden(false)
         if (measured) Exact.owner?.windowFrames?.attach(window)
@@ -537,10 +547,12 @@ open class ExactActivity : Activity() {
     override fun onStop() {
         stopped = true
         Exact.owner?.windowFrames?.detach()
+        nativeStarted = false
         Exact.hidden(true)
         if (reads()) pads.background()
         if (reads()) Extensions.stopped(isChangingConfigurations)
         view.running(false, reads())
+        natives?.lifecycle?.event(ViewLifecycle.STOP)
         // Behind the hide, the pads' release and the stop of the turns (none queued after it), what they and anything
         // since the pause committed is on disk before Android may kill it.
         if (!Exact.drainStore()) android.util.Log.w("exact", "the store's writes did not finish before the stop")
@@ -552,11 +564,15 @@ open class ExactActivity : Activity() {
      * reads again what the person may have changed in Settings ([Extensions.resumed]). */
     override fun onResume() {
         super.onResume()
+        nativeResumed = true
+        natives?.lifecycle?.event(ViewLifecycle.RESUME)
         requests.resumed()
         Extensions.resumed()
     }
 
     override fun onPause() {
+        nativeResumed = false
+        natives?.lifecycle?.event(ViewLifecycle.PAUSE)
         // Everything committed before the pause is on disk (exact2 writes the store on a thread of its own).
         if (!Exact.drainStore()) android.util.Log.w("exact", "the store's writes did not finish before the pause")
         Extensions.paused()
@@ -575,6 +591,17 @@ open class ExactActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         Extensions.activityResult(requestCode, resultCode, data)
+    }
+
+    override fun onSaveInstanceState(state: Bundle) {
+        natives?.lifecycle?.save()?.let { state.putBundle("exact.hosted", it) }
+        super.onSaveInstanceState(state)
+    }
+
+    @Deprecated("Deprecated in Android")
+    override fun onLowMemory() {
+        natives?.lifecycle?.event(ViewLifecycle.LOW_MEMORY)
+        super.onLowMemory()
     }
 
     override fun onDestroy() {

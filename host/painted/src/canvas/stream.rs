@@ -348,6 +348,48 @@ component App
     }
 
     #[test]
+    fn a_hosted_hit_names_the_native_contents_painted_origin() {
+        use crate::presenter::{PainterChoice, Presenter};
+        for scale in [1., 2., 2.75] {
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(r##"component App
+  view
+    view margin=10.25 padding=12 width=350 height=350
+      test-map testId="map" width=200 height=200 padding=20 border-width=3 border-style="solid" translate="4px 7px"
+"##),
+                (), (400., 400.), scale, std::path::PathBuf::new(), PainterChoice::Canvas,
+            ).unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.frame();
+            let ops = FINISHED.with(|f| f.borrow_mut().take()).unwrap();
+            let mut matrix = [1., 0., 0., 1., 0., 0.];
+            let mut native = None;
+            let mut at = 0;
+            while at < ops.len() {
+                if ops[at] == MATRIX {
+                    matrix = std::array::from_fn(|i| f32::from_bits(ops[at + 1 + i]));
+                }
+                if ops[at] == NATIVE {
+                    let rect: [f32; 4] = std::array::from_fn(|i| f32::from_bits(ops[at + 3 + i]));
+                    let x = matrix[0] * rect[0] + matrix[2] * rect[1] + matrix[4];
+                    let y = matrix[1] * rect[0] + matrix[3] * rect[1] + matrix[5];
+                    native = Some((ops[at + 1], x, y, rect[2], rect[3]));
+                }
+                at = end(&ops, at).unwrap();
+            }
+            let (id, x, y, width, height) = native.expect("the module's op 28");
+            assert_eq!((width, height), (200., 200.));
+            let words = p.reader_module(x + 5. * scale, y + 5. * scale, scale);
+            assert_eq!(words[0], id as i32);
+            let origin = [words[8], words[9]].map(|v| f32::from_bits(v as u32));
+            assert_eq!(origin, [(x + 0.5).floor(), (y + 0.5).floor()]);
+            let border = [words[1], words[2]].map(|v| f32::from_bits(v as u32));
+            assert!((x - border[0] - 23. * scale).abs() < 0.01);
+            assert!((y - border[1] - 23. * scale).abs() < 0.01);
+        }
+    }
+
+    #[test]
     fn turned_boxes_record_shapes_without_cpu_pictures() {
         use crate::presenter::{PainterChoice, Presenter};
         let (mut p, error) = Presenter::boot_with(

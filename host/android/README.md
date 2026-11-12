@@ -612,9 +612,44 @@ libraries are named in `app.json` under `host.android.maven` ("Maven libraries" 
 the APK resolves it only at the first module view. Each module creates and updates its real Android `View`.
 `events(view, emit)` binds before its first update; call `emit("change", value)` or `emit("input", value)` with
 string values, `emit("message", payload)` with the guest message, `emit("load", "")`, or `emit("press", "")`.
-Retired bindings and events for an old node allocation are ignored. A module button receives `performClick()`
-for an unscrolled tap that no long press took, at its painted position so a platform popup can anchor to it. Native drags, arbitrary
-pointer forwarding and zero-size service modules are not implemented by this button seam.
+Retired bindings and events for an old node allocation are ignored.
+
+A hosted view receives `dispatchTouchEvent` in its current painted content coordinates, inside its CSS border and padding
+(LLP 1133.008 D8). The inverse of the allocation's full transform maps every pointer into the view, including through
+scaled and rotated retained rows and animation layers. Returning false for `ACTION_DOWN` declines the sequence;
+no module opt-in is needed. A tap reaches the view's normal click handling.
+Exact's gestures retain their claimed axes. Without an Exact context-menu candidate, the view receives down
+provisionally, so Android recognizes a native long click at its normal deadline, including inside a swipeable row.
+Movement on an Exact gesture's axis cancels the native contact. An Exact context-menu candidate defers native
+delivery until movement, release or Exact's long-press reply settles that claim. Declining the context menu admits
+native recognition while preserving Exact's axis claims. An additional pointer cancels Exact's long-press timer,
+including while hit replies or native admission are pending.
+An accepted down leaves the scroller watching: past touch slop on its axis, it intercepts and the hosted view gets
+`ACTION_CANCEL`. A hosted view or descendant that needs the drag calls
+`parent.requestDisallowInterceptTouchEvent(true)` before the crossing move, as in any
+[Android ViewGroup](https://developer.android.com/develop/ui/views/touch-and-input/gestures/viewgroup).
+The request lasts until up or cancel, or until the child passes `false`. The maps package requests this on down
+to reserve its pan. A drag on an axis the enclosing page cannot scroll stays with the hosted view; a second
+pointer before interception gives it the pinch and the rest of that sequence. A down stops a running fling and
+reaches the hosted view.
+Declining the down leaves the scroller's drag and velocity tracking intact, including when the down stopped a fling.
+A field keeps a selection drag if it disallowed interception before the crossing move; otherwise scrolling gets
+that move first.
+The reader holds events until the hit reply arrives and replays them in order, including subsequent taps. If more
+than 240 events await a reply, it releases a field's held down to Exact and replays there, ignoring the late reply. Retirement or
+activity stop cancels the view's contact. The agent's synthetic `tap … drag` still drives Exact; use real Android
+touches to exercise a hosted view. Zero-size service modules are not part of this seam.
+
+`NativeModule.lifecycle(view, event, state)` receives `ViewLifecycle`'s `CREATE`, `START`, `RESUME`, `PAUSE`,
+`STOP`, `DESTROY`, `SAVE_INSTANCE_STATE` and `LOW_MEMORY` (LLP 1133.021 §9). A view made after resume first hears
+create, start and resume. `CREATE` receives that allocation's saved bundle; `SAVE_INSTANCE_STATE` fills a private
+bundle, retained across reader replacement and activity recreation. An allocation awaiting saved state gets a new
+view, so its `CREATE` receives that bundle. A reused view keeps its lifecycle until it is destroyed. Package
+implementations receive the same callbacks through `ExactExtension.viewLifecycle`.
+The maps package forwards them to [Google's MapView](https://developers.google.com/android/reference/com/google/android/gms/maps/MapView).
+It saves the last applied camera props beside the SDK state: restoration compares their numeric values and keeps
+the person's camera unless the author changed a prop. Only changed fields are applied; changing the centre and
+zoom together preserves the person's bearing and tilt.
 
 ## Module implementations (LLP 1133.001 D5)
 

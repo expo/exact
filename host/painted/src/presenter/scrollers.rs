@@ -672,6 +672,40 @@ fn bits(v: f32) -> i32 {
     v.to_bits() as i32
 }
 
+impl<D: DataSource> Presenter<D> {
+    /// Module hit reply: allocation, border box, key, long-press count, painted content origin, context candidate.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn reader_module(&mut self, x: f32, y: f32, scale: f32) -> Vec<i32> {
+        let module = self.hit(x / scale, y / scale).filter(|id| {
+            self.host.kernel().node(*id).is_some_and(|node| {
+                node.node_type == NodeType::NativeView
+                    && self.host.retained_action_eligible(node.key)
+            })
+        });
+        let painted = module.and_then(|id| self.box_of(id));
+        let rect = painted.map(|b| b.rect).unwrap_or_default();
+        let node = module.and_then(|id| self.host.kernel().node(id));
+        let content = painted
+            .zip(node.as_ref())
+            .and_then(|(b, node)| b.native_content(self.host.kernel(), node));
+        let mut words = vec![module.unwrap_or(0) as i32];
+        words.extend([rect.0, rect.1, rect.2, rect.3].map(|v| (v * scale).to_bits() as i32));
+        words.extend([
+            node.as_ref().map_or(0, |node| node.key.index as i32),
+            node.as_ref().map_or(0, |node| node.key.generation as i32),
+            self.long_presses() as i32,
+        ]);
+        // Player rounds the mapped content origin before drawing the native RenderNode.
+        let content = content.unwrap_or_default();
+        words.extend([content.0, content.1].map(|v| (v * scale + 0.5).floor().to_bits() as i32));
+        words.push(
+            self.context_menu_at(x / scale, y / scale)
+                .map_or(0, |v| v.0 as i32),
+        );
+        words
+    }
+}
+
 #[cfg(test)]
 #[path = "scrollers_tests.rs"]
 mod tests;

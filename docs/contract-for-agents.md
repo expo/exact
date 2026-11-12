@@ -2815,6 +2815,20 @@ scrolling a strip of choices to one moves the sheet's form too. `block="nearest"
 scroller that already shows it alone and `inline` places it across the strip:
 ``scrollIntoView(`icon-${i}`, block="nearest", inline="start", behavior="instant")``.
 
+### Native views: touch input
+
+On Android, a hosted module's `View` receives `dispatchTouchEvent` in its own
+coordinates. Returning `true` for `ACTION_DOWN` accepts delivery. A drag past
+touch slop on an enclosing scroller's axis cancels that delivery and scrolls the
+page, as with a button inside an
+[Android ViewGroup](https://developer.android.com/develop/ui/views/touch-and-input/gestures/viewgroup).
+A view or descendant that needs its own pan calls
+`parent.requestDisallowInterceptTouchEvent(true)` before the crossing move;
+request it on down to reserve the pan, as the maps package does. Passing `false`
+allows interception again. The request clears on up or cancel. An unscrollable
+axis and a second pointer before interception stay with the hosted view.
+See the [Android module seam](../host/android/README.md).
+
 ### Native views: accessibility
 
 A native view ([recipe](recipes/native-views.md)) that says nothing to VoiceOver is one

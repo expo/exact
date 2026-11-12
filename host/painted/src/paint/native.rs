@@ -111,6 +111,19 @@ impl Painter {
     }
 }
 
+impl PaintedBox {
+    /// The content bounds through the paint walk's placement, as Android's Player maps op 28.
+    #[cfg(any(target_os = "android", test))]
+    pub(crate) fn native_content(&self, kernel: &Kernel, node: &NodeRef<'_>) -> Option<Rect4> {
+        let (left, top, width, height) = exact_kernel::svg::scene::content_box(kernel, node);
+        let local = self.scroll_rect();
+        space::mapped_bounds(
+            &self.scroll_mapping()?,
+            (local.0 + left, local.1 + top, width, height),
+        )
+    }
+}
+
 #[cfg(test)]
 #[path = "native_tests.rs"]
 mod tests;

@@ -1,6 +1,6 @@
 # Recipe: native views
 
-A view needing a platform API (a map, the camera) is a Swift view: a hyphenated tag in
+A platform view (a map, the camera) is a hyphenated tag in
 `app.json` `modules`, made by `modules/apple/*.swift`. A video is the `video` element, with a
 `poster`; a Skia or Reanimated screen is boxes, SVG and keyframes. Contract places it:
 
@@ -56,7 +56,7 @@ final class Video: ExactNativeInstance {
 - **Time is the session's:** `context.frames`, `context.after(ms)`, never a
   `CADisplayLink` or timer, so `clock +N` moves it; timed audio is a `sequence`.
 - **Touches:** recognizers on the view; a point `point(inside:)` declines goes under the box
-  unless it has `press=`. Drive them with `agent ios --touch platform`.
+  unless it has `press=`. Use `agent ios --touch platform`. [Android](../contract-for-agents.md#native-views-touch-input).
 - **Size:** `intrinsicSize` is the natural size; an authored size wins.
 - **Accessibility:** [native views](../contract-for-agents.md#native-views-accessibility).
 - **Data:** `app.ts` asks: `native!.watch('state'); return native!.call({op: 'state'});`. The
@@ -64,4 +64,4 @@ final class Video: ExactNativeInstance {
 - **A crash:** `agent ios logs` shows the newest crash report.
 - **First frame:** views attach after first paint. Only a cheap one says
   `ExactNativeFactory(firstFrame: true)`, never an engine's; the module is made with it, on
-  main: make an `AVAudioEngine` on first use. A splash is Contract: native slows launch.
+  main: make an `AVAudioEngine` on first use. Write splashes in Contract.

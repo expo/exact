@@ -78,9 +78,10 @@ object Native {
      * rows are a node the reader can move, bit 3 no scrollbar, bit 4 it hears `refresh`, bit 5 its `refreshing`
      * is true, bits 6 and 7 its `keyboardDismissMode`), its revision, then as float bits its offset (x, y), its farthest offset
      * (x, y) and the box it shows in (x, y, width, height). exact2 tells the reader of each of them from then on
-     * ([scrollers]). After the scrollers: the native module button under the point (0: none), then its painted
-     * box x, y, width and height as float bits, in pixels, its allocation slot and generation, and how many long
-     * presses a node has taken so far (wrapping). Then each scroller's snap, in the same order (`host/painted/src/presenter/snap.rs`,
+     * ([scrollers]). After the scrollers: the native module view under the point (0: none), then its painted
+     * border box x, y, width and height as float bits, in pixels, its allocation slot and generation, how many long
+     * presses a node has taken so far (wrapping), its painted content origin x and y as float bits, and the
+     * Exact context-menu candidate (0: none). Then each scroller's snap, in the same order (`host/painted/src/presenter/snap.rs`,
      * `reader_snaps`): flags (bit 0 it snaps sideways, bit 1 up and down, bit 2 `mandatory`), then sideways and then up
      * and down its snapport's length as float bits, a count, and per snap area the least and greatest offsets it rests
      * at as float bits and 1 for `scroll-snap-stop: always`, in pixels; flag bit 3: a virtualized list, whose areas past

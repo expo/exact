@@ -91,6 +91,8 @@ abstract class ExactExtension(val context: ExtensionContext) {
 
     /** The view's node is gone. */
     open fun destroyView(view: android.view.View) {}
+    /** The hosted view's activity lifecycle, separate from the session's foreground fact (LLP 1133.021). */
+    open fun viewLifecycle(view: android.view.View, event: ViewLifecycle, state: android.os.Bundle?) {}
 
     /**
      * View [id] of [session] was displayed or hidden, by the origin of the commit that did it (`app`, `tool` or
@@ -648,6 +650,9 @@ internal object Extensions {
         }
         override fun update(view: android.view.View, props: JSONObject) { extension(name)?.update(view, props) }
         override fun events(view: android.view.View, emit: (String, String) -> Unit) { emits[view] = emit }
+        override fun lifecycle(view: android.view.View, event: ViewLifecycle, state: android.os.Bundle?) {
+            extension(name)?.viewLifecycle(view, event, state)
+        }
         override fun destroy(view: android.view.View) { emits.remove(view); extension(name)?.destroyView(view) }
     }
 

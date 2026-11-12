@@ -703,8 +703,8 @@ internal class Fields(context: Context) : FrameLayout(context) {
      * ([Scrolling.next]): once it says the scroll has the touch, what is left is not theirs, and the scroll has
      * cancelled the touch where it was ([cancel]).
      */
-    fun under(serial: Int, field: Int, scrolls: () -> Boolean = { false }) {
-        if (serial != this.serial || state != HOLDING) return
+    fun under(serial: Int, field: Int, scrolls: () -> Boolean = { false }): Boolean {
+        if (serial != this.serial || state != HOLDING) return false
         val f = target
         val events = ArrayList(held)
         held.clear()
@@ -723,6 +723,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
             } else view?.fingers?.relay(e)
             e.recycle()
         }
+        return own
     }
 
     /** A scroll took the touch ([Scrolling]): the field's touch is cancelled, or what was held is let go. Whether

@@ -822,23 +822,23 @@ fn a_long_press_opens_the_context_menu_a_node_names_where_the_finger_is() {
     let at = (held.0 + 120.0, held.1 + 10.0);
     assert_eq!(p.pointer_down(at.0, at.1, 0.0), Ok(true));
     let before = p.long_presses();
+    assert_ne!(p.reader_module(at.0, at.1, 1.0)[10], 0);
     assert!(p.long_press(at.0, at.1, 500.0));
     assert_eq!(p.long_presses(), before.wrapping_add(1));
-    // Its `contextmenu` ran first, then the menu opened at the finger.
     assert_eq!(text(&p, "aimed"), "row");
     assert_eq!(p.surface().map(|s| s.kind), Some(SurfaceKind::Menu));
     let (_, _, frame, _) = told(&mut p)[0];
     assert_eq!((frame[0], frame[1]), (at.0 as i32, at.1 as i32));
-    // The finger lifts on nothing: the row's own press does not run.
     let _ = p.pointer_up(at.0, at.1, 600.0);
     assert_eq!(text(&p, "said"), "nothing");
-    // The platform's long-press click was asked for.
     assert!(
         !p.long_press(at.0, at.1, 700.0),
         "not while a surface is open"
     );
+    assert_eq!(p.reader_module(at.0, at.1, 1.0)[10], 0);
     let poke = p.rect_of(id(&p, "poke")).unwrap();
     choose(&mut p, "menu-share");
+    assert_eq!(p.reader_module(poke.0 + 5., poke.1 + 5., 1.0)[10], 0);
     assert!(
         !p.long_press(poke.0 + 5.0, poke.1 + 5.0, 800.0),
         "a node that names none"

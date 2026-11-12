@@ -121,6 +121,7 @@ internal class Scrolling(private val view: ExactView) {
             field = value
         }
     val timerActive: Boolean get() = mode != IDLE
+    val dragging: Boolean get() = mode == DRAGGING
     /** What exact2 said is under the touch, once it has. */
     private var chain: List<Link> = emptyList()
     private var claims = 0
@@ -162,7 +163,7 @@ internal class Scrolling(private val view: ExactView) {
      * had the answer come at once ([next], [caughtUp]): a frame that answers late loses none of the finger's way, its
      * turns at a scroller's end, a finger that lifted, or the lift itself.
      */
-    fun touch(e: MotionEvent): Boolean {
+    fun touch(e: MotionEvent, disallowIntercept: Boolean = false): Boolean {
         if (e.actionMasked == MotionEvent.ACTION_DOWN) {
             val ended = early.any { it.actionMasked == MotionEvent.ACTION_UP || it.actionMasked == MotionEvent.ACTION_CANCEL }
             val first = down
@@ -192,18 +193,18 @@ internal class Scrolling(private val view: ExactView) {
             return false
         }
         if (mode == WATCHING && !answered) { early.add(MotionEvent.obtain(e)); return false }
-        return take(e)
+        return take(e, disallowIntercept)
     }
 
     /** [e], a touch event after the down, once exact2 has answered for the touch: whether the scroll took it. */
-    private fun take(e: MotionEvent): Boolean {
+    private fun take(e: MotionEvent, disallowIntercept: Boolean = false): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_MOVE -> {
                 tracker?.addMovement(e)
                 val i = e.findPointerIndex(pointer)
                 if (i < 0) return mode == DRAGGING
                 val x = e.getX(i); val y = e.getY(i)
-                if (mode == WATCHING) decide(x, y)
+                if (mode == WATCHING && !disallowIntercept) decide(x, y)
                 if (mode != DRAGGING) return false
                 val d = if (sideways) lastX - x else lastY - y
                 lastX = x; lastY = y
@@ -239,6 +240,19 @@ internal class Scrolling(private val view: ExactView) {
                 return was == DRAGGING
             }
         }
+    }
+
+    /** An accepted down can stop a fling, but scroll interception still waits for the new contact's slop. */
+    fun hosted() { if (mode == DRAGGING) mode = WATCHING }
+
+    /** This sequence no longer belongs to scrolling; unrelated refreshes and edge effects stay visible. */
+    fun yieldToHosted() {
+        if (mode == WATCHING || mode == DRAGGING) mode = IDLE
+        forget()
+        for (o in owing) for (e in o.events) e.recycle()
+        owing.clear()
+        tracker?.recycle(); tracker = null
+        serial++
     }
 
     /**
@@ -318,7 +332,11 @@ internal class Scrolling(private val view: ExactView) {
         forget()
         tracker?.recycle(); tracker = null
         released()
-        mode = IDLE
+        serial++
+        mode = IDLE; answered = false; chain = emptyList(); active = emptyList(); pointer = -1
+        halt()
+        frames.removeFrameCallback(edger); edging = false
+        for (s in scrollers.values) for (edge in s.edges) edge?.finish()
     }
 
     /**
@@ -328,7 +346,7 @@ internal class Scrolling(private val view: ExactView) {
      */
     fun under(serial: Int, w: IntArray) {
         if (serial != this.serial) { owing.firstOrNull { it.serial == serial }?.let { owing.remove(it); owed(it, w) }; return }
-        if (mode != WATCHING || w.size < 3) return
+        if ((mode != WATCHING && mode != DRAGGING) || w.size < 3) return
         answered(w)
     }
 
@@ -350,8 +368,8 @@ internal class Scrolling(private val view: ExactView) {
             links.add(Link(s, w[i + 1] and 1 != 0, w[i + 1] and 2 != 0))
             i += 11
         }
-        // After the module's eight words, each scroller's snap.
-        var at = 3 + 11 * w[1] + 8
+        // After the module's eleven words, each scroller's snap.
+        var at = 3 + 11 * w[1] + 11
         for (link in links) {
             if (at >= w.size) break
             val s = link.s
@@ -396,7 +414,7 @@ internal class Scrolling(private val view: ExactView) {
         // crossed the slop went far past it (a quick swipe, or moves held back until a late answer).
         lastX = if (sideways) downX + sign(x - downX) * slop else x
         lastY = if (sideways) y else downY + sign(y - downY) * slop
-        if (!replaying) view.forward(3, x, y, tool, 0L)
+        if (!replaying) view.cancelContact(x, y, tool)
         keyed = false
     }
 

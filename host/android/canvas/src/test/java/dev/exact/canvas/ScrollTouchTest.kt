@@ -131,7 +131,7 @@ class ScrollTouchTest {
         assertEquals(soon.first, late.first)
         assertTrue(slop in 11..29)
         assertEquals("answered at once, exact2 hears the move within the slop", listOf(0, 2, 3), soon.second)
-        assertEquals("answered late, it heard the moves until the scroll took the touch", listOf(0, 2, 2, 2, 3), late.second)
+        assertEquals("a late hit replays the same contact before scrolling intercepts", soon.second, late.second)
     }
 
     @Test fun aFingerThatLiftedBeforeTheAnswerScrollsAndFlings() {
@@ -139,8 +139,8 @@ class ScrollTouchTest {
         assertEquals(100f - slop, late.first[1]!!, 0.01f)
         assertEquals(soon.first, late.first)
         assertTrue("the lift flings", view.scrolling().timerActive)
-        // exact2 heard the lift before the touch was known to be a scroll: it has nothing to cancel.
-        assertEquals(listOf(0, 2, 2, 2, 1), late.second)
+        // The queued contact is cancelled in exact2 as soon as scrolling intercepts it.
+        assertEquals(soon.second, late.second)
     }
 
     @Test fun theUpsOwnSampleMovesNothing() {
@@ -294,7 +294,8 @@ class ScrollTouchTest {
         // A finger on the list while it flings stops it and has it: the fling is over.
         down(400f)
         assertEquals(listOf("end 1 flings", "rest 1"), Host.told.takeLast(2))
-        // It is dragged once the finger moves it.
+        // The hit reply admits the new contact before its moves can scroll.
+        answer(reply(scroller(1, 0f, max = 100000f)))
         move(380f)
         assertEquals(listOf("start 1", "move 1"), Host.told.takeLast(2))
     }
@@ -436,10 +437,10 @@ class ScrollTouchTest {
         assertEquals(100f - slop, thread.moved[1]!!, 0.01f)
         assertEquals("its fling stopped where the next touch came down",
             listOf("start 1", "move 1", "move 1", "move 1", "end 1 flings", "rest 1"), Host.told)
-        assertEquals("exact2 is told to cancel nothing: the first ended, the second is its own", listOf(0, 2, 2, 2, 1, 0), thread.touches)
+        assertEquals("the first scroll cancels exact2; the next down catches its fling", listOf(0, 3), thread.touches)
         answer(reply(scroller(1, 0f)))
         move(380f); move(340f)
-        assertEquals("the second scrolls on from there", 100f - slop + 60f - slop, thread.moved[1]!!, 0.01f)
+        assertEquals("the second scrolls on from there", 100f - slop + 60f, thread.moved[1]!!, 0.01f)
     }
 
     @Test fun aNestedDragTellsAndHoldsTheScrollerThatMoves() {

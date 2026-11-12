@@ -1,7 +1,7 @@
 # Recipe: a native module in Swift
 
-Put an `ExactModule` in `modules/apple/*.swift`; `let exactModule` names its class.
-No app.json entry.
+`modules/apple/*.swift` defines an `ExactModule`; `let exactModule` names it.
+No app.json entry. Android [gestures](../contract-for-agents.md#native-views-touch-input).
 
 **Kept answers:** a resource that reads `native.available` or calls `native.call`
 reads device state, so its answer can be kept across launches. Read launch
@@ -80,12 +80,12 @@ Web drives use that module when present, otherwise the fallback; iOS calls Swift
 Use `clock +1`, then `clock data`.
 Swift edits need `bun exact.mjs ios`. `print` reaches agent `logs`.
 
-Set the environment read above on an installed simulator build (`id` in app.json):
+Set the simulator environment (`id` in app.json):
 
 ```sh
 SIMCTL_CHILD_API_BASE_URL=https://jsonplaceholder.typicode.com xcrun simctl launch --terminate-running-process <udid> <bundle-id>
 ```
 
-The app receives `API_BASE_URL`. Use the same prefix on
+Use that prefix on
 `bun exact.mjs agent ios "clock +1" "clock data" state`.
 `-API_BASE_URL value` sets `UserDefaults`, which this example does not read.
