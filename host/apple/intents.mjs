@@ -259,15 +259,7 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
       '-module-cache-path', extensionModuleCache, '-target', triple, '-sdk', sdk,
       ...constValueArgs(values, dir),
       '-c', file, '-o', object]);
-    if (process.platform === 'linux') {
-      const major = parseInt(JSON.parse(readFileSync(resolve(sdk, 'SDKSettings.json'), 'utf8')).Version);
-      const actions = emittedIntentsMetadata(JSON.parse(readFileSync(values, 'utf8')), major);
-      mkdirSync(metadata, { recursive: true });
-      writeFileSync(resolve(metadata, 'extract.actionsdata'), JSON.stringify(actions));
-      writeFileSync(resolve(metadata, 'version.json'), JSON.stringify({ toolsVersion: 'exact-1', version: '3.0' }));
-    } else {
-      intentsMetadata({ moduleName: 'ExactIntents', dir, sdk, triple, platform, deployment, binary: object, sources: [file], values, runApple });
-    }
+    intentsMetadata({ moduleName: 'ExactIntents', dir, sdk, triple, platform, deployment, binary: object, sources: [file], values, runApple });
     console.log(`host/apple: intents: ${faces.length} faced tool${faces.length === 1 ? '' : 's'} compiled with their metadata (${Date.now() - started} ms)`);
   }
   return {
