@@ -656,6 +656,11 @@ pub struct MaterialOverride {
     /// patches the instance in place; its first appearance rebatches once.
     /// `None` draws as before.
     pub uv_offset: Option<[f32; 2]>,
+    /// The offset at the previous world tick, interpolated to `uv_offset` at
+    /// each rendered frame. `None` keeps the current offset at every frame.
+    /// Use unwrapped coordinates across repeats (for example 0.9 to 1.1,
+    /// not 0.9 to 0.1). Ignored without `uv_offset` or by a custom material.
+    pub uv_offset_previous: Option<[f32; 2]>,
 }
 /// Texture names replacing a model material's own, by slot; `None` keeps the
 /// material's. A slot the material samples no texture in stays untextured,

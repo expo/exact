@@ -752,6 +752,12 @@ gets a run of one neutral entry, which adds nothing, and a record with merged-pa
 looks carries it in each part's entry. Changing it patches those entries in place;
 its first appearance, or removal, changes the table's shape and rebatches. Instances
 without one draw as before (`surface_tests::cosmetics::a_blended_material_s_uv_offset_scrolls_its_texture_in_place`).
+For motion between world ticks, also write `uv_offset_previous`, the offset at
+the previous tick. The renderer interpolates the pair at each display frame,
+using the same alpha as model poses; neither the world nor its hash changes.
+Omitting it keeps the current offset at every frame. Keep scrolling coordinates
+unwrapped across repeats: interpolate 0.9 to 1.1, then let the sampler wrap.
+Base colour and emission use the same offset, including unlit emission.
 
 When an entity's `Mesh` names a model that cannot draw yet, the feed keeps drawing the
 rigid model (no skin, no animated parts) that entity drew at its last rebuild, with the

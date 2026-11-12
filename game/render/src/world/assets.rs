@@ -519,7 +519,7 @@ impl Assets {
                     .0
                     .iter()
                     .find(|o| o.material as usize == index)?;
-                Some((o.color, o.emissive, o.uv_offset))
+                Some((o.color, o.emissive, o.uv_offset, o.uv_offset_previous))
             };
             drawn |= !nodes.is_empty();
             if !nodes.is_empty() {
@@ -546,15 +546,18 @@ impl Assets {
                     .and_then(|l| l.2)
                     .filter(|_| !draws.custom.contains(&material));
                 let [u, v] = offset.unwrap_or_default();
+                let [previous_u, previous_v] = offset
+                    .and_then(|_| material_look(material).and_then(|l| l.3))
+                    .unwrap_or([u, v]);
                 if parts.len() <= 1 {
                     look = parts.first().and_then(find);
                     // One neutral entry for the whole record, holding the offset.
                     if offset.is_some() {
                         base = self.part_looks.len() as u32 + 1;
-                        let mut entry = [0.; 18];
+                        let mut entry = [0.; 20];
                         entry[..4].copy_from_slice(&[1.; 4]);
-                        entry[16..].copy_from_slice(&[u, v]);
-                        let mut end = [0.; 18];
+                        entry[16..].copy_from_slice(&[u, v, previous_u, previous_v]);
+                        let mut end = [0.; 20];
                         end[7] = f32::from_bits(u32::MAX);
                         self.part_looks.extend([entry, end]);
                     }
@@ -596,16 +599,18 @@ impl Assets {
                                         m[7],
                                         u,
                                         v,
+                                        previous_u,
+                                        previous_v,
                                     ]
                                 }),
                         );
-                    let mut end = [0.; 18];
+                    let mut end = [0.; 20];
                     end[7] = f32::from_bits(u32::MAX);
                     self.part_looks.push(end);
                 }
                 let (mut tint, mut glow) =
                     look.map_or(([1.; 4], [0.; 3]), |l| (l.color, l.emissive));
-                if let Some((color, g, _)) = material_look(material) {
+                if let Some((color, g, _, _)) = material_look(material) {
                     if let Some(c) = color {
                         tint = std::array::from_fn(|i| tint[i] * c[i]);
                         base |= REPLACE;
@@ -708,6 +713,7 @@ fn look_digests(w: &World) -> BTreeMap<u32, u64> {
             l.emissive.map(f32::to_bits).hash(h);
             l.textures.names().hash(h);
             l.uv_offset.map(|o| o.map(f32::to_bits)).hash(h);
+            l.uv_offset_previous.map(|o| o.map(f32::to_bits)).hash(h);
         }
     }
     hashers.into_iter().map(|(k, h)| (k, h.finish())).collect()

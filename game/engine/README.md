@@ -490,7 +490,9 @@ every skin: each named `.tex` is requested while an instance names it and releas
 none draws it, and until all of an instance's named textures can draw, it keeps the ones
 it drew before (the model's own the first time). `MaterialOverride.uv_offset` scrolls
 the base colour and emission textures on one instance, after the material's own UV
-transform: a tail running along a ribbon, flowing water. `World::drawn(e)` is the displayed
+transform: a tail running along a ribbon, flowing water. Set `uv_offset_previous`
+to the previous tick's unwrapped offset to interpolate the pair at display time;
+leave it `None` for the current offset at every frame. `World::drawn(e)` is the displayed
 pose and opacity, in the same walk as `World::is_visible`. Picking, layout, physics
 and gameplay use the simulated pose.
 

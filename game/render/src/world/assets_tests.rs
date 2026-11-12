@@ -411,3 +411,28 @@ fn a_fallback_draws_without_the_new_models_levels() {
     feed(&mut assets, &w, &mut r);
     assert_eq!(assets.records.len(), 4, "walnut and its coarse level");
 }
+
+#[test]
+fn previous_uv_offset_patches_without_changing_the_look_table_shape() {
+    let mut w = World::new(10, 0);
+    let e = w.spawn((Transform::default(), Mesh::asset("model")));
+    let look = |previous| {
+        exact_game::MaterialOverrides(vec![exact_game::MaterialOverride {
+            uv_offset: Some([1.1, 0.0]),
+            uv_offset_previous: previous,
+            ..Default::default()
+        }])
+    };
+    let (mut assets, mut r) = (Assets::default(), Recording::default());
+    w.insert(e, look(None));
+    feed(&mut assets, &w, &mut r);
+    assert_eq!(&assets.part_looks[0][16..], &[1.1, 0.0, 1.1, 0.0]);
+    let shape = (assets.records.len(), assets.part_looks.len());
+    w.insert(e, look(Some([0.9, 0.0])));
+    assert!(assets.patch_looks(&w, &mut r).unwrap());
+    assert_eq!(&assets.part_looks[0][16..], &[1.1, 0.0, 0.9, 0.0]);
+    assert_eq!((assets.records.len(), assets.part_looks.len()), shape);
+    w.insert(e, look(None));
+    assert!(assets.patch_looks(&w, &mut r).unwrap());
+    assert_eq!(&assets.part_looks[0][16..], &[1.1, 0.0, 1.1, 0.0]);
+}

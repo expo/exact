@@ -73,6 +73,10 @@ jobs:
           CARGO_TERM_COLOR: always
         run: cargo test --tests --no-fail-fast
 
+      - name: Game engine and renderer tests
+        working-directory: game
+        run: cargo test --locked -p exact-game -p exact-game-render --no-fail-fast
+
       - uses: browser-actions/setup-chrome@v1
         id: chrome
         if: ${{ !cancelled() }}
@@ -122,3 +126,7 @@ jobs:
         env:
           CARGO_TERM_COLOR: always
         run: cargo test --tests --no-fail-fast
+
+      - name: Game engine and renderer tests
+        working-directory: game
+        run: cargo test --locked -p exact-game -p exact-game-render --no-fail-fast

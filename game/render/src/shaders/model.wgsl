@@ -71,7 +71,7 @@ fn layered_ambient(n:vec3<f32>, v:vec3<f32>, lobe:vec3<shading>) -> vec3<shading
 @diagnostic(off, derivative_uniformity)
 fn model_unlit(input:ModelVarying, base:vec4<f32>) -> vec4<f32> {
     var emission=vec3(1.0);
-    if MODEL_TEXTURES { emission=textureSample(emission_texture,emission_sampler,material_uv(input.uv,3u)).rgb; }
+    if MODEL_TEXTURES { emission=textureSample(emission_texture,emission_sampler,material_uv(input.uv,3u)+input.uv_offset).rgb; }
     if MODEL_DISCARD && baked.flags.x==1.0 && base.a < baked.emission_cutoff.w { discard; }
     var color=vec3<shading>(base.rgb)+vec3<shading>(emission*baked.emission_cutoff.rgb*input.part_emission)+vec3<shading>(input.glow.xyz);
     if FOG { color=shaded_fog(color,input.world); }

@@ -114,6 +114,10 @@ fn model_transform(position: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, instan
         glow+=look.glow.xyz;
         if numbered { part=look.local[0]; part_emission=look.local[1].xyz; }
         uv_offset=look.local[2].xy;
+        let previous=look.local[2].zw;
+        if any(previous!=uv_offset) {
+            uv_offset=mix(previous,uv_offset,frame.camera_alpha.w);
+        }
     }
     // Read the instance material per vertex, as the primitive path does. Flat
     // varyings avoid storage-buffer reads for every covered fragment.
