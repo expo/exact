@@ -87,6 +87,28 @@ fn an_app_file_iframe_keeps_its_source_for_the_file_loader() {
     assert!(!js.contains("about:blank"), "{js}");
 }
 
+/// LLP 1055 D4: the SVG namespace follows the node type, so a module's custom
+/// element named `felt-…` is HTML and the glue attaches its factory.
+#[test]
+fn only_an_svg_node_is_created_in_the_svg_namespace() {
+    let plan = contract::compile(
+        "component App\n  view\n    column\n      felt-haptics enabled=true\n      svg viewBox=\"0 0 10 10\"\n        defs\n          filter id=\"soft\"\n            feGaussianBlur stdDeviation=2\n",
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    let maker = |tag: &str| {
+        let at = js
+            .find(&format!(",\"{tag}\","))
+            .unwrap_or_else(|| panic!("no {tag}: {js}"));
+        let open = js[..at].rfind('=').unwrap();
+        js[open + 1..at].split('(').next().unwrap().to_string()
+    };
+    assert_eq!(maker("felt-haptics"), "h", "{js}");
+    for tag in ["svg", "filter", "feGaussianBlur"] {
+        assert_eq!(maker(tag), "hs", "{tag}: {js}");
+    }
+}
+
 struct Answers;
 impl DataSource for Answers {
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
@@ -581,6 +603,24 @@ fn a_native_button_marks_bound_size_and_padding() {
     }
 }
 
+/// A bare button's bound inline padding is copied where a checked menu's mark
+/// column adds to it (sides.rs); no other node's is, as the wasm host's
+/// button_css.rs `face` copies only a bare button's.
+#[test]
+fn only_a_bare_buttons_bound_padding_is_copied_for_the_menu_mark() {
+    let copied = |source: &str| {
+        let plan = contract::compile(source).unwrap();
+        let js = crate::emit::emit(&plan, false, false).unwrap().js;
+        ["--exact-padding-left", "--exact-padding-right"]
+            .map(|name| js.contains(&format!("\"{name}\"")))
+    };
+    let app = |node: &str| {
+        format!("component App\n  state n = 0\n  view\n    {node} padding-left=(n + 4) padding-right=n\n      text \"Go\"\n")
+    };
+    assert_eq!(copied(&app("button appearance=\"none\"")), [true, true]);
+    assert_eq!(copied(&app("column")), [false, false]);
+}
+
 #[test]
 fn a_capsule_control_takes_no_curve() {
     // Written, the capsule's round corner is in the node's CSS beside its radius.
@@ -1073,8 +1113,13 @@ fn a_bound_side_stays_its_authors_right_to_left_and_the_sheets_mirror() {
     );
     assert!(!out.css.contains("padding-inline-"), "{}", out.css);
     for (side, value) in [("start", "16px"), ("end", "0px")] {
-        let write = format!("\"padding-inline-{side}\",\"\",()=>(v=>v==null?\"{value}\":null)");
-        assert!(out.js.contains(&write), "{write}: {}", out.js);
+        let property = format!("\"padding-inline-{side}\",\"\",()=>mapped(");
+        let at = out.js.find(&property).unwrap();
+        let write = out.js[at..].split(";S").next().unwrap();
+        assert!(
+            write.contains(&format!("==null?\"{value}\":null)")),
+            "{write}"
+        );
     }
 }
 
@@ -1249,4 +1294,36 @@ fn a_table_and_a_description_list_are_their_elements() {
     }
     // No grid of the host's: the browser's UA sheet gives each its display.
     assert!(!out.css.contains("display:grid"), "{}", out.css);
+}
+
+/// @ref LLP 1047.002 D1 — a commit reads bound exits and layout transitions
+/// through presence-bindings.js, which only a plan that binds one links, and
+/// which is handed over before the first commit builds the view.
+#[test]
+fn presence_bindings_link_only_where_an_exit_or_layout_transition_is_bound() {
+    let emitted = |view: &str| {
+        let source = format!("keyframes leave\n  to opacity=0\n\ncomponent App\n  state calm = false\n  view\n    column\n      {view}\n");
+        crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
+            .unwrap()
+            .js
+    };
+    for view in [
+        "text \"Card\" -exact-exit-animation=(calm ? \"none\" : \"leave 200ms linear both\")",
+        "text \"Card\" -exact-layout-transition=(calm ? \"none\" : \"200ms linear\")",
+    ] {
+        let js = emitted(view);
+        let install = js.find("usePresenceBindings(presenceUse());");
+        assert!(install.is_some() && install < js.find("mount($R=>"), "{js}");
+    }
+    for view in [
+        "text \"Card\"",
+        "text \"Card\" -exact-exit-animation=\"leave 200ms linear both\"",
+        "text \"Card\" -exact-layout-transition=\"200ms linear\"",
+    ] {
+        let js = emitted(view);
+        assert!(
+            !js.contains("presenceUse") && !js.contains("usePresenceBindings"),
+            "{js}"
+        );
+    }
 }

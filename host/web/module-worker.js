@@ -117,6 +117,7 @@ function init(message) {
   self.__exact_install_storage();
   evaluate(message.script);
   if ((self.exact?.abi !== 1 && self.exact?.abi !== 2) || self.exact.appId !== admitted.appId || !sameGrantDeclaration(admitted.grantSet, self.exact.grants) || typeof self.exact.answer !== 'function') throw new Error('module exports mismatch the admitted client');
+  return self.__exact_has_overlay() === '1';
 }
 
 function begin(request) {
@@ -249,7 +250,10 @@ self.onmessage = ({ data }) => {
     return;
   }
   if (data.op === 'init') {
-    try { init(data); postMessage({ token: 0, result: { ok: true } }); }
+    try {
+      const hasOverlay = init(data);
+      postMessage({ token: 0, result: { ok: true, hasOverlay } });
+    }
     catch (error) { postMessage({ token: 0, error: String(error?.message ?? error) }); }
     return;
   }

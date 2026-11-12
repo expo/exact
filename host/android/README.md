@@ -66,7 +66,12 @@ It needs the Android SDK (`ANDROID_HOME`, else `~/Library/Android/sdk` or `~/And
 NDK (`ANDROID_NDK_HOME`, else the newest under the SDK), a JDK (17 or newer) and the Rust target
 (`exact setup` adds it to the pinned toolchain). It:
 
-1. builds the app's `android/` crate for `aarch64-linux-android` at `host-dev` (`--release`: at `release` with fat
+1. writes the app's launcher icon and TV banner, from its manifest's `icons` (LLP 1163 D6), as resources under
+   `app/build/<app>/icons/res/`: from a square `maskable` PNG an adaptive icon, with a `monochrome` glyph as its
+   themed layer; without one, a legacy icon from a square `any` PNG; and a banner from a 16:9 `any` PNG. A file its
+   slot refuses (smaller than the slot, or a glyph with no transparent pixels) fails the build here, before anything
+   compiles;
+2. builds the app's `android/` crate for `aarch64-linux-android` at `host-dev` (`--release`: at `release` with fat
    LTO, as a production build links, for measuring). The crate is a cdylib whose source is `exact_linux::canvas_jni!(<the data source>, hatches =
    crate::exact_hatches())`, with a build script that bakes the plan and calls `contract::native::android_entry`,
    which writes the app's hatches' install (`hatches.rs`) and the plan's uses (`uses.txt`) beside it; `apps/caltrain/android` is the one to copy for an app whose data is Rust and
@@ -77,12 +82,13 @@ NDK (`ANDROID_NDK_HOME`, else the newest under the SDK), a JDK (17 or newer) and
    macOS, signed 64-bit Mach-O code omits the signature and normalizes its three size fields, matching
    the definition in `update/src/gpu.rs` through a parity-tested host copy; other files hash whole. Completed development receipts always
    bind the whole file. Both the process cache and Android's persistent cache distinguish these digests;
-2. copies the library to `app/build/<app>/rust/jniLibs/arm64-v8a/libexactcanvas.so`, the GPU module beside it under
+3. copies the library to `app/build/<app>/rust/jniLibs/arm64-v8a/libexactcanvas.so`, the GPU module beside it under
    its own name, the app's `assets/` to `app/build/<app>/rust/assets/app/assets/`, and a GPU module's shaders
    (`gpu/shaders/*.wgsl`, as a Linux bake packs them) to `app/build/<app>/rust/assets/app/shaders/`, where the host
    registers them from before a canvas is made;
-3. runs `./gradlew :app:assembleRelease -Papp=<app> -PappDir=<the app's directory>` here (a game's `.shells/`, whose
-   `app.json` is resolved), with `-PgpuModule=<file>` for a module: the APK then extracts its libraries and leaves
+4. runs `./gradlew :app:assembleRelease -Papp=<app> -PappDir=<the app's directory>` here (a game's `.shells/`, whose
+   `app.json` is resolved), with `-PappIcon` and `-PappBanner` naming the icon and banner it wrote, with
+   `-PgpuModule=<file>` for a module: the APK then extracts its libraries and leaves
    the module unstripped, since the host opens it by path and checks its digest; with `-Pcompose=1` when the plan's
    uses name `dates` (a date or time control), which links Compose Material 3 for its pickers; and with the Kotlin
    in the app's `modules/android`, its hatches and module roster, compiled in,
@@ -141,6 +147,13 @@ Shelf (`apps/shelf`) is the app that defines "Android works", and its data is `a
 library links `exact-js` and with it the lean Hermes VM, from the pinned Ibex release's Android Hermes bundle, which
 `exact setup` installs and verifies as it does the other targets' (LLP 1107 §4.1). One built from an Ibex checkout
 with `bun scripts/hermes-android.mjs build` takes its place (`agent-android.mjs` hands it to Cargo).
+The local builder selects API 29, the oldest supported Android, for both Hermes and ICU.
+An API-30 bundle can import `pthread_cond_clockwait`, which Android 10 lacks;
+changing only the app's linker cannot remove that dependency. The headless linker
+continues to read the selected bundle's API from `hermes-input-receipt.json`.
+The published v5 pin still names the API-30 archive. Replacing it requires a new
+`expo/ibex` release and its verified archive digests; a local build does not publish
+or change that pin.
 
 **The Canvas host needed nothing for it.** It boots through the Linux host's own door
 (`app::boot_presenter_with_painter`), so the module is made, activated after the first frame is recorded
@@ -511,7 +524,8 @@ under `ExactHatch`, gives its `due` pickers titles, no weekends and a 24-hour cl
 turns on exact2's clock and stops at a tap. `bun scripts/exact.mjs hatch <word> <app>` writes the class for an app
 with an `android/` crate.
 
-An app's optional native module views (LLP 1024) live in the same `modules/android` source directory. Define
+An app's optional native module views (LLP 1024) live in the same `modules/android` source directory. Their Maven
+libraries are named in `app.json` under `host.android.maven` ("Maven libraries" below). Define
 `class exact.app.Modules : dev.exact.canvas.NativeModules` with a `modules: Map<String, NativeModule>` roster;
 the APK resolves it only at the first module view. Each module creates and updates its real Android `View`.
 `events(view, emit)` binds before its first update; call `emit("change", value)` or `emit("input", value)` with
@@ -558,11 +572,19 @@ typed `Any`, so the reader links no CameraX).
 ### Maven libraries: one locked, verified Gradle graph (LLP 1133.008 D8 item 5)
 
 An implementation may name Maven coordinates on Google's Maven and Maven Central in its `exact.json`,
-`"maven": ["androidx.camera:camera-camera2:1.6.2", …]` (`packages/camera`, `packages/media-capture`). It adds no
-repository and no plugin. They resolve in the app's one Gradle graph, with the reader's own AndroidX (Compose, for an
-app with a date or time control), so a camera beside a date picker builds; two closures of AndroidX would not.
-`agent-android.mjs` passes the union of the bound implementations' coordinates (`-Pmaven`), and the graph is held by
-Gradle's own means:
+`"maven": ["androidx.camera:camera-camera2:1.6.2", …]` (`packages/camera`, `packages/media-capture`). An app names
+libraries its own Kotlin in `modules/android` needs in `app.json`:
+
+```json
+{ "host": { "android": { "maven": ["org.apache.commons:commons-lang3:3.17.0"] } } }
+```
+
+Both arrays take `group:artifact:version` with a pinned version: no ranges, dynamic selectors, SNAPSHOTs,
+classifiers or repository URLs. Neither adds a repository or plugin. A conflict between direct declarations
+of the same artifact is refused with both coordinates and their declaration files named. They resolve in the app's
+one Gradle graph, with the reader's own AndroidX (Compose, for an app with a date or time control), so a camera
+beside a date picker builds; two closures of AndroidX would not. `agent-android.mjs` passes the union of the app's
+and bound implementations' coordinates (`-Pmaven`), and the graph is held by Gradle's own means:
 
 - **Locked:** `dependencyLocking` in `STRICT` mode, to the app's `gradle.lockfile` beside its other locks
   (`-PmavenLock`). A module, or a version, the lock does not name is refused by Gradle, naming it.
@@ -570,10 +592,10 @@ Gradle's own means:
   from the app's `gradle-verification.xml`. Gradle reads that file only from the reader's `gradle/`, so the build
   copies it to `gradle/verification-metadata.xml` for the run and takes it away after (ignored by Git), and passes
   `--dependency-verification=strict`. `gradle.properties` leaves verification off for every other build.
-- **Written** once, and again when a module's coordinates change:
+- **Written** once, and again when the app's or a module's coordinates change:
   in the repository directory, `bun scripts/agent-android.mjs build <app> --apk --write-locks` (Gradle's `--write-locks` and
   `--write-verification-metadata sha256`); the app keeps both files with its source. Without them, an app whose
-  modules name libraries is refused before Rust compiles. The refusal and `exact add` name the directory and
+  modules or own Kotlin name libraries is refused before Gradle runs. The refusal and `exact add` name the directory and
   command: `in <app dir>: bun exact.mjs android --write-locks` when the app has its own launcher, otherwise
   the repository directory and command above, with `EXACT_APP_DIR` set to the app's directory unless it is
   `apps/<app>`.
@@ -1204,8 +1226,9 @@ Not tried: Android 11 (no device), and a TypeScript data module: the Android Her
 
 ## Android TV (LLP 1115.001.003)
 
-The phone's APK also runs on an Android TV, and its manifest puts the app in the TV launcher with a plain banner
-(`app/src/main/res/drawable/banner.xml`). Build it as for a phone, then install it on a TV emulator:
+The phone's APK also runs on an Android TV, and its manifest puts the app in the TV launcher with the app's banner: a
+16:9 `any` PNG of its manifest's `icons` (LLP 1163 D6), else a plain one (`app/src/main/res/drawable/banner.xml`).
+Build it as for a phone, then install it on a TV emulator:
 
 ```sh
 bun scripts/agent-android.mjs build caltrain --apk
@@ -1231,8 +1254,7 @@ On a TV:
 
 A drive with `--reader` restarts the app, and its `type … key ArrowDown` reaches the presenter, not Android's input.
 To test the real keys, send them with `adb shell input keyevent KEYCODE_DPAD_DOWN` while the drive waits on real time
-(`"clock +15000 real"`). `focusGuide`, the media keys, text entry with the TV's keyboard and a banner per app are not
-built.
+(`"clock +15000 real"`). `focusGuide`, the media keys and text entry with the TV's keyboard are not built.
 
 ## Still the benchmark's
 
@@ -1324,7 +1346,7 @@ The cut was the smallest one. Left in the reader:
 - **Only the async lane's second tier builds it** (LLP 1133.002 stage 4): Weatherlight's APK, hourly, which
   compiles `exact-linux` for the Android target and the reader's Kotlin with a module's. Gradle is in none of the
   six checks.
-- **The shell is a development build**: signed with the debug key, with no icon. Its one activity turns keys on for
+- **The shell is a development build**: signed with the debug key. Its one activity turns keys on for
   every app, and gives none an app's own native module (LLP 1024) or a video player, which the benchmark's apps
   passed from an activity of their own. A package's implementation of a module is the exception (below, "Module
   implementations").

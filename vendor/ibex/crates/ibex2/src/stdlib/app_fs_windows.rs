@@ -420,12 +420,20 @@ impl Staged {
         }
     }
     /// Sync the staging file and rename it over the target.
-    pub fn publish(mut self) -> Result<(), HostError> {
+    pub fn publish(self) -> Result<(), HostError> {
+        self.publish_if(|| Ok(()))
+    }
+    /// Sync, then admit the rename. A refusal removes the staging file.
+    pub fn publish_if(
+        mut self,
+        admit: impl FnOnce() -> Result<(), HostError>,
+    ) -> Result<(), HostError> {
         let file = self
             .file
             .take()
             .ok_or_else(|| error("staged file already published"))?;
         file.sync_all().map_err(error)?;
+        admit()?;
         self.parent.rename(&file, &self.leaf).map_err(error)?;
         drop(file);
         self.temp.clear();

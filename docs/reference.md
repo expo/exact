@@ -36,7 +36,13 @@ keeps Hermes's OS-backed Intl; Android has no `Intl` yet. A Rust-only app needs 
 `exact setup` installs the host bundle and, on macOS, the iOS and tvOS Simulator
 bundles, and the iOS device bundle where Xcode's iphoneos SDK is installed.
 `exact setup --check` runs Ibex's own offline resolver validation over that
-same set.
+same set. On a CI worker, `bun <exact2>/scripts/exact.mjs setup --check
+--platform ios --device` checks the archive's prerequisites; `--platform
+android` checks the APK/AAB prerequisites, including JDK 17+ and the NDK's
+actual compiler paths. A scoped check fails when any of its rows is missing
+and does not check unrelated web tools. `--platform` is check-only; install
+commands are in the platform's CI recipe. The general check still reports
+optional tools separately (LLP 1086 D6).
 
 ### Windows painter
 
@@ -474,6 +480,60 @@ Widget entries are top-level `app.json` `widgets` rows. For example:
 Optional `title` and `description` strings supply the widget gallery's labels;
 each defaults to the humanised `kind` when omitted.
 
+On iOS and macOS, an optional `configuration` lets the person choose in Edit Widget
+(LLP 1126; LLP 1133.023). The
+entry becomes WidgetKit's
+[`AppIntentConfiguration`](https://developer.apple.com/documentation/widgetkit/appintentconfiguration),
+its [`WidgetConfigurationIntent`](https://developer.apple.com/documentation/appintents/widgetconfigurationintent)
+generated with one enum parameter per row, and the build extracts the extension's
+App Intents metadata, through which the sheet shows them:
+
+```json
+"configuration": {"title":"Next trains","description":"Choose how many departures.",
+  "parameters":[{"name":"rows","type":"enum","title":"Rows","default":"automatic",
+    "values":[{"value":"automatic","title":"Automatic"},{"value":"one","title":"1"},{"value":"three","title":"3"}]}]}
+```
+
+On watchOS, the complication picker offers
+[`recommendations`](https://developer.apple.com/documentation/widgetkit/appintentrecommendation)
+instead of a parameter form. Exact generates one per combination of declared
+values, with the default combination first and parameter/value titles as labels.
+Repeated value titles include their identifiers. If complete labels still collide,
+each label also includes the choices' UTF-8 hex identifiers to distinguish them. A widget
+with watch families may declare at most 64 combinations (the product of its
+parameter value counts); the bake refuses more and asks for fewer values or
+parameters. This Exact bound keeps the watch picker and generated bundle small.
+
+`title` and `description` (defaulting to the title) are the intent's; the sheet itself
+is headed by the widget's own `title` and `description`, as on iOS 27. Each
+parameter's `name` is a lowerCamelCase field name, its `title` the row's label and
+its `type: "enum"` a fixed list, and its `values` the menu, in order: `value` is what the render reads, `title` what the
+menu shows. `default` is one of the values, the first when omitted; it is the choice
+before the person makes one, and the gallery's. A component reads the chosen values
+as it reads the family's size, through the reserved inject `snapshot_configuration`:
+
+```
+shape Rows
+  rows: enum<"automatic", "one", "three">
+
+component NextTrains
+  inject
+    snapshot_viewport: Viewport
+    snapshot_configuration: Rows
+```
+
+The shape has one field per parameter, typed `string` or an `enum` of exactly its
+values; every injecting component names one shape. A configuration that no component
+reads, or an inject without one, fails the bake with an edit. The refresh does not see
+the configuration: one timeline serves every configuration and family, and each render
+reads its own. The configuration, labels included, is generated Swift and so a binary
+compatibility input; Live Activities have none. Keep kind, parameter and value
+identifiers stable across updates; changing a title does not change a choice.
+A removed or renamed parameter is ignored, and a missing or removed value uses
+that parameter's current default. Other valid choices are retained. Reordering
+entries, parameters or values does not reassign a saved choice. Data-backed
+options and fetching different data for each placement are not supported.
+
 `component` and the `props` shape are declared or imported by `app.contract`;
 every component prop must match a field of that shape. `preview` supplies all
 fields, with their declared types. `refresh` names a data-source function taking
@@ -691,9 +751,12 @@ face's editor.
 The watch extension keeps the accessory families (`accessoryCircular`,
 `accessoryRectangular`, `accessoryInline`, `accessoryCorner`); iOS drops
 `accessoryCorner`. An optional `watchFamilies` on an entry overrides its watchOS
-families; `families` still names its iOS families. An app with `app.ts` has all
-watch entries omitted with a message, including its Rust refreshes, until the
-watch Hermes gate passes (LLP 1126.001 §5 Q3). Rust-only apps' entries
+families; `families` still names its iOS families. An app with `app.ts` builds its
+live watch entry when that plan reaches only Rust, runner-owned or native
+module sources. The watch bake refuses a TypeScript dependency by name until
+the watch Hermes gate passes (LLP 1126.001 §5 Q3); a mixed bake declares its
+Rust ownership through `build_mixed_with`'s source list. Such an app's complications are still omitted
+with a message, including its Rust refreshes. Rust-only apps' complications
 refresh against the watch's own App Group and store. No account transfer is
 performed.
 For `accessoryInline`, emit exactly one `text` or `time` leaf plus at most one
@@ -718,7 +781,8 @@ again when the family's size changes; the preference fields are a still page's.
 Choose a layout by them as `docs/recipes/responsive-columns.md` does for a page
 (a Lock Screen row is under 100 pt tall; a medium widget is over 250 wide), so
 one entry serves every family it declares. The app's own plan is untouched: an
-unused component's inject is not demanded by the app's view. A `performanceNow()` call is refused everywhere, including
+unused component's inject is not demanded by the app's view. A configured widget's
+second fact is its configuration, the `snapshot_configuration` inject above. A `performanceNow()` call is refused everywhere, including
 inside `time` and `progress`; pass instants from refresh for platform time
 presentation. A variable's name imposes no restriction. A class is a style name
 or `class=(condition ? A : B)`. Only literal font families reached through the
@@ -751,8 +815,24 @@ must hold at every box size; use a single unit when mixed units could cross.
 Restricted paint values are literals or choices of literals, so their admission
 is checked at bake.
 
-App icons come from `app.json`'s Web App Manifest `icons` array: Apple uses
-the first square raster of at least 512 px. To select an
+App icons come from `app.json`'s Web App Manifest `icons` array, and in a dark
+scheme from `color_scheme_dark.icons`, which replaces it there (LLP 1163). Each
+host picks by `purpose`, then shape and size, and refuses a file smaller than
+its slot. iOS and macOS take the smallest square `maskable`, else `any`, PNG of
+at least 1024 px; iOS, watchOS and tvOS pass over one with transparent pixels,
+and refuse it when no opaque file fits. iOS's dark icon is picked the same way
+from `color_scheme_dark.icons`, and its tinted icon is a square `monochrome`
+PNG, whose alpha iOS draws white on black. The web links each scheme's favicons
+(the smallest square raster of at least 32 px, then an SVG when there is one)
+and an Apple touch icon (the smallest opaque square PNG of at least 180 px, else
+the largest). Android takes a square `maskable` of at least 432 px as its
+adaptive icon, a `monochrome` one as its themed layer, a square `any` of 192 px
+when there is no `maskable`, and a 16:9 `any` of at least 640×360 px as the TV
+banner. tvOS takes the brand assets in the app's catalogs, else a 5:3 `any` of
+at least 1280×768 px (an 8:3 and a 29:9 one give the Top Shelf images); the
+watch app a square one of 1024 px, or `host.ios.icon` when its `icon.json` lists
+watchOS; Windows a square `any` of at least 256 px, linked into the executable.
+To select an
 [Icon Composer project](https://developer.apple.com/documentation/xcode/creating-your-app-icon-using-icon-composer),
 set `host.ios.icon` or `host.macos.icon` to its app-relative `.icon` directory,
 for example `"host": { "ios": { "icon": "art/Primary.icon" }, "macos": { "icon": "art/Primary.icon" } }`.
@@ -767,6 +847,44 @@ and paths that are not `.icon` directories fail by name. The project and its
 layers compile in the same `actool` pass as the app's catalogs; changing them
 requires a new native build. `icons` still supplies the web and the native
 raster fallback when the platform has no `icon` selection.
+
+### Store category, Game Mode and memory
+
+`categories` in `app.json` is the W3C manifest's member, which the web manifest
+carries: what the app is, for a store or catalog to file it under. A value is
+one of the W3C's standardized categories or one of Apple's, written without
+`public.app-category.` (`developer-tools`, `graphics-design`, `reference`,
+`video`, and the game genres from `action-games` to `word-games`); the build
+refuses any other. The iOS and macOS bundles' `LSApplicationCategoryType` is
+the first that Apple has a category for: `fitness` and `health` are
+`healthcare-fitness`, `photo` is `photography`, `social` is
+`social-networking`, and `books`, `food`, `government`, `kids`, `magazines`,
+`navigation`, `personalization`, `politics`, `security` and `shopping` have
+none. App Store Connect requires a category of a Mac upload. A game the game
+shell builds (`game`) with no category of Apple's is `games`.
+
+```json
+{ "categories": ["dice-games", "games"], "host": { "ios": { "increasedMemoryLimit": true } } }
+```
+
+An app whose Apple category is `games` or a genre is a game, and Game Mode
+(priority on the CPU and GPU, lower Bluetooth latency for controllers and
+AirPods, less background work) is offered to it: the bundles carry
+`LSSupportsGameMode` (iOS 18.6, macOS 26), and the iOS bundle also
+`GCSupportsGameMode`, which iOS 18.0 to 18.5 read, when `host.ios.minimumOS`
+is below 18.6. `host.ios.gameMode` and `host.macos.gameMode` set it per
+platform: `false` keeps a game too light to need it out of Game Mode, and
+`true` offers it to an app that is not a game. tvOS and an App Clip carry
+neither key.
+
+`host.ios.increasedMemoryLimit: true` signs the app with
+`com.apple.developer.kernel.increased-memory-limit`: on the iPhone and iPad
+models that allow it, the app may use more memory than the default limit. The
+app must still work without it (`os_proc_available_memory` says what it has).
+Increased Memory Limit is a capability of the App ID, so a device build takes
+only a profile that grants it and otherwise is refused
+(`memory-device-profile`); a simulator build signs it as is. Extensions, the
+App Clip and tvOS never take it.
 
 Apple products live under the resolved app's target directory, scoped by
 canonical source directory, manifest id, destination, composition and trust
@@ -789,10 +907,18 @@ UIKit would load at launch (LLP 1047.001.001). A device App Clip copies its pare
 executable and carries the same link; a simulator links the same target with the Clip’s
 own embedded entitlements. An IPA writes `<name>.dSYM`
 beside its archive; `exact release` copies the build's matching dSYM beside its release.
-Production iOS and tvOS bundles ship a small receipt and stripped frameworks, whether
+Production iOS and tvOS bundles ship a small receipt and strip Swift frameworks, whether
 archived or not. The whole receipt stays beside `<name>.app` or `<name>.ipa` as
 `<name>.receipt.json`; framework dSYMs are in `<name>.dSYMs/<Framework>.framework.dSYM`.
-GPU frameworks keep the bytes the bake authenticated and also get dSYMs.
+Rust module and package frameworks keep their linker output because Xcode's strip
+can make them unloadable. GPU frameworks keep the bytes the bake authenticated.
+All keep matching dSYMs outside the bundle.
+Production widget and share extension executables are stripped before signing; their
+source dSYMs are kept in `<name>.dSYMs/<Extension>.appex.dSYM`, outside the app.
+Watch builds keep the watch executable's, complication extension's and runtime
+framework's dSYMs in `<name>.dSYMs/Watch/`. Mac builds keep module library and
+framework dSYMs outside the app too, including the bare products' shared runtime
+at `<namespace>/ExactCore.framework.dSYM`.
 A production build links its Rust
 with fat LTO and, when its plan is fixed, leaves out the loaded modules the
 plan cannot reach (LLP 1036.000 §5–§10). `--bundle` prints the stable Mac bundle at
@@ -869,6 +995,174 @@ receipt, and signed GPU frameworks (primary and named modules). Copy those
 frameworks intact into the embedding app's `Frameworks/`; their binaries must
 retain the baked digests.
 
+### Native CI preparation
+
+The [EAS iOS](recipes/eas-ios.md) and [EAS Android](recipes/eas-android.md)
+recipes use the ordinary native builders (LLP 1030.003 D6, D8). Exact does
+not manage an EAS account, credentials, build counters or store submissions.
+These examples describe a single-target app; extensions need their own
+matching profiles, as described in the widget signing sections.
+
+Keep Exact's `app.json`. Add a separate `app.config.js` for EAS, returning
+only Expo's configuration rather than merging Exact's manifest:
+
+```js
+module.exports = {
+  name: 'My app', slug: 'my-app', version: process.env.EXACT_VERSION || '1.0.0',
+  ios: { bundleIdentifier: 'com.example.myapp' },
+  android: { package: 'com.example.myapp' },
+  extra: { eas: { projectId: 'YOUR-EAS-PROJECT-ID' } },
+};
+```
+
+Match both identifiers to Exact's app id. Link the EAS project and install
+`expo-modules-autolinking` as a development dependency for EAS's config
+resolver (`bun add --dev expo-modules-autolinking`; commit the lockfile).
+Exact does not need Expo or React Native at run time. Pin EAS CLI in the app's
+dev dependencies too (`bun add --dev --exact eas-cli`). This `eas.json` uses file secrets for signing; set
+`EXACT_REF` to the immutable Exact commit used by the app:
+
+```json
+{
+  "cli": { "appVersionSource": "remote" },
+  "build": {
+    "exact": {
+      "environment": "production",
+      "distribution": "store",
+      "withoutCredentials": true,
+      "autoIncrement": true,
+      "bun": "1.4.2",
+      "env": { "EXACT_REF": "FULL-EXACT-COMMIT", "EXACT_VERSION": "1.0.0" },
+      "ios": { "config": "eas-ios.yml", "image": "macos-tahoe-26.6-xcode-27.2" },
+      "android": { "config": "eas-android.yml", "image": "ubuntu-26.04-jdk-17-ndk-r27b-sdk-58" }
+    }
+  }
+}
+```
+
+Image names above are the reporter's working choices; choose an available
+image with Xcode 27.1+ for iOS, or JDK 17+ and Android command-line tools for
+Android. Bun must satisfy Exact's `package.json` engines range. Initialize
+EAS's remote build counters above any number already uploaded; do not assume
+the first remote build increments an existing store number. Resolve the
+build config before reading `eas.job.version.buildNumber` or `versionCode`.
+See [EAS custom builds](https://docs.expo.dev/custom-builds/schema/) and
+[build configuration](https://docs.expo.dev/build/eas-json/).
+
+Save the following as `.ci/prepare-native.sh` in the app repository. The
+recipes run it with `ios` or `android`. It installs only that platform's
+Rust targets and Hermes bundles, with no simulator. Bun, git, curl and
+unzip come from the selected image. For a clean local worker, install Bun
+1.4.2 first and omit the final two EAS `set-env` calls.
+
+```sh
+#!/bin/sh
+set -eu
+export EXACT="$PWD/../exact"
+git clone https://github.com/expo/exact.git "$EXACT"
+git -C "$EXACT" checkout --detach "$EXACT_REF"
+bun install --frozen-lockfile --cwd "$EXACT"
+if ! command -v rustup >/dev/null; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/exact-rustup.sh
+  sh /tmp/exact-rustup.sh -y --profile minimal --default-toolchain none --no-modify-path
+fi
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+pin=$(bun -e 'console.log(Bun.TOML.parse(await Bun.file(process.env.EXACT + "/rust-toolchain.toml").text()).toolchain.channel)')
+case "$1" in
+  ios) triple=aarch64-apple-ios ;;
+  android) triple=aarch64-linux-android ;;
+  *) exit 2 ;;
+esac
+rustup toolchain install "$pin" --profile minimal --target "$triple"
+cargo +"$pin" run --locked --manifest-path "$EXACT/vendor/ibex/crates/hermes-lean-sys-installer/Cargo.toml" -- --target "$triple"
+set-env EXACT "$EXACT"
+set-env PATH "$PATH"
+```
+
+The installer also installs the host Hermes bundle used to bake TypeScript.
+If the launcher or Cargo manifests still name a developer's checkout, run
+`EXACT=../exact bun exact.mjs update` locally and commit its changes before
+submitting the job. An app's `host.ios` and `host.android` entries must be
+present; `exact new --with ios,android` creates both. Native shells are
+generated by the build. A native-view dependency must supply a roster that
+can be read without a simulator; see [the CI archive path](#build-an-ios-app-on-a-ci-machine).
+
+Cache Cargo's registry and git downloads, `$CARGO_HOME/hermes-lean-sys`,
+Gradle's `GRADLE_USER_HOME` (default `~/.gradle`), and `~/.cache/exact` when
+useful. Restore app and Exact `target/` only under keys that distinguish
+OS/architecture, toolchain, lockfiles and build mode. A cache hit does not
+promise reuse: fresh checkout mtimes can invalidate Cargo fingerprints,
+and production Apple builds do not use the development module cache.
+`CARGO_LOG=cargo::core::compiler::fingerprint=info` explains rebuilds. Do not
+rewrite source mtimes to force reuse. A clean build must work without these
+caches. Do not cache signing keys or provisioning profiles.
+
+### Import an iOS signing identity on a CI worker
+
+For the iOS recipe, save this as `.ci/sign-ios.sh`. Source it in the build
+step so the exported identity reaches Exact. In the EAS production
+environment, create secret file variables `CI_IOS_P12` and `EXACT_PROFILE`,
+and a secret string `CI_IOS_P12_PASSWORD`. The files are a distribution
+certificate with its private key and a matching App Store provisioning
+profile. EAS supplies file variables as paths; see its
+[file-variable documentation](https://docs.expo.dev/eas/environment-variables/faq/).
+Use only on an ephemeral worker: this selects a temporary keychain for the
+step. Do not turn on shell tracing around credentials.
+
+```sh
+set -eu
+CI_SIGN_DIR=$(mktemp -d)
+CI_KEYCHAIN="$CI_SIGN_DIR/build.keychain-db"
+CI_KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
+trap 'security delete-keychain "$CI_KEYCHAIN"; rm -rf "$CI_SIGN_DIR"' EXIT
+security create-keychain -p "$CI_KEYCHAIN_PASSWORD" "$CI_KEYCHAIN"
+security set-keychain-settings -lut 21600 "$CI_KEYCHAIN"
+security unlock-keychain -p "$CI_KEYCHAIN_PASSWORD" "$CI_KEYCHAIN"
+security import "$CI_IOS_P12" -k "$CI_KEYCHAIN" -P "$CI_IOS_P12_PASSWORD" -T /usr/bin/codesign
+security set-key-partition-list -S apple-tool:,apple: -s -k "$CI_KEYCHAIN_PASSWORD" "$CI_KEYCHAIN"
+security list-keychains -d user -s "$CI_KEYCHAIN"
+EXACT_IDENTITY=$(security find-identity -v -p codesigning "$CI_KEYCHAIN" | awk '/[0-9A-F]{40}/ {print $2}')
+test "$(printf '%s\n' "$EXACT_IDENTITY" | wc -l | tr -d ' ')" = 1
+test -n "$EXACT_IDENTITY"
+export EXACT_IDENTITY
+```
+
+If EAS already manages the credentials, download them through `eas
+credentials` for these secret files, or adapt the step to decode
+`eas.job.secrets.buildCredentials`: iOS uses the chosen target's
+`distributionCertificate.dataBase64` (base64), its `password`, and
+`provisioningProfileBase64`; Android uses `keystore.dataBase64`,
+`keystorePassword`, `keyAlias` and `keyPassword`. When using EAS-managed
+job credentials, remove `withoutCredentials`. Select the intended iOS
+target explicitly when there are several. Do not use
+`eas/configure_ios_credentials`: it expects an Xcode project. Exact signs
+the app directly with `EXACT_IDENTITY` and `EXACT_PROFILE`.
+
+### Build Android artifacts without a device
+
+From the app's directory, `bun exact.mjs android --release --no-install --json`
+builds an APK without querying adb. `bun exact.mjs android --bundle --json`
+builds a production App Bundle (`.aab`) without installing. Both report the
+artifact's absolute path. An outside app's outputs are
+`target/android/app/outputs/apk/release/app-release.apk` and
+`target/android/app/outputs/bundle/release/app-release.aab`.
+
+`EXACT_BUILD_NUMBER` sets Android's `versionCode` (1 by default, an integer
+from 1 through 2100000000); `EXACT_VERSION` sets `versionName` (0.1.0 by
+default). Set all four of `EXACT_KEYSTORE` (a file path),
+`EXACT_KEYSTORE_PASSWORD`, `EXACT_KEY_ALIAS` and `EXACT_KEY_PASSWORD` to sign
+with your upload key. Partial credentials fail before compiling. A bundle
+requires them; an APK without them uses Android's debug key and cannot be
+submitted to Play. Passwords are passed through the environment, never as
+Gradle command arguments (LLP 1030.003 D6, D8).
+
+`--release` selects optimization. For an APK you will distribute, also set
+`EXACT_UPDATE_TRUST=production`; `--bundle` sets it itself. Production trust
+requires your update stream's signing keys and receipt (or
+`EXACT_UPDATE_GENESIS=1` for a new stream). Android uses the Linux bake:
+set `deploy.store.linux` to `"0"` for a binary without Exact updates;
+`deploy.store.android` does not disable the bake's update checks.
+
 ### Build an iOS app on a CI machine
 
 A Mac runner needs no phone. An app with native view tags has its build read
@@ -892,7 +1186,7 @@ With `--json`, `ios`, `mac`, `web-build`, `linux`, `android` and `windows`
 print one JSON object on stdout, its last and only line, however they end, and
 send the build's own output to stderr. The object names the artifact's
 absolute `path` (the `.app`, the `.ipa` of `--archive`, `--embed`'s directory,
-`target/web-dist` or `--out`'s directory, the executable, the APK), its
+`target/web-dist` or `--out`'s directory, the executable, the APK or AAB), its
 `target` (`ios-simulator`, `ios`, `tvos-simulator`, `tvos`, `macos`, `web`,
 `linux`, `windows` or `android`) and its `trust` (`development` or
 `production`: what the build baked; the JS target's `web-build` is
@@ -925,15 +1219,16 @@ team's, or run a project in Xcode with that bundle id and team on that phone wit
 Automatically manage signing enabled, then retry.
 `EXACT_IDENTITY` and `EXACT_PROFILE` in place of `--unsigned` sign the `.ipa`
 on the runner. The runner needs Xcode 27.1 or later selected (`DEVELOPER_DIR`,
-or `xcode-select -s`), rustup and Bun 1.4.2; then `bun <exact2>/scripts/exact.mjs setup` installs the
+or `xcode-select -s`); the build checks its destination’s SDK before compiling.
+It also needs rustup and Bun 1.4.2; then `bun <exact2>/scripts/exact.mjs setup` installs the
 pinned Rust with its iOS targets and the Hermes bundles, and `setup --check`
 names what is still missing. An archive needs a square icon of at least
-512 px in `icons` (or `host.ios.icon`), which the build checks before it
+1024 px in `icons` (or `host.ios.icon`), which the build checks before it
 compiles. An archive, and a simulator build with `--release` (the build that
 ships), bake production trust: with an update store (`deploy.store.ios` not
 `"0"`) each needs `EXACT_UPDATE_RECEIPT` or `EXACT_UPDATE_GENESIS=1`. A cold
-build takes tens of minutes, most of it Rust and the Swift host. Keeping the
-app's `target/` and `~/.cache/exact` between runs makes the next one minutes.
+build compiles Rust and the Swift host. Cache reuse depends on the source,
+toolchain, paths and build mode; see [native CI preparation](#native-ci-preparation).
 Export compliance is the developer's answer, so a production iOS or tvOS build
 (`--release`, `--archive`, `--distribution`) writes `ITSAppUsesNonExemptEncryption`
 into Info.plist only when `EXACT_NON_EXEMPT_ENCRYPTION` is `true` or `false` in its
@@ -1092,7 +1387,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 
 | Available on every executor | Notes on Hermes |
 | --- | --- |
-| `fetch`, `Headers`, `Response` | Grant-checked; `signal` aborts, and the host cancels the request (below). A request `body` accepts a string, `URLSearchParams`, or bytes from an `ArrayBuffer` or view (such as `storage.fs.readFile`'s bytes). Unless `headers` already names a `Content-Type` (case-insensitively, even an empty value), a string adds `text/plain;charset=UTF-8` and `URLSearchParams` adds `application/x-www-form-urlencoded;charset=UTF-8`, including empty strings and forms. The prelude adds none for bytes or an absent body; on Apple, URLSession adds `application/x-www-form-urlencoded` to an untyped POST with a body, including bytes. As Fetch does, a body on a GET or HEAD, or a view on a `SharedArrayBuffer` or resizable buffer, rejects, and a detached buffer sends no bytes. Natively, in the wasm target's module realms and with `exactStream` on the web JS target, a `ReadableStream` request body rejects with a `TypeError` before sending; collect it with `await new Response(stream).arrayBuffer()` first. `exactBodyFrom: "app:/tmp/…"` sends an app file instead: the host reads it when it sends the request, under `fs.read` as `readFile` is, at most 64 MiB, and the bytes never enter JavaScript, so a 2 MB upload costs the answer's step nothing; with `body`, or on a GET or HEAD, it is a `TypeError`, and a missing file, a denied path or one over 64 MiB rejects the fetch (`FetchError`, kind `Refused`, naming why) before anything is sent, as does a host with no app files (a drive with no scratch store) or none built yet (Windows), with kind `Unsupported`; Exact adds no Content-Type (Apple's POST default above still applies; LLP 1108 D6 R2). An older binary's prelude would send it as an empty body, so a native app with a TypeScript data module carries `typescriptRuntime` in its compatibility id: the first build after this change gives every such app a new id, and each needs a new binary once. `exactBodyTo: "app:/cache/…"` is the reverse, for a download: the host writes a 2xx reply's body into that app file as it arrives, under `fs.write` as `writeFile` is, and the bytes never enter JavaScript, so a large file costs neither the answer's step nor the engine's 64 MiB heap. The body goes to a staging file beside the target, which replaces the target only once the body is complete; a failure, an abort, the deadline or a body over the bound leaves the target as it was. The bound is `exactIndependentHttp.maxResponseBytes`, which may then be up to 1 GiB, or 1 GiB when none is given. The `Response` resolves once the file is in place, with `status`, `ok` and `headers` as received, an empty body, and `exactBodyTo: {path, bytes}`, the bytes written (absent or `null` on any other response). A reply that is not 2xx is not written: the file is untouched and its body is read as usual, at most 1 MiB, so the server's error is readable. A path that is not a plain `app:/` one, a HEAD, or `exactStream` beside it is a `TypeError`; a denied path or a missing folder rejects the fetch (`FetchError`, kind `Refused`) before anything is sent, and a host with no app files does so with kind `Unsupported`. It may come with a `body` or `exactBodyFrom`. On the web the body becomes a Blob the browser holds, stored in the page's store in one transaction (LLP 1108 D6 R2, 2026-10-26). An older prelude would ignore it and read the body into memory, so it moves `typescriptRuntime` to 4. `redirect` is Fetch's: `follow` (the default), `error` (a redirect rejects the fetch), or `manual`, which answers with the 3xx itself; natively its `Location` header is readable (an OAuth step whose redirect names an app scheme), while a browser gives its opaque redirect (status 0, no headers); any other word is a `TypeError`. An older prelude would ignore it and follow, so it moves `typescriptRuntime` to 2: such an app needs a new binary once more, and a cohort on an older binary gets no bundle that relies on it. A `Response` has `status`, `ok`, `statusText`, `headers`, `bodyUsed`, `text()`, `json()`, `arrayBuffer()`, `clone()`, as Fetch's does: a body reads once, a clone of a read one is a `TypeError`, a fetched reply's headers and a redirect's take no change, and a response's own refuse `Set-Cookie`; no `body` getter, `Request`, `Blob` or `FormData`. `new Response(body, init)`, `Response.json` and `Response.redirect` make a reply as Fetch does (a demo's server in the app), from a string, `URLSearchParams`, bytes or a `ReadableStream`. A stream brings no Content-Type; `text()`, `json()` and `arrayBuffer()` read its `Uint8Array` chunks to the end, rejecting any other chunk with a `TypeError` and propagating stream errors. A locked or already-read stream is refused; `bodyUsed` tracks reads and cancellation, and `clone()` tees an unread, unlocked stream so each response reads independently. A module that names `.clone`, `statusText` or `bodyUsed` needs `typescriptRuntime` 7, as an older prelude makes one with no status and no body, reads a body again, or throws. `Response`, `ReadableStream`, `TransformStream`, `CompressionStream` and `DecompressionStream` require runtime 8 so stream bodies cannot reach an older prelude that stringifies them. Natively and in the wasm target's module realms, `Response.redirect` takes only an absolute URL (a relative one is a `TypeError`; the web JS executor resolves it as the browser does), and natively a fetched reply's `statusText` is `""`; in the wasm target's browser realms, which are not hardened, a `Response`'s headers take no guard, and an app that replaces an intrinsic there (a prototype's method, `Math`, a `WeakMap`'s `get`) changes what `Response` does, as it changes what any code in that realm does, while what an app gives a `Response` (an object's own properties, its iterator, its conversion hooks) is read as Fetch reads it on every host |
+| `fetch`, `Headers`, `Response` | Grant-checked; `signal` aborts, and the host cancels the request (below). A request `body` accepts a string, `URLSearchParams`, or bytes from an `ArrayBuffer` or view (such as `storage.fs.readFile`'s bytes). Unless `headers` already names a `Content-Type` (case-insensitively, even an empty value), a string adds `text/plain;charset=UTF-8` and `URLSearchParams` adds `application/x-www-form-urlencoded;charset=UTF-8`, including empty strings and forms. The prelude adds none for bytes or an absent body; on Apple, URLSession adds `application/x-www-form-urlencoded` to an untyped POST with a body, including bytes. As Fetch does, a body on a GET or HEAD, or a view on a `SharedArrayBuffer` or resizable buffer, rejects, and a detached buffer sends no bytes. Natively, in the wasm target's module realms and with `exactStream` on the web JS target, a `ReadableStream` request body rejects with a `TypeError` before sending; collect it with `await new Response(stream).arrayBuffer()` first. `exactBodyFrom: "app:/tmp/…"` sends an app file instead: the host reads it when it sends the request, under `fs.read` as `readFile` is, at most 64 MiB, and the bytes never enter JavaScript, so a 2 MB upload costs the answer's step nothing; with `body`, or on a GET or HEAD, it is a `TypeError`, and a missing file, a denied path or one over 64 MiB rejects the fetch (`FetchError`, kind `Refused`, naming why) before anything is sent, as does a host with no app files (a drive with no scratch store) or none built yet (Windows), with kind `Unsupported`; Exact adds no Content-Type (Apple's POST default above still applies; LLP 1108 D6 R2). An older binary's prelude would send it as an empty body, so a native app with a TypeScript data module carries `typescriptRuntime` in its compatibility id: the first build after this change gives every such app a new id, and each needs a new binary once. `exactBodyTo: "app:/cache/…"` is the reverse, for a download: the host writes a 2xx reply's body into that app file as it arrives, under `fs.write` as `writeFile` is, and the bytes never enter JavaScript, so a large file costs neither the answer's step nor the engine's 64 MiB heap. The body goes to a staging file beside the target, which replaces the target only once the body is complete; a failure, an abort, the deadline or a body over the bound leaves the target as it was. The bound is `exactIndependentHttp.maxResponseBytes`, which may then be up to 1 GiB, or 1 GiB when none is given. The `Response` resolves once the file is in place, with `status`, `ok` and `headers` as received, an empty body, and `exactBodyTo: {path, bytes}`, the bytes written (absent or `null` on any other response). A reply that is not 2xx is not written: the file is untouched and its body is read as usual, at most 1 MiB, so the server's error is readable. A path that is not a plain `app:/` one, a HEAD, or `exactStream` beside it is a `TypeError`; a denied path or a missing folder rejects the fetch (`FetchError`, kind `Refused`) before anything is sent, and a host with no app files does so with kind `Unsupported`. It may come with a `body` or `exactBodyFrom`. On the web the body becomes a Blob the browser holds, stored in the page's store in one transaction (LLP 1108 D6 R2, 2026-10-26). An older prelude would ignore it and read the body into memory, so it moves `typescriptRuntime` to 4. `redirect` is Fetch's: `follow` (the default), `error` (a redirect rejects the fetch), or `manual`, which answers with the 3xx itself; natively its `Location` header is readable (an OAuth step whose redirect names an app scheme), while a browser gives its opaque redirect (status 0, no headers); any other word is a `TypeError`. An older prelude would ignore it and follow, so it moves `typescriptRuntime` to 2: such an app needs a new binary once more, and a cohort on an older binary gets no bundle that relies on it. `cache` is Fetch's `"default"` (unsaid), `"no-store"`, `"reload"`, `"no-cache"`, `"force-cache"` or `"only-if-cached"`, controlling the native cache for a resource's `GET` and the browser's cache on the web; any other value is a `TypeError`, and a module that names it needs `typescriptRuntime` 11. A `Response` has `status`, `ok`, `statusText`, `headers`, `bodyUsed`, `text()`, `json()`, `arrayBuffer()`, `clone()`, as Fetch's does: a body reads once, a clone of a read one is a `TypeError`, a fetched reply's headers and a redirect's take no change, and a response's own refuse `Set-Cookie`; no `body` getter, `Request`, `Blob` or `FormData`. `new Response(body, init)`, `Response.json` and `Response.redirect` make a reply as Fetch does (a demo's server in the app), from a string, `URLSearchParams`, bytes or a `ReadableStream`. A stream brings no Content-Type; `text()`, `json()` and `arrayBuffer()` read its `Uint8Array` chunks to the end, rejecting any other chunk with a `TypeError` and propagating stream errors. A locked or already-read stream is refused; `bodyUsed` tracks reads and cancellation, and `clone()` tees an unread, unlocked stream so each response reads independently. A module that names `.clone`, `statusText` or `bodyUsed` needs `typescriptRuntime` 7, as an older prelude makes one with no status and no body, reads a body again, or throws. `Response`, `ReadableStream`, `TransformStream`, `CompressionStream` and `DecompressionStream` require runtime 8 so stream bodies cannot reach an older prelude that stringifies them. Natively and in the wasm target's module realms, `Response.redirect` takes only an absolute URL (a relative one is a `TypeError`; the web JS executor resolves it as the browser does), and natively a fetched reply's `statusText` is `""`; in the wasm target's browser realms, which are not hardened, a `Response`'s headers take no guard, and an app that replaces an intrinsic there (a prototype's method, `Math`, a `WeakMap`'s `get`) changes what `Response` does, as it changes what any code in that realm does, while what an app gives a `Response` (an object's own properties, its iterator, its conversion hooks) is read as Fetch reads it on every host |
 | `structuredClone` | No transfer list |
 | `ReadableStream`, `WritableStream`, `TransformStream`, their readers, writers and controllers, `CountQueuingStrategy`, `ByteLengthQueuingStrategy` | WHATWG Streams, with `pipeTo`, `pipeThrough`, `tee`, `for await` and `ReadableStream.from`. No byte streams: `type: "bytes"` and a BYOB reader are a `TypeError` |
 | `DecompressionStream`, `CompressionStream` | WHATWG Compression's `"deflate"`, `"deflate-raw"` and `"gzip"`, worked by native code in the turn that writes each chunk: 8 MB of JSON inflates from 1.4 MB in about 25 ms of that turn's budget, and writing it in slices with `await scheduler.yield()` between spreads it over turns of their own. Its errors are the standard's `TypeError`s: corrupt data, data after the end, input that ends before its end at `close()`, a chunk that is not an `ArrayBuffer` or view. One stream may span many writes: Discord's `zlib-stream` (one zlib stream across a socket's messages, each ending in a sync flush) inflates message by message, each write's output queued once it settles; keep a `read()` pending, as a write waits for one |
@@ -1146,18 +1441,40 @@ can also hide the response and yield `Network`. Exact API grants do not
 sandbox page code: it can call browser `fetch` directly, subject to the
 rendered page's CSP where one is served.
 
-On native hosts, ordinary ordered `GET`/`HEAD` reads wait in the same FIFO as
-writes: up to 128 queued, running and unconsumed requests, with at most 64 MiB
-of waiting request buffers. Other ordered work retains a 16-request admission
-bound. A full queue rejects explicitly; the runtime never restarts the whole
-source on that refusal, since earlier turns may have written already. For
-example, 20 resources fetching once beside one source fetching 20 times can
-all wait and answer. A failed resource keeps its last value; `refresh` asks
-again. See LLP 1041 §8.4 for the byte reservations and cancellation policy.
+On native hosts, a resource's plain HTTP requests overlap, up to six at a
+time, and their replies are delivered in the order asked (LLP 1162 D1, D2).
+A TypeScript resource's answer hands over every request it has made, so
+`Promise.all` overlaps too. Reads wait for earlier sends, storage steps and
+native continuations; those wait for the reads before them. In the sequence,
+requests with `exactBodyFrom` or `exactBodyTo` still run one at a time.
 
-That queue runs one request at a time, so a screen that reads twenty feeds
-waits for each in turn. A read whose request and reply may both be handled
-out of order can leave it: `fetch(url, { exactIndependentHttp:
+Resource `GET`/`HEAD` reads retain the bound of 128 queued, running and
+unconsumed requests, with at most 64 MiB of waiting request buffers. A
+resource's other methods, including a GraphQL `POST`, overlap too, but count
+against the 16-request effect bound and wait when it is full. They are never
+aborted when their answer is let go. Other ordered work retains that
+16-request admission bound and rejects explicitly when full; the runtime
+never restarts the whole source on that refusal, since earlier turns may have
+written already. For example, 20 resources fetching once beside one resource
+fetching 20 times can all wait and answer. A failed resource keeps its last
+value; `refresh` asks again. See LLP 1041 §8.4 for the byte reservations and
+cancellation policy.
+
+A mutation's answer hands over one request at a time, in order. Sends of the
+same `parallel` mutation overlap, up to three at a time on the six shared
+workers. They wait for everything before them except the other sends of
+their mutation; later work waits for them. Replies retain the order asked.
+
+Native hosts keep a resource's `GET` reply when it says how long it is fresh
+or carries a validator (LLP 1162 D4): in memory, 16 MiB per runtime, gone with
+the process. An entry answers only a request equal in method, URL and every
+header; a stale reply is revalidated when it has a validator. `refresh` and a
+declared `refreshes` go to the network and replace the entry, and a successful
+write to a URL drops that URL's entries. A browser uses its own cache; the
+render server keeps none.
+
+A read whose request and reply may both be handled out of order can leave
+the sequence altogether: `fetch(url, { exactIndependentHttp:
 { maxResponseBytes: 4194304 } })` in TypeScript, or
 `Request::get(url).independent_http(4 << 20)` from a Rust source. A native app
 then runs up to six such reads at once, within their own budget of 128
@@ -1166,22 +1483,29 @@ running read counts its ceiling, and one that does not fit waits for the reads
 before it, so keep the ceiling near the largest reply you expect. An open
 stream (`exactStream`) counts twice its ceiling on the same budget for as long
 as it is open, and a read whose ceiling does not fit beside the open streams is
-refused when it is made. A download written to a file (`exactBodyTo`) counts
+refused when it is made or while it waits if a later stream takes its room.
+A download written to a file (`exactBodyTo`) counts
 only the 1 MiB it can hold, whatever its ceiling. A browser has no lanes and schedules every fetch itself, so
 there only the ceiling applies. On every host a reply larger than
 `maxResponseBytes` fails as `refused`. The ceiling is 1 byte to 64 MiB (1 GiB
 with `exactBodyTo`), and anything else is a `TypeError`. A `GET` is
-not independent by default, because a source may depend on its replies
-arriving in order. Leave writes, and any read whose parse depends on an
-earlier reply, in the queue. Storage steps and native continuations cannot
-opt out of it.
+not independent by default: ordinary resource reads already overlap, while
+an independent reply settles as it arrives. Leave writes, and any read whose
+parse depends on an earlier reply, in the queue. Storage steps and native
+continuations cannot opt out of it.
 
-On Hermes each turn of an answer has 100 ms of wall clock: its call, or its
+On Hermes each turn of an answer has 100 ms of its own time: its call, or its
 resumption after a `fetch`, storage step or yield it awaited, until it awaits
-the next. A turn over it is refused as `Unavailable` (`` `walk` took 401.8 ms,
-over the 100 ms budget for one turn; … ``), and the message names the repair:
-`await scheduler.yield()` every few thousand items of a long loop
+the next. Its own time is the calling thread's CPU clock where the platform keeps
+one, so a turn that waits on a blocked host call spends little of it; a turn may
+still take at most ten budgets (1 s) of wall clock. A turn over either is refused
+as an overrun (`Overrun`: `` `work` took 904.5 ms of its own (CPU) time (2283.7 ms
+of wall), over the 100 ms budget for one turn; … ``), and the message names the
+repair: `await scheduler.yield()` every few thousand items of a long loop
 ([the guide](contract-for-agents.md#data-requests-and-side-effects) shows one).
+A resource so refused keeps its last value and reads as pending, and is asked
+again at 250 ms, then at 1 s; a third overrun in a row fails it as any refusal
+does. A mutation's or a stream message's overrun is not asked again.
 The host asks a yielded answer again at once, in its place among the source's
 requests, with no work and no clock, so an agent's `clock settle` runs it to its
 end without moving the clock. The browser keeps no such budget and
@@ -1559,6 +1883,25 @@ commit coalesce to the newest, counted in `coalesced`. The end is
 closed: `the socket closed (1000)`), `Refused` (outside the grants), `Aborted`,
 or `Response` with the status and body of a reply that was not an event stream.
 
+For authentication, use the runnable [single-use ticket recipe](recipes/socket-ticket.md):
+an authorized HTTPS request obtains a ticket, and a second source opens its WSS
+stream. Each reconnect obtains another ticket.
+
+A socket can offer protocol names in preference order with
+`exactProtocols: ["events.v2", "events.v1"]` beside `exactStream` (LLP 1016.000).
+Rust calls `Request::get(url).protocols(["events.v2", "events.v1"])`, handles
+its `Result<Request, String>`, then passes the request to `Answer::stream`. Each name must be a
+nonempty [RFC 7230 token](https://www.rfc-editor.org/rfc/rfc7230#section-3.2.6),
+and duplicate names are refused by name before opening. Names are case-sensitive.
+The mapper's `event.protocol` (Rust `Message::protocol`) reports the selection
+on `open` and each message; receive-only hosts report it on each message.
+An omitted or empty list preserves an ordinary socket with an empty selection.
+If protocols were offered, a missing selection fails the connection, as does an
+unoffered selection, following the
+[WebSocket opening handshake](https://websockets.spec.whatwg.org/#opening-handshake).
+Do not put access tokens in protocol names: their alphabets differ, and the server
+echoes the selected protocol.
+
 A TypeScript source's `http:`/`https:` stream whose 2xx body is not
 `text/event-stream` is a **byte stream** (LLP 1016.000, the amendment of
 2026-10-23): each `message` has an ArrayBuffer `data`, the bytes read since the
@@ -1577,9 +1920,12 @@ is still held. New arguments, `refresh` or the resource leaving the view close
 the stream without further mapper calls;
 `state.pending` lists it until its first mapped value commits, `state.streams`
 while it is open, with `grant`, the grant line that admitted it. The same holds on Hermes, the web's wasm host and the web build (the JS
-target), with one difference: on the web build the stream's `fetch` must be
-made while the answer is asked, before its first `await` (a later one is
-refused, saying so); on Hermes it may follow an `await`.
+target). The stream's `fetch` may follow an `await` in the answer (a token
+fetched first, or the answer's own timer), on every host: it is made in one of
+the answer's own turns, its source, its code after an `await` in an `async`
+function, or its timer, while the answer has not given its value or been let go.
+On the web build one made elsewhere (a plain `.then` callback, module
+initialization) is refused, saying so.
 
 An **upload** that tells its progress (LLP 1016.000 D10) is a stream with
 `exactUploadProgress: true` beside its body, for a percentage the view draws
@@ -1647,7 +1993,11 @@ out (a limit, the grants, the local network's rule) was never sent, and
 It must be an `http:` or `https:` request other than GET or HEAD, without
 `exactLongPoll`, and with `redirect` left to follow (XMLHttpRequest can only
 follow), or it is a `TypeError`. On the web a cross-origin upload asks a CORS
-preflight, as any XMLHttpRequest with an upload listener does. An older
+preflight, as any XMLHttpRequest with an upload listener does. Uploads are
+sent without consulting the browser's cache. `only-if-cached` fails with a
+network error and sends nothing; a forced ask overrides it, as for other
+fetches. The other cache modes need no change to the upload, and Exact adds
+no cache request headers (LLP 1162 D4). An older
 prelude would ignore the option and read the reply as a byte stream, so a
 module that uses it needs `typescriptRuntime` 5, which it shares with the
 abort changes above (no binary had shipped 5): the bake records each
@@ -1690,8 +2040,9 @@ every host take it, and Rust sources with `Request::long_poll(cursor, from)` on
 a stream's request. An older prelude would ignore it and open an event stream,
 so it moves `typescriptRuntime` to 3: a native app with a TypeScript data module
 needs a new binary once more. A Rust source's long poll is a new kind on the
-module seam, so the Rust ABI moves to 4, and every app with Rust data sources
-needs a new binary once too.
+module seam. The Rust module ABI is 7: long polls, two-way sockets
+(LLP 1016.003), cache modes (LLP 1162 D4) and admitted secret names
+(LLP 1048.000 D9) require a matching binary.
 
 On the **web JS target and on macOS, iOS, Linux and Windows, TypeScript sources**
 receive `(event, socket)` for a WebSocket (LLP 1016.000 D7). Keep the handle by your resource's identity in
@@ -3550,6 +3901,13 @@ mode presentation are stand-ins; archive fidelity needs the real extension.
 | `bun scripts/agent.mjs ios widget next-trains --family systemMedium --mode accented --scheme dark --size xxxl tree "screenshot target/widget.png" state` | Snapshot tree, the entry alone, and its props |
 | `bun scripts/agent.mjs macos widget next-trains tree state` | First declared family, full colour, light, large text |
 | `bun scripts/agent.mjs ios widget next-trains --epoch 2026-08-28T09:05:00Z "clock +600000" tree state` | Refresh and render at the app’s advanced clock |
+
+| `bun scripts/agent.mjs ios widget next-trains --configuration '{"rows":"one"}' "screenshot target/one.png" state` | A configured widget's render with that choice; `state` reports the `configuration` |
+
+A configured widget's cells render its defaults, then each other value of each
+parameter (the rest at their defaults) in full colour, light and dark;
+`--configuration <json>` names parameters and values over the defaults, and a name or
+value the configuration does not declare is refused with the ones it does.
 
 An immediate refresh answer supplies its first timeline entry. Pending, empty
 or unavailable data keeps the preview; `state` reports which. The gallery's

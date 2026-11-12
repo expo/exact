@@ -56,12 +56,14 @@ export function uploadAnswer(r, mark, a, { take, fails, release }) {
   }
   return r.value;
 }
-/** `reply`'s callbacks for resource `r`'s ticket `t` (rt.js `res`), the answer's `f` and the failure's `gone`, as given;
- * for an upload, its mark is made now and they keep how it ended. */
+/** `reply`'s callbacks for resource `r`'s ticket `t` (rt.js `res`), the answer's `f` and the failure's `gone`; for an
+ * upload they keep how it ended. Its mark is made now, or, for an answer that opens its upload in a later turn
+ * (ts-data.js `late`), when it does (`t.uploading`). */
 function ends(r, t, f, next, gone) {
-  if (!t.upload) return [f, next, gone];
-  uploadSent(r, t.args, t);
-  return [(p, o) => { f(p, o); if (!o.more) uploadEnded(r, t, { v: p.v }); }, next, (error, code, reason) => { uploadEnded(r, t, { failed: [error, code, reason] }); gone(error, code, reason); }];
+  const marked = () => uploadSent(r, t.args, t);
+  if (t.upload) marked(); else t.uploading = marked;
+  return [(p, o) => { f(p, o); if (t.upload && !o.more) uploadEnded(r, t, { v: p.v }); }, next,
+    (error, code, reason) => { if (t.upload) uploadEnded(r, t, { failed: [error, code, reason] }); gone(error, code, reason); }];
 }
 /** What rt.js's `data.uploads` is once a TypeScript source is installed. */
 export const ledger = {
@@ -72,7 +74,7 @@ export const ledger = {
   kept: (r, a) => { if (r.ticket.upload) uploadSent(r, a, r.ticket); return r.value; },
 };
 /** The identity of an upload's request (`exactUploadProgress`) among `fetch`'s arguments, which the same request for newer
- * arguments shares (D3): its URL, method, headers, body (by length and FNV-1a), file, deadline and redirect mode. */
+ * arguments shares (D3): its URL, method, headers, body (by length and FNV-1a), file, deadline, cache mode and redirect mode. */
 export function requestKey({ input, init, redirect }) {
   if (init?.exactUploadProgress !== true) return undefined;
   const request = typeof Request === 'function' && input instanceof Request ? input : null, body = init.body;
@@ -81,5 +83,5 @@ export function requestKey({ input, init, redirect }) {
   let hash = 0x811c9dc5;
   for (const b of bytes ?? []) hash = Math.imul(hash ^ b, 16777619) >>> 0;
   return JSON.stringify([request ? request.url : String(input), init.method ?? request?.method ?? 'GET', [...new Headers(init.headers ?? request?.headers ?? [])].sort(),
-    bytes ? [bytes.length, hash] : null, init.exactBodyFrom ?? null, init.exactTimeout ?? null, redirect ?? null]);
+    bytes ? [bytes.length, hash] : null, init.exactBodyFrom ?? null, init.exactTimeout ?? null, init.cache ?? request?.cache ?? 'default', redirect ?? null]);
 }

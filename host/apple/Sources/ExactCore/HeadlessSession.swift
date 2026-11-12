@@ -138,14 +138,15 @@ public final class HeadlessSession {
     /// Boots the supplied plan, or the linked app's baked plan when nil. A `live` session
     /// is a running app's (LLP 1126.002 D3): its runner reads `liveNow()`, so a repeating
     /// timer that missed beats fires once; a render keeps the seek clock its caller moves.
-    public convenience init(plan: Data? = nil, entry: String? = nil, props: Data? = nil, size: CGSize, facts: SessionFacts, assets: AssetResolver,
-                            live: Bool = false) throws {
-        try self.init(plan: plan, entry: entry, props: props, size: size, facts: facts, assets: assets, presentation: nil, live: live)
+    /// An entry's `configuration` is a configured widget's chosen values, as JSON.
+    public convenience init(plan: Data? = nil, entry: String? = nil, props: Data? = nil, configuration: Data? = nil, size: CGSize, facts: SessionFacts,
+                            assets: AssetResolver, live: Bool = false) throws {
+        try self.init(plan: plan, entry: entry, props: props, configuration: configuration, size: size, facts: facts, assets: assets, presentation: nil, live: live)
     }
 
     /// A package composition may install Markdown expansion without a presenter.
-    package init(plan: Data? = nil, entry: String? = nil, props: Data? = nil, size: CGSize, facts: SessionFacts, assets: AssetResolver,
-                 presentation: TextPresentation?, live: Bool = false) throws {
+    package init(plan: Data? = nil, entry: String? = nil, props: Data? = nil, configuration: Data? = nil, size: CGSize, facts: SessionFacts,
+                 assets: AssetResolver, presentation: TextPresentation?, live: Bool = false) throws {
         self.size = size; rootFontSize = facts.rootFontSize
         let runtime = Runtime(hooks: .headless)
         let text = TextEngine(assets: { assets.url($0) }, read: { assets.bytes($0) }, bundled: { assets.bundledURL($0) },
@@ -164,7 +165,7 @@ public final class HeadlessSession {
             try facts.prime(runtime)
             if let entry {
                 guard let plan else { return Batch(ops: [], timers: false, motion: false, clock: nil, error: "an entry requires a plan") }
-                return runtime.bootEntry(plan, kind: entry, props: props, width: size.width, height: size.height)
+                return runtime.bootEntry(plan, kind: entry, props: props, configuration: configuration, width: size.width, height: size.height)
             }
             return plan.map { runtime.bootPlan($0, width: size.width, height: size.height) }
                 ?? runtime.boot(width: size.width, height: size.height)
@@ -172,9 +173,9 @@ public final class HeadlessSession {
         Owner.shared.sync { text.commitFonts() }
     }
 
-    public convenience init(plan: Data? = nil, entry: String? = nil, props: Data? = nil, size: CGSize, facts: SessionFacts,
+    public convenience init(plan: Data? = nil, entry: String? = nil, props: Data? = nil, configuration: Data? = nil, size: CGSize, facts: SessionFacts,
                             assetRoot: URL = Bundle.main.bundleURL, live: Bool = false) throws {
-        try self.init(plan: plan, entry: entry, props: props, size: size, facts: facts, assets: AssetResolver(root: assetRoot), live: live)
+        try self.init(plan: plan, entry: entry, props: props, configuration: configuration, size: size, facts: facts, assets: AssetResolver(root: assetRoot), live: live)
     }
 
     public static let defaultRootFontSize = SessionFacts.defaultRootFontSize

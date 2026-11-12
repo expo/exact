@@ -226,8 +226,9 @@ test('changed paths preserve unstaged edits, filenames and both sides of a renam
       expect(changedPaths(base, root).sort()).toEqual([...paths, newline].sort());
     }
 
-    const prefix = Array.from({ length: 8 }, (_, i) => `${i}-${'x'.repeat(180)}`).join('/');
-    const many = Array.from({ length: 800 }, (_, i) => `canvas/${prefix}/${i}.rs`);
+    // Past 1 MiB of names, in paths that stay well under macOS's PATH_MAX (1,024 bytes) once the fixture's root is joined.
+    const prefix = Array.from({ length: 3 }, (_, i) => `${i}-${'x'.repeat(180)}`).join('/');
+    const many = Array.from({ length: 2000 }, (_, i) => `canvas/${prefix}/${i}.rs`);
     expect(Buffer.byteLength(many.join('\0'))).toBeGreaterThan(1024 * 1024);
     for (const path of many) write(path, 'canvas\n');
     const before = paths.concat(process.platform === 'win32' ? [] : ['host/web/new file\nwith spaces.js']);

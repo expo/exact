@@ -1,0 +1,40 @@
+// A signed-out reader on a route that needs one is sent to sign in, in that
+// route's place (LLP 1038 §7). These readers hold no token, which app.ts knows
+// without asking the hosted API, so no test reaches it.
+fail fetch "https://api.realworld.show"
+
+test "settings sends a signed-out reader to sign in"
+  at "/settings"
+  clock data
+  clock +1
+  expect state current.name == "login"
+  expect tree has "page-login"
+
+test "the editor sends a signed-out reader to sign in"
+  at "/editor"
+  clock data
+  clock +1
+  expect state current.name == "login"
+
+test "editing an article sends a signed-out reader to sign in"
+  at "/editor/how-to-train-your-dragon"
+  clock data
+  clock +1
+  expect state current.name == "login"
+
+test "Your Feed sends a signed-out reader to sign in, and Back is the global feed" on web
+  at "/?feed=following"
+  clock data
+  clock +1
+  clock +1
+  expect state current.name == "login"
+  tap "app" history -1
+  clock data
+  expect state current.name == "home"
+  expect state following == false
+
+test "public routes stay for a signed-out reader"
+  at "/tag/dragons"
+  clock data
+  clock +1
+  expect state current.name == "tag"

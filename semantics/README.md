@@ -58,6 +58,15 @@ routes, and what their fields name — not every shape the checker knows, so a
 compiler shape the program never reaches (an event's) does not make an app
 embedding stale when it is added.
 
+The embedding shares the plan lowerer's `delete=` expansion: an admitted
+list row includes its generated Delete button and suffixed `testId`, with
+`disabled` belonging to that button. Admission reads grouped-row layout
+before descending and keeps enum prop ascriptions as the plan does.
+Emission omits literal ascriptions that add no Lean type information;
+enums emit as strings.
+The plain embedding used to compare component expansion keeps the view
+before this lowering step.
+
 **Differential testing.** For each case, `difftest` compiles the program to a
 plan and boots it on the runner, delivers the script's events, and prints a
 canonical observation after every step: the outcome, the commits attempted, every root slot, derive

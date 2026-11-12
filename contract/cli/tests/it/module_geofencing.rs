@@ -40,6 +40,17 @@ impl App {
     fn plan(&self) -> exact_plan::Plan {
         self.compile().unwrap_or_else(|e| panic!("{e:?}"))
     }
+    /// Replaces `from`, which occurs once, in package `name`'s `exact.json`.
+    fn edit(&self, name: &str, from: &str, to: &str) {
+        let path = self
+            .0
+            .join("node_modules/@exact")
+            .join(name)
+            .join("exact.json");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(text.matches(from).count(), 1, "{from}");
+        std::fs::write(&path, text.replace(from, to)).unwrap();
+    }
 }
 impl Drop for App {
     fn drop(&mut self) {
@@ -480,5 +491,68 @@ fn the_web_has_no_geofencing() {
         logs(&r).contains("addGeofence: NotSupportedError"),
         "{}",
         logs(&r)
+    );
+}
+
+const STATUS: &str = r#"use geofencingStatus, GeofencingStatus from "@exact/geofencing"
+
+component App
+  resource status = geofencingStatus() as shape GeofencingStatus
+  view
+    text status.state
+"#;
+
+/// A permission's state reads those it requires and the one that grants
+/// it, so a cycle among one interface's permissions is refused by name.
+#[test]
+fn a_cycle_among_the_permissions_is_refused() {
+    let location = r#""grants": ["device.geolocation"]"#;
+    for (edit, steps) in [
+        (
+            format!(r#"{location}, "grantedBy": "geolocation-background""#),
+            "`geolocation-background` requires `geolocation` on android, and `geolocation` is granted by `geolocation-background`",
+        ),
+        (
+            format!(r#"{location}, "requires": {{ "android": ["geolocation-background"] }}"#),
+            "`geolocation-background` requires `geolocation` on android, and `geolocation` requires `geolocation-background` on android",
+        ),
+    ] {
+        let app = App::new("cycle", STATUS);
+        app.edit("geofencing", location, &edit);
+        let refused = app.compile().unwrap_err();
+        let error = (refused.iter())
+            .find(|e| e.id == "contract-use-declaration")
+            .unwrap_or_else(|| panic!("{refused:?}"));
+        assert!(error.message.contains(steps), "{}", error.message);
+    }
+}
+
+/// A cycle through a permission another interface declares, which neither
+/// declaration shows the compiler, still reads a state, where the agent
+/// asks it too.
+#[test]
+fn a_cycle_across_interfaces_reads_a_state() {
+    let app = App::new("across", APP);
+    let requires = r#""requires": { "android": ["geolocation"] }"#;
+    let both = r#""requires": { "android": ["geolocation", "notifications"] }"#;
+    app.edit("geofencing", requires, both);
+    let notifications = r#""denied": "NotAllowedError""#;
+    let back = r#", "requires": { "android": ["geolocation-background"] }"#;
+    app.edit(
+        "notifications",
+        notifications,
+        &format!("{notifications}{back}"),
+    );
+    let mut r = boot(app.plan(), "android");
+    pump(&mut r);
+    assert!(
+        slot(&r, "status").contains("prompt"),
+        "{}",
+        slot(&r, "status")
+    );
+    let agent = state(&r).to_string();
+    assert!(
+        agent.contains(r#""geolocation-background":"prompt""#),
+        "{agent}"
     );
 }

@@ -444,6 +444,7 @@ impl<D: DataSource> Runner<D> {
             self.module_send(target, source, args)
         } else {
             let answer = self.answer_mutation(target, source, args);
+            let answer = self.single_answer(target, answer);
             self.refuse_locked(answer)
         };
         // What its source staged on sockets goes out only with an answer

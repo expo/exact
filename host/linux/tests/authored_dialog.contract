@@ -48,11 +48,11 @@ component App
           button "Top" testId="tall-first" press=poke height=30 flex-shrink=0
           box height=1000 flex-shrink=0
           button "Last" testId="last" press=poke height=30 flex-shrink=0
-      column id="picker" testId="picker" popover="auto" role="dialog" width=160 height=90 toggle=toggling cancel=cancelled
+      column id="picker" testId="picker" popover="auto" role="dialog" width=160 height=90 toggle=toggling cancel=cancelled padding=0
         input box-sizing="border-box" value=query input=changed autofocus=true testId="pop-search" width=150 height=30
         button "Dialog" testId="replace" commandfor="dialog" command="show-modal" height=30
         button "Hide" testId="hide" popovertarget="picker" popovertargetaction="hide" height=30
-      column id="above-picker" testId="above-picker" popover="auto" role="dialog" width=160 height=90 position-area="top span-left" margin-bottom=6
+      column id="above-picker" testId="above-picker" popover="auto" role="dialog" width=160 height=90 position-area="top span-left" margin-bottom=6 padding=0
         button "Inside" testId="above-inside" press=poke height=30
-      column id="manual-picker" testId="manual-picker" popover="manual" role="dialog" width=160 height=60
+      column id="manual-picker" testId="manual-picker" popover="manual" role="dialog" width=160 height=60 padding=0
         button "Hide" testId="manual-hide" popovertarget="manual-picker" popovertargetaction="hide" height=30

@@ -657,6 +657,52 @@ test('R13 named and empty argument objects survive the web batch and GPU binding
   }
 });
 
+test('a named update sends the module only the arguments that changed since its last accepted bind', async () => {
+  const f = await fixture(), crossed = [];
+  let refuse = false;
+  f.gpu.gpu_bind_at = (id, json) => { crossed.push(['full', json]); return !refuse; };
+  f.gpu.gpu_bind_changed_at = (id, json) => { crossed.push(['changed', json]); return !refuse; };
+  const saved = 'x'.repeat(100_000), host = new f.Element('host'); host.canvas = new f.Element(); f.exact.views.set(1, host);
+  const update = values => f.applyBatch({ops:[{op:'surface',id:1,name:'world',values}],timers:false,motion:false});
+  const last = () => crossed.splice(0).map(([kind, json]) => [kind, JSON.parse(json, (_, v) => v === saved ? '<saved>' : v)]);
+  f.exact.gpu.surface(1, 'world', {saved, count: 1, at: [1, 2]});
+  assert.deepEqual(last(), [['full', {saved: '<saved>', count: 1, at: [1, 2]}]]);
+  // The batch parses a new string and a new list each time: equal by their JSON.
+  await update({saved: 'x'.repeat(100_000), count: 2, at: [1, 2]});
+  assert.deepEqual(last(), [['changed', {count: 2}]]);
+  await update({saved, count: 2, at: [1, 3]});
+  assert.deepEqual(last(), [['changed', {at: [1, 3]}]]);
+  await update({saved, count: -0, at: [1, 3], extra: true});
+  assert.deepEqual(last(), [['changed', {count: 0, extra: true}]]);
+  // The agent's clock re-binds what wants a frame: nothing changed.
+  f.exact.gpu.retier('high'); f.exact.gpu.schedule();
+  assert.deepEqual(last(), [['changed', {}]]);
+  // A refused bind leaves the module at its last accepted values, and so the baseline.
+  refuse = true; await update({saved, count: 3, at: [1, 3], extra: true});
+  refuse = false; await update({saved, count: 0, at: [1, 3], extra: true});
+  assert.deepEqual(last(), [['changed', {count: 3}], ['changed', {}]]);
+  // A gone argument returns to its default only in a full bind.
+  await update({saved, count: 4, at: [1, 3]});
+  assert.deepEqual(last(), [['full', {saved: '<saved>', count: 4, at: [1, 3]}]]);
+  await update({saved, count: 5, at: [1, 3]});
+  assert.deepEqual(last(), [['changed', {count: 5}]]);
+  // Positional values are always whole.
+  await update([1, 2]); await update([1, 2]);
+  assert.deepEqual(last(), [['full', [1, 2]], ['full', [1, 2]]]);
+  await update({saved, count: 5});
+  assert.deepEqual(last(), [['full', {saved: '<saved>', count: 5}]]);
+  // After device recovery the first bind is whole again.
+  f.gpu.gpu_recover = async surfaces => JSON.stringify({status:'recovered', instances:[...surfaces]});
+  const lost = host.canvas;
+  lost.replaceWith = el => { f.Element.prototype.replaceWith.call(lost, el); host.canvas = el; };
+  f.exact.gpu.deviceLost();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  await f.exact.gpu.settled();
+  await update({saved, count: 6});
+  await update({saved, count: 7});
+  assert.deepEqual(last(), [['full', {saved: '<saved>', count: 6}], ['changed', {count: 7}]]);
+});
+
 test('E10 focused Contract buttons consume activation keys before the world', async () => {
   const f = await fixture({input:true}), canvas=f.create(1), pause=new f.Element('button');
   let prevented=0; pause.click=()=>{};

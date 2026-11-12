@@ -189,6 +189,12 @@
       "description": "What the app does, in a sentence: the web manifest's `description`, which an install prompt or a store listing can show.",
       "type": "string"
     },
+    "categories": {
+      "description": "The W3C manifest's categories, which the web manifest carries: what the app is, for a store or catalog to file it under. Each is a W3C standardized category or one of Apple's, written without public.app-category.: developer-tools, graphics-design, reference, video and the game genres (dice-games, puzzle-games, ...). The Apple bundles' LSApplicationCategoryType (iOS and macOS) is the first that Apple has: fitness and health are healthcare-fitness, photo photography, social social-networking, and books, food, government, kids, magazines, navigation, personalization, politics, security and shopping have none. Absent: a game the game shell builds (game) is filed under games, any other app under none. An Apple category of games or a game genre turns Game Mode on (host.ios.gameMode, host.macos.gameMode).",
+      "type": "array",
+      "minItems": 1,
+      "items": { "enum": ["books", "business", "education", "entertainment", "finance", "fitness", "food", "games", "government", "health", "kids", "lifestyle", "magazines", "medical", "music", "navigation", "news", "personalization", "photo", "politics", "productivity", "security", "shopping", "social", "sports", "travel", "utilities", "weather", "developer-tools", "graphics-design", "reference", "video", "action-games", "adventure-games", "arcade-games", "board-games", "card-games", "casino-games", "dice-games", "educational-games", "family-games", "kids-games", "music-games", "puzzle-games", "racing-games", "role-playing-games", "simulation-games", "sports-games", "strategy-games", "trivia-games", "word-games"] }
+    },
     "privacy_policy": {
       "description": "The app's privacy policy, an https: URL: the one its App Store and Google Play listings name (LLP 1133.026 D4). HealthKit requires one, and Health Connect's permission screen links to it, so an app granting device.health-read without it is refused for Android (grant-privacy-policy) and warned for iOS.",
       "type": "string",
@@ -246,10 +252,23 @@
       "enum": ["automatic", "light", "dark"]
     },
     "theme_color": { "type": "string" },
-    "background_color_dark": {
-      "type": "string",
-      "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
-      "description": "The dark first-frame background beside background_color, used by the web page and iOS launch screen: #RGB, #RRGGBB or #RRGGBBAA, the forms the launch screen's colour set takes."
+    "color_scheme_dark": {
+      "description": "What replaces a member in a dark scheme, as the W3C manifest draft's member of this name: background_color (the dark first frame of the web page and the iOS launch screen), theme_color, and icons, which replaces icons there (LLP 1163 D2). manifest.json carries it without icons.",
+      "type": "object",
+      "properties": {
+        "background_color": {
+          "type": "string",
+          "pattern": "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+          "description": "The dark first-frame background: #RGB, #RRGGBB or #RRGGBBAA, the forms the launch screen's colour set takes."
+        },
+        "theme_color": { "type": "string" },
+        "icons": {
+          "description": "The dark scheme's icons, which replace icons there: every file a dark slot may take, \"any\" only. iOS's dark icon and the web's dark favicon are picked from it as the light ones are from icons.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/icon" }
+        }
+      },
+      "additionalProperties": false
     },
     "background_color": {
       "type": "string",
@@ -268,21 +287,9 @@
       "description": "Capabilities a native production build links before any plan uses them (LLP 1047 D8; LLP 1047.001), so a later bundle may: an archive otherwise links what its plan uses (plus `auth_session` from `auth.session` grants and `sqlite` from `sqlite.open` grants) and nothing else, and a bundle that needs more is a new binary. Linking sqlite without sqlite.open only adds unused code: an update that adds the grant changes the compatibility identity and requires a new binary even when sqlite was linked. Development links every capability but `media_picker` and `auth_session`, which it links as production would (LLP 1047.001.000 F). Names are the runner's (`exact_runner::Capability::name`)."
     },
     "icons": {
-      "description": "The app's raster icons, as the web manifest spells them (`src`, `sizes`, `type`, `purpose`). Apple bakes derive their icon sets from these unless host.ios.icon or host.macos.icon selects an Icon Composer project; an iOS distribution build requires either that project or a square raster of at least 512 px.",
+      "description": "The app's icons, as the web manifest spells them: PNG, SVG or ICO files under assets/. Each host picks the file a slot takes by purpose, then shape and size (LLP 1163 D5): iOS and macOS a square maskable, else any, of at least 1024 px, unless host.ios.icon or host.macos.icon selects an Icon Composer project; iOS's tinted icon a square monochrome PNG; the web's favicons the smallest square raster of at least 32 px and an SVG, and its Apple touch icon the smallest opaque square PNG of at least 180 px, else the largest. An iOS distribution build requires the iOS icon.",
       "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "src"
-        ],
-        "properties": {
-          "src": { "type": "string" },
-          "sizes": { "type": "string" },
-          "type": { "type": "string" },
-          "purpose": { "type": "string" }
-        },
-        "additionalProperties": false
-      }
+      "items": { "$ref": "#/$defs/icon" }
     },
     "live_activities": {
       "type": "array",
@@ -427,7 +434,47 @@
             },
             "description": "Optional watchOS families; defaults to the accessory families in families."
           },
-          "preview": { "type": "object" }
+          "preview": { "type": "object" },
+          "configuration": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "parameters"],
+            "description": "The person's choices in the Edit Widget sheet: WidgetKit's AppIntentConfiguration, its intent one parameter per row. A component reads the chosen values through `inject` with `snapshot_configuration: <shape>`, the shape one field per parameter (`string`, or an enum of exactly its values), at render as it reads the family's size; the refresh does not see them. Generated Swift, so a change needs a new binary.",
+            "properties": {
+              "title": { "type": "string", "description": "The intent's title (the Edit Widget sheet is headed by the widget's own title and description)." },
+              "description": { "type": "string", "description": "The intent's description; defaults to the title." },
+              "parameters": {
+                "type": "array",
+                "minItems": 1,
+                "description": "The sheet's rows, in order.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name", "title", "type", "values"],
+                  "properties": {
+                    "name": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "description": "The configuration shape's field that carries the chosen value." },
+                    "title": { "type": "string", "description": "The row's label." },
+                    "type": { "type": "string", "enum": ["enum"], "description": "A fixed list of choices; data-backed options are not supported." },
+                    "values": {
+                      "type": "array",
+                      "minItems": 1,
+                      "description": "The choices, in the menu's order.",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["value", "title"],
+                        "properties": {
+                          "value": { "type": "string", "description": "What the render reads." },
+                          "title": { "type": "string", "description": "What the menu shows." }
+                        }
+                      }
+                    },
+                    "default": { "type": "string", "description": "One of the values: before the person chooses, and in previews. Defaults to the first." }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -689,6 +736,14 @@
                 }
               }
             },
+            "gameMode": {
+              "type": "boolean",
+              "description": "Whether iOS may turn Game Mode on while the app runs: priority on the CPU and GPU, lower Bluetooth latency for controllers and AirPods, and less background work (LSSupportsGameMode, iOS 18.6; GCSupportsGameMode for iOS 18.0 to 18.5, written when minimumOS is below 18.6). Absent: true for a game (an Apple category of games or a game genre in categories, or a game the game shell builds), else no key. false keeps Game Mode off for a game too light to need it."
+            },
+            "increasedMemoryLimit": {
+              "type": "boolean",
+              "description": "Sign com.apple.developer.kernel.increased-memory-limit: on the iPhone and iPad models that allow it, the app may use more memory than the default limit (iOS 15). The app must still work without it; os_proc_available_memory says what it has. A device build needs a profile whose App ID has Increased Memory Limit enabled, and is refused without one. Extensions, App Clips and tvOS never take it. Absent or false: the default limit."
+            },
             "webBrowser": {
               "type": "boolean",
               "description": "Opt in to Apple's managed default-browser role for the iOS app. Requires http and https in protocol_handlers and Apple's approval of com.apple.developer.web-browser in its provisioning profile. Extensions, App Clips and tvOS never inherit this role. distribution_only on the pair also limits the entitlement to distributed builds. Absent or false: no browser entitlement and no HTTP/HTTPS registration on iOS."
@@ -696,7 +751,7 @@
             "icon": {
               "type": "string",
               "minLength": 1,
-              "description": "Primary Icon Composer .icon directory, relative to app.json and inside the app. Compiled with the app's catalogs; conflicts with an .appiconset in those catalogs are refused. Absent: use icons. tvOS does not inherit this field."
+              "description": "Primary Icon Composer .icon directory, relative to app.json and inside the app. Compiled with the app's catalogs; conflicts with an .appiconset in those catalogs are refused. Absent: use icons. The watch app takes it when its icon.json lists watchOS under supported-platforms.circles; tvOS never does."
             },
             "minimumOS": {
               "description": "The oldest iOS the app runs on, as \"17.0\"; never below 17.0.",
@@ -862,6 +917,10 @@
               "enum": ["speed", "size"],
               "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O) or \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2). Absent: speed for a Mac app, size for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size because their generated Cargo workspace has no size profile. `build.mjs --optimize` overrides it."
             },
+            "gameMode": {
+              "type": "boolean",
+              "description": "Whether macOS may turn Game Mode on while the app runs: priority on the CPU and GPU, lower Bluetooth latency for controllers and AirPods, and less background work (LSSupportsGameMode, macOS 26). Absent: true for a game (an Apple category of games or a game genre in categories, or a game the game shell builds), else no key. false keeps Game Mode off for a game too light to need it."
+            },
             "oneTimeCodeAutofill": {
               "enum": ["marked"],
               "description": "\"marked\": macOS offers verification codes from Messages and Mail only in fields marked `autocomplete=\"one-time-code\"` (`NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac`). Absent: the platform's default; macOS 26 offers them in any text field."
@@ -930,7 +989,7 @@
           "additionalProperties": false
         },
         "android": {
-          "description": "Android: the painter, `minimumOS` (default 12), and `certificates` for the origin's `assetlinks.json`.",
+          "description": "Android: the painter, `minimumOS` (default 12), `certificates` for the origin's `assetlinks.json`, and `maven` libraries for the app's Kotlin.",
           "type": "object",
           "properties": {
             "painter": {
@@ -940,6 +999,15 @@
             "minimumOS": {
               "description": "The oldest Android the app runs on, as \"12\"; never below 10. Below 12 the APK carries the reader's Android 10 and 11 code (host/android/README.md, \"Android 10 and 11\"); at 12 or later it carries none.",
               "enum": ["10", "11", "12", "13", "14", "15", "16"]
+            },
+            "maven": {
+              "description": "Pinned group:artifact:version coordinates on Google's Maven or Maven Central for the app's Kotlin in modules/android. Like a package implementation's maven array, these join the APK's locked, checksum-verified Gradle graph (LLP 1133.008 D8 item 5; host/android/README.md).",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+:(?!(?:[Ll][Aa][Tt][Ee][Ss][Tt]|[Rr][Ee][Ll][Ee][Aa][Ss][Ee])(?:\\.|$))(?!.*-[Ss][Nn][Aa][Pp][Ss][Hh][Oo][Tt]$)[A-Za-z0-9_.-]+$(?![\\s\\S])",
+                "x-hint": "use group:artifact:version with a pinned version, without ranges, dynamic selectors, SNAPSHOTs, classifiers or repositories"
+              }
             },
             "certificates": {
               "description": "The SHA-256 fingerprints of every certificate that signs the app (the debug key, the upload key, Play App Signing's), as `AB:CD:…`: the origin's `/.well-known/assetlinks.json` lets each use the app's passkeys (LLP 1133.011 D6).",
@@ -991,6 +1059,14 @@
               "description": "Tags the web build writes into the <head> of every document: the shell, each pre-rendered page and the 404 page. Each entry is one tag, {\"script\": {...}}, {\"link\": {...}} or {\"meta\": {...}}, whose value is its attributes (a string, or true for a bare one such as async); a script's `text` is its content. For what a site says once to the browser (an analytics script, a preconnect, site-wide JSON-LD); a page's own title and metas are the Contract `head` element's. The same on every page and web only.",
               "type": "array",
               "items": { "$ref": "#/$defs/webHeadEntry" }
+            },
+            "csp": {
+              "description": "The app's part of the Content-Security-Policy the render server sends with each page; a static host and `exact serve` send none. Exact's policy already admits each inline script in `head` by its hash and each script `src` by its origin. Each key is a directive in lower case. A list adds its sources after Exact's for that directive (for a directive Exact does not write, after what CSP falls back to: `'self'` from `default-src`). A string replaces Exact's value, and in it the word `exact` stands for Exact's sources. false sends no policy. Beside Exact's hashes the browser ignores `'unsafe-inline'`, and `'strict-dynamic'` makes it ignore `'self'`, so Exact's app.js stops loading: either keyword goes in a string without `exact`. For example {\"script-src\": [\"https://www.googletagmanager.com\"], \"connect-src\": [\"https://*.google-analytics.com\"]}.",
+              "anyOf": [{ "const": false }, { "$ref": "#/$defs/webCsp" }]
+            },
+            "cspReportOnly": {
+              "description": "A policy sent as Content-Security-Policy-Report-Only by the render server, to try one before it is enforced: the same shape as `csp`, over a copy of Exact's policy. Absent or false, none is sent.",
+              "anyOf": [{ "const": false }, { "$ref": "#/$defs/webCsp" }]
             }
           }
         }
@@ -1360,6 +1436,26 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "webCsp": {
+      "description": "Directives by name in lower case, each a list of sources to add to Exact's, or a string that replaces Exact's value (the word `exact` standing for Exact's sources).",
+      "type": "object",
+      "additionalProperties": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] }
+    },
+    "icon": {
+      "type": "object",
+      "required": ["src"],
+      "properties": {
+        "src": { "type": "string", "description": "The file, relative to app.json: a PNG, SVG or ICO under assets/." },
+        "sizes": { "type": "string", "description": "As the file is, \"1024x1024\" or \"any\" for an SVG; absent, read from the file." },
+        "type": { "type": "string", "description": "image/png, image/svg+xml or image/x-icon; absent, read from the file." },
+        "purpose": {
+          "type": "string",
+          "pattern": "^(any|maskable|monochrome)( (any|maskable|monochrome))*$",
+          "description": "Space-separated W3C purposes: any (full colour), maskable (square, opaque, full-bleed, what matters inside the centred circle of 80% diameter), monochrome (a glyph whose alpha the host fills). Absent, any."
+        }
+      },
+      "additionalProperties": false
+    },
     "webHeadEntry": {
       "oneOf": [
         { "type": "object", "required": ["script"], "additionalProperties": false, "properties": { "script": { "type": "object", "properties": { "text": { "type": ["string", "object", "array"], "description": "The script's content; an object or list is written as JSON (application/ld+json, importmap, speculationrules). In JSON, `<!--`, and `</script` before whitespace, `/` or `>`, are written as `\\u003C…`, which JSON reads alike. A string is written as it is, and one holding either is refused: write `\\x3C!--` or '<' + '!--' inside a string, or a space after `<` in code." } }, "additionalProperties": { "$ref": "#/$defs/webHeadAttribute" } } } },

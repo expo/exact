@@ -1,0 +1,57 @@
+// LLP 1145 D4: 200 rows of 32 px in a 320 px port. Probe exact
+// contact and one-pixel overlap with each edge band, then remount the lists.
+component ReachMargin
+  state step = 0
+  state shown = true
+  derive offsets = [1000, 5088, 5089, 5728, 5729, 6048, 6049, 6080, 1000, 992, 991, 352, 351, 32, 31, 0, 6080]
+  derive top = match offsets.at(step) { case some(x) => x, case none => 1000 }
+  state defaultStarts = ""
+  state defaultEnds = ""
+  state pixelStarts = ""
+  state pixelEnds = ""
+  state percentStarts = ""
+  state percentEnds = ""
+  state asymmetricStarts = ""
+  state asymmetricEnds = ""
+  action advance
+    step = (step + 1) % offsets.length
+  action toggle
+    shown = not shown
+  action defaultStartsHit
+    defaultStarts = `${defaultStarts}${top},`
+  action defaultEndsHit
+    defaultEnds = `${defaultEnds}${top},`
+  action pixelStartsHit
+    pixelStarts = `${pixelStarts}${top},`
+  action pixelEndsHit
+    pixelEnds = `${pixelEnds}${top},`
+  action percentStartsHit
+    percentStarts = `${percentStarts}${top},`
+  action percentEndsHit
+    percentEnds = `${percentEnds}${top},`
+  action asymmetricStartsHit
+    asymmetricStarts = `${asymmetricStarts}${top},`
+  action asymmetricEndsHit
+    asymmetricEnds = `${asymmetricEnds}${top},`
+  view
+    column testId="root"
+      button press=advance testId="advance"
+        text "Next offset"
+      button press=toggle testId="toggle"
+        text "Toggle lists"
+      text `${top}` testId="offset" font-variant-numeric="tabular-nums"
+      if shown
+        row display="flex"
+          list virtualized=true estimated-item-height=32 reachstart=defaultStartsHit reachend=defaultEndsHit scrollTop=top testId="default" width=320 height=320
+            for n in range(200) key=n
+              text `${n}` height=32 font-variant-numeric="tabular-nums"
+          list virtualized=true estimated-item-height=32 reach-margin="0px" reachstart=pixelStartsHit reachend=pixelEndsHit scrollTop=top testId="pixel" width=320 height=320
+            for n in range(200) key=n
+              text `${n}` height=32 font-variant-numeric="tabular-nums"
+        row display="flex"
+          list virtualized=true estimated-item-height=32 reach-margin="300%" reachstart=percentStartsHit reachend=percentEndsHit scrollTop=top testId="percent" width=320 height=320
+            for n in range(200) key=n
+              text `${n}` height=32 font-variant-numeric="tabular-nums"
+          list virtualized=true estimated-item-height=32 reach-margin="0PX 960px" reachstart=asymmetricStartsHit reachend=asymmetricEndsHit scrollTop=top testId="asymmetric" width=320 height=320
+            for n in range(200) key=n
+              text `${n}` height=32 font-variant-numeric="tabular-nums"

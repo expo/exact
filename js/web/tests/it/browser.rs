@@ -363,6 +363,34 @@ try {
     module.dispose();
     if(!call({op:'answer',id:module.id,source:'explicit',args:[0]}).error)throw new Error('disposed environment is callable');
 
+    for(const placement of ['main','worker'])for(const hasOverlay of [false,true]){
+      const overlaySource=`let reads=0, present=${hasOverlay};
+        globalThis.exact={abi:1,appId:'test.browser.module',grants:'secret.keep token',
+          get overlay(){reads++;return present?()=>{throw new Error('worker overlay ran');}:undefined;},
+          answer(source){if(source==='toggle')present=!present;return reads;}};`;
+      const realm=await prepare(await payload(overlaySource),{...identity,placement});
+      try{
+        for(const source of ['reads','toggle','reads']){
+          const probe=call({op:'has-overlay',id:realm.id});
+          if(probe.has!==hasOverlay)throw new Error(`${placement}: overlay at load was ${hasOverlay}, probe answered ${JSON.stringify(probe)}`);
+          const started=call({op:'answer',id:realm.id,source,args:[],store:[],grants:[]});
+          if((await checkpoint(started)).value!==1)throw new Error(`${placement}: overlay was not read exactly once at load`);
+        }
+        if(placement==='worker'&&hasOverlay){
+          const overlay=call({op:'overlay',id:realm.id,source:'reads',args:[],answer:1,writes:[]});
+          if(overlay.tag!==4||overlay.worker!==true)throw new Error('worker overlay no longer shows the answer');
+        }
+      }finally{realm.dispose();}
+      if(!call({op:'has-overlay',id:realm.id}).error)throw new Error('disposed realm retained its overlay decision');
+      const bad=overlaySource.replace("appId:'test.browser.module'","appId:'another.app'");
+      let refused=false;try{await prepare(await payload(bad),{...identity,placement});}catch{refused=true;}
+      if(!refused)throw new Error(`${placement}: invalid module admitted`);
+      const throwing=await prepare(await payload(overlaySource.replace('reads++;return present?',
+        "throw new Error('overlay getter failed');return present?")),{...identity,placement});
+      try{if(call({op:'has-overlay',id:throwing.id}).has!==true)throw new Error(`${placement}: throwing overlay getter treated as absent`);}
+      finally{throwing.dispose();}
+    }
+
     const inputsIdentity=admit({appId:'test.explicit-inputs',grants:'net.fetch https://fixture.exact.test\n'});
     const inputs=await prepare(await payload(fixtures.inputs,inputsIdentity),inputsIdentity);
     const invoke=(realm,source,args=[],store=[],grants=[],outcome)=>checkpoint(call({id:realm.id,op:outcome?'resume':'answer',source,args,store,grants,outcome}));
@@ -894,6 +922,16 @@ try {
     if((await copied.query('SELECT value FROM t')).rows[0][0]!==42n)throw new Error('copied database contents');
     const prepared=await copied.prepare('SELECT value FROM t');await copied.close();
     await refused(prepared.query());
+    // OR FAIL keeps, and outside a transaction commits, the rows the statement
+    // changed before its error (https://www.sqlite.org/lang_conflict.html).
+    const failing=await sql.open('app:/data/fail.db');
+    await failing.execute('CREATE TABLE t (x INTEGER UNIQUE)');
+    await failing.execute('INSERT INTO t VALUES (1)');
+    await refused(failing.execute('INSERT OR FAIL INTO t VALUES (2),(1)'));
+    await failing.close();
+    const reopened=await sql.open('app:/data/fail.db');
+    const kept=(await reopened.query('SELECT x FROM t ORDER BY x')).rows.map(r=>r[0]).join();await reopened.close();
+    if(kept!=='1,2')throw new Error(`rows a failing OR FAIL statement kept were not saved: ${kept}`);
     const reloadApp='test.browser.sqlite-overlap';
     let current=createSqlite(reloadApp,fsSet);
     const coldStart=performance.now();

@@ -35,6 +35,25 @@ enum ButtonConfigurationMac {
             ? (capsuleRadius(face, size: size) ? .capsule : .automatic)
             : (face.rows.button["control_corner_style"]?.string == "capsule" ? .capsule : .automatic)
     }
+    /// An image-only borderless target uses the push button's height on
+    /// both axes. Authored padding replaces each side's share of that space.
+    static func imageSizing(_ face: ButtonFace, button: NSButton) -> (size: NSSize, padding: NSEdgeInsets)? {
+        guard !button.isBordered, button.imagePosition == .imageOnly, button.image != nil else { return nil }
+        let glyph = button.fittingSize
+        button.isBordered = true
+        let target = button.fittingSize.height
+        button.isBordered = false
+        let horizontal = max(0, target - glyph.width) / 2, vertical = max(0, target - glyph.height) / 2
+        func side(_ name: String) -> CGFloat? { face.rows.button["padding_" + name]?.number.map { CGFloat($0) } }
+        let top = side("top"), right = side("right"), bottom = side("bottom"), left = side("left")
+        let hasHorizontal = left != nil || right != nil, hasVertical = top != nil || bottom != nil
+        let padding = NSEdgeInsets(top: top ?? vertical, left: left ?? horizontal, bottom: bottom ?? vertical, right: right ?? horizontal)
+        let size = NSSize(width: glyph.width + padding.left + padding.right, height: glyph.height + padding.top + padding.bottom)
+        // Without an inset on an axis, AppKit centres the image in the
+        // whole box, including when an authored dimension makes it smaller.
+        return (size, NSEdgeInsets(top: hasVertical ? padding.top : 0, left: hasHorizontal ? padding.left : 0,
+            bottom: hasVertical ? padding.bottom : 0, right: hasHorizontal ? padding.right : 0))
+    }
     @discardableResult
     static func apply(_ face: ButtonFace, to button: NSButton, appearance: NSAppearance, accent: NSColor?, destructive: Bool = false, red: Bool = false) -> (look: String, glass: Bool) {
         let rows = face.rows
@@ -116,6 +135,7 @@ enum ButtonConfigurationMac {
         button.alignment = alignment(rows.title["text_align"]?.string, rtl: button.userInterfaceLayoutDirection == .rightToLeft)
         button.lineBreakMode = .byTruncatingTail
         corners(face, to: button, size: button.fittingSize)
+        if let cell = button.cell as? NativeButtonCellMac { cell.imagePadding = imageSizing(face, button: button)?.padding }
         return (look, glass)
     }
     static func alignment(_ value: String?, rtl: Bool) -> NSTextAlignment {
@@ -160,7 +180,12 @@ enum ButtonConfigurationMac {
                 button.isEnabled || (rows.symbol["tint_color"] == nil && rows.title["text_color"] == nil) || button.image == nil ? nil : "AppKit dims the disabled image despite its authored colour")
         ]
         for side in ["top", "right", "bottom", "left"] {
-            result["padding-" + side] = row(rows.button["padding_" + side] != nil, "NSButton default insets", rows.button["padding_" + side] == nil ? nil : "NSButton has no content inset field; authored padding ignored")
+            let value = rows.button["padding_" + side]
+            if !button.isBordered, button.imagePosition == .imageOnly, button.image != nil, let padding = value?.number {
+                result["padding-" + side] = row(true, padding)
+            } else {
+                result["padding-" + side] = row(value != nil, "NSButton default insets", value == nil ? nil : "NSButton has no content inset field; authored padding ignored")
+            }
         }
         return result
     }

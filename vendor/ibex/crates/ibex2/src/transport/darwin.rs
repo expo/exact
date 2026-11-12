@@ -286,24 +286,32 @@ impl Transport for DarwinTransport {
                 _ => break failed,
             }
         };
-        let headers_text = unsafe { take_string(headers) }.unwrap_or_default();
+        let head = unsafe { take_string(headers) }.map(|text| {
+            let mut headers = Headers::new();
+            for line in text.lines() {
+                if let Some((name, value)) = line.split_once(": ") {
+                    headers.set_response(name, value);
+                }
+            }
+            headers
+        });
         let error = unsafe { take_string(error) };
-        signal.check()?;
         if failed != 0 {
+            // A head that arrived before the failure is still told (Exact patch 31).
+            if let (Some(received), Some(headers)) = (&request.received, &head) {
+                (received.0)(&request.method, &request.url, status as u16, headers);
+            }
+            signal.check()?;
             return Err(HostError::Failed(
                 error.unwrap_or_else(|| "TypeError: Failed to fetch".into()),
             ));
         }
+        signal.check()?;
         // The whole body was sent once the headers came.
         if let Some(sent) = sent.filter(|_| seen as u64 != total) {
             (sent.0)(total, total);
         }
-        let mut headers = Headers::new();
-        for line in headers_text.lines() {
-            if let Some((name, value)) = line.split_once(": ") {
-                headers.set_response(name, value);
-            }
-        }
+        let headers = head.unwrap_or_default();
         Ok(StreamingResponse {
             status: status as u16,
             status_text: String::new(),

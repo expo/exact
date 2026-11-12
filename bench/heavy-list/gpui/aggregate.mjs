@@ -420,7 +420,10 @@ for (const phase of phases) {
       sample.received = raw.fling.wheelEvents;
       sample.received_fraction = sample.received / sample.posted;
       sample.maxGapMs = Math.max(...driver.map(row => row.maxGapMs));
-      sample.emptyCallbacks = sum(driver.map(row => row.emptyCallbacks));
+      const emptyCallbacks = driver.filter(row => 'emptyCallbacks' in row).map(row => row.emptyCallbacks);
+      assert(emptyCallbacks.every(Number.isFinite), `${path}: invalid emptyCallbacks`);
+      // A sample total needs all four gesture measurements.
+      if (emptyCallbacks.length === driver.length) sample.emptyCallbacks = sum(emptyCallbacks);
       const windows = raw.inputWindows;
       assert.equal(windows.length, 4, `${path}: four input windows`);
       sample.gesture_seconds = sum(windows.map(([start, end]) => end - start));
@@ -515,7 +518,12 @@ cadence += '\n| Inputs received / posted per sample | ' + arms.map(arm => {
 }).join(' | ') + ' |';
 cadence += '\n| Driver maxGapMs; maximum of four gestures | ' + arms.map(arm => format(arm, 'maxGapMs', 3)).join(' | ') + ' |';
 
-if (fourArms) cadence += '\n| Driver empty callbacks per sample | ' + arms.map(arm => format(arm, 'emptyCallbacks', 0)).join(' | ') + ' |';
+if (fourArms) cadence += '\n| Driver empty callbacks per sample | ' + arms.map(arm => {
+  const flings = samples[arm].filter(sample => sample.fling_seconds);
+  const measured = flings.filter(sample => 'emptyCallbacks' in sample).length;
+  const value = format(arm, 'emptyCallbacks', 0);
+  return measured && measured < flings.length ? `${value}; ${measured}/${flings.length} measured` : value;
+}).join(' | ') + ' |';
 const gpuTable = table([
   ['Fling GPU busy time, ms/s; process command buffers', 'gpu_ms_s', 3],
   ['Fling GPU ms/presented frame', 'gpu_ms_frame', 4],

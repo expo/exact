@@ -1,5 +1,7 @@
-//! Khronos glTF-Sample-Assets, fetched into an external cache, never vendored.
-//! BoxTextured: Cesium, CC BY 4.0. Fox: PixelMannen, CC0; conversion by @tommy3b.
+//! Khronos glTF-Sample-Assets, which these tests fetch into an external cache
+//! (game/games/skinned-fixture/art keeps a modified Fox, with its licence).
+//! BoxTextured: Cesium, CC BY 4.0. Fox: model PixelMannen, CC0; rigging and
+//! animation tomkranis, CC BY 4.0; glTF conversion @AsoboStudio and @scurest, CC BY 4.0.
 //! DamagedHelmet: ctxwing (2018), CC BY 4.0; original theblueturtle_ (2016), CC BY-NC 4.0.
 //! Metadata/licences: https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models
 use exact_game::{asset::Model, bin};

@@ -190,8 +190,8 @@ another lane, then an Xcode startup wait); no mutation result is claimed.
 The assignment was restored before the final verification run.
 
 ```sh
-/private/tmp/claude-501/-Users-ccheever-projects-exact2/5f1c298e-7e97-40bc-8a1a-486f1889060d/scratchpad/ios-verify.sh /Users/ccheever/projects/exact2-iss-rangeedit FieldSelectionIOSTests C25DD7E7-E600-415E-A7FA-A729AD1FC140
-/private/tmp/claude-501/-Users-ccheever-projects-exact2/5f1c298e-7e97-40bc-8a1a-486f1889060d/scratchpad/ios-verify.sh /Users/ccheever/projects/exact2-iss-rangeedit FieldSelectionIOSTests AC228731-1097-4E4A-A81B-34A2BEEE90EC
+<scratchpad>/ios-verify.sh /Users/<user>/projects/exact2-iss-rangeedit FieldSelectionIOSTests C25DD7E7-E600-415E-A7FA-A729AD1FC140
+<scratchpad>/ios-verify.sh /Users/<user>/projects/exact2-iss-rangeedit FieldSelectionIOSTests AC228731-1097-4E4A-A81B-34A2BEEE90EC
 ```
 
 The first command reproduced the original two assertions (11 tests, 10
@@ -200,7 +200,7 @@ reaching runtime. The second command was the final production-source run;
 it stalled for several minutes in `simctl list devices available -j` before
 Xcode and was stopped. **The corrected UIKit test compiles, but its final
 runtime verification remains blocked; no UIKit pass is claimed.** The final
-log is `/Users/ccheever/projects/exact2-iss-rangeedit.ios.log`; the original
+log is `/Users/<user>/projects/exact2-iss-rangeedit.ios.log`; the original
 failure log is `target/rangeedit-ios-before.log`. Temporary source and build
 script edits were restored. Only this lane's stalled processes were stopped.
 The iPhone Air booted for the retry could not be confirmed shut down:
@@ -233,7 +233,7 @@ with zero failures. The same command was run three times: diagnostic failure
 both controls), then the restored production source passed:
 
 ```sh
-/private/tmp/claude-501/-Users-ccheever-projects-exact2/5f1c298e-7e97-40bc-8a1a-486f1889060d/scratchpad/ios-verify.sh /Users/ccheever/projects/exact2-iss-rangeedit FieldSelectionIOSTests AC228731-1097-4E4A-A81B-34A2BEEE90EC
+<scratchpad>/ios-verify.sh /Users/<user>/projects/exact2-iss-rangeedit FieldSelectionIOSTests AC228731-1097-4E4A-A81B-34A2BEEE90EC
 ```
 
 Logs: `target/rangeedit-ios2-before.log`, `target/rangeedit-ios2-mutation.log`,

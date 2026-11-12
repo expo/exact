@@ -450,7 +450,7 @@ test('round 1: the accounts file replaced by a rename, again and again, is read 
   file.revoked.push('other');
   replace(file);
   await until(() => relay.revoked.has('other'), 5000);
-});
+}, 15_000); // Two waits of up to 5 s each on the file's watcher.
 
 test('round 2: connections not yet a session\'s or authenticated are capped per address and in all; a cut account\'s TXT request in flight is stopped', async () => {
   const { port, txt } = await startRelay({ limits: { pendingPerIp: 3 } });

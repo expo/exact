@@ -1,0 +1,19 @@
+shape Feed
+  status: string
+  protocol: string
+  text: string
+
+component SocketTicket
+  state attempt = 0
+  resource ready = ticket(attempt) when attempt > 0 as shape number else empty()
+  resource feed = events(ready) when ready == attempt and ready > 0 as shape Feed else empty()
+  action connect
+    attempt = attempt + 1
+  view
+    column padding=24 gap=16
+      text "Socket tickets" role="heading" aria-level=1
+      button press=connect testId="connect"
+        text "Connect again"
+      text feed.status testId="status"
+      text feed.protocol testId="protocol"
+      text feed.text testId="message"

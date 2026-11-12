@@ -247,6 +247,12 @@ pub fn bind_at(id: u32, values: &str, at_ms: Option<f64>) -> bool {
     with(|m| m.bind_json(id, values, at_ms)).unwrap_or(false)
 }
 
+/// Bind the named inputs that changed since the last accepted bind
+/// ([`Module::bind_changed_json`]).
+pub fn bind_changed_at(id: u32, changed: &str, at_ms: Option<f64>) -> bool {
+    with(|m| m.bind_changed_json(id, changed, at_ms)).unwrap_or(false)
+}
+
 /// Record one frame into the open frame (shown at [`flush`]): 1 = wants
 /// another, 0 = done, 2 = failed.
 pub fn render(id: u32, width: f32, height: f32, scale: f32, now_ms: f64) -> u32 {
@@ -500,6 +506,12 @@ macro_rules! module {
         #[::wasm_bindgen::prelude::wasm_bindgen]
         pub fn gpu_bind_at(id: u32, values: &str, at_ms: Option<f64>) -> bool {
             $crate::web::bind_at(id, values, at_ms)
+        }
+
+        /// Bind the named inputs that changed since the last accepted bind.
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_bind_changed_at(id: u32, changed: &str, at_ms: Option<f64>) -> bool {
+            $crate::web::bind_changed_at(id, changed, at_ms)
         }
 
         /// Record one frame (shown at `gpu_flush`): 1 = wants another, 0 = done, 2 = failed.

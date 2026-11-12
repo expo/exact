@@ -13,7 +13,8 @@ import { After, PropHooks, Hooks, inflight, journal, clock, data, onEnd } from "
 // through `Hooks.image`) and those a binding gives one, each until the scope that built it ends. A set walked in
 // place of two document-wide queries a commit (LLP 1071.001 A7).
 const Images = new Set();
-const image = Hooks.image = e => { if (!Images.has(e)) { Images.add(e); onEnd(() => Images.delete(e)); } };
+const image = e => { if (!Images.has(e)) { Images.add(e); onEnd(() => Images.delete(e)); } };
+Hooks.image = e => { const s = e.getAttribute("data-symbol-source"); if (s?.startsWith("symbol:icon|") && !e.hasAttribute("data-symbol-path") && !e.hasAttribute("data-symbol-file")) draw(e, s.slice(7)); else image(e); };
 
 let Table = {}, All = null; // every role: not asked for, loading, or loaded (true)
 let Pending = false;
@@ -53,7 +54,7 @@ const draw = (e, name) => {
   image(e);
   // A form that is no icon draws nothing: no path, viewBox or rule.
   const form = name.startsWith("icon|") ? iconForm(name) : undefined;
-  const [path, filled, box, file, evenOdd] = form === undefined ? Table[name] ?? [""] : form ?? ["", 0, "", "", 0];
+  const [path, filled, box, file, evenOdd] = form === undefined ? (Object.hasOwn(Table, name) ? Table[name] : [""]) : form ?? ["", 0, "", "", 0];
   e.toggleAttribute("data-symbol-file", !!file);
   // A file shown as written: no path, viewBox, rule or mask of a path drawn before.
   if (file) {
@@ -96,7 +97,7 @@ export function symbols(table) {
     if (e.localName === "img" && v?.startsWith("data:") && v.length > DATA_LIMIT) { journal.push(`t=${clock.now} image refused: a data: source is over ${DATA_LIMIT} bytes`); e.removeAttribute("src"); return true; }
     if (e.localName !== "img" || !v?.startsWith("symbol:")) { template(e, v); return false; }
     template(e, null);
-    if (!Table[v.slice(7)] && !All && !v.startsWith("symbol:icon|")) everyRole();
+    if (!Object.hasOwn(Table, v.slice(7)) && !All && !v.startsWith("symbol:icon|")) everyRole();
     e.setAttribute("data-symbol-source", v); draw(e, v.slice(7));
     // Decorative unless its author named it (`alt`, `aria-label`), as the template writes it.
     if (!e.getAttribute("alt")) e.alt = "";

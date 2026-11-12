@@ -735,7 +735,7 @@ impl Lowerer<'_> {
                         format!("a native button's role is `button`, `tab`, `radio`, `menuitem`, `menuitemcheckbox` or `menuitemradio`, written as a literal or a choice: {alternative}"),
                     )
                 }
-                "backgroundMaterial" | "glassGroup" => {
+                "backgroundMaterial" | "glassGroup" | "glassInteractive" | "-exact-glass-tint" => {
                     return refuse(
                         "lower-button-style-attr",
                         format!("a native button draws its own glass: no `{name}` on it (put a `glassGroup` on its parent); {alternative}"),

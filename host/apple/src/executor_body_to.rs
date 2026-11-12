@@ -124,8 +124,9 @@ fn read_within(body: &mut Body, cap: usize, limit: usize) -> Result<Vec<u8>, Hos
     bytes
         .try_reserve_exact(cap)
         .map_err(|_| HostError::Failed("HTTP response allocation failed".into()))?;
+    let mut filled = 0;
     loop {
-        let at = bytes.len();
+        let at = filled;
         if at == cap {
             if body.read(&mut [0])? == 0 {
                 break;
@@ -133,13 +134,57 @@ fn read_within(body: &mut Body, cap: usize, limit: usize) -> Result<Vec<u8>, Hos
             body.cancel();
             return Err(over_limit(limit));
         }
+        // Keep the initialized tail after a short read, so the next read
+        // initializes only the additional bytes it can fill.
         bytes.resize((at + CHUNK).min(cap), 0);
         let n = body.read(&mut bytes[at..])?;
-        bytes.truncate(at + n);
+        filled += n;
         if n == 0 {
             break;
         }
     }
+    bytes.truncate(filled);
     bytes.shrink_to_fit();
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ibex2::stdlib::fetch::BodySource;
+    use std::sync::{atomic::AtomicUsize, atomic::Ordering, Arc};
+
+    struct ShortReads {
+        reads: usize,
+        initialized: Arc<AtomicUsize>,
+    }
+
+    impl BodySource for ShortReads {
+        fn read(&mut self, out: &mut [u8]) -> Result<usize, HostError> {
+            self.initialized
+                .fetch_add(out.iter().filter(|b| **b == 0).count(), Ordering::Relaxed);
+            // Mark the entire window, including the tail a short read leaves,
+            // so a later zero counts initialization of that byte again.
+            out.fill(1);
+            self.reads += 1;
+            Ok(usize::from(self.reads <= 3))
+        }
+    }
+
+    #[test]
+    fn short_reads_initialize_no_more_than_the_buffer_capacity() {
+        let cap = CHUNK * 2;
+        let initialized = Arc::new(AtomicUsize::new(0));
+        let source = ShortReads {
+            reads: 0,
+            initialized: initialized.clone(),
+        };
+        let mut body = Body::new(Box::new(source), cap, Default::default());
+        assert_eq!(read_within(&mut body, cap, cap).unwrap(), [1; 3]);
+        let initialized = initialized.load(Ordering::Relaxed);
+        assert!(
+            initialized <= cap,
+            "initialized {initialized} bytes for {cap}"
+        );
+    }
 }

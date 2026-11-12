@@ -68,6 +68,7 @@ fn entry_refresh_answers_without_mutating_the_preview() {
         props: "Props".into(),
         refresh: "refreshCard".into(),
         preview: serde_json::json!({"title": "Preview train"}),
+        configuration: None,
     };
     let plan = contract::snapshot::compile("shape Props\n  title: string\ncomponent App\n  view\n    text \"App\"\ncomponent Card\n  props\n    title: string\n  view\n    text title\n", &widget).unwrap();
     for response in 0..5 {
@@ -77,6 +78,7 @@ fn entry_refresh_answers_without_mutating_the_preview() {
         bridge.boot_entry(
             bytes.len(),
             10,
+            0,
             0,
             Timeline(response, app_id.clone()),
             Hooks::none(),

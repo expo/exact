@@ -24,7 +24,7 @@ export function updates({ lists, rows, say, now, changed, raise }) {
     const given = args[value.from] ?? value.absent ?? null;
     if (!value.map) return [given];
     const word = typeof given === "string" ? given : JSON.stringify(given);
-    return word in value.map ? valueOf(value.map[word], args) : [];
+    return Object.hasOwn(value.map, word) ? valueOf(value.map[word], args) : [];
   };
   const setFields = (fields, set, args) => { for (const [field, v] of Object.entries(set ?? {})) { const got = valueOf(v, args); if (got.length) fields[field] = got[0]; } };
   return {
@@ -57,7 +57,7 @@ export function updates({ lists, rows, say, now, changed, raise }) {
     choose(entry, choice) {
       const state = entry.row.sub.list.state, choices = config(state).tap?.choices;
       if (!choices) return { error: `@${entry.ref} takes no choice: tap @${entry.ref} alone` };
-      const chosen = choices[choice];
+      const chosen = Object.hasOwn(choices, choice) ? choices[choice] : null;
       if (!chosen) return { error: `@${entry.ref} takes ${Object.keys(choices).join(", ")}, not \`${choice}\`` };
       if (chosen.when && !matches(entry.fields, chosen.when)) {
         const now = Object.keys(chosen.when).map(f => `its ${f} is ${JSON.stringify(entry.fields[f] ?? null)}`);

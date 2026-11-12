@@ -36,16 +36,18 @@ import { compilerWarnings, webInputDigests } from '../../scripts/agent-launch.mj
 import { webBuildFailure } from '../../scripts/app-cli.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
 import { authClientMetadata, checkModuleRoster, gpuModules, markWorlds, rustPolicy, webGpuArtifacts, webHostFiles, worldSurfaces } from '../../scripts/app.mjs';
-import { webHead } from '../../scripts/web-head.mjs';
+import { webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { buildRust, rustFiles, rustCards, rustPackage } from '../../scripts/rust.mjs';
 import { webAppManifest, webDist, copyShaders, bakeOutput, bakeWatchEnv, buildBake, contractLast, readBake, verifyBakeFiles, developmentBuildEnv, resolveApp } from '../../scripts/app.mjs';
 import { buildEditor, buildFlow } from '../web-js/module.mjs';
 import { closeFilesystemReader } from '../../scripts/filesystem.mjs';
 import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
-import { BINARYEN_DOWNLOAD, splitStages, unsplitReason } from './stages.mjs';
+import { BINARYEN_DOWNLOAD, optimizeWasm, splitStages, unsplitReason } from './stages.mjs';
 import { interfaceStyle, withInterfaceStyle, withLook } from './look.mjs';
+import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { appManifestDigest, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
 import { foreignBeside } from './generations.mjs';
+import { writeAppleAssociation } from './association.mjs';
 
 guardFlags('web-build', process.argv.slice(2));
 const target = ['--js', '--wasm'].find((flag) => process.argv.includes(flag));
@@ -97,7 +99,7 @@ if (target !== '--wasm' && !game && !bakeOnly) {
   // An app outside apps/ reaches it through EXACT_APP_DIR, as here. It builds in a stage of its own beside the
   // output, which replaces the output only when complete (`replaceBuild`), so builds run at once never mix, and the
   // build replaced is kept by its generation while a page `serve` sent may still ask for its files.
-  const dist = outRoot || webDist();
+  const dist = outRoot || webDist(app);
   // The JS build runs Cargo in an authored workspace in two cases (LLP 1153 D2.1): a web crate whose build script is
   // the author's, and pages rendered by the app's own render entry (`--render rust`, the default when it has one).
   // Its lock is checked before either, as every other build's is.
@@ -127,6 +129,9 @@ if (target !== '--wasm' && !game && !bakeOnly) {
     // the build rewrote them, are one line (LLP 1116.001 D4.5).
     for (const line of compiler) console.error(line);
     for (const line of (js.stderr ?? '').split('\n')) if (/^(warning|app\.contract\.d\.ts): /.test(line)) console.error(line);
+    // The origin's association file, from the manifest's claims (LLP 1030 D1). Its `webcredentials` comes from the
+    // bake's grants, which only the wasm build below runs.
+    writeAppleAssociation(stage, app);
     // The receipt first, since what it records may come from the build's intermediates. `release`: a site to host
     // (`--out`), built again (to the same directory, as a release) when what it was built from changes.
     // `env`: each setting app.ts read, as inlined, and its source (LLP 1153 D4), for the drive's logs and `changedSettings`.
@@ -135,11 +140,11 @@ if (target !== '--wasm' && !game && !bakeOnly) {
     // A site to host holds the site, not the build's intermediates (`.gen`, the app's captured sources among them;
     // the receipt's file cards name no dot path), but for what `serve` renders a `render=request` or `cached` route's
     // page with, when it has such a route: the server bundle (LLP 1153 D3.4) and the analyzed sheet a page selects
-    // its rules from (LLP 1048.007 D4).
+    // its rules from (LLP 1048.007 D4); and, for a render server, the app's part of its CSP (LLP 1048.000 D11).
     if (outDir) {
       const routes = JSON.parse(readFileSync(resolve(stage, 'routes.json'), 'utf8')).routes;
-      const kept = routes.some((r) => r.render === 'request' || r.render === 'cached')
-        ? ['server.js', 'page-style.json'].filter((name) => existsSync(resolve(stage, '.gen', name))).map((name) => [name, readFileSync(resolve(stage, '.gen', name))]) : [];
+      const kept = [...routes.some((r) => r.render === 'request' || r.render === 'cached') ? ['server.js', 'page-style.json'] : [], 'csp.json']
+        .filter((name) => existsSync(resolve(stage, '.gen', name))).map((name) => [name, readFileSync(resolve(stage, '.gen', name))]);
       rmSync(resolve(stage, '.gen'), { recursive: true, force: true });
       if (kept.length) mkdirSync(resolve(stage, '.gen'));
       for (const [name, bytes] of kept) writeFileSync(resolve(stage, '.gen', name), bytes);
@@ -159,7 +164,7 @@ const kib = (n) => `${(n / 1024).toFixed(0)} KiB`;
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 // `EXACT_WEB_DIST` names another output directory: `exact deploy` bakes into a
 // run-specific one and never publishes from the dev server's shared dist/.
-const dist = webDist();
+const dist = webDist(app);
 const previous = `${dist}.previous`;
 // A hard stop can land after dist moved aside but before the completed stage
 // took its place. Restore the prior complete build before doing slow work;
@@ -228,16 +233,16 @@ const out = resolve(stage, 'app.wasm');
 let optNote = 'none (--bake)';
 if (!bakeOnly) {
 const named = resolve(stage, 'app.named.wasm');
-const opt = spawnSync('wasm-opt', ['-Oz', '--one-caller-inline-max-function-size', '20', '--always-inline-max-function-size', '6', '--converge', '--low-memory-unused', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', keepNames || !unsplit ? '-g' : '--strip-debug', '--strip-producers', '-o', unsplit ? out : named, built], { stdio: 'inherit' });
+const opt = optimizeWasm(built, unsplit ? out : named, ['-Oz', '--one-caller-inline-max-function-size', '20', '--always-inline-max-function-size', '6', '--converge', '--low-memory-unused', '--enable-bulk-memory', '--enable-nontrapping-float-to-int', '--enable-sign-ext', '--enable-mutable-globals', keepNames || !unsplit ? '-g' : '--strip-debug', '--strip-producers'], resolve(app.target, 'web-opt', crate));
 if (opt.error?.code === 'ENOENT') { copyFileSync(built, out); optNote = `wasm-opt not on PATH (binaryen: brew install binaryen, or ${BINARYEN_DOWNLOAD}): shipped unoptimized`; }
 else if (opt.status !== 0) process.exit(opt.status ?? 1);
-else if (unsplit) optNote = `wasm-opt -Oz; unsplit: ${unsplit}`;
+else if (unsplit) optNote = `wasm-opt -Oz${opt.cached ? ' (cached)' : ''}; unsplit: ${unsplit}`;
 else {
   const split = splitStages(named);
   writeFileSync(out, split.core);
   for (const [path, bytes] of split.files) { mkdirSync(resolve(stage, path, '..'), { recursive: true }); writeFileSync(resolve(stage, path), bytes); }
   rmSync(named);
-  optNote = `wasm-opt -Oz; the core, with stages: ${split.report.join('; ')}`;
+  optNote = `wasm-opt -Oz${opt.cached ? ' (cached)' : ''}; the core, with stages: ${split.report.join('; ')}`;
 }
 }
 
@@ -366,17 +371,16 @@ writeFileSync(resolve(stage, 'bake.json'), JSON.stringify(buildReceipt) + '\n');
 writeFileSync(resolve(stage, 'exact.json'), JSON.stringify({ ...webEnvelope(app, planBytes, copiedAssets), ...(pairedModule ? { module: pairedModule } : {}), ...(pairedRust ? { rust: pairedRust } : {}) }) + '\n');
 // The web app manifest (LLP 1030 D2/D10; 1030.000 D7): the W3C keys of
 // `app.json`, copied out as `manifest.json`; the page links it, takes its
-// name as the title, and its first icon as the favicon. An installed PWA's
-// icon and name are the browser's cached copies of these — the origin's
-// carrier, at its real strength.
+// name as the title, and its favicons and Apple touch icon from its icons
+// (LLP 1163 D7). An installed PWA's icon and name are the browser's cached
+// copies of these — the origin's carrier, at its real strength.
 const manifestNotes = [];
-const webManifest = webAppManifest(app.manifest, app.displayName, manifestNotes);
+const webManifest = webAppManifest(app.manifest, app.displayName, manifestNotes, app.dir);
 for (const note of manifestNotes) console.log(note);
 writeFileSync(resolve(stage, 'manifest.json'), JSON.stringify(webManifest, null, 2) + '\n');
 const sourceRevision = spawnSync('git', ['rev-parse', '--short=10', 'HEAD'], {cwd:app.dir,encoding:'utf8'});
 const sourceChanges = spawnSync('git', ['status', '--porcelain'], {cwd:app.dir,encoding:'utf8'});
 writeInstallPages(stage, app.manifest, {id:buildReceipt.binary.sha256, source:sourceRevision.status === 0 ? sourceRevision.stdout.trim() : null, dirty:sourceChanges.status === 0 && !!sourceChanges.stdout.trim(), builtAt:new Date().toISOString(), mode:buildEnv.EXACT_UPDATE_TRUST === 'production' ? 'Release build' : 'Development build', reach:bakedReceipt.reach?.rows ?? []});
-const icon = webManifest.icons?.[0];
 const escapeHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 // The shell's <style> ships without its comments and indentation: they are
 // for readers of host/web/index.html, and every served document's first bytes
@@ -411,7 +415,7 @@ const pageNative = app.modules.web;
 // app that chose dark showed beside its root; Markdown's conformance).
 // A fixed `userInterfaceStyle` takes its side alone, as the iOS launch screen does.
 const hex = (value) => /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value ?? '') ? value : null;
-const launchLight = app.manifest.background_color, launchDark = interfaceStyle(app.manifest) === 'light' ? null : hex(app.manifest.background_color_dark);
+const launchLight = app.manifest.background_color, launchDark = interfaceStyle(app.manifest) === 'light' ? null : hex(app.manifest.color_scheme_dark?.background_color);
 const launchHtml = 'html:has(#exact-root:empty)';
 const launchCss = !hex(launchLight) ? '' : interfaceStyle(app.manifest) === 'dark' ? `${launchHtml}{background-color:${launchDark ?? launchLight}}`
   : `${launchHtml}{background-color:${launchLight}}${launchDark ? `@media (prefers-color-scheme:dark){${launchHtml}{background-color:${launchDark}}}` : ''}`;
@@ -419,15 +423,21 @@ writeFileSync(resolve(stage, 'index.html'), readFileSync(resolve(stage, 'index.h
   .replace(/<style>([\s\S]*?)<\/style>/, (_, css) => `<style>${minifyCss(css)}${launchCss}</style>`)
   .replace('<html lang="en">', `<html lang="${escapeHtml(webManifest.lang)}">`)
   .replace('<title>Exact</title>', `<title>${escapeHtml(webManifest.name)}</title>`)
-  // LLP 1116 D8: the app's icon in place of the shell's default one.
-  .replace(/<link rel="icon"[^>]*>/, (link) => icon ? `<link rel="icon" type="${escapeHtml(icon.type ?? 'image/png')}" href="./${escapeHtml(icon.src)}">` : link)
+  // The manifest's favicons and Apple touch icon, else the shell's default favicon (LLP 1163 D7).
+  .replace(/<link rel="icon"[^>]*>/, (link) => webIconLinks(app.manifest, app.dir, link))
   // `app.json`'s `audio_session` (LLP 1096 D7), which sound-glue.js gives the Audio Session API where it exists, and
   // its `host.web.head` before the root, after the sheet, as the JS target writes it (LLP 1048.000 D3).
   .replace('<div id="exact-root"></div>', `${webHead(app.manifest)}${app.manifest.audio_session ? `<div id="exact-root" data-audio-session="${escapeHtml(app.manifest.audio_session)}"></div>` : '<div id="exact-root"></div>'}`)
   .replace(
     '<script type="module" src="./glue.js"></script>',
-    `<link rel="alternate" type="application/vnd.exact.envelope+json" href="./exact.json">\n<link rel="manifest" href="./manifest.json">\n${webManifest.theme_color ? `<meta name="theme-color" content="${escapeHtml(webManifest.theme_color)}">\n` : ''}${pageNative ? '<meta name="exact-native" content="./modules/index.js">\n' : ''}<script type="module" src="./glue.js"></script>`,
+    `<link rel="alternate" type="application/vnd.exact.envelope+json" href="./exact.json">\n<link rel="manifest" href="./manifest.json">\n${webThemeColors(app.manifest).map((meta) => `${meta}\n`).join('')}${pageNative ? '<meta name="exact-native" content="./modules/index.js">\n' : ''}<script type="module" src="./glue.js"></script>`,
   ));
+// The app's part of the render server's CSP (LLP 1048.000 D11), which it reads at start.
+const cspFile = webCspFile(app.manifest);
+if (cspFile) {
+  mkdirSync(resolve(stage, '.gen'), { recursive: true });
+  writeFileSync(resolve(stage, '.gen', 'csp.json'), cspFile);
+}
 // app.wasm's URL names its build (LLP 1047.000 §9): `./app.wasm?v=` and
 // the first 16 hex digits of its SHA-256, in the shell's preload, which the
 // capture script and the glue fetch (and a document's checkpoint, when it
@@ -503,13 +513,7 @@ const authReach = bakedReceipt.reach?.auth ?? {};
 const originHost = app.origin ? new URL(app.origin).hostname : null;
 const passkeyHere = (authReach.passkeys ?? []).includes(originHost);
 const webcredentials = passkeyHere || (authReach.callbacks ?? []).some((c) => app.origin && c.startsWith(new URL(app.origin).origin + '/'));
-if ((ios.associatedDomains || webcredentials) && ios.team) {
-  mkdirSync(resolve(stage, '.well-known'), { recursive: true });
-  writeFileSync(resolve(stage, '.well-known/apple-app-site-association'), JSON.stringify({
-    ...(ios.associatedDomains ? { applinks: { details: [{ appIDs: [`${ios.team}.${app.id}`], components: [{ '/': '*' }] }] } } : {}),
-    ...(webcredentials ? { webcredentials: { apps: [`${ios.team}.${app.id}`] } } : {}),
-  }) + '\n');
-}
+writeAppleAssociation(stage, app, { webcredentials });
 // Android's statement (LLP 1133.011 D6): the package may use this domain's passkeys, for each certificate the app
 // lists. Every other RP ID's two entries are printed, for the domain that serves it.
 const certificates = app.manifest.host?.android?.certificates ?? [];

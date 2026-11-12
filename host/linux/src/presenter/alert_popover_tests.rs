@@ -85,6 +85,24 @@ fn an_auto_popover_leaves_the_focus_on_its_invoker_and_a_tap_outside_reaches_the
 }
 
 #[test]
+fn a_non_neutral_popover_keeps_only_its_authored_padding() {
+    assert!(!crate::paint::look::neutral());
+    for (padding, expected) in [
+        ("", (0., 0., 0., 0.)),
+        ("padding=0", (0., 0., 0., 0.)),
+        ("padding-top=7 padding-left=0", (0., 7., 0., 0.)),
+    ] {
+        let mut p = boot(&APP.replace("width=200", &format!("width=200 {padding}")));
+        tap(&mut p, "open");
+        let k = p.host.kernel();
+        assert_eq!(
+            k.resolved_padding(k.node(id(&p, "menu")).unwrap().key),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
 fn a_click_outside_an_auto_popover_closes_it_and_presses_what_it_lands_on() {
     let mut p = boot(APP);
     click(&mut p, "open", 0.);

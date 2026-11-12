@@ -99,6 +99,7 @@ impl Half {
                 space: Space::Srgb,
                 c: [c.r, c.g, c.b].map(|v| f64::from(v) / 255.0),
                 alpha: c.a,
+                missing: [false; 4],
             },
         )
     }
@@ -228,7 +229,7 @@ pub(crate) fn not_color_kind<T>() -> Result<T, FoldError> {
 pub(crate) fn color_item(item: &Item, names: &mut dyn Names) -> Result<Folded, FoldError> {
     match item {
         Item::Hash(h) => match exact_color::parse(&format!("#{h}")) {
-            Some(Parsed::Legacy(c)) => Ok(Folded::One(Half::legacy(c))),
+            Some(Parsed::Legacy(c, _)) => Ok(Folded::One(Half::legacy(c))),
             _ => fail("tamber-kind", format!("`#{h}` is not a colour")),
         },
         Item::Ident(name) => ident(name, names),
@@ -275,7 +276,7 @@ fn ident(name: &str, names: &mut dyn Names) -> Result<Folded, FoldError> {
         Named::Unknown => {}
     }
     match exact_color::parse(name) {
-        Some(Parsed::Legacy(c)) => Ok(Folded::One(Half::legacy(c))),
+        Some(Parsed::Legacy(c, _)) => Ok(Folded::One(Half::legacy(c))),
         Some(Parsed::Current) => fail(
             "tamber-kind",
             "`currentcolor` is the element's own colour, which no token can hold",

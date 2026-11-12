@@ -3,8 +3,7 @@
 // same Chrome, driven by the same agent operations (scripts/agent.mjs's
 // `open`). After every step it compares the runner's typed state, including
 // the document head, the tree (depth, type, testId, text, value, label, handlers,
-// focus), layout boxes
-// by testId, a screenshot, and the reason of each refusal for passing one of
+// focus), layout boxes by testId, a screenshot, and the reason of each refusal for passing one of
 // the runner's evaluation bounds (LLP 1090 D7). `app.test.contract` files run on both.
 // Every failure is reported in one run; the exit code is 0 unless `--strict`,
 // which exits 1 on any failure and prints each as a `FAIL <target> <step>:`
@@ -194,7 +193,38 @@ const soundLines = lines => lines.flatMap(l => SOUND.exec(l)?.[0] ?? []);
 // A host's journal since its last read, read once for both filters: a read advances the cursor, so a second read
 // would see none of what the first consumed
 const journal = async S => { const { lines } = await S.logs(); return { bounds: boundReasons(lines), sounds: soundLines(lines) }; };
-const norm = t => t.nodes.map(n => [n.depth ?? 0, n.type, n.props?.testId ?? '', n.props?.text ?? '', n.props?.value ?? '', n.props?.accessibilityLabel ?? '', n.props?.checked ?? '', (n.handlers ?? []).join(' '), n.focused === true ? 'focused' : ''].join('|'));
+// A rendered page caches every tab; a live boot builds a tab on selection (LLP 1075.003 §9.14).
+// Compare what the projection shows. An inactive page behind a sheet can still be visible.
+async function comparisonTree(session) {
+  const tree = await session.tree(), hidden = tree.nodes.filter(n => n.hidden).map(n => n.id);
+  if (!hidden.length) return tree;
+  // Projection-hidden flags propagate even when a descendant overrides visibility:hidden.
+  const visible = new Set(await session.carrier.evaluate(`(() => {
+    // A folded text is \`display: contents\` (host/web/src/element.rs, \`folds\`): it has no box, so checkVisibility()
+    // is false while its words paint. They paint when they have line boxes, its visibility is visible, and the
+    // nearest box around it is rendered and does not skip its contents (content-visibility: hidden).
+    const shown = el => {
+      if (!el) return false;
+      const style = getComputedStyle(el);
+      if (style.display !== 'contents') return el.checkVisibility({ visibilityProperty: true });
+      let box = el.parentElement;
+      while (box && getComputedStyle(box).display === 'contents') box = box.parentElement;
+      if (!box?.checkVisibility() || getComputedStyle(box).contentVisibility === 'hidden') return false;
+      return [...el.childNodes].some(child => child.nodeType === Node.ELEMENT_NODE ? shown(child)
+        : child.nodeType === Node.TEXT_NODE && style.visibility === 'visible' && (() => {
+          const words = document.createRange(); words.selectNodeContents(child); return words.getClientRects().length > 0;
+        })());
+    };
+    const painted = new Set([...document.querySelectorAll('[data-flow-fragment] *')]
+      .filter(el => el.exactFlowOriginal && shown(el)).map(el => el.exactFlowOriginal));
+    return (${JSON.stringify(hidden)}).filter(id => {
+      const el = exact.views.get(id);
+      return shown(el) || painted.has(el);
+    });
+  })()`));
+  return { ...tree, nodes: tree.nodes.map(n => n.hidden && visible.has(n.id) ? { ...n, hidden: false } : n) };
+}
+const norm = t => t.nodes.filter(n => !n.hidden).map(n => [n.depth ?? 0, n.type, n.props?.testId ?? '', n.props?.text ?? '', n.props?.value ?? '', n.props?.accessibilityLabel ?? '', n.props?.checked ?? '', (n.handlers ?? []).join(' '), n.focused === true ? 'focused' : ''].join('|'));
 function diffLists(a, b, what, other = 'js', reference = 'wasm') {
   const out = [];
   for (let i = 0; i < Math.max(a.length, b.length); i++) if (a[i] !== b[i]) { out.push(`${what} #${i}: ${reference} «${a[i] ?? '—'}» ${other} «${b[i] ?? '—'}»`); if (out.length >= 4) { out.push(`${what}: … (${a.length} vs ${b.length} entries)`); break; } }
@@ -215,9 +245,10 @@ function diffJSONFields(a, b, path, out, other, reference) {
 }
 function boxes(l, tree, relative) {
   const raw = new Map(l.nodes.map(n => [n.id, n])), parent = new Map();
+  const hidden = new Set((tree?.nodes ?? []).filter(n => n.hidden).map(n => n.id));
   for (const n of tree?.nodes ?? []) for (const child of n.children ?? []) parent.set(child, n.id);
   const m = new Map();
-  for (const n of l.nodes) if (n.testId && !m.has(n.testId)) {
+  for (const n of l.nodes) if (n.testId && !hidden.has(n.id) && !m.has(n.testId)) {
     const p = raw.get(parent.get(n.id));
     m.set(n.testId, relative && p ? { ...n, x: n.x - p.x + (p.sx ?? 0), y: n.y - p.y + (p.sy ?? 0) } : n);
   }
@@ -415,6 +446,7 @@ async function drive(t, report, fail, dir, ws, js) {
     const compare = async step => {
       let st = 0;
       let linuxLayout = null;
+      let linuxTree = null;
       let linuxReport = null;
       driveAt = `${step} state`;
       const [sw, sj] = await pair(() => W.state(), () => J.state().catch(e => ({ error: e.message })));
@@ -428,7 +460,7 @@ async function drive(t, report, fail, dir, ws, js) {
         o.forEach(x => fail(step, x.what, x.field)); st += o.length;
       } else { const o = []; for (const k of [...STATE_KEYS, 'session']) diffJSON(sw[k], sj[k], k, o, other, reference); o.forEach(x => differ(step, 'state ' + x)); st += o.length; }
       driveAt = `${step} tree`;
-      const [tw, tj] = await pair(() => W.tree(), () => J.tree());
+      const [tw, tj] = await pair(() => comparisonTree(W), () => comparisonTree(J));
       const o2 = diffLists(norm(tw), norm(tj), 'tree', other, reference); o2.forEach((x, i) => differ(step, x, crossBrowser ? `tree.${i}` : null)); st += o2.length;
       await onLinux(step, async L => {
         const [sl, tl] = await Promise.all([L.state(), L.tree()]), o = [];
@@ -437,7 +469,7 @@ async function drive(t, report, fail, dir, ws, js) {
         const apart = LINUX_APART[t.name], own = (k, s) => (k === 'slots' ? withoutSlots(apart, s) : s);
         for (const k of STATE_KEYS) diffJSON(own(k, sw[k]), own(k, sl[k]), k, o, 'linux');
         if (!linux.stateOnly) o.push(...diffLists(norm(tw), norm(tl), 'tree', 'linux').slice(0, 4));
-        if (linux.layout) linuxLayout = await L.layout();
+        if (linux.layout) { linuxLayout = await L.layout(); linuxTree = tl; }
         o.forEach(x => fail(step, 'linux ' + x));
         linuxReport = { target: t.name, step, reference: 'linux', differences: o.length };
         report.steps.push(linuxReport);
@@ -450,7 +482,7 @@ async function drive(t, report, fail, dir, ws, js) {
       const o3 = diffLayout(lw, lj, tw, tj, !!crossBrowser, reference, other, documentW, documentJ); o3.forEach(x => differ(step, x.what, crossBrowser ? x.field : null)); st += o3.length;
       if (crossBrowser) report.targets[t.name].maxLayoutDelta = Math.max(report.targets[t.name].maxLayoutDelta ?? 0, o3.maxDelta);
       if (linuxLayout) {
-        const ol = diffLayout(lw, linuxLayout, tw, null, false, reference, 'kernel');
+        const ol = diffLayout(lw, linuxLayout, tw, linuxTree, false, reference, 'kernel');
         ol.forEach(x => fail(step, x.what));
         st += ol.length;
         linuxReport.differences += ol.length;

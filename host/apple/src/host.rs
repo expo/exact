@@ -9,6 +9,8 @@
 //! sizes; other presentation values follow. The kernel is the single source of truth; the mirror
 //! is a memo of what the presenter has been told.
 
+#[path = "host_replies.rs"]
+mod replies;
 use crate::{batch::Batch, style};
 use exact_kernel::motion::{motion_node, node_key, targets, MotionSync};
 use exact_kernel::{
@@ -235,7 +237,7 @@ pub struct Host<D: DataSource> {
     #[cfg(test)]
     height_target_passes: usize,
     #[cfg(test)]
-    layout_calls: usize,
+    pub(crate) layout_calls: usize,
     viewport: (f32, f32),
     now_ms: f64,
     /// Where the app's kept secrets, and the runner's kept answers, go after
@@ -429,8 +431,10 @@ impl<D: DataSource> Host<D> {
         }
         let plan = plan_bytes.decode().map_err(HostError::Plan)?;
         let entry_props = match plan_bytes {
-            PlanBytes::Entry(_, _, Some(bytes)) => {
-                Some(snapshot::props(&plan, bytes).map_err(HostError::Layout)?)
+            PlanBytes::Entry(_, _, props, configuration)
+                if props.is_some() || configuration.is_some() =>
+            {
+                Some(snapshot::slots(&plan, props, configuration).map_err(HostError::Layout)?)
             }
             _ => None,
         };
@@ -851,44 +855,6 @@ impl<D: DataSource> Host<D> {
     /// Whether another pump must settle an admission failure.
     pub fn has_request_refusals(&self, allow_ordered: bool) -> bool {
         self.runner.has_request_refusals(allow_ordered)
-    }
-
-    /// The outcomes the executor brought back, oldest first, as one batch:
-    /// each reply is a commit at `now_ms` (a ticket no longer held commits
-    /// nothing); a reply the source cannot shape is the batch's error and
-    /// the ones before it stand.
-    pub fn fulfill_all(
-        &mut self,
-        outcomes: Vec<(u64, Outcome, Option<u64>)>,
-        now_ms: f64,
-    ) -> String {
-        self.now_ms = now_ms.max(self.now_ms);
-        // Sample the presented batch's authored scroll before this pump changes geometry.
-        let (batch, intersect_error) = self.intersect_round(Batch::new(), None);
-        // Announced topics first: what the device said before these replies.
-        let (announced, failed) = self.runner.apply_announced();
-        let mut error = failed.map(|e| format!("{e:?}"));
-        let mut receipts: Vec<Timed> = announced
-            .into_iter()
-            .map(|receipt| Timed {
-                at_ms: self.now_ms,
-                receipt,
-            })
-            .collect();
-        for (ticket, outcome, elapsed_ms) in outcomes {
-            match self.runner.fulfill_measured(ticket, outcome, elapsed_ms) {
-                Ok(Some(receipt)) => receipts.push(Timed {
-                    at_ms: self.now_ms,
-                    receipt,
-                }),
-                Ok(None) => {}
-                Err(e) => {
-                    error = Some(format!("{e:?}"));
-                    break;
-                }
-            }
-        }
-        self.commit_into(&receipts, error.or(intersect_error), batch)
     }
 
     /// Strict common LE viewport feedback followed by any runner edge action.

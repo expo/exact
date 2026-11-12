@@ -385,7 +385,7 @@ fn a_keyword_rows_map_is_not_a_length_rows() {
         out.js
     );
     assert!(
-        map("$tk").contains("\"tile\"") && !map("$tk").contains("space.md"),
+        map("$tki").contains("\"tile\"") && !map("$tki").contains("space.md"),
         "{}",
         out.js
     );

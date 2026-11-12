@@ -6,6 +6,7 @@
 
 mod android;
 mod beside;
+mod icon;
 mod library;
 mod linked;
 #[path = "../../package_tool.rs"]
@@ -67,6 +68,7 @@ impl std::error::Error for BakeError {}
 pub fn build(app: &Path, platform: &str) -> Result<(), BakeError> {
     println!("cargo:rerun-if-env-changed=EXACT_BAKED");
     library::link(app, platform).map_err(BakeError)?;
+    icon::link();
     match std::env::var_os("EXACT_BAKED") {
         Some(baked) => std::env::var_os("OUT_DIR")
             .ok_or_else(|| "build requires OUT_DIR".to_string())
@@ -100,6 +102,7 @@ pub const APP_BYTECODE: &[u8] = {
 /// through TypeScript alone.
 pub fn build_mixed(app: &Path, platform: &str, rust: &dyn DataSource) -> Result<(), BakeError> {
     library::link(app, platform).map_err(BakeError)?;
+    icon::link();
     build_sources(app, platform, Some(rust), None, false).map_err(BakeError)
 }
 
@@ -116,6 +119,7 @@ pub fn build_mixed_with(
     compose: impl Fn(Module) -> Box<dyn DataSource>,
 ) -> Result<(), BakeError> {
     library::link(app, platform).map_err(BakeError)?;
+    icon::link();
     let composer = Composer {
         rust_sources: rust_sources.iter().map(|s| s.to_string()).collect(),
         compose: Box::new(compose),

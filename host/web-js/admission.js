@@ -1,7 +1,7 @@
 import { admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, hasGrant, rawGrantText, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 import { faultMessage, takeFault } from '../web/faults.js';
 import { redirectFor, reachRefusal } from '../web/address-space.js';
-export { admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, hasGrant, rawGrantText, sameGrantDeclaration, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
+export { socketProtocols, admitsNetwork, admitsSecret, coversPath, createGrantSet, grantError, hasGrant, rawGrantText, sameGrantDeclaration, scopedGrantSet, unionGrantSets } from '../web/grant-admission.js';
 
 // Captured while the entry graph loads. App source injection never replaces
 // the page global, so separately loaded host modules retain browser authority.
@@ -82,7 +82,7 @@ export const signalDeadline = { arm: null };
 // `origin`: who asked it (LLP 1133.036 D6); a tool's, a wake's or the device's reach to a less public space is checked.
 // `decided`: `fetchOf` has already armed the signal's deadline before the file work, or found the request has none
 // (ts-fetch.js), so it is not weighed again.
-export async function fetchWith(set, input, init = {}, expires = null, redirect = redirectOf(input, init), read = within, origin = 'app', decided = false) {
+export async function fetchWith(set, input, init = {}, expires = null, redirect = redirectOf(input, init), read = within, origin = 'app', decided = false, forced) {
   let value, asset, deadline, signal, own, armed;
   init ??= {};
   deadline = deadlineOf(init);
@@ -104,6 +104,11 @@ export async function fetchWith(set, input, init = {}, expires = null, redirect 
   redirect = redirectFor(origin, redirect);
   try {
     const rest = ownWithout(init, ['exactTimeout', 'exactIndependentHttp', 'redirect', 'signal']);
+    // A forced ask reloads unless the request stores nothing; Fetch allows only-if-cached same-origin (LLP 1162 D4).
+    const cache = init.cache ?? input?.cache, sent = forced && cache !== 'no-store' ? 'reload' : cache;
+    const mode = init.mode ?? (sent === 'only-if-cached' && 'same-origin');
+    if (sent) rest.cache = sent;
+    if (mode) rest.mode = mode;
     // The caller's signal, read once by name, as `fetch` reads its init's members (an inherited one too), else the
     // input `Request`'s (`null` clears the Request's, `undefined` keeps it, as `fetch` has them).
     const given = init.signal;
@@ -173,7 +178,7 @@ export function createRequestExecutor(appId, sourceSet, readBody = response => r
     }
     try {
       // Its ceiling bounds the read inside `fetchWith` too, so an oversized body that never ends is refused, not awaited.
-      const response = await fetchWith(admitted, req.url, { method: req.method, headers: req.headers, body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.raw,
+      const response = await fetchWith(admitted, req.url, { method: req.method, headers: req.headers, cache: req.forced && req.cache !== 'no-store' ? 'reload' : req.cache, mode: req.mode, body: ['GET', 'HEAD'].includes(req.method) ? undefined : req.raw,
         ...(req.maxResponseBytes != null ? { exactIndependentHttp: { maxResponseBytes: req.maxResponseBytes } } : {}) });
       return { status: response.status, headers: [...response.headers], body: new Uint8Array(await readBody(response, req.maxResponseBytes)) };
     } catch (error) {

@@ -327,9 +327,10 @@ impl<'a> Supervisor<'a> {
         let mut fail_ready = false;
         let mut pending: Vec<Seen> = Vec::new();
         let mut sent: Vec<String> = Vec::new();
-        // What the child's own stdin queue held at the last look. The
-        // handle's count (`ctl.queued`) also holds what was sent and not
-        // yet taken here, so it falls only by what the child consumed.
+        // What the child's own stdin queue held at the last look, and what
+        // was written to it since. The handle's count (`ctl.queued`) also
+        // holds what was sent and not yet taken here, so it falls only by
+        // what the child consumed.
         let mut held = 0u64;
         if gone {
             self.release(&mut child, &mut escalate, &mut pending);
@@ -499,9 +500,10 @@ impl<'a> Supervisor<'a> {
                 Input::Release => self.release(&mut child, &mut escalate, &mut pending),
                 Input::Op(m, _) if m != n => {}
                 Input::Op(_, ProcessOp::Write { data, drain }) => {
-                    self.ctl.consumed(held.saturating_sub(child.queued()));
+                    // Counted, not read back: the child may take the bytes,
+                    // or drop them once its stdin is closed, before a look.
+                    held += data.len() as u64;
                     child.write(data);
-                    held = child.queued();
                     owed |= drain;
                 }
                 Input::Op(_, ProcessOp::End) => child.end(),

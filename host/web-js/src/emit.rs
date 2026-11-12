@@ -42,6 +42,8 @@ mod rows;
 mod said;
 #[path = "sides.rs"]
 mod sides;
+#[path = "sites.rs"]
+mod sites;
 #[path = "timers.rs"]
 mod timers;
 #[path = "trapped.rs"]
@@ -49,72 +51,11 @@ mod trapped;
 #[path = "type_descriptors.rs"]
 mod type_descriptors;
 use regions::root_slot;
+pub use sites::{Site, Sites};
 use type_descriptors::type_code;
 pub(crate) use type_descriptors::{
     surface_type_json, type_code_numeric, type_code_wire, type_json,
 };
-
-#[derive(Clone, Copy, Debug)]
-pub enum Site {
-    Node(u32),
-    Region(u32),
-}
-
-/// The plan's child sites, grouped as the runner groups them.
-pub struct Sites {
-    pub root: u32,
-    by_node: Vec<Vec<Site>>,
-    by_arm: Vec<Vec<Site>>,
-}
-
-impl Sites {
-    pub fn new(plan: &Plan) -> Result<Sites, String> {
-        let mut by_node: Vec<Vec<(u32, u8, u32, Site)>> = vec![Vec::new(); plan.nodes.len()];
-        let mut by_arm: Vec<Vec<(u32, u8, u32, Site)>> = vec![Vec::new(); plan.arms.len()];
-        let mut root = None;
-        for (i, n) in plan.nodes.iter().enumerate() {
-            let e = (n.order, 0, i as u32, Site::Node(i as u32));
-            // A site's group is (parent, arm): an arm's roots have no parent;
-            // a deeper site names its parent node and its enclosing arm.
-            match (n.parent, n.arm) {
-                (Some(p), _) => by_node[p.0 as usize].push(e),
-                (None, Some(a)) => by_arm[a.0 as usize].push(e),
-                (None, None) => {
-                    if root.replace(i as u32).is_some() {
-                        return Err("more than one root".into());
-                    }
-                }
-            }
-        }
-        for (i, r) in plan.regions.iter().enumerate() {
-            let e = (r.order, 1, i as u32, Site::Region(i as u32));
-            match (r.parent, r.arm) {
-                (Some(p), _) => by_node[p.0 as usize].push(e),
-                (None, Some(a)) => by_arm[a.0 as usize].push(e),
-                (None, None) => return Err("a region at the root".into()),
-            }
-        }
-        let sort = |v: Vec<Vec<(u32, u8, u32, Site)>>| {
-            v.into_iter()
-                .map(|mut l| {
-                    l.sort_by_key(|e| (e.0, e.1, e.2));
-                    l.into_iter().map(|e| e.3).collect()
-                })
-                .collect()
-        };
-        Ok(Sites {
-            root: root.ok_or("no root")?,
-            by_node: sort(by_node),
-            by_arm: sort(by_arm),
-        })
-    }
-    pub fn of_node(&self, n: u32) -> &[Site] {
-        &self.by_node[n as usize]
-    }
-    pub fn of_arm(&self, a: u32) -> &[Site] {
-        &self.by_arm[a as usize]
-    }
-}
 
 pub struct Output {
     pub js: String,
@@ -377,6 +318,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             tables.join(","),
             slot.0
         );
+        commands::locale_slot(plan, &mut body, slot.0);
     }
     // Slots, in order: an initializer reads only earlier slots.
     for (i, r) in plan.slots.iter().enumerate() {
@@ -588,6 +530,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let painting = em.uses.rt("usePaint");
         let _ = write!(body, "{painting}($paint());");
     }
+    em.presence_bindings(&mut body);
     if em.media {
         let media = em.uses.rt("useMedia");
         let _ = write!(body, "{media}($media());");
@@ -802,6 +745,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
             (em.symbols.0, "import{symbols as $symbols}from\"./symbols.js\";"),
             (modes.is_some(), "import{modes as $modes,Sx}from\"./modes.js\";"),
             (plan.slots.iter().any(|s| s.persist), "import{stored as $stored,keep as $keep}from\"./persist.js\";"),
+            (exact_runner::uses::chooses_locale(plan), "import{localeSlot as $localeSlot,setLocale as $setLocale}from\"./chosen.js\";"),
         ]
         .iter()
         .filter(|(on, _)| *on)
@@ -971,6 +915,7 @@ impl Em<'_> {
             self.symbols.1 |= bound;
         }
         let (mut attrs, content, extra) = rows::attributes(element, &parts.props);
+        crate::symbols::path_in_source(&mut attrs);
         if element == "img" && exact_runner::rows::repeated(plan, exact_plan::NodesId(i)) {
             attrs.push(("loading".into(), "lazy".into()));
         }
@@ -1117,7 +1062,7 @@ impl Em<'_> {
             // A surface the app's GPU module draws (the build names them)
             // goes to it; any other is a Canvas 2D surface, drawn by the data module and replayed by the web host's own glue.
             let name = plan.str(sf.name);
-            let gpu = gpu_surfaces().iter().any(|s| s == name);
+            let gpu = commands::gpu_surfaces().iter().any(|s| s == name);
             let named = sf.mode == exact_plan::SurfaceArgsMode::Named;
             if !gpu {
                 // Positional values, their declared types where known, and
@@ -1222,11 +1167,14 @@ impl Em<'_> {
             if b.kind == BindingKind::Prop && b.id == PropId::FocusGuide as u16 {
                 continue;
             }
-            // Nor have the system bars (LLP 1105 D7).
+            // Nor have the system bars (LLP 1105 D7), interactive glass or
+            // a menu's order.
             if b.kind == BindingKind::Prop
                 && (b.id == PropId::StatusBarStyle as u16
                     || b.id == PropId::StatusBarAnimation as u16
-                    || b.id == PropId::SystemBarsHidden as u16)
+                    || b.id == PropId::SystemBarsHidden as u16
+                    || b.id == PropId::GlassInteractive as u16
+                    || b.id == PropId::MenuOrder as u16)
             {
                 continue;
             }
@@ -1480,16 +1428,4 @@ impl Em<'_> {
         }
         Ok(())
     }
-}
-
-/// The surfaces the app's GPU modules draw, as the build read them from
-/// their compiled registries (`EXACT_JS_GPU_SURFACES`, comma-separated;
-/// host/web-js/build.mjs).
-fn gpu_surfaces() -> Vec<String> {
-    std::env::var("EXACT_JS_GPU_SURFACES")
-        .unwrap_or_default()
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
-        .collect()
 }

@@ -62,9 +62,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
     weak var paintParent: PaintView?
     let firstDraw: DrawReceipt?
     package let kind: String
-    var inlineText: [InlineText] = [] { didSet { hasInlineContextPopover = inlineText.contains { $0.props["contextPopover"]?.isEmpty == false } } }
-    /// A run names a context popover: read for every paragraph each batch (`ContextMenuHost.sync`).
-    private(set) var hasInlineContextPopover = false
+    var inlineText: [InlineText] = [] { didSet { hasInlineContextPopover = inlineText.contains { $0.props["contextPopover"]?.isEmpty == false }; hasInlineLink = inlineText.contains { $0.props["href"].map(NodeView.hasLinkMenu) == true } } }
+    /// A run names a context popover, or is a link with the host's own menu (`hasLinkMenu`): read for every paragraph each batch (`ContextMenuHost.sync`).
+    private(set) var hasInlineContextPopover = false, hasInlineLink = false
     /// The rarely set fields (`NodeExtrasIOS.swift`); nil until one is set.
     var extras: NodeExtras?
     /// A box's gradient and shadows (`NodePaintExtras`); nil until one is set.
@@ -1060,7 +1060,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         defer { syncGlassSlot(); syncGlassGroup(); settleVibrancy(); syncDefaultSurfaceScroll() }
         let kind = materialRequest
         let supported = kind != nil
-        let interactive = Materials.glass(kind) && handlers.contains("press") && !disabled
+        let interactive = Materials.glass(kind) && glassInteracts
         if materialKind != (supported ? kind : nil) {
             let children = container.subviews.compactMap { $0 as? NodeView }
             let old = materialView
@@ -1087,9 +1087,9 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         }
         guard let materialView else { rehomeMaterialChildren(); return }
         if cssVisibilityHidden { materialView.effect = nil }
-        else if materialView.effect == nil || materialInteractive != interactive || backdropStale {
+        else if materialView.effect == nil || materialInteractive != interactive || materialTint != glassTint || backdropStale {
             showMaterialEffect(backdropEffect() ?? materialEffect(kind ?? "ultra-thin", interactive: interactive))
-            materialInteractive = interactive
+            materialInteractive = interactive; materialTint = glassTint
         }
         applyMaterialRadius()
         rehomeMaterialChildren()
@@ -1198,18 +1198,17 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if !wordsOnly || !canRasterText { setNeedsDisplay() }
     }
 
-    /// CSS `filter` (LLP 1055.000 D14): the box shows through a filtered
-    /// picture (`BoxFilter`), drawn again when what it shows changes.
+    /// CSS `filter` (LLP 1055.000 D14), as a picture or the layer's own effect.
     private(set) var boxFilter: BoxFilter?
     var hasBoxFilter: Bool { boxFilter != nil }
     func applyFilter() {
         // A node with no `filter` and none before makes no `BoxFilter` (three
         // layers) to learn so: every styled node passes through here.
         guard boxFilter != nil || style["filter"] != nil else { return }
+        defer { refreshPressOpacity() }
         let f = boxFilter ?? BoxFilter()
         if f.set(style["filter"]) {
             boxFilter = f
-            layer.mask = f.hide
             presenter?.boxFilters.add(self) { [weak self] in self?.renderFilter(fresh: $0) }
             redrawFilter()
         } else if let f = boxFilter {
@@ -1217,6 +1216,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             boxFilter = nil
             presenter?.boxFilters.remove(self)
             applyBoxMask()
+            presenter?.afterBatch { [weak self] in self?.filterPublished() }
         }
     }
 

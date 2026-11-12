@@ -1,5 +1,77 @@
 use super::*;
 
+#[test]
+fn a_native_buttons_cleared_display_matches_the_wasm_face() {
+    let plan = contract::compile(
+        r#"component App
+  state visible = true
+  view
+    button appearance="auto" display=(visible ? "flex" : "none")
+      text "Lock"
+      image "symbol:lock"
+"#,
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    let start = js.find("v=>v===\"none\"?\"none\":\"grid\"").unwrap();
+    let arguments = js[start..].split("));").next().unwrap();
+    let mapped = include_str!("../../rt.js")
+        .lines()
+        .find_map(|line| line.strip_prefix("export const mapped = "))
+        .unwrap()
+        .trim_end_matches(';');
+    let actual = run(
+        &format!("v=>({mapped})(v,{arguments})"),
+        &["", " \t", "flex", "none"],
+    );
+    let sites = crate::emit::Sites::new(&plan).unwrap();
+    let (mut kernel, _) = static_tree(&plan, &sites).unwrap();
+    let mut patch = exact_kernel::StyleProps::default();
+    patch.written.set(StyleId::Display);
+    kernel
+        .apply(
+            1,
+            2,
+            &[Op::SetStyle {
+                id: 1,
+                patch: Box::new(patch),
+            }],
+        )
+        .unwrap();
+    let css = exact_web::host::template::parts(&kernel, &plan, 1)
+        .unwrap()
+        .css;
+    let display = css
+        .split(';')
+        .filter_map(|d| d.strip_prefix("display:"))
+        .next_back()
+        .unwrap();
+    assert_eq!(display, "grid");
+    assert_eq!(
+        actual,
+        serde_json::json!([display, display, display, "none"])
+    );
+}
+
+#[test]
+fn mapped_css_clears_leave_timeline_companions_absent() {
+    let plan = contract::compile(
+        "component App\n  state c = \"\"\n  view\n    view cursor=c animation-timeline=c testId=\"v\"\n",
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    for (name, clear) in [
+        ("\"cursor\"", true),
+        ("\"--exact-animation-timeline\"", false),
+        ("\"animation-play-state\"", false),
+    ] {
+        let at = js.find(name).unwrap_or_else(|| panic!("{name}:\n{js}"));
+        let write = js[at..].split(";S").next().unwrap();
+        assert!(write.contains("mapped(("), "{name}: {write}");
+        assert_eq!(write.contains(",\"unset\")"), clear, "{name}: {write}");
+    }
+}
+
 /// @ref LLP 1095 D4 — a bound colour naming a theme entry or an
 /// overridden role writes the entry's CSS, as the literal path does.
 #[test]
@@ -217,6 +289,56 @@ fn bound_font_smoothing_writes_the_prefixed_property() {
     assert_eq!(writes[0].map, None);
     assert_eq!(writes[1].name, "-moz-osx-font-smoothing");
     assert!(writes[1].map.unwrap().contains("grayscale"));
+}
+
+/// The write of `property` on the node with test id `v` in `view`, a view
+/// line under `state s = ""`.
+fn bound_write(view: &str, property: &str) -> String {
+    let source = format!("component App\n  state s = \"\"\n  view\n    {view}\n");
+    let js = crate::emit::emit(&contract::compile(&source).unwrap(), false, false)
+        .unwrap()
+        .js;
+    let at = js
+        .find(&format!(",\"{property}\","))
+        .unwrap_or_else(|| panic!("no {property} write:\n{js}"));
+    js[at..].split(";S").next().unwrap().to_string()
+}
+
+/// A cleared row writes `unset` for each property a value writes, as
+/// css.rs's clear does: the stroke shorthand for its two longhands, Firefox's
+/// font smoothing beside WebKit's, and a bare button's copy of its padding.
+/// (A write with no map is `unset` by rt.js `cssText`.)
+#[test]
+fn a_blank_clears_every_property_its_value_writes() {
+    for (view, property) in [
+        ("text \"a\" -webkit-text-stroke=s", "-webkit-text-stroke"),
+        (
+            "text \"a\" -webkit-font-smoothing=s",
+            "-moz-osx-font-smoothing",
+        ),
+        (
+            "button appearance=\"none\" padding-left=s\n      text \"a\"",
+            "--exact-padding-left",
+        ),
+    ] {
+        let write = bound_write(view, property);
+        assert!(
+            write.contains("mapped(") && write.contains(",\"unset\"))"),
+            "{property}: {write}"
+        );
+    }
+}
+
+/// A bound size on a native button is the author's while it is declared, a
+/// clear included, as the kernel's written bit says a literal one
+/// (element.rs `data-exact-said`).
+#[test]
+fn a_native_buttons_cleared_width_stays_said() {
+    let write = bound_write(
+        "button appearance=\"auto\" width=s\n      text \"a\"",
+        "data-exact-width",
+    );
+    assert!(write.contains("return v==null?null:\"\""), "{write}");
 }
 
 /// LLP 1104 D3: a bound `::placeholder` colour writes css.rs's

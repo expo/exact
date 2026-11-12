@@ -11,6 +11,8 @@ use contract_syntax::{
 use serde_json::{Map, Value};
 use std::path::Path;
 
+mod permissions;
+
 /// A refusal: its id and message; the caller adds the `use`'s span.
 type Refusal = (&'static str, String);
 
@@ -82,6 +84,9 @@ pub(crate) fn read(path: &Path, text: &str, source_id: u32) -> Result<File, Refu
                 }
             }
             groups(&json, &file).map_err(refuse)?;
+            if let Value::Array(declared) = &json["permission"] {
+                permissions::acyclic(declared).map_err(refuse)?;
+            }
             // An implementation made when the module loads, after first
             // pixel, rather than at its first call (LLP 1133.015 D16 item 1);
             // the hosts' builds read it from the interface.
@@ -443,6 +448,7 @@ fn module(
         sync: entry["sync"]["name"].as_str().map(str::to_owned),
         data_only,
         imported: false,
+        view_only: false,
         substitute,
         span,
     })
@@ -539,6 +545,7 @@ fn member_decl(
         sync: None,
         data_only: true,
         imported: false,
+        view_only: false,
         substitute: Value::Object(sub).to_string(),
         span,
     })
@@ -596,14 +603,7 @@ fn substitute(entry: &Value, interface: &Value) -> Result<String, String> {
     if let Some(images) = interface["images"].as_object() {
         images_checked(images)?;
     }
-    if let Some(words) = interface["agent"].as_object() {
-        if !words.values().all(|t| {
-            t.as_str()
-                .is_some_and(|t| type_expr(t, Span::default()).is_ok())
-        }) {
-            return Err("an interface's `agent` names each word's type".into());
-        }
-    }
+    agent_words(&interface["agent"])?;
     // A send that shows the person a choice (`choose`, LLP 1133.019 §10;
     // a sheet, LLP 1133.018 D13 item 4): its ticket, the agent word its
     // typed answer sets if it names one, its taps besides `cancel`, whether
@@ -1330,6 +1330,23 @@ fn images_checked(images: &Map<String, Value>) -> Result<(), String> {
         return Err("`images.owned` names a grant line for each target".into());
     }
     Ok(())
+}
+
+/// Module names and package views share the interface's agent type grammar.
+pub(crate) fn agent_words(words: &Value) -> Result<String, String> {
+    if let Some(words) = words.as_object() {
+        if !words.values().all(|t| {
+            t.as_str()
+                .is_some_and(|t| type_expr(t, Span::default()).is_ok())
+        }) {
+            return Err("an interface's `agent` names each word's type".into());
+        }
+    }
+    Ok(if words.is_null() {
+        "{}".into()
+    } else {
+        words.to_string()
+    })
 }
 
 /// A declaration's type (LLP 1133.002 D13): `number`, `string`, `bool`,

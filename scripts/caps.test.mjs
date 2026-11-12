@@ -136,6 +136,16 @@ const cases = [
     { 'rules/RULES.md': GOOD_RULES, 'docs/recipes/money.md': 'x'.repeat(3073) }, 'cap:recipe'],
   ['a recipe of exactly 3,072 bytes passes',
     { 'rules/RULES.md': GOOD_RULES, 'docs/recipes/money.md': 'x'.repeat(3072) }, null],
+  ['a file named for a Windows device, with an extension, fails',
+    { 'rules/RULES.md': GOOD_RULES, 'js/tests/fixtures/nul.ts': '' }, 'path:windows'],
+  ['a directory named for a Windows device fails',
+    { 'rules/RULES.md': GOOD_RULES, 'src/COM1/a.rs': '' }, 'path:windows'],
+  ['a name with a character Windows reserves fails',
+    { 'rules/RULES.md': GOOD_RULES, 'src/a:b.txt': '' }, 'path:windows'],
+  ['a name ending in a period fails',
+    { 'rules/RULES.md': GOOD_RULES, 'src/notes.': '' }, 'path:windows'],
+  ['names that only begin with a device name pass',
+    { 'rules/RULES.md': GOOD_RULES, 'js/tests/fixtures/nul-byte.ts': '', 'src/console.ts': '', 'src/aux_data.rs': '', 'src/com10.md': '' }, null],
   ['the recipe cap counts bytes, not characters',
     { 'rules/RULES.md': GOOD_RULES, 'docs/recipes/money.md': '’'.repeat(1025) }, 'cap:recipe'],
   ['navigation-stack and rest-backend may run to 5,120 bytes',
@@ -648,7 +658,7 @@ for (const [name, html, files, expectCode, expect] of [
   const table = await classify({ app, opts: {}, origin, channel: 'prod', snapshot: { commit: '0'.repeat(40), dirty: false, changes: [] }, release: 'test', web: newWeb,
     bundle: {}, compat: {}, platforms: [], wantOrigin: true });
   whole &&= table.rows[0].files.removed.join(',') === '.well-known/apple-app-site-association,assets/removed.txt';
-  const directHeadRefused = await rejects(async () => await origin.put(`.exact/web/${'b'.repeat(64)}/exact.json`, Buffer.from('unguarded'), { immutable: true }), error => error.message.includes('stream heads require putHead'));
+  const directHeadRefused = await rejects(async () => await origin.put(`.exact/web/${'b'.repeat(64)}/exact.json`, Buffer.from('unguarded'), { immutable: true }), error => error.message.includes('stream heads and locks require the held stream lock'));
   whole &&= directHeadRefused;
   const rootChannel = await classify({ app, opts: {}, origin, channel: 'root', snapshot: { commit: '0'.repeat(40), dirty: false, changes: [] }, release: 'test', web: newWeb,
     bundle: { plan: { sha256: '0'.repeat(64), bytes: 3 }, assets: [] }, compat: { linux: { id: 'c'.repeat(32), inputs: { store: { L: 'A' }, executors: [] } } }, platforms: ['linux'], wantOrigin: false });

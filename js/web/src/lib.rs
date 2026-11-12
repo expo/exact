@@ -406,6 +406,20 @@ impl Module {
                     .as_str()
                     .ok_or_else(|| unavailable("fetch has no URL"))?,
             );
+            if let Some(names) = r.get("protocols") {
+                let names = names
+                    .as_array()
+                    .and_then(|names| {
+                        names
+                            .iter()
+                            .map(|name| name.as_str().map(str::to_owned))
+                            .collect::<Option<Vec<_>>>()
+                    })
+                    .ok_or_else(|| {
+                        unavailable("exactProtocols must be an array of protocol names")
+                    })?;
+                request = request.protocols(names).map_err(unavailable)?;
+            }
             request.method = r["method"]
                 .as_str()
                 .ok_or_else(|| unavailable("fetch has no method"))?
@@ -514,6 +528,7 @@ fn outcome_json(outcome: Outcome) -> Result<Json, DataError> {
                 ("id", m.id.into()),
                 ("data", m.data.into()),
                 ("coalesced", m.coalesced.into()),
+                ("protocol", m.protocol.to_string().into()),
             ]),
         )]),
         // The web's wasm host keeps every socket listening (LLP 1016.000 D7):
@@ -1047,6 +1062,7 @@ mod tests {
                 target: Target::Mutation(0),
                 source: "source",
                 args: &[Value::str("ab")],
+                fetch: None,
                 continuation: Some(1),
             }],
         );
@@ -1197,6 +1213,52 @@ mod tests {
     }
 
     #[test]
+    fn stream_protocol_names_cross_the_browser_module_seam() {
+        let mut module = Module::new("test", "", "revision");
+        module
+            .signatures
+            .insert("feed".into(), (vec![], Shape::String));
+        let mut store = Store::new("", []);
+        for (names, expected) in [
+            (serde_json::json!([]), Ok(vec![])),
+            (
+                serde_json::json!(["chat.v2", "chat.v1"]),
+                Ok(vec!["chat.v2", "chat.v1"]),
+            ),
+            (
+                serde_json::json!(["bad/name"]),
+                Err("invalid WebSocket protocol"),
+            ),
+            (
+                serde_json::json!(["chat", "chat"]),
+                Err("duplicate WebSocket protocol"),
+            ),
+            (
+                serde_json::json!("chat"),
+                Err("exactProtocols must be an array"),
+            ),
+        ] {
+            let turn = serde_json::json!({"tag":1,"request":{"method":"GET",
+                "url":"ws://example.test", "headers":[], "stream":true,"protocols":names}});
+            let answer = module.step(
+                &mut store,
+                "feed",
+                "feed".into(),
+                &serde_json::to_vec(&turn).unwrap(),
+            );
+            match expected {
+                Ok(names) => {
+                    let Answer::Later(request) = answer.unwrap() else {
+                        panic!("a stream request")
+                    };
+                    assert_eq!(request.protocols, names);
+                }
+                Err(message) => assert!(format!("{:?}", answer.unwrap_err()).contains(message)),
+            }
+        }
+    }
+
+    #[test]
     fn an_answer_without_a_value_reads_as_null_would() {
         let mut module = Module::new("test", "", "revision");
         let mut store = Store::new("", []);
@@ -1255,10 +1317,8 @@ mod tests {
 mod overlay_probe_tests {
     use super::overlay_present;
 
-    /// Only an explicit answer decides: `{has: false}` is no overlay, `{has:
-    /// true}` (a page realm with one, or a worker realm, which can't say) is
-    /// one, and a probe that threw or answered nothing usable fails, as the
-    /// overlay call's own failure did.
+    /// Only an explicit boolean decides whether a realm has an overlay;
+    /// a probe that threw or answered nothing usable fails.
     #[test]
     fn only_an_explicit_answer_decides_whether_a_realm_has_an_overlay() {
         assert!(!overlay_present(br#"{"has":false}"#).unwrap());

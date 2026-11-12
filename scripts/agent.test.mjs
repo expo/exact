@@ -7,10 +7,47 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { open, jsonLines, MalformedOperation, main, webFrame } from './agent.mjs';
-import { chromium, launchFacts, noteDefaultStore } from './agent-launch.mjs';
+import { chromium, launchFacts, noteDefaultStore, suiteBrowser, withEpoch } from './agent-launch.mjs';
+import { browserMissing, reloadPlaywrightPage } from './agent-playwright.mjs';
 import { need, notApplicable } from './coverage.mjs';
 import { typeCommand } from './agent-keys.mjs';
 import { render, stateOp } from './agent-inspect.mjs';
+
+for (const engine of ['chromium', 'firefox', 'webkit']) {
+  need(engine, await browserMissing(engine))(`a Playwright reload keeps the current entry and its Back and Forward entries (${engine})`, async () => {
+    let loads = 0;
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(
+      `<!doctype html><body data-load="${++loads}">History</body>`,
+      { headers: { 'content-type': 'text/html' } },
+    ) });
+    const browser = await suiteBrowser(engine), page = await browser.newPage();
+    const historySnapshot = () => page.evaluate(() => ({ length: history.length,
+      ...(globalThis.navigation ? { keys: navigation.entries().map(e => e.key) } : {}),
+    }));
+    try {
+      await page.goto(server.url.href);
+      await page.evaluate(() => {
+        history.replaceState({ id: 'home' }, '', '/');
+        history.pushState({ id: 'one' }, '', '/item/one#moves');
+        history.pushState({ id: 'two' }, '', '/item/two');
+      });
+      const entries = await historySnapshot();
+      await page.goBack();
+      const load = await page.locator('body').getAttribute('data-load');
+      await reloadPlaywrightPage(page, withEpoch(page.url(), 60000));
+      assert.notEqual(await page.locator('body').getAttribute('data-load'), load);
+      assert.equal(new URL(page.url()).searchParams.get('epoch'), '60000');
+      assert.equal(new URL(page.url()).hash, '#moves');
+      assert.deepEqual(await historySnapshot(), entries);
+      assert.deepEqual(await page.evaluate(() => history.state), { id: 'one' });
+      await page.goForward();
+      assert.equal(new URL(page.url()).pathname, '/item/two');
+      await page.goBack();
+      await page.goBack();
+      assert.equal(new URL(page.url()).pathname, '/');
+    } finally { await browser.close(); await server.stop(true); }
+  }, 30000);
+}
 
 test('a web frame fallback settles its evaluate request when two RAFs do not complete', async () => {
   for (const completed of [0, 1, 2]) {

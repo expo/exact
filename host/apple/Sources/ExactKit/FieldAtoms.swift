@@ -169,7 +169,8 @@ extension TextArea: NSViewToolTipOwner {
     /// technology points: VoiceOver's cursor following the mouse, the
     /// trackpad commander, Accessibility Inspector.
     func atomElement(atScreen point: NSPoint) -> AtomElement? {
-        guard !atomElements.isEmpty, let window, let hit = atom(at: convert(window.convertPoint(fromScreen: point), from: nil)) else { return nil }
+        guard atomsAccessibilityExposed, !atomElements.isEmpty, let window,
+              let hit = atom(at: convert(window.convertPoint(fromScreen: point), from: nil)) else { return nil }
         return atomElements.first { $0.range == hit.range }
     }
     /// The arrow over a pill, as over a token; the I-beam elsewhere.
@@ -198,6 +199,18 @@ extension TextArea: NSViewToolTipOwner {
 extension TextArea {
     /// The Markdown fields with atoms, whose nodes' hosts list them.
     nonisolated(unsafe) static let atomFields = NSHashTable<TextArea>.weakObjects()
+
+    var atomsAccessibilityExposed: Bool {
+        guard let owner, owner.accessibilityExposed else { return false }
+        var ancestor: NSView? = self
+        while let view = ancestor {
+            if view.isHidden { return false }
+            if let node = view as? NodeView,
+               node.accessibilityHiddenWritten || node.props["accessibilityElementsHidden"] == "true" { return false }
+            ancestor = view.superview
+        }
+        return true
+    }
 }
 
 extension NodeView {
@@ -208,47 +221,74 @@ extension NodeView {
     /// than one item only when the person interacts with it; one that holds a
     /// single item it passes through, so the atoms go past every wrapper,
     /// scrolling or not, that holds the field alone. An image or a range is a
-    /// leaf, which lists nothing, and is passed too. Nil for a field with no
-    /// such ancestor: its own node lists them.
+    /// leaf, which lists nothing, and is passed too. If every ancestor holds
+    /// only the field, the outermost eligible one lists the atoms; when that
+    /// one scrolls, it lists them beside its scroll view, not in it
+    /// (`atomPlacement`). With no eligible ancestor, the field's own node
+    /// lists them.
     var atomHost: NodeView? {
+        var outermost: NodeView?
         var view = superview
         while let v = view {
-            if let node = v as? NodeView, node.props["accessibilityRole"] != "img", node.rangeRole == nil,
-               node.isAccessibilityElement() || Self.holdsMoreThanOneNode(node) { return node }
+            if let node = v as? NodeView, node.props["accessibilityRole"] != "img", node.rangeRole == nil {
+                if node.isAccessibilityElement() || Self.holdsMoreThanOneElement(node) { return node }
+                outermost = node
+            }
             view = v.superview
         }
-        return nil
+        return outermost
     }
-    /// Whether `view` holds a second node below it, scroll and clip views
-    /// passed through; it stops at the second.
-    private static func holdsMoreThanOneNode(_ view: NSView) -> Bool {
+    /// Whether the node exposes a second child before atoms are inserted.
+    /// Asking a node for AXChildren here would ask for its atom host again.
+    private static func holdsMoreThanOneElement(_ node: NodeView) -> Bool {
         var found = 0
         func walk(_ v: NSView) -> Bool {
-            for sub in v.subviews {
-                if sub is NodeView { found += 1; if found > 1 { return true } } else if walk(sub) { return true }
+            for sub in v.subviews where !sub.isHidden {
+                let node = sub as? NodeView
+                if let node, node.accessibilityHiddenWritten || node.props["accessibilityElementsHidden"] == "true" { continue }
+                if sub.isAccessibilityElement() { found += 1 }
+                else if sub is NodeView {
+                    if walk(sub) { return true }
+                } else if sub is NSControl || sub.subviews.isEmpty {
+                    // AppKit controls can expose a cell instead of the view.
+                    found += NSAccessibility.unignoredChildren(from: [sub]).count
+                } else if walk(sub) { return true }
+                if found > 1 { return true }
             }
             return false
         }
-        return walk(view)
+        return walk(node.scroll?.documentView ?? node)
+    }
+    /// The node that lists this field's atoms, and whether its scroll view
+    /// lists them among the scrolled children. A scrolling host that holds
+    /// only the field lists them beside its scroll view, which then holds one
+    /// item and is passed through.
+    private var atomPlacement: (host: NodeView, scrolled: Bool) {
+        let host = atomHost ?? self
+        guard host.scroll != nil else { return (host, false) }
+        return (host, host === self || Self.holdsMoreThanOneElement(host))
     }
     /// The element that lists this field's atoms: a scrolling host's scroll
-    /// view (the atoms are its children, beside the field, not after the
-    /// scroll area), the host, or the element that lists the host's children.
+    /// view when the atoms go among its children, beside the field, the host,
+    /// or the element that lists the host's children.
     var atomParent: Any? {
-        let host = atomHost ?? self
-        if let scroll = host.scroll { return scroll }
+        let (host, scrolled) = atomPlacement
+        if scrolled, let scroll = host.scroll { return scroll }
         return host.isAccessibilityElement() ? host : NSAccessibility.unignoredAncestor(of: host)
     }
     /// The atoms of the fields this node hosts, each run after the element
     /// that holds its field, in text order. The children are taken unignored,
     /// as VoiceOver reads them, so a view that holds the field among siblings
-    /// (a scroll view's document) is passed into. A scrolling node's scroll
-    /// view lists them (`inScroll`), as its children hold the field.
+    /// (a scroll view's document) is passed into. `inScroll` is a scrolling
+    /// node's scroll view asking, for the atoms its children list
+    /// (`atomPlacement`); the node itself lists the others after that view.
     func withAtoms(_ children: [Any]?, inScroll: Bool = false) -> [Any]? {
-        guard let children, scroll == nil || inScroll, let window, TextArea.atomFields.count > 0 else { return children }
+        guard let children, let window, TextArea.atomFields.count > 0 else { return children }
         let hosted = TextArea.atomFields.allObjects.filter { field in
-            guard field.window === window, !field.atomElements.isEmpty, let node = field.owner else { return false }
-            return (node.atomHost ?? node) === self
+            guard field.window === window, field.atomsAccessibilityExposed,
+                  !field.atomElements.isEmpty, let node = field.owner else { return false }
+            let placement = node.atomPlacement
+            return placement.host === self && placement.scrolled == inScroll
         }
         guard !hosted.isEmpty else { return children }
         var listed = NSAccessibility.unignoredChildren(from: children)
@@ -298,10 +338,8 @@ package final class AtomElement: NSAccessibilityElement, AgentOwned {
     package override func accessibilityRole() -> NSAccessibility.Role? { atom.role == "link" ? .link : .button }
     package override func accessibilityLabel() -> String? { atom.spokenName }
     package override func accessibilityHelp() -> String? { atom.title.isEmpty ? nil : atom.title }
-    /// Not under a host whose elements are hidden, which lists none.
     package override func isAccessibilityElement() -> Bool {
-        guard let host = field?.owner.map({ $0.atomHost ?? $0 }) else { return true }
-        return host.props["accessibilityElementsHidden"] != "true" && !host.accessibilityHiddenWritten
+        field?.atomsAccessibilityExposed ?? false
     }
     package override func accessibilityFrame() -> NSRect {
         guard let field, let window = field.window, let frame = field.atomFrames().first(where: { $0.range == range })?.frame else { return .zero }

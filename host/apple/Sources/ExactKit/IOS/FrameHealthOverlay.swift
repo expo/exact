@@ -131,11 +131,6 @@ final class FrameHealthOverlay: UIView {
         NotificationCenter.default.post(name: Self.visibilityChanged, object: self)
     }
 
-    override func safeAreaInsetsDidChange() {
-        super.safeAreaInsetsDidChange()
-        setNeedsLayout()
-    }
-
     override func didMoveToWindow() {
         super.didMoveToWindow()
         // A new window may be another scene's, which the screen's frames then come from
@@ -423,9 +418,7 @@ final class FrameHealthOverlay: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // Keep the card 8 points inside the safe area, clear of the status bar, the sensor housing and the home
-        // indicator, and above the keyboard
-        var available = bounds.inset(by: safeAreaInsets).insetBy(dx: 8, dy: 8)
+        var available = FrameHealthCardFace.restingArea(in: bounds)
         if let keyboard, keyboard.intersects(available), keyboard.maxY >= available.maxY {
             available.size.height = max(0, keyboard.minY - 8 - available.minY)
         }
@@ -1048,9 +1041,6 @@ extension DevMenu {
             root.view.addSubview(overlay)
             // Shown without becoming key: the app's window keeps the keyboard, the first responder and key commands
             window.isHidden = false
-            // The overlay takes the window's safe area only at the window's layout, so the card's first show would
-            // otherwise place it under the status bar
-            window.layoutIfNeeded()
             overlay.host = window
         } else {
             overlay.frame = container.bounds

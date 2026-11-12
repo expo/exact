@@ -273,6 +273,15 @@ test('async glue runs the capture fixtures and the web JS target\'s tests, less 
   expect(glue).not.toContain('./host/web-js/document-agent.test.mjs');
 });
 
+test('async glue runs a script test no list names', () => {
+  const root = mkdtempSync(join(tmpdir(), 'exact-glue-'));
+  try {
+    mkdirSync(join(root, 'scripts'));
+    writeFileSync(join(root, 'scripts', 'unnamed.test.mjs'), '');
+    expect(asyncLane.glueTests(root)).toContain('./scripts/unnamed.test.mjs');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 const parent = realpathSync.native(tmpdir());
 const fixture = mkdtempSync(join(parent, 'exact deploy paths café # '));
 const put = (name, text = 'fixture') => {

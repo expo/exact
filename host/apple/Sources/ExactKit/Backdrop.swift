@@ -141,6 +141,10 @@ enum BackdropOperation: Equatable {
 }
 
 extension NodeView {
+    /// Its `-exact-glass-tint` in its colour scheme, nil where unset: the
+    /// tint of its glass material (`UIGlassEffect`, `NSGlassEffectView`).
+    var glassTint: CGColor? { cgColor("glass_tint") }
+
     var backdropOperations: [BackdropOperation] {
         style["backdrop_filter"]?.array?.compactMap(BackdropOperation.init) ?? []
     }
@@ -235,6 +239,12 @@ extension NodeView {
         (materialView as? BackdropEffectView).map { $0.operations != backdropOperations } ?? false
     }
 
+    /// Whether its glass reacts to a touch (`UIGlassEffect.isInteractive`):
+    /// its `glassInteractive`, else whether it can be pressed now.
+    var glassInteracts: Bool {
+        props["glassInteractive"].map { $0 == "true" } ?? (handlers.contains("press") && !disabled)
+    }
+
     /// The effect for material `kind` (LLP 1053.000 D4): a glass effect on
     /// iOS 26 (else ultra-thin), otherwise the table's blur style.
     func materialEffect(_ kind: String, interactive: Bool) -> UIVisualEffect {
@@ -243,6 +253,7 @@ extension NodeView {
             if #available(iOS 26.0, tvOS 26.0, *) {
                 let glass = UIGlassEffect(style: apple == "glass" ? .regular : .clear)
                 glass.isInteractive = interactive
+                glass.tintColor = glassTint.map { UIColor(cgColor: $0) }
                 return glass
             }
             #if os(tvOS)

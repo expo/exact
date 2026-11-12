@@ -57,6 +57,7 @@ fn surface_work_scope_is_refused_before_presenter_effects() {
     let request = |ticket, mut request: exact_runner::Request| {
         request.grants = Some("surface.read other".into());
         RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket,
             target: "save".into(),
             request,
@@ -84,6 +85,7 @@ fn surface_work_scope_is_refused_before_presenter_effects() {
     allowed.grants = Some("surface.read world".into());
     surfaces.enqueue(
         RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket: 8,
             target: "save".into(),
             request: allowed,

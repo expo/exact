@@ -458,11 +458,11 @@ final class NavigationMoreIOSTests: XCTestCase {
     }
 
     /// UIKit's animated Back under More keeps the route it takes away as
-    /// More's child until the pop ends (measured in a scene's window). A
-    /// batch synced meanwhile leaves More's record as it was, so the pop's
-    /// end finds the route it took and the router goes back.
+    /// More's child as its animations start (LLP 1075.003 §9.16). A batch
+    /// synced then leaves More's record as it was, so the pop's end finds
+    /// the route it took and the router goes back.
     func testASyncDuringAnAnimatedBackUnderMoreKeepsTheBack() throws {
-        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit keeps a popped controller as More's child through the animation only in a scene's window") }
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit keeps a popped controller as More's child as the animations start only in a scene's window") }
         let (session, tabs, more) = try moreFixture("more-back-sync")
         let navigation = session.presenter.navigation
         tapTab(tabs, of: tabs.moreNavigationController)
@@ -475,7 +475,7 @@ final class NavigationMoreIOSTests: XCTestCase {
         UIView.setAnimationsEnabled(true)
         defer { UIView.setAnimationsEnabled(false) }
         more.popViewController(animated: true)
-        waitFor("UIKit's pop under way") { more.transitionCoordinator != nil }
+        waitForAnimationsToStart(more)
         navigation.sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
         waitFor("the router is back on Five's root", facts: { "route \(String(describing: navigation.observation()["route"])), More holds \(more.viewControllers.count), changing \(navigation.changing)" }) {
             navigation.observation()["route"] as? String == root && more.transitionCoordinator == nil && !navigation.changing
@@ -487,8 +487,9 @@ final class NavigationMoreIOSTests: XCTestCase {
 
     /// More tapped while Home's animated pop runs: More's list shows, and
     /// Home's pop still reaches the router once Home shows again, so Detail
-    /// does not come back (measured in a scene's window: Home's pop ends when
-    /// Home is selected again).
+    /// does not come back (in a scene's window, Home's pop, left by a tap on
+    /// More once its animations have started, ends when Home is selected
+    /// again).
     func testMoreTappedDuringAnotherTabsPopKeepsThatPopsBack() throws {
         guard hostedWindowScene() != nil else { throw missing("scene", "a pop left off screen by a tap on More ends as UIKit's does only in a scene's window") }
         let (session, tabs, more) = try moreFixture("more-during-pop")
@@ -501,7 +502,7 @@ final class NavigationMoreIOSTests: XCTestCase {
         UIView.setAnimationsEnabled(true)
         defer { UIView.setAnimationsEnabled(false) }
         home.popViewController(animated: true)
-        waitFor("Home's pop under way") { home.transitionCoordinator != nil }
+        waitForAnimationsToStart(home)
         tapTab(tabs, of: more)
         waitFor("More selected, showing its list") { tabs.selectedViewController === more && more.stackRoutes.isEmpty && more.transitionCoordinator == nil }
         waitForMainQueue()
@@ -512,6 +513,254 @@ final class NavigationMoreIOSTests: XCTestCase {
         waitForMainQueue()
         XCTAssertEqual(home.viewControllers.count, 1, "no sync pushes Detail back")
         XCTAssertEqual(journal(session, "press view \(back) (back)"), 1, "Home's pop is the router's Back")
+    }
+
+    /// A tab on the bar tapped once More's animated Back has started: UIKit
+    /// ends the pop off screen, and More sends no `didShow` then (LLP 1075.003
+    /// §9.16). Syncs on the tab tapped reach UIKit, so a push there shows,
+    /// and the Back reaches the router once More shows again, with no
+    /// sync putting the popped route back meanwhile.
+    func testABarTabTappedDuringMoresBackLeavesItsSyncsFreeAndKeepsTheBack() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit animates More's pop and the tab change as in an app only in a scene's window") }
+        try tapABarTabDuringMoresBack("more-pop-leave", started: true)
+    }
+
+    /// As above, with Home tapped in the turn the Back is asked for, before
+    /// its animations start: More's pop starts within the tap, once Home's
+    /// press has moved the router, and More's `willShow` for Five's root then
+    /// presses nothing (§9.16).
+    func testABarTabTappedInTheTurnOfMoresBackLeavesItsSyncsFreeAndKeepsTheBack() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit animates More's pop and the tab change as in an app only in a scene's window") }
+        try tapABarTabDuringMoresBack("more-pop-leave-turn", started: false)
+    }
+
+    private func tapABarTabDuringMoresBack(_ label: String, started: Bool) throws {
+        let (session, tabs, more, root, back) = try deeperUnderMore(label)
+        let navigation = session.presenter.navigation
+        let home = try XCTUnwrap(tabs.viewControllers?[0] as? UINavigationController)
+        UIView.setAnimationsEnabled(true)
+        defer { UIView.setAnimationsEnabled(false) }
+        more.popViewController(animated: true)
+        if started { waitForAnimationsToStart(more) }
+        tapTab(tabs, 0)
+        waitFor("the router follows Home") { navigation.routerTab == 0 && tabs.selectedViewController === home && home.transitionCoordinator == nil }
+        try tapNode(session, "open-detail")
+        waitFor("Detail pushed in Home", facts: { "Home holds \(home.viewControllers.count), changing \(navigation.changing), More's pop on tab \(String(describing: navigation.morePopTab))" }) {
+            home.viewControllers.count == 2 && home.transitionCoordinator == nil && !navigation.changing
+        }
+        XCTAssertEqual(more.stackRoutes.count, 1, "no sync put Deeper back in More")
+        XCTAssertEqual(journal(session, "press left the router"), 0, "no tab's press was declined")
+        let detailBack = try node(session, "back-detail").id
+        tapTab(tabs, of: more)
+        waitFor("More shows Five's root, and the router follows", facts: { "router tab \(navigation.routerTab), route \(String(describing: navigation.observation()["route"])), More holds \(more.viewControllers.count), changing \(navigation.changing)" }) {
+            navigation.routerTab == 4 && more.stackRoutes.count == 1 && more.transitionCoordinator == nil && !navigation.changing
+                && navigation.observation()["route"] as? String == root
+        }
+        XCTAssertEqual(journal(session, "press view \(back) (back)"), 1, "UIKit's Back under More is the router's")
+        XCTAssertEqual(journal(session, "press view \(detailBack) (back)"), 0, "and not Home's")
+        XCTAssertEqual(home.viewControllers.count, 2, "Home still holds Detail")
+    }
+
+    /// The router returning, by its own selection, to a tab whose Back More
+    /// keeps, as the agent's tap on the tab's authored tab does: no sync waits
+    /// forever, and More shows the route the router is on.
+    func testTheRouterGoingBackToATabWhoseBackMoreKeepsWaitsForNothing() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit ends More's pop off screen as in an app only in a scene's window") }
+        let (session, _, more) = try leaveMoresBackForHome("more-kept-router")
+        let navigation = session.presenter.navigation
+        try tapNode(session, "tab-five")
+        waitFor("the router follows Five under More, with nothing pending", facts: { "router tab \(navigation.routerTab), route \(String(describing: navigation.observation()["route"])), More holds \(more.viewControllers.count), in transition \(navigation.inTransition), More's pop on tab \(String(describing: navigation.morePopTab))" }) {
+            navigation.routerTab == 4 && more.transitionCoordinator == nil && !navigation.inTransition
+        }
+        waitForMainQueue()
+        XCTAssertEqual((more.topViewController as? RouteController)?.key, navigation.observation()["route"] as? String, "More shows the route the router is on")
+    }
+
+    /// A regular width moving a tab's routes out of More while More keeps its
+    /// Back: no sync on that tab waits for a `didShow` that More, off the bar,
+    /// need not send (LLP 1075.003 §9.16).
+    func testAWidthMovingATabOutOfMoreWhileItsBackIsKeptWaitsForNothing() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit ends More's pop off screen as in an app only in a scene's window") }
+        let (session, tabs, _) = try leaveMoresBackForHome("more-kept-width")
+        let navigation = session.presenter.navigation
+        setSizeClasses(tabs, horizontal: .regular)
+        let five = try XCTUnwrap(tabs.viewControllers?[4] as? UINavigationController)
+        waitFor("Five is on the bar") { navigation.barItem(ofTab: 4) != nil }
+        waitForMainQueue()
+        tapTab(tabs, 4)
+        waitFor("the router follows Five on the bar, with nothing pending", facts: { "router tab \(navigation.routerTab), route \(String(describing: navigation.observation()["route"])), Five holds \(five.viewControllers.count), in transition \(navigation.inTransition), More's pop on tab \(String(describing: navigation.morePopTab))" }) {
+            navigation.routerTab == 4 && five.transitionCoordinator == nil && !navigation.inTransition
+        }
+        XCTAssertEqual((five.topViewController as? RouteController)?.key, navigation.observation()["route"] as? String, "Five shows the route the router is on")
+    }
+
+    /// More tapped again before its Back, left by a tap on Home, has ended:
+    /// the router follows Five, and the Back reaches it.
+    func testMoreTappedAgainBeforeItsBackLeftByAnotherTabEndsKeepsTheBack() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit animates More's pop and the tab changes as in an app only in a scene's window") }
+        let (session, tabs, more, root, back) = try deeperUnderMore("more-pop-back-again")
+        let navigation = session.presenter.navigation
+        UIView.setAnimationsEnabled(true)
+        defer { UIView.setAnimationsEnabled(false) }
+        more.popViewController(animated: true)
+        waitForAnimationsToStart(more)
+        tapTab(tabs, 0)
+        XCTAssertNotNil(more.transitionCoordinator, "More's pop still runs")
+        tapTab(tabs, of: more)
+        waitFor("More shows Five's root, and the router follows", facts: { "router tab \(navigation.routerTab), route \(String(describing: navigation.observation()["route"])), More holds \(more.viewControllers.count), in transition \(navigation.inTransition)" }) {
+            navigation.routerTab == 4 && more.stackRoutes.count == 1 && more.transitionCoordinator == nil && !navigation.inTransition
+                && navigation.observation()["route"] as? String == root
+        }
+        XCTAssertEqual(journal(session, "press left the router"), 0, "no tab's press was declined")
+        XCTAssertEqual(journal(session, "press view \(back) (back)"), 1, "UIKit's Back under More is the router's")
+    }
+
+    /// More tapped again above Five's root, then Home tapped before More's pop
+    /// to its list ends: the pop ends with More's list on top while the router
+    /// is on Home, so no Back reaches the router (LLP 1075.003 §3.7), and
+    /// Five's row then shows the route the router is on.
+    func testMoreTappedAgainThenAnotherTabLeavesTheRoutersStack() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit animates More's pop and the tab changes as in an app only in a scene's window") }
+        let (session, tabs, more, _, back) = try deeperUnderMore("more-list-left")
+        let navigation = session.presenter.navigation
+        UIView.setAnimationsEnabled(true)
+        defer { UIView.setAnimationsEnabled(false) }
+        // More's tap as UIKit performs it (measured): `shouldSelect(more)`, `didSelect` of the tab it shows, then the pop to the list
+        XCTAssertEqual(tabs.delegate?.tabBarController?(tabs, shouldSelect: more), true)
+        tabs.delegate?.tabBarController?(tabs, didSelect: try XCTUnwrap(tabs.selectedViewController))
+        more.popToRootViewController(animated: true)
+        waitForAnimationsToStart(more)
+        tapTab(tabs, 0)
+        waitFor("the router follows Home, and More's pop has ended") { navigation.routerTab == 0 && more.transitionCoordinator == nil && !navigation.inTransition }
+        tapTab(tabs, of: more)
+        waitFor("More shows its list") { tabs.selectedViewController === more && more.stackRoutes.isEmpty && more.transitionCoordinator == nil }
+        pickRow(tabs, 4)
+        waitFor("Five's row shows the route the router is on, with nothing pending", facts: { "router tab \(navigation.routerTab), route \(String(describing: navigation.observation()["route"])), More holds \(more.viewControllers.count), in transition \(navigation.inTransition)" }) {
+            navigation.routerTab == 4 && more.transitionCoordinator == nil && !navigation.inTransition
+                && (more.topViewController as? RouteController)?.key == navigation.observation()["route"] as? String
+        }
+        XCTAssertEqual(journal(session, "press view \(back) (back)"), 0, "no Back reaches the router")
+    }
+
+    /// A tab not built yet, tapped while More keeps another tab's Back, which
+    /// holds `syncTabs`' writes: its controller is filled within the tap, with
+    /// its bar as its first route says, as at any other time.
+    func testATabNotBuiltTappedWhileMoreKeepsABackIsFilledWithinTheTap() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit ends More's pop off screen as in an app only in a scene's window") }
+        let (session, tabs, _) = try leaveMoresBackForHome("more-kept-unbuilt")
+        let navigation = session.presenter.navigation
+        let barless = try XCTUnwrap(tabs.viewControllers?[1] as? UINavigationController, "Barless's panel draws its stack")
+        XCTAssertTrue(barless.viewControllers.isEmpty)
+        tapTab(tabs, 1)
+        XCTAssertTrue(tabs.selectedViewController === barless)
+        XCTAssertEqual(navigation.routerTab, 1)
+        XCTAssertEqual((barless.viewControllers.first as? RouteController)?.node.props["testId"], "route-barless")
+        XCTAssertTrue(barless.isNavigationBarHidden, "Barless's first route shows no bar")
+        XCTAssertEqual(navigation.morePopTab, 4, "More still keeps Five's Back")
+    }
+
+    /// A control in a sheet over Home moving the router to Five, whose Back
+    /// More keeps: More reports its pop as it shows again while navigation
+    /// follows the sheet's stack, so the pop is recorded with no Back, and the
+    /// sync that closes the sheet runs then, with no further batch.
+    func testASheetsControlMovingTheRouterToTheTabWhoseBackMoreKeepsClosesTheSheet() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit presents a sheet, and ends More's pop off screen, as in an app only in a scene's window") }
+        let (session, _, more) = try leaveMoresBackForHome("more-kept-sheet")
+        let navigation = session.presenter.navigation
+        let back = try node(session, "back-deeper").id
+        // A sheet waits for the first drawn frame, which this window never draws
+        if session.firstDrawMs == nil { session.firstDrawMs = ExactEnv.wall() }
+        try tapNode(session, "open-sheet")
+        waitFor("the sheet is up") { session.presenter.modals.routes.count == 1 && !session.presenter.modals.inTransition && !navigation.inTransition }
+        try tapNode(session, "sheet-five")
+        waitFor("the sheet is gone, with nothing pending", facts: { "router tab \(navigation.routerTab), sheets \(session.presenter.modals.routes.count), in transition \(navigation.inTransition), changing \(navigation.changing), More's pop on tab \(String(describing: navigation.morePopTab)), More holds \(more.viewControllers.count)" }) {
+            navigation.routerTab == 4 && session.presenter.modals.routes.isEmpty && !session.presenter.modals.inTransition && !navigation.inTransition
+        }
+        waitForMainQueue()
+        XCTAssertEqual(journal(session, "press view \(back) (back)"), 0, "no Back reaches the router")
+        XCTAssertEqual((more.topViewController as? RouteController)?.key, navigation.observation()["route"] as? String, "More shows the route the router is on")
+    }
+
+    /// More showing Five's Deeper, its animated Back started, and Home tapped;
+    /// once the Back has ended off screen, More holds Five's root and keeps
+    /// the Back for when More shows again.
+    private func leaveMoresBackForHome(_ label: String) throws -> (ExactSession, UITabBarController, UINavigationController) {
+        let (session, tabs, more, _, _) = try deeperUnderMore(label)
+        let navigation = session.presenter.navigation
+        UIView.setAnimationsEnabled(true)
+        defer { UIView.setAnimationsEnabled(false) }
+        more.popViewController(animated: true)
+        waitForAnimationsToStart(more)
+        tapTab(tabs, 0)
+        waitFor("the router follows Home, and More's Back has ended") { navigation.routerTab == 0 && more.transitionCoordinator == nil && !navigation.inTransition }
+        XCTAssertEqual(navigation.morePopTab, 4, "More keeps the Back")
+        return (session, tabs, more)
+    }
+
+    /// More showing Five's Deeper over Five's root, picked from More's list:
+    /// the router's route on Five's root, and Deeper's Back control.
+    private func deeperUnderMore(_ label: String) throws -> (ExactSession, UITabBarController, UINavigationController, String, UInt32) {
+        let (session, tabs, more) = try moreFixture(label)
+        let navigation = session.presenter.navigation
+        tapTab(tabs, of: tabs.moreNavigationController)
+        pickRow(tabs, 4)
+        waitFor("the router follows Five, whose root More holds") { navigation.routerTab == 4 && more.stackRoutes.count == 1 && more.transitionCoordinator == nil }
+        let root = try XCTUnwrap(navigation.observation()["route"] as? String)
+        try tapNode(session, "open-deeper")
+        waitFor("Deeper pushed onto More") { more.stackRoutes.count == 2 && more.transitionCoordinator == nil && !navigation.changing }
+        return (session, tabs, more, root, try node(session, "back-deeper").id)
+    }
+
+    /// An app that sets More's delegate itself takes More's `didShow` from
+    /// Exact: a pop of More then holds no sync.
+    func testAnAppsOwnDelegateOnMoreHoldsNoSync() throws {
+        let (session, _, more, _, _) = try deeperUnderMore("more-app-delegate")
+        let navigation = session.presenter.navigation
+        XCTAssertNotNil(more.view.window, "More is on screen")
+        let app = BarWatcher()
+        more.delegate = app
+        more.popViewController(animated: false)
+        navigation.sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+        waitFor("no sync waits for a didShow Exact cannot hear", facts: { "changing \(navigation.changing), More's pop on tab \(String(describing: navigation.morePopTab))" }) { !navigation.changing }
+    }
+
+    /// An interactive pop toward More's list, cancelled while a sync waits
+    /// for it: navigation follows More again and the sync runs, with no batch
+    /// after it.
+    func testACancelledSwipeTowardMoresListKeepsFollowingMore() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "an interactive pop of More runs as an app's only in a scene's window") }
+        let (session, tabs, more) = try moreFixture("more-swipe-cancel")
+        let navigation = session.presenter.navigation
+        tapTab(tabs, of: tabs.moreNavigationController)
+        pickRow(tabs, 4)
+        waitFor("the router follows Five, whose root More holds") { navigation.routerTab == 4 && more.stackRoutes.count == 1 && more.transitionCoordinator == nil && !navigation.changing }
+        let root = try XCTUnwrap(navigation.observation()["route"] as? String)
+        let pop = InteractivePop()
+        navigation.setAppDelegate(more, pop)
+        pop.interactive = true
+        UIView.setAnimationsEnabled(true)
+        defer { UIView.setAnimationsEnabled(false) }
+        more.popViewController(animated: true)
+        waitForAnimationsToStart(more)
+        pop.interaction.update(0.4)
+        navigation.sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+        pop.interaction.cancel()
+        waitFor("the cancelled swipe leaves More on Five's root") { more.transitionCoordinator == nil && more.stackRoutes.count == 1 }
+        waitFor("navigation follows More again, with nothing owed", facts: { "follows More \(navigation.primaryNavigation === more), changing \(navigation.changing), in transition \(navigation.inTransition), stack \(String(describing: navigation.observation()["stack"]))" }) {
+            navigation.primaryNavigation === more && !navigation.inTransition
+        }
+        XCTAssertEqual(navigation.observation()["route"] as? String, root)
+    }
+
+    /// Waits until `nav`'s transition has started its animations: the
+    /// coordinator runs its alongside block then.
+    private func waitForAnimationsToStart(_ nav: UINavigationController, file: StaticString = #filePath, line: UInt = #line) {
+        var started = false
+        guard nav.transitionCoordinator?.animate(alongsideTransition: { _ in started = true }) == true else {
+            return XCTFail("a transition runs", file: file, line: line)
+        }
+        waitFor("the transition's animations start", onFailure: { XCTFail($0, file: file, line: line) }) { started }
+        XCTAssertNotNil(nav.transitionCoordinator, "and it still runs", file: file, line: line)
     }
 
     /// A tap on the selected tab above its root is UIKit's pop, which the

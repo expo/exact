@@ -3,7 +3,7 @@ import Foundation
 extension ExactModule {
     /// Queries a service loaded by the app's `launch` configuration, such as `observe`.
     /// Calls `reply` once, on any thread, with the JSON answer or nil when the
-    /// service is unavailable or does not answer queries.
+    /// service is unavailable, does not answer queries, or `request` is not JSON.
     /// Observe accepts `["op": "recent", "limit": n]`.
     public func service(_ module: String, _ request: [String: Any], reply: @escaping ([String: Any]?) -> Void) {
         guard let hatches else { return reply(nil) }
@@ -15,7 +15,7 @@ extension ExactHatches {
     typealias ServiceReplyFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32) -> Void
     typealias ServiceFn = @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<UInt8>?, UInt32, UnsafePointer<UInt8>?, UInt32, UnsafeMutableRawPointer?, ServiceReplyFn) -> Void
     func service(_ module: String, _ request: [String: Any], reply: @escaping ([String: Any]?) -> Void) {
-        guard let serviceFn, let json = try? JSONSerialization.data(withJSONObject: request) else { return reply(nil) }
+        guard let serviceFn, let json = exactJSON(request) else { return reply(nil) }
         let box = Unmanaged.passRetained(ServiceReply(reply)).toOpaque()
         let name = Array(module.utf8)
         name.withUnsafeBufferPointer { n in

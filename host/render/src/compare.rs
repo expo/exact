@@ -134,6 +134,7 @@ fn streamed<D: DataSource + 'static, F: Fn() -> D>(
         &js,
         late,
         usize::MAX,
+        None,
         &mut send,
     )?
     else {
@@ -148,13 +149,14 @@ fn streamed<D: DataSource + 'static, F: Fn() -> D>(
             late(page.rendered.activate),
             false,
             Some(boot),
+            None,
         )
     });
     let start = page.boot.as_ref().map_or(0, |boot| boot.sent);
     if sent.get(start..) != Some(after_boot.as_deref().unwrap_or(&page.body).as_bytes()) {
         return Ok(Some("the streamed runs are not the page".into()));
     }
-    let expected = body_js(shell, &js, kernel, late(kernel.activate), false);
+    let expected = body_js(shell, &js, kernel, late(kernel.activate), false, None);
     let (a, b) = (
         without_clock(&without_digest(&expected)),
         without_clock(&without_digest(&page.body)),

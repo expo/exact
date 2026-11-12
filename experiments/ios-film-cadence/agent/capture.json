@@ -1,0 +1,487 @@
+{
+  "mode": "agent",
+  "hostNativeTiming": "agent",
+  "events": [
+    {
+      "name": "opened",
+      "wallMs": 1509.128083,
+      "boot": 98.75991684384644,
+      "udid": "0430DA24-F984-466E-B567-46EEC01FD156"
+    },
+    {
+      "name": "settled-before",
+      "wallMs": 1560.319166,
+      "state": {
+        "navigation": {
+          "nativeBack": null,
+          "closedby": null,
+          "route": "0",
+          "stack": [
+            "0"
+          ],
+          "url": "/",
+          "collapseScroller": 7,
+          "arrangedScrollers": [],
+          "contentScroller": 7,
+          "transition": {
+            "interactive": false,
+            "phase": "idle"
+          },
+          "owners": [],
+          "barHeight": 106,
+          "source": null,
+          "presentation": null,
+          "popover": null
+        },
+        "clock": 0,
+        "epoch": 2,
+        "incarnation": 1
+      }
+    },
+    {
+      "name": "recorder-process",
+      "wallMs": 3454.758333,
+      "pid": 62024
+    },
+    {
+      "name": "recording-ready",
+      "wallMs": 3671.07375
+    },
+    {
+      "name": "tap-start",
+      "wallMs": 3671.077458
+    },
+    {
+      "name": "tap-end",
+      "wallMs": 3998.980541,
+      "reply": {
+        "delivery": "host-activation",
+        "pressed": 5,
+        "native": "bar-button-item",
+        "tapped": 5,
+        "target": "open-picker",
+        "carrier": "ios",
+        "mode": "agent",
+        "epoch": 3,
+        "incarnation": 1,
+        "clock": 0
+      }
+    },
+    {
+      "name": "film-start",
+      "wallMs": 3998.982458
+    },
+    {
+      "name": "film-end",
+      "wallMs": 5773.374125,
+      "reply": {
+        "w": 402,
+        "epoch": 3,
+        "h": 874,
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        },
+        "incarnation": 1,
+        "window": true,
+        "front": true,
+        "scale": 0.5,
+        "clock": 600,
+        "screenshot": "film.png",
+        "frames": 13,
+        "every": 50,
+        "over": 600,
+        "at": [
+          0,
+          50,
+          100,
+          150,
+          200,
+          250,
+          300,
+          350,
+          400,
+          450,
+          500,
+          550,
+          600
+        ],
+        "dir": "film.png.frames",
+        "form": "sheet"
+      }
+    },
+    {
+      "name": "settle-start",
+      "wallMs": 5773.375416
+    },
+    {
+      "name": "settle-end",
+      "wallMs": 5818.958291,
+      "state": {
+        "navigation": {
+          "transition": {
+            "interactive": false,
+            "phase": "idle"
+          },
+          "owners": [
+            {
+              "presentation": "modal",
+              "route": "1"
+            }
+          ],
+          "arrangedScrollers": [],
+          "stack": [
+            "1"
+          ],
+          "popover": null,
+          "source": null,
+          "collapseScroller": 15,
+          "closedby": null,
+          "barHeight": 106,
+          "url": "/picker",
+          "nativeBack": null,
+          "contentScroller": 15,
+          "presentation": "modal",
+          "route": "1"
+        },
+        "clock": 600,
+        "epoch": 3,
+        "incarnation": 1
+      }
+    },
+    {
+      "name": "recording-stop",
+      "wallMs": 7685.139083
+    },
+    {
+      "name": "recording-end",
+      "wallMs": 7707.969041,
+      "result": {
+        "code": 0,
+        "signal": null
+      }
+    }
+  ],
+  "samples": [
+    {
+      "file": "before.png",
+      "film": false,
+      "wallStartMs": 1560.617541,
+      "wallEndMs": 3361.860916,
+      "result": {
+        "incarnation": 1,
+        "clock": 0,
+        "h": 874,
+        "front": true,
+        "epoch": 2,
+        "screenshot": "before.png",
+        "window": true,
+        "scale": 3,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "w": 402,
+        "pixels": "app",
+        "pixelsWhy": "the display changed while it was read",
+        "note": "the picture is the app's own drawing, not the display's (the display changed while it was read): glass and other backdrop materials in it are approximate"
+      }
+    },
+    {
+      "file": "000-0ms.png",
+      "film": true,
+      "wallStartMs": 3999.5805410000003,
+      "wallEndMs": 4055.1247080000003,
+      "result": {
+        "incarnation": 1,
+        "w": 402,
+        "h": 874,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "epoch": 3,
+        "screenshot": "000-0ms.png",
+        "front": true,
+        "window": true,
+        "scale": 3,
+        "clock": 0
+      }
+    },
+    {
+      "file": "001-50ms.png",
+      "film": true,
+      "wallStartMs": 4143.098583,
+      "wallEndMs": 4194.406291,
+      "result": {
+        "front": true,
+        "scale": 3,
+        "window": true,
+        "incarnation": 1,
+        "w": 402,
+        "screenshot": "001-50ms.png",
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        },
+        "epoch": 3,
+        "clock": 50,
+        "h": 874
+      }
+    },
+    {
+      "file": "002-100ms.png",
+      "film": true,
+      "wallStartMs": 4283.6653750000005,
+      "wallEndMs": 4331.4445000000005,
+      "result": {
+        "h": 874,
+        "front": true,
+        "scale": 3,
+        "w": 402,
+        "window": true,
+        "incarnation": 1,
+        "screenshot": "002-100ms.png",
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "clock": 100,
+        "epoch": 3
+      }
+    },
+    {
+      "file": "003-150ms.png",
+      "film": true,
+      "wallStartMs": 4423.12775,
+      "wallEndMs": 4471.613791,
+      "result": {
+        "incarnation": 1,
+        "front": true,
+        "h": 874,
+        "scale": 3,
+        "epoch": 3,
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        },
+        "screenshot": "003-150ms.png",
+        "w": 402,
+        "window": true,
+        "clock": 150
+      }
+    },
+    {
+      "file": "004-200ms.png",
+      "film": true,
+      "wallStartMs": 4568.524375,
+      "wallEndMs": 4616.435666,
+      "result": {
+        "clock": 200,
+        "h": 874,
+        "w": 402,
+        "screenshot": "004-200ms.png",
+        "incarnation": 1,
+        "epoch": 3,
+        "window": true,
+        "front": true,
+        "scale": 3,
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        }
+      }
+    },
+    {
+      "file": "005-250ms.png",
+      "film": true,
+      "wallStartMs": 4704.01,
+      "wallEndMs": 4752.2795,
+      "result": {
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        },
+        "front": true,
+        "scale": 3,
+        "screenshot": "005-250ms.png",
+        "epoch": 3,
+        "h": 874,
+        "window": true,
+        "w": 402,
+        "clock": 250,
+        "incarnation": 1
+      }
+    },
+    {
+      "file": "006-300ms.png",
+      "film": true,
+      "wallStartMs": 4833.754708,
+      "wallEndMs": 4881.591291,
+      "result": {
+        "screenshot": "006-300ms.png",
+        "w": 402,
+        "epoch": 3,
+        "h": 874,
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        },
+        "incarnation": 1,
+        "window": true,
+        "front": true,
+        "scale": 3,
+        "clock": 300
+      }
+    },
+    {
+      "file": "007-350ms.png",
+      "film": true,
+      "wallStartMs": 4968.305083,
+      "wallEndMs": 5017.269541,
+      "result": {
+        "scale": 3,
+        "window": true,
+        "incarnation": 1,
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        },
+        "w": 402,
+        "epoch": 3,
+        "clock": 350,
+        "screenshot": "007-350ms.png",
+        "front": true,
+        "h": 874
+      }
+    },
+    {
+      "file": "008-400ms.png",
+      "film": true,
+      "wallStartMs": 5100.999833,
+      "wallEndMs": 5149.062041,
+      "result": {
+        "incarnation": 1,
+        "screenshot": "008-400ms.png",
+        "epoch": 3,
+        "h": 874,
+        "scale": 3,
+        "w": 402,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "clock": 400,
+        "front": true,
+        "window": true
+      }
+    },
+    {
+      "file": "009-450ms.png",
+      "film": true,
+      "wallStartMs": 5233.630666,
+      "wallEndMs": 5280.182708,
+      "result": {
+        "clock": 450,
+        "h": 874,
+        "w": 402,
+        "screenshot": "009-450ms.png",
+        "incarnation": 1,
+        "epoch": 3,
+        "window": true,
+        "front": true,
+        "scale": 3,
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        }
+      }
+    },
+    {
+      "file": "010-500ms.png",
+      "film": true,
+      "wallStartMs": 5369.462375,
+      "wallEndMs": 5415.369708,
+      "result": {
+        "safeArea": {
+          "top": 62,
+          "bottom": 34
+        },
+        "w": 402,
+        "clock": 500,
+        "epoch": 3,
+        "scale": 3,
+        "incarnation": 1,
+        "window": true,
+        "front": true,
+        "h": 874,
+        "screenshot": "010-500ms.png"
+      }
+    },
+    {
+      "file": "011-550ms.png",
+      "film": true,
+      "wallStartMs": 5500.286833,
+      "wallEndMs": 5545.599875,
+      "result": {
+        "h": 874,
+        "screenshot": "011-550ms.png",
+        "scale": 3,
+        "window": true,
+        "clock": 550,
+        "incarnation": 1,
+        "epoch": 3,
+        "front": true,
+        "w": 402,
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        }
+      }
+    },
+    {
+      "file": "012-600ms.png",
+      "film": true,
+      "wallStartMs": 5633.633291,
+      "wallEndMs": 5683.372208,
+      "result": {
+        "screenshot": "012-600ms.png",
+        "w": 402,
+        "epoch": 3,
+        "h": 874,
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        },
+        "incarnation": 1,
+        "window": true,
+        "front": true,
+        "scale": 3,
+        "clock": 600
+      }
+    },
+    {
+      "file": "after.png",
+      "film": false,
+      "wallStartMs": 5819.022041,
+      "wallEndMs": 7596.6335,
+      "result": {
+        "presented": "sheet",
+        "front": true,
+        "incarnation": 1,
+        "w": 402,
+        "clock": 600,
+        "safeArea": {
+          "bottom": 34,
+          "top": 62
+        },
+        "window": true,
+        "epoch": 3,
+        "screenshot": "after.png",
+        "scale": 3,
+        "h": 874,
+        "pixels": "display"
+      }
+    }
+  ]
+}

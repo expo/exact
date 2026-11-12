@@ -14,7 +14,7 @@ import { basename, resolve } from 'node:path';
 import { browserDiagnosticNoise, open as openAgent, render, runTests as runAgentTests } from './agent.mjs';
 import { driveStore, pollUntil } from './agent-launch.mjs';
 import { HOST_DEV, authoredTests, resolveApp, withAppFixture } from './app.mjs';
-import { agree, explainNode, hostSections, httpFrameSmoke, formControlsSmoke, poolingDrive, messageKeys, rebooted } from './smoke-inspect.mjs';
+import { agree, explainNode, hostSections, httpFrameSmoke, formControlsSmoke, poolingDrive, messageKeys, rebooted, isDeckURL } from './smoke-inspect.mjs';
 import { DirectoryOrigin, parseWebRoot, webReleasePath, webRootPath } from './origin.mjs';
 import { jsTargetBuild, readStaticFile, serveStatic } from '../host/web/serve.mjs';
 import { canonicalBytes, channelOf, publicKeyFromRaw, webRelease } from './deploy.mjs';
@@ -38,8 +38,8 @@ let selectedWebDist = null;
 let fixtureWebDist = null; // the router sweep's wasm build, linking every capability (LLP 1047 D7)
 const device = argv.includes('--device');
 const phone = argv.includes('--phone') ? argv[argv.indexOf('--phone') + 1] : undefined;
-const open = (options) => openAgent({ device, phone, ...options, app: options.app ?? app.name, webDist: options.webDist ?? selectedWebDist }); // a plan: its JS build (`--plan`)
-const runTests = (options) => runAgentTests({ device, phone, ...options, app: options.app ?? app.name, webDist: options.webDist ?? selectedWebDist });
+const open = (options) => openAgent({ device, phone, ...options, app: options.app ?? appName, webDist: options.webDist ?? selectedWebDist }); // a plan: its JS build (`--plan`)
+const runTests = (options) => runAgentTests({ device, phone, ...options, app: options.app ?? appName, webDist: options.webDist ?? selectedWebDist });
 
 // 0. The transcript form (LLP 1012 §7): the one text rendering of the
 // replies, pinned by a fixture — `scripts/fixtures/transcript.json` rendered
@@ -508,11 +508,11 @@ if (host === 'web') {
   const webBuild = mkdtempSync(resolve(tmpdir(), 'exact-smoke-web-'));
   selectedWebDist = resolve(webBuild, 'dist');
   process.on('exit', () => rmSync(webBuild, { recursive: true, force: true }));
-  const built = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web')], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EXACT_WEB_DIST: selectedWebDist } });
+  const built = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web')], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_WEB_DIST: selectedWebDist } });
   if (built.status !== 0) process.exit(built.status ?? 1);
   if (!argv.includes('--app-only')) { // the router sweep swaps plans into a page: the wasm runner's
     fixtureWebDist = resolve(webBuild, 'fixtures');
-    const fixtures = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web'), '--wasm'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EXACT_WEB_DIST: fixtureWebDist, EXACT_WEB_LINK: 'all' } });
+    const fixtures = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web'), '--wasm'], { cwd: ROOT, stdio: 'inherit', env: { ...process.env, EXACT_APP_DIR: app.dir, EXACT_WEB_DIST: fixtureWebDist, EXACT_WEB_LINK: 'all' } });
     if (fixtures.status !== 0) process.exit(fixtures.status ?? 1);
   }
 }
@@ -578,7 +578,8 @@ try {
     }, ({ frameNode, deckState }) => frameNode?.loading === false && deckState.slots.deckLoaded === true && deckState.slots.deckMessage === 'deck-ready');
     tree = loaded.tree;
     let { frameNode, deckState } = loaded;
-    check(frameNode?.type === 'WebView' && frameNode.url === '/deck/index.html', `the iframe tree node is ${JSON.stringify(frameNode)}`);
+    const frameBase = host === 'web' ? await s.carrier.evaluate('document.baseURI') : null;
+    check(frameNode?.type === 'WebView' && isDeckURL(frameNode.url, frameBase), `the iframe tree node is ${JSON.stringify(frameNode)}`);
     check(frameNode?.loading === false, `the iframe is still loading: ${JSON.stringify(frameNode)}`);
     check(deckState?.slots.deckLoaded === true, `load did not record its flag: ${JSON.stringify(deckState?.slots)}`);
     check(deckState?.slots.deckMessage === 'deck-ready', `message recorded ${JSON.stringify(deckState?.slots.deckMessage)}, not "deck-ready"`);

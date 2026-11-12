@@ -291,8 +291,10 @@ fn components(w: Wide, space: MixSpace) -> [f64; 3] {
     space.from_linear_srgb(w.linear_srgb())
 }
 
+/// Whether `w` is written in `space`'s components (an `hsl()` colour in
+/// `hsl`), so taken as it is.
 fn in_own_space(w: Wide, space: MixSpace) -> bool {
-    space_of(space) == w.space && !matches!(space, MixSpace::Hsl | MixSpace::Hwb)
+    space.own() == w.space
 }
 
 /// Components in `space` as a colour, hsl and hwb as sRGB. A relative
@@ -312,6 +314,7 @@ fn wide_from(space: MixSpace, c: [f64; 3], alpha: f64) -> Wide {
         space: space_of(space),
         c,
         alpha: alpha.clamp(0.0, 1.0),
+        missing: [false; 4],
     }
 }
 
@@ -440,20 +443,9 @@ pub(crate) fn absolute(
         _ => format!("{name}({} {} {} / {})", n(c[0]), n(c[1]), n(c[2]), n(a)),
     };
     match exact_color::parse(&canonical) {
-        Some(Parsed::Legacy(c8)) => {
-            let exact = match space {
-                MixSpace::Srgb => Wide {
-                    space: Space::Srgb,
-                    c: c.map(|v| (v / 255.0).clamp(0.0, 1.0)),
-                    alpha: a.clamp(0.0, 1.0),
-                },
-                _ => {
-                    let s = [c[1].clamp(0.0, 100.0), c[2].clamp(0.0, 100.0)];
-                    wide_from(space, [c[0].rem_euclid(360.0), s[0], s[1]], a)
-                }
-            };
-            Ok(Folded::One(Half::Legacy(c8, exact)))
-        }
+        // The unquantised colour as written, which a further fold starts
+        // from: `hsl()` and `hwb()` in their own components.
+        Some(Parsed::Legacy(c8, exact)) => Ok(Folded::One(Half::Legacy(c8, exact))),
         Some(Parsed::Wide(w)) => Ok(Folded::One(Half::Wide(w))),
         _ => not(),
     }
@@ -514,14 +506,16 @@ pub(crate) fn relative(
         ];
         let rgb = components(src, MixSpace::Srgb);
         // CSS Color 4's thresholds: an hsl or hwb grey, a chroma under
-        // 0.0015 in lch, under 0.000004 in oklch (§9.3, §9.5).
-        let gray = match space {
-            MixSpace::Hsl | MixSpace::Hwb => {
-                rgb[0].max(rgb[1]).max(rgb[2]) - rgb[0].min(rgb[1]).min(rgb[2]) < 1e-6
-            }
-            MixSpace::Lch => values[1].abs() < 0.0015,
-            _ => values[1].abs() < 0.000_004,
-        };
+        // 0.0015 in lch, under 0.000004 in oklch (§9.3, §9.5). A hue
+        // written in the space is the source's own, gray or not (§4.4.1).
+        let gray = !in_own_space(src, space)
+            && match space {
+                MixSpace::Hsl | MixSpace::Hwb => {
+                    rgb[0].max(rgb[1]).max(rgb[2]) - rgb[0].min(rgb[1]).min(rgb[2]) < 1e-6
+                }
+                MixSpace::Lch => values[1].abs() < 0.0015,
+                _ => values[1].abs() < 0.000_004,
+            };
         let ch = Channels {
             names: keys,
             values,
@@ -588,6 +582,7 @@ fn relative_hdr(
             space,
             c,
             alpha: a.clamp(0.0, 1.0),
+            missing: [false; 4],
         }))
     })
 }
@@ -715,19 +710,23 @@ fn polar(space: MixSpace) -> Option<usize> {
 
 fn end(w: Wide, space: MixSpace) -> End {
     let c = components(w, space);
-    let gray = match space {
-        MixSpace::Hsl | MixSpace::Hwb => {
-            let rgb = components(w, MixSpace::Srgb);
-            rgb[0].max(rgb[1]).max(rgb[2]) - rgb[0].min(rgb[1]).min(rgb[2]) < 1e-6
-        }
-        MixSpace::Lch | MixSpace::Oklch => c[1].abs() < 1e-6,
-        _ => false,
-    };
+    // A written hue acts as normal even on a gray (CSS Color 4 §4.4.1): only
+    // the hue a conversion gives an achromatic colour is powerless.
+    let written = in_own_space(w, space);
+    let gray = !written
+        && match space {
+            MixSpace::Hsl | MixSpace::Hwb => {
+                let rgb = components(w, MixSpace::Srgb);
+                rgb[0].max(rgb[1]).max(rgb[2]) - rgb[0].min(rgb[1]).min(rgb[2]) < 1e-6
+            }
+            MixSpace::Lch | MixSpace::Oklch => c[1].abs() < 1e-6,
+            _ => false,
+        };
     End {
         c,
         alpha: w.alpha,
         gray,
-        written: in_own_space(w, space),
+        written,
     }
 }
 

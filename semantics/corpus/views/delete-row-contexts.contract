@@ -1,0 +1,168 @@
+style Grouped
+  appearance="auto"
+
+style Cells
+  display="flex"
+  flex-direction="column"
+
+style OtherCells
+  display="flex"
+  flex-direction="column"
+  background-color="transparent"
+
+style Sideways
+  display="flex"
+  flex-direction="row"
+
+component App
+  state items = ["x", "y"]
+  state choice = some("selected")
+  state show = true
+  state removed = ""
+  action remove(id: string)
+    removed = removed + id
+  action drop(id: string)
+    items = items.filter(item => item != id)
+  action clear
+    choice = none
+  view
+    column
+      list class=Grouped
+        if show
+          for group in ["g"] key=group
+            section delete=remove("section") testId="section"
+              header delete=remove("header") testId="header"
+                text "Heading"
+              for id in items key=id
+                if show
+                  match choice
+                    case some(value)
+                      row delete=remove(id) testId=`grouped-${id}`
+                        text id
+                        button "Nested" delete=remove("nested") testId=`nested-${id}`
+                    case none
+                      row delete=remove(id) testId=`fallback-${id}`
+                        text id
+              footer delete=remove("footer") testId="footer"
+                text "Footnote"
+      list class=(show ? Cells : OtherCells)
+        if show
+          match choice
+            case some(value)
+              for id in items key=id
+                row delete=drop(id) testId=id
+                  text id
+            case none
+              row delete=remove("empty") testId="cell-fallback"
+                text "Empty"
+      list class=Sideways display="block"
+        row delete=remove("override") testId="override"
+          text "An authored row overrides its class"
+      list appearance="auto"
+        section
+          scroll swipeContent="grouped-content" swipeTrailing="grouped-action" delete=remove("ignored") testId="written-grouped" overflow-x="scroll" overflow-y="hidden"
+            row id="grouped-content"
+              text "Authored swipe"
+            button "Flag" id="grouped-action" press=remove("flag") testId="flag"
+      list
+        scroll swipeContent="cell-content" swipeTrailing="cell-action" delete=remove("cell") testId="written-cell" overflow-x="scroll" overflow-y="hidden"
+          row id="cell-content"
+            text "Cell swipe"
+          button "Flag" id="cell-action" press=remove("other-flag")
+      row delete=remove("outside") testId="outside"
+        text "Outside a list"
+      list class=Grouped appearance="none"
+        row delete=remove("optout") testId="optout"
+          text "Authored rows"
+          list
+            row delete=remove("inner") testId="inner"
+              text "A nested cell list"
+      list class=Sideways
+        row delete=remove("sideways") testId="sideways"
+          text "Carousel"
+      list display="grid"
+        row delete=remove("grid") testId="grid"
+          text "Grid"
+      list display=(show ? "block" : "flex")
+        row delete=remove("dynamic") testId="dynamic"
+          text "Dynamic layout"
+      list overflow-x="scroll" overflow-y="hidden"
+        row delete=remove("horizontal") testId="horizontal"
+          text "Horizontal scroller"
+      list
+        section
+          row delete=remove("ungrouped") testId="ungrouped"
+            text "A section without a grouped list"
+      list appearance="auto"
+        section
+          list
+            row delete=remove("grouped-inner") testId="grouped-inner"
+              text "A grouped row lays its children out sideways"
+          list class=Cells delete=remove("grouped-parent") testId="grouped-parent"
+            row delete=remove("class-inner") testId="class-inner"
+              text "A class overrides the grouped row's layout"
+          list display="block"
+            row delete=remove("block-inner") testId="block-inner"
+              text "An authored display overrides the grouped row's layout"
+          scroll swipeContent="list-content" swipeTrailing="list-action" overflow-x="scroll" overflow-y="hidden"
+            list id="list-content"
+              row delete=remove("swipe-inner") testId="swipe-inner"
+                text "A swipe's content takes grouped-row layout"
+            button "Flag" id="list-action" press=remove("list-flag")
+      button "Clear" press=clear testId="clear"
+
+test "delete expands through regions in grouped and cell lists"
+  expect tree has "grouped-x-delete"
+  expect tree has "grouped-y-delete"
+  expect tree has "x-delete"
+  expect tree has "y-delete"
+  tap "grouped-x-delete"
+  expect state removed == "x"
+  tap "x-delete"
+  expect tree missing "grouped-x-delete"
+  expect tree missing "x-delete"
+  tap "clear"
+  expect tree has "fallback-y-delete"
+  expect tree has "cell-fallback-delete"
+  tap "fallback-y-delete"
+  tap "cell-fallback-delete"
+  expect state removed == "xyempty"
+
+test "authored attributes override a class's admission and nested lists start their own context"
+  expect tree has "override-delete"
+  expect tree has "inner-delete"
+  tap "override-delete"
+  tap "inner-delete"
+  expect state removed == "overrideinner"
+
+test "an authored grouped swipe takes precedence and a cell still expands delete"
+  expect tree missing "written-grouped-delete"
+  expect tree has "written-cell-delete"
+  tap "flag"
+  tap "written-cell-delete"
+  expect state removed == "flagcell"
+
+test "authored and class attributes override a grouped row's layout"
+  expect tree has "grouped-parent-delete"
+  expect tree has "class-inner-delete"
+  expect tree has "block-inner-delete"
+  tap "class-inner-delete"
+  tap "block-inner-delete"
+  tap "grouped-parent-delete"
+  expect state removed == "class-innerblock-innergrouped-parent"
+
+test "delete outside an admitted row generates no button"
+  expect tree missing "section-delete"
+  expect tree missing "header-delete"
+  expect tree missing "footer-delete"
+  expect tree missing "nested-x-delete"
+  expect tree missing "nested-y-delete"
+  expect tree missing "outside-delete"
+  expect tree missing "optout-delete"
+  expect tree missing "sideways-delete"
+  expect tree missing "grid-delete"
+  expect tree missing "dynamic-delete"
+  expect tree missing "horizontal-delete"
+  expect tree missing "ungrouped-delete"
+  expect tree missing "grouped-inner-delete"
+  expect tree missing "swipe-inner-delete"

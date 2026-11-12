@@ -286,6 +286,7 @@ fn a_long_poll_round_trips_and_bad_terms_are_refused() {
     w.string("https://example.com/changes");
     pairs(&mut w, &[]);
     bytes(&mut w, &[]);
+    w.u32(0); // no WebSocket protocols
     w.string("since");
     w.string("a.b.c");
     w.u8(0);
@@ -770,5 +771,90 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
         writes[0].value.as_deref(),
         Some(&b"secret-2"[..]),
         "for the host's backend"
+    );
+}
+
+#[test]
+fn cache_modes_cross_the_rust_module_seam() {
+    assert_eq!(ABI, 8);
+    let mut old = header(0).into_vec();
+    old[..4].copy_from_slice(&7u32.to_le_bytes());
+    assert!(matches!(reader(&old), Err(e) if e == "logic ABI version differs"));
+    for word in [
+        "unspecified",
+        "default",
+        "no-store",
+        "reload",
+        "no-cache",
+        "force-cache",
+        "only-if-cached",
+    ] {
+        let mode = CacheMode::parse((word != "unspecified").then_some(word)).unwrap();
+        for mut request in [
+            Request::get("https://example.test"),
+            Request::get("https://example.test").independent_http(4096),
+            Request {
+                stream: true,
+                ..Request::get("https://example.test").independent_http(4096)
+            },
+            Request {
+                stream: true,
+                ..Request::get("https://example.test")
+                    .independent_http(4096)
+                    .long_poll("cursor", "next")
+            },
+        ] {
+            request.cache = mode;
+            let mut encoded = Writer::default();
+            encode_result(&mut encoded, Ok(Answer::Later(request.clone())));
+            let bytes = encoded.into_vec();
+            assert_eq!(
+                bytes[0],
+                if mode == CacheMode::Unspecified {
+                    if request.long_poll.is_some() {
+                        10
+                    } else if request.stream {
+                        9
+                    } else if request.http == HttpScheduling::Ordered {
+                        1
+                    } else {
+                        6
+                    }
+                } else {
+                    12
+                }
+            );
+            let mut reader = Reader::new(&bytes);
+            assert_eq!(
+                read_result(&mut reader).unwrap(),
+                Ok(Answer::Later(request))
+            );
+            end(&reader).unwrap();
+        }
+    }
+}
+
+#[test]
+fn socket_protocols_and_selection_cross_the_module_seam() {
+    let request = Request::get("wss://example.test")
+        .protocols(["chat.v2", "chat.v1"])
+        .unwrap();
+    let answer = Answer::stream(request);
+    let mut encoded = Writer::default();
+    encode_result(&mut encoded, Ok(answer.clone()));
+    assert_eq!(
+        read_result(&mut Reader::new(&encoded.into_vec())).unwrap(),
+        Ok(answer)
+    );
+    let message = Outcome::Message(exact_runner::Message {
+        event: "open".into(),
+        protocol: "chat.v1".into(),
+        ..Default::default()
+    });
+    let mut encoded = Writer::default();
+    encode_outcome(&mut encoded, &message);
+    assert_eq!(
+        read_outcome(&mut Reader::new(&encoded.into_vec())).unwrap(),
+        message
     );
 }

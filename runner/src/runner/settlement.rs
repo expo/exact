@@ -38,7 +38,7 @@ enum RequestEffect {
     Answered,
     Later {
         args: Vec<Value>,
-        request: Box<Request>,
+        requests: Vec<Request>,
         forced: bool,
     },
     /// Refused by a turn over its budget: held to be asked again
@@ -173,8 +173,10 @@ impl<D: DataSource> Runner<D> {
             // collected are dropped, and their sources forget the calls
             // (LLP 1027.002 D3, the cleanup of rolled-back calls).
             for effect in effects {
-                if let RequestEffect::Later { request, .. } = effect {
-                    self.discard_request(&request);
+                if let RequestEffect::Later { requests, .. } = effect {
+                    for request in &requests {
+                        self.discard_request(request);
+                    }
                 }
             }
         }
@@ -959,10 +961,12 @@ impl<D: DataSource> Runner<D> {
                             let draws_before = self.store.entropy_draws();
                             // Asked again in a later pass: an earlier
                             // `Later` answer was never handed out.
-                            if let RequestEffect::Later { request, .. } =
+                            if let RequestEffect::Later { requests, .. } =
                                 std::mem::replace(&mut effects[i], RequestEffect::None)
                             {
-                                self.discard_request(&request);
+                                for request in &requests {
+                                    self.discard_request(request);
+                                }
                             }
                             pending_res[i] = self.resources[i].pending;
                             self.store.take_topics();
@@ -1179,6 +1183,12 @@ impl<D: DataSource> Runner<D> {
                                     Held::new(v)
                                 }
                                 Ok(Answer::Later(request)) => {
+                                    let requests = self
+                                        .requests_for(Target::Resource(i), request)
+                                        .map_err(|error| RunnerError::Data {
+                                            resource: self.target_name(Target::Resource(i)),
+                                            error,
+                                        })?;
                                     // The host will run it. Meanwhile the resource
                                     // keeps the value it had — its last answer, or
                                     // its compiled boot value (LLP 1016 D3).
@@ -1213,7 +1223,7 @@ impl<D: DataSource> Runner<D> {
                                     };
                                     effects[i] = RequestEffect::Later {
                                         args: args.clone(),
-                                        request: Box::new(request),
+                                        requests,
                                         forced: refreshed,
                                     };
                                     pending_res[i] = true;
@@ -1343,9 +1353,9 @@ impl<D: DataSource> Runner<D> {
                 match effect {
                     RequestEffect::Later {
                         args,
-                        request,
+                        requests,
                         forced,
-                    } => self.enqueue(Target::Resource(i), source, args, *request, forced),
+                    } => self.enqueue_requests(Target::Resource(i), source, args, requests, forced),
                     RequestEffect::Wait {
                         args,
                         reasks,

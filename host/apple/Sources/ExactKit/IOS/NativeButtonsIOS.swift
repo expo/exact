@@ -471,6 +471,7 @@ extension MenuHost {
             if !open, let pop, self?.presentedMenu[pop.id] != nil { self?.presentedMenu = [:] }
         }
         button.showsMenuAsPrimaryAction = true
+        button.preferredMenuElementOrder = Self.order(v.props["menuOrder"])
         guard button.menu == nil || shape != button.menuShape else { return }
         button.menuShape = shape
         button.menu = pullDown(of: v, titled: heading)
@@ -492,6 +493,7 @@ extension MenuHost {
         button.menu = nil
         button.menuShape = nil
         button.showsMenuAsPrimaryAction = false
+        button.preferredMenuElementOrder = .automatic
         button.popover = nil
         button.toggled = nil
     }

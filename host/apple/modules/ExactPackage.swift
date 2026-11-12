@@ -43,10 +43,13 @@ public final class ExactPackageEvents {
     public func message(_ text: String) { send(8, text) }
     /// An event the view declares beyond the nine (LLP 1133.021 §9 item 2),
     /// `args` in the declared types' JSON: the handler named for it runs
-    /// with them decoded. Sent as a message the runner recognises.
+    /// with them decoded. Sent as a message the runner recognises; not sent
+    /// when `args` are not JSON (a NaN, an infinity).
     public func emit(_ name: String, _ args: [Any]) {
         let body: [String: Any] = ["exact:event": name, "args": args]
-        guard let data = try? JSONSerialization.data(withJSONObject: body), let text = String(data: data, encoding: .utf8) else { return }
+        // `data(withJSONObject:)` raises, uncaught by `try?`, for what this refuses.
+        guard JSONSerialization.isValidJSONObject(body), let data = try? JSONSerialization.data(withJSONObject: body),
+              let text = String(data: data, encoding: .utf8) else { return }
         send(8, text)
     }
     /// Preferred content size in points; an authored size wins; nil forgets it.
@@ -191,7 +194,8 @@ public final class ExactPackageContext {
     /// The `userInfo` entry for a notification the implementation posts
     /// whose opening raises event `name` with `args`, or opens `navigate`
     /// (LLP 1133.004 D6, D7): the host's notification delegate reads it and
-    /// raises the event, a person's activation, on the session that posted it.
+    /// raises the event, a person's activation, on the session that posted
+    /// it. Empty, and a line in the journal, for `args` that are not JSON.
     public func activation(_ name: String, _ args: [Any], navigate: String? = nil) -> [AnyHashable: Any] {
         activationFn(name, args, navigate)
     }

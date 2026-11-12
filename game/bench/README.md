@@ -836,7 +836,7 @@ apps need that lookup. A warm external-game probe measured 15 calls before and
 after: median **28.97 → 0.531 ms**, range 25.59–62.13 → 0.420–1.104 ms. Each run
 kept all 22 generated/app files byte-identical and returned the same app identity,
 manifest, workspace and target. This is resolution time, not proof time or FPS.
-Evidence: `/Users/ccheever/projects/.exact-game-verification/resolve-probe/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/resolve-probe/`.
 
 Generated-adapter cleanup also preserves Cargo's `target/` directory while
 removing old adapter identities. Six starter checks, 54 proof checks and three
@@ -851,7 +851,7 @@ writer fixed that matcher; the existing real-Cargo regression now exercises a
 workspace with spaces. All four focused checks pass in 12.53 s, covering library
 and executable receipts, source/environment changes, cache reuse and refusal of
 ambiguous dep-info. This verifies the receipt fix, not the complete new-game proof.
-Evidence: `/Users/ccheever/projects/.exact-game-verification/dep-info/focused.log`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/dep-info/focused.log`.
 
 ### Direct publication values — 2026-09-18
 
@@ -881,7 +881,7 @@ All three captured save files match across hosts; observed tick pins, final worl
 hashes, publications and journal lines agree. The game's pins file remains empty,
 so these are observed comparisons, not a repinned baseline. Native journal chunks
 also carry a tick field that the web chunks omit. Evidence and rejected candidate:
-`/Users/ccheever/projects/.exact-game-verification/publication/`.
+`/Users/<user>/projects/.exact-game-verification/publication/`.
 
 The final no-host-argument proof passes in 47.90 s wall time, including another
 rebake after concurrent edits; this does not measure the warm headless loop. The
@@ -906,7 +906,7 @@ identical executable bytes and modification time. A subsequent Rust-source edit
 still rebuilds both packages. This measures avoided compilation, not the full
 game proof or startup. All 54 proof-harness tests pass, including documentation
 exclusion and source/asset invalidation. Evidence:
-`/Users/ccheever/projects/.exact-game-verification/doc-build/`.
+`/Users/<user>/projects/.exact-game-verification/doc-build/`.
 
 ### Attachment maintenance stays with its component — 2026-09-19
 
@@ -925,7 +925,7 @@ crate, feature or build option is involved. The 550,000-byte target remains open
 Beacons and Skinned proofs pass on web and headless Linux with unchanged tick/save
 digests, including the model fixture's stale and restored attachments. All seven
 captured save files agree byte-for-byte across hosts. Evidence and paired artifacts:
-`/Users/ccheever/projects/.exact-game-verification/primitive-ownership/`.
+`/Users/<user>/projects/.exact-game-verification/primitive-ownership/`.
 The full game workspace passes 565 tests (11 ignored), build, all-target Clippy
 and formatting; caps and boot pass. The cleanup regression covers a restored world
 with its last follower despawned. Browser descendant inventory was unavailable for
@@ -946,7 +946,7 @@ Three actual default Beacons runs pass with the existing tick/save observations
 and all recorded carrier children exited. All three refreshed stale build receipts
 as the shared tree changed (5.74, 259.82 and 12.62 s command wall time); no warm-loop
 improvement is claimed. The long run was sampled inside Cargo's build-script output
-wait. Evidence: `/Users/ccheever/projects/.exact-game-verification/proof-default/`.
+wait. Evidence: `/Users/<user>/projects/.exact-game-verification/proof-default/`.
 
 ### Binary decoding borrows internal names — 2026-09-19
 
@@ -969,7 +969,7 @@ encoded bytes and hashes. These are native decode/restore measurements, not fram
 rates or end-to-end proof latency. The standalone probe grows 64 executable bytes;
 no shipped module size reduction is claimed. Regression coverage checks duplicate
 literal names at different input offsets, nested skipped names and their later
-reuse. Evidence: `/Users/ccheever/projects/.exact-game-verification/codec-names/`.
+reuse. Evidence: `/Users/<user>/projects/.exact-game-verification/codec-names/`.
 
 Beacons and Skinned proofs pass on web and headless Linux with their existing
 pins. All seven captured saves match across hosts, including fresh-process
@@ -994,7 +994,7 @@ smaller code comes with observed decode costs. The first also slows 256-row
 decoding by 6–15%. These are native decode timings, not FPS; the three-candidate
 loop is closed. The baseline is 746,976 raw / 320,274 gzip bytes. Further size work
 should remove unnecessary linked ownership/execution, with these traversal shapes
-left alone. Evidence: `/Users/ccheever/projects/.exact-game-verification/shared-record-read/`.
+left alone. Evidence: `/Users/<user>/projects/.exact-game-verification/shared-record-read/`.
 The rebuilt restored artifact matches the baseline byte-for-byte; 34 focused
 data/save tests, caps and boot pass. Restoration explicitly refreshed source
 timestamps after the first check caught Cargo reusing an experimental artifact.
@@ -1027,7 +1027,7 @@ proofs pass on web and headless Linux with their existing pins and all nine vali
 captured saves equal across hosts. Linux Save-every-tick and FreshGame modes pass
 for all three too; their 18 captured saves equal the continuous run. Recorded
 carrier children exited; browser descendant inventory was unavailable. Evidence:
-`/Users/ccheever/projects/.exact-game-verification/optional-asset-owner/`.
+`/Users/<user>/projects/.exact-game-verification/optional-asset-owner/`.
 
 ### Restore constructs the game once — 2026-09-19
 
@@ -1059,7 +1059,7 @@ and formatting; caps and boot pass. Beacons, Asset and Skinned proofs pass on we
 and Linux, plus Save-every-tick and FreshGame on Linux. All 27 cross-host/mode save
 comparisons are byte-identical, with existing pins and all recorded carrier
 children exited. Beacons' browser descendant audit was unavailable. Evidence:
-`/Users/ccheever/projects/.exact-game-verification/single-setup/`.
+`/Users/<user>/projects/.exact-game-verification/single-setup/`.
 
 ### Compact type directories rejected — 2026-09-19
 
@@ -1079,7 +1079,7 @@ candidate also retained them for Beacons and four scene populations.
 
 The size saving does not justify extra custom collection code and slower type
 installation. This experiment is closed; the original maps remain. Evidence:
-`/Users/ccheever/projects/.exact-game-verification/type-tables/`.
+`/Users/<user>/projects/.exact-game-verification/type-tables/`.
 
 ### Named world bindings across Exact2 — 2026-09-19
 
@@ -1113,7 +1113,7 @@ Keychain fixture still refuses access. Caltrain builds and passes all three web
 assertions; its smoke fails solely on Chrome's Keychain/encryption errors. A green
 root suite or Caltrain smoke is not claimed. Recorded proof carriers exit; browser
 descendant inventory is unavailable on some runs. Evidence:
-`/Users/ccheever/projects/.exact-game-verification/named-surface-args/`.
+`/Users/<user>/projects/.exact-game-verification/named-surface-args/`.
 
 ### Record-publication candidates rejected — 2026-09-19
 
@@ -1147,7 +1147,7 @@ The restored native probe and shipped Wasm are byte-identical to their baselines
 All 58 focused data, simulation and ergonomics tests pass, as do formatting, caps
 and boot. Only these measurements and the queue note remain; the shared index
 was unchanged by validation, which used a private staged copy.
-Evidence: `/Users/ccheever/projects/.exact-game-verification/record-publication/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/record-publication/`.
 
 ### Dynamic values stream without an owned copy — 2026-09-19
 
@@ -1185,7 +1185,7 @@ passes pinned proofs on both hosts with identical saves. The full game workspace
 passes 537 tests (11 ignored), build, all-target Clippy and formatting. Recorded
 carrier children exited; Beacons' browser descendant audit was unavailable.
 Evidence:
-`/Users/ccheever/projects/.exact-game-verification/value-streaming/`.
+`/Users/<user>/projects/.exact-game-verification/value-streaming/`.
 
 ### Shared clock preparation rejected — 2026-09-19
 
@@ -1205,7 +1205,7 @@ across the three timing rounds produced identical saves, hashes and tick counts.
 The size saving does not justify the extra helper and the ordinary-step cost.
 The original source and normal Beacons artifact are restored byte-for-byte:
 749,140 raw / 321,466 gzip bytes. This experiment is closed. Evidence:
-`/Users/ccheever/projects/.exact-game-verification/clock-preparation/`.
+`/Users/<user>/projects/.exact-game-verification/clock-preparation/`.
 
 ### Encoder name storage rejected — 2026-09-19
 
@@ -1235,7 +1235,7 @@ The fresh restored build is byte-identical to the baseline: 749,140 raw /
 321,466 gzip bytes. All 138 focused engine, data, save and simulation tests pass
 (1 ignored), as do formatting, caps and boot. The shared index has no staged
 content changes; caps used a private staged copy. This experiment is closed. Evidence:
-`/Users/ccheever/projects/.exact-game-verification/encoder-names/`.
+`/Users/<user>/projects/.exact-game-verification/encoder-names/`.
 
 ### Save framing uses one buffer — 2026-09-19
 
@@ -1297,7 +1297,7 @@ processes exited; the browser's full descendant inventory timed out, so a separa
 PID audit confirmed every recorded browser/carrier PID was absent. Validation
 used a private Git index and changed no staged content.
 
-Evidence: `/Users/ccheever/projects/.exact-game-verification/save-framing/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/save-framing/`.
 
 ### Input declarations shared — 2026-09-19
 
@@ -1345,7 +1345,7 @@ Caps and boot pass using a private index. The later browser descendant audit
 timed out; all 276 recorded carrier/browser PIDs were absent on a separate check.
 This is not a clean integrated-suite claim; source files changed during that run.
 
-Evidence: `/Users/ccheever/projects/.exact-game-verification/input-declarations/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/input-declarations/`.
 
 ### Agent input uses one projection — 2026-09-19
 
@@ -1389,7 +1389,7 @@ All recorded proof PIDs exited; the full browser descendant inventory timed out.
 The 641-second workspace test command includes launch delays: a one-second sample
 of its audio test harness captured only `_dyld_start`, before Rust ran. The audio
 compile and formatting failures from the preceding slice are resolved in this tree.
-Evidence: `/Users/ccheever/projects/.exact-game-verification/agent-input/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/agent-input/`.
 
 ### Input invariants checked at restore — 2026-09-19
 
@@ -1429,7 +1429,7 @@ Rust. The subsequent integrated shipped module is **749,960 raw / 322,603 gzip
 bytes**, with no source drift during that build; this includes concurrent changes
 and is not an isolated delta for this slice.
 
-Evidence: `/Users/ccheever/projects/.exact-game-verification/input-boundary/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/input-boundary/`.
 
 ### Restore decodes once after choosing setup arguments — 2026-09-19
 
@@ -1464,7 +1464,7 @@ All 26 saved-file comparisons match (Beacons against the preceding accepted run;
 Asset and Skinned reconstruction modes against their continuous runs). All recorded
 proof PIDs are absent; the complete web descendant inventory timed out.
 
-Evidence: `/Users/ccheever/projects/.exact-game-verification/restore-once-current/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/restore-once-current/`.
 
 
 ### Restore reuses its decoded input queue — 2026-09-19
@@ -1490,7 +1490,7 @@ web continuous; all 12 saved-file comparisons match the preceding accepted run.
 All 146 recorded proof PIDs are absent; the complete web descendant inventory
 was unavailable.
 
-Evidence: `/Users/ccheever/projects/.exact-game-verification/restore-queue/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/restore-queue/`.
 
 
 ### Bound restore reuses canonical arguments — 2026-09-19
@@ -1528,7 +1528,7 @@ argument test target has 5 passes and 1 failure. These results do not supersede 
 isolated allocation comparison above; they prevent claiming current integration
 passes. See `integrated/` and `current-registration.log` in the evidence directory.
 
-Evidence: `/Users/ccheever/projects/.exact-game-verification/restore-bound-args/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/restore-bound-args/`.
 
 ### Retained quad updates — 2026-09-19
 
@@ -1556,7 +1556,7 @@ match through component edits, visibility changes, missing poses, reused slots,
 parent changes and world restores. The placement app passes Linux and web;
 both complete saves match across hosts and retain their existing pins.
 
-Evidence: `/Users/ccheever/projects/.exact-game-verification/quad-feed-current/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/quad-feed-current/`.
 
 
 ### Screen bounds — 2026-09-19
@@ -1580,7 +1580,7 @@ now it makes neither. The all-behind sample allocates in neither version.
 Twelve alternating samples per case, 100,000 calls per sample. Allocation counting
 was disabled during timings; both versions use the same instrumented allocator.
 These are isolated screen-bound CPU costs, not frame-rate or whole-agent timings.
-Evidence: `/Users/ccheever/projects/.exact-game-verification/spatial-bounds-current/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/spatial-bounds-current/`.
 
 
 ### Shared float notation — 2026-09-19
@@ -1606,7 +1606,7 @@ and debug spelling, plus boundaries and nonfinite values. Native and WebAssembly
 agree on digest `f8a958f77ad4cd3a`; 81 integrated layout/pick replies are unchanged.
 119 focused engine/data/save/agent tests pass (one ignored), as does engine Clippy.
 Linux and web placement proofs retain their tick and complete-save pins.
-Evidence: `/Users/ccheever/projects/.exact-game-verification/float-notation-current/`.
+Evidence: `/Users/<user>/projects/.exact-game-verification/float-notation-current/`.
 
 ### Entity target lookup — 2026-09-19
 
@@ -1624,7 +1624,7 @@ are isolated lookups, not frame-rate or whole-game measurements.
 All 2,508 compared target results and 8,467 save bytes are identical, including
 literal `#` names, duplicate names, absent targets and recycled entities. The 39
 focused ECS, argument/agent and ergonomics tests, engine Clippy and formatting
-checks pass. Evidence: `/Users/ccheever/projects/.exact-game-verification/target-resolution-current/`.
+checks pass. Evidence: `/Users/<user>/projects/.exact-game-verification/target-resolution-current/`.
 
 ### Compressed textures — 2026-09-23
 

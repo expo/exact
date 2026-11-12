@@ -56,7 +56,7 @@ impl Persistence {
             disk.reap(true);
             if let Err(error) = std::fs::remove_file(&disk.path) {
                 if error.kind() != io::ErrorKind::NotFound {
-                    eprintln!("game pipeline cache removal failed: {error}");
+                    eprintln!("GPU module pipeline cache removal failed: {error}");
                 }
             }
         }
@@ -200,7 +200,7 @@ impl PipelineCache {
                     .flatten();
                 if disk.is_some() {
                     eprintln!(
-                        "game pipeline cache: {}",
+                        "GPU module pipeline cache: {}",
                         if handle.is_none() {
                             "unavailable"
                         } else if data.is_some() {
@@ -291,7 +291,7 @@ fn optional_cache<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> Optio
     let mut failed = false;
     for scope in scopes.into_iter().rev() {
         if let Some(error) = crate::block_on(scope.pop()) {
-            eprintln!("game pipeline cache unavailable: {error}");
+            eprintln!("GPU module pipeline cache unavailable: {error}");
             failed = true;
         }
     }

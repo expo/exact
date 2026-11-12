@@ -83,7 +83,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Record a host admission refusal on a still-current ticket. Repeating
-    /// refusals cannot grow a queue: there is at most one ticket per target.
+    /// refusals cannot grow a queue: each request already has its ticket.
     pub fn refuse_request(&mut self, ticket: u64, reason: &'static str, ordered: bool) {
         if let Some(pending) = self.pending.iter_mut().find(|p| p.ticket == ticket) {
             pending.refusal = Some((reason, ordered));
@@ -282,6 +282,24 @@ impl<D: DataSource> Runner<D> {
         ))
     }
 
+    /// [`Self::release_failed`] as a commit of the request's origin,
+    /// invocation and causes, as its reply's refused commit was (LLP
+    /// 1133.002 D12, LLP 1133.035 D16 item 6): what the release refreshes
+    /// is asked as the request's, so a wake's failed reply reaches no
+    /// app-only source.
+    pub(super) fn release_failed_as_asked(
+        &mut self,
+        ticket: u64,
+        target: Target,
+        why: Failure,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let (origin, id) = (self.ticket_origin(ticket), self.ticket_id(ticket));
+        let causes = self.ticket_causes(ticket);
+        self.as_invocation_caused(origin, id, causes, |r| {
+            r.release_failed(ticket, target, why)
+        })
+    }
+
     /// A reply the source failed to take (it threw, ran over its budget, or
     /// answered outside its shape). The refused commit's rollback restored
     /// the request to the pending set, but the host has already delivered
@@ -303,6 +321,7 @@ impl<D: DataSource> Runner<D> {
             .map(|p| (Some(p.args.clone()), p.ask_again, p.write, p.upload, p.sent))
             .unwrap_or_default();
         self.pending.retain(|p| p.ticket != ticket);
+        self.forget_ticket(target);
         self.forgot = true;
         self.sync_pending_flags();
         let name = self.target_name(target);

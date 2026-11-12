@@ -754,10 +754,13 @@ final class InlineContextIOSTests: XCTestCase {
     }
 
     /// The mean difference in luminance, 0 to 255, between the lifted picture and the window over the run's boxes,
-    /// both as the render server draws them
+    /// both as the render server draws them; the window with the run's words, which the lift cuts out of it
     private func difference(_ preview: UITargetedPreview, over rects: [CGRect], of node: NodeView) -> Double {
         let container = preview.target.container, size = preview.view.bounds.size
         let area = CGRect(x: preview.target.center.x - size.width / 2, y: preview.target.center.y - size.height / 2, width: size.width, height: size.height)
+        let ink = node.textRasterLayer, cut = ink?.mask
+        CATransaction.begin(); CATransaction.setDisableActions(true); ink?.mask = nil; CATransaction.commit()
+        defer { CATransaction.begin(); CATransaction.setDisableActions(true); ink?.mask = cut; CATransaction.commit() }
         let shown = container.convert(area, to: window), image = capture(window)
         let truth = UIGraphicsImageRenderer(size: size).image { _ in
             image.draw(at: CGPoint(x: -shown.minX, y: -shown.minY))

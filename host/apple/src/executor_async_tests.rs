@@ -12,15 +12,16 @@ use std::time::{Duration, Instant};
 
 /// One exchange the core started, to answer by hand, with what it sent
 /// (an upload's buffer stays alive with it, as the platform's would).
-struct Started {
+pub(super) struct Started {
     url: String,
-    _request: HopRequest,
-    sink: Box<dyn Sink>,
+    pub(super) _request: HopRequest,
+    pub(super) sink: Box<dyn Sink>,
 }
 
 #[derive(Default)]
 pub(super) struct Script {
-    refuse_next: std::sync::atomic::AtomicBool,
+    retired: std::sync::atomic::AtomicBool,
+    pub(super) refuse_next: std::sync::atomic::AtomicBool,
     panic_next: std::sync::atomic::AtomicBool,
     panic_activate: std::sync::atomic::AtomicBool,
     started: Mutex<Vec<Started>>,
@@ -29,13 +30,22 @@ pub(super) struct Script {
 
 impl Script {
     /// Wait until `n` exchanges have started; how many did.
-    fn wait(&self, n: usize) -> usize {
+    pub(super) fn wait(&self, n: usize) -> usize {
         let started = self.started.lock().unwrap();
         let (started, _) = self
             .changed
             .wait_timeout_while(started, HANG, |s| s.len() < n)
             .unwrap();
         started.len()
+    }
+
+    pub(super) fn wait_for(&self, url: &str) {
+        let started = self.started.lock().unwrap();
+        let (started, _) = self
+            .changed
+            .wait_timeout_while(started, HANG, |s| !s.iter().any(|r| r.url == url))
+            .unwrap();
+        assert!(started.iter().any(|r| r.url == url), "{url} did not start");
     }
 
     /// How many have started, after a moment for any that would.
@@ -45,7 +55,7 @@ impl Script {
     }
 
     /// Answer the first started exchange to `url` with 200 and `body`.
-    fn answer(&self, url: &str, body: &[u8]) {
+    pub(super) fn answer(&self, url: &str, body: &[u8]) {
         let mut exchange = self.take(url);
         exchange.sink.head(Head {
             status: 200,
@@ -56,7 +66,7 @@ impl Script {
         exchange.sink.end(Ok(()));
     }
 
-    fn take(&self, url: &str) -> Started {
+    pub(super) fn take(&self, url: &str) -> Started {
         let mut started = self.started.lock().unwrap();
         let at = started
             .iter()
@@ -68,6 +78,18 @@ impl Script {
 
 struct Scripted(Arc<Script>);
 impl ibex2::stdlib::fetch_async::AsyncTransport for Scripted {
+    fn retire(&self) {
+        let started = {
+            let mut started = self.0.started.lock().unwrap();
+            self.0.retired.store(true, Ordering::Release);
+            std::mem::take(&mut *started)
+        };
+        for mut exchange in started {
+            exchange
+                .sink
+                .end(Err(ibex2::stdlib::fetch_async::aborted()));
+        }
+    }
     fn start(
         &self,
         request: HopRequest,
@@ -104,7 +126,13 @@ impl ibex2::stdlib::fetch_async::AsyncTransport for Scripted {
                     "injected transport activation panic"
                 );
                 let url = request.url.clone();
-                script.started.lock().unwrap().push(Started {
+                let mut started = script.started.lock().unwrap();
+                if script.retired.load(Ordering::Acquire) {
+                    drop(started);
+                    drop(sink);
+                    return;
+                }
+                started.push(Started {
                     url,
                     _request: request,
                     sink,
@@ -120,7 +148,7 @@ pub(super) fn core(script: &Arc<Script>, grants: &str) -> (Core, Receiver<()>) {
     core_with_upload_copy(script, grants, false)
 }
 
-fn core_with_upload_copy(
+pub(super) fn core_with_upload_copy(
     script: &Arc<Script>,
     grants: &str,
     portable: bool,
@@ -151,6 +179,7 @@ fn core_with_upload_copy(
 
 fn job(ticket: u64, request: Request) -> RequestOut {
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "test".into(),
         request,
@@ -419,9 +448,9 @@ fn the_suite_passes_on_the_asynchronous_core() {
 }
 
 /// Temporary app directories for a file body.
-struct Files(std::path::PathBuf);
+pub(super) struct Files(pub(super) std::path::PathBuf);
 impl Files {
-    fn new() -> Files {
+    pub(super) fn new() -> Files {
         let root = std::env::temp_dir().join(format!(
             "exact-async-upload-{}-{}",
             std::process::id(),
@@ -432,7 +461,7 @@ impl Files {
         }
         Files(root)
     }
-    fn roots(&self) -> [std::path::PathBuf; 3] {
+    pub(super) fn roots(&self) -> [std::path::PathBuf; 3] {
         ["data", "cache", "tmp"].map(|dir| self.0.join(dir))
     }
 }
@@ -442,7 +471,7 @@ impl Drop for Files {
     }
 }
 
-fn upload(url: &str, path: &str, ceiling: u32) -> Request {
+pub(super) fn upload(url: &str, path: &str, ceiling: u32) -> Request {
     let mut request = Request::get(url).body_from(path).independent_http(ceiling);
     request.method = "POST".into();
     request

@@ -812,13 +812,13 @@ export function bakedSettingChanges(bin, app) {
   return settingChanges(record, process.env, app.dir).map(({ name }) => `import.meta.env.${name}`);
 }
 
-/** A packaged Windows game keeps compiler provenance in the private bake cache.
+/** A packaged Windows app keeps compiler provenance in the private bake cache.
  * Require both unchanged source inputs and the exact copied executable/DLLs. */
 export function packagedBuildChanges(receipt, directory, app) {
   if (!existsSync(receipt)) return ['missing compiler build receipt'];
   const build = JSON.parse(readFileSync(receipt, 'utf8'));
-  if (build.version !== 1 || !build.binary?.inputs || !build.products?.length) return ['invalid compiler build receipt'];
-  const changed = pendingBuildInputs(build);
+  if (build.version !== 1 || !build.binary?.inputs || !build.sourceInputs?.inputs || !build.sourceInputs.inventory || !build.sourceInputs.outputs || !build.products?.length) return ['invalid compiler build receipt'];
+  const changed = pendingBuildInputs(build, { includeSources: true });
   const products = build.products.filter(product => /\.(exe|dll)$/.test(product.path));
   if (!products.some(product => product.path.endsWith('.exe'))) changed.push('receipt has no executable');
   for (const product of products) {
@@ -853,7 +853,11 @@ export function bakedPlans(linuxBin, bakeDir) {
  * left — where the live driver looks. */
 export function traceLocators(appName) {
   const out = [process.env.EXACT_DEV_PLAN, resolve(webDist(), 'app.plan')].filter(Boolean);
-  try { const a = resolveApp(appName); out.push(...bakedPlans(process.env.EXACT_LINUX_BIN ?? linuxBinary(a), bakeOutput(a))); } catch {}
+  try {
+    const a = resolveApp(appName);
+    if (a.outside) out.push(resolve(webDist(a), 'app.plan'));
+    out.push(...bakedPlans(process.env.EXACT_LINUX_BIN ?? linuxBinary(a), bakeOutput(a)));
+  } catch {}
   return out;
 }
 

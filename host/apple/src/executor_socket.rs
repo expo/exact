@@ -120,6 +120,7 @@ pub(super) fn read(
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let open = Message {
             event: "open".into(),
+            protocol: socket.protocol().into(),
             ..Message::default()
         };
         if matches!(frame(shared, ticket, open, limit), Frame::Gone) {
@@ -129,9 +130,11 @@ pub(super) fn read(
             let m = match socket.next_event() {
                 Ok(Event::Message(ibex2::stdlib::websocket::Message::Text(data))) => Message {
                     data,
+                    protocol: socket.protocol().into(),
                     ..Message::default()
                 },
                 Ok(Event::Message(ibex2::stdlib::websocket::Message::Binary(bytes))) => Message {
+                    protocol: socket.protocol().into(),
                     binary: Some(bytes),
                     ..Message::default()
                 },
@@ -230,6 +233,8 @@ fn frame(shared: &Shared, ticket: u64, message: Message, limit: usize) -> Frame 
     }
     exact_runner::stream_timing::received(ticket);
     state.completed[lane].push_back(Completed {
+        cached: false,
+        finished_at: std::time::Instant::now(),
         elapsed_ms,
         ticket,
         outcome: Outcome::Message(message),

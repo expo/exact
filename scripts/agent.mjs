@@ -77,10 +77,11 @@ export const webFrame = (evaluate, ms = 250) => evaluate(`new Promise((resolve) 
 })`);
 async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPORT, url: pageURL, app, webDist, onProcess, reuse, storage, fresh = false, facts, env, mediaClock = 'wall', lineHeight = null, port: fixed = null }) {
   env = { ...process.env, ...env };
+  const selected = resolveApp(app), dist = resolve(webDist ?? defaultWebDist(selected));
   // A launch location (`--url /share?text=hi`, LLP 1038 D5) is a path on the page this carrier serves.
   const location = pageURL?.startsWith('/') ? pageURL : null; if (location) pageURL = undefined;
   if (location && browser !== 'chrome') throw new Error(`--url ${location}: a launch location on the web is Chrome's drive`);
-  if (!pageURL) await (await import('./agent-test.mjs')).backendPreflight(resolveApp(app), resolve(webDist ?? defaultWebDist()));
+  if (!pageURL) await (await import('./agent-test.mjs')).backendPreflight(selected, dist);
   if (browser !== 'chrome') {
     const { openPlaywrightWeb } = await import('./agent-playwright.mjs');
     return openPlaywrightWeb({ browser, plan, world, size, url: pageURL, app, webDist, onProcess, reuse, storage, facts, env, port: fixed, parity: parityScript({ mediaClock, lineHeight }) });
@@ -92,11 +93,9 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
     }
     await reuse.close();
   }
-  const selected = resolveApp(app);
-  const dist = resolve(webDist ?? defaultWebDist());
   if (!pageURL) {
     await assertWebDistApp(dist, selected);
-    const js = jsTargetBuild(dist), env = process.env.EXACT_APP_DIR || webDist || process.env.EXACT_WEB_DIST ? `EXACT_APP_DIR=${selected.dir} EXACT_WEB_DIST=${dist} ` : '';
+    const js = jsTargetBuild(dist), env = selected.outside || webDist || process.env.EXACT_WEB_DIST ? `EXACT_APP_DIR=${selected.dir} EXACT_WEB_DIST=${dist} ` : '';
     const command = (js && ownWebBuild(selected, dist)) || `${env}bun host/web/build.mjs ${selected.crate('web')}${js ? '' : ' --wasm'}`, changed = webChanges(dist, selected);
     refuseStale('web', resolve(dist, '.exact-build.json'), changed.all, command);
   }
@@ -198,6 +197,7 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
     const target = targetInfos.find((t) => t.type === 'page') ?? (await cdp.send('Target.createTarget', { url: 'about:blank' }));
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
     const heldKeys = new Map();
+    let documentLoader = null;
     const call = async (method, params, timeoutMs) => {
       const reply = await cdp.send(method, withHeldModifiers(method, params, heldKeys), sessionId, timeoutMs);
       if (method === 'Input.dispatchKeyEvent') {
@@ -208,6 +208,7 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
     };
     cdp.listeners.push((msg) => {
       if (msg.sessionId !== sessionId) return;
+      if (msg.method === 'Page.frameNavigated' && !msg.params.frame.parentId) documentLoader = msg.params.frame.loaderId;
       if (msg.method === 'Runtime.consoleAPICalled') hostLines.push(`console.${msg.params.type}: ` + msg.params.args.map((a) => a.value ?? a.description ?? a.type).join(' '));
       else if (msg.method === 'Runtime.exceptionThrown') hostLines.push('exception: ' + (msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text));
       else if (msg.method === 'Log.entryAdded' && msg.params.entry.level !== 'verbose') hostLines.push(`${msg.params.entry.level}: ${msg.params.entry.text}`);
@@ -250,7 +251,9 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
     // Display preferences are the agent's from launch, never the machine's (LLP 1069.007 D2); `prefer` changes them.
     const emulated = { ...LAUNCH_MEDIA };
     await call('Emulation.setEmulatedMedia', { features: Object.entries(emulated).map(([name, value]) => ({ name, value })) });
-    await call('Page.navigate', { url: page.href });
+    // Reset before the history mirror records the new session's browser index.
+    await call('Page.resetNavigationHistory');
+    await evaluate(`location.replace(${JSON.stringify(page.href)})`);
     // The first frame: the glue stamps the root when it is in the DOM. A fresh profile's first launch can be slow.
     const t = Date.now();
     let boot = null;
@@ -294,7 +297,7 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
         const ms = await evaluate("document.getElementById('exact-root')?.dataset.gpuMs ?? null");
         return ms == null ? null : Number(ms);
       },
-      /** A fresh document on this page: its origin's storage emptied, or `keep`ing it (a test's `reload`, mail F19). A new `session` on a reused carrier starts from the launch display preferences and pointer, never the last session's `prefer` (LLP 1069.007 D2; agent-prefer.mjs). */
+      /** A fresh test clears storage and history; `keep` reloads the current entry with its history and store (LLP 1038 D7). A new `session` on a reused carrier starts from the launch display preferences and pointer, never the last session's `prefer` (LLP 1069.007 D2; agent-prefer.mjs). */
       async reset({ keep = false, failFetch, epoch, session = false } = {}) {
         if (session) { for (const name of Object.keys(emulated)) delete emulated[name]; Object.assign(emulated, LAUNCH_MEDIA); await call('Emulation.setEmulatedMedia', { features: Object.entries(emulated).map(([name, value]) => ({ name, value })) }); await call('Emulation.setTouchEmulationEnabled', { enabled: false }); }
         // Release browser-owned input while its original document still exists.
@@ -306,21 +309,17 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
         await evaluate('sessionStorage.clear()');
         if (!keep) await call('Storage.clearDataForOrigin', {origin:page.origin, storageTypes:'all'});
         const destination = withEpoch(withFaults(keep ? await evaluate('location.href') : page.href, failFetch), epoch);
-        await call('Page.navigate', {url:'about:blank'});
-        const deadline = Date.now() + 30000;
-        while (!await evaluate("location.href === 'about:blank'").catch(() => false)) {
-          if (Date.now() > deadline) throw new Error('the reused page never left its old document');
-          await sleep(15);
-        }
+        const previousLoader = documentLoader, deadline = Date.now() + 30000;
         hostLines.length = 0;
-        await call('Page.navigate', {url:destination});
+        if (!keep) await call('Page.resetNavigationHistory');
+        await evaluate(`history.replaceState(${keep ? 'history.state' : 'null'}, '', ${JSON.stringify(destination)})`);
+        await call('Page.reload');
         let boot;
-        while ((boot = await evaluate("document.getElementById('exact-root')?.dataset.bootMs ?? null").catch(() => null)) == null) {
+        while (documentLoader === previousLoader || (boot = await evaluate("document.getElementById('exact-root')?.dataset.bootMs ?? null").catch(() => null)) == null) {
           if (Date.now() > deadline) throw new Error('the reused page never booted');
           await sleep(15);
         }
         await evaluate('exact.ready');
-        await call('Page.resetNavigationHistory');
         this.boot = Number(boot);
       },
       ask, async reveal(id) { const r = await ask({ op: 'reveal', id }); if (r.scrolled) await frame(); return r; },
@@ -755,7 +754,7 @@ export async function open({onProcess, host = 'web', browser, plan, world, size,
     : await openWeb({ browser, plan, world, size, url, app, webDist, onProcess, reuse, storage, fresh: env?.EXACT_AGENT_STORAGE_FRESH === '1', facts, env, mediaClock, lineHeight, port: webPort(port, { ...process.env, ...env }) });
   const mapLocator = plan ?? carrier.plan ?? (url && /^https?:\/\//i.test(url) ? url : env?.EXACT_DEV_PLAN ?? process.env.EXACT_DEV_PLAN)
     // The dist the carrier serves — an app outside the repo's own (shop F2), never Caltrain's by default.
-    ?? (carrier.host === 'web' ? resolve(webDist ?? defaultWebDist(), 'app.plan') : null);
+    ?? (carrier.host === 'web' ? resolve(webDist ?? defaultWebDist(resolveApp(app)), 'app.plan') : null);
   // Without a plan of the drive's own, a native host runs its bake's: the maps a development bake left (LLP 1012.001.000 D6).
   const baked = () => { const a = resolveApp(app); const bin = host === 'windows'
     ? process.env.EXACT_WINDOWS_BIN ?? resolve(a.dir, 'dist-windows', `${executableName(a)}.exe`)
@@ -1457,7 +1456,7 @@ export async function main(argv, injected = {}) {
           : Object.fromEntries(args.flatMap((a, i) => i % 2 ? [] : [[a, args[i + 1]]]))); break;
         // A system's call of a tool (LLP 1133.023 §10): `call <tool> <json> [--door <door>]`, run as the door would.
         case 'call': { const door = trimmed.match(/\s--door\s+(\S+)\s*$/); r = await s.op({ op: 'call', tool: args[0], args: trimmed.replace(/\s--door\s+\S+\s*$/, '').replace(/^call\s+\S+\s*/, '') || '{}', door: door?.[1] ?? 'agent' }); break; }
-        case 'fail': case 'pass': r = await s.op(faultRequest(op, args, fetchOrigins(resolve(flags.webDist ?? defaultWebDist())))); break;
+        case 'fail': case 'pass': r = await s.op(faultRequest(op, args, fetchOrigins(resolve(flags.webDist ?? defaultWebDist(resolveApp(flags.app)))))); break;
         case 'perf': r = await perfOp(s, args, line, step); break;
         case 'check': r = await checkOp(s, args); break; /* LLP 1116.003 D8: the presented screen, judged in text */ case 'scroll': throw new MalformedOperation(`scroll is not an op: a finger scrolls, \`tap ${args[0] ?? '<scroller>'} drag ${-(Number(args[1]) || 0)} ${-(Number(args[2] ?? 300) || 0)}\` (the content follows the finger: a scroll of 300 down is a drag of -300), a wheel \`tap <scroller> wheel <dx> <dy>\`, a list's row by key \`tap <list> into <key>\``); case 'open': case 'openurl': case 'url': case 'link': throw new MalformedOperation(`${op} is not an op: a link arrives as \`type <root> ${args[0] ?? 'euxy://p/abc'}\`, the root being the node with navigate= (its testId or id, from \`tree\`; LLP 1038 D11); on macOS and iOS a URL with a scheme goes through the app's protocol_handlers as the system delivers it, with no "Open in …?" alert`);
         default: throw new MalformedOperation(`unknown op: ${op} (tree, layout, state, logs, check, screenshot, sample, tap, type, post, pick, reload, clock, resize, close, back, prefer, call, perf, fail fetch, pass fetch)`);
@@ -1467,7 +1466,7 @@ export async function main(argv, injected = {}) {
   // The drive, against the build it used (LLP 1146 D2: `bun scripts/evidence.mjs`).
   const recordDrive = async (result) => (await import('./evidence.mjs')).recordRun(flags.app, { host, what: `drive ${ops.join(' · ').slice(0, 300)}`, result, timing: flags.timing ?? 'agent', touch: flags.touch, device: flags.device || flags.phone, sim: flags.sim, webDist: flags.webDist });
   // What the replies leave out, on stderr, which a --json reader's stdout never carries (agent-test.mjs `driveNotes`).
-  const notes = driveNotes(s, { host, storage: flags.storage, origins: flags.url ? [] : loopbackOrigins(resolve(flags.webDist ?? defaultWebDist())) });
+  const notes = driveNotes(s, { host, storage: flags.storage, origins: flags.url ? [] : loopbackOrigins(resolve(flags.webDist ?? defaultWebDist(resolveApp(flags.app)))) });
   try { if (flags.permission) await s.prefer(flags.permission); // `--permission name=state` (agent-launch.mjs)
     await launchEntries(s, flags); // `--notification '<entry>'`
     for (const [k, line] of ops.entries()) {

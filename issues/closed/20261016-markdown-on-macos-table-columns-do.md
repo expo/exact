@@ -7,7 +7,7 @@
 **Date:** 2026-10-16
 
 Reported by Charlie from a screenshot of the macOS Markdown app (`apps/markdown`) showing
-`/Users/ccheever/projects/tui-comparison-20261010/REPORT.md`, whose tables are ordinary GFM pipe tables
+`/Users/<user>/projects/tui-comparison-20261010/REPORT.md`, whose tables are ordinary GFM pipe tables
 (e.g. line 46: an 11-column header `| Framework | App | Typing ms | … | Observed limits |`, a `| --- |` row,
 then rows such as `| ink | harness | 4.68 | 97.94 | 1,779,030.00 | … |`).
 

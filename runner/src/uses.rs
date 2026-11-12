@@ -606,6 +606,12 @@ pub fn keeps_midi(plan: &Plan) -> bool {
     uses_midi(plan) || !plan.sequences.is_empty()
 }
 
+/// Whether the plan's code runs `setLocale`: only then does a language the
+/// app chose, kept in the store, choose its strings at the next launch.
+pub fn chooses_locale(plan: &Plan) -> bool {
+    runs_command(plan, &["setLocale"])
+}
+
 fn runs_command(plan: &Plan, names: &[&str]) -> bool {
     let mut runs = false;
     plan.each_code(&mut |code| {

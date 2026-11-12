@@ -315,6 +315,8 @@ test('the wasm early GET follows a return chain and is claimed at the granted fi
   try {
     const op = { method: 'GET', url: `${origin.url}start`, headers: [], scope };
     const source = scopedGrantSet(app, scope);
+    for (const cache of ['no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached'])
+      expect(fetchEarly({ ...op, cache }, source)).toBe(null);
     expect(fetchEarly(op, source)).toBeFunction();
     const response = await request(op, { grantSet: app, controllers: new Set(), moduleLoader: { claim } });
     expect([response.kind, new TextDecoder().decode(response.body), middleHits, finalHits]).toEqual([0, 'accepted', 1, 1]);
@@ -435,6 +437,29 @@ test('a long poll waits out Retry-After, shows retrying, and a drop ends the wai
   assert.equal(controller.retrying, undefined);
   assert.equal(s.asked.length, 3, 'not asked again');
   s.server.stop(true);
+});
+
+test('a long poll sets its cursor where it is, or appends it, and keeps every other parameter as written', async () => {
+  // As the native hosts' `with_query_value` does (host/apple/src/executor_longpoll.rs): the value is
+  // %XX outside the unreserved set, and no other pair is re-serialised as a form.
+  const cases = [
+    ['?wait=25&path=/a/b&tags=x,y&q=hello%20world&flag', 'a b', '?wait=25&path=/a/b&tags=x,y&q=hello%20world&flag&since=a%20b'],
+    ['?since=0&wait=25&since=1', "7!'()*", '?since=7%21%27%28%29%2A&wait=25'],
+    ['?%73ince=0&wait=25', '-_.~', '?since=-_.~&wait=25'],
+    // Empty fields stay, and a name that begins with U+FEFF is not the cursor's.
+    ['?&wait=25&&flag&since=0&', '1', '?&wait=25&&flag&since=1&'],
+    ['?%EF%BB%BFsince=0&since=0', '1', '?%EF%BB%BFsince=0&since=1'],
+    ['?%EF%BB%BFsince=0&since=0', '1', '?%EF%BB%BFsince=1&since=0', '\uFEFFsince'],
+    ['?wait=25&', '1', '?wait=25&&since=1'],
+  ];
+  for (const [query, next, expected, cursor = 'since'] of cases) {
+    const s = standIn([{ body: JSON.stringify({ seq: next }) }]);
+    const controller = new AbortController(), sent = [];
+    const done = longPoll(s, controller, sent, { cursor }, { url: `${s.origin}/changes${query}`, maxResponseBytes: 256 });
+    await until(() => s.held.length === 1);
+    assert.deepEqual(s.asked, [query, expected]);
+    controller.abort(); await done; s.server.stop(true);
+  }
 });
 
 test('what is not a poll reply ends a long poll, and only a bodiless GET is one', async () => {
@@ -594,4 +619,18 @@ test('a render upload keeps HTTP error replies and enforces its byte ceiling, ab
     globalThis.fetch = saved.fetch;
     if (saved.render) Object.defineProperty(globalThis, '__exactRender', saved.render); else delete globalThis.__exactRender;
   }
+});
+
+test('a cache-only upload fails without constructing an XMLHttpRequest or telling sending', async () => {
+  const saved = globalThis.XMLHttpRequest, messages = [], controllers = new Set();
+  let made = 0;
+  globalThis.XMLHttpRequest = class { constructor() { made++; throw new Error('upload contacted the network'); } };
+  try {
+    const outcome = await request({ method: 'POST', url: 'https://example.test/upload', headers: [], body: btoa('bytes'), stream: true, upload: true, cache: 'only-if-cached' },
+      { grantSet: normalized('net.fetch https://example.test'), controllers, message: m => messages.push(m) });
+    assert.equal(outcome.kind, 1);
+    assert.equal(made, 0);
+    assert.deepEqual(messages, []);
+    assert.equal(controllers.size, 0);
+  } finally { globalThis.XMLHttpRequest = saved; }
 });

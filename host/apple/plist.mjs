@@ -29,6 +29,9 @@ export const transportSecurity = (section, keys = {}, { web = true } = {}) => {
  * (`reach.localNetworking`, LLP 1133.036 D5). */
 export const localNetworking = (section, reach) => (section?.localNetworking || reach?.localNetworking ? { NSAllowsLocalNetworking: true } : {});
 
+/** The app's declared origin (`app.origin`), which a link's Copy Link and Share put a path in the app on. */
+export const declaredOrigin = ({ origin }) => (origin ? { ExactOrigin: new URL(origin).origin } : {});
+
 /** A launch no link started opens at the manifest's `start_url`, as an installed web app does (W3C App Manifest): resolved
  * against the manifest's URL, on the app's declared origin when it has one, and baked when it is a place in the app (on
  * that origin) other than the root. */
@@ -45,6 +48,55 @@ export const startLocation = ({ manifest: { start_url: at }, origin: declared })
  * Mac's row is Exact's `ExactUserInterfaceStyle`, which ExactMac sets as `NSApp.appearance` before its first window. */
 export const interfaceStyle = ({ manifest: { userInterfaceStyle: style } }, mac = false) =>
   style === 'light' || style === 'dark' ? (mac ? { ExactUserInterfaceStyle: style } : { UIUserInterfaceStyle: style === 'dark' ? 'Dark' : 'Light' }) : {};
+
+/** Each value `categories` admits, with the category Apple files it under (`LSApplicationCategoryType`'s values,
+ * without `public.app-category.`), or null where Apple has none. The W3C's standardized categories (the manifest
+ * wiki's "Categories" page) come first; the rest are Apple's own, each a category the W3C list has no name for. The
+ * schema's enum is this list (`store-keys.test.mjs`). */
+export const CATEGORIES = new Map([
+  ...['business', 'education', 'entertainment', 'finance', 'games', 'lifestyle', 'medical', 'music', 'news', 'productivity', 'sports', 'travel', 'utilities', 'weather'].map((c) => [c, c]),
+  ['fitness', 'healthcare-fitness'], ['health', 'healthcare-fitness'], ['photo', 'photography'], ['social', 'social-networking'],
+  ...['books', 'food', 'government', 'kids', 'magazines', 'navigation', 'personalization', 'politics', 'security', 'shopping'].map((c) => [c, null]),
+  ...['developer-tools', 'graphics-design', 'reference', 'video'].map((c) => [c, c]),
+  ...['action', 'adventure', 'arcade', 'board', 'card', 'casino', 'dice', 'educational', 'family', 'kids', 'music', 'puzzle', 'racing', 'role-playing', 'simulation', 'sports', 'strategy', 'trivia', 'word'].map((g) => [`${g}-games`, `${g}-games`]),
+]);
+
+/** Apple's category for the manifest: its first `categories` entry Apple has one for, else `games` for a game the
+ * game shell builds (`game`), else none. */
+export function appleCategory({ categories = [], game }) {
+  const named = categories.map((c) => CATEGORIES.get(c)).find(Boolean);
+  return named ?? (game ? 'games' : null);
+}
+
+const atLeast = (version, floor) => {
+  const [a, b] = [String(version), floor].map((v) => v.split('.').map(Number));
+  return (a[0] - b[0] || (a[1] ?? 0) - (b[1] ?? 0) || (a[2] ?? 0) - (b[2] ?? 0)) >= 0;
+};
+
+/** The rows that file the app under its category and offer Game Mode, on `platform` (`ios` or `macos`).
+ * `LSApplicationCategoryType` is the category the Mac App Store, Finder and Launchpad file the app under, and the one
+ * App Store Connect requires of a Mac upload; Apple documents it for macOS, and the iOS bundle carries it too. Game
+ * Mode (Apple, "LSSupportsGameMode": iOS 18.6, macOS 26) gives a game priority on the CPU and GPU and lower Bluetooth
+ * latency, and a game without the key "might not" get it: so a game (an Apple category of `games` or a genre of game)
+ * is written `YES` unless `host.<platform>.gameMode` is false, and any app may ask for it. iOS 18.0 to 18.5 read
+ * `GCSupportsGameMode` instead, which an app whose `minimumOS` is below 18.6 carries too. */
+export function storeKeys({ manifest }, platform) {
+  const category = appleCategory(manifest), section = manifest.host?.[platform] ?? {};
+  const game = category === 'games' || !!category?.endsWith('-games');
+  const mode = section.gameMode ?? (game ? true : undefined);
+  const older = platform === 'ios' && mode !== undefined && !atLeast(section.minimumOS ?? '17.0', '18.6');
+  return { ...(category ? { LSApplicationCategoryType: `public.app-category.${category}` } : {}),
+    ...(mode !== undefined ? { LSSupportsGameMode: mode } : {}), ...(older ? { GCSupportsGameMode: mode } : {}) };
+}
+
+export const MEMORY_ENTITLEMENT = 'com.apple.developer.kernel.increased-memory-limit';
+
+/** `host.ios.increasedMemoryLimit`'s entitlement, which lets the app exceed the default memory limit on the iPhone
+ * and iPad models that allow it (Apple, "Increased Memory Limit", iOS 15). The app's own: not an extension's or an App
+ * Clip's, and not tvOS's, which Apple does not list for it. It is a capability of the App ID, so a device build's
+ * profile must grant it. */
+export const memoryEntitlements = (app) => app.manifest.host?.ios?.increasedMemoryLimit === true
+  && !app.widgetTV && !app.widgetHost && !app.widgetAppId && !app.clipParent ? [MEMORY_ENTITLEMENT] : [];
 
 /** When a downloaded update applies and how often the app checks (`deploy.activate`, `deploy.check.interval`). */
 export const updateActivation = (app) => ({ ...(app.manifest.deploy?.activate ? { ExactUpdateActivate: app.manifest.deploy.activate } : {}),

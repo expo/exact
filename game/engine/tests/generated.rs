@@ -644,3 +644,22 @@ fn a_cosmetic_name_is_immutable_while_registered_and_never_takes_a_declared_name
     }
     assert_eq!(returns, 2);
 }
+
+#[test]
+fn packed_coat_mask_is_optional_and_round_trips() {
+    use exact_game::asset::{decode_model, encode_model, MaterialData, Model};
+    let plain = Model {
+        materials: vec![MaterialData::default()],
+        ..Default::default()
+    };
+    let bytes = encode_model(&plain);
+    assert!(!bytes
+        .windows(b"clearcoat_mask_from_alpha".len())
+        .any(|w| w == b"clearcoat_mask_from_alpha"));
+    let mut masked = plain.clone();
+    masked.materials[0].clearcoat_mask_from_alpha = true;
+    let packed = encode_model(&masked);
+    assert_ne!(bytes, packed);
+    assert!(decode_model(&packed).unwrap().materials[0].clearcoat_mask_from_alpha);
+    assert!(!decode_model(&bytes).unwrap().materials[0].clearcoat_mask_from_alpha);
+}

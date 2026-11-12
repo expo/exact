@@ -102,8 +102,9 @@ test('a peer\'s write is read again as only the tokens it moved, a package\'s de
 test('a batch whose reply passes 1 MiB (a stream\'s cap, not a fetch\'s) is read whole: each read one resolve, every row shown', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-design-tool-batch-big-'));
   cpSync(resolve(ROOT, 'apps/theme-fixture/app.json'), join(app, 'app.json'));
-  // 180 families near the value bound (about 3.9 KB each, twice that in an answer): describe under 1 MiB, the batch's answers past it.
-  const stack = n => Array.from({ length: 550 }, (_, i) => `f${n}x${i}`).join(', ').slice(0, 3900).replace(/, [^,]*$/, '');
+  // 180 families near the value bound (about 3.8 KB each, twice that in an answer): describe under 1 MiB, the batch's answers past it.
+  // Each is 60 long names, within a stack's 64.
+  const stack = n => Array.from({ length: 60 }, (_, i) => `f${n}x${i}-${'y'.repeat(54)}`).join(', ');
   const faces = Array.from({ length: 180 }, (_, n) => `face${n}`);
   writeFileSync(join(app, 'app.tamber'), `tamber t\n\ntheme\n  ink = #111111\n${faces.map((f, n) => `  ${f}: family = ${stack(n)}\n`).join('')}`);
   writeFileSync(join(app, 'app.contract'), `component App\n  view\n    column background-color="ink"\n${faces.map(f => `      text "x" font-family="${f}"\n`).join('')}`);

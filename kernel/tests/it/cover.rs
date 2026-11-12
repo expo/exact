@@ -445,154 +445,9 @@ fn scroller(long: bool) -> Kernel {
 
 #[test]
 fn a_scroller_the_platform_insets_lays_out_its_content_between_the_insets() {
-    let mut kernel = scroller(false);
-    assert_eq!(frame(&mut kernel, 4), (0.0, 0.0, 390.0, 844.0));
-    assert_eq!(
-        frame(&mut kernel, 5),
-        (0.0, 16.0, 390.0, 812.0),
-        "as authored"
-    );
-    // UIKit insets the scroller by the large title's 140 and the home
-    // indicator's 34: the filled column ends where the indicator begins
-    // once the title's inset moves it down, and keeps its start.
-    kernel
-        .set_host_cover(4, Some(HostCover::Inset([140.0, 34.0])))
-        .unwrap();
-    assert_eq!(
-        frame(&mut kernel, 4),
-        (0.0, 0.0, 390.0, 844.0),
-        "the scroller keeps its box"
-    );
-    assert_eq!(frame(&mut kernel, 5), (0.0, 16.0, 390.0, 638.0));
-    let list = kernel.node(4).unwrap().key;
-    assert_eq!(
-        kernel.resolved_padding(list),
-        Some((0.0, 16.0, 0.0, 16.0)),
-        "CSS's"
-    );
-    assert_eq!(
-        kernel.layout_padding(list),
-        Some((0.0, 16.0, 0.0, 16.0)),
-        "the insets are a gutter, not padding"
-    );
-    assert_eq!(
-        kernel.node(4).unwrap().content.1,
-        670.0,
-        "the extent the platform adds its insets to: 16 + 638 + 16"
-    );
-    kernel.set_host_cover(4, None).unwrap();
-    assert_eq!(frame(&mut kernel, 5).3, 812.0, "cleared, as authored");
-}
-
-#[test]
-fn scrolling_content_keeps_its_extent_under_an_inset() {
-    let mut kernel = scroller(true);
-    kernel
-        .set_host_cover(4, Some(HostCover::Inset([140.0, 34.0])))
-        .unwrap();
-    assert_eq!(frame(&mut kernel, 6), (0.0, 16.0, 390.0, 2000.0));
-    assert_eq!(kernel.node(4).unwrap().content.1, 2032.0, "16 + 2000 + 16");
-    assert!(kernel
-        .set_host_cover(4, Some(HostCover::Inset([f32::NAN, 0.0])))
-        .is_err());
-}
-
-#[test]
-fn an_inset_scroller_keeps_the_box_its_sizes_give_it() {
-    let text = |t: &'static str| StyleValue::Text(t.into());
-    let n = StyleValue::Number;
-    // The ways a scroller beside a sibling (7, `flex: 1 1 0%`) gets a
-    // definite block size: a height (a length, a percentage, a
-    // calculation), a minimum or a maximum, a flex basis, a share of the
-    // column, a height under its insets, and a width through an aspect
-    // ratio. An arranged pane fills its allocation with `height: 100%`.
-    let sizes: [&[(StyleId, StyleValue)]; 10] = [
-        &[(StyleId::Height, n(500.0))],
-        &[(StyleId::Height, StyleValue::Percent(100.0))],
-        &[(StyleId::Height, text("calc(50% + 10px)"))],
-        &[(StyleId::Height, n(10.0)), (StyleId::MinHeight, n(600.0))],
-        &[
-            (StyleId::Height, StyleValue::Percent(100.0)),
-            (StyleId::MaxHeight, n(300.0)),
-        ],
-        &[
-            (StyleId::MaxHeight, text("calc(40% - 8px)")),
-            (StyleId::Height, n(700.0)),
-        ],
-        &[(StyleId::FlexBasis, n(400.0))],
-        &[
-            (StyleId::FlexGrow, n(1.0)),
-            (StyleId::FlexShrink, n(1.0)),
-            (StyleId::FlexBasis, StyleValue::Percent(0.0)),
-        ],
-        &[(StyleId::Height, n(100.0))],
-        &[
-            (StyleId::Height, n(100.0)),
-            (StyleId::AspectRatio, n(2.0)),
-            (StyleId::AlignSelf, text("flex-start")),
-        ],
-    ];
-    for sizing in ["content-box", "border-box"] {
-        for size in sizes {
-            let mut kernel = scroller(false);
-            let mut rows = vec![
-                (StyleId::FlexGrow, n(0.0)),
-                (StyleId::FlexShrink, n(0.0)),
-                (StyleId::BoxSizing, text(sizing)),
-            ];
-            rows.extend_from_slice(size);
-            let sibling = [
-                (StyleId::FlexGrow, n(1.0)),
-                (StyleId::FlexShrink, n(1.0)),
-                (StyleId::FlexBasis, StyleValue::Percent(0.0)),
-            ];
-            let ops = [
-                Op::SetStyle {
-                    id: 4,
-                    patch: Box::new(style(&rows)),
-                },
-                Op::CreateView {
-                    id: 7,
-                    node_type: NodeType::View,
-                },
-                Op::SetStyle {
-                    id: 7,
-                    patch: Box::new(style(&sibling)),
-                },
-                Op::SetChildren {
-                    id: 2,
-                    children: vec![3, 4, 7],
-                },
-            ];
-            kernel.apply(2, 3, &ops).unwrap();
-            let (authored, beside) = (frame(&mut kernel, 4), frame(&mut kernel, 7));
-            kernel
-                .set_host_cover(4, Some(HostCover::Inset([140.0, 34.0])))
-                .unwrap();
-            assert_eq!(frame(&mut kernel, 4), authored, "{sizing} {size:?}");
-            assert_eq!(frame(&mut kernel, 7), beside, "beside, {sizing} {size:?}");
-            // The filled column rests between the padding and the insets
-            assert_eq!(
-                frame(&mut kernel, 5).3,
-                (authored.3 - 32.0 - 174.0).max(0.0),
-                "{sizing} {size:?}"
-            );
-            kernel.set_host_cover(4, None).unwrap();
-            assert_eq!(
-                frame(&mut kernel, 4),
-                authored,
-                "cleared, {sizing} {size:?}"
-            );
-        }
-    }
-}
-
-#[test]
-fn an_inset_scroller_keeps_its_children_above_its_insets() {
     let n = StyleValue::Number;
     let text = |t: &'static str| StyleValue::Text(t.into());
-    // A footer pinned to the list's bottom (7) rests where the home
-    // indicator's inset begins once the title's inset moves the content down
+    // The list (4) holds a filled column (5) and a footer pinned to its bottom (7)
     let mut kernel = scroller(false);
     let footer = [
         (StyleId::PositionType, text("absolute")),
@@ -620,125 +475,299 @@ fn an_inset_scroller_keeps_its_children_above_its_insets() {
         },
     ];
     kernel.apply(2, 3, &ops).unwrap();
+    assert_eq!(frame(&mut kernel, 4), (0.0, 0.0, 390.0, 844.0));
+    assert_eq!(
+        frame(&mut kernel, 5),
+        (0.0, 16.0, 390.0, 812.0),
+        "as authored"
+    );
     assert_eq!(frame(&mut kernel, 7).1, 804.0, "as authored");
+    // UIKit insets the scroller by the large title's 140 and the home
+    // indicator's 34: the filled column and the footer end where the
+    // indicator begins once the title's inset moves the content down, and
+    // the column keeps its start.
     kernel
         .set_host_cover(4, Some(HostCover::Inset([140.0, 34.0])))
         .unwrap();
+    assert_eq!(
+        frame(&mut kernel, 4),
+        (0.0, 0.0, 390.0, 844.0),
+        "the scroller keeps its box"
+    );
+    assert_eq!(frame(&mut kernel, 5), (0.0, 16.0, 390.0, 638.0));
     assert_eq!(frame(&mut kernel, 7).1, 630.0, "844 - 174 - 40");
-
-    // A multi-column list's extent is at least its client box, which the
-    // insets' gutter is outside of: 670 points, so a list that fits does
-    // not scroll by the insets the platform adds to it
-    let mut kernel = scroller(false);
-    let columns = [
-        (StyleId::Display, text("block")),
-        (StyleId::ColumnCount, n(2.0)),
-        (StyleId::Height, StyleValue::Percent(100.0)),
-        (StyleId::BoxSizing, text("border-box")),
-        (StyleId::FlexShrink, n(0.0)),
-    ];
-    let ops = [
-        Op::SetStyle {
-            id: 4,
-            patch: Box::new(style(&columns)),
-        },
-        Op::SetStyle {
-            id: 5,
-            patch: Box::new(style(&[(StyleId::Height, n(100.0))])),
-        },
-    ];
-    kernel.apply(2, 3, &ops).unwrap();
-    kernel
-        .set_host_cover(4, Some(HostCover::Inset([140.0, 34.0])))
-        .unwrap();
-    frame(&mut kernel, 4);
-    assert_eq!(kernel.node(4).unwrap().content.1, 670.0);
+    let list = kernel.node(4).unwrap().key;
+    assert_eq!(
+        kernel.resolved_padding(list),
+        Some((0.0, 16.0, 0.0, 16.0)),
+        "CSS's"
+    );
+    assert_eq!(
+        kernel.layout_padding(list),
+        Some((0.0, 16.0, 0.0, 16.0)),
+        "the insets are a gutter, not padding"
+    );
+    assert_eq!(
+        kernel.node(4).unwrap().content.1,
+        670.0,
+        "the extent the platform adds its insets to, where the column's end padding and the footer end"
+    );
+    // A scroller written `overflow-x: hidden` lays out the same
+    let ops = [Op::SetStyle {
+        id: 4,
+        patch: Box::new(style(&[(StyleId::OverflowX, text("hidden"))])),
+    }];
+    kernel.apply(3, 4, &ops).unwrap();
+    assert_eq!(frame(&mut kernel, 5).3, 638.0, "overflow-x: hidden");
+    assert_eq!(
+        kernel.node(4).unwrap().content.1,
+        670.0,
+        "overflow-x: hidden"
+    );
+    kernel.set_host_cover(4, None).unwrap();
+    assert_eq!(frame(&mut kernel, 5).3, 812.0, "cleared, as authored");
 }
 
 #[test]
-fn an_inset_takes_a_hidden_overflow_x_and_a_gutter_leaves_the_client_box() {
-    let n = StyleValue::Number;
+fn scrolling_content_keeps_its_extent_under_an_inset() {
+    let mut kernel = scroller(true);
+    kernel
+        .set_host_cover(4, Some(HostCover::Inset([140.0, 34.0])))
+        .unwrap();
+    assert_eq!(frame(&mut kernel, 6), (0.0, 16.0, 390.0, 2000.0));
+    assert_eq!(kernel.node(4).unwrap().content.1, 2032.0, "16 + 2000 + 16");
+    assert!(kernel
+        .set_host_cover(4, Some(HostCover::Inset([f32::NAN, 0.0])))
+        .is_err());
+}
+
+#[test]
+fn a_sticky_box_in_an_inset_scroller_sticks_until_the_content_ends() {
     let text = |t: &'static str| StyleValue::Text(t.into());
-    // Most scrollers are written `overflow-x: hidden`: the insets still come
-    // out of the content box and the extent
-    let mut kernel = scroller(false);
-    let hidden = [(StyleId::OverflowX, text("hidden"))];
+    // The scroller's first child (5) sticks to its top; its containing block
+    // is the content the scroller scrolls, which ends after the 2000-point
+    // child (6) as with no inset, wherever the insets end the content box
+    let mut kernel = scroller(true);
+    let sticky = [
+        (StyleId::PositionType, text("sticky")),
+        (StyleId::Top, StyleValue::Number(0.0)),
+    ];
     let ops = [Op::SetStyle {
-        id: 4,
-        patch: Box::new(style(&hidden)),
+        id: 5,
+        patch: Box::new(style(&sticky)),
     }];
     kernel.apply(2, 3, &ops).unwrap();
     kernel
         .set_host_cover(4, Some(HostCover::Inset([140.0, 34.0])))
         .unwrap();
-    assert_eq!(frame(&mut kernel, 5).3, 638.0);
-    assert_eq!(kernel.node(4).unwrap().content.1, 670.0);
+    frame(&mut kernel, 4);
+    let key = kernel.arena().key_of(5).unwrap();
+    let c = kernel.sticky_constraint(key).unwrap();
+    assert_eq!(c.limit[3], 2016.0, "16 + 2000, where the content ends");
+}
 
-    // A multi-column scroller's extent is at least its client box, which a
-    // native scrollbar's gutter is outside of, and its columns end above
-    // the gutter
-    let columns = |extra: &[(StyleId, StyleValue)]| {
+#[test]
+fn an_inset_scroller_keeps_the_box_its_sizes_give_it() {
+    let text = |t: &'static str| StyleValue::Text(t.into());
+    let n = StyleValue::Number;
+    let share = [
+        (StyleId::FlexGrow, n(1.0)),
+        (StyleId::FlexShrink, n(1.0)),
+        (StyleId::FlexBasis, StyleValue::Percent(0.0)),
+    ];
+    let pinned = [
+        (StyleId::Height, n(100.0)),
+        (StyleId::AspectRatio, n(2.0)),
+        (StyleId::AlignSelf, text("flex-start")),
+    ];
+    // A scroller beside a sibling (7, `flex: 1 1 0%`) keeps the box its
+    // definite sizes give it. Under `content-box`: a height (an arranged pane
+    // fills its allocation with `height: 100%`), a minimum, a maximum, a flex
+    // basis, and a share of the column, which Taffy floors at the box's
+    // padding and border (insets laid out as padding take 525, not 438).
+    // Under both sizings: a height too small for the padding and the insets,
+    // whose box stays with an empty content box, and the width an aspect
+    // ratio gives.
+    let cases: [(&str, &[(StyleId, StyleValue)]); 9] = [
+        (
+            "content-box",
+            &[(StyleId::Height, StyleValue::Percent(100.0))],
+        ),
+        (
+            "content-box",
+            &[(StyleId::Height, n(10.0)), (StyleId::MinHeight, n(600.0))],
+        ),
+        (
+            "content-box",
+            &[
+                (StyleId::Height, StyleValue::Percent(100.0)),
+                (StyleId::MaxHeight, n(300.0)),
+            ],
+        ),
+        ("content-box", &[(StyleId::FlexBasis, n(400.0))]),
+        ("content-box", &share),
+        ("content-box", &[(StyleId::Height, n(100.0))]),
+        ("border-box", &[(StyleId::Height, n(100.0))]),
+        ("content-box", &pinned),
+        ("border-box", &pinned),
+    ];
+    for (sizing, size) in cases {
         let mut kernel = scroller(false);
         let mut rows = vec![
+            (StyleId::FlexGrow, n(0.0)),
+            (StyleId::FlexShrink, n(0.0)),
+            (StyleId::BoxSizing, text(sizing)),
+        ];
+        rows.extend_from_slice(size);
+        let ops = [
+            Op::SetStyle {
+                id: 4,
+                patch: Box::new(style(&rows)),
+            },
+            Op::CreateView {
+                id: 7,
+                node_type: NodeType::View,
+            },
+            Op::SetStyle {
+                id: 7,
+                patch: Box::new(style(&share)),
+            },
+            Op::SetChildren {
+                id: 2,
+                children: vec![3, 4, 7],
+            },
+        ];
+        kernel.apply(2, 3, &ops).unwrap();
+        let authored = frame(&mut kernel, 4);
+        kernel
+            .set_host_cover(4, Some(HostCover::Inset([140.0, 34.0])))
+            .unwrap();
+        assert_eq!(frame(&mut kernel, 4), authored, "{sizing} {size:?}");
+        // The filled column rests between the padding and the insets
+        assert_eq!(
+            frame(&mut kernel, 5).3,
+            (authored.3 - 32.0 - 174.0).max(0.0),
+            "{sizing} {size:?}"
+        );
+    }
+    // A size taken from content counts the insets, as a web scroller's
+    // counts a horizontal scrollbar's gutter: a scroller growing from its
+    // automatic basis takes more of the column under them
+    let mut kernel = scroller(false);
+    let ops = [
+        Op::SetStyle {
+            id: 4,
+            patch: Box::new(style(&[(StyleId::FlexGrow, n(1.0))])),
+        },
+        Op::CreateView {
+            id: 7,
+            node_type: NodeType::View,
+        },
+        Op::SetStyle {
+            id: 7,
+            patch: Box::new(style(&share)),
+        },
+        Op::SetChildren {
+            id: 2,
+            children: vec![3, 4, 7],
+        },
+    ];
+    kernel.apply(2, 3, &ops).unwrap();
+    assert_eq!(
+        (frame(&mut kernel, 4).3, frame(&mut kernel, 7).3),
+        (438.0, 406.0)
+    );
+    kernel
+        .set_host_cover(4, Some(HostCover::Inset([140.0, 34.0])))
+        .unwrap();
+    assert_eq!(
+        (frame(&mut kernel, 4).3, frame(&mut kernel, 7).3),
+        (525.0, 319.0),
+        "the scroller and its sibling"
+    );
+}
+
+#[test]
+fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
+    let n = StyleValue::Number;
+    let text = |t: &'static str| StyleValue::Text(t.into());
+    // A two-column list (4) whose rows (5, then 20 to 25) are 100 and 20
+    // points tall
+    let columns = |extra: &[(StyleId, StyleValue)], rows: u32| {
+        let mut kernel = scroller(false);
+        let mut list = vec![
             (StyleId::Display, text("block")),
             (StyleId::ColumnCount, n(2.0)),
             (StyleId::BoxSizing, text("border-box")),
             (StyleId::FlexShrink, n(0.0)),
         ];
-        rows.extend_from_slice(extra);
-        let ops = [
+        list.extend_from_slice(extra);
+        let mut ops = vec![
             Op::SetStyle {
                 id: 4,
-                patch: Box::new(style(&rows)),
+                patch: Box::new(style(&list)),
             },
             Op::SetStyle {
                 id: 5,
                 patch: Box::new(style(&[(StyleId::Height, n(100.0))])),
             },
         ];
+        for id in 20..20 + rows {
+            ops.push(Op::CreateView {
+                id,
+                node_type: NodeType::View,
+            });
+            ops.push(Op::SetStyle {
+                id,
+                patch: Box::new(style(&[(StyleId::Height, n(20.0))])),
+            });
+        }
+        if rows > 0 {
+            ops.push(Op::SetChildren {
+                id: 4,
+                children: (20..20 + rows).collect(),
+            });
+        }
         kernel.apply(2, 3, &ops).unwrap();
         kernel
     };
+    // Its extent is at least its client box, which the platform's insets and
+    // a native scrollbar's gutters are outside of (CSS 2.1 §11.1.1): a list
+    // that fits does not scroll by them. A vertical scrollbar's gutter is at
+    // the end edge, which is the left in right-to-left text, and the first
+    // column starts at the client box's start edge. Points are from the
+    // border box's left (AppKit's `kernelDocumentOrigin` takes a left gutter
+    // off), so the client box's right edge is 375 left to right and 390
+    // right to left.
     let full = [(StyleId::Height, StyleValue::Percent(100.0))];
-    let mut kernel = columns(&full);
+    let mut kernel = columns(&full, 0);
     kernel
-        .set_host_cover(4, Some(HostCover::Gutter([15.0, 0.0])))
+        .set_host_cover(4, Some(HostCover::Inset([140.0, 34.0])))
         .unwrap();
     frame(&mut kernel, 4);
-    assert_eq!(
-        kernel.node(4).unwrap().content.0,
-        375.0,
-        "390 less the right gutter"
-    );
-    let mut kernel = columns(&full);
-    kernel
-        .set_host_cover(4, Some(HostCover::Gutter([0.0, 15.0])))
-        .unwrap();
-    frame(&mut kernel, 4);
-    assert_eq!(
-        kernel.node(4).unwrap().content.1,
-        829.0,
-        "844 less the bottom gutter"
-    );
-    // Six 20-point rows under an 80-point cap: the columns end above the
-    // gutter, 33 points tall, so each holds one row and they run on sideways
-    let mut kernel = columns(&[(StyleId::MaxHeight, n(80.0))]);
-    let mut ops = vec![];
-    for id in 20..26 {
-        ops.push(Op::CreateView {
-            id,
-            node_type: NodeType::View,
-        });
-        ops.push(Op::SetStyle {
-            id,
-            patch: Box::new(style(&[(StyleId::Height, n(20.0))])),
-        });
+    assert_eq!(kernel.node(4).unwrap().content.1, 670.0, "844 - 174");
+    for (direction, start, right) in [("ltr", 0.0, 375.0), ("rtl", 390.0, 390.0)] {
+        let mut kernel = columns(&[full[0].clone(), (StyleId::Direction, text(direction))], 0);
+        kernel
+            .set_host_cover(4, Some(HostCover::Gutter([15.0, 0.0])))
+            .unwrap();
+        let first = frame(&mut kernel, 5);
+        let edge = if direction == "rtl" {
+            first.0 + first.2
+        } else {
+            first.0
+        };
+        assert_eq!(edge, start, "{direction}: the first column's start");
+        assert_eq!(
+            kernel.node(4).unwrap().content.0,
+            right,
+            "{direction}: the client box's right edge"
+        );
     }
-    ops.push(Op::SetChildren {
-        id: 4,
-        children: (20..26).collect(),
-    });
-    kernel.apply(3, 4, &ops).unwrap();
+    // Six 20-point rows under an 80-point cap: the columns end above the
+    // bottom gutter, 33 points tall, so each holds one row and they run on
+    // sideways
+    let mut kernel = columns(&[(StyleId::MaxHeight, n(80.0))], 6);
     kernel
         .set_host_cover(4, Some(HostCover::Gutter([0.0, 15.0])))
         .unwrap();

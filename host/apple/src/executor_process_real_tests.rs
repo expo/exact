@@ -44,6 +44,7 @@ fn core_in(grants: &str, dir: std::path::PathBuf) -> (Core, Receiver<()>, std::p
 
 fn request(ticket: u64, body: serde_json::Value, stream: bool) -> RequestOut {
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "server".into(),
         request: Request::process(body.to_string().into_bytes(), stream, 1 << 20),
@@ -312,18 +313,92 @@ fn a_stale_record_ends_no_group_that_is_not_the_apps() {
 
 #[test]
 fn a_quit_ends_every_group() {
+    use std::io::{BufRead, Read, Write};
+    use std::process::{Command, Stdio};
+
+    const CHILD: &str = "EXACT_PROCESS_QUIT_TEST";
+    if std::env::var_os(CHILD).is_none() {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "executor::core::process::real::tests::a_quit_ends_every_group",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let mut output = String::new();
+        let groups: Vec<i32> = loop {
+            let mut line = String::new();
+            assert_ne!(stdout.read_line(&mut line).unwrap(), 0, "{output}");
+            output.push_str(&line);
+            if let Some((_, pids)) = line.split_once("quit-ready ") {
+                break serde_json::from_str(pids).unwrap();
+            }
+        };
+        // Setup is outside the measurement. The interval includes quit and
+        // every atexit callback, with 2 s for scheduling beyond the 5 s grace.
+        let started = Instant::now();
+        child.stdin.take().unwrap().write_all(b"quit\n").unwrap();
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break Some(status);
+            }
+            if started.elapsed() >= BOUND {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let took = started.elapsed();
+        stdout.read_to_string(&mut output).unwrap();
+        while groups.iter().any(|g| os::group_alive(*g))
+            && started.elapsed() < Duration::from_secs(7)
+        {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let alive: Vec<_> = groups.into_iter().filter(|g| os::group_alive(*g)).collect();
+        for pgid in &alive {
+            os::signal_group(*pgid, os::SIGKILL).unwrap();
+        }
+        assert!(status.is_some_and(|s| s.success()), "{status:?}: {output}");
+        assert!(alive.is_empty(), "groups outlived exit: {alive:?}");
+        assert!(
+            (Duration::from_secs(5)..Duration::from_secs(7)).contains(&took),
+            "quit through process exit took {took:?}: {output}"
+        );
+        return;
+    }
+
     let (core, woke, _) = core("process.spawn /bin/sh\nfs.read /");
     // A grace past the quit's 5 s: the quit's limit is what ends it.
-    let mut body = sh("trap '' TERM; sleep 120 & wait");
+    // Descendants also ignore SIGTERM; Linux's parent-death signal cannot
+    // hide a missed escalation by killing only their leaders at exit.
+    let mut body = sh("trap '' TERM; sleep 120 & echo ready; wait");
     body["forceKillAfter"] = 60_000.into();
-    core.run(request(1, body, true), None).unwrap();
-    let out = collect(&core, &woke, |o| !o.is_empty());
-    let leader = spawned_pid(&out);
+    let mut groups = Vec::new();
+    for ticket in 1..=3 {
+        core.run(request(ticket, body.clone(), true), None).unwrap();
+        // A spawn event precedes the shell installing its signal disposition.
+        let out = collect(&core, &woke, |o| {
+            o.iter().any(|o| event(o) == "stdout ready\n")
+        });
+        groups.push(spawned_pid(&out));
+    }
+    println!("quit-ready {}", serde_json::to_string(&groups).unwrap());
+    std::io::stdout().flush().unwrap();
+    let mut go = String::new();
+    std::io::stdin().read_line(&mut go).unwrap();
+    assert_eq!(go, "quit\n");
     drop(core);
     // The caller's thread does not wait: the escalation runs off it, and
-    // the group, which ignores the quit's signal, is alive when it returns.
-    assert!(os::group_alive(leader), "the quit waited out the grace");
-    until_gone(leader, "the quit left the group past its 5 s limit");
+    // the groups, which ignore the quit's signal, are alive when it returns.
+    assert!(groups.iter().all(|g| os::group_alive(*g)));
+    std::process::exit(0);
 }
 
 #[test]
@@ -576,4 +651,43 @@ fn the_login_shell_answers_the_named_variables_between_markers() {
     );
     assert_eq!(out.as_deref(), Some("hi\n"));
     assert!(started.elapsed() < BOUND, "{:?}", started.elapsed());
+}
+
+#[test]
+fn writes_to_a_child_that_closed_its_stdin_are_dropped_and_drain() {
+    let (core, woke, _) = core("process.spawn /bin/sh");
+    core.run(
+        request(1, sh("exec 0<&-; echo closed; sleep 120"), true),
+        None,
+    )
+    .unwrap();
+    let out = collect(&core, &woke, |o| o.len() >= 2);
+    let leader = spawned_pid(&out);
+    assert_eq!(event(&out[1]), "stdout closed\n");
+    // Together past the 1 MiB queue: each is dropped (EPIPE), not held.
+    for i in 0..5 {
+        let batch = SocketSend {
+            origin: SocketOrigin::Mutation("send".into()),
+            ops: vec![(
+                1,
+                "server".into(),
+                SocketOp::Process {
+                    incarnation: 1,
+                    op: ProcessOp::Write {
+                        data: vec![b'x'; 300_000],
+                        drain: true,
+                    },
+                },
+            )],
+        };
+        let queued = core.socket(&batch);
+        assert!(queued.is_ok(), "write {i}: {queued:?}");
+        let seen: Vec<String> = collect(&core, &woke, |o| !o.is_empty())
+            .iter()
+            .map(event)
+            .collect();
+        assert_eq!(seen, ["drain"], "write {i}");
+    }
+    core.forget(|_| false);
+    until_gone(leader, "the group outlived its release");
 }

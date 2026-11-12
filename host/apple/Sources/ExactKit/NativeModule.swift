@@ -441,7 +441,6 @@ final class NativeViews {
     fileprivate var observers: [NSObjectProtocol] = []
     deinit {
         for o in observers { NotificationCenter.default.removeObserver(o) }
-        if let crumbSlot { HatchBreadcrumb.shared?.free(crumbSlot) }
     }
     #endif
     private static let kinds = ["press", "change", "hover", "focus", "blur", "key", "submit", "load", "message"]
@@ -792,6 +791,8 @@ final class NativeViews {
         endScopes()
         hatchClock.reset()
         pendingHatches = nil
+        // The session's end gives its breadcrumb slot back (LLP 1075.003.000.001 §4.4).
+        if let crumbSlot { HatchBreadcrumb.shared?.free(crumbSlot); self.crumbSlot = nil }
         guard let instance, case .success(let table)? = NativeProcess.table else { return }
         self.instance = nil
         hatchesConnected = false

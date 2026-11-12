@@ -4,6 +4,7 @@
 import { test, spyOn } from 'bun:test';
 import * as childProcess from 'node:child_process';
 import { pathFrom } from './app.mjs';
+import { encodePng } from './png.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -116,7 +117,12 @@ test.skipIf(!tools)('widget packaging preserves parent platform and device capab
         if (command === 'plutil') return { stdout: JSON.stringify(readPlist(args.at(-1))) };
         assert.equal(command, 'xcrun');
         assert.equal(args[2], 'swiftc');
-        cpSync(library, args[args.indexOf('-o') + 1]);
+        const output = args[args.indexOf('-o') + 1];
+        cpSync(library, output);
+        if (args.includes('-g')) {
+          const symbols = spawnSync('dsymutil', [output, '-o', `${output}.dSYM`], { encoding: 'utf8' });
+          assert.equal(symbols.status, 0, symbols.stderr);
+        }
         return { stdout: '' };
       }, sign(extension) { signed = extension; } });
     assert.equal(signed, resolve(bundle, 'PlugIns/ExactWidgets.appex'));
@@ -871,7 +877,7 @@ test.skipIf(process.platform !== 'darwin')('Icon Composer supplies the primary i
   const macKeys = appleAssets(app, mac, { platform: 'macos', kept });
   assert.equal(macKeys.CFBundleIconName, 'Primary');
   assert.ok(inspect(mac).some(asset => asset.AssetType === 'IconImageStack'));
-  writeFileSync(resolve(dir, 'raster.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64'));
+  writeFileSync(resolve(dir, 'raster.png'), encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
   app.manifest.icons = [{ src: 'raster.png', sizes: '1024x1024' }];
   assert.deepEqual(appIcon(app, mac, 'macos'), {}, 'the raster must not overwrite the selected Mac icon');
   delete app.manifest.host.ios.icon;
@@ -889,7 +895,7 @@ test.skipIf(process.platform !== 'darwin')('iOS alternate icon sets compile besi
   const { iosAssets } = require('../host/apple/assets.mjs');
   useXcode();
   const primary = resolve(dir, 'icon.png');
-  writeFileSync(primary, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64'));
+  writeFileSync(primary, encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
   const set = resolve(dir, 'modules/apple/Icons.xcassets/Nested/Alternate.appiconset');
   mkdirSync(set, { recursive: true });
   const sized = spawnSync('sips', ['-z', '1024', '1024', primary, '--out', resolve(set, 'icon.png')], { encoding: 'utf8' });
@@ -970,7 +976,7 @@ test.skipIf(process.platform !== 'darwin')('the iOS launch screen is the app\'s 
   // A page of the platform's own stays the system's launch screen (`systemBackground`, light and dark).
   for (const options of [{ launch: 'system' }, {}]) assert.deepEqual(made({}, options).keys, {});
   // The author's colours name it whatever the first route stands on.
-  const named = made({ background_color: '#ffeedd', background_color_dark: '#102030' }, { launch: 'grouped' });
+  const named = made({ background_color: '#ffeedd', color_scheme_dark: { background_color: '#102030' } }, { launch: 'grouped' });
   assert.deepEqual(named.colours, [['light', [255, 238, 221, 255]], ['UIAppearanceDark', [16, 32, 48, 255]]]);
 }), 60000);
 
@@ -989,8 +995,8 @@ test.skipIf(process.platform !== 'darwin')('Apple asset catalogs retain named im
   json(`${source}/Badge.imageset/Contents.json`, { info, images: [{ idiom: 'universal', filename: 'image.png' }] });
   const colour = red => ({ info, colors: [{ idiom: 'universal', color: { 'color-space': 'srgb', components: { red, green: '0.0', blue: '0.0', alpha: '1.0' } } }] });
   json(`${source}/Ink.colorset/Contents.json`, colour('0.2'));
-  put('icon.png', png);
-  const app = { dir, name: 'Catalog', manifest: { icons: [{ src: 'icon.png', sizes: '1024x1024' }], background_color: '#fff', background_color_dark: '#123456' } };
+  put('icon.png', encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
+  const app = { dir, name: 'Catalog', manifest: { icons: [{ src: 'icon.png', sizes: '1024x1024' }], background_color: '#fff', color_scheme_dark: { background_color: '#123456' } } };
   const cache = { dir: resolve(dir, 'cache'), stamp: 'fixture-toolchain' };
   const inventory = appleAssetCatalogInventory(app, 'ios');
   const ios = resolve(dir, 'iOS.app'); mkdirSync(ios);
@@ -1190,7 +1196,7 @@ test.skipIf(!tools)('release keeps Mac widget entitlements, including the provis
 test('setup refuses the removed game warmup flag before provisioning', () => {
   const result=spawnSync(process.execPath,[resolve(import.meta.dir,'exact.mjs'),'setup','--game'],{encoding:'utf8'});
   assert.notEqual(result.status,0);
-  assert.match(result.stderr,/Usage: exact setup \[--check\]/);
+  assert.match(result.stderr,/Usage: exact setup \[--check \[--platform/);
   assert.doesNotMatch(result.stdout,/warming|cargo fetch|rustup toolchain install/);
 });
 
@@ -1403,13 +1409,14 @@ test.skipIf(process.platform === 'win32')('setup reports Gradle SDK packages and
     const sdk = resolve(root, 'SDK with spaces'), jdk = resolve(root, 'JDK with spaces');
     mkdirSync(resolve(jdk, 'bin'), { recursive: true });
     writeFileSync(resolve(jdk, 'bin/java'), '#!/bin/sh\necho \'openjdk version "21.0.1"\' >&2\n', { mode: 0o755 });
+    writeFileSync(resolve(jdk, 'bin/javac'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     const tool = resolve(sdk, 'cmdline-tools/19.0/bin/sdkmanager');
     mkdirSync(dirname(tool), { recursive: true });
     writeFileSync(tool, '#!/bin/sh\nexit 99\n', { mode: 0o755 });
     const env = { ...process.env, ANDROID_HOME: sdk, JAVA_HOME: jdk }, packages = androidSdkPackages();
     assert.deepEqual(androidSdkPackages('compileSdk { version = release(42) { minorApiLevel = 3 } }\nbuildToolsVersion = "41.0.2"').map(p => p.id), ['platforms;android-42.3', 'build-tools;41.0.2']);
     assert.throws(() => androidSdkPackages(''), /cannot read/);
-    const rows = () => sdkReport(env, { only: 'android' }).filter(r => r.name.startsWith('Android'));
+    const rows = () => sdkReport(env, { only: 'android' }).filter(r => packages.some(p => p.name === r.name));
     assert.deepEqual(rows().map(r => [r.name, r.ok, r.want]), packages.map(p => [p.name, false, p.version]));
     for (const [i, row] of rows().entries()) {
       assert.equal(row.fix, `'${tool}' '--sdk_root=${sdk}' '${packages[i].id}'`);
@@ -1419,6 +1426,8 @@ test.skipIf(process.platform === 'win32')('setup reports Gradle SDK packages and
     assert.ok(rows().every(r => r.ok));
     assert.ok(!sdkReport(env, { only: 'web' }).some(r => r.name.startsWith('Android')));
     assert.ok(!platformRowNames('web').some(name => name.startsWith('Android')));
+    assert.equal(sdkReport(env, { only: 'android' }).find(r => r.name === 'Android JDK')?.ok, true);
+    assert.equal(sdkReport({ ...env, JAVA_HOME: resolve(root, 'absent') }, { only: 'android' }).find(r => r.name === 'Android JDK')?.ok, false);
     assert.equal(androidJavaEnv(env, 'linux').JAVA_HOME, jdk);
     assert.equal(androidJavaEnv({ PATH: '', JAVA_HOME: resolve(root, 'missing-jdk') }, 'linux'), null);
     assert.equal(androidJavaEnv({ PATH: '' }, 'darwin', jdk).JAVA_HOME, jdk);
@@ -1438,3 +1447,40 @@ test.skipIf(process.platform === 'win32')('setup reports Gradle SDK packages and
     assert.ok(!sdkReport(absentEnv).some(r => packages.some(p => p.name === r.name)), 'without an SDK the general report omits its packages');
   } finally { rmSync(root, { recursive: true, force: true }); }
 }, 60_000);
+
+// These recipes use job values directly; EAS also supports inputs on run steps.
+test('EAS recipes export resolved job versions directly and upload the native artifacts', () => {
+  for (const [platform, version, artifact] of [
+    ['ios', 'buildNumber', 'out.ipa'],
+    ['android', 'versionCode', 'target/android/app/outputs/bundle/release/app-release.aab'],
+  ]) {
+    const doc = readFileSync(resolve(import.meta.dir, `../docs/recipes/eas-${platform}.md`), 'utf8');
+    const { build } = Bun.YAML.parse(/```yaml\n([\s\S]*?)```/.exec(doc)[1]);
+    const steps = build.steps;
+    assert.equal(steps[0], 'eas/checkout');
+    const resolved = steps.indexOf('eas/resolve_build_config');
+    assert.ok(steps.indexOf('eas/install_node_modules') < resolved);
+    const buildStep = steps.findIndex(step => step.run?.command.includes('export EXACT_BUILD_NUMBER='));
+    assert.ok(buildStep > resolved);
+    const expression = '${ eas.job.version.' + version + ' }';
+    assert.ok(steps[buildStep].run.command.includes('export EXACT_BUILD_NUMBER="' + expression + '"'));
+    for (const step of steps.filter(step => step.run)) {
+      assert.equal(Object.hasOwn(step.run, 'inputs'), false, 'keep job expressions directly in these recipes');
+      const command = step.run.command.replaceAll(expression, '42');
+      assert.doesNotMatch(command, /\$\{\s*(inputs|eas|steps)\./);
+    }
+    assert.deepEqual(steps.at(-1), { 'eas/upload_artifact': { inputs: { type: 'application-archive', path: artifact } } });
+  }
+});
+
+test.skipIf(!existsSync('/bin/sh'))('EAS recipes have valid shell syntax after job versions resolve', () => {
+  for (const platform of ['ios', 'android']) {
+    const doc = readFileSync(resolve(import.meta.dir, `../docs/recipes/eas-${platform}.md`), 'utf8');
+    const { build } = Bun.YAML.parse(/```yaml\n([\s\S]*?)```/.exec(doc)[1]);
+    for (const { run } of build.steps.filter(step => step.run)) {
+      const command = run.command.replaceAll(/\$\{ eas\.job\.version\.(buildNumber|versionCode) }/g, '42');
+      const parsed = spawnSync('/bin/sh', ['-n'], { input: command, encoding: 'utf8' });
+      assert.equal(parsed.status, 0, parsed.stderr);
+    }
+  }
+});

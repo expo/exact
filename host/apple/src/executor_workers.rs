@@ -3,7 +3,10 @@
 use super::*;
 
 /// Start one base thread; the job owns its process reservation.
-pub(super) fn spawn(name: String, body: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+pub(super) fn spawn(
+    name: String,
+    body: Box<dyn FnOnce() + Send>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
     #[cfg(test)]
     if FAIL_BASE_SPAWN.with(|remaining| {
         let position = remaining.get();
@@ -12,10 +15,7 @@ pub(super) fn spawn(name: String, body: Box<dyn FnOnce() + Send>) -> std::io::Re
     }) {
         return Err(std::io::Error::other("injected base worker spawn failure"));
     }
-    std::thread::Builder::new()
-        .name(name)
-        .spawn(body)
-        .map(|_| ())
+    std::thread::Builder::new().name(name).spawn(body)
 }
 
 #[cfg(test)]
@@ -48,6 +48,9 @@ mod portable {
         }
     }
     impl WorkerService for Workers {
+        fn retire(&self) {
+            *self.pool.lock().unwrap() = Some(Err("HTTP workers retired".into()));
+        }
         fn reserve(&self) -> Result<Box<dyn ReservedWorker>, HostError> {
             // Constructing an unused core starts no worker. This is called off
             // the executor state lock, only after its process slots were reserved.
@@ -112,6 +115,7 @@ mod portable {
                 )
             };
             let request = || exact_runner::RequestOut {
+                class: exact_runner::RequestClass::Ordered,
                 ticket: 1,
                 target: "worker-lifecycle".into(),
                 forced: false,

@@ -57,14 +57,9 @@ impl Painter {
         }
     }
 
-    /// Name `node`'s platform element to the backend.
-    pub(super) fn native(
-        &mut self,
-        node: &NodeRef<'_>,
-        content: Rect4,
-        outer: &Shape,
-        ts: Transform,
-    ) {
+    /// Name `node`'s platform element to the backend, shown in `edge`: its
+    /// content box on the content edge's curve.
+    pub(super) fn native(&mut self, node: &NodeRef<'_>, edge: &Shape, ts: Transform) {
         let p = node.props;
         let flag = |id| p.bool(id) == Some(true);
         let (kind, props) = match node.node_type {
@@ -102,21 +97,20 @@ impl Painter {
             NodeType::Canvas => (NativeKind::Surface, serde_json::json!({})),
             _ => return,
         };
-        if content.2 <= 0.0 || content.3 <= 0.0 {
+        if edge.rect.2 <= 0.0 || edge.rect.3 <= 0.0 {
             return;
         }
-        let clip = Shape {
-            rect: content,
-            radii: outer.radii,
-            corners: None,
-        };
         self.backend.native(
             node.id,
             kind,
-            &clip,
+            edge,
             ts,
             &props.to_string(),
             self.direct_canvases.contains(&node.id),
         );
     }
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;

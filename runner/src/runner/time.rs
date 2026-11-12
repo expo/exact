@@ -5,6 +5,17 @@ use crate::time::{Place, WallTime, SOURCE};
 use exact_kernel::CommitReceipt;
 use exact_plan::{TypeKind, Value};
 
+/// The store's name for the language the app chose (`setLocale`), beside
+/// its persisted state: no state is named `#locale`, which is the locale
+/// slot's name. JSON text, as a persisted string is.
+pub(crate) const CHOSEN: &str = "exact.state.#locale";
+
+/// A tag `setLocale` takes: what [`crate::time::Place::validate`] takes for
+/// the viewer's locale.
+fn valid_tag(tag: &str) -> bool {
+    !tag.is_empty() && tag.len() <= 64 && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 impl<D: DataSource> Runner<D> {
     /// What the host last said about the date.
     pub fn wall_time(&self) -> WallTime {
@@ -121,13 +132,9 @@ impl<D: DataSource> Runner<D> {
             place,
             SOURCE,
             |r, _, mut readers| {
-                // The locale slot is part of this fact's commit (LLP 1060 D4).
-                let written = r.plan.locale.and_then(|slot| {
-                    let i = slot.0 as usize;
-                    let resolved = r.plan.resolve_locale(&r.place.locale)?;
-                    let value = Value::str(resolved);
-                    (r.slots[i] != value).then(|| (i, std::mem::replace(&mut r.slots[i], value)))
-                });
+                // The locale slot is part of this fact's commit (LLP 1060 D4):
+                // the table the app's choice resolves to, else the viewer's.
+                let written = r.write_locale();
                 if written.is_some() && readers.is_empty() {
                     readers = r
                         .resource_rows()
@@ -152,6 +159,82 @@ impl<D: DataSource> Runner<D> {
                 result
             },
         )
+    }
+
+    /// The language the app chose with `setLocale`, kept across launches;
+    /// `None` while it follows the host's, and for a plan that never runs
+    /// `setLocale` (a choice an earlier version kept chooses nothing).
+    pub fn chosen_locale(&self) -> Option<String> {
+        let text = self.store.kept(CHOSEN)?;
+        let tag = super::persist::decode_string(text).filter(|t| valid_tag(t))?;
+        crate::uses::chooses_locale(&self.plan).then_some(tag)
+    }
+
+    /// The tag the strings table is resolved from: the app's choice, else
+    /// the viewer's locale.
+    pub(super) fn requested_locale(&self) -> String {
+        self.chosen_locale()
+            .unwrap_or_else(|| self.place.locale.clone())
+    }
+
+    /// Write the table [`Runner::requested_locale`] resolves to into the
+    /// locale slot: the slot's index and old value when that changed it.
+    fn write_locale(&mut self) -> Option<(usize, Value)> {
+        let i = self.plan.locale?.0 as usize;
+        let requested = self.requested_locale();
+        let value = Value::str(self.plan.resolve_locale(&requested)?);
+        (self.slots[i] != value).then(|| (i, std::mem::replace(&mut self.slots[i], value)))
+    }
+
+    /// The commit's `setLocale`s from `from` on, each applied and taken
+    /// out, before its settlement: the app's choice is kept in the store
+    /// (so the next launch's first frame reads it), the locale slot takes
+    /// the table it resolves to, and every `exactTime` is asked again for
+    /// `resolvedLocale`. `setLocale("")` forgets the choice. No host is
+    /// told: each reads the resolved table after the commit, as after
+    /// `set_place`.
+    pub(super) fn take_set_locale(&mut self, from: usize) {
+        let mut i = from;
+        while i < self.commands.len() {
+            if self.commands[i].name != "setLocale" {
+                i += 1;
+                continue;
+            }
+            let args = self.commands.remove(i).args;
+            let Some(tag) = (match &args[..] {
+                [tag] => tag.as_str().filter(|t| t.is_empty() || valid_tag(t)),
+                _ => None,
+            }) else {
+                let mut said = String::new();
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        said.push_str(", ");
+                    }
+                    crate::agent::untyped_json(a, &mut said);
+                }
+                self.log(format!(
+                    "setLocale({said}) refused: a BCP 47 tag (\"de\", \"pt-BR\"), or \"\" for the host's locale"
+                ));
+                continue;
+            };
+            if tag.is_empty() {
+                self.store.forget_kept(CHOSEN);
+            } else {
+                let mut text = String::new();
+                crate::agent::quote(tag, &mut text);
+                self.store.keep(CHOSEN, text.into_bytes());
+            }
+            if self.write_locale().is_some() {
+                let readers: Vec<usize> = self
+                    .resource_rows()
+                    .enumerate()
+                    .filter_map(|(i, row)| (self.plan.str(row.source) == SOURCE).then_some(i))
+                    .collect();
+                for r in readers {
+                    self.force_refresh(r);
+                }
+            }
+        }
     }
 
     /// Take the topics the source's native module announces (LLP 1016.002),
@@ -272,20 +355,26 @@ impl<D: DataSource> Runner<D> {
             }
             // A stream keeps no reply to wait for, and a refused request
             // never ran: those are asked now, as before.
-            let flight = self.pending.iter_mut().find(|p| {
+            let mut in_flight = false;
+            let mut log = None;
+            for p in self.pending.iter_mut().filter(|p| {
                 p.target == crate::Target::Resource(i)
                     && p.stream.is_none()
                     && !p.refused
                     && p.refusal.is_none()
-            });
-            match flight {
-                Some(p) if p.ask_again => {}
-                Some(p) => {
+            }) {
+                in_flight = true;
+                if !p.ask_again {
                     p.ask_again = true;
-                    let (ticket, name) = (p.ticket, self.target_name(crate::Target::Resource(i)));
-                    self.log(super::lines::waits_for(topic, ticket, &name));
+                    log.get_or_insert(p.ticket);
                 }
-                None => which.push(i),
+            }
+            if let Some(ticket) = log {
+                let name = self.target_name(crate::Target::Resource(i));
+                self.log(super::lines::waits_for(topic, ticket, &name));
+            }
+            if !in_flight {
+                which.push(i);
             }
         }
         // Each reader asks again under its own last ask's origin (LLP 1133.002 D12).

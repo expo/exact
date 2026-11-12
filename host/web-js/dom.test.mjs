@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createDocument } from './dom.js';
 import { webCompiler } from './module.mjs';
@@ -306,3 +306,41 @@ test('Bun-rendered bound links and symbols keep their attributes through adoptio
     await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
   }
 }, 60000);
+
+// An attribute's `<` and `>` are written as references (HTML, "Serializing HTML fragments", attribute mode), as
+// document.rs writes them, so the hero image scan, which ends a tag at its first `>` (render.mjs `heroImage`), reads
+// every attribute of an image and of a covered route: the page preloads the image it shows first.
+test.each(['js', 'rust'])('%s-rendered pages escape a > in an attribute and preload the image shown first', async how => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/dom-escape-test-'));
+  try {
+    const source = resolve(dir, 'app.contract'), dist = resolve(dir, 'dist');
+    writeFileSync(source, `routes nav
+  home "/" render=build
+    detail "/detail" render=build
+
+component Pages
+  action follow(url: string)
+    nav = go(nav, url)
+  view
+    main navigationKey=\`\${top(nav).id}\` navigationBack="back" navigate=follow
+      for e in stack(nav) key=e.id
+        column navigationKey=\`\${e.id}\` position="absolute" inset=0 aria-label="1 > 0"
+          if e.name == "home"
+            image "https://example.com/home.png" width=96 alt="home"
+          if e.name == "detail"
+            image "https://example.com/one.png" width=10 alt="1 > 0"
+            image "https://example.com/two.png" width=10 alt="second"
+`);
+    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'caltrain', '--contract', source, '--out', dist, '--render', how], {
+      cwd: root, env: process.env, stdout: 'pipe', stderr: 'pipe',
+    });
+    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
+    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
+    const html = path => readFileSync(resolve(dist, path, 'index.html'), 'utf8');
+    const preloads = path => html(path).match(/<link rel="preload" as="image"[^>]*>/g);
+    expect([preloads(''), preloads('detail')]).toEqual([['<link rel="preload" as="image" href="https://example.com/home.png">'],
+      ['<link rel="preload" as="image" href="https://example.com/one.png">']]);
+    expect([html('detail').includes('alt="1 &gt; 0"'), html('detail').includes('="1 > 0"')]).toEqual([true, false]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 180000);

@@ -642,6 +642,9 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         "emojiPicker" => AttrTarget::Prop(p("emojiPicker")),
         "backgroundMaterial" => AttrTarget::Prop(p("backgroundMaterial")),
         "glassGroup" => AttrTarget::Prop(p("glassGroup")),
+        "glassInteractive" => AttrTarget::Prop(p("glassInteractive")),
+        // The order a trigger's menu shows its rows in (LLP 1115 §2).
+        "menuOrder" => AttrTarget::Prop(p("menuOrder")),
         "buttonStyle" => AttrTarget::Prop(p("buttonStyle")),
         "listStyle" => AttrTarget::Prop(p("listStyle")),
         "toolbarPlacement" => AttrTarget::Prop(p("toolbarPlacement")),
@@ -954,6 +957,13 @@ pub fn renamed(old: &str) -> Option<&'static str> {
         "autoComplete" | "textContentType" | "autoCompleteType" => "autocomplete",
         "viewportFit" | "safeArea" | "safeAreaView" => "viewport-fit",
         "statusBarStyle" | "barStyle" | "StatusBar" => "status-bar-style",
+        // UIKit's and SwiftUI's names for a menu's order.
+        "preferredMenuElementOrder" | "menu-order" | "menuElementOrder" => "menuOrder",
+        // UIKit's `UIGlassEffect` properties and SwiftUI's `.tint`/`.interactive()`.
+        "background-material-tint" | "backgroundMaterialTint" | "glassTint" | "glass-tint" => {
+            "-exact-glass-tint"
+        }
+        "isInteractive" | "glass-interactive" => "glassInteractive",
         // React Native's and Expo's `hidden`, React Navigation's screen
         // options, UIKit's controller properties, Android's immersive mode.
         "status-bar-hidden"

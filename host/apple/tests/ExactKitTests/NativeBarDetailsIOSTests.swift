@@ -4,6 +4,89 @@ import XCTest
 @testable import ExactKit
 
 final class NativeBarDetailsIOSTests: XCTestCase {
+    func testAPressableTitleFollowsItsHeadingsAuthoredFont() throws {
+        let session = ExactApp.shared.makeSession(label: "title-font-\(UUID().uuidString)")
+        defer { session.destroy() }
+        let p = session.presenter
+        for symbols in [false, true] {
+            let header = NodeView(id: 1, kind: "view", presenter: p)
+            let group = NodeView(id: 2, kind: "view", presenter: p)
+            let heading = NodeView(id: 3, kind: "text", presenter: p)
+            let seal = NodeView(id: 4, kind: "image", presenter: p)
+            group.handlers = ["press"]
+            group.applyStyle(["display": "flex", "flex_direction": "row"])
+            heading.props = ["text": "Chat", "accessibilityRole": "heading"]
+            header.addSubview(group); group.addSubview(heading)
+            if symbols {
+                seal.props = ["imageSource": "symbol:checkmark.seal.fill", "symbolName": "checkmark.seal.fill"]
+                group.addSubview(seal)
+            }
+            let engine = try XCTUnwrap(heading.text)
+            let view = HeaderTitleView(host: p.navigation)
+            let base = UIFont.preferredFont(forTextStyle: .headline, compatibleWith: view.traitCollection)
+            var previous = try XCTUnwrap(HeaderTitle(header: header, heading: heading, tap: group, apart: []))
+            view.update(previous, title: "Chat")
+            XCTAssertEqual(view.title.font, base)
+            for (family, size, weight, italic) in [(5, 29, 800, true), (2, 29, 800, true),
+                                                  (2, 23, 800, true), (2, 23, 300, true), (2, 23, 300, false)] {
+                heading.applyStyle(["font_family": .number(Double(family)), "font_size": .number(Double(size)), "font_weight": .number(Double(weight)),
+                    "font_style": italic ? "italic" : "normal", "written": ["font_family", "font_size", "font_weight", "font_style"]])
+                let next = try XCTUnwrap(HeaderTitle(header: header, heading: heading, tap: group, apart: []))
+                XCTAssertNotEqual(next, previous, "a font-only change invalidates the title")
+                XCTAssertNotEqual(next.source, previous.source, "the route's projection signature includes the font")
+                view.update(next, title: "Chat")
+                let expected = engine.font(size: CGFloat(size), weight: weight, family: family, italic: italic)
+                XCTAssertEqual(view.title.font, expected)
+                if symbols {
+                    let line = try XCTUnwrap(view.title.attributedText)
+                    XCTAssertEqual(line.attribute(.font, at: 0, effectiveRange: nil) as? UIFont, expected)
+                }
+                previous = next
+            }
+            heading.applyStyle(["font_family": 5, "written": ["font_family"]])
+            view.update(try XCTUnwrap(HeaderTitle(header: header, heading: heading, tap: group, apart: [])), title: "Chat")
+            XCTAssertEqual(view.title.font, engine.font(size: base.pointSize, weight: TextEngine.cssWeight(of: base) ?? 400, family: 5, italic: false),
+                           "a family alone keeps the platform's size and weight")
+            heading.applyStyle(["font_family": 5, "font_size": 29, "font_weight": 800, "font_style": "italic"])
+            view.update(try XCTUnwrap(HeaderTitle(header: header, heading: heading, tap: group, apart: [])), title: "Chat")
+            XCTAssertEqual(view.title.font, base, "inherited typography leaves the platform's headline")
+        }
+    }
+
+    func testAPressableTitlesUnspecifiedSizeFollowsDynamicType() throws {
+        let session = ExactApp.shared.makeSession(label: "title-size-\(UUID().uuidString)")
+        defer { session.destroy() }
+        let p = session.presenter
+        let header = NodeView(id: 1, kind: "view", presenter: p)
+        let heading = NodeView(id: 2, kind: "text", presenter: p)
+        header.addSubview(heading)
+        let view = HeaderTitleView(host: p.navigation)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        defer { window.isHidden = true }
+        window.traitOverrides.preferredContentSizeCategory = .large
+        window.addSubview(header); window.addSubview(view)
+        window.makeKeyAndVisible()
+        let engine = try XCTUnwrap(heading.text)
+        for authoredFamily in [false, true] {
+            heading.applyStyle(authoredFamily ? ["font_family": 5, "written": ["font_family"]] : [:])
+            window.traitOverrides.preferredContentSizeCategory = .large
+            window.updateTraitsIfNeeded(); view.updateTraitsIfNeeded()
+            view.update(try XCTUnwrap(HeaderTitle(header: header, heading: heading, tap: header, apart: [])), title: "Chat")
+            let before = view.title.font.pointSize
+            window.traitOverrides.preferredContentSizeCategory = .accessibilityExtraLarge
+            window.updateTraitsIfNeeded(); view.updateTraitsIfNeeded()
+            let base = UIFont.preferredFont(forTextStyle: .headline, compatibleWith: view.traitCollection)
+            let expected = authoredFamily ? engine.font(size: base.pointSize, weight: TextEngine.cssWeight(of: base) ?? 400, family: 5, italic: false) : base
+            XCTAssertEqual(view.title.font, expected)
+            XCTAssertGreaterThan(view.title.font.pointSize, before)
+        }
+        heading.applyStyle(["font_size": 29, "written": ["font_size"]])
+        view.update(try XCTUnwrap(HeaderTitle(header: header, heading: heading, tap: header, apart: [])), title: "Chat")
+        window.traitOverrides.preferredContentSizeCategory = .large
+        window.updateTraitsIfNeeded(); view.updateTraitsIfNeeded()
+        XCTAssertEqual(view.title.font.pointSize, 29, "an authored absolute size is already resolved by the kernel")
+    }
+
     func testTheSelectedTabsOwnTintOverridesTheTablistAccent() throws {
         let p = Presenter(), list = NodeView(id: 1, kind: "view", presenter: p)
         let first = NodeView(id: 2, kind: "button", presenter: p)

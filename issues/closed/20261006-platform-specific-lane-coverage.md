@@ -84,7 +84,7 @@ At 07fdd0ff4, on the fleet. Both machines ran the pinned Rust (1.97.0) and Bun
   save differs; the world journal lacks `loop wind on`.
 - `cargo test -p exact-linux --lib --tests` on Windows: the shared presenter's
   1,032 tests pass when `TEMP` has no space. Under this box's
-  `C:\Users\Charlie Cheever\…` the agent's two picker tests fail: a one-line
+  `C:\Users\<user>\…` the agent's two picker tests fail: a one-line
   pick answer is split on whitespace (`runner/src/runner/picker.rs`
   `answer_paths`; the web, Apple and driver parsers do the same). That is a
   real bug for any absolute path that contains a space. In 1 of 3 full runs,

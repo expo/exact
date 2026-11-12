@@ -122,7 +122,7 @@ structs! {
     PropertyDecl { span, kind, name, lines }
     PropertyLine { span, form }
     FnDecl { name, params, ret, body, span }
-    ModuleDecl { name, declared, package, extension, kind, options, words, answers, args, raised, hold, budget, handler, live, request, sync, data_only, imported, substitute, span }
+    ModuleDecl { name, declared, package, extension, kind, options, words, answers, args, raised, hold, budget, handler, live, request, sync, data_only, imported, view_only, substitute, span }
     PlatformWords { platform, package, words }
     UseDecl { names, path, span }
     UseName { name, alias, span }
@@ -232,8 +232,12 @@ impl VisitSpans for Expr {
                 parts.visit_spans(visit);
                 visit(span);
             }
+            Self::Typed(inner, ty, span) => {
+                inner.visit_spans(visit);
+                ty.visit_spans(visit);
+                visit(span);
+            }
             Self::NamedArg(_, inner, span)
-            | Self::Typed(inner, _, span)
             | Self::Some(inner, span)
             | Self::Member(inner, _, span)
             | Self::Unary(_, inner, span) => {

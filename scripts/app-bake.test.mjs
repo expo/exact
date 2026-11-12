@@ -9,7 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
-import { classifyArtifacts, buildBake, bakeTarget, pendingBuildInputs } from './app.mjs';
+import { classifyArtifacts, buildBake, bakeOutput, bakeTarget, pendingBuildInputs } from './app.mjs';
 import { pinned } from './test-workspace.mjs';
 import { fileURLToPath } from 'node:url';
 import { copyStaticTreeIfPresent, syncStaticTree } from '../host/web/serve.mjs';
@@ -50,6 +50,173 @@ test.each([
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test.each(['source additions', 'package watches', 'build-script helpers', 'new Rust sources'])('Windows bake receipts track %s by content', async mode => {
+  const { packagedBuildChanges } = await import('./agent-launch.mjs');
+  const { windowsBuild } = await import('./agent-build.mjs');
+  mkdirSync(resolve(import.meta.dir, '../target'), { recursive: true });
+  const dir = pinned(realpathSync(mkdtempSync(resolve(import.meta.dir, '../target/windows-inputs-'))));
+  const write = (path, bytes) => { mkdirSync(dirname(resolve(dir, path)), { recursive: true }); writeFileSync(resolve(dir, path), bytes); };
+  const old = new Date('2000-01-01T00:00:00Z'), target = bakeTarget('windows'), id = 'com.exact.inputs';
+  let blocked;
+  try {
+    write('Cargo.toml', '[workspace]\nmembers=["windows","data"]\nresolver="2"\n');
+    write('windows/Cargo.toml', '[package]\nname="inputs-windows"\nversion="0.1.0"\nedition="2021"\n[dependencies]\ninputs-data={path="../data"}\n');
+    write('data/Cargo.toml', '[package]\nname="inputs-data"\nversion="0.1.0"\nedition="2021"\n');
+    write('data/src/lib.rs', 'pub fn value() -> u8 { option_env!("WINDOWS_INPUTS_VALUE").unwrap_or("1").parse().unwrap() }\n');
+    write('windows/src/main.rs', 'fn main() { println!("{}", inputs_data::value()); }\n');
+    const watched = ['app.contract', 'app.ts', 'imported.ts', 'value/index.ts', 'child.contract', 'optional.txt'];
+    write('app.contract', 'use Child from "./child.contract"\ncomponent App\n  view\n    Child()\n    text "before"\n');
+    write('child.contract', 'component Child\n  text "before"\n');
+    write('app.ts', 'export { value } from "./imported";\nexport { other } from "./value";\n');
+    write('imported.ts', 'export const value = 1;\n');
+    write('value/index.ts', 'export const other = 1;\n');
+    if (mode === 'package watches') write('assets/icon.txt', 'icon');
+    if (mode === 'source additions' && process.platform !== 'win32') {
+      symlinkSync('.cycle-b.md', resolve(dir, '.cycle-a.md'));
+      symlinkSync('.cycle-a.md', resolve(dir, '.cycle-b.md'));
+    }
+    if (mode === 'package watches') {
+      const pkg = resolve(dir, 'node_modules/@fixture/ui');
+      write('node_modules/@fixture/ui/package.json', '{"name":"@fixture/ui","exports":"./child.contract"}');
+      write('node_modules/@fixture/ui/child.contract', 'component Child\n  text "package"\n');
+      watched.push('node_modules/@fixture/ui');
+      if (process.platform !== 'win32') {
+        blocked = resolve(pkg, '.cache/0-private');
+        write('node_modules/@fixture/ui/.cache/0-private', 'unused');
+        chmodSync(blocked, 0);
+        if (process.getuid?.() !== 0) assert.throws(() => readFileSync(blocked), {code:'EACCES'});
+        symlinkSync(pkg, resolve(pkg, '.cache/cycle'), 'dir');
+        mkdirSync(resolve(dir, 'target'), {recursive:true});
+        symlinkSync(resolve(dir, 'target'), resolve(pkg, '.cache/output'), 'dir');
+      }
+    }
+    write('windows/bake_helper.rs', 'pub fn value() -> u8 { 1 }\n');
+    utimesSync(resolve(dir, 'windows/bake_helper.rs'), old, old);
+    write('windows/build.rs', `mod bake_helper;
+    fn main() {
+      assert_eq!(bake_helper::value(), 1);
+      println!("cargo:rerun-if-env-changed=EXACT_BAKE_INPUTS");
+      ${watched.map(path => `println!("cargo:rerun-if-changed=../${path}");`).join('\n      ')}
+      let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
+      std::fs::write(out.join("compat.json"), r#"${JSON.stringify({target,inputs:{platform:'windows',app:id,store:{L:'A'},keys:[]}})}"#).unwrap();
+      std::fs::write(out.join("artifacts.json"), r#"{"version":1,"artifacts":[],"sources":{}}"#).unwrap();
+      let mut plan = std::fs::read("../app.contract").unwrap();
+      plan.extend(std::fs::read("../value.ts").or_else(|_| std::fs::read("../value/index.ts")).unwrap());
+      std::fs::write(out.join("app.plan"), plan).unwrap();
+    }`);
+    const paths = [...watched.filter(path => !['node_modules/@fixture/ui', 'optional.txt'].includes(path)), 'data/src/lib.rs', 'windows/src/main.rs', ...(mode === 'package watches' ? ['assets/icon.txt'] : [])];
+    for (const path of paths) utimesSync(resolve(dir, path), old, old);
+    const app = {dir, workspace:dir, target:resolve(dir, 'target'), name:'inputs', displayName:'Inputs', id,
+      manifest:{app:{id,name:'Inputs'},rust:false}, crate:kind=>`inputs-${kind}`};
+    // Compile a native fixture on this machine; packaging checks read bytes, so its PE suffix can be supplied here.
+    const bake = () => buildBake(app, 'windows', target, {profile:'dev', env:{CARGO_NET_OFFLINE:'true',EXACT_UPDATE_TRUST:'development'}});
+    const build = bake();
+    const original = build.products.find(product => basename(product.path).startsWith('inputs-windows'));
+    assert.ok(original);
+    const binary = resolve(dir, 'dist-windows/Inputs.exe'), dll = resolve(dir, 'dist-windows/module.dll');
+    write('dist-windows/Inputs.exe', readFileSync(original.path));
+    write('dist-windows/module.dll', 'module');
+    const digest = path => createHash('sha256').update(readFileSync(path)).digest('hex');
+    build.products = [{...original,path:resolve(dirname(original.path),'inputs-windows.exe')}, {path:dll,sha256:digest(dll)}];
+    const receipt = resolve(bakeOutput(app), `windows-${target}.build.json`);
+    writeFileSync(receipt, JSON.stringify(build));
+    const fresh = () => {
+      assert.deepEqual(packagedBuildChanges(receipt, dirname(binary), app), []);
+      assert.deepEqual(windowsBuild(app), {bin:binary,changed:[]});
+    };
+    fresh();
+    if (mode === 'build-script helpers') {
+      const helper = resolve(dir, 'windows/bake_helper.rs'), before = readFileSync(helper);
+      writeFileSync(helper, 'pub fn value() -> u8 { 2 }\n'); utimesSync(helper, old, old);
+      assert.ok(packagedBuildChanges(receipt, dirname(binary), app).length, 'the agent must detect a build-script helper edit');
+      assert.ok(windowsBuild(app).changed.length, 'build-first must detect a build-script helper edit');
+      assert.ok(build.binary.inputs.some(file => file.path === helper), 'compiler dependencies are binary inputs');
+      writeFileSync(helper, before); fresh();
+      return;
+    }
+    if (mode === 'new Rust sources') {
+      for (const path of ['data/build.rs', 'data/src/main.rs', 'data/src/bin/tool.rs']) {
+        write(path, 'fn main() {}\n'); utimesSync(resolve(dir, path), old, old);
+        assert.ok(packagedBuildChanges(receipt, dirname(binary), app).length, `${path}: the agent must detect a new Cargo target`);
+        assert.ok(windowsBuild(app).changed.length, `${path}: build-first must detect a new Cargo target`);
+        rmSync(resolve(dir, path)); fresh();
+      }
+      write('data/build.rs', 'fn main() { println!("cargo:rustc-env=WINDOWS_INPUTS_VALUE=2"); }\n');
+      utimesSync(resolve(dir, 'data/build.rs'), old, old);
+      const rebuilt = bake();
+      assert.ok(rebuilt.binary.inputs.some(file => file.path === resolve(dir, 'data/build.rs')), 'the rebuilt receipt records the discovered build script');
+      assert.deepEqual(pendingBuildInputs(rebuilt, {includeSources:true}), []);
+      const run = spawnSync(original.path, [], {encoding:'utf8'});
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(run.stdout.trim(), '2');
+      return;
+    }
+    for (const path of paths) {
+      const file = resolve(dir, path), before = readFileSync(file);
+      const edited = Buffer.from(before); edited[edited.length - 2] ^= 1;
+      writeFileSync(file, edited); utimesSync(file, old, old);
+      assert.ok(packagedBuildChanges(receipt, dirname(binary), app).length, `${path}: the agent must reject equal-mtime edits`);
+      assert.ok(windowsBuild(app).changed.length, `${path}: build-first must reject equal-mtime edits`);
+      writeFileSync(file, before);
+      fresh(); // Identical bytes with a newer mtime are still fresh.
+      utimesSync(file, old, old);
+    }
+    for (const path of ['value.ts', 'optional.txt', 'assets/new.txt', 'deck/new.txt', 'gpu/shaders/new.wgsl']) {
+      const root = resolve(dir, path.split('/')[0]), hadRoot = existsSync(root);
+      write(path, 'new');
+      utimesSync(resolve(dir, path), old, old);
+      assert.ok(packagedBuildChanges(receipt, dirname(binary), app).length, `${path}: new source input`);
+      assert.ok(windowsBuild(app).changed.length, `${path}: build-first must detect a new source input`);
+      rmSync(resolve(dir, path));
+      if (path.includes('/new.') && !hadRoot) rmSync(root, {recursive:true});
+      fresh();
+    }
+    rmSync(resolve(dir, 'child.contract'));
+    assert.ok(packagedBuildChanges(receipt, dirname(binary), app).length, 'a missing imported Contract is stale');
+    write('child.contract', 'component Child\n  text "before"\n'); fresh();
+    write('notes.md', 'unused'); fresh();
+    write('target/build-output.json', 'output'); fresh();
+    if (blocked) {
+      chmodSync(blocked, 0o600);
+      if (process.getuid?.() !== 0) assert.ok(packagedBuildChanges(receipt, dirname(binary), app).length, 'a newly readable watch changes its identity');
+      chmodSync(blocked, 0);
+      // Permission changes alter the guarded identity; restore the receipt for the remaining checks.
+      Object.assign(build, bake(), {products:build.products});
+      writeFileSync(receipt, JSON.stringify(build)); fresh();
+    }
+    for (const path of [binary, dll]) {
+      const before = readFileSync(path);
+      writeFileSync(path, 'changed');
+      assert.ok(packagedBuildChanges(receipt, dirname(binary), app).includes(path));
+      assert.ok(windowsBuild(app).changed.includes(path));
+      writeFileSync(path, before); fresh();
+    }
+    assert.ok(!build.binary.inputs.some(file => file.path === resolve(dir, 'app.contract')));
+    const cohort = {binary:build.binary.sha256,compat:build.compat,sources:build.graph.sources};
+    write('app.contract', readFileSync(resolve(dir, 'app.contract'), 'utf8').replace('before', 'after!'));
+    utimesSync(resolve(dir, 'app.contract'), old, old);
+    assert.equal(classifyArtifacts(build, cohort).binary, false, 'replaceable source edits do not change the binary identity');
+    assert.deepEqual(pendingBuildInputs(build), [], 'binary classification considers only binary inputs');
+    const rebaked = bake();
+    assert.equal(rebaked.binary.sha256, build.binary.sha256, 'rebaking a plan edit keeps the binary fingerprint');
+    assert.equal(classifyArtifacts(rebaked, cohort).binary, false);
+    assert.deepEqual(pendingBuildInputs(rebaked, {includeSources:true}), [], 'rebaked equal-mtime sources are fresh');
+    write('optional.txt', 'present');
+    const stable = bake();
+    const planPath = resolve(stable.sourceInputs.outputs.find(path => basename(path) === 'out'), 'app.plan');
+    const before = statSync(planPath, {bigint:true}).mtimeNs;
+    if (mode === 'source additions') {
+      bake();
+      assert.equal(statSync(planPath, {bigint:true}).mtimeNs, before, 'unchanged sources must not rerun the bake');
+    }
+    write('value.ts', 'export const other = 2;\n');
+    utimesSync(resolve(dir, 'value.ts'), old, old);
+    const added = bake();
+    assert.ok(readFileSync(resolve(bakeOutput(app), `windows-${target}.plan`), 'utf8').includes('other = 2'), 'the rebuild must bake the new import candidate');
+    assert.deepEqual(pendingBuildInputs(added, {includeSources:true}), [], 'the rebuilt inventory is fresh');
+  } finally { if (blocked) chmodSync(blocked, 0o600); rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
 
 test('kept registry units rebuild foreign dep-info while retaining valid units', async () => {
   const { keptCrates } = await import('../host/apple/crates.mjs');
@@ -438,21 +605,23 @@ test.skipIf(!process.env.EXACT_BAKE_CACHE_TEST)('native bakes stay fresh and ret
   } finally { rmSync(dir, {recursive:true, force:true}); }
 }, 180000);
 
-test.each(['rlib', 'staticlib', 'executable', 'windows-executable'].flatMap(kind => [null, 'intermediate', 'output/intermediate', '.'].map(split => [kind, split])))('copied %s roots with build directory %s require unique compiler dep-info', async (kind, split) => {
+test.each(['rlib', 'staticlib', 'executable', 'windows-executable', 'build-script', 'windows-build-script'].flatMap(kind => [null, 'intermediate', 'output/intermediate', '.'].map(split => [kind, split])))('copied %s roots with build directory %s require unique compiler dep-info', async (kind, split) => {
   const { unitDepInfo } = await import('./app.mjs');
   const root = mkdtempSync(resolve(tmpdir(), 'exact-unit-dep-'));
   try {
     const metadata = {target_directory:resolve(root, 'output'), build_directory:resolve(root, split ?? 'output')};
-    const dir = resolve(metadata.target_directory, 'release'), deps = resolve(metadata.build_directory, 'release/deps'), src = resolve(root, 'src/main.rs');
+    const custom = kind.endsWith('build-script'), folder = custom ? 'release/build/script-a11ce' : 'release';
+    const dir = resolve(custom ? metadata.build_directory : metadata.target_directory, folder);
+    const deps = custom ? dir : resolve(metadata.build_directory, folder, 'deps'), src = resolve(root, custom ? 'build.rs' : 'src/main.rs');
     mkdirSync(dir, {recursive:true});
     mkdirSync(deps, {recursive:true});
-    const executable = kind.endsWith('executable'), target = executable ? 'game-native' : 'game_apple';
-    const suffix = kind === 'windows-executable' ? '.exe' : '';
+    const executable = custom || kind.endsWith('executable'), target = custom ? 'build-script-build' : executable ? 'game-native' : 'game_apple';
+    const suffix = kind.startsWith('windows-') ? '.exe' : '';
     const extension = kind === 'staticlib' ? '.a' : '.rlib';
     const artifact = resolve(dir, executable ? target + suffix : `lib${target}${extension}`);
     writeFileSync(artifact, 'selected unit');
     const message = {filenames:[artifact],
-      executable:executable ? artifact : null, target:{name:target, src_path:src}};
+      executable:executable && !custom ? artifact : null, target:{name:target, src_path:src,kind:custom ? ['custom-build'] : []}};
     writeFileSync(resolve(dir, `${target}.d`), `${artifact}: ${src}\n`);
     const unit = (hash, bytes, source = src) => {
       const name = `${target.replaceAll('-', '_')}-${hash}`, dep = resolve(deps, `${name}.d`);

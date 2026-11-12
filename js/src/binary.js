@@ -93,6 +93,21 @@
   }
   // `exactIdleTimeout` (LLP 1016.000 D11): why it is refused, if it is. `socket`: a WebSocket stream that is no
   // listener, child, upload or long poll.
+// Protocol names, never credentials (LLP 1016.000; RFC 7230 token).
+function socketProtocols(value, socket) {
+  if (value === undefined) return [];
+  if (!socket) throw new TypeError('exactProtocols: only a WebSocket stream takes protocols');
+  if (!Array.isArray(value)) throw new TypeError('exactProtocols must be an array of protocol names');
+  var names = [];
+  for (var name of value) {
+    if (typeof name !== 'string' || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name))
+      throw new TypeError(`invalid WebSocket protocol ${JSON.stringify(name)}: expected a non-empty RFC 7230 token`);
+    if (names.includes(name)) throw new TypeError(`duplicate WebSocket protocol ${JSON.stringify(name)}`);
+    names.push(name);
+  }
+  return names;
+}
+
   function idleRefusal(idle, socket) {
     if (idle === undefined) return undefined;
     if (!Number.isInteger(idle) || idle < 1 || idle > 3600000) return "exactIdleTimeout must be an integer number of milliseconds from 1 to 3600000";
@@ -385,6 +400,8 @@
       return arm("setTimeout()", callback, Math.max(Number(delay) | 0, 0), Array.prototype.slice.call(arguments, 2)); // `long`, as WebIDL converts it
     });
     fixed("clearTimeout", function clearTimeout(id) {
+      var timer = armed.get(id);
+      if (timer) timer.call.ran = true; // Its parked deadline must be read again (LLP 1162 D3).
       armed.delete(id);
       reports = reports.filter(function (r) { return r.id !== id; });
     });
@@ -447,10 +464,12 @@
       left: function (signal) { var s = deadline(signal); return s && !signal.aborted ? Math.max(1, s.due - time()) : undefined; },
       expire: function (signal) { var s = deadline(signal); if (s && !signal.aborted) { armed.delete(s.id); s.abort(); } },
       checkpoint: function () {
+        var ran = reports.length > 0;
         while (reports.length) {
           var report = reports.shift();
           try { report.run(); } catch (e) { /* the tracker's own; nothing to tell */ }
         }
+        return ran;
       },
     };
   }
@@ -815,6 +834,20 @@
     }
     return { Response: Response, reply: reply };
   }
+  function FetchError(f) {
+    Object.defineProperties(this, {
+      name: { value: "FetchError", configurable: true },
+      message: { value: String(f.message), configurable: true },
+      kind: { value: String(f.kind), configurable: true },
+    });
+  }
+  FetchError.prototype = Object.create(Error.prototype);
+  function cacheMode(init) {
+    var raw = init ? init.cache : undefined, mode = raw === undefined ? "default" : String(raw);
+    if (["default", "no-store", "reload", "no-cache", "force-cache", "only-if-cached"].indexOf(mode) < 0)
+      throw new TypeError("cache must be default, no-store, reload, no-cache, force-cache or only-if-cached");
+    return raw === undefined ? undefined : mode;
+  }
   global.__exact_binary = Object.freeze({
     requestBody: requestBody,
     keptReply: keptReply,
@@ -822,6 +855,8 @@
     copyBytes: copyBytes,
     timers: timers,
     fileRefusal: fileRefusal,
+    cacheMode: cacheMode,
+    FetchError: FetchError,
     imageOptions: imageOptions,
     toBase64: toBase64,
     utf8Length: utf8Length,
@@ -830,6 +865,7 @@
     longPollOf: longPollOf,
     uploadOf: uploadOf,
     idleRefusal: idleRefusal,
+    socketProtocols: socketProtocols,
     uploadEvent: uploadEvent,
     presence: presence,
     sockets: sockets,
@@ -908,9 +944,33 @@
         return steps.length;
       },
       inModuleTurn: function () { return turn === MODULE.id; },
+      readied: function (call) { return ready.has(call); },
       adopted: function () { adopted++; note(); },
       landed: function () { adopted--; note(); },
       outstanding: function () { return adopted + waiting() > 0; },
     });
+  };
+})(globalThis);
+
+// A parked answer needs a turn only when its chain or its next operation moved (LLP 1162 D3).
+(function (global) {
+  "use strict";
+  global.__exact_waiting_answers = function (calls, pending, work, headOwner) {
+    return function (ids) {
+      var own = new Set(), unclaimed = false, at = headOwner(), ready = [];
+      pending.forEach(function (p) {
+        if (p.claimed || p.stream || p.module) return;
+        if (p.call && p.call.status === "pending" && !p.call.letGo && calls.has(p.call.id)) own.add(p.call.id);
+        else unclaimed = true;
+      });
+      JSON.parse(ids).forEach(function (id) {
+        var c = calls.get(id);
+        if (!c) return;
+        var claims = unclaimed && c.status === "pending" && !c.storage;
+        if (claims) unclaimed = false;
+        if (c.ran || c.status !== "pending" || work.readied(c) || own.has(id) || c.storage && (!at || at === c) || claims) ready.push(id);
+      });
+      return JSON.stringify(ready);
+    };
   };
 })(globalThis);

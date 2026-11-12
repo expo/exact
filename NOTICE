@@ -5,6 +5,10 @@ Third-party code under vendor/ keeps its own licence files: accesskit-windows,
 fontique, parley and vello (MIT OR Apache-2.0), wgpu-hal (MIT OR Apache-2.0),
 rapier3d (Apache-2.0), taffy (MIT) and ibex (MIT).
 
+vendor/ibex/third_party/wpt/urltestdata.json is web-platform-tests'
+url/resources/urltestdata.json, Copyright (c) web-platform-tests contributors,
+under the 3-Clause BSD License; the licence is beside it (LICENSE.md).
+
 Media
 
 The following images are by Daehyeon Mun and are included with permission:
@@ -13,6 +17,12 @@ The following images are by Daehyeon Mun and are included with permission:
   apps/interaction-gallery/ (photographs)
   apps/duo-lab/art/
   tamber/tests/import/figma/ (Figma kit fixtures)
+
+game/games/skinned-fixture/art/fox.glb is a modified copy of the Khronos glTF
+sample Fox: the model by PixelMannen (CC0 1.0); rigging and animation (c) 2014
+tomkranis and the glTF conversion (c) 2017 @AsoboStudio and @scurest, both
+under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/legalcode). The
+README.md beside it says what was changed; Fox-LICENSE.md is the sample's licence.
 
 Fonts
 

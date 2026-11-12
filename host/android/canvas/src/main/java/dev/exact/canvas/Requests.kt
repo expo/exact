@@ -157,7 +157,7 @@ internal class Requests(private val activity: ExactActivity) {
             "app-settings" -> Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", activity.packageName, null))
             else -> Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE)
         }
-        try { activity.startActivity(intent) } catch (e: ActivityNotFoundException) { Log.w(TAG, "no app opens $url") }
+        try { activity.startActivity(intent) } catch (e: ActivityNotFoundException) { Log.w(TAG, "no app opens ${url.replaceFirst(USERINFO, "$1//")}") }
     }
 
     /**
@@ -239,6 +239,8 @@ internal class Requests(private val activity: ExactActivity) {
 
     private companion object {
         const val TAG = "exact"
+        /** A URL's user name and password (to the authority's last `@`), which logcat is not given. */
+        val USERINFO = Regex("^([A-Za-z][A-Za-z0-9+.-]*:)?//[^/?#\\\\]*@")
         const val ID = "id"
         /** The kinds (`presenter::Request`). */
         const val OPEN = 1

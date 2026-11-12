@@ -46,6 +46,52 @@ fn a_test_block_parses_to_the_eight_operations_and_expects() {
 }
 
 #[test]
+fn a_test_traverses_browser_history() {
+    let tests =
+        contract::tests("test \"history\"\n  tap \"root\" history -1\n  tap \"root\" history 2\n")
+            .unwrap();
+    assert!(matches!(
+        tests[0].steps[0],
+        Step::Tap {
+            form: TapForm::History(-1),
+            ..
+        }
+    ));
+    let json = contract::tests_json(&tests);
+    assert!(
+        json.contains(r#"{"op":"tap","target":"root","form":"history","history":-1,"line":2}"#),
+        "{json}"
+    );
+    assert!(
+        json.contains(r#""form":"history","history":2,"line":3"#),
+        "{json}"
+    );
+    for delta in [
+        "0",
+        "1.5",
+        "-0.5",
+        "2147483648",
+        "-2147483649",
+        "1e20",
+        "",
+        "back",
+    ] {
+        let e = contract::tests(&format!(
+            "test \"history\"\n  tap \"root\" history {delta}\n"
+        ))
+        .unwrap_err();
+        assert_eq!(e.id, "syntax-expected-step", "{delta}: {e}");
+        assert!(e.message.contains("history"), "{delta}: {e}");
+    }
+    for delta in [i32::MIN, i32::MAX] {
+        assert!(contract::tests(&format!(
+            "test \"history\"\n  tap \"root\" history {delta}\n"
+        ))
+        .is_ok());
+    }
+}
+
+#[test]
 fn a_step_that_is_not_an_operation_is_refused() {
     let e = contract::tests("test \"t\"\n  jump \"a\"\n").unwrap_err();
     assert_eq!(e.id, "syntax-expected-step");

@@ -55,6 +55,7 @@ mod media;
 mod menu_rows;
 mod menus;
 mod metrics;
+mod module_sources;
 pub mod motion;
 mod native;
 mod native_typed;
@@ -105,6 +106,7 @@ pub use native::{is_module_tag, module_tags};
 pub use native_typed::{DeclaredView, DeclaredViews, EVENT_MARKER};
 pub use sites::{ButtonSite, Declared, NodeSite, Origin, Sites, Written};
 pub use states::PRESS_OPACITY_TO;
+pub use swipe_rows::expand_row_deletes;
 pub use theme::vocab as tamber_vocab;
 
 /// The base scale's names (LLP 1121 stage 11, the lead's ruling 2).
@@ -601,80 +603,7 @@ fn lower_body(
         }
         l.resources.push(id);
     }
-    // The seam's signatures (LLP 1027 D2), in name order; a native module's
-    // names among them are routed to the native slot (LLP 1133.002 D13).
-    // A used module's other names are there too, unread: its substitute reads
-    // them (its status, the source a send answers from).
-    let mut sources = root_types.sources.clone();
-    // An event the root hears uses its module too (LLP 1133.004 D6), and so
-    // does a name data code alone calls (LLP 1133.011 D12), which Contract
-    // never reads: a package of such names alone (`@exact/clipboard`, LLP
-    // 1133.006) is used once a `use` reads its declaration. So does a
-    // package the app's TypeScript imports, whatever Contract reads.
-    let used: Vec<&str> = (file.modules.iter())
-        .filter(|m| {
-            sources.contains_key(&m.name) || m.handler.is_some() || m.data_only || m.imported
-        })
-        .map(|m| m.extension.as_str())
-        .collect();
-    // An `img` scheme is one package's (LLP 1133.019 D11 item 1).
-    let mut schemes: std::collections::BTreeMap<String, &str> = Default::default();
-    for m in (file.modules.iter()).filter(|m| used.contains(&m.extension.as_str())) {
-        let sub: serde_json::Value = serde_json::from_str(&m.substitute).unwrap_or_default();
-        let Some(scheme) = sub["images"]["scheme"].as_str() else {
-            continue;
-        };
-        match schemes.insert(scheme.to_owned(), &m.package) {
-            Some(other) if other != m.package => {
-                return Err(vec![LowerError {
-                    id: "bake-scheme-twice",
-                    message: format!(
-                        "the image scheme `{scheme}:` is declared by {other} and by {}: a scheme is one package's, so the app uses one of them",
-                        m.package
-                    ),
-                    span: m.span,
-                }])
-            }
-            _ => {}
-        }
-    }
-    for m in file.modules.iter().filter(|m| {
-        used.contains(&m.extension.as_str()) && m.kind != contract_syntax::ModuleKind::Event
-    }) {
-        let options = format!("{}__options", m.name);
-        let params = match l.types.shapes.map.contains_key(&options) {
-            true => vec![Ty::Record(options)],
-            false => Vec::new(),
-        };
-        // A send that answers nothing answers `unit` (LLP 1133.004 D5).
-        let answers = match &m.answers {
-            Some(a) => l.types.shapes.resolve(a),
-            None => Ok(Ty::Unit),
-        };
-        if let Ok(ty) = answers {
-            sources.entry(m.name.clone()).or_insert((params, ty));
-        }
-    }
-    for (name, (params, ty)) in &sources {
-        let mut ids = Vec::with_capacity(params.len());
-        for p in params {
-            ids.push(l.ty_id(p)?);
-        }
-        let ty = l.ty_id(ty)?;
-        let id = l.b.source(name, &ids, ty);
-        if let Some(m) = file.modules.iter().find(|m| m.name == *name) {
-            l.b.module(
-                id,
-                (&m.extension, &m.package),
-                &m.declared,
-                m.kind == contract_syntax::ModuleKind::Send,
-                m.live,
-                &m.request,
-                m.sync.as_deref().unwrap_or(""),
-                &m.substitute,
-            );
-        }
-    }
+    l.declare_module_sources(file, root_types, &root.view)?;
     // A mutation is a slot of `option<T>`, `none` at boot, plus its row.
     for (i, m) in root.mutations.iter().enumerate() {
         let t = l.ty_id(&root_types.mutations[i])?;
@@ -1329,10 +1258,10 @@ impl<'a> Lowerer<'a> {
                     }
                     let stacks = self.family_stacks(&a.value)?;
                     let (code, ty) = self.typed_code(&stacks, scope, locals)?;
-                    // Literal families are stack numbers, an empty one `none`.
+                    // Validated literal choices contain stack ids or string clears.
                     let literal = Self::literal_family_arms(&a.value);
                     if ty != Ty::String
-                        && !(literal && matches!(ty, Ty::Number | Ty::Option(_)))
+                        && !(literal && matches!(ty, Ty::Number | Ty::Unknown))
                         && !matches!(ty, Ty::Option(ref inner) if **inner == Ty::String)
                     {
                         return err("lower-attr-type", "`font-family` needs a string", a.span);

@@ -595,12 +595,17 @@ fn a_blur_that_opens_another_dialog_keeps_the_newer_surface() {
       dialog id="second" testId="second"
         input testId="second-field" width=160 height=30
 "#;
-    let mut p = boot(source);
-    tap(&mut p, "open");
-    assert_eq!(p.surface_json()["node"], id(&p, "second"));
-    assert_eq!(p.focus(), Some(id(&p, "second-field")));
-    assert!(p.rect_of(id(&p, "first")).is_none());
-    assert!(p.rect_of(id(&p, "second-field")).is_some());
+    for source in [
+        source.to_owned(),
+        source.replace("dialog id=\"second\"", "dialog id=\"second\" tabindex=0"),
+    ] {
+        let mut p = boot(&source);
+        tap(&mut p, "open");
+        assert_eq!(p.surface_json()["node"], id(&p, "second"));
+        assert_eq!(p.focus(), Some(id(&p, "second-field")));
+        assert!(p.rect_of(id(&p, "first")).is_none());
+        assert!(p.rect_of(id(&p, "second-field")).is_some());
+    }
 }
 
 #[test]

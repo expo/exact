@@ -611,6 +611,50 @@ component App
     assert!(r.failed_resources().is_empty());
 }
 
+/// A wake's reply outside its shape is let go as the wake's: what the
+/// release refreshes is asked under the wake's origin, not the app's.
+#[test]
+fn a_refused_wake_reply_releases_its_request_under_the_wakes_origin() {
+    let app = App::new("refused-origin");
+    app.edit_interface(
+        r#""source": "everyTides","#,
+        r#""source": "everyTides", "origin": "app","#,
+    );
+    app.write(
+        "app.contract",
+        r#"
+use everyTides, tide, TideEntry from "@fixture/tide"
+
+shape Pulled
+  tag: string
+
+component App
+  mutation pulled as shape Pulled refreshes sensitive
+  resource sensitive = everyTides() as shape TideEntry[]
+  action ebbed(tag: string)
+    send pulled = pull(tag)
+  view
+    column tide=ebbed
+      text `${sensitive.length}`
+"#,
+    );
+    let mut r = boot(&app);
+    r.raise_wake("tide", "tide", r#"["wake"]"#, WakeHow::default())
+        .unwrap();
+    by(&mut r, 0.0);
+    assert!(r.failed_resources().is_empty());
+    // `Later` answers `{tag: 7}`, outside `Pulled`.
+    answer_pull(&mut r);
+    let logs = logs(&r);
+    assert!(logs.contains("answered outside its shape"), "{logs}");
+    assert!(
+        logs.contains("tide.everyTides: refused, person-required (wake origin)"),
+        "{logs}"
+    );
+    assert_eq!(r.failed_resources().len(), 1, "{logs}");
+    assert_eq!(r.failed_resources()[0].0, "sensitive");
+}
+
 #[test]
 fn an_expired_wake_clears_only_the_stall_of_a_head_it_drops() {
     for wake_is_head in [true, false] {

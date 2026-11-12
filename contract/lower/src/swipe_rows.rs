@@ -25,6 +25,7 @@
 use crate::metrics::grouped as metric;
 use crate::LowerError;
 use contract_syntax::{Attr, Expr, Node, Span, StyleDecl, TemplatePart, VisitSpans};
+use std::borrow::Cow;
 
 /// The names the expansion gives the content and the action, where the
 /// row has no `id` of its own. Every row repeats them: a swipe row's names
@@ -38,6 +39,63 @@ const BOX: &[&str] = &["grouped-row-separator"];
 
 fn last(attrs: &[Attr], name: &str) -> Option<Attr> {
     attrs.iter().rev().find(|a| a.name == name).cloned()
+}
+
+fn untyped(expr: &Expr, keep_enums: bool) -> Expr {
+    fn erase(expr: &mut Expr, keep_enums: bool) {
+        match expr {
+            Expr::Typed(inner, ty, _) => {
+                if keep_enums && ty.contains_enum() {
+                    erase(inner, keep_enums);
+                } else {
+                    *expr = untyped(inner, keep_enums);
+                }
+            }
+            Expr::Template(parts, _) => {
+                for part in parts {
+                    if let TemplatePart::Expr(e) = part {
+                        erase(e, keep_enums);
+                    }
+                }
+            }
+            Expr::List(items, _) | Expr::Call(_, items, _) => {
+                for item in items {
+                    erase(item, keep_enums);
+                }
+            }
+            Expr::Some(e, _)
+            | Expr::Member(e, _, _)
+            | Expr::NamedArg(_, e, _)
+            | Expr::Unary(_, e, _)
+            | Expr::Arrow { body: e, .. } => erase(e, keep_enums),
+            Expr::Binary(_, a, b, _)
+            | Expr::Let {
+                value: a, body: b, ..
+            } => {
+                erase(a, keep_enums);
+                erase(b, keep_enums);
+            }
+            Expr::Ternary(a, b, c, _)
+            | Expr::Match {
+                subject: a,
+                some: b,
+                none: c,
+                ..
+            } => {
+                erase(a, keep_enums);
+                erase(b, keep_enums);
+                erase(c, keep_enums);
+            }
+            Expr::Number(..)
+            | Expr::Str(..)
+            | Expr::Bool(..)
+            | Expr::None(..)
+            | Expr::Ident(..) => {}
+        }
+    }
+    let mut expr = expr.clone();
+    erase(&mut expr, keep_enums);
+    expr
 }
 
 fn implied(name: &str, value: Expr, span: Span) -> Attr {
@@ -234,7 +292,7 @@ fn written(node: &Node, row: &dyn Fn(&Node, bool) -> Node) -> Option<Node> {
     // The child whose `id` is written as `swipeContent` is (a template
     // such as `row-${n.id}` included): the same expression, where it is.
     let bare = |e: &Expr| {
-        let mut e = e.clone();
+        let mut e = untyped(e, false);
         e.visit_spans(&mut |s| *s = Span::default());
         e
     };
@@ -411,10 +469,7 @@ pub(crate) fn cells(children: &[Node]) -> Option<Vec<Node>> {
     }
     fn expand(node: &Node) -> Node {
         match node {
-            Node::Element { span, instance, .. } => match parts(node, &|a| a) {
-                Some(parts) => scroll(parts, Vec::new(), *span, *instance),
-                None => node.clone(),
-            },
+            Node::Element { .. } => cell(node),
             Node::When {
                 tag,
                 cond,
@@ -467,6 +522,16 @@ pub(crate) fn cells(children: &[Node]) -> Option<Vec<Node>> {
         .then(|| children.iter().map(expand).collect())
 }
 
+fn cell(node: &Node) -> Node {
+    match node {
+        Node::Element { span, instance, .. } => match parts(node, &|a| a) {
+            Some(parts) => scroll(parts, Vec::new(), *span, *instance),
+            None => node.clone(),
+        },
+        _ => node.clone(),
+    }
+}
+
 /// Where an element stands, for `lower-delete-row`: a list's row, a
 /// grouped list's section, or anywhere else.
 #[derive(Clone, Copy, PartialEq)]
@@ -475,6 +540,135 @@ enum At {
     Sections,
     Section,
     Other,
+}
+
+impl At {
+    fn row(self, tag: &str) -> bool {
+        self == Self::Row || (self == Self::Section && !matches!(tag, "header" | "footer"))
+    }
+
+    fn expand(self, node: &Node) -> Cow<'_, Node> {
+        match node {
+            Node::Element { tag, .. } if self == Self::Section && self.row(tag) => {
+                Cow::Owned(grouped(node, &|n, swiped| {
+                    crate::grouped::row(n, false, swiped)
+                }))
+            }
+            Node::Element { attrs, .. }
+                if self == Self::Row && attrs.iter().any(|a| a.name == "delete") =>
+            {
+                Cow::Owned(cell(node))
+            }
+            _ => Cow::Borrowed(node),
+        }
+    }
+
+    fn inside(self, tag: &str, attrs: &[Attr], children: &[Node]) -> Self {
+        if tag == "list" {
+            match crate::grouped::style(tag, attrs) {
+                Ok(Some(_)) => Self::Sections,
+                Ok(None) if crate::cells::rows(tag, attrs, children, false) => Self::Row,
+                _ => Self::Other,
+            }
+        } else if tag == "section" && self == Self::Sections {
+            Self::Section
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// Expand admitted list rows' `delete=` for the semantics embedding,
+/// using the plan lowerer's swipe parts and grouped-row precedence.
+/// Classes decide list admission; regions preserve the surrounding row
+/// context. A `delete=` outside a list row is dropped as in plan lowering.
+pub fn expand_row_deletes(view: &[Node], styles: &[StyleDecl]) -> Vec<Node> {
+    fn nodes(view: &[Node], at: At, styles: &[StyleDecl]) -> Vec<Node> {
+        view.iter().map(|n| node(n, at, styles)).collect()
+    }
+    fn node(n: &Node, at: At, styles: &[StyleDecl]) -> Node {
+        match n {
+            Node::Element { .. } => {
+                let expanded = at.expand(n);
+                let Node::Element {
+                    tag,
+                    positional,
+                    attrs,
+                    children,
+                    span,
+                    instance,
+                } = expanded.as_ref()
+                else {
+                    unreachable!("row expansion keeps an element")
+                };
+                let all = if tag == "list" {
+                    drawn(attrs, styles)
+                } else {
+                    Vec::new()
+                };
+                let inside = at.inside(tag, &all, children);
+                let mut element = Node::Element {
+                    tag: tag.clone(),
+                    positional: positional.clone(),
+                    attrs: attrs.clone(),
+                    children: nodes(children, inside, styles),
+                    span: *span,
+                    instance: *instance,
+                };
+                if let Node::Element { attrs, .. } = &mut element {
+                    if let Some(kept) = stray(attrs) {
+                        *attrs = kept;
+                    }
+                }
+                element
+            }
+            Node::When {
+                tag,
+                cond,
+                then,
+                otherwise,
+                span,
+            } => Node::When {
+                tag: *tag,
+                cond: cond.clone(),
+                then: nodes(then, at, styles),
+                otherwise: nodes(otherwise, at, styles),
+                span: *span,
+            },
+            Node::Each {
+                tag,
+                var,
+                index,
+                list,
+                key,
+                body,
+                span,
+            } => Node::Each {
+                tag: *tag,
+                var: var.clone(),
+                index: index.clone(),
+                list: list.clone(),
+                key: key.clone(),
+                body: nodes(body, at, styles),
+                span: *span,
+            },
+            Node::Match {
+                tag,
+                subject,
+                some,
+                none,
+                span,
+            } => Node::Match {
+                tag: *tag,
+                subject: subject.clone(),
+                some: (some.0.clone(), nodes(&some.1, at, styles)),
+                none: nodes(none, at, styles),
+                span: *span,
+            },
+            other => other.clone(),
+        }
+    }
+    nodes(view, At::Other, styles)
 }
 
 /// Where the walk stands within a row a `for` repeats.
@@ -514,15 +708,10 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
         for node in nodes {
             match node {
                 Node::Element {
-                    tag,
-                    attrs,
-                    children,
-                    span,
-                    ..
+                    tag, attrs, span, ..
                 } => {
                     let at = w.at;
-                    let label = at == At::Section && (tag == "header" || tag == "footer");
-                    let row = matches!(at, At::Row) || (at == At::Section && !label);
+                    let row = at.row(tag);
                     let delete = attrs.iter().find(|a| a.name == "delete");
                     if let Some(a) = delete.filter(|_| !row) {
                         out.push(LowerError {
@@ -548,7 +737,17 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
                     } else {
                         w.advise && !holds_actions
                     };
-                    // A list's attributes as lowering reads them, its class's rows first.
+                    // Grouped-row layout precedes admission of any lists it contains.
+                    let expanded = at.expand(node);
+                    let Node::Element {
+                        tag,
+                        attrs,
+                        children,
+                        ..
+                    } = expanded.as_ref()
+                    else {
+                        unreachable!("row expansion keeps an element")
+                    };
                     let list = (tag == "list").then(|| drawn(attrs, styles));
                     if let Some(all) = &list {
                         section_list(all, children, *span, out);
@@ -565,15 +764,7 @@ pub(crate) fn unplaced(view: &[Node], styles: &[StyleDecl]) -> Vec<LowerError> {
                             span: *span,
                         });
                     }
-                    let inside = match (&list, tag.as_str(), at) {
-                        (Some(all), ..) => match crate::grouped::style(tag, all) {
-                            Ok(Some(_)) => At::Sections,
-                            Ok(None) if crate::cells::rows(tag, all, children, false) => At::Row,
-                            _ => At::Other,
-                        },
-                        (None, "section", At::Sections) => At::Section,
-                        _ => At::Other,
-                    };
+                    let inside = at.inside(tag, list.as_deref().unwrap_or(&[]), children);
                     let w = Walk {
                         at: inside,
                         repeated: false,
@@ -637,9 +828,20 @@ fn section_list(all: &[Attr], children: &[Node], span: Span, out: &mut Vec<Lower
     }
 }
 
-/// An element's attributes as lowering reads them: its class's rows
-/// (`class::rows`), then its own. A class the build refuses adds none.
+/// An element's attributes as lowering reads them: its grouped sheet,
+/// class rows, then its own. A class the build refuses adds none.
 fn drawn(attrs: &[Attr], styles: &[StyleDecl]) -> Vec<Attr> {
+    // Only the semantics adds non-enum prop ascriptions; enum ascriptions
+    // also survive the plan's expansion and must keep its admission decision.
+    let attrs: Vec<Attr> = attrs
+        .iter()
+        .map(|a| Attr {
+            value: untyped(&a.value, true),
+            ..a.clone()
+        })
+        .collect();
+    let (sheet, own) = crate::grouped::split(&attrs);
+    let attrs = own.as_deref().unwrap_or(&attrs);
     let style = |name: &str| {
         styles
             .iter()
@@ -648,10 +850,9 @@ fn drawn(attrs: &[Attr], styles: &[StyleDecl]) -> Vec<Attr> {
     };
     let class = crate::class::rows(attrs, &style, &[]).ok().flatten();
     let own = attrs.iter().filter(|a| a.name != "class").cloned();
-    class
-        .map(|(_, rows)| rows)
-        .unwrap_or_default()
+    sheet
         .into_iter()
+        .chain(class.map(|(_, rows)| rows).unwrap_or_default())
         .chain(own)
         .collect()
 }

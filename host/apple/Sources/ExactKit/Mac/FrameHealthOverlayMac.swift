@@ -29,7 +29,7 @@ final class FrameHealthOverlayMac: NSView {
         card.moved = { [weak self] origin in
             guard let self else { return }
             self.health?.hudDragging = true
-            place(at: FrameHealthCardFace.resisted(origin, size: card.frame.size, in: bounds.insetBy(dx: 8, dy: 8)))
+            place(at: FrameHealthCardFace.resisted(origin, size: card.frame.size, in: restingArea))
         }
         card.released = { [weak self] velocity in
             guard let self else { return }
@@ -193,7 +193,7 @@ final class FrameHealthOverlayMac: NSView {
 
     override func layout() {
         super.layout()
-        let available = bounds.insetBy(dx: 8, dy: 8)
+        let available = restingArea
         let compact = available.height < FrameHealthCardFace.height
         let height = compact ? FrameHealthCardFace.compactHeight : FrameHealthCardFace.height
         card.compact = compact
@@ -225,16 +225,17 @@ final class FrameHealthOverlayMac: NSView {
     }
 
     private var snapping: Bool { card.layer?.animation(forKey: "snap.position.x") != nil || card.layer?.animation(forKey: "snap.position.y") != nil }
+    private var restingArea: CGRect { FrameHealthCardFace.restingArea(in: bounds) }
 
     private func settle(velocity: CGVector) {
-        position = FrameHealthCardFace.Position(nearest: card.frame.origin, velocity: velocity, size: card.frame.size, in: bounds.insetBy(dx: 8, dy: 8))
+        position = FrameHealthCardFace.Position(nearest: card.frame.origin, velocity: velocity, size: card.frame.size, in: restingArea)
         spring(velocity: velocity)
     }
 
     private func spring(velocity: CGVector) {
         guard let layer = card.layer else { return }
         let from = layer.position
-        place(at: position.origin(of: card.frame.size, in: bounds.insetBy(dx: 8, dy: 8)))
+        place(at: position.origin(of: card.frame.size, in: restingArea))
         let to = layer.position
         for (key, start, end, speed) in [("position.x", from.x, to.x, velocity.dx), ("position.y", from.y, to.y, velocity.dy)] where start != end {
             let spring = CASpringAnimation(keyPath: key)
@@ -249,7 +250,7 @@ final class FrameHealthOverlayMac: NSView {
 
     /// Return to the resting position after a click interrupts the spring.
     private func rest() {
-        guard !snapping, card.frame.origin != position.origin(of: card.frame.size, in: bounds.insetBy(dx: 8, dy: 8)) else { return }
+        guard !snapping, card.frame.origin != position.origin(of: card.frame.size, in: restingArea) else { return }
         spring(velocity: .zero)
     }
 

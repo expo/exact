@@ -441,8 +441,11 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
         &mut self,
         store: &Store,
         in_flight: exact_runner::InFlight<'_>,
+        fetch: Option<u64>,
     ) -> Option<(u64, exact_runner::Request)> {
-        self.embedded.as_mut()?.timer_before_reply(store, in_flight)
+        self.embedded
+            .as_mut()?
+            .timer_before_reply(store, in_flight, fetch)
     }
     fn module_landed(
         &mut self,
@@ -695,6 +698,27 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             embedded.answer_for(target, store, source, args)
         } else {
             self.call(store, source, args, None)
+        }
+    }
+    fn more_for(&mut self, target: Target) -> Vec<exact_runner::Request> {
+        self.embedded
+            .as_mut()
+            .map(|d| d.more_for(target))
+            .unwrap_or_default()
+    }
+    fn parse_fetch_for(
+        &mut self,
+        target: Target,
+        fetch: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        if let Some(embedded) = &mut self.embedded {
+            embedded.parse_fetch_for(target, fetch, store, source, args, outcome)
+        } else {
+            self.call(store, source, args, Some(&outcome)).map(Some)
         }
     }
     fn parse_for(

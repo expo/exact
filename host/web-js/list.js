@@ -10,7 +10,7 @@
 // reorder drag; not carried (refused at build): a dynamic `virtualized`.
 import { inactive } from "./document.js";
 import { rt as runtime } from './rt-link.js';
-import { sig, effect, scope, end, untracked, write, writeItem, owner, onEnd, viewId, Views, inflight, Before, After, rev, ticket, journal, Resources, Mutations, unadopted, adopting, adoptRow, settled, Refusal, Hosts, exitView, clock, eq } from "./rt.js";
+import { sig, effect, scope, end, untracked, write, writeItem, owner, onEnd, viewId, Views, inflight, Before, After, rev, ticket, journal, Resources, Mutations, unadopted, adopting, adoptRow, settled, Refusal, Hosts, exitView, clock, eq, presentRows } from "./rt.js";
 
 const BOOTSTRAP_ROWS = 16, ESTIMATED = 32, LEAD_SECONDS = 0.25, FAR_VIEWPORTS = 2, KEPT = 4096;
 // A port less than END_SLACK from a followed end already sent is at it: hosts round or floor offsets (start.rs `at_target`).
@@ -238,6 +238,13 @@ function keyText(k) {
   if (typeof k === "number" && isFinite(k)) return "n:" + String(k === 0 ? 0 : k);
   if (typeof k === "boolean") return "b:" + k;
   throw new Refusal("a collection key is a string, a finite number or a bool");
+}
+
+function collectionKey(value, unique) {
+  const text = keyText(value);
+  let occurrence = 0, id = text;
+  while (unique.has(id)) id = "d" + ++occurrence + ":" + text;
+  return [id, occurrence];
 }
 
 // ---------------------------------------------------------------- collections
@@ -511,7 +518,7 @@ class Collection {
       owner().$row = m;
       globalThis.exact?.rowWork?.(this.el, "rowConstructed");
       onEnd(() => globalThis.exact?.rowWork?.(this.el, "rowRetired"));
-      this.o.row(w, m.item, m.index);
+      this.o.row(w, m.item, m.index, m.key);
     }, this.own);
     m.s = served ? adoptRow(w, build) : unadopted(build);
     m.view = viewId(w); w.dataset.view = m.view;
@@ -912,6 +919,7 @@ class Collection {
 /** A virtualized `list`'s rows: `o` carries the key and row builders, the
  * edges' handlers, and what the runner reads when the list is created. */
 export function vl(el, subject, key, row, o) {
+  row = presentRows(row, subject, key, (value, unique) => collectionKey(value, unique)[0]);
   const own = owner();
   let outer = null;
   for (let s = own; s && !outer; s = s.up) outer = s.$row;
@@ -943,9 +951,7 @@ export function vl(el, subject, key, row, o) {
   effect(() => {
     const items = subject(), inputs = o.inputs?.() ?? [], idents = [], dups = new Map(), unique = new Set();
     items.forEach((item, i) => {
-      const text = keyText(key(() => item, () => i));
-      let d = 0, id = text;
-      while (unique.has(id)) id = "d" + ++d + ":" + text;
+      const [id, d] = collectionKey(key(() => item, () => i), unique);
       unique.add(id);
       if (d) dups.set(i, d);
       idents.push(id);

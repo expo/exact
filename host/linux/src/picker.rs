@@ -5,6 +5,7 @@
 //! and a picked image's pixel size read from its header (D3).
 
 use exact_runner::DataError;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -43,15 +44,75 @@ pub fn agent() -> bool {
     std::env::var("EXACT_AGENT").as_deref() == Ok("1") || cfg!(test)
 }
 
+/// An XDG base directory: `variable` when it holds an absolute path, else
+/// `$HOME/<fallback>` when `HOME` does. A relative path in either is
+/// invalid and ignored, as the XDG Base Directory Specification says
+/// (<https://specifications.freedesktop.org/basedir-spec/latest/>); `None`
+/// when neither gives one.
+pub fn xdg_base(variable: &str, fallback: &str) -> Option<PathBuf> {
+    base_from(
+        std::env::var_os(variable),
+        std::env::var_os("HOME"),
+        fallback,
+    )
+}
+
+fn base_from(value: Option<OsString>, home: Option<OsString>, fallback: &str) -> Option<PathBuf> {
+    let absolute = |v: OsString| Some(PathBuf::from(v)).filter(|p| p.is_absolute());
+    value
+        .and_then(absolute)
+        .or_else(|| home.and_then(absolute).map(|home| home.join(fallback)))
+}
+
 /// `app:/data`, `app:/cache`, `app:/tmp`, once storage is configured.
 static ROOTS: Mutex<Option<[PathBuf; 3]>> = Mutex::new(None);
 
 /// Record the app's directories, and empty `app:/tmp/picked/` and
-/// `app:/tmp/shared/`: what the last launch picked or was shared is gone (D4).
+/// `app:/tmp/shared/` ([`empty_landings`]).
 pub fn set_roots(data: PathBuf, cache: PathBuf, temporary: PathBuf) {
-    let _ = std::fs::remove_dir_all(temporary.join("picked"));
-    let _ = std::fs::remove_dir_all(temporary.join("shared"));
+    empty_landings(&temporary);
     *ROOTS.lock().unwrap_or_else(|e| e.into_inner()) = Some([data, cache, temporary]);
+}
+
+/// The `app:/tmp` roots whose `picked` and `shared` this process has emptied.
+static LANDINGS_EMPTIED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Empty `temporary`'s `picked` and `shared` once a process: what the last
+/// launch picked or was shared is gone (D4). A development reload, or an
+/// update applied while the app is open, boots a host that activates its
+/// storage again; that activation leaves them, since the state it carries
+/// may name the files.
+fn empty_landings(temporary: &Path) {
+    let mut emptied = LANDINGS_EMPTIED.lock().unwrap_or_else(|e| e.into_inner());
+    if emptied.iter().any(|t| t == temporary) {
+        return;
+    }
+    emptied.push(temporary.to_path_buf());
+    // `temporary` is `<cache base>/exact/<app id>/temporary`, or a drive's
+    // `<cache base>/exact/<app id>/agent/<name>/temporary` ([`app_dirs`]).
+    let depth = if std::env::var_os("EXACT_AGENT").is_some() {
+        5
+    } else {
+        3
+    };
+    empty_landings_below(temporary, depth);
+}
+
+/// Empty `temporary`'s `picked` and `shared` unless `temporary`, or a
+/// directory between it and its ancestor `depth` levels up, is a symbolic
+/// link: `remove_dir_all` follows a link above the path it is given, so
+/// emptying through one deletes the `picked` and `shared` it points at.
+fn empty_landings_below(temporary: &Path, depth: usize) {
+    let refused = match first_link(temporary, depth) {
+        Ok(None) => {
+            let _ = std::fs::remove_dir_all(temporary.join("picked"));
+            let _ = std::fs::remove_dir_all(temporary.join("shared"));
+            return;
+        }
+        Ok(Some(at)) => format!("{} is a symbolic link", at.display()),
+        Err((at, e)) => format!("could not inspect {}: {e}", at.display()),
+    };
+    eprintln!("exact: app:/tmp/picked and app:/tmp/shared are not emptied: {refused}");
 }
 
 /// The app's `app:/data`, `app:/cache` and `app:/tmp` (LLP 1027.001): under
@@ -80,21 +141,14 @@ pub(crate) fn app_dirs(app_id: &str) -> Result<Option<([PathBuf; 3], Option<Path
     let (mut data, mut cache) = windows::bases(&windows::local_app_data()?, app_id)?;
     #[cfg(not(windows))]
     let (mut data, mut cache) = {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .ok_or_else(|| DataError::Unavailable("app storage needs an absolute HOME".into()))?;
         let base = |variable: &str, fallback: &str| {
-            std::env::var_os(variable)
-                .map(PathBuf::from)
-                .filter(|p| p.is_absolute())
-                .unwrap_or_else(|| home.join(fallback))
-                .join("exact")
-                .join(app_id)
+            xdg_base(variable, fallback)
+                .map(|base| base.join("exact").join(app_id))
+                .ok_or_else(|| DataError::Unavailable("app storage needs an absolute HOME".into()))
         };
         (
-            base("XDG_DATA_HOME", ".local/share").join("data"),
-            base("XDG_CACHE_HOME", ".cache"),
+            base("XDG_DATA_HOME", ".local/share")?.join("data"),
+            base("XDG_CACHE_HOME", ".cache")?,
         )
     };
     let mut fresh = None;
@@ -176,30 +230,38 @@ pub(crate) fn empty_fresh_tree(app_id: &str) -> Result<(), DataError> {
 /// emptying it through one would delete whatever the link points at, such as
 /// the app's real files.
 fn unlinked(tree: &std::path::Path) -> Result<(), DataError> {
-    let Some(base) = tree.ancestors().nth(4) else {
-        return Ok(());
+    match first_link(tree, 4) {
+        Ok(None) => Ok(()),
+        Ok(Some(at)) => Err(DataError::Unavailable(format!(
+            "EXACT_AGENT_STORAGE_FRESH: {} is a symbolic link, so the scratch store under it is not emptied: remove the link, or name another store",
+            at.display()
+        ))),
+        Err((at, e)) => Err(DataError::Unavailable(format!(
+            "EXACT_AGENT_STORAGE_FRESH: could not inspect {}: {e}",
+            at.display()
+        ))),
+    }
+}
+
+/// The first symbolic link among `path` and the directories between it and
+/// its ancestor `depth` levels up, looking down from that ancestor. `None`
+/// when there is none or a part does not exist yet; an error names the part
+/// that could not be inspected.
+fn first_link(path: &Path, depth: usize) -> Result<Option<PathBuf>, (PathBuf, std::io::Error)> {
+    let Some(base) = path.ancestors().nth(depth) else {
+        return Ok(None);
     };
     let mut at = base.to_path_buf();
-    for part in tree.strip_prefix(base).unwrap_or(tree).components() {
+    for part in path.strip_prefix(base).unwrap_or(path).components() {
         at.push(part);
         match std::fs::symlink_metadata(&at) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                return Err(DataError::Unavailable(format!(
-                    "EXACT_AGENT_STORAGE_FRESH: {} is a symbolic link, so the scratch store under it is not emptied: remove the link, or name another store",
-                    at.display()
-                )));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => {
-                return Err(DataError::Unavailable(format!(
-                    "EXACT_AGENT_STORAGE_FRESH: could not inspect {}: {e}",
-                    at.display()
-                )));
-            }
+            Ok(meta) if meta.file_type().is_symlink() => return Ok(Some(at)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err((at, e)),
             Ok(_) => {}
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// A scripted drive's scratch storage (`EXACT_AGENT_STORAGE=<name>`): a tree
@@ -552,6 +614,24 @@ pub(crate) fn shared_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    #[test]
+    fn an_xdg_base_ignores_a_relative_path_and_has_none_without_home() {
+        let some = |s: &str| Some(OsString::from(s));
+        let share = ".local/share";
+        assert_eq!(
+            base_from(some("/x/data"), some("/home/a"), share),
+            Some(PathBuf::from("/x/data"))
+        );
+        assert_eq!(
+            base_from(some("updates"), some("/home/a"), share),
+            Some(PathBuf::from("/home/a/.local/share"))
+        );
+        assert_eq!(base_from(some("updates"), None, share), None);
+        assert_eq!(base_from(None, None, share), None);
+        assert_eq!(base_from(None, some("home"), share), None);
+    }
+
     /// A reset refuses a scratch tree reached through a symbolic link above it
     /// (an `agent` directory linked to the app's real data, say), leaving
     /// what the link points at as it was; an ordinary tree is let through.
@@ -714,6 +794,71 @@ mod tests {
         );
         assert_eq!(place("app:/data/photos/a.png/x"), None, "below a file");
         assert_eq!(place("app:/data/../private/new.png"), None);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// `picked` and `shared` are emptied at the first activation in this
+    /// process and kept at a later one, a reload's with its state carried.
+    #[test]
+    fn landings_are_emptied_once_a_process() {
+        let temporary =
+            std::env::temp_dir().join(format!("exact-landings-once-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temporary);
+        let put = |name: &str| {
+            let file = temporary.join(name);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, "x").unwrap();
+            file
+        };
+        let stale = [put("picked/1-1.jpg"), put("shared/1/a.txt")];
+        empty_landings(&temporary);
+        assert!(stale.iter().all(|f| !f.exists()), "the last launch's files");
+        let picked = [put("picked/7-1.jpg"), put("shared/7/b.txt")];
+        empty_landings(&temporary);
+        assert!(picked.iter().all(|f| f.exists()), "this launch's files");
+        let _ = std::fs::remove_dir_all(&temporary);
+    }
+
+    /// `app:/tmp` reached through a symbolic link, at it or above it, is
+    /// not emptied, and what the link points at keeps its `picked` and
+    /// `shared`; an ordinary `app:/tmp` is emptied.
+    #[cfg(unix)]
+    #[test]
+    fn landings_are_not_emptied_through_a_link() {
+        use std::os::unix::fs::symlink;
+        let base = std::env::temp_dir().join(format!("exact-landings-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let app = base.join("cache/exact/app.id");
+        let temporary = app.join("temporary");
+        let fill = |dir: &Path| {
+            let files = [dir.join("picked/deep/f"), dir.join("shared/1/g")];
+            for file in &files {
+                std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+                std::fs::write(file, "kept").unwrap();
+            }
+            files
+        };
+        // `temporary` itself a link.
+        let target = fill(&base.join("target"));
+        std::fs::create_dir_all(&app).unwrap();
+        symlink(base.join("target"), &temporary).unwrap();
+        empty_landings_below(&temporary, 3);
+        assert!(target.iter().all(|f| f.exists()), "through app:/tmp");
+        // A directory above it a link.
+        std::fs::remove_file(&temporary).unwrap();
+        std::fs::remove_dir(&app).unwrap();
+        let above = fill(&base.join("elsewhere/temporary"));
+        symlink(base.join("elsewhere"), &app).unwrap();
+        empty_landings_below(&temporary, 3);
+        assert!(
+            above.iter().all(|f| f.exists()),
+            "through the app's directory"
+        );
+        // No link.
+        std::fs::remove_file(&app).unwrap();
+        let own = fill(&temporary);
+        empty_landings_below(&temporary, 3);
+        assert!(own.iter().all(|f| !f.exists()), "an ordinary app:/tmp");
         let _ = std::fs::remove_dir_all(&base);
     }
 

@@ -241,7 +241,7 @@ impl<D: DataSource> Presenter<D> {
         self.dirty = true;
         // An attached display still has the page's previous boxes. Initial
         // dialog focus follows its new layout before that picture is acknowledged.
-        let boxed: BTreeSet<ViewId> = self
+        let mut boxed: BTreeSet<ViewId> = self
             .host
             .preorder()
             .into_iter()
@@ -265,7 +265,12 @@ impl<D: DataSource> Presenter<D> {
         });
         let error = match autofocus {
             Some(id) => self.set_focus(Some(id), now),
-            None if dialog => self.move_focus_in(false, now, &boxed),
+            None if dialog => {
+                // The dialog is the fallback, even when Windows makes its
+                // scroll container a Tab stop.
+                boxed.remove(&id);
+                self.move_focus_in(false, now, &boxed)
+            }
             None => None,
         };
         if let Some(e) = error {

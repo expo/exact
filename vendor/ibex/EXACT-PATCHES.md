@@ -1,5 +1,17 @@
 # Vendored Ibex split crates — Exact integration ledger
 
+## Portable event-stream timeouts
+
+`transport/rustls_http.rs` removes implicit read deadlines after a successful
+`text/event-stream` response identifies an event stream without an explicit
+request timeout. Connection and header limits and explicit timeouts still apply.
+Cancellation interrupts blocked reads; ordinary requests keep their limits.
+Classification uses the headers returned to callers, including the last
+`Content-Type` when it is repeated. `transport/rustls_timeout_tests.rs` probes
+both default deadlines and expired deadlines, explicit-timeout policy and
+agent reuse. `transport/stream_tests.rs` exercises later events, explicit
+timeout expiry, cancellation and release against loopback peers.
+
 ## Windows WebSocket readiness
 
 `crates/ibex2/src/transport/websocket.rs` subscribes to writable readiness only
@@ -252,11 +264,12 @@ Cargo from discovering an enclosing checkout when `cargo fmt --all` visits these
 excluded path dependencies in a nested worktree. Preserve these boundaries when
 refreshing the vendored crates.
 
-`ibex2/build.rs` emits empty binding bytecode and hardening metadata only when
-`EXACT_JS_ENGINE=stub`. `hermes-lean-sys/build.rs` recognizes that same explicit
-configuration and emits empty engine/compiler metadata with no native link.
-Normal builds still validate and link the receipted lean VM. These remain
-Exact-only; paired `HERMESC_PATH` export is now generic upstream support.
+`ibex2/build.rs` emits empty binding bytecode and hardening metadata with
+`EXACT_JS_ENGINE=stub` or for watchOS. `hermes-lean-sys/build.rs` selects the
+same engine-free composition, with no native link. The watch bake refuses
+entries reaching TypeScript until LLP 1126.001 §5 Q3 passes; host-side bakers
+still validate and link the receipted lean VM. These remain Exact-only;
+paired `HERMESC_PATH` export is now generic upstream support.
 
 `secrets/darwin_keychain.mm` selects the bundle's
 `ExactKeychainAccessGroup` only when `ExactAppIdentifier` equals the Keychain
@@ -738,3 +751,80 @@ development and unknown compositions keep it.
 An absent provider in `sqlite_abi` (JavaScript) or `host::Sqlite` (Rust)
 refuses an admitted open with `Unlinked("sqlite")`, matching Exact's portable
 storage executor and bake. Replay these refusals on a refresh.
+
+## Local patch 31, a fetch reports each hop's response head
+
+`stdlib::fetch::Request` carries an optional `received` callback. The blocking
+fetch (`stdlib/fetch.rs`), the asynchronous one (`stdlib/fetch_async.rs`) and
+the portable transport (`transport/rustls_http.rs`) call it with a hop's
+method, URL, status and headers when that hop's response head arrives, before
+a redirect is followed or a body is read. Exact's executor uses it to drop
+cached replies a write may have changed (RFC 9111 §4.4; LLP 1162 D4): a write
+that a redirect follows, or whose body then fails, has still been answered.
+Unset, nothing changes.
+
+The Darwin transport's wait for a head (`ibex2_darwin_http_headers`,
+`transport/darwin_http.mm`) hands back a head that arrived together with a
+failure: one refused for its declared length, or one whose exchange failed
+before the wait returned. `DarwinTransport::open` tells it and returns the
+failure as before. URLSession tells a head only once some of its body, or
+the connection's end, has come.
+
+The asynchronous fetch's blocking adapter (`run_blocking`) passes a head the
+transport told with a failure to `Sink::observed`, which `HopSink` reports as
+it reports `head`. Both call the embedder outside the task's lock, since what
+it calls may abort the fetch.
+
+Replay all of it on a refresh.
+
+## Local patch 32, gated WebSocket subprotocols
+
+The host binding passes protocol names through its existing network gate
+(LLP 1016.000). It checks the selected name against the offer, including the
+browser rule that an offer requires a selection. Protocol names are case-sensitive,
+including duplicate detection in the JavaScript constructor. Gated opens, receive-only
+opens and event watches share the selection check; a refused watch reports error
+then close 1006, without open. `stdlib/websocket.rs` tests those entry points.
+`host/apple/src/executor_protocol_tests.rs` exercises
+URLSession and the portable transport against a local handshake server.
+
+## Local patch 33, an asynchronous fetch's reply body destination
+
+`stdlib::fetch::Request::response_body` optionally names a `BodyDestination`
+and an error-body allowance. `FetchTask` sends only the final 2xx body's
+chunks there and calls `finish` for its response metadata, outside its lock.
+The transport's serial sink context calls both: on the bounded blocking
+adapter, its worker thread may write a file; a native delegate queue must
+arrange a different execution context before using a disk destination.
+Other statuses collect at most the error allowance, and redirects skip their
+bodies. Abort retains the destination through the physical end; its last
+release cleans up any unpublished file. Unset, nothing changes.
+
+`Staged::publish_if` syncs before asking its caller to admit the rename.
+Exact uses that boundary to arbitrate abort and deadline against publication
+(LLP 1162 D1). The existing `publish` admits unconditionally.
+
+Replay both on a refresh.
+
+## Local patch 34, asynchronous transport retirement
+
+`AsyncTransport::retire` releases a lane's idle resources while accepted
+exchanges retain their physical owners (LLP 1162 D8). `BlockingAdapter`
+forwards retirement to its `WorkerService`. Exact's service closes its
+bounded pool; reserved and running jobs keep their workers until they return.
+The bounded pool also supports retirement while its service handle is retained.
+`DarwinLane` serializes preparation against retirement and invalidates its
+session with `invalidateAndCancel`, even when callers retain the lane.
+Retirement refuses further preparation and task completions still arrive.
+
+Replay these lifecycle methods and the retained-pool and lane tests on a refresh.
+
+## Local patch 35, a redirect's next hop names its destination
+
+The asynchronous fetch tells its embedder that a redirect's next hop is
+ready (`next_hop`). The call now carries the hop's URL, so the embedder
+admits the hop against its destination's origin before it starts it, as it
+admits a first hop (LLP 1162 D8). An embedder that ignores the URL behaves
+as before.
+
+Replay the parameter and its test on a refresh.

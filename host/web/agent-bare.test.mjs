@@ -1,4 +1,5 @@
-import { glueDeclarations } from './tests/glue-fixture.mjs';
+import { glueDeclarations, glueNode } from './tests/glue-fixture.mjs';
+import { fixture, declaration } from './glue-fixture.mjs';
 // @ref LLP 1104 D2 — the driver's shared layout names why the default is bare.
 import { test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -16,6 +17,38 @@ test('the JS agent tree lists authored children but not a hatch part as a view',
   expect(kids(node)).toEqual([authored]);
   node.getAttribute = () => null;
   expect(kids(node)).toEqual([authored, seal]);
+});
+
+for (const target of ['js', 'wasm']) test(`the ${target} frame tree URL keeps the src attribute's spelling`, () => {
+  const f = fixture(), guest = [{ tag: 'h1', depth: 0, text: 'Deck' }];
+  const frame = Object.assign(new f.HTMLIFrameElement(), {
+    tagName: 'IFRAME', localName: 'iframe', dataset: { testid: 'deck-frame' },
+    hasAttribute: () => false, matches: () => false,
+    exactNavigation: { last: { url: 'https://exact.invalid/guest-navigation', loading: false } },
+  });
+  f.views.set(7, frame);
+  f.iframeLoading = new Map([[frame, false]]);
+  f.guestOutline = () => guest;
+  let read;
+  if (target === 'wasm') {
+    vm.runInContext(declaration('tree'), f);
+    f.ask = () => ({ roots: [7], nodes: [{ id: 7, type: 'WebView' }] });
+    read = () => f.exact.agent({ op: 'tree' }).nodes[0];
+  } else {
+    const source = readFileSync(new URL('../web-js/agent.js', import.meta.url), 'utf8');
+    Object.assign(f, { id: () => 7, type: () => 'WebView', loaded: new Map() });
+    const record = glueNode(source, n => n.type === 'VariableDeclarator' && n.id.name === 'record' ? n : null);
+    read = vm.runInContext(`${glueDeclarations(source, ['PROPS', 'TABLE_TAGS'])}
+const ${record}; () => record(views.get(7), 0);`, f);
+  }
+  const base = `https://exact.invalid/.exact/gen/${'a'.repeat(32)}/`;
+  for (const source of ['/deck/index.html', './deck/index.html', `${base}deck/index.html`]) {
+    frame.getAttribute = name => name === 'src' ? source : null;
+    frame.src = new URL(source, base).href;
+    if (target === 'js') f.loaded.set(frame, source);
+    expect(read()).toMatchObject({ type: 'WebView', url: source, loading: false, guest,
+      navigation: { url: 'https://exact.invalid/guest-navigation' } });
+  }
 });
 
 test('layout joins a bare reason only to the matching plan site on every carrier', () => {

@@ -374,11 +374,11 @@ test('an audit makes every unit outside the inputs unreadable, Cargo manifests a
 test("the lane's steps read the dists they are given by variable, and no other step does", async () => {
   const { laneSelection } = await import('./async.mjs');
   const names = "import { test } from 'bun:test';\ntest('d', () => open(process.env.EXACT_WEB_DIST));\n";
-  const { root, repo, done } = fixture({ 'scripts/agent.test.mjs': names, 'scripts/elsewhere.test.mjs': names, 'apps/caltrain/app.contract': '' }, []);
+  const { root, repo, done } = fixture({ 'scripts/agent.test.mjs': names, 'game/elsewhere.test.mjs': names, 'apps/caltrain/app.contract': '' }, []);
   try {
     const picked = laneSelection(['apps/caltrain/app.contract'], { root, repo });
     expect(picked.glue).toEqual(['./scripts/agent.test.mjs']);
-    expect(picked.ids).not.toContain('bun:scripts/elsewhere.test.mjs');
+    expect(picked.ids).not.toContain('bun:game/elsewhere.test.mjs');
   } finally { done(); }
 });
 

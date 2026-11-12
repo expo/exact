@@ -68,10 +68,10 @@ async function assertDist(dist, app) {
 }
 
 async function files({ plan, pageURL, app, webDist, port, env }) {
-  const selected = resolveApp(app), dist = resolve(webDist ?? defaultWebDist());
+  const selected = resolveApp(app), dist = resolve(webDist ?? defaultWebDist(selected));
   if (!pageURL) {
     await assertDist(dist, selected);
-    const js = jsTargetBuild(dist), env = process.env.EXACT_APP_DIR || webDist || process.env.EXACT_WEB_DIST ? `EXACT_APP_DIR=${selected.dir} EXACT_WEB_DIST=${dist} ` : '';
+    const js = jsTargetBuild(dist), env = selected.outside || webDist || process.env.EXACT_WEB_DIST ? `EXACT_APP_DIR=${selected.dir} EXACT_WEB_DIST=${dist} ` : '';
     const command = webBuildCommand(selected, dist, js ? '' : ' --wasm', `${env}bun host/web/build.mjs ${selected.crate('web')}${js ? '' : ' --wasm'}`), changed = webChanges(dist, selected);
     refuseStale('web', resolve(dist, '.exact-build.json'), changed.app, command);
     warnStale('web', resolve(dist, '.exact-build.json'), changed.shared, `if they matter, run ${command}`);
@@ -116,6 +116,12 @@ async function waitForBoot(page, why = 'the page never booted') {
   catch { throw new Error(typeof why === 'function' ? why() : why); }
   await page.evaluate(() => globalThis.exact.ready);
   return Number(await page.locator('#exact-root').getAttribute('data-boot-ms'));
+}
+
+/** Keep Back and Forward entries when a reload changes launch parameters (LLP 1038 D7). */
+export async function reloadPlaywrightPage(page, destination) {
+  await page.evaluate(url => history.replaceState(history.state, '', url), destination);
+  await page.reload({ waitUntil: 'commit' });
 }
 
 // A key by its `key` name or its code, on every target (as scripts/agent.mjs `cdpKey`).
@@ -226,7 +232,7 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
   const hosted = await files({ plan, pageURL, app, webDist, port, env });
   let browserServer, browser, context, page, poolKey;
   // Only Chrome keeps a named store's profile between drives (agent.mjs `openWeb`); here it is this drive's own.
-  const hostLines = [...pageURL ? [] : builtSettingLines(resolve(webDist ?? defaultWebDist())), ...storage === undefined ? [] : [`${name}: --storage ${storage} is this drive's own profile, emptied when it ends; Chrome keeps a store between drives`]];
+  const hostLines = [...pageURL ? [] : builtSettingLines(resolve(webDist ?? defaultWebDist(resolveApp(app)))), ...storage === undefined ? [] : [`${name}: --storage ${storage} is this drive's own profile, emptied when it ends; Chrome keeps a store between drives`]];
   // Why a page never booted: its last 20 lines when the wait gave up, as a hangup's report (agent-wire.mjs).
   const neverBooted = what => () => `${what}; ${hostLines.slice(-20).join('\n')}`;
   const closeFiles = () => {
@@ -354,7 +360,11 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
         heldKeys.clear();
         await page.evaluate(async (keep) => { sessionStorage.clear(); if (keep) return; localStorage.clear(); await Promise.all((await indexedDB.databases?.() ?? []).map(x => x.name && new Promise(ok => { const r = indexedDB.deleteDatabase(x.name); r.onsuccess = r.onerror = r.onblocked = ok; }))); }, keep);
         if (!keep) await context.clearCookies();
-        hostLines.length = 0; await page.goto(withEpoch(withFaults(keep ? page.url() : address.href, failFetch), epoch), { waitUntil: 'commit' }); this.boot = await waitForBoot(page, neverBooted('the reused page never booted'));
+        const destination = withEpoch(withFaults(keep ? page.url() : address.href, failFetch), epoch);
+        hostLines.length = 0;
+        if (keep) await reloadPlaywrightPage(page, destination);
+        else await page.goto(destination, { waitUntil: 'commit' });
+        this.boot = await waitForBoot(page, neverBooted('the reused page never booted'));
       },
       ask,
       async reveal(id) { const r = await ask({ op: 'reveal', id }); if (r.scrolled) await frame(); return r; },

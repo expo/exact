@@ -219,6 +219,36 @@ fn a_parameter_shadows_a_state_in_a_large_component() {
 }
 
 #[test]
+fn untyped_action_parameters_need_a_handler_or_call_argument() {
+    let source = |caller: &str, view: &str| {
+        format!("component App\n  action keep(value)\n    let unused = value\n{caller}  view\n    {view}\n")
+    };
+    for (caller, view, expected) in [
+        ("", "input change=keep", Ty::String),
+        ("", "button \"Keep\" press=keep(7)", Ty::Number),
+        (
+            "  action go\n    keep(7)\n",
+            "button \"Keep\" press=go",
+            Ty::Number,
+        ),
+        (
+            "  action go\n    keep([])\n    keep([7])\n",
+            "button \"Keep\" press=go",
+            Ty::List(Box::new(Ty::Number)),
+        ),
+    ] {
+        let file = contract_syntax::parse(&source(caller, view)).unwrap();
+        let checked = crate::check(&file, |_| false).unwrap();
+        assert_eq!(checked.types.components[0].actions[0], [expected]);
+    }
+    let file = contract_syntax::parse(&source("", "text \"ok\"")).unwrap();
+    let error = crate::check(&file, |_| false).err().unwrap();
+    assert_eq!(error.id, "type-cannot-infer");
+    assert!(error.message.contains("parameter `value`"), "{error}");
+    assert_eq!((error.span.line, error.span.col), (2, 15));
+}
+
+#[test]
 fn a_refusal_is_not_said_again_as_the_capture_it_left_untyped() {
     // `wide` is `?` once `rem` is refused, so the capture `note(wide > 1)`
     // curries is too: that is the refusal's consequence, and saying it

@@ -9,7 +9,9 @@ final class ArrangementOptions {
     private var routes: [String: ExactRoute] = [:]
     private var panes: [String: ExactElement] = [:]
     /// Stacks whose bar starts as a plain UINavigationController's does, without large titles, as in
-    /// the reference app: Automatic shows an inline title until Large turns large titles on
+    /// the reference app: Automatic shows an inline title until Large turns large titles on. Under
+    /// More, `route.navigation` is nil, since More's stack is UIKit's, so More's bar, which its list
+    /// shares, keeps UIKit's large-title setting.
     private let stacks = NSHashTable<UINavigationController>.weakObjects()
 
     func update(_ route: ExactRoute) {

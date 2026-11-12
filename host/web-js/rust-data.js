@@ -1,13 +1,13 @@
 import { admitsSecret, createRequestExecutor, fetchHostAsset, sameGrantDeclaration, setAppGrantSet } from './admission.js';
 import { rustGrantSet, tsGrantSet } from './admission-data.js';
 import { boundedHttpBody, longPollRefusal, streamed } from './http-body.js';
-// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 6,
+// A Rust data module on the JS runtime (LLP 1029.000's seam, ABI 8,
 // `logic/abi/src/lib.rs`): the app's importless module wasm and its plan's
 // declarations (`app.bind.plan`, the plan without the bake's answers),
 // fetched after first pixel; once bound and activated, every answer is a
 // synchronous call, as the runner's `DataSource::answer` is. Until then the
 // runtime keeps each resource's compiled value and asks again at `ready`.
-const ABI = 6, utf8 = new TextEncoder(), text = new TextDecoder();
+const ABI = 8, utf8 = new TextEncoder(), text = new TextDecoder();
 
 function writer() {
   let buf = new Uint8Array(256), at = 0;
@@ -67,7 +67,10 @@ function reader(b) {
   return r;
 }
 
-export async function install(data, sources, load = p => fetchHostAsset(p).then(r => r.arrayBuffer())) {
+export async function install(data, sources, load = p => fetchHostAsset(p).then(r => {
+  if (!r.ok) throw new Error(`${p.slice(2)} answered HTTP ${r.status}`);
+  return r.arrayBuffer();
+}, e => { throw new Error(`${p.slice(2)} could not be fetched: ${e?.message ?? e}`); })) {
   const [wasm, plan] = await Promise.all([load('./rust/wasm/app.module.wasm'), load('./app.bind.plan')]);
   // Bytes, or a module a renderer compiled once for every render.
   const made = await WebAssembly.instantiate(wasm, {}), instance = made.instance ?? made;
@@ -86,7 +89,11 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   };
   // A result (`read_result`): now, or an HTTP request for the host to run.
   const result = r => {
-    const tag = r.u8();
+    let tag = r.u8(), cache;
+    if (tag === 12) {
+      cache = r.str(); tag = r.u8();
+      if (!['default', 'no-store', 'reload', 'no-cache', 'force-cache', 'only-if-cached'].includes(cache) || ![1, 6, 9, 10].includes(tag)) throw new Error('invalid cached HTTP result');
+    }
     if (tag === 0) return { v: r.value() };
     // The source's own refusal refuses the commit, as the runner's does;
     // UnknownSource (2): a mixed app's TypeScript module may answer it.
@@ -101,12 +108,14 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       const method = r.str(), url = r.str(), headers = [];
       for (let n = r.u32(); n--;) headers.push([r.str(), r.str()]);
       const n = r.u32(), body = r.bytes(n);
+      const protocols = [];
+      if (tag >= 9) for (let n = r.u32(); n--;) protocols.push(r.str());
       // A long poll (tag 10, LLP 1016.000 D8): its terms after the body, checked as the stream opens (http-body.js).
       const longPoll = tag === 10 ? { cursor: r.str(), from: r.str(), sameCursorEvent: [false, true][r.u8()] ?? (() => { throw new Error('invalid long poll terms'); })() } : undefined;
       // (refused as the native seam refuses it: before the turn's writes apply)
       const pollRefusal = longPoll && longPollRefusal({ url, longPoll, stream: true }, method, n ? 'x' : '');
       if (pollRefusal) throw new Error(pollRefusal);
-      return { req: { method, url, headers, body: text.decode(body), raw: body, http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, longPoll } };
+      return { req: { method, url, headers, cache, body: text.decode(body), raw: body, http, maxResponseBytes: http === 'ordered' ? undefined : Number(http.split(':')[1]), scope: scoped ? scope : null, stream: tag >= 9, protocols, longPoll } };
     }
     // Storage work (LLP 1027.001 D2): a portable request the host runs
     // through the web host's own `storage-request.js`, under its scope.
@@ -134,7 +143,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
       if (outcome) {
         if (outcome.storage) { w.u8(5); w.bytes(outcome.storage); }
         // One message of a stream (LLP 1016.000), the ABI's tag 8.
-        else if (outcome.streamed) { const m = outcome.streamed; w.u8(8); w.str(m.event); w.str(m.id); w.str(m.data); w.u32(m.coalesced); }
+        else if (outcome.streamed) { const m = outcome.streamed; w.u8(8); w.str(m.event); w.str(m.id); w.str(m.data); w.u32(m.coalesced); w.str(m.protocol ?? ''); }
         else if (outcome.failed) { w.u8(outcome.failed); w.str(outcome.message); }
         else { w.u8(0); w.u16(outcome.status); w.u32(outcome.headers.length); for (const [k, v] of outcome.headers) { w.str(k); w.str(v); } w.bytes(outcome.body); }
       }
@@ -156,7 +165,7 @@ export async function install(data, sources, load = p => fetchHostAsset(p).then(
   };
   const rust = (source, args, store) => callWith(3, source, args, store), ts = data.ts, tsThrewRead = data.threwRead;
   data.threwRead = () => { const read = [threwRead, !!tsThrewRead?.()]; threwRead = false; return read[0] || read[1]; };
-  data.answer = ts ? (source, args, store, target, mutation) => { try { return rust(source, args, store); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation); throw e; } } : rust;
+  data.answer = ts ? (source, args, store, target, mutation, forced) => { try { return rust(source, args, store); } catch (e) { if (e.unknown) return ts(source, args, store, target, mutation, forced); throw e; } } : rust;
   data.parse = (source, args, outcome, store) => callWith(4, source, args, store, outcome);
   // An overlay (`overlay_request`): what a resource shows while writes affect it; none from the Rust module asks
   // the TypeScript one's, beside it.

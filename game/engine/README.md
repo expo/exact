@@ -147,7 +147,8 @@ bound a new message refuses. A device event displaces the oldest move, otherwise
 the oldest non-message; if all entries are messages it refuses the new device event.
 A displaced pointer's deltas join its next queued event when one exists. Each
 kind journals once per overflow episode, which ends below capacity. Paused input
-updates held state directly without tick edges or queued wheel deltas.
+updates held state directly without tick edges or queued wheel deltas, after the
+device events still queued from before the pause.
 Tables, pads and sequence markers use this contract when admitted;
 this engine currently admits keys, pointers, controls, wheels, messages and typed events.
 
@@ -444,6 +445,12 @@ restores keep it resident, and the present that follows registers what the new w
 shows. A name is immutable while registered and may take new content once it retired;
 a declared, generated or delivered model's name is refused.
 
+Agent `layout` and `Sim::layout` can project the CPU bounds registered by
+`cosmetic_model`, even while textures are pending. An authored `ModelBounds`
+still takes precedence. These read-only inspection bounds describe the current
+`Mesh`, not the renderer's temporary fallback. `World::model`, simulation
+bounds, picking, saves and hashes remain independent of cosmetic residency.
+
 Until a model a `Mesh` names can draw, the stock renderer keeps drawing the rigid model
 that entity drew before (keyed by the full entity id), so a swapped skin never shows
 blank, and keeps it if the new one fails; no game code reads readiness. A skinned or
@@ -493,7 +500,13 @@ every skin: each named `.tex` is requested while an instance names it and releas
 none draws it, and until all of an instance's named textures can draw, it keeps the ones
 it drew before (the model's own the first time). `MaterialOverride.uv_offset` scrolls
 the base colour and emission textures on one instance, after the material's own UV
-transform: a tail running along a ribbon, flowing water. `World::drawn(e)` is the displayed
+transform: a tail running along a ribbon, flowing water. Set `uv_offset_previous`
+to the previous tick's unwrapped offset to interpolate the pair at display time;
+leave it `None` for the current offset at every frame. Optional `roughness`,
+`metallic`, `clearcoat` and `clearcoat_roughness` replace the material factors
+on that instance; `None` keeps each factor. Values are clamped to [0, 1],
+non-finite values are ignored, and roughness/metallic still multiply texture
+channels. A zero coat removes it. Unlit and custom materials ignore these factors. `World::drawn(e)` is the displayed
 pose and opacity, in the same walk as `World::is_visible`. Picking, layout, physics
 and gameplay use the simulated pose.
 

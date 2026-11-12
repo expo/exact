@@ -21,11 +21,12 @@ const page = `<!doctype html>
 <div id="exact-root" style="padding:20px">
   <div id="card" style="width:300px;height:300px;background:#f06;touch-action:none"></div>
   <div id="plain" style="width:300px;height:100px;background:#06f;touch-action:none"></div>
+  <div id="nested" style="width:300px;height:100px;touch-action:none"><button id="child">Drag or tap</button></div>
 </div>
 <script type="module">
   import { createInputHandlers } from './input-glue.js';
   const root = document.getElementById('exact-root');
-  const views = new Map([[1, document.getElementById('card')], [2, document.getElementById('plain')]]);
+  const views = new Map([[1, document.getElementById('card')], [2, document.getElementById('plain')], [3, document.getElementById('nested')]]);
   window.log = [];
   const samples = [];
   // A least-squares stand-in with the engine's contract: samples since the
@@ -46,6 +47,11 @@ const page = `<!doctype html>
   window.stamps = [];
   for (const type of ['pointerdown', 'pointerup']) views.get(1).addEventListener(type, e => window.stamps.push(e.timeStamp));
   views.get(2).exactHandlers = ['pan'];
+  views.get(3).exactHandlers = ['pan'];
+  document.getElementById('child').addEventListener('click', () => window.log.push(['press', 3]));
+  views.get(1).addEventListener('pointerdown', e => {
+    if (window.defer) ((globalThis.exact ??= {}).contacts ??= new Map()).set(e.pointerId, 'pending');
+  });
   for (const [id, el] of views) { const on = (type, handle) => el.addEventListener(type, handle); el.addEventListener('pointerdown', handlers.pan(el, id, on)); }
   window.ready = true;
 </script>`;
@@ -104,6 +110,29 @@ check('a pan that began releases once with its velocity; a tap none; a cancel at
     log = await take();
     expect(kinds(log)).toContain('pan');
     expect(kinds(log)).not.toContain('panrelease');
+
+    // A nested button keeps a tap; a pan takes a drag and its release outside the node.
+    const [x, y] = await evaluate(`(() => { const r = document.getElementById('child').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    await mouse('mousePressed', x, y); await mouse('mouseReleased', x + 2, y);
+    expect(kinds(await take()).filter(k => k !== 'sample')).toEqual(['press']);
+    await mouse('mousePressed', x, y); await mouse('mouseMoved', 500, y); await frame();
+    await mouse('mouseReleased', 500, y); await frame();
+    log = await take();
+    expect(log.filter(([kind]) => kind === 'pan').reduce((sum, [, , p]) => sum + Number(p.split(',')[0]), 0)).toBe(500 - x);
+    expect(kinds(log)).not.toContain('press');
+    await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none', buttons: 0 }); await frame();
+    expect(await take()).toEqual([]);
+
+    // While an inner swipe decides, capture is deferred. The document hears an outside release and cancels the pan.
+    await evaluate('window.defer = true');
+    await mouse('mousePressed', 100, 150); await mouse('mouseMoved', 500, 800); await frame();
+    await mouse('mouseReleased', 500, 800);
+    await evaluate('window.defer = false; exact.contacts.clear()');
+    expect(kinds(await take()).filter(k => k !== 'sample')).toEqual([]);
+    await mouse('mousePressed', 100, 150); await mouse('mouseReleased', 108, 150); await frame();
+    log = await take();
+    expect(log.filter(([kind]) => kind === 'pan')).toEqual([['pan', 1, '8,0']]);
+    expect(log.filter(([kind]) => kind === 'panrelease')).toHaveLength(1);
 
     // A touch contact the platform cancels after the pan began releases at rest.
     await call('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 2 });

@@ -310,6 +310,11 @@ internal class Access(private val host: View) {
             }
             TABLIST -> if (n.of > 0) info.collectionInfo = collection(1, n.of, AccessibilityNodeInfo.CollectionInfo.SELECTION_MODE_SINGLE)
             SLIDER, PROGRESS -> if (n.has(RANGE)) info.rangeInfo = if (Build.VERSION.SDK_INT >= 30) AccessibilityNodeInfo.RangeInfo(AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT, n.min, n.max, n.now) else Legacy.range(n.min, n.max, n.now)
+            // An open select's menu, as a Spinner's popup list has it: all its options counted, one of them selected.
+            LIST_BOX -> {
+                info.isScrollable = n.has(FORWARD) || n.has(BACKWARD)
+                info.collectionInfo = collection(n.children.maxOfOrNull { nodes[it]?.of ?: 0 } ?: 0, 1, AccessibilityNodeInfo.CollectionInfo.SELECTION_MODE_SINGLE)
+            }
             SCROLLER -> {
                 info.isScrollable = n.has(FORWARD) || n.has(BACKWARD)
                 // A list's rows say their place and how many they are: the scroller is that list.
@@ -319,7 +324,7 @@ internal class Access(private val host: View) {
         }
         if (n.role != TAB && n.of > 0 && n.at > 0) {
             val sideways = nodes[n.parent]?.has(SIDEWAYS) == true
-            info.collectionItemInfo = item(if (sideways) 0 else n.at - 1, if (sideways) n.at - 1 else 0, false)
+            info.collectionItemInfo = item(if (sideways) 0 else n.at - 1, if (sideways) n.at - 1 else 0, n.role == OPTION && n.has(SELECTED))
         }
         if (n.has(CHECKABLE)) {
             info.isCheckable = true
@@ -333,15 +338,15 @@ internal class Access(private val host: View) {
         if (n.has(CLICK) && !(n.role == TAB && n.has(SELECTED))) { info.isClickable = true; info.addAction(AccessibilityAction.ACTION_CLICK) }
         if (n.has(LONG_CLICK)) { info.isLongClickable = true; info.addAction(AccessibilityAction.ACTION_LONG_CLICK) }
         if (n.has(EXPANDABLE) && n.has(CLICK)) info.addAction(if (n.has(EXPANDED)) AccessibilityAction.ACTION_COLLAPSE else AccessibilityAction.ACTION_EXPAND)
-        if (n.role == SCROLLER || n.role == SLIDER) {
+        if (n.role == SCROLLER || n.role == SLIDER || n.role == LIST_BOX) {
             val sideways = n.has(SIDEWAYS)
             if (n.has(FORWARD)) {
                 info.addAction(AccessibilityAction.ACTION_SCROLL_FORWARD)
-                if (n.role == SCROLLER) info.addAction(if (sideways) AccessibilityAction.ACTION_SCROLL_RIGHT else AccessibilityAction.ACTION_SCROLL_DOWN)
+                if (n.role != SLIDER) info.addAction(if (sideways) AccessibilityAction.ACTION_SCROLL_RIGHT else AccessibilityAction.ACTION_SCROLL_DOWN)
             }
             if (n.has(BACKWARD)) {
                 info.addAction(AccessibilityAction.ACTION_SCROLL_BACKWARD)
-                if (n.role == SCROLLER) info.addAction(if (sideways) AccessibilityAction.ACTION_SCROLL_LEFT else AccessibilityAction.ACTION_SCROLL_UP)
+                if (n.role != SLIDER) info.addAction(if (sideways) AccessibilityAction.ACTION_SCROLL_LEFT else AccessibilityAction.ACTION_SCROLL_UP)
             }
             if (n.role == SLIDER) info.addAction(AccessibilityAction.ACTION_SET_PROGRESS)
         }
@@ -388,6 +393,7 @@ internal class Access(private val host: View) {
                 "CheckBox" -> "checkbox"; "Switch" -> "switch"; "RadioButton" -> "radio"
                 "SeekBar" -> "slider"; "ProgressBar" -> "progressbar"; "EditText" -> "textbox"
                 "ImageView" -> "image"; "Spinner" -> "combobox"; "TextView" -> "StaticText"
+                "ListView" -> "listbox"; "CheckedTextView" -> "option"
                 else -> if (info.collectionInfo?.selectionMode == AccessibilityNodeInfo.CollectionInfo.SELECTION_MODE_SINGLE) "tablist" else "group"
             }
         }
@@ -531,6 +537,8 @@ internal class Access(private val host: View) {
         const val DROPDOWN = 16
         const val TOGGLE = 17
         const val UP = 18
+        const val LIST_BOX = 28
+        const val OPTION = 29
 
         /** A node's flags (`presenter::access::flag`). */
         const val CLICK = 1
@@ -575,6 +583,8 @@ internal class Access(private val host: View) {
             PROGRESS -> "android.widget.ProgressBar"
             EDIT -> "android.widget.EditText"
             DROPDOWN -> "android.widget.Spinner"
+            LIST_BOX -> "android.widget.ListView"
+            OPTION -> "android.widget.CheckedTextView"
             TOGGLE -> "android.widget.ToggleButton"
             UP -> "android.widget.ImageButton"
             TAB -> "android.view.View"

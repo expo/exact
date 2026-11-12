@@ -325,7 +325,8 @@ const agentParameters = [
 ];
 export function historyURL(path) {
   // (exported for its test) the document's URL with the route's path, query and fragment: History refuses a URL whose userinfo differs (HTML, "can have its URL rewritten")
-  const facts = AGENT_ADMITTED ? launched() : null, url = new URL(location.href), route = new URL(path, url);
+  // "/." keeps a leading "//" a path, as the router has it (route/src/location.rs): the URL parser drops the dot segment, where alone it would read "//b" as a host
+  const facts = AGENT_ADMITTED ? launched() : null, url = new URL(location.href), route = new URL(path.startsWith("/") ? "/." + path : path, url);
   url.pathname = route.pathname;
   url.search = route.search;
   url.hash = route.hash;

@@ -2,12 +2,35 @@ use crate::{json, Module};
 
 impl Module {
     /// Bind a positional JSON array or named JSON object through the same typed
-    /// bind operation. Unknown names and malformed input leave the surface intact.
+    /// bind operation. A named argument the object omits takes its default.
+    /// Unknown names and malformed input leave the surface intact.
     pub fn bind_json(&mut self, id: u32, text: &str, at_ms: Option<f64>) -> bool {
+        self.bind_text(id, text, at_ms, false)
+    }
+
+    /// Bind a named JSON object of the arguments that changed: one it omits
+    /// keeps its value from the last accepted bind, so a host need not send a
+    /// large unchanged argument again. A refusal leaves that bind in place.
+    pub fn bind_changed_json(&mut self, id: u32, text: &str, at_ms: Option<f64>) -> bool {
+        self.bind_text(id, text, at_ms, true)
+    }
+
+    fn bind_text(&mut self, id: u32, text: &str, at_ms: Option<f64>, changed: bool) -> bool {
         let result = (|| {
             let (names, values) = json::parse_bindings(text)?;
             let inst = self.instances.get(&id).ok_or("no such canvas")?;
             let mut fields = inst.surface.arguments();
+            if changed {
+                if names.is_none() {
+                    return Err("a changed bind names its arguments".to_string());
+                }
+                if !inst.bound {
+                    return Err("a changed bind follows an accepted bind".to_string());
+                }
+                for ((_, target), value) in fields.iter_mut().zip(&inst.inputs) {
+                    *target = value.clone();
+                }
+            }
             let Some(names) = names else {
                 if fields.is_empty() {
                     return Ok(values);

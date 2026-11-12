@@ -29,7 +29,9 @@
 //! the page (`bars.rs`): their nodes are read from the bars, first and
 //! last, so the order is bar, content, navigation bar. While a surface of
 //! the top layer is open (`top.rs`) the tree is that surface alone, in its
-//! own window's space: the page under it cannot be reached.
+//! own window's space: the page under it cannot be reached. While a
+//! select's menu is open the tree is that select and the menu's listbox
+//! (`access/menu.rs`).
 //!
 //! **Identity** ([`identity`]) is what a platform keeps its place by, so it
 //! must outlive a commit, a scroll, and a row that leaves and returns. A
@@ -41,6 +43,7 @@
 //! **A hosted text field** is the reader's own view (D8) and reports
 //! itself: its node here says only where it stands in the order and what
 //! its author named it.
+mod menu;
 mod surface;
 mod walk;
 
@@ -109,6 +112,10 @@ pub mod role {
     pub const TERM: i32 = 26;
     /// A `dd`: ARIA's `definition`.
     pub const DEFINITION: i32 = 27;
+    /// An open `select`'s menu: ARIA's `listbox`, under its dropdown.
+    pub const LIST_BOX: i32 = 28;
+    /// A row of an open `select`'s menu: ARIA's `option`.
+    pub const OPTION: i32 = 29;
 }
 
 /// A table's or a description list's element as its role (HTML-AAM): a
@@ -264,6 +271,7 @@ struct Key {
     surface: Option<(u32, u32)>,
     bars: u32,
     frame: [i32; 4],
+    menu: Option<(ViewId, u32)>,
 }
 
 fn fnv(mut hash: u64, bytes: &[u8]) -> u64 {
@@ -673,7 +681,11 @@ impl<D: DataSource> Presenter<D> {
             ControlKind::Select => {
                 let shown = self.host.kernel().select_chosen(node.id);
                 let label = shown.map(|c| c.label).unwrap_or_else(value);
-                (role::DROPDOWN, flag::CLICK, [0.0; 3], label)
+                let mut flags = flag::CLICK | flag::EXPANDABLE;
+                if self.menu == Some(node.id) {
+                    flags |= flag::EXPANDED;
+                }
+                (role::DROPDOWN, flags, [0.0; 3], label)
             }
             _ => (role::BUTTON, flag::CLICK, [0.0; 3], value()),
         }
@@ -899,6 +911,7 @@ impl<D: DataSource> Presenter<D> {
             surface,
             bars,
             frame: self.chrome().frame.map(ten),
+            menu: (self.menu).map(|id| (id, self.menu_scroll.to_bits())),
         }
     }
 
@@ -932,6 +945,7 @@ impl<D: DataSource> Presenter<D> {
                     disabled: false,
                 },
             );
+            self.access_menu(&mut b);
             Self::access_sets(&mut b.out);
             return (b.out, 0, (0, String::new()));
         }
@@ -980,6 +994,7 @@ impl<D: DataSource> Presenter<D> {
             self.access_walk(&mut b, top, scope);
         }
         self.access_bottom(&mut b);
+        self.access_menu(&mut b);
         Self::access_sets(&mut b.out);
         (b.out, 0, pane)
     }
@@ -1207,7 +1222,8 @@ impl<D: DataSource> Presenter<D> {
     /// node's middle, as the agent's `tap` is; a held press opens the
     /// node's context menu, as a finger held on it does; a scroller scrolls
     /// by what it shows, less a little kept in view; a range steps, or is
-    /// set to `value`.
+    /// set to `value`. A press on a select opens or closes its menu, and on
+    /// one of the menu's options chooses it, as a press on its row does.
     pub fn access_act(&mut self, id: i32, action: i32, value: f32, now_ms: f64) -> bool {
         let Some(node) = self.access.nodes.iter().find(|n| n.id == id).cloned() else {
             return false;
@@ -1215,6 +1231,10 @@ impl<D: DataSource> Presenter<D> {
         let live = |p: &Self| node.view != 0 && p.host.kernel().node(node.view).is_some();
         match (action, node.role) {
             (act::CLICK, role::UP) => self.system_back(now_ms),
+            (act::CLICK, role::OPTION) => self.access_choose(node.view),
+            (act::FORWARD | act::BACKWARD, role::LIST_BOX) => {
+                self.access_menu_scroll(action == act::FORWARD)
+            }
             (act::CLICK, _) if node.flags & flag::CLICK != 0 && live(self) => {
                 let done = self.tap(node.view);
                 if let Err(e) = &done {

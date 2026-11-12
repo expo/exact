@@ -55,7 +55,7 @@ impl Game for Dice {
     }
 }
 /// A square facing the camera, sampling `texture`.
-fn quad(texture: &str) -> Model {
+pub(super) fn quad(texture: &str) -> Model {
     let mesh = MeshData {
         positions: vec![-2., -2., 0., 2., -2., 0., 2., 2., 0., -2., 2., 0.],
         normals: [0., 0., 1.].repeat(4),
@@ -354,9 +354,14 @@ impl Game for ShadedSkin {
             let mut model = quad(if args.blue { "blue.tex" } else { "red.tex" });
             let material = &mut model.materials[0];
             material.unlit = args.shading == 1;
-            if args.shading == 2 {
+            if args.shading >= 2 {
                 material.clearcoat = 1.;
                 material.clearcoat_roughness = 0.2;
+                if args.shading >= 3 {
+                    material.metallic_roughness_texture = Some(1);
+                    material.clearcoat_mask_from_alpha = args.shading == 3;
+                    model.textures.push("mask.tex".into());
+                }
             }
             model
         })
@@ -402,6 +407,19 @@ fn an_instance_skin_keeps_an_unlit_or_coated_materials_shading() {
                 break;
             }
             for name in &requests {
+                if name == "mask.tex" {
+                    s.asset(
+                        name,
+                        Ok(&exact_game::bin::to_vec(&TextureData {
+                            width: 4,
+                            height: 4,
+                            srgb: false,
+                            mips: [16, 4, 1].map(|n| [255, 255, 255, 0].repeat(n)).to_vec(),
+                            ..Default::default()
+                        })),
+                    );
+                    continue;
+                }
                 let rgb = match name.as_str() {
                     "blue.tex" => [0, 0, 255],
                     "red.tex" => [255, 0, 0],
@@ -423,7 +441,7 @@ fn an_instance_skin_keeps_an_unlit_or_coated_materials_shading() {
                 panic!("one skinned material: {:?}", models.variants.keys());
             };
             let material = &models.materials[variant.0];
-            assert_eq!(material.layered, shading == 2);
+            assert_eq!(material.layered, shading >= 2);
             s.bind(
                 &[
                     Value::Number(shading.into()),
@@ -454,4 +472,19 @@ fn an_instance_skin_keeps_an_unlit_or_coated_materials_shading() {
     }
     assert_ne!(drawn[1], drawn[0], "unlit draws apart from lit");
     assert_ne!(drawn[2], drawn[0], "the coat draws apart from no coat");
+    assert_eq!(
+        centre(3, true, false),
+        drawn[0],
+        "zero mask removes the coat"
+    );
+    assert_eq!(
+        centre(4, true, false),
+        drawn[2],
+        "alpha stays unused unless opted in"
+    );
+    assert_eq!(
+        centre(3, false, true),
+        drawn[0],
+        "mask survives texture override and fallback"
+    );
 }

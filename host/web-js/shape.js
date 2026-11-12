@@ -75,7 +75,7 @@ const FETCH_FAILURE = { Network: "offline", Timeout: "timeout", Refused: "refuse
 export function failureCode(e) {
   if (!e || typeof e !== "object") return "error";
   if (e[Shaped]) return "shape";
-  if (e.name === "FetchError") return FETCH_FAILURE[e.kind] ?? "error";
+  if (e.name === "FetchError") return Object.hasOwn(FETCH_FAILURE, e.kind) ? FETCH_FAILURE[e.kind] : "error";
   return e.kind === "Unavailable" && typeof e.code === "string" ? "storage" : "error";
 }
 /** `failure(x).reason`: a string the thrown value carries as `reason` (the snapback4 driver's refusal code, `SLOT_FULL`),

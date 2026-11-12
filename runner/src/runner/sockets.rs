@@ -98,7 +98,7 @@ impl<D: DataSource> Runner<D> {
         p: &PendingReq,
         message: bool,
         outcome: Outcome,
-    ) -> Result<Answer, DataError> {
+    ) -> Result<Option<Answer>, DataError> {
         let socket = p.stream.and_then(|s| s.socket);
         let call = match p.target {
             Target::Resource(i) if message && socket.is_some_and(|s| s.listen.is_none()) => {
@@ -107,7 +107,14 @@ impl<D: DataSource> Runner<D> {
             _ => crate::SocketCall::None,
         };
         self.store.set_socket_call(call);
-        let parsed = (self.data).parse_for(p.target, &mut self.store, &p.source, &p.args, outcome);
+        let parsed = self.data.parse_fetch_for(
+            p.target,
+            p.fetch,
+            &mut self.store,
+            &p.source,
+            &p.args,
+            outcome,
+        );
         self.store.end_socket_call(parsed)
     }
 

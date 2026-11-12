@@ -68,6 +68,7 @@ pub fn outcome_from(kind: u32, status: u32, headers: &str, body: Vec<u8>) -> Out
             };
             Outcome::Message(exact_runner::Message {
                 event: field("event"),
+                protocol: field("protocol").into(),
                 id: field("id"),
                 coalesced: field("coalesced").parse().unwrap_or(0),
                 data: String::from_utf8_lossy(&body).into_owned(),
@@ -1334,7 +1335,8 @@ impl<D: DataSource> Host<D> {
             .collect();
         let pairs: Vec<(&str, String)> =
             props.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
-        batch.create(id, tag, &pairs, &css, &handlers);
+        let svg = node.node_type == NodeType::Svg || node.node_type.is_svg_element();
+        batch.create(id, tag, svg, &pairs, &css, &handlers);
         self.mirror.insert(
             id,
             Mirror {

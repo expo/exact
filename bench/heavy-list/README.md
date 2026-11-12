@@ -128,14 +128,23 @@ from inside the app, and devicectl only launches and copies files.
 
 ## The measurement Mac
 
-Mac measurement series use the silver M5 Max at `ccheever@100.76.94.78`:
-Mac17,6, 18 CPU cores, 40 GPU cores, 128 GiB, built-in 3456×2234 display,
-macOS 27.0.1 (26A434), Xcode 27.2, Bun 1.4.2 and Rust 1.97.0.
-Build only the benchmark arms in `~/projects/exact2-measure`, a detached
-worktree made from fetched `origin/main`. Leave the main clone and the old
-worktrees alone. Every Cargo invocation uses this worktree's `target/`,
+Mac measurement series use a dedicated M5 Max, the "silver" Mac of
+`gpui/RESULTS.md`: Mac17,6, 18 CPU cores, 40 GPU cores, 128 GiB, built-in
+3456×2234 display, macOS 27.0.1 (26A434), Xcode 27.2, Bun 1.4.2 and Rust 1.97.0.
+The benchmark arms are built only in a detached worktree made from fetched
+`origin/main`, and every Cargo invocation uses that worktree's `target/`,
 including `--target-dir target` for the separate benchmark workspaces.
-Nothing else may build there; no other work may run during a series.
+Nothing else builds there, and no other work runs during a series.
+
+**What this repository holds.** The measuring half is under `gpui/`: the
+driver `measure.m`, the probe `probe.m`, the launch-cohort driver `startup.py`,
+the hook comparison `run-hook.py` and the tables `aggregate.mjs`. The wrappers
+that built, signed and sequenced the four arms (`build.sh`, `bundle.py`,
+`run-series.py`, `run-boot.py`, and G4q.1's clock driver) are not: they were
+written into that Mac's ignored `target/g0/` beside the evidence they
+produced. This section therefore says what a series does and the conditions
+its rows were taken under, not how to start one; rerunning a series means
+writing that sequencing again around `measure.m` and `startup.py`.
 
 Scoreboard CPU rows use `G1_GPU_HOOK=0` with `powermetrics` off; GPU rows
 use `G1_GPU_HOOK=1` with power sampling off. Power is measured in its own
@@ -218,67 +227,45 @@ The direct `osascript` route had timed out; opening a `.command` file in Termina
 worked without that automation route. A Terminal comparison still needs the
 owner's Accessibility grant, then a new clock sample before any series.
 
-To reproduce the tested LaunchServices route, enter the user's Aqua bootstrap
-domain as below. For each signed bundle set that domain's
-`DYLD_INSERT_LIBRARIES` to its probe, then invoke `open -n -W -a <bundle>` with
-its probe environment and application arguments. Use the probe's recorded PID
-for signals and accounting, not `open`'s PID. Clear the domain variable after
-launch and on failure. G4q.1 retains the exact driver and wrapper under
-`target/g0/clock-2035d50319/`; these are diagnostic launch instructions, not a
-qualified CPU recipe. Keep power sampling separate and never run two lanes'
-arms together. Check for M10's `measure`, arms and `target/g0/run-*.py` before
-each launch; wait in bounded intervals up to one hour if they are active.
+The tested LaunchServices route entered the user's Aqua bootstrap domain as
+below. For each signed bundle it set that domain's `DYLD_INSERT_LIBRARIES` to
+its probe, then invoked `open -n -W -a <bundle>` with its probe environment
+and application arguments. It used the probe's recorded PID for signals and
+accounting, not `open`'s PID, and cleared the domain variable after launch and
+on failure. This is a diagnostic launch route, not a qualified CPU recipe.
+Power sampling stays separate, and two lanes' arms never run together.
 
-The G4 driver and its four signed bundles are prepared under `target/g0/`.
-`build.sh`, `bundle.py` and the build logs retain the commands; the data must pass
-`data.sha256` before any run. Keep all raw attempts, quiet observations,
-power samples and provenance in that directory. Use a fresh series directory
-for each later run; never replace evidence cited by `gpui/RESULTS.md`.
-The native benchmark build uses `EXACT_IDENTITY=-` for ad-hoc signing over
-SSH. Xcode's optional Metal Toolchain is required (`xcodebuild
+The data must pass `data.sha256` before any run. Every raw attempt, quiet
+observation, power sample and provenance file is kept, and each later run
+writes a fresh series directory; evidence cited by `gpui/RESULTS.md` is never
+replaced. The native benchmark build uses `EXACT_IDENTITY=-` for ad-hoc
+signing over SSH. Xcode's optional Metal Toolchain is required (`xcodebuild
 -downloadComponent MetalToolchain`); without it, Ink can build with direct
 Metal unavailable. It was installed and both Exact arms rebuilt on 2026-10-30.
 
 GUI runs must join the signed-in user's Aqua session. `launchctl asuser`
 needs privilege over SSH; it changes the bootstrap session, not the Unix
-user. Enter that session with sudo, then drop back to `ccheever` before
-running the driver. Every SSH command needs the PATH below, including the
-Homebrew Rust shims. Start the one-arm qualification from the development Mac:
+user. A series enters that session with `sudo -n /bin/launchctl asuser
+$(id -u)`, drops back to the signed-in user with `sudo -u <user>`, and runs the
+driver under `caffeinate -u -d -i`. An SSH session's PATH needs Bun's, Cargo's
+and Homebrew's directories, including Homebrew's `rustup` shims.
 
-```sh
-ssh ccheever@100.76.94.78 '
-  export PATH="$HOME/.bun/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/opt/homebrew/opt/rustup/bin:$PATH"
-  cd ~/projects/exact2-measure
-  sudo -n /bin/launchctl asuser $(id -u) /usr/bin/sudo -u ccheever \
-    /usr/bin/env PATH="$PATH" /usr/bin/caffeinate -u -d -i \
-    python3 target/g0/run-42d5066572/run-series.py qualify target/g0/run-42d5066572/qualification-repeat
-'
-```
-
-This opens Ink with `G1_COLD_ONLY=1`, checks the probe's ready and focus
-reports, captures its window with `screencapture -l`, then exits without
-gestures. Inspect the new capture; the qualified original is
-`target/g0/run-42d5066572/qualification/ink.png`.
-The following retained wrapper reproduces the historical power-on instrument;
-it does not implement the current CPU/GPU separation or busy-core bounds.
-For historical reproduction, use a fresh result directory. In the same command,
-replace `qualify target/g0/run-42d5066572/qualification-repeat` with
-`series target/g0/run-42d5066572/g4m-repeat` to run
-five rotating fling/rest rounds and five further cold-only rounds, with
-five-second quiet observations and one-second power samples. The wrapper
-requires a successful qualification first. Use `static` instead of `series`
-with a fresh `g5m-repeat` directory for the three-round fling/bar/caret series.
-For Stage 0b, the same launch chain runs `run-boot.py retained <fresh-directory>`
-and then `run-boot.py miss <fresh-directory>`, from the refreshed directory.
-G4m's first qualification passed activation, key-window, readiness and capture.
+A series has three modes. **Qualification** opens Ink with `G1_COLD_ONLY=1`,
+checks the probe's ready and focus reports, captures its window with
+`screencapture -l`, then exits without gestures; the other modes require a
+passed qualification. **Series** runs five rotating fling/rest rounds and five
+further cold-only rounds, with five-second quiet observations and one-second
+power samples. **Static** runs three rounds of fling, bar and caret. Stage 0b
+runs a retained-launch cohort and then an archive-miss cohort. The
+G4m-era wrapper reproduces the historical power-on instrument; it does not
+implement the current CPU/GPU separation or busy-core bounds. G4m's first
+qualification passed activation, key-window, readiness and capture.
 
 On this dedicated measurement Mac there is **no GO file** (Charlie,
 2026-10-30): its session stays unlocked and awake. Dedicated use is an ownership
 rule, not evidence that background processes have stopped.
-The development Mac's display-ownership rule does not apply here. The
-wrapper in `target/g0/run-42d5066572/run-series.py` runs without a GO wait.
-Its `qualify`, `series` and `static` modes use the refreshed signed arms beside
-it. Keep `launchctl asuser`, the user switch and `caffeinate -d -i` above.
+The development Mac's display-ownership rule does not apply here, and a
+series runs without a GO wait.
 Accessibility and Screen Recording must be granted
 to `/usr/libexec/sshd-keygen-wrapper`, the responsible process for SSH-launched
 programs. Power collection needs passwordless sudo for `/usr/bin/powermetrics`:

@@ -16,7 +16,7 @@ private final class RegionInkView: NSView {
     override func mouseUp(with event: NSEvent) { surface?.followLink(event) }
     @objc func copy(_ sender: Any?) { surface?.copySelection() }
     override func keyDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "c" { copy(nil) }
+        if event.modifierFlags.contains(.command), NodeView.commandKey(event) == "c" { copy(nil) }
         else { super.keyDown(with: event) }
     }
 }

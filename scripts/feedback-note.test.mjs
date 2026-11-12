@@ -174,4 +174,4 @@ test('an app\'s command nudges at the end of stderr on failure and success, and 
     assert.equal(signalled.status, 143);
     assert.doesNotMatch(signalled.stderr, /feedback note/);
   } finally { rmSync(parent, { recursive: true, force: true }); }
-});
+}, 60_000); // About a dozen Bun processes, one after another.

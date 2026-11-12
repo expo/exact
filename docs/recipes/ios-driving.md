@@ -1,7 +1,6 @@
 # Recipe: driving iOS
 
-**Check a screen against a reference** (the original's screenshot) with compare, not by
-eye: `bun exact.mjs agent ios --touch platform … "clock settle" "screenshot
+**Compare a screen with the original's screenshot**: `bun exact.mjs agent ios --touch platform … "clock settle" "screenshot
 .exact/x.png compare ref/x.png"` captures as a device does, the keyboard too on a simulator it
 booted (status bar: `xcrun simctl status_bar <udid> override --time 9:41`), and says where they
 differ: each region by node, where its content moved, a box measured in both (`x.side.png`:
@@ -30,7 +29,7 @@ bun exact.mjs agent ios "clock data" "screenshot .exact/a.png compare ref/a.png"
 | --- | --- |
 | `check`, `check dark`, `check both` | What is wrong: clipped text, a covered control, a small target, low contrast. |
 | `--scale 3` | Screenshots at 3 px a point, not 1. |
-| `screenshot <file> window` | The whole screen, bars included; a plain one is the window's too while an alert, sheet or menu is up. `screenshot <f> over 600 every 50 window` films it. |
+| `screenshot <file> window` | Bars included; also the default with an alert, sheet or menu up. Film samples the agent clock; [UIKit motion](../../experiments/ios-film-cadence/README.md) needs a display recording. |
 | `tap <id> down` `screenshot <png>` `tap up` | `<id>` shown pressed, then pressed once; `tap hold <ms>` moves the clock. |
 | `clock settle` | Ends a transition, runs an `after(1, …)`; waits up to 1.5 s for UIKit's animations (4 s: a list gliding). |
 | `--timing platform`, `--touch platform` | UIKit's own transition timing (default: frozen); every tap and drag a real touch. |

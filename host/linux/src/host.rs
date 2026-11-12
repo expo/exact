@@ -7,6 +7,8 @@
 //! under the viewport, feeds the motion engine the commit (LLP 1003 §4),
 //! seeks the app's clock and keeps node presentation values.
 
+#[path = "host_replies.rs"]
+mod replies;
 use crate::paint::Presented;
 use exact_kernel::motion::{motion_node, MotionSync, PaintMotion};
 use exact_kernel::{Kernel, NodeKey, TextMeasurer, ViewId};
@@ -117,7 +119,7 @@ pub struct Host<D: DataSource> {
     height_layout_valid: bool,
     content_region: Option<crate::content_region::ContentRegionState>,
     #[cfg(test)]
-    layout_calls: usize,
+    pub(crate) layout_calls: usize,
     data_activated: bool,
     /// Reader-owned [`lower::LOWERED`] animations and their change count.
     lowering: bool,
@@ -883,41 +885,6 @@ impl<D: DataSource> Host<D> {
     /// Whether another pump must settle an admission failure.
     pub fn has_request_refusals(&self, allow_ordered: bool) -> bool {
         self.runner.has_request_refusals(allow_ordered)
-    }
-
-    /// The executor's replies, oldest first, each a commit at `now_ms` (a
-    /// ticket no longer held commits nothing); a reply the source cannot
-    /// shape is the error, and the ones before it stand.
-    pub fn fulfill_all(
-        &mut self,
-        outcomes: Vec<(u64, Outcome, Option<u64>)>,
-        now_ms: f64,
-    ) -> Option<String> {
-        self.now_ms = now_ms.max(self.now_ms);
-        // Announced topics first: what the device said before these replies.
-        let (announced, failed) = self.runner.apply_announced();
-        let mut error = failed.map(|e| format!("{e:?}"));
-        let mut receipts: Vec<Timed> = announced
-            .into_iter()
-            .map(|receipt| Timed {
-                at_ms: self.now_ms,
-                receipt,
-            })
-            .collect();
-        for (ticket, outcome, elapsed_ms) in outcomes {
-            match self.runner.fulfill_measured(ticket, outcome, elapsed_ms) {
-                Ok(Some(receipt)) => receipts.push(Timed {
-                    at_ms: self.now_ms,
-                    receipt,
-                }),
-                Ok(None) => {}
-                Err(e) => {
-                    error = Some(format!("{e:?}"));
-                    break;
-                }
-            }
-        }
-        self.commit(&receipts, error)
     }
 
     /// A real path arriving at the `open-file` field becomes the document

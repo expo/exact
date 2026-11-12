@@ -191,10 +191,8 @@ final class MenuHost {
             #endif
             live.insert(v.id)
             if isConfirmation(pop) {
-                let button = overlays[v.id] ?? InvokerButton(type: .custom)
+                let button = overlay(of: v, menu: false) ?? InvokerButton(type: .custom)
                 (button as? InvokerButton)?.invoker = v
-                button.menu = nil
-                button.showsMenuAsPrimaryAction = false
                 button.autoresizingMask = [.flexibleWidth, .flexibleHeight]
                 button.accessibilityLabel = v.props["accessibilityLabel"] ?? title(of: v)
                 button.accessibilityIdentifier = v.props["testId"] ?? v.props["id"]
@@ -212,7 +210,7 @@ final class MenuHost {
                 continue
             }
             rejectActiveMenuProperties(in: pop)
-            let button = overlays[v.id] ?? {
+            let button = overlay(of: v, menu: true) ?? {
                 #if os(iOS)
                 let b = MenuButton(type: .custom)
                 b.focus = focus
@@ -237,6 +235,7 @@ final class MenuHost {
             if button.superview !== v { v.addSubview(button); button.setPaintForeground() }
             (button as? InvokerButton)?.invoker = v
             button.frame = v.bounds
+            button.preferredMenuElementOrder = Self.order(v.props["menuOrder"])
             button.accessibilityLabel = v.props["accessibilityLabel"] ?? title(of: v)
             button.accessibilityIdentifier = v.props["testId"] ?? v.props["id"]
             button.isEnabled = !v.disabled
@@ -254,20 +253,32 @@ final class MenuHost {
                 button.menu = pullDown(of: v, titled: heading)
             }
         }
-        for (id, b) in overlays where !live.contains(id) {
-            #if os(iOS)
-            (b as? MenuButton)?.dismissMenu()
-            #endif
-            b.removeFromSuperview()
-            overlays[id] = nil
-            menuShapes[id] = nil
-        }
+        for id in overlays.keys where !live.contains(id) { dropOverlay(id) }
         #if os(iOS)
         for (id, b) in nativeMenus where !liveNative.contains(id) || presenter.controls.controls[id] !== b {
             Self.endNativeMenu(b); nativeMenus[id] = nil
         }
         context.sync()
         #endif
+    }
+
+    /// The overlay kept over `v`, if it was made for the same kind: a menu's
+    /// presents its menu as its primary action, a confirmation's runs the
+    /// action that opens the alert. An invoker whose target changes kind
+    /// gets a new one, as `ControlHost.control(for:)` remakes a control.
+    private func overlay(of v: NodeView, menu: Bool) -> UIButton? {
+        guard let kept = overlays[v.id] else { return nil }
+        if kept.showsMenuAsPrimaryAction == menu { return kept }
+        dropOverlay(v.id)
+        return nil
+    }
+    private func dropOverlay(_ id: UInt32) {
+        guard let b = overlays.removeValue(forKey: id) else { return }
+        #if os(iOS)
+        (b as? MenuButton)?.dismissMenu()
+        #endif
+        b.removeFromSuperview()
+        menuShapes[id] = nil
     }
 
     /// A custom hide-only control inside a lifted content popover has the
@@ -376,6 +387,16 @@ final class MenuHost {
         (overlays[node.id] as? InvokerButton).map { $0.isHighlighted && $0.pressing === node } ?? false
     }
     func live(_ node: NodeView) -> Bool { presenter?.views[node.id] === node }
+    /// The order a menu shows its rows in for its trigger's `menuOrder`
+    /// `word`; unsaid, UIKit's `.automatic`, which shows a menu that opens
+    /// upward last row first (LLP 1115 §2: unsaid, the platform's).
+    static func order(_ word: String?) -> UIContextMenuConfiguration.ElementOrder {
+        switch word {
+        case "fixed": .fixed
+        case "priority": .priority
+        default: .automatic
+        }
+    }
     /// `inBar`: the node is a bar item's button, which the page hides while
     /// the bar shows it: that hiding, and only that, does not count.
     /// A pull-down's rows, read as UIKit opens it: the invoker's press applies

@@ -24,6 +24,8 @@ struct ExactWidgetEntry: TimelineEntry {
     // Inline archives ask for intrinsic content; GeometryReader receives zero.
     var displaySize = CGSize.zero
     var unavailable = false
+    /// A configured widget's chosen values, the JSON its `snapshot_configuration` slot decodes.
+    var configuration: Data?
 }
 private func embeddedRoot() -> URL {
     Bundle.main.resourceURL ?? Bundle.main.bundleURL
@@ -56,7 +58,7 @@ private func snapshotFamily(_ family: WidgetFamily) -> SnapshotEnvironment.Famil
 // LLP 1126.000 WP5: the driver owns the archived layout and applies margins once.
 private func widgetSnapshotView(_ entry: ExactWidgetEntry, displaySize: CGSize, contentSize: CGSize,
                                 facts: SessionFacts, family: WidgetFamily) throws -> some View {
-    let session = try HeadlessSession(plan: entry.plan, entry: entry.kind, props: entry.props,
+    let session = try HeadlessSession(plan: entry.plan, entry: entry.kind, props: entry.props, configuration: entry.configuration,
                                       size: contentSize, facts: facts, assetRoot: entry.root)
     let environment = SnapshotEnvironment(
         family: snapshotFamily(family), entryName: entry.kind,

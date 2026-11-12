@@ -60,7 +60,7 @@ search establishes only what those scripts observed.
 
 `bun exact.mjs test web` (or `test ios`) checks `always` at boot, after inputs and
 reloads, and after every clock step.
-`bun exact.mjs verify` runs `contract verify` beside the device checks and prints
-its receipt; either failure fails it. Device and headless JS runs count the `after`,
-frame, command and `never refuses` lines they leave unchecked: neither exposes the
-commit trace they need.
+`verify` runs both checks; either failure fails it. Its verdict gives counts and
+the report and receipt's path, `.exact/verify/properties.txt`. Device and
+headless JS runs count unchecked `after`, frame, command and `never refuses` lines:
+neither exposes the commit trace they need.

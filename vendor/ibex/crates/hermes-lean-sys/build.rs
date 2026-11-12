@@ -34,10 +34,11 @@ fn main() {
     }
 
     let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    // Exact's explicit refusing executor is used by Hermes-less CI and E1's
-    // not-yet-supported targets. Keep the Cargo graph stable while selecting
-    // no compiler, headers, archive, or native link line.
-    if std::env::var("EXACT_JS_ENGINE").as_deref() == Ok("stub") {
+    // Watch entries cannot reach TypeScript before LLP 1126.001 §5 Q3 passes.
+    // As in Hermes-less CI, keep the graph but select no engine or native link.
+    if std::env::var("EXACT_JS_ENGINE").as_deref() == Ok("stub")
+        || std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("watchos")
+    {
         for key in [
             "include_dir",
             "hermesc_path",

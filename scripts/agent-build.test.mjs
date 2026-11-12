@@ -57,6 +57,43 @@ function scratchApp(name) {
   return { dir, write };
 }
 
+test('Apple rebuilds carry a path-selected app into the child without changing the parent environment', () => {
+  const { dir } = scratchApp('field-log');
+  const script = `
+    import assert from 'node:assert/strict';
+    import { mock } from 'bun:test';
+    import * as processes from 'node:child_process';
+    import { resolveApp } from './scripts/app.mjs';
+    const spawn = processes.spawn;
+    const dir = ${JSON.stringify(dir)}, builds = [];
+    mock.module('node:child_process', () => ({ ...processes, spawn(command, args, options) {
+      assert.ok(args[0].endsWith('/host/apple/build.mjs'));
+      builds.push(args.slice(1));
+      const probe = 'import { resolveApp } from "./scripts/app.mjs"; '
+        + 'console.log(resolveApp(' + JSON.stringify(args.find(arg => arg.endsWith('-apple'))) + ').dir)';
+      return spawn(command, ['-e', probe], options);
+    } }));
+    const { buildFirst } = await import('./scripts/agent-build.mjs');
+    delete process.env.EXACT_MAC_BIN;
+    for (const inherited of [undefined, ${JSON.stringify(resolve(import.meta.dir, '../apps/theme-fixture'))}]) {
+      if (inherited === undefined) delete process.env.EXACT_APP_DIR;
+      else process.env.EXACT_APP_DIR = inherited;
+      const app = resolveApp(dir);
+      for (const host of ['ios', 'macos']) {
+        assert.equal(await buildFirst(host, app, { say: line => console.error(line), wait: () => {} }), 0);
+        const log = await Bun.file(dir + '/.exact/' + host + '-build.log').text();
+        assert.equal(log.trim(), dir);
+        assert.equal(process.env.EXACT_APP_DIR, inherited);
+      }
+    }
+    assert.equal(builds.length, 4);
+  `;
+  try {
+    const r = spawnSync(process.execPath, ['-e', script], { cwd: resolve(import.meta.dir, '..'), encoding: 'utf8', timeout: 20_000 });
+    assert.equal(r.status, 0, r.stdout + r.stderr + (r.error ?? ''));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('macOS freshness checks the full product receipt when the bundle carries a reduced receipt', () => {
   const previous = process.env.EXACT_APP_DIR, { dir, write } = scratchApp('ats-drive');
   try {
@@ -715,7 +752,7 @@ test('a long build says how long it has run and its last step, then a lock it wa
     assert.ok(said.some(line => /Blocking waiting for file lock on package cache, (held by|cargo running|its holder)/.test(line)), said.join('\n'));
     assert.match(readFileSync(resolve(dir, 'build.log'), 'utf8'), /Compiling exact-kernel/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
-});
+}, 30_000); // Naming the lock's holder runs `lsof`, which takes seconds on a Mac running many processes.
 
 test("a package-cache lock's holder is named by the process that has the file open", () => {
   const calls = [];
@@ -756,7 +793,7 @@ test.skipIf(process.platform === 'win32')('Gradle keeps its given environment wi
     const env = { PATH: bin, GRADLE_OPTS: '-Xmx128m' }, calls = [];
     expect(Bun.which('javac', { PATH: env.PATH })).toBe(resolve(bin, 'javac'));
     for (const platform of ['darwin', 'linux']) {
-      expect(androidJavaEnv(env, platform, studio)).toBeNull();
+      expect(androidJavaEnv(env, platform, studio)).toBe(env);
       expect(runGradle(['--version'], { env }, platform, { studio, run: (...args) => { calls.push(args); return { status: 0 }; } })).toBe(true);
       expect(calls.at(-1)[2].env).toBe(env);
       expect(calls.at(-1)[2].env).toEqual({ PATH: bin, GRADLE_OPTS: '-Xmx128m' });
@@ -765,7 +802,26 @@ test.skipIf(process.platform === 'win32')('Gradle keeps its given environment wi
 });
 
 // The receipt fixture retains the pinned Android bundle's API and Intl flags; cargo records the build's environment.
-for (const [form, dependencies, api] of [
+test('the local Hermes builder targets Android 10 even when its caller requests a newer API', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-hermes-api-'));
+  try {
+    mkdirSync(resolve(dir, 'scripts'));
+    writeFileSync(resolve(dir, 'scripts/build-hermes-vanilla-release.sh'), `#!/bin/sh
+# aarch64-linux-android)
+printf '%s' "$IBEX_ANDROID_API" > api
+exit 17
+`);
+    const built = spawnSync(process.execPath, ['scripts/hermes-android.mjs', 'build'], {
+      encoding: 'utf8', env: { ...process.env, IBEX_DIR: dir, IBEX_ANDROID_API: '30',
+        EXACT_HERMES_ANDROID_CACHE: resolve(dir, 'cache') },
+    });
+    expect(built.status).toBe(17);
+    expect(readFileSync(resolve(dir, 'api'), 'utf8')).toBe('29');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const [form, dependencies, api, bundleApi = 30] of [
+  ['API-29 Hermes', '[dependencies.exact-js]\npath = "../js"', 29, 29],
   ['inline', '[dependencies]\nexact-js = { path = "../js" }', 30],
   ['table', '[dependencies.exact-js]\npath = "../js"', 30],
   ['quoted key', '[dependencies]\n"exact-js" = { path = "../js" }', 30],
@@ -790,7 +846,7 @@ for (const [form, dependencies, api] of [
     for (const sub of [tools, bundle, bin, resolve(dir, 'linux')]) mkdirSync(sub, { recursive: true });
     for (const level of [29, 30]) writeFileSync(resolve(bin, `aarch64-linux-android${level}-clang`), '');
     expect(hermesApi(bundle)).toBeNull();
-    writeFileSync(resolve(bundle, 'hermes-input-receipt.json'), JSON.stringify({ build: { flags: ['-DHERMES_ENABLE_INTL=false', '-DANDROID_PLATFORM=android-30'] } }));
+    writeFileSync(resolve(bundle, 'hermes-input-receipt.json'), JSON.stringify({ build: { flags: ['-DHERMES_ENABLE_INTL=false', `-DANDROID_PLATFORM=android-${bundleApi}`] } }));
     writeFileSync(resolve(dir, 'app.contract'), 'app "Fixture"\n');
     writeFileSync(resolve(dir, 'Cargo.toml'), `[workspace]\nresolver = "2"\nmembers = ["linux", "js", "bridge", "shared", "other", "macros"]\n[workspace.dependencies]\nengine = { package = "exact-js", path = "js" }\n[patch.crates-io]\n${patchLines(dir).join('\n')}\n`);
     writeFileSync(resolve(dir, 'rust-toolchain.toml'), `[toolchain]\nchannel = "${PINNED_RUST}"\n`);

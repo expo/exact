@@ -383,7 +383,11 @@ and imports. Rust argument edits reach that declaration through the next GPU bui
 so while the game's Rust is newer than it, `contract build` reports its findings as
 warnings beside every other diagnostic, and `contract types` and `contract rust`
 never stop on them; a bake checks them against the declaration it has just written.
-The dev compiler retains its last good plan on an error.
+The dev compiler retains its last good plan on an error. A native or web build also
+checks the plan against the GPU product it packages, which carries its own argument
+names: when a source changed while the build ran, so that a canvas passes a name the
+product lacks or more values by position than it has arguments, the build stops with
+"build again" rather than ship a canvas that fails to bind.
 
 ### Controls
 
@@ -443,7 +447,7 @@ pushed as far, the lower index); a button is down while any pad holds it. Per ho
 |---|---|---|
 | Web | the Gamepad API, polled each frame while a pad is connected; a pad without the standard mapping is reported (`pad 1 connected unmapped` in the journal) and delivers nothing | as the browser exposes pads |
 | macOS, iOS, tvOS | GameController's extended gamepad, on each change, and every pad as it is now when a canvas or a control in it takes or gives up the focus, when the app becomes active, and on the Mac when a window becomes or stops being key | a controller without the extended profile (the Siri Remote) is unmapped; on iPadOS with several windows the pads go to the earliest-made canvas holding the focus in any of them, not to the key window's |
-| Android | gamepad keys and joystick axes; each trigger with an axis (LTRIGGER or BRAKE for the left, RTRIGGER or GAS for the right) reports its travel, one without its key | every pad is reported standard; the host reads no pad's state on its return from the background, so a pad reports itself with its next event, and a button held through the background reads up until pressed again |
+| Android | gamepad keys and joystick axes; each trigger with an axis (LTRIGGER or BRAKE for the left, RTRIGGER or GAS for the right) reports its travel, one without its key; releases readings when the reader's window loses focus or the activity stops, keeping slots | every pad is reported standard; the host reads no pad's state on focus gain, so a pad reports itself with its next event, and a button held while unfocused reads up until pressed again |
 | Linux | evdev, at each report, stamped with the report's time moved into the host's clock by one origin per read and kept when that report moves the pads to a canvas, so readings buffered in one read keep their spacing and several pads' arrive in the order they happened (ties by index, then as read); in the kernel's gamepad layout (Xbox drivers' letters read as their positions); a pad's state is read when it opens and delivered ahead of the reports buffered since | pads present at launch only; every pad is reported standard |
 | Windows | XInput's four slots, every 8 ms while one is connected and every 250 ms otherwise, while the window has focus, and all four at once when it regains focus, so a pad unplugged meanwhile reads gone | `GamepadHome` is never down (XInput does not report the guide button); a reading is stamped at its poll |
 

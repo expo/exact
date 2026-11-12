@@ -1,8 +1,31 @@
 // What an Apple app links: the capabilities its composition names, and the
 // SDK its executable records, with the device launch link of LLP 1047.001.001.
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { readFileSync, mkdirSync, rmSync, cpSync, statSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
+
+/** Save a distributed image's symbols before removing its local symbol table.
+ * `strip` keeps the image's UUID; `strip: false` writes the dSYM alone.
+ * A direct Swift link supplies its dSYM: the driver's temporary objects are already gone. */
+export function stripForDistribution(executable, dsym, { strip = true, sourceDsym = null } = {}) {
+  // dsymutil reports each symbol it could not find in an object file on stderr; only a failure is said.
+  const run = (cmd, args) => { const r = spawnSync(cmd, args, { stdio: ['ignore', 'ignore', 'pipe'] }); if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed (${r.status ?? r.signal}): ${r.stderr ?? ''}`); };
+  mkdirSync(dirname(dsym), { recursive: true });
+  rmSync(dsym, { recursive: true, force: true });
+  if (sourceDsym) {
+    cpSync(sourceDsym, dsym, { recursive: true });
+    rmSync(sourceDsym, { recursive: true });
+  } else run('dsymutil', [executable, '-o', dsym]);
+  if (!strip) return { dsym, saved: 0 };
+  const before = statSync(executable).size;
+  run('strip', ['-x', executable]);
+  return { dsym, saved: before - statSync(executable).size };
+}
+/** Embedded products name a dSYM outside their shipped bundle. */
+export function stripProductionExecutable(executable, { production, ipa = null, dsym = ipa ? `${ipa.replace(/\.ipa$/, '')}.dSYM` : `${executable}.dSYM`, sourceDsym = null, strip = true }) {
+  if (!production) return null;
+  return stripForDistribution(executable, dsym, { sourceDsym, strip });
+}
 
 /** Production compiler policy (LLP 1047.001 D9). tvOS shares host.ios. */
 export function appleProduction(app, platform, args = []) {

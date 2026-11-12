@@ -1120,8 +1120,9 @@ test('an unnamed package linked from far outside the app is refused, and no remo
 // read client's batch whose answers pass 1 MiB (a stream's reply cap, not a fetch's) is read whole (theme2's condition).
 test('a batched resolve past 1 MiB through the TLS door: a paired read client reads it whole', async () => {
   const app = mkdtempSync(join(tmpdir(), 'exact-remote-batch-'));
-  // 180 families near the value bound (about 3.9 KB each, twice that in an answer): about 1.6 MB of answers.
-  const stack = n => Array.from({ length: 550 }, (_, i) => `f${n}x${i}`).join(', ').slice(0, 3900).replace(/, [^,]*$/, '');
+  // 180 families near the value bound (about 3.8 KB each, twice that in an answer): about 1.6 MB of answers. Each is
+  // 60 long names, within a stack's 64.
+  const stack = n => Array.from({ length: 60 }, (_, i) => `f${n}x${i}-${'y'.repeat(54)}`).join(', ');
   const faces = Array.from({ length: 180 }, (_, n) => `face${n}`);
   writeFileSync(join(app, 'app.json'), '{"app": {"id": "dev.test.batch", "name": "Batch"}, "host": {"web": {}}}');
   writeFileSync(join(app, 'app.tamber'), `tamber t\n\ntheme\n  ink = #111111\n${faces.map((f, n) => `  ${f}: family = ${stack(n)}\n`).join('')}`);

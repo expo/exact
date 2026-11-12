@@ -712,6 +712,7 @@ launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
 step          = "tap" STRING [ "hover" | "dblclick" | "contextmenu"
                   | "pinch" NUMBER [ "at" NUMBER NUMBER ]
                   | "wheel" [ "-" ] NUMBER [ "-" ] NUMBER
+                  | "history" [ "-" ] NUMBER
                   | "into" STRING
                   | "modifiers" STRING | "mediasession" STRING [ NUMBER ] ] NL
               | "tap" STRING "drag" ( "to" STRING [ "at" NUMBER NUMBER ]
@@ -941,6 +942,10 @@ dx dy`) at the node's middle, in points (CSS pixels on the web): a positive `dy`
 scrolls on toward the content's end, so its offset grows, and a negative one back
 toward its start; a positive `dx` scrolls right. It lands at once, with no
 momentum, so a Mac's scroll can be tested where a drag selects text instead.
+`tap "root" history <delta>` traverses browser history on the navigation root:
+a nonzero 32-bit integer, negative for Back and positive for Forward. It uses
+the browser's `history.go`, including entries kept across `reload`; other hosts
+report unsupported. Scope these tests with `on web`.
 `tap "id" dblclick` and `contextmenu` are the driver's forms of the same names
 (no Linux carrier double-clicks). `tap "list" into "key"` brings a virtualized
 list's row into view by its key, so a row outside the rendered window can be
@@ -949,8 +954,10 @@ value, as Playwright's `fill`; `append` adds the text after the value the tree
 shows (a prefilled reply). `type "id" key "Name"` presses the key;
 `down` and `up` are the two halves, and `for <ms>` holds it that long on the
 virtual clock (`down` or `up` together with `for` is refused). `reload` restarts the app on the store it had: the
-web page loads again in the same profile, a native app relaunches on the same
-scratch store. Its state starts over and `performanceNow()` is 0 again, at the date the test had
+web page reloads its current history entry in the same profile, keeping Back
+and Forward entries; each separate test starts with an isolated history.
+A native app relaunches on the same scratch store. Its state starts over and
+`performanceNow()` is 0 again, at the date the test had
 reached (`epoch` plus its `clock` steps); what the app
 stored is what it reads, so persistence is testable. `close` presses the
 window's close button as ⌘W or the red button does (the driver's `close`): its
@@ -1275,8 +1282,11 @@ each interpolation part of one value that also holds text, outside parentheses
 a concatenation, a `fn` that returns one) is refused
 (`lower-css-shorthand`): write the longhands, each of which may be computed. A computed
 single value (`padding=pad`) is every side's.
-An empty string on any style row declares nothing, as CSSOM's `setProperty(p, "")`:
-the row is unset (`background-color=dot` with `dot` `""`).
+An empty or whitespace-only string explicitly clears a style row: it keeps the
+author's declaration without an own value (inherited on inherited rows, otherwise
+initial). For example, `background-color=dot` with `dot` `""` overrides class and
+platform fills with a transparent background. An absent optional value (`none`)
+removes the binding's declaration and exposes those lower-priority values.
 `border-style` and each `border-<side>-style` accept `none`, `hidden`, `solid`,
 `inset`, `dotted` and `dashed`. The two patterned styles keep their authored
 border widths in layout. AppKit, UIKit and Linux paint their dots and dashes;
@@ -1613,11 +1623,11 @@ component Composer
 
 The web, macOS and iOS draw atoms in the editor and the reader (on Apple the
 reader's pill draws no icon, border, ring or `:hover` paint, and UIKit's smart
-delete takes one of the two spaces an atom's deletion leaves). VoiceOver on macOS and iOS reads
-an atom's label in place and its role only from its own element, which the
-next-item command passes over on macOS and reaches after the field on iOS
-(LLP 1045.000 §10 Q10). Linux, Windows and Android show the source in the
-editor and the link text in the reader, with no `atompress`. The driver's
+delete takes one of the two spaces an atom's deletion leaves). In the editor,
+VoiceOver on macOS and iOS reads an atom's accessible name in place and its
+role from its element after the field. The next-item command reaches each
+atom in source order (LLP 1045.000 §10 Q10). Linux, Windows and Android show
+the source in the editor and the link text in the reader, with no `atompress`. The driver's
 `state atoms` lists each one: its node, kind, source, range, label and frame from the node's top
 left, where `tap <node> at <x> <y>` presses it.
 
@@ -2320,14 +2330,14 @@ On **web (JS and wasm), macOS, iOS and Linux**, `setRangeText(id, text)` replace
 current selection; `setRangeText(id, text, start, end[, selectionMode])`
 replaces the given UTF-16 range. `selectionMode` is `preserve` by default,
 or `select`, `start`, `end`, following HTML. It does not focus the field or
-apply `maxlength`. On macOS it is one undo step that restores the text before
-it, as on the Markdown editor, wherever the field has an editor (a textarea, or
-an input being edited); without one, or while an input method composes, the
-value is written as the app's own is. On iOS it is no undo step. Both Apple
-hosts clear the edited field's undo history when a value is written. On the web
-it is HTML's, which Chrome makes no undo step, and Linux keeps no field undo
-history. Invalid ranges, modes, unsupported
-input types and missing ids log a refusal without editing. On the Markdown
+apply `maxlength`. On macOS, wherever the field has an editor (a textarea, or
+an input being edited), and on iOS while the field is focused, a changed value
+is one undo step that restores the text and selection before it. On iOS, redo
+also restores the replacement and its selection. Without an editor, without
+focus on iOS, or while an input method composes, the value is written as the
+app's own is, clearing only that field's undo history. On the web it is HTML's,
+which Chrome makes no undo step, and Linux keeps no field undo history. Invalid
+ranges, modes, unsupported input types and missing ids log a refusal without editing. On the Markdown
 editor (web, macOS and iOS) the offsets are the source's and each call is one
 undo step ([Markdown](#markdown-markup-format-select)); Linux refuses it there.
 Windows, Android and terminal do not support this command yet.
@@ -2745,7 +2755,7 @@ rows and content lifted into a popover; an explicit
 The current command name inventory is:
 
 `blur`, `copyText`, `deliveryActivate`, `deliveryCheck`, `fastSeek`, `focus`, `format`,
-`load`, `openURL`, `requestFullscreen`, `exitFullscreen`, `requestPictureInPicture`, `exitPictureInPicture`, `removeAllRanges`, `selectText`, `setSelectionRange`, `setRangeText`, `setScheme`, `setRootFontSize`, `setPageZoom`, `setWindowOpacity`, `showPicker`, `share`, `saveFile`,
+`load`, `openURL`, `requestFullscreen`, `exitFullscreen`, `requestPictureInPicture`, `exitPictureInPicture`, `removeAllRanges`, `selectText`, `setSelectionRange`, `setRangeText`, `setScheme`, `setLocale`, `setRootFontSize`, `setPageZoom`, `setWindowOpacity`, `showPicker`, `share`, `saveFile`,
 `showOpenFilePicker`, `showDirectoryPicker`, `showSaveFilePicker`, `requestPermission`, `scrollIntoView`, `scrollBy`, `showModal`,
 `haptic`, `postMessage`, `reload`, `relaunch`, `close`,
 `observe`, `observeAttributes`, `observeError`, `playSound`, `playSounds`, `stopSounds`, `requestMIDIAccess`, `sendMIDI`, `startTrace_EXPERIMENTAL`, `stopTrace_EXPERIMENTAL`
@@ -2766,11 +2776,12 @@ argument validation. Use the working implementation when selecting arguments:
 | `blur()`, `blur(id)` | [Messages](../apps/messages/app.contract), [keyboard-bar corpus](../contract/corpus/keyboard-bar.contract) |
 | `selectText(...)` | No app fixture; the hosts' field selection, such as [`FieldSelections.swift`](../host/apple/Sources/ExactKit/FieldSelections.swift) |
 | `setSelectionRange(id, start, end[, direction])`: a text field's or text's selection, by its `id` ([form controls](#form-controls-radio-inputevent-setselectionrange)) | [radios conformance](../host/web-js/conformance/radios.contract), [control tests](../contract/cli/tests/it/controls.rs) |
-| `setRangeText(id, text[, start, end[, selectionMode]])`: a field's range replacement, one `input`, preserve selection by default; one undo step on macOS and on the Markdown editor, none on a plain field elsewhere ([form controls](#form-controls-radio-inputevent-setselectionrange)) | [Chrome comparison](../host/web/tests/field-range.test.mjs) |
+| `setRangeText(id, text[, start, end[, selectionMode]])`: a field's range replacement, one `input`, preserve selection by default; one undo step on macOS, focused iOS fields and the Markdown editor ([form controls](#form-controls-radio-inputevent-setselectionrange)) | [Chrome comparison](../host/web/tests/field-range.test.mjs) |
 | `copyText(text)` | [Messages](../apps/messages/app.contract) |
 | `startTrace_EXPERIMENTAL()`, `stopTrace_EXPERIMENTAL()`: experimental, so named while the trace's fields may still change; a recording of each UI update UIKit makes, observed without asking for one or for a frame rate (iOS and tvOS 18 and later), elsewhere of each display-link callback, from which it estimates the frames the display showed again, from an app's own control and in any build, a production one included; `stopTrace_EXPERIMENTAL()` puts the trace on the clipboard as compact JSON and in a `trace-recording-*.json` file in the app's temporary directory; `stopTrace_EXPERIMENTAL(maxBytes)` copies it cut to that many bytes (its totals and scroll segments as rows, then the frames late the longest first, as many as fit), for a conversation that limits a message (a budget too small for its totals gets a note naming the size that fits them; that note can exceed the requested budget), and still saves the whole trace. On iOS it splits each scroll a person makes of an element's scroller, a route's page or the document into its drag and its glide, with its frame rate and delay relative to the display’s fastest rate; a Mac recording follows no scroller. It lists each late frame with its cause, its scroll offset, its update's phases, the main thread's busy time, its overrun and commit time, batches and host phases; [Frame trace fields](#frame-trace-fields) says what each field means. Apple hosts (tvOS, with no clipboard, only saves the file); the web and Linux refuse it in the journal | [`TraceRecording.swift`](../host/apple/Sources/ExactKit/TraceRecording.swift) |
 | `openURL(url)`: an absolute `http`, `https`, `mailto` or `tel` URL, or one of a scheme app.json's `open_url.schemes` declares (`"open_url": {"schemes": ["vscode", "zed"]}`, an editor's deep link), opened by whatever the system registered for it; the web's JS target, macOS and iOS open declared schemes (a browser asks first) and journal one nothing could open, and under the agent journal them instead (`openURL vscode: …`). `openURL(url, id)` also says whether it opened, as Electron's `shell.openExternal` does: `change` at the element `id` names hears `opened` when the system took the URL, or `failed` when it was refused or nothing could open it (no app registered for its scheme, a host with no browser). The web hears `opened` for any URL it hands the browser, which does not say what opened it. Where the agent's drive journals an open instead, macOS answers whether an app is registered for the URL and the other hosts answer `opened` A link's `href` of a declared scheme opens on macOS and iOS, which hand followed links to `openURL`; the web writes no such `href` (its link policy keeps the four schemes). `file`, `javascript`, `data` and the other schemes that run or read content cannot be declared. Any other scheme is refused in the journal (LLP 1133.000 §2) | No Contract fixture; the hosts' dispatch, such as [`host/web-js/commands.js`](../host/web-js/commands.js), [`OpenURL.swift`](../host/apple/Sources/ExactKit/OpenURL.swift) |
 | `setScheme(scheme)`: the app's scheme, `"light"`, `"dark"` or `"system"` (follow the system's appearance) | [Caltrain](../apps/caltrain/app.contract), [Markdown](../apps/markdown/app.contract) |
+| `setLocale(tag)`: the language the app's strings read, over the host's locale: `t(…)` texts, `lang`, `dir` and `exactTime().resolvedLocale` follow the table `tag` resolves to, by the lookup the host's locale takes (`"de-AT"`, then `"de"`, then the base). `exactTime().locale` and `formatLocale` stay the device's. The choice is kept across launches and applies before the first frame of the next; `setLocale("")` forgets it and follows the host's locale. A literal tag is checked here (`type-set-locale`), a computed one in the log when it runs; an app with no strings tables is refused (`type-strings-missing`) | [strings tests](../contract/cli/tests/it/strings.rs) |
 | `setRootFontSize(px)`, `setRootFontSize("125%")`, `setRootFontSize("medium")`: CSS's `:root { font-size }`, the root font size every `rem` follows, in px above 0, laid out in the action's own commit; `px` lengths stay. It stands over the host's own size (the browser's setting, iOS Dynamic Type, 16 on macOS and Linux), as an author's `html { font-size: 20px }` stands over a browser's font-size setting, and `"medium"` hands the size back to the host. A percentage (CSS's number syntax, above 0) is that share of the host's size and follows it as the host's changes (LLP 1121 D6). A literal of 0 or less is refused here, a computed one in the log when it runs. Not kept across a launch: set it again from a mount task (LLP 1069.000 D3) | [rem tests](../contract/cli/tests/it/rem.rs) |
 | `setPageZoom(factor)`: the window's page zoom, as View ▸ Zoom In sets it and Electron's `webContents.setZoomFactor`: a CSS px is `factor` points, so the viewport, media queries, `px` and `rem` all follow; `setPageZoom(1)` is Actual Size, and a factor is clamped to 0.25–5. For an app whose own ⌘0, ⌘= and ⌘- commands keep their own steps ([The Mac's menu bar](#keys)). The Mac's; iOS, Linux, Windows and the web refuse it in the journal (LLP 1021 §5.3.1) | [`PageZoomMacTests`](../host/apple/tests/ExactKitTests/PageZoomMacTests.swift) |
 | `exitFullscreen()`, `setWindowOpacity(opacity)`: what a quit the app holds does to its window before it quits, as Electron's `setFullScreen(false)` and `setOpacity(0)`. `exitFullscreen()` is the web's `document.exitFullscreen()`: on the Mac the session's window leaves its full-screen space (a video's own full screen is `requestFullscreen(id)`'s); nothing happens when nothing is full screen. `setWindowOpacity` draws the session's window at an opacity from 0 (unseen, still key and still hearing keys) to 1 (`NSWindow.alphaValue`); a literal outside 0–1 is refused here (`type-window-opacity`). The Mac's; the web refuses `setWindowOpacity`, and iOS and Linux refuse both, in the journal. The agent's `state.windows` shows each window's `fullScreen` and `opacity` (LLP 1069.010) | [calls tests](../contract/cli/tests/it/calls.rs), [`WindowCommandsMacTests`](../host/apple/tests/ExactKitTests/WindowCommandsMacTests.swift) |

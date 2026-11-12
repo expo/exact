@@ -82,6 +82,7 @@ impl<D: DataSource> Runner<D> {
             poisoned: self.poisoned,
             ..Outstanding::default()
         };
+        let mut listed = vec![false; self.resources.len()];
         for p in &self.pending {
             if !p.in_flight() || self.device_holds.iter().any(|h| h.ticket == p.ticket) {
                 continue;
@@ -90,6 +91,9 @@ impl<D: DataSource> Runner<D> {
                 continue;
             };
             if matches!(&self.resources[i].state, Some(s) if !s.placeholder) {
+                continue;
+            }
+            if std::mem::replace(&mut listed[i], true) {
                 continue;
             }
             let name = self.target_name(p.target);

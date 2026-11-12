@@ -19,10 +19,10 @@ import android.view.MotionEvent
  * pads, `current` and the claims a module made through them (@exact/gamepad, [ExtensionPads]) where they were. The
  * activity that reads the host hands it every key and motion event first, whatever holds the focus. Only while a
  * canvas receives pad input are those events consumed; otherwise Android handles navigation. When that activity
- * goes to the background each pad keeps its slot and the canvas hears it all released, so a world's holds drop;
- * Android has no call that reads a pad's state, so a pad reports itself
- * again with its next event: a motion event carries every axis, and a button held through the background reads up
- * until it is pressed again, as a key does.
+ * loses window focus or goes to the background each pad keeps its slot and the canvas hears it all released, so a
+ * world's holds drop. Android has no call that reads a pad's state, so a pad reports itself again with its next
+ * event: a motion event carries every axis, and a button held while unfocused reads up until it is pressed again,
+ * as a key does.
  *
  * **A drive's pads.** Under the agent (`EXACT_AGENT`, as the host reads it), `EXACT_AGENT_PADS` (the drive's
  * `x_agent_pads` launch extra) is a JSON list of `{"index", "id", "vendor", "product", "pressed", "leaves"}`: those pads take their
@@ -77,8 +77,8 @@ object Pads : InputManager.InputDeviceListener {
         }
     }
 
-    /** The app went to the background (said by the activity that reads the host): each pad's canvas reading is
-     * all released, and the slot kept. */
+    /** The activity that reads the host lost window focus or stopped: release each pad's canvas reading and keep
+     * its slot. */
     fun background() {
         for (slot in 0 until MAX) if (slots[slot] != -1) {
             val device = InputDevice.getDevice(slots[slot])

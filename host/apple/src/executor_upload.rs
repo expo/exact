@@ -116,6 +116,12 @@ impl Drop for Held {
 }
 
 impl Uploads {
+    pub(in super::super) fn retire(&self) -> impl Send {
+        let mut budget = self.0.lock().unwrap();
+        budget.waiting_bodies = 0;
+        budget.started.clear();
+        std::mem::take(&mut budget.queue)
+    }
     /// Uploads waiting now, and the bytes those going out hold.
     #[cfg(test)]
     pub(in super::super) fn waiting(&self) -> (usize, usize) {
@@ -245,8 +251,20 @@ pub(in super::super) fn start(shared: &Arc<Shared>) {
             starting.push(next);
         }
         if state.retired {
-            budget.queue.clear();
+            if state.book.retiring {
+                state
+                    .book
+                    .trash
+                    .push(Box::new(std::mem::take(&mut budget.queue)));
+                budget.started.clear();
+                shared.ready.notify_all();
+            } else {
+                budget.queue.clear();
+            }
             budget.waiting_bodies = 0;
+        }
+        if !starting.is_empty() {
+            super::super::rouse(shared, state);
         }
     }
     for ticket in gone {

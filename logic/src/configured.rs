@@ -170,8 +170,14 @@ macro_rules! configured {
                 &mut self,
                 store: &$crate::exact_runner::Store,
                 in_flight: $crate::exact_runner::InFlight<'_>,
+                fetch: Option<u64>,
             ) -> Option<(u64, $crate::exact_runner::Request)> {
-                $crate::exact_runner::DataSource::timer_before_reply(&mut self.0, store, in_flight)
+                $crate::exact_runner::DataSource::timer_before_reply(
+                    &mut self.0,
+                    store,
+                    in_flight,
+                    fetch,
+                )
             }
             fn module_landed(
                 &mut self,
@@ -267,6 +273,31 @@ macro_rules! configured {
                     store,
                     source,
                     args,
+                )
+            }
+            fn more_for(
+                &mut self,
+                target: $crate::exact_runner::Target,
+            ) -> Vec<$crate::exact_runner::Request> {
+                $crate::exact_runner::DataSource::more_for(&mut self.0, target)
+            }
+            fn parse_fetch_for(
+                &mut self,
+                target: $crate::exact_runner::Target,
+                fetch: Option<u64>,
+                store: &mut $crate::exact_runner::Store,
+                source: &str,
+                args: &[$crate::exact_plan::Value],
+                outcome: $crate::exact_runner::Outcome,
+            ) -> Result<Option<$crate::exact_runner::Answer>, $crate::exact_runner::DataError> {
+                $crate::exact_runner::DataSource::parse_fetch_for(
+                    &mut self.0,
+                    target,
+                    fetch,
+                    store,
+                    source,
+                    args,
+                    outcome,
                 )
             }
             fn parse_for(

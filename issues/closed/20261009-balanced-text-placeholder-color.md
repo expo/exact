@@ -76,7 +76,7 @@ cargo clippy -p exact-web -p exact-web-js -p exact-apple --all-targets -- -D war
 cargo fmt --all -- --check
 bun test host/web/tests/neutral-look.test.mjs
 bun test host/web/tests/textrows.test.mjs
-zsh /private/tmp/claude-501/-Users-ccheever-projects-exact2/5f1c298e-7e97-40bc-8a1a-486f1889060d/scratchpad/ios-verify.sh /Users/ccheever/projects/exact2-iss-textrows NavigationBarIOSTests 793D239B-0A6E-48CB-9C12-E87C729207EB
+zsh <scratchpad>/ios-verify.sh /Users/<user>/projects/exact2-iss-textrows NavigationBarIOSTests 793D239B-0A6E-48CB-9C12-E87C729207EB
 ```
 
 ## Second review corrections (2026-10-12)

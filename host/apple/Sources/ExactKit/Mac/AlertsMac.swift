@@ -274,6 +274,7 @@ final class AlertHost {
         }
     }
 
+    private static let fieldWidth: CGFloat = 228
     /// A prompt (`kernel/src/confirmation.rs`): the alert's accessory view
     /// holds the authored input's field, lent as the toolbar's search field
     /// is (`NodeView.lendFieldToAlert`): the node is its delegate and it edits
@@ -288,7 +289,7 @@ final class AlertHost {
         for node in fields {
             guard let field = node.lendFieldToAlert() else { continue }
             field.translatesAutoresizingMaskIntoConstraints = false
-            owner.widths.append(field.widthAnchor.constraint(equalToConstant: 228))
+            owner.widths.append(field.widthAnchor.constraint(equalToConstant: Self.fieldWidth))
             stack.addArrangedSubview(field)
             owner.fields.append(node)
         }
@@ -296,6 +297,28 @@ final class AlertHost {
         stack.setFrameSize(stack.fittingSize)
         owner.alert.accessoryView = stack
         owner.alert.window.initialFirstResponder = owner.fields.first?.field
+    }
+    /// A prompt's input whose `type` changed to or from `password` while
+    /// its field is lent: a field of the new class takes the old one's place
+    /// in the accessory view, its width and its first responder, keeping
+    /// the editing and its selection (`NodeView.replaceField`).
+    func relend(_ node: NodeView) {
+        guard let owner = presented, let index = owner.fields.firstIndex(where: { $0 === node }), owner.widths.indices.contains(index),
+              let old = node.field, let stack = old.superview as? NSStackView, let at = stack.arrangedSubviews.firstIndex(of: old) else { return }
+        let lent = node.makeAlertField(like: old)
+        lent.translatesAutoresizingMaskIntoConstraints = false
+        owner.widths[index].isActive = false
+        owner.widths[index] = lent.widthAnchor.constraint(equalToConstant: Self.fieldWidth)
+        owner.widths[index].isActive = true
+        // Read first: AppKit gives the role to an alert button once the field leaves the window.
+        let first = owner.alert.window.initialFirstResponder === old
+        node.replaceField(old, with: lent) {
+            old.removeFromSuperview()
+            stack.insertArrangedSubview(lent, at: at)
+        }
+        if first { owner.alert.window.initialFirstResponder = lent }
+        node.syncFieldSide()
+        node.syncBarField()
     }
     /// Return in a prompt, one rule on every host (docs/contract-for-agents.md):
     /// the input's `key` handlers first (prevented, nothing more); its

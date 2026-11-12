@@ -203,6 +203,7 @@ if (process.argv.includes('--web-bytes')) {
 }
 const appName = process.argv.includes('--app') ? process.argv[process.argv.indexOf('--app') + 1] : undefined;
 const app = resolveApp(appName);
+const appEnv = { ...process.env, ...(app.outside ? { EXACT_APP_DIR: app.dir } : {}) };
 // The child uses the captured scripts and inputs; only this invocation's
 // resolved root bypasses capture. Foreign inherited markers cannot do so.
 if (!process.argv.includes('--flow') && !process.argv.includes('--scaling') && !process.argv.includes('--list-memory') && process.env.EXACT_DIAGNOSTIC_ROOT !== ROOT) {
@@ -420,7 +421,7 @@ await step('native', () => {
     Object.assign(out, Object.fromEntries(NATIVE_ROWS.map((key) => [key, NaN])));
     return;
   }
-  const r = spawnSync('cargo', ['run', '-q', '--release', '-p', app.crate('web'), '--bin', 'metrics'], { cwd: app.workspace, encoding: 'utf8', env: developmentBuildEnv() });
+  const r = spawnSync('cargo', ['run', '-q', '--release', '-p', app.crate('web'), '--bin', 'metrics'], { cwd: app.workspace, encoding: 'utf8', env: { ...developmentBuildEnv(), ...(app.outside ? { EXACT_APP_DIR: app.dir } : {}) } });
   if (r.status !== 0) { console.error(r.stderr); process.exit(1); }
   Object.assign(out, JSON.parse(r.stdout.trim().split('\n').pop()));
 });
@@ -430,7 +431,7 @@ await step('native', () => {
 // ~1.5 s), so every number below is for the code as it is now.
 await step('wasm', async () => {
   const dist = resolve(ROOT, 'host/web/dist');
-  const b = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web')], { cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'] });
+  const b = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web')], { cwd: ROOT, env: appEnv, stdio: ['ignore', 'ignore', 'inherit'] });
   if (b.status !== 0) process.exit(b.status ?? 1);
   out.web_target = jsTargetBuild(dist) ? 'js' : 'wasm';
   if (out.web_target === 'js') {
@@ -622,7 +623,10 @@ await step('boot', () => {
   const t = Date.now();
   const { executable: chrome, unavailable } = chromium({ needs: ['gpu', 'perf'] });
   const port = 20000 + Math.floor(Math.random() * 20000);
-  const dev = spawn(process.execPath, [resolve(ROOT, 'host/web/dev.mjs'), '--app', app.name, '--port', String(port)], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  const dev = spawn(process.execPath, [resolve(ROOT, 'host/web/dev.mjs'), '--app', app.name, '--port', String(port)], {
+    cwd: ROOT, env: appEnv,
+    stdio: ['ignore', 'pipe', 'pipe'], detached: true,
+  });
   let compilerPid = null, diagnostic = '', devExited = false;
   dev.stderr.on('data', chunk => { diagnostic = (diagnostic + chunk).slice(-8000); });
   dev.on('exit', () => { devExited = true; });
@@ -756,7 +760,7 @@ if (rebuild) {
     const now = new Date();
     utimesSync(source, now, now);
     const t = Date.now();
-    const r = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web')], { cwd: ROOT, stdio: 'ignore' });
+    const r = spawnSync(process.execPath, [resolve(ROOT, 'host/web/build.mjs'), app.crate('web')], { cwd: ROOT, env: appEnv, stdio: 'ignore' });
     out.rebuild_ms = r.status === 0 ? Date.now() - t : NaN;
   });
 }
@@ -855,7 +859,7 @@ if (long) {
   await step('macos', () => {
     const build = () => {
       const t = Date.now();
-      const r = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), app.crate('apple')], { cwd: ROOT, encoding: 'utf8' });
+      const r = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), app.crate('apple')], { cwd: ROOT, env: appEnv, encoding: 'utf8' });
       const m = /cargo ([\d.]+) s, swift ([\d.]+) s/.exec(r.stdout ?? '');
       // A build that did not finish is a finding, never a blank: its last words.
       const failed = r.status === 0 ? null : `${r.error?.message ?? `exit ${r.status}`}: ${failure(r)}`;
@@ -881,7 +885,7 @@ if (long) {
   // `floor.swift`, installed bytes and gzip apart; each optional artifact
   // (the GPU module, the web arm) reported beside it, never folded in.
   await step('macos-link-delta', () => {
-    const r = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), app.crate('apple'), '--host'], { cwd: ROOT, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [resolve(ROOT, 'host/apple/build.mjs'), app.crate('apple'), '--host'], { cwd: ROOT, env: appEnv, encoding: 'utf8' });
     if (r.status !== 0 || !existsSync(macHostBinary) || !existsSync(floorBin)) {
       out.link_delta_bytes = NaN;
       if (r.status !== 0) out.link_delta_failed = `exit ${r.status}: ${failure(r)}`;

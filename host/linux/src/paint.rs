@@ -31,6 +31,8 @@ mod presentation;
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 pub(crate) use presentation::Presentation;
 pub mod border;
+mod shape;
+pub use shape::Shape;
 mod box_filter;
 pub(crate) mod button;
 mod caret;
@@ -105,70 +107,6 @@ fn image_tint(node: &NodeRef<'_>, presented: &Presented, dark: bool) -> Option<[
 
 /// A rectangle as (x, y, w, h).
 pub type Rect4 = (f32, f32, f32, f32);
-
-/// A rectangle with per-corner radii (top-left, top-right, bottom-right,
-/// bottom-left), reduced by CSS's one factor so neighbours never overlap.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Shape {
-    /// The box.
-    pub rect: Rect4,
-    /// The radii.
-    pub radii: [(f32, f32); 4],
-    /// CSS `corner-shape` when any corner is not `round` (LLP 1077 D1).
-    pub corners: Option<exact_kernel::corner::CornerShape>,
-}
-
-impl Shape {
-    /// A box with radii, reduced as CSS reduces them: every corner by the
-    /// one factor that fits the tightest edge.
-    pub fn new(rect: Rect4, radii: [f32; 4]) -> Shape {
-        Self::elliptical(rect, radii.map(|r| (r.max(0.0), r.max(0.0))))
-    }
-
-    /// A box with independent horizontal and vertical corner radii.
-    pub fn elliptical(rect: Rect4, radii: [(f32, f32); 4]) -> Shape {
-        Shape {
-            rect,
-            radii: border::reduced(radii, rect.2, rect.3),
-            corners: None,
-        }
-    }
-
-    /// A plain box.
-    pub fn rect(rect: Rect4) -> Shape {
-        Shape {
-            rect,
-            radii: [(0.0, 0.0); 4],
-            corners: None,
-        }
-    }
-
-    /// The same box with these corner shapes; `round` ones are none.
-    pub fn with_corners(mut self, corners: Option<exact_kernel::corner::CornerShape>) -> Shape {
-        self.corners = corners.filter(|c| !c.is_round());
-        self
-    }
-
-    /// Whether any corner is rounded.
-    pub fn rounded(&self) -> bool {
-        self.radii.iter().any(|r| r.0 > 0.0 && r.1 > 0.0)
-    }
-
-    /// The same box inset on every side (radii shrink with it).
-    pub fn inset(&self, by: f32) -> Shape {
-        Shape::elliptical(
-            (
-                self.rect.0 + by,
-                self.rect.1 + by,
-                (self.rect.2 - 2.0 * by).max(0.0),
-                (self.rect.3 - 2.0 * by).max(0.0),
-            ),
-            self.radii
-                .map(|(x, y)| ((x - by).max(0.0), (y - by).max(0.0))),
-        )
-        .with_corners(self.corners)
-    }
-}
 
 // Frozen numeric/style operands. Capture resolves environment and appearance
 // once; geometry is evaluated at the published frame with ordinary f32 order.
@@ -255,10 +193,12 @@ impl BoxPaint {
                 {
                     palette.window
                 }
-                // The material's tint where the author painted no background,
-                // as the web's rule sits under an inline one (LLP 1053.000 D4).
+                // The material's tint (a glass's `-exact-glass-tint` in place of the table's) where the
+                // author painted no background, as the web's rule sits under an inline one (LLP 1053.000 D4).
                 (_, Some(m)) if s.background_color.unwrap_or(current).resolve(dark).a() == 0 => {
-                    if dark {
+                    if m.ios.starts_with("glass") && s.written.has(StyleId::GlassTint) {
+                        rgba(s.rare.glass_tint.resolve(dark))
+                    } else if dark {
                         m.dark
                     } else {
                         m.light
@@ -530,11 +470,12 @@ pub struct Painter {
     region_picture: Option<Rc<region::Picture>>,
     region_frame: Option<region::Published>,
     damage: damage::Retained,
-    /// `backgroundMaterial` names the schema lacks, and those not yet logged.
-    materials: (std::collections::BTreeSet<String>, Vec<String>),
+    /// `backgroundMaterial` names the schema lacks.
+    materials: std::collections::BTreeSet<String>,
+    notes: Vec<String>,
+    svg_warned: std::collections::BTreeSet<exact_kernel::NodeKey>,
     decoration_warning: bool,
-    /// The node a 3D island paints flat, its own transform being the warp's
-    /// (LLP 1077 D8).
+    /// The node a 3D island paints flat, its own transform being the warp's (LLP 1077 D8).
     pub(crate) flatten: Option<ViewId>,
     /// The control a finger's press focused: it is the focus and shows no
     /// ring, which is for a focus a key moved (LLP 1115.001 D7.6).
@@ -595,18 +536,24 @@ impl Painter {
         let Some(name) = node.props.str(PropId::BackgroundMaterial) else {
             return false;
         };
-        if exact_kernel::generated::material(name).is_none() && self.materials.0.insert(name.into())
-        {
-            self.materials.1.push(format!(
+        if exact_kernel::generated::material(name).is_none() && self.materials.insert(name.into()) {
+            self.notes.push(format!(
                 "backgroundMaterial `{name}` is not a material; drawing ultra-thin"
             ));
         }
         true
     }
 
-    /// The lines [`Painter::material_note`] noted since the last call.
+    /// Host warnings noted since the last call.
     pub fn take_notes(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.materials.1)
+        std::mem::take(&mut self.notes)
+    }
+
+    pub(crate) fn replaced(&mut self) {
+        // A fresh kernel can reuse both epochs and node keys.
+        self.paint_epoch = None;
+        self.shared = SharedState::default();
+        self.svg_warned.clear();
     }
 
     /// A painter over a backend.
@@ -634,6 +581,8 @@ impl Painter {
             region_frame: None,
             damage: Default::default(),
             materials: Default::default(),
+            notes: Vec::new(),
+            svg_warned: Default::default(),
             decoration_warning: false,
             placements: BTreeMap::new(),
             canvases: BTreeMap::new(),
@@ -854,6 +803,8 @@ impl Painter {
         self.damage.next.clear();
         self.damage.unsupported = false;
         if self.paint_epoch != Some(scene.kernel.epoch()) {
+            self.svg_warned
+                .retain(|key| scene.kernel.node_by_key(*key).is_some());
             self.refresh_ranks(scene.kernel);
             self.order_shared(scene);
             self.paint_epoch = Some(scene.kernel.epoch());
@@ -1123,8 +1074,20 @@ impl Painter {
         }
         let outer = geometry.outer;
         let content = geometry.content;
+        // Clipped by this box when its overflow is not visible: its children,
+        // and a text's own lines (CSS Overflow 3 §3).
+        let (ox, oy) = effective_overflow(node);
+        let clip = field::overflow_clip(&surface.outer, paint.widths, (ox, oy));
         match node.node_type {
-            NodeType::Text => self.text_node(walk, node, &geometry, rect, ts),
+            NodeType::Text => {
+                if let Some(clip) = &clip {
+                    self.backend.push_clip(clip, ts);
+                }
+                self.text_node(walk, node, &geometry, rect, ts);
+                if clip.is_some() {
+                    self.backend.pop_clip();
+                }
+            }
             // The rest is this element's own paint (its picture, field, or control).
             _ if !paints_self => {}
             // @ref LLP 1056 D7 — a 2D canvas's kept bitmap fills its content box.
@@ -1136,7 +1099,7 @@ impl Painter {
                 } else if let Some(c) = self.canvases.get(&node.id) {
                     self.backend.canvas(&c.pixels, content, &clips, ts);
                 } else {
-                    self.native(node, content, &outer, ts);
+                    self.native(node, &clips[0], ts);
                 }
             }
             NodeType::Image => {
@@ -1172,7 +1135,7 @@ impl Painter {
             }
             NodeType::Svg => self.svg(walk, node, paint.content_shape(&geometry), ts),
             NodeType::Video | NodeType::WebView | NodeType::NativeView => {
-                self.native(node, content, &outer, ts)
+                self.native(node, &geometry.content_edge(), ts)
             }
             NodeType::Control if node.props.str(PropId::Type) == Some("select") => {
                 let label =
@@ -1230,10 +1193,7 @@ impl Painter {
             ),
             _ => {}
         }
-        // Children: clipped by this box when its overflow is not visible,
-        // moved by its scroll offset when it scrolls.
-        let (ox, oy) = effective_overflow(node);
-        let clip = field::overflow_clip(&surface.outer, paint.widths, (ox, oy));
+        // Children, moved by this box's scroll offset when it scrolls.
         let clips = clip.is_some();
         let mut child_rect = clip_rect;
         if let Some(clip) = clip {

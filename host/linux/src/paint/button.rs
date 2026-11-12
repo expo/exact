@@ -2,6 +2,7 @@
 use super::{control, look, rgba, Painter, Rect4, Shape};
 use crate::text::{Paragraph, TextEngine};
 use exact_kernel::generated::metric;
+use exact_kernel::style::relative::{text_style, text_style_size, MEDIUM};
 use exact_kernel::{
     AxisOffer, ButtonFaceStyle, ButtonImagePlacement, ButtonMeasure, ButtonMeasureRequest,
     ControlCornerStyle, ControlSize, Dimension, NodeRef, PropId, StyleId, StyleProps, TextAlign,
@@ -26,9 +27,8 @@ fn active_background(node: &NodeRef<'_>, dark: bool, down: bool) -> Option<[u8; 
 
 /// The neutral look's button type (LLP 1115.000 D17), as the page's sheet
 /// sets it: the size the button inherits, or the one its `controlSize`
-/// names (what a page writes for it at a 16 px root: the subheadline's 14
-/// for mini and small, the body's 16 for medium, 18 for large), at weight
-/// 500 on a line 1.25 of it. A size or weight the author wrote is theirs.
+/// names in rem (LLP 1069.011.001 D8), at weight 500 on a line 1.25 of it.
+/// A size or weight the author wrote is theirs.
 fn neutral_typography(style: &StyleProps, size: Option<f32>) -> StyleProps {
     let mut out = style.clone();
     out.font_family = 0;
@@ -170,15 +170,19 @@ pub(super) fn face_layout(
     };
     let declared = |s: &StyleProps, id| s.mask.union(s.written).has(id);
     let scale = control_scale(rows.button.control_size);
-    let said_size =
-        rows.button
-            .mask
-            .has(StyleId::ControlSize)
-            .then_some(match rows.button.control_size {
-                ControlSize::Mini | ControlSize::Small => 14.0,
-                ControlSize::Medium => 16.0,
-                ControlSize::Large => 18.0,
-            });
+    let said_size = rows.button.mask.has(StyleId::ControlSize).then(|| {
+        let style = match rows.button.control_size {
+            ControlSize::Mini | ControlSize::Small => "-exact-subheadline",
+            ControlSize::Medium | ControlSize::Large => "-exact-body",
+        };
+        let rem = text_style_size(text_style(style).expect("schema text style"), MEDIUM) / MEDIUM;
+        rem * rows.root_font_size
+            * if rows.button.control_size == ControlSize::Large {
+                18.0 / 16.0
+            } else {
+                1.0
+            }
+    });
     let type_of = |s: &StyleProps| {
         if filled || segment {
             material_typography(s, scale)
@@ -1089,6 +1093,7 @@ mod tests {
                 ..Default::default()
             },
             style: ButtonFaceStyle {
+                root_font_size: 16.0,
                 neutral_tab_root: None,
                 neutral_role_floor: false,
                 title: StyleProps::default(),

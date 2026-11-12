@@ -597,7 +597,7 @@ extension NodeView {
         if presenter?.pressHandoff?.control === self { presenter?.pressHandoff = nil } // another node's view now
         // UIKit's setters are not free, even to the same value.
         if isHidden { isHidden = false }
-        if alpha != 1 { alpha = 1 }
+        if alpha != 1 || boxFilter != nil { presentOpacity(1) }
         translatePx = .zero; translatePercent = .zero; layoutOffset = .zero; layoutResize = .zero; endSurface(); scale = 1; rotate = 0; stopPressEase(); press = PressFeedback(); dropPressPaint()
         if !transform.isIdentity { transform = .identity }
         if !isUserInteractionEnabled { isUserInteractionEnabled = true }

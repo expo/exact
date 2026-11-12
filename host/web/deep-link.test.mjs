@@ -15,7 +15,7 @@ import {createApp} from '../../game/new.mjs';
 import {developmentBuildEnv} from '../../scripts/app.mjs';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
-import {acceptsHTML, appDocumentPath, DirectoryOrigin, webRootPath} from '../../scripts/origin.mjs';
+import {acceptsHTML, appDocumentPath, DirectoryOrigin, prefersMarkdown, webRootPath} from '../../scripts/origin.mjs';
 import {publishRoot} from '../../scripts/deploy.mjs';
 import {canonical, locationOf, matchPattern} from '../web-js/route-pattern.js';
 import {buildTreeFile, buildTreeFileAsync, planRouteTable, readWebRequest, readModuleFile, serveBuildTree} from './serve.mjs';
@@ -47,6 +47,12 @@ test('a navigation to a dotted deep link is the document; a fetch of one is not'
     expect((await readWebRequest(dist, '/assets/missing.pdf', html)).found).toBe(null);
     expect(buildTreeFile(dist, '/deck/missing.html', html)).toBe(null);
     expect((await readWebRequest(dist, '/assets/hero.model', html)).found).toBe(null);
+    // The one dot path a build tree serves beside the install pages: the association file Apple's CDN fetches.
+    mkdirSync(resolve(dist, '.well-known'));
+    writeFileSync(resolve(dist, '.well-known/apple-app-site-association'), '{}');
+    writeFileSync(resolve(dist, '.well-known/other'), '{}');
+    expect(buildTreeFile(dist, '/.well-known/apple-app-site-association')?.route).toBe('/.well-known/apple-app-site-association');
+    expect(buildTreeFile(dist, '/.well-known/other')).toBe(null);
   } finally { rmSync(dist, {recursive: true, force: true}); }
 });
 
@@ -60,6 +66,18 @@ test('acceptsHTML reads the media type, any case, at a quality above zero', () =
   expect(acceptsHTML('application/json;profile="a,text/html,b"')).toBe(false);
   expect(acceptsHTML('application/json;profile="a\\",text/html"')).toBe(false);
   expect(acceptsHTML('application/vnd.exact.envelope+json, text/html;q=0.9')).toBe(true);
+});
+
+test('prefersMarkdown names text/markdown no lower than the most specific range taking text/html', () => {
+  expect(prefersMarkdown('text/markdown')).toBe(true);
+  expect(prefersMarkdown('text/markdown, text/html;q=0.9')).toBe(true);
+  expect(prefersMarkdown('text/html, text/markdown;q=0.5')).toBe(false);
+  expect(prefersMarkdown('text/markdown;q=0.5, text/*')).toBe(false);
+  expect(prefersMarkdown('text/markdown;q=0.5, text/*;q=0.2, */*')).toBe(true);
+  expect(prefersMarkdown('text/markdown, */*;q=0.1')).toBe(true);
+  expect(prefersMarkdown('text/*, */*')).toBe(false);
+  expect(prefersMarkdown('text/markdown;q=0')).toBe(false);
+  expect(prefersMarkdown(undefined)).toBe(false);
 });
 
 // Use the compiler's wire format, so the server's route reader is checked

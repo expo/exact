@@ -1345,3 +1345,13 @@ test('an APK with Maven libraries refuses missing locks before any native build 
     expect(() => buildApk(app, {}, 'release')).toThrow('native build reached');
   } finally { console.error = error; rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+test('a widget address carries a configuration of parameter names to values', async () => {
+  const {widgetArguments} = await import('./agent-widget.mjs');
+  const parsed = widgetArguments(['ios', 'widget', 'plan', '--configuration', '{"categories":"three"}', '--family', 'systemLarge', 'state']);
+  expect(parsed.widget).toEqual({entry:'plan', configuration:'{"categories":"three"}', family:'systemLarge'});
+  expect(parsed.argv).toEqual(['ios', 'state']);
+  for (const bad of ['three', '[]', '{"categories":3}'])
+    expect(() => widgetArguments(['ios', 'widget', 'plan', '--configuration', bad, 'state'])).toThrow('widget --configuration: expected a JSON object');
+});

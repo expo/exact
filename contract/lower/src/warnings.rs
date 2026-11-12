@@ -1049,7 +1049,7 @@ fn literal_colour(value: &str) -> bool {
         }
     }
     match exact_color::parse(&lower) {
-        Some(exact_color::Parsed::Legacy(c)) => c.a > 0.0,
+        Some(exact_color::Parsed::Legacy(c, _)) => c.a > 0.0,
         Some(exact_color::Parsed::Wide(c)) => c.alpha > 0.0,
         _ => false,
     }

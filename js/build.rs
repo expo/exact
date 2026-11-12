@@ -196,6 +196,7 @@ fn main() {
         "pure",
         "spin",
         "shared-load",
+        "liveness",
         "overlay",
         "overlay-none",
         "overlay-some",
@@ -209,12 +210,13 @@ fn main() {
         "heap",
         "snapshot",
         "context",
+        "network",
         "walk",
         "presence",
         "timers",
         "outlive",
         "kept-json",
-        "nul",
+        "nul-byte",
     ] {
         let source = manifest.join(format!("tests/fixtures/{name}.ts"));
         println!("cargo:rerun-if-changed={}", source.display());

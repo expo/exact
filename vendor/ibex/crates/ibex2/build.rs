@@ -14,7 +14,7 @@ fn main() {
     }
 
     println!("cargo:rerun-if-env-changed=EXACT_JS_ENGINE");
-    if std::env::var("EXACT_JS_ENGINE").as_deref() == Ok("stub") {
+    if std::env::var("EXACT_JS_ENGINE").as_deref() == Ok("stub") || target_os == "watchos" {
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
         for name in [
             "headers",

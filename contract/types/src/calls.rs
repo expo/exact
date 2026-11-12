@@ -109,7 +109,15 @@ pub(super) fn called_for_value(stmt: &Stmt, scope: &Scope, shapes: &Shapes) -> O
     })
 }
 
-/// An argument that is an action: a call's arguments are values, and an
+fn contains_action(ty: &Ty) -> bool {
+    match ty {
+        Ty::Action(_) => true,
+        Ty::Option(inner) | Ty::List(inner) => contains_action(inner),
+        _ => false,
+    }
+}
+
+/// An argument that holds an action: a call's arguments are values, and an
 /// action is passed only where a view binds it (`type-call-action-arg`).
 fn action_arg(
     callee: &str,
@@ -125,7 +133,7 @@ fn action_arg(
             ),
             other => action_head(other, scope, shapes).is_some(),
         };
-        if named {
+        if named || infer(arg, scope, shapes).is_ok_and(|ty| contains_action(&ty)) {
             return err(
                 "type-call-action-arg",
                 format!(
@@ -380,7 +388,9 @@ pub(super) fn refine(c: &Component, ct: &mut ComponentTypes, types: &Types) {
                     break;
                 }
                 if let Ok(t) = infer(arg, &scope, shapes) {
-                    if ct.actions[ci][at].contains_enum() {
+                    // Actions are not call arguments (D1). Propagating their
+                    // unknown parameter types can double a type at each call.
+                    if contains_action(&t) || ct.actions[ci][at].contains_enum() {
                         continue;
                     }
                     if let Some(u) = ct.actions[ci][at].unify(&t) {

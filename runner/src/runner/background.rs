@@ -53,6 +53,7 @@ impl<D: DataSource> Runner<D> {
         self.next_ticket += 1;
         self.background.ticket = Some(ticket);
         self.requests.push(RequestOut {
+            class: crate::RequestClass::Ordered,
             ticket,
             target: NAME.into(),
             request,

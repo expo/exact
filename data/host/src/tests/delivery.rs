@@ -67,6 +67,7 @@ fn a_kept_replys_delivery_dispatches_the_childs_continuation() {
             target,
             source: "wait",
             args: &[],
+            fetch: None,
             continuation: Some(waiting),
         }],
     );

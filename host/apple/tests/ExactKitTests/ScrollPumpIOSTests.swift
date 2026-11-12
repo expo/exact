@@ -51,6 +51,99 @@ final class ScrollPumpIOSTests: XCTestCase {
         while p.textRasters.inFlight > 0 && Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
     }
 
+    private func addLeadText(_ p: Presenter, ids: [Int]) {
+        p.apply(wireBatch(belowThePort(ids) + [
+            ["op": "children", "id": 1, "ids": [2] + ids],
+            ["op": "frame", "id": 1, "x": 0.0, "y": 0.0, "w": 400.0, "h": 800.0],
+        ]))
+        window.layoutIfNeeded()
+        for id in ids { p.views[UInt32(id)]?.layer.displayIfNeeded() }
+    }
+
+    func testFreedSlotsRefillBetweenFrameSlicesAndKeepScrollingFrames() throws {
+        let session = fixture("pump-completions")
+        defer { session.destroy() }
+        let p = session.presenter, ids = Array(10..<30)
+        RegionTextExecutor.queue.isSuspended = true
+        defer { RegionTextExecutor.queue.isSuspended = false }
+        addLeadText(p, ids: ids)
+        p.refreshVisibleText()
+        XCTAssertFalse(p.textRasters.hasRoom)
+        let slots = p.textRasters.inFlight
+        RegionTextExecutor.queue.isSuspended = false
+        RegionTextExecutor.queue.waitUntilAllOperationsAreFinished()
+        RegionTextExecutor.queue.isSuspended = true
+
+        // Finished mailboxes still occupy the slots. Run a frame slice, then
+        // consume two mailboxes in this turn, before their queued notifications.
+        p.scrollPump.reset()
+        p.scrollPump.requestText()
+        FrameClock.shared.fire(try XCTUnwrap(FrameClock.shared.link))
+        XCTAssertFalse(FrameClock.shared.wants(p.scrollPump))
+        for offset in 0..<2 {
+            let node = try XCTUnwrap(p.views[UInt32(ids[offset])])
+            XCTAssertTrue(p.textRasters.ensure(node, urgent: true))
+            XCTAssertTrue(node.textRasterSettled)
+            XCTAssertEqual(p.textRasters.inFlight, slots, "the freed slot starts another job in the completion's turn")
+            XCTAssertNotNil(p.views[UInt32(ids[slots + offset])]?.textRasterKey)
+            XCTAssertFalse(FrameClock.shared.wants(p.scrollPump))
+        }
+
+        p.scrollPump.scrolled(nil)
+        XCTAssertTrue(FrameClock.shared.wants(p.scrollPump))
+        XCTAssertTrue(p.textRasters.ensure(try XCTUnwrap(p.views[UInt32(ids[2])]), urgent: true))
+        XCTAssertEqual(p.textRasters.inFlight, slots)
+        XCTAssertTrue(FrameClock.shared.wants(p.scrollPump), "a completion leaves the scrolling request active")
+        RegionTextExecutor.queue.isSuspended = false
+        waitFor("the scroll and its text settle") {
+            ids.allSatisfy { p.views[UInt32($0)]?.textRasterSettled == true } && !p.scrollPump.asksForFrames
+        }
+    }
+
+    func testACompletionDuringATextWalkWaitsForItsClipGeometry() throws {
+        let session = fixture("pump-text-walk")
+        defer { session.destroy() }
+        let p = session.presenter
+        addLeadText(p, ids: [3])
+        drain(p)
+        p.scrollPump.reset()
+        let node = try XCTUnwrap(p.views[3])
+        node.dropTextRaster()
+        let clips = TextClips(p.viewport, soon: 0, reach: 0)
+        p.textClips = clips
+        p.textRasters.slotFreed?()
+        p.textRasters.slotFreed?()
+        XCTAssertTrue(p.textClips === clips)
+        XCTAssertNil(node.textRasterKey, "a completion cannot nest another text walk")
+        XCTAssertFalse(FrameClock.shared.wants(p.scrollPump))
+        p.textClips = nil
+        waitForMainQueue("the deferred text pass")
+        XCTAssertTrue(node.textRasterSettled)
+    }
+
+    func testACompletionDuringABatchLeavesTextForTheBatchsPass() throws {
+        let session = fixture("pump-batch")
+        defer { session.destroy() }
+        let p = session.presenter
+        addLeadText(p, ids: [3])
+        drain(p)
+        p.scrollPump.reset()
+        let node = try XCTUnwrap(p.views[3])
+        node.dropTextRaster()
+        defer { p.onViewportFit = nil }
+        var completed = false
+        p.onViewportFit = {
+            XCTAssertTrue(p.applying)
+            p.textRasters.slotFreed?()
+            XCTAssertNil(node.textRasterKey)
+            XCTAssertFalse(FrameClock.shared.wants(p.scrollPump))
+            completed = true
+        }
+        p.apply(wireBatch([["op": "props", "id": 1, "set": ["viewportFit": "cover"]]]))
+        XCTAssertTrue(completed)
+        waitFor("the batch's text pass") { node.textRasterSettled }
+    }
+
     func testAScrollOverPaintedTextAsksForNothing() throws {
         let session = fixture("pump-settled")
         defer { session.destroy() }
@@ -121,12 +214,22 @@ final class ScrollPumpIOSTests: XCTestCase {
         XCTAssertFalse(p.textRasters.hasRoom, "every slot is still taken")
         let settled = { ids.allSatisfy { p.views[UInt32($0)]?.textRasterSettled == true } }
         XCTAssertFalse(settled())
+        let slotFreed = p.textRasters.slotFreed
+        defer { p.textRasters.slotFreed = slotFreed }
+        var completions = 0, completionRequestedFrames = false
+        p.textRasters.slotFreed = {
+            slotFreed?()
+            completions += 1
+            completionRequestedFrames = completionRequestedFrames || FrameClock.shared.wants(p.scrollPump)
+        }
         RegionTextExecutor.queue.isSuspended = false
         // Stuck: no worker in flight and no pass to come, with paragraphs still owed
         let stuck = { p.textRasters.inFlight == 0 && !p.scrollPump.asksForFrames && !settled() }
         waitFor("each freed slot asks for the pass that gives the next paragraph a worker", giveUp: stuck) {
             settled() && !p.scrollPump.asksForFrames
         }
+        XCTAssertGreaterThan(completions, 0)
+        XCTAssertFalse(completionRequestedFrames, "a worker completion starts the next text job without waking the display link")
     }
 }
 #endif

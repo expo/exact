@@ -657,6 +657,22 @@ test('ordinary web reloads keep the launch seed', async () => {
   expect(draws).toBe(1);
 });
 
+test('a document boot waits for named answers before passing its checkpoint to wasm', async () => {
+  for (const available of [true, false]) {
+    const f = fixture(false), entered = deferred(), answers = deferred(), calls = [];
+    f.page = { holding: true, get answers() { entered.resolve(); return answers.promise; }, checkpoint: '' };
+    f.wasm.exact_checkpoint = wire => calls.push(['checkpoint', wire]);
+    f.wasm.exact_boot = () => { calls.push(['boot']); return '{"ops":[]}'; };
+    const boot = f.boot(null);
+    await entered.promise;
+    expect(calls).toEqual([]);
+    f.page.checkpoint = available ? 'digest\n{}' : '';
+    answers.resolve();
+    await boot;
+    expect(calls).toEqual([...(available ? [['checkpoint', 'digest\n{}']] : []), ['boot']]);
+  }
+});
+
 test('ordinary boot and restart do not yield between DOM commit and ticker startup', async () => {
   for (const bytes of [null, new Uint8Array([1])]) {
     const f = fixture(false), el = f.views.get(1);
@@ -706,7 +722,7 @@ const inputCode = inputSource.replace(/^export (async function|function|const) /
 const inputScript = new vm.Script(inputCode + '\n' + declaration('attach'), { filename: 'input-glue.js' });
 
 function inputFixture() {
-  const listeners = new Map(), windowListeners = new Map(), frames = new Map(), sent = [], captured = [];
+  const listeners = new Map(), windowListeners = new Map(), documentListeners = new Map(), frames = new Map(), sent = [], captured = [];
   let serial = 0;
   const el = { dataset: {}, inert: false, disabled: false, isConnected: true,
     addEventListener(kind, fn) { const list = listeners.get(kind) ?? []; list.push(fn); listeners.set(kind, list); },
@@ -717,7 +733,14 @@ function inputFixture() {
     views: new Map([[7, el]]), retiredViews: new WeakSet(), frames, sent, captured, el,
     root: { querySelectorAll: s => s.includes('aria-modal') ? [] : buttons, addEventListener() {}, contains: () => true }, // press feedback's listener: press.test.mjs drives it
     // The shortcuts' keydown listens in the capture phase, a pressable's activation in the bubble phase.
-    document: { addEventListener(kind, fn, capture) { if (kind === 'keydown') f[capture ? 'keydown' : 'keyActivate'] = fn; }, activeElement: { closest: () => null }, getElementById: id => (id === 'exact-snap' ? {} : null), styleSheets: [], documentElement: { dataset: {} } },
+    document: {
+      addEventListener(kind, fn, capture) {
+        if (kind === 'keydown') f[capture ? 'keydown' : 'keyActivate'] = fn;
+        const list = documentListeners.get(kind) ?? []; list.push(fn); documentListeners.set(kind, list);
+      },
+      removeEventListener(kind, fn) { documentListeners.set(kind, (documentListeners.get(kind) ?? []).filter(g => g !== fn)); },
+      activeElement: { closest: () => null }, getElementById: id => (id === 'exact-snap' ? {} : null), styleSheets: [], documentElement: { dataset: {} },
+    },
     HTMLIFrameElement: class {}, HTMLInputElement: class {}, HTMLTextAreaElement: class {}, HTMLButtonElement: class {},
     MutationObserver: class { observe() {} disconnect() {} takeRecords() { return []; } }, queueMicrotask, Element: class {}, matchMedia: () => ({ matches: false, addEventListener() {} }), // the input glue's start: sheets, looks, hover
     inertAncestor: node => node.inert, getComputedStyle: () => ({ visibility: 'visible' }),
@@ -730,6 +753,7 @@ function inputFixture() {
     removeEventListener(kind, fn) { windowListeners.set(kind, (windowListeners.get(kind) ?? []).filter(g => g !== fn)); },
   });
   f.host = f;
+  el.ownerDocument = f.document;
   inputScript.runInContext(f);
   f.attach(el, 7, ['pan']);
   function event(extra = {}) {
@@ -738,16 +762,16 @@ function inputFixture() {
       preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; },
       stopImmediatePropagation() { this.stopped = true; }, ...extra };
   }
-  return { f, el, buttons, frames, sent, captured, windowListeners,
-    // An event at this node reaches the window's capture listeners first; one outside it, only them.
-    outside(kind, extra) { const e = event(extra); for (const fn of [...windowListeners.get(kind) ?? []]) fn(e); return e; },
+  return { f, el, buttons, frames, sent, captured, windowListeners, documentListeners,
+    // Capture reaches the window, then the document; an outside event skips this node's listeners.
+    outside(kind, extra) { const e = event(extra); for (const fn of [...windowListeners.get(kind) ?? [], ...documentListeners.get(kind) ?? []]) fn(e); return e; },
     load() {
       vm.runInContext(`inputHandlers = createInputHandlers({ root, views, retiredViews,
         ready: () => inputReady, inertAncestor,
         dispatch: (id, payload) => send(wasm.exact_dispatch(id, 20, writeIn(payload), now())),
       }); inputReady = true;`, f);
     },
-    pointer(kind, extra) { const e = event(extra); for (const fn of [...windowListeners.get(kind) ?? [], ...listeners.get(kind) ?? []]) fn(e); return e; },
+    pointer(kind, extra) { const e = event(extra); for (const fn of [...windowListeners.get(kind) ?? [], ...documentListeners.get(kind) ?? [], ...listeners.get(kind) ?? []]) fn(e); return e; },
     key(extra) { const e = event({ key: 'k', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false, ...extra }); f.keydown(e); return e; },
     tick() { const pending = [...frames.values()]; frames.clear(); pending.forEach(fn => fn()); },
   };
@@ -826,6 +850,27 @@ test('a pan under a nested button hears its contact on the window until it begin
   h.pointer('pointermove', { ...nested, clientX: 15 }); h.tick();
   h.pointer('pointerup', { ...nested, clientX: 15, buttons: 0 });
   expect(h.sent).toEqual([[7, 20, '10,0', 0], [7, 20, '5,0', 0]]);
+});
+
+test('a pan waiting for an inner swipe ends at its document and removes its end listeners', () => {
+  for (const end of ['pointerup', 'pointercancel']) {
+    const h = inputFixture(); h.load();
+    (h.f.exact ??= {}).contacts = new Map([[1, 'pending']]);
+    const count = () => ['pointerup', 'pointercancel'].map(k => h.documentListeners.get(k)?.length ?? 0);
+    const base = count();
+    h.pointer('pointerdown');
+    expect(count()).toEqual(base.map(n => n + 1));
+    expect(h.captured).toEqual([]);
+    h.pointer('pointermove', { clientX: 20 }); h.tick();
+    expect(h.sent).toEqual([]);
+    h.outside(end, { clientX: 30 });
+    expect(count()).toEqual(base);
+    h.f.exact.contacts.clear();
+    h.pointer('pointermove', { clientX: 40 }); h.tick();
+    expect(h.sent).toEqual([]);
+    h.pointer('pointerdown'); h.pointer('pointerup', { clientX: 8 });
+    expect(h.sent).toEqual([[7, 20, '8,0', 0]]);
+  }
 });
 
 test('moved keyboard shortcuts preserve modifiers, readiness, repeat and modal gating', () => {

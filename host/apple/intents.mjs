@@ -194,6 +194,29 @@ export function shortcutKeys(app, platform) {
     UIApplicationShortcutItemUserInfo: { url: item.url } })) };
 }
 
+/** The compiler flags that write the constant values the metadata pass reads, into `values`. */
+export const constValueArgs = (values, dir) => {
+  writeFileSync(resolve(dir, 'protocols.json'), JSON.stringify(gathered));
+  return ['-emit-const-values-path', values, '-Xfrontend', '-const-gather-protocols-file', '-Xfrontend', resolve(dir, 'protocols.json')];
+};
+
+/** Xcode's App Intents metadata pass over a compiled module: writes `dir/Metadata.appintents`, which the bundle
+ * that holds the binary carries in its resources, or throws. */
+export function intentsMetadata({ moduleName, dir, sdk, triple, platform, deployment, binary, sources, values, runApple }) {
+  const metadata = resolve(dir, 'Metadata.appintents');
+  writeFileSync(resolve(dir, 'sources.txt'), sources.join('\n') + '\n');
+  writeFileSync(resolve(dir, 'values.txt'), values + '\n');
+  writeFileSync(resolve(dir, 'none.txt'), '');
+  const xcode = /Build version (\S+)/.exec(spawnSync('xcodebuild', ['-version'], { encoding: 'utf8' }).stdout ?? '')?.[1] ?? '';
+  runApple(resolve(toolchain, 'usr/bin/appintentsmetadataprocessor'), ['--toolchain-dir', toolchain, '--module-name', moduleName, '--sdk-root', sdk,
+    '--xcode-version', xcode, '--platform-family', platform === 'macos' ? 'macOS' : platform === 'watchos' ? 'watchOS' : 'iOS', '--deployment-target', deployment, '--target-triple', triple,
+    '--output', dir, '--binary-file', binary, '--source-file-list', resolve(dir, 'sources.txt'), '--swift-const-vals-list', resolve(dir, 'values.txt'),
+    '--metadata-file-list', resolve(dir, 'none.txt'), '--static-metadata-file-list', resolve(dir, 'none.txt'),
+    '--compile-time-extraction', '--deployment-aware-processing', '--no-app-shortcuts-localization'], { stdio: 'ignore' });
+  if (!existsSync(resolve(metadata, 'extract.actionsdata'))) throw new Error(`host/apple: intents: the metadata pass wrote no ${metadata}/extract.actionsdata`);
+  return metadata;
+}
+
 /** The floor of what the generated code uses: App Shortcuts' short titles and symbols are iOS 17 and macOS 14 (D17). */
 const floor = { ios: 17, macos: 14 };
 
@@ -213,22 +236,12 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
     mkdirSync(dir, { recursive: true });
     const file = resolve(dir, 'ExactIntents.swift'), values = resolve(dir, 'ExactIntents.swiftconstvalues');
     writeFileSync(file, source);
-    writeFileSync(resolve(dir, 'protocols.json'), JSON.stringify(gathered));
     const started = Date.now();
     runApple('xcrun', ['--sdk', sdkName, 'swiftc', '-parse-as-library', '-wmo', '-O', '-swift-version', '5', '-module-name', 'ExactIntents',
       '-module-cache-path', resolve(directory, 'module-cache'), '-target', triple, '-sdk', sdk,
-      '-emit-const-values-path', values, '-Xfrontend', '-const-gather-protocols-file', '-Xfrontend', resolve(dir, 'protocols.json'),
+      ...constValueArgs(values, dir),
       '-c', file, '-o', object]);
-    writeFileSync(resolve(dir, 'sources.txt'), file + '\n');
-    writeFileSync(resolve(dir, 'values.txt'), values + '\n');
-    writeFileSync(resolve(dir, 'none.txt'), '');
-    const xcode = /Build version (\S+)/.exec(spawnSync('xcodebuild', ['-version'], { encoding: 'utf8' }).stdout ?? '')?.[1] ?? '';
-    runApple(resolve(toolchain, 'usr/bin/appintentsmetadataprocessor'), ['--toolchain-dir', toolchain, '--module-name', 'ExactIntents', '--sdk-root', sdk,
-      '--xcode-version', xcode, '--platform-family', platform === 'macos' ? 'macOS' : 'iOS', '--deployment-target', deployment, '--target-triple', triple,
-      '--output', dir, '--binary-file', object, '--source-file-list', resolve(dir, 'sources.txt'), '--swift-const-vals-list', resolve(dir, 'values.txt'),
-      '--metadata-file-list', resolve(dir, 'none.txt'), '--static-metadata-file-list', resolve(dir, 'none.txt'),
-      '--compile-time-extraction', '--deployment-aware-processing', '--no-app-shortcuts-localization'], { stdio: 'ignore' });
-    if (!existsSync(resolve(metadata, 'extract.actionsdata'))) throw new Error(`host/apple: intents: the metadata pass wrote no ${metadata}/extract.actionsdata`);
+    intentsMetadata({ moduleName: 'ExactIntents', dir, sdk, triple, platform, deployment, binary: object, sources: [file], values, runApple });
     console.log(`host/apple: intents: ${faces.length} faced tool${faces.length === 1 ? '' : 's'} compiled with their metadata (${Date.now() - started} ms)`);
   }
   return {

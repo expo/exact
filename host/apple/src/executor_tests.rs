@@ -141,15 +141,16 @@ fn setup_with_grants(grants: &str) -> (Core, Arc<Fixture>, Receiver<()>) {
         woke,
     )
 }
-fn job(ticket: u64, request: Request) -> RequestOut {
+pub(super) fn job(ticket: u64, request: Request) -> RequestOut {
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "test".into(),
         request,
         forced: false,
     }
 }
-fn collect(core: &Core, woke: &Receiver<()>, count: usize) -> Vec<(u64, Outcome)> {
+pub(super) fn collect(core: &Core, woke: &Receiver<()>, count: usize) -> Vec<(u64, Outcome)> {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut outcomes = vec![];
     while outcomes.len() < count {
@@ -157,7 +158,20 @@ fn collect(core: &Core, woke: &Receiver<()>, count: usize) -> Vec<(u64, Outcome)
         outcomes.extend(core.drain().into_iter().map(|(t, o, _)| (t, o)));
         if outcomes.len() < count {
             woke.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    let pending = {
+                        let state = core.shared.state.lock().unwrap();
+                        (
+                            state.jobs.each_ref().map(VecDeque::len),
+                            state.running.len(),
+                            state.completed.each_ref().map(VecDeque::len),
+                        )
+                    };
+                    panic!(
+                        "{error}: {}/{count} outcomes; (queued, running, completed): {pending:?}",
+                        outcomes.len()
+                    );
+                });
         }
     }
     outcomes
@@ -652,29 +666,6 @@ fn grants_that_do_not_parse_are_named_in_every_refusal() {
             "{message}"
         );
     }
-}
-
-/// A redirect that leaves the grants is refused naming the origin it led to
-/// (podcast F5: a feed moved to another host read only "outside the app's
-/// grants"), and the second hop is never sent.
-#[test]
-fn a_refused_redirect_names_where_it_led() {
-    let (core, fixture, woke) = setup();
-    core.run(job(1, Request::get("https://example.test/away")), None)
-        .unwrap();
-    let [(_, outcome)] = collect(&core, &woke, 1).try_into().unwrap();
-    let Outcome::Failed { kind, message } = outcome else {
-        panic!("the redirect was followed: {outcome:?}");
-    };
-    assert_eq!(kind, FailureKind::Refused);
-    assert_eq!(
-        message,
-        "outside the app's grants (net.fetch): redirected to https://elsewhere.test"
-    );
-    assert_eq!(
-        fixture.state.lock().unwrap().2,
-        ["https://example.test/away"]
-    );
 }
 
 #[test]
@@ -1463,24 +1454,6 @@ fn a_native_call_is_handed_off_and_never_holds_the_ordered_lane() {
     assert_eq!(collect(&core, &woke, 1)[0].0, 20);
 }
 
-#[test]
-fn completed_latency_is_measured_before_the_ui_drains_it() {
-    let (core, fixture, woke) = setup();
-    let before = Instant::now();
-    core.run(job(991, Request::get("https://example.test/hold")), None)
-        .unwrap();
-    fixture.wait_held(1);
-    fixture.release();
-    woke.recv_timeout(Duration::from_secs(5)).unwrap();
-    let completed_by = before.elapsed().as_millis() as u64;
-    // Simulate a UI owner busy after the reply; its wait is not network latency.
-    std::thread::sleep(Duration::from_millis(20));
-    let (ticket, outcome, elapsed) = core.drain().pop().unwrap();
-    assert_eq!(ticket, 991);
-    assert!(matches!(outcome, Outcome::Response(_)));
-    assert!(elapsed.unwrap() <= completed_by);
-}
-
 #[path = "executor_timeout_tests.rs"]
 mod timeout;
 
@@ -1491,7 +1464,37 @@ mod again;
 mod body_from;
 
 #[path = "executor_body_to_tests.rs"]
-mod body_to;
+pub(super) mod body_to;
 
 #[path = "executor_abort_tests.rs"]
 pub(crate) mod abort;
+
+#[path = "executor_pump_tests.rs"]
+mod pump;
+
+/// The host a lane of the machine fetches through. The Darwin blocking
+/// transport serves four exchanges at a time, and the machine's adapter gives
+/// a lane's threads one transport: here each thread has its own, as each of
+/// the workers' owners has.
+pub(crate) fn lane_host() -> ibex2::host::Host {
+    #[cfg(target_vendor = "apple")]
+    {
+        use ibex2::stdlib::fetch::{Request, StreamingResponse, Transport};
+        struct PerThread;
+        impl Transport for PerThread {
+            fn open(
+                &self,
+                request: &Request,
+                signal: &ibex2::stdlib::abort::AbortSignal,
+            ) -> Result<StreamingResponse, ibex2::boundary::HostError> {
+                thread_local! {
+                    static OWN: Box<dyn Transport> = ibex2::transport::default_transport();
+                }
+                OWN.with(|own| own.open(request, signal))
+            }
+        }
+        ibex2::host::Host::with_transport(Box::new(PerThread))
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    ibex2::host::Host::new()
+}

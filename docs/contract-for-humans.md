@@ -976,7 +976,7 @@ including a data module's `secret.keep`.
 **Rust instead.** A data module can be a Rust crate rather than `app.ts`:
 `bun exact.mjs contract rust app.contract -o shapes.rs` generates the shapes as
 structs with their conversions, and [Caltrain's data crate](../apps/caltrain/data/src/lib.rs)
-answers its sources that way. The [reference](reference.md#generate-typescript-data-source-types)
+answers its sources that way. The [Exact developer reference](reference.md#generate-typescript-data-source-types)
 covers placement on a worker, live replacement, and the platform limits.
 
 ## Styling and layout
@@ -1085,10 +1085,12 @@ data table and a `dl` as a list, its rows and cells with no role of their
 own. A drawn range —
 `role="progressbar"`, `"slider"`, `"meter"`, `"scrollbar"` or `"spinbutton"` —
 takes `aria-valuenow`, `aria-valuemin` and `aria-valuemax` (numbers; ARIA's 0
-and 100 where a bound is unsaid) and `aria-valuetext`: it is one element, its
-children unread, and its value is the platform's (UIKit's `accessibilityValue`
-as a percentage, "30%", or the text; AppKit's value, minimum and maximum, the
-text its description). A `progress` or `input type="range"` says its own value.
+and 100 where a bound is unsaid, and none for a `spinbutton`) and
+`aria-valuetext`: it is one element, its children unread, and its value is the
+platform's (UIKit's `accessibilityValue` as a percentage, "30%", a
+`spinbutton`'s as its number, "3", or the text; AppKit's value, minimum and
+maximum, the text its description). A `progress` or `input type="range"` says
+its own value.
 Leave font sizes, colours and control metrics unsaid and the platform supplies them;
 what you set on a node wins.
 
@@ -1642,7 +1644,12 @@ such as `t("greeting", name=person.name)`, with `{name}` in the table value. The
 key must be a literal; keys and placeholder names are checked at compilation. The
 base table is `en` unless `app.json` sets `strings.base`, and a translation may
 omit keys but not add them. The locale comes from the host; lookup falls back from
-the exact tag to shorter tags, then to the base. See
+the exact tag to shorter tags, then to the base. An app's own language setting
+calls `setLocale("de")` in its action, and `setLocale("")` for "System": the
+choice stands over the host's locale, is kept across launches, and applies before
+the next launch's first frame, so the setting needs no mount task.
+`exactTime().resolvedLocale` follows it; `locale` and `formatLocale` stay the
+device's. See
 [the locale fixture](../host/web-js/conformance/locale) and
 [the string tests](../contract/cli/tests/it/strings.rs).
 

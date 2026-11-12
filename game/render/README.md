@@ -559,6 +559,14 @@ extensions' factors; a model that uses either extension's textures
 `sheenColorTexture`, `sheenRoughnessTexture`) is refused by name, and so is one
 that lists either extension as required, which the glTF reader does not accept.
 
+Generated models can set `clearcoat_mask_from_alpha: true` to multiply the coat
+factor by the alpha channel of `metallic_roughness_texture`. Green and blue keep
+their roughness and metallic meanings; alpha is linear and uses that texture's
+UV transform. This lets paint or engravings stay uncoated without another draw
+or sampler. The default is false, so existing alpha channels keep their pixels
+and model bytes. A missing texture acts as alpha one. This packing is opt-in;
+the baker still refuses the glTF extensions' separate layer textures.
+
 A material with either layer draws in a *layered* pipeline, a variant key bit
 (`MODEL_LAYERED`) beside the others above, made on first use like them and with
 its own uniform-driven fallback; a material with neither never compiles or runs
@@ -746,6 +754,20 @@ changed too, until every texture of its new set is
 resident, so a skin never draws with mixed maps; the feed watches the names it waits
 for and rebuilds when one arrives.
 A variant is reclaimed with its material or when one of its textures retires.
+
+`MaterialOverride.roughness`, `metallic`, `clearcoat` and `clearcoat_roughness`
+replace those material factors on one instance. `None` keeps the authored
+factor; finite values are clamped to [0, 1], and non-finite values are ignored.
+Roughness and metallic still multiply their texture channels. A zero coat
+removes its reflection and attenuation; its roughness has the same .045 floor
+as an authored coat. Unlit and custom materials ignore these factors.
+
+The factors live in the optional look table. Their first appearance or removal
+can rebatch; later values patch in place. Enabling a coat on an uncoated material selects a layered variant, shared by all its
+coated instances with the same textures; it may compile that family on first
+use. Changing factors within that family creates no new material or texture.
+Turning off an added coat returns to the uncoated family. The instance record does
+not grow, and simulation state, saves and hashes are unchanged.
 `MaterialOverride.uv_offset` adds to the coordinates the material's base colour and
 emission textures are sampled at on that instance, after the material's
 `KHR_texture_transform` (`MaterialData.uv_transforms`), in the transformed space, so
@@ -758,6 +780,12 @@ gets a run of one neutral entry, which adds nothing, and a record with merged-pa
 looks carries it in each part's entry. Changing it patches those entries in place;
 its first appearance, or removal, changes the table's shape and rebatches. Instances
 without one draw as before (`surface_tests::cosmetics::a_blended_material_s_uv_offset_scrolls_its_texture_in_place`).
+For motion between world ticks, also write `uv_offset_previous`, the offset at
+the previous tick. The renderer interpolates the pair at each display frame,
+using the same alpha as model poses; neither the world nor its hash changes.
+Omitting it keeps the current offset at every frame. Keep scrolling coordinates
+unwrapped across repeats: interpolate 0.9 to 1.1, then let the sampler wrap.
+Base colour and emission use the same offset, including unlit emission.
 
 When an entity's `Mesh` names a model that cannot draw yet, the feed keeps drawing the
 rigid model (no skin, no animated parts) that entity drew at its last rebuild, with the

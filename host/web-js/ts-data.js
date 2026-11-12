@@ -16,6 +16,7 @@ import { tsGrantSet } from './admission-data.js';
 import { sourceTypes } from './names.js';
 import { checkpoint, clock, commit, drive, inflight, journal, Origin, painted, R, Resources, time } from './rt.js';
 import { failureCode, failureReason, Shaped } from './shape.js';
+// What uploads a resource asks (uploads.js); with ts-fetch-refused.js no source can upload, and the build links none.
 import { ledger, requestKey } from './uploads.js';
 useFetch(sourceFetch);
 // The app's id is app.json's, which the build writes here; app.ts need not export one.
@@ -601,22 +602,22 @@ export function install(data, mixed = false, modules = null) {
       if (k && types) try { source.kept(r.source, k[0].map((a, i) => named(a, types[0][i])), named(k[1], types[1])); } catch {}
     }
   };
-  const ts = (name, args, store, target, mutation = false) => {
+  const ts = (name, args, store, target, mutation = false, forced) => {
     if (!seeded) seed();
     const types = sourceTypes[name], [params, result] = types ?? [[], 'u'];
     // The store as the module sees it (LLP 1018): a read marks the answer.
     const seen = createSecretFacade(store, tsGrantSet, kept);
     // A call that read the store and then threw read it too: its resource is a store reader (LLP 1146 §2.3).
     threwRead = false;
-    try { return answerWith(name, args, target, mutation, types, params, result, seen); } catch (e) { threwRead = !!seen.read; throw e; }
+    try { return answerWith(name, args, target, mutation, types, params, result, seen, forced); } catch (e) { threwRead = !!seen.read; throw e; }
   };
-  const answerWith = (name, args, target, mutation, types, params, result, seen) => {
+  const answerWith = (name, args, target, mutation, types, params, result, seen, forced) => {
     // A kept key's work is counted on its answer as an ordinary fetch is (LLP 1016.000 D9).
     for (const name of ['key', 'keepKey', 'exclusive']) { const op = seen[name]; seen[name] = (...a) => ordinary(() => op(...a)); }
     asking = target ?? name; watching = name;
     for (const sources of moduleWatched.values()) sources.delete(name);
     // The origin of the commit that asked it (LLP 1133.002 D12), which a fetch it makes carries (LLP 1133.036 D6).
-    const call = answering.call = { stream: null, mutation, name: target ?? name, turn: true, origin: Origin.now() }, target_ = target ?? name;
+    const call = answering.call = { stream: null, mutation, forced, name: target ?? name, turn: true, origin: Origin.now() }, target_ = target ?? name;
     if (call.origin !== 'app') answering.untraced.add(call);
     // What the source sent goes once the commit that asked it stands: an answer in flight's (a resource's, or a mutation's that
     // answers with a promise) whatever it then answers, a refused commit saying so (LLP 1016.000 D7, amended 2026-10-18).
@@ -644,6 +645,17 @@ export function install(data, mixed = false, modules = null) {
       // Once: an answer let go while its timers were armed never settles, and ends here (ts-fetch.js `dropTimers`).
       const settle = () => { if (call.settled) return; call.settled = true; dropTimers(call); answering.untraced.delete(call); pendingAnswers--; if (!pendingAnswers && owed) { owed = false; leftOpen(); } };
       call.abandon = settle;
+      // A stream opened in a later turn (ts-fetch.js `stream`) is the answer, as one opened by its source is: its ticket
+      // opens it (request-send.js `late`), and what the async function goes on to return is not the answer. An upload's
+      // identity is read first: what it refuses (a `ReadableStream` body) rejects the `fetch` and leaves the answer as it
+      // was. An upload is marked as asked before it opens (uploads.js `ends`).
+      call.late = () => {
+        const upload = requestKey(call.stream), t = call.ticket;
+        settle();
+        t.stream = opener(call.stream, v => conv(shaped(v), result, target_), target_);
+        if (upload) { t.upload = upload; t.uploading?.(); }
+        t.late?.();
+      };
       // In flight: its later turns may send (ts-stream.js `later`), behind what this source sent, once the commit
       // that asked it stands; a refused commit takes those batches back.
       call.flight = true;
@@ -658,7 +670,7 @@ export function install(data, mixed = false, modules = null) {
   // answer is the Rust module's, not ready until it loads; rust-data.js
   // then asks it first and this module for what it calls unknown.
   data.uploads = ledger; // the uploads a resource asks are asked once (LLP 1016.000 D10)
-  data.answer = mixed ? (name, args, store, target, mutation) => { try { return ts(name, args, store, target, mutation); } catch { return null; } } : ts;
+  data.answer = mixed ? (name, args, store, target, mutation, forced) => { try { return ts(name, args, store, target, mutation, forced); } catch { return null; } } : ts;
   // An overlay (`overlay.js`): what a resource shows while writes affect it, in overlay mode; `undefined` without one.
   overlaying.say = line => journal.push(`t=${clock.now} ${line}`);
   data.overlay = source.overlay && ((name, args, answer, writes) => {
@@ -677,7 +689,7 @@ export function install(data, mixed = false, modules = null) {
   // fresh answer that fills no slot, with the call's origin on it, so a module call it makes is admitted with that
   // origin (`__exact_module`). Its answer, or null for a name `tools` does not export.
   data.tool = (name, args, store, origin) => {
-    const handler = source.tools?.[name];
+    const handler = source.tools && Object.hasOwn(source.tools, name) ? source.tools[name] : undefined;
     if (typeof handler !== 'function') return null;
     const before = answering.call, call = answering.call = { stream: null, mutation: true, name, turn: true, origin };
     if (origin !== 'app') answering.untraced.add(call);

@@ -1,0 +1,31 @@
+component App
+  state removed = ""
+  state opened = ""
+  state locked = true
+  action remove(id: string)
+    removed = removed + id
+  action open(id: string)
+    opened = id
+  action unlock
+    locked = false
+  view
+    column
+      list appearance="auto"
+        section
+          button press=open("a") delete=remove("a") testId="row-a"
+            text "Alpha"
+          button press=open("b") delete=remove("b") disabled=locked testId="row-b"
+            text "Beta"
+      button "Unlock" press=unlock testId="unlock"
+
+test "a row's delete button runs its action and respects its lock"
+  expect tree has "row-a-delete"
+  expect tree has "row-b-delete"
+  tap "row-b"
+  expect state opened == "b"
+  expect state removed == ""
+  tap "unlock"
+  tap "row-b-delete"
+  expect state removed == "b"
+  tap "row-a-delete"
+  expect state removed == "ba"

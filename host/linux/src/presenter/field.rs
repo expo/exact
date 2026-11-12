@@ -1019,6 +1019,7 @@ impl<D: DataSource> Presenter<D> {
         let selection = self.field_selection(id);
         // A Control or Meta chord types nothing, as in a browser.
         let chord = self.held & 0b1100_1100 != 0;
+        let typed = self.key_text.take();
         // A number field's vertical arrows step it (`number.rs`).
         if let Some(number) = number
             .as_ref()
@@ -1079,20 +1080,25 @@ impl<D: DataSource> Presenter<D> {
                     None => return,
                 }
             }
-            s if s.chars().count() == 1 && !chord => match &number {
-                Some(_) => {
-                    let (start, end) = (
-                        byte_at(&value, selection.start),
-                        byte_at(&value, selection.end),
-                    );
-                    let taken = number::insertion(s, &value, start, end);
-                    if taken.is_empty() {
-                        return;
+            s if s.chars().count() == 1 && !chord => {
+                // A key may type other than its name: a dead key's accent
+                // before Space or a letter (`hardware_key_typing`).
+                let s = typed.as_deref().unwrap_or(s);
+                match &number {
+                    Some(_) => {
+                        let (start, end) = (
+                            byte_at(&value, selection.start),
+                            byte_at(&value, selection.end),
+                        );
+                        let taken = number::insertion(s, &value, start, end);
+                        if taken.is_empty() {
+                            return;
+                        }
+                        replace(&value, selection, &taken)
                     }
-                    replace(&value, selection, &taken)
+                    None => replace(&value, selection, s),
                 }
-                None => replace(&value, selection, s),
-            },
+            }
             _ => return,
         };
         // maxlength stops typing that would lengthen past it, as HTML's does.
@@ -1108,7 +1114,7 @@ impl<D: DataSource> Presenter<D> {
             "Backspace" => ("deleteContentBackward", None),
             "Delete" => ("deleteContentForward", None),
             "Enter" => ("insertLineBreak", None),
-            _ => ("insertText", Some(name.to_owned())),
+            _ => ("insertText", Some(typed.unwrap_or_else(|| name.to_owned()))),
         };
         if let Some(e) = self.edit_field(
             id,

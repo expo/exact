@@ -536,6 +536,7 @@ fn forgotten_hands_a_child_its_own_tokens_and_lets_go_of_the_rest() {
         target,
         source: "wait",
         args: &[],
+        fetch: None,
         continuation: Some(continuation),
     };
     // The second replaced the first: the child hears its own token back.

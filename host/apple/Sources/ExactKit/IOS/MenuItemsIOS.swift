@@ -31,8 +31,8 @@ extension MenuHost {
             row.rejectNativeActiveProperties(on: "UIAction")
             let face = label(of: row)
             if let children = submenu(of: row, path: path + [pop], opener: opener) {
-                // UIMenu has no disabled state: a disabled opener is a dimmed action.
-                let element: UIMenuElement = row.props["disabled"] == "true"
+                // UIMenu has no disabled state: a disabled or inert opener is a dimmed action.
+                let element: UIMenuElement = row.disabled || row.authoredInert
                     ? UIAction(title: face.title, image: image(of: row), attributes: .disabled) { _ in }
                     : UIMenu(title: face.title, image: image(of: row), children: children)
                 element.subtitle = face.subtitle
@@ -43,9 +43,9 @@ extension MenuHost {
                 let image = image(of: row)
                 let action = UIAction(title: face.title, image: image) { [weak self] action in
                     // The row this menu showed, not a recycled view's next node,
-                    // and still enabled: a disabled button does nothing (HTML)
+                    // and still enabled: a disabled or inert button does nothing (HTML)
                     func current() -> NodeView? {
-                        guard let row = self?.presenter?.views[id], row.incarnation == token, !row.disabled else { return nil }
+                        guard let row = self?.presenter?.views[id], row.incarnation == token, !row.disabled, !row.authoredInert else { return nil }
                         return row
                     }
                     guard let self, let presenter = self.presenter, let row = current() else { return }
@@ -72,7 +72,8 @@ extension MenuHost {
                 }
                 action.subtitle = face.subtitle
                 if row.props["accessibilityChecked"] == "true" { action.state = .on }
-                if row.props["disabled"] == "true" { action.attributes.insert(.disabled) }
+                // As the Mac's menu and iOS's alert have it: an inert row is shown, never chosen.
+                if row.disabled || row.authoredInert { action.attributes.insert(.disabled) }
                 if row.props["destructive"] == "true" { action.attributes.insert(.destructive) }
                 sections[sections.count - 1].append(action)
                 rows.append(GivenRow(row, title: action.title, subtitle: action.subtitle))

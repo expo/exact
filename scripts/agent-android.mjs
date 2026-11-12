@@ -37,19 +37,21 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameS
 import { createConnection } from 'node:net';
 import { homedir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
-import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, injectedProfiles, linuxBuild, resolveApp, wholeProgram } from './app.mjs';
-import { hermesAndroidBundle } from './hermes-android.mjs';
+import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, injectedProfiles, linuxBuild, mavenProblems, resolveApp, wholeProgram } from './app.mjs';
+import { ANDROID_MIN_API, hermesAndroidBundle } from './hermes-android.mjs';
 import { ANDROID_PAGE_SIZE, androidCargo } from './cargo-check.mjs';
 import { guardFlags, reportBuilt } from './help.mjs';
 import { androidImplementations, packageConfig } from '../js/bake/src/typescript.mjs';
 import { recordBuiltSettings } from '../js/bake/src/__exact_env.mjs';
 import { configMetaData, fragmentPermissions, manifestFragment, withMetaData } from './android-manifest.mjs';
 import { androidShareActivity } from './share-target.mjs';
+import { pickIcon, placeRgba, readPng, resize } from './app-icons.mjs';
+import { encodePng } from './png.mjs';
 import { copyStaticTreeIfPresent } from '../host/web/serve.mjs';
 
 export const ANDROID_TARGET = 'aarch64-linux-android';
 /** The oldest Android the binary runs on (the NDK's clang wrapper names it). */
-const API = 29;
+const API = ANDROID_MIN_API;
 /** What a drive runs: the app's Linux host built for the phone, or with `--reader` (EXACT_ANDROID_READER) its APK. */
 export const androidBinary = (app, bin) => process.env.EXACT_ANDROID_READER ? readerApk(app)
   : resolve(app.target, ANDROID_TARGET, HOST_DEV, bin ?? app.crate('linux'));
@@ -69,14 +71,27 @@ export function androidSdkPackages(gradle = readFileSync(resolve(import.meta.dir
   ];
 }
 
-/** Gradle's JDK: JAVA_HOME, else Android Studio's on macOS. */
-export function androidJavaEnv(env = process.env, platform = process.platform, studio = '/Applications/Android Studio.app/Contents/jbr/Contents/Home') {
-  const home = env.JAVA_HOME?.replaceAll('"', '') || (platform === 'darwin' && existsSync(resolve(studio, 'bin/java')) ? studio : null);
-  if (!home) return null;
-  const java = resolve(home, 'bin', platform === 'win32' ? 'java.exe' : 'java');
-  const checked = spawnSync(java, ['-version'], { env, encoding: 'utf8', timeout: 5000 });
-  const major = /version "(\d+)/.exec(`${checked.stderr ?? ''}${checked.stdout ?? ''}`)?.[1];
-  return checked.status === 0 && Number(major) >= 17 ? { ...env, JAVA_HOME: home } : null;
+const STUDIO_JAVA_HOME = '/Applications/Android Studio.app/Contents/jbr/Contents/Home';
+
+/** Gradle's JDK: JAVA_HOME, else a usable Android Studio JDK on macOS, else PATH. */
+export function androidJavaEnv(env = process.env, platform = process.platform, studio = STUDIO_JAVA_HOME) {
+  const suffix = platform === 'win32' ? '.exe' : '';
+  const check = home => {
+    const tool = name => home ? resolve(home, 'bin', name + suffix) : Bun.which(name + suffix, { PATH: env.PATH ?? '' });
+    const java = tool('java'), javac = tool('javac');
+    if (!java || !javac || !existsSync(java) || !existsSync(javac)) return null;
+    const checked = spawnSync(java, ['-version'], { env, encoding: 'utf8', timeout: 5000 });
+    const major = /version "(\d+)/.exec(`${checked.stderr ?? ''}${checked.stdout ?? ''}`)?.[1];
+    return checked.status === 0 && Number(major) >= 17 ? (home ? { ...env, JAVA_HOME: home } : env) : null;
+  };
+  if (env.JAVA_HOME) return check(env.JAVA_HOME.replaceAll('"', ''));
+  return (platform === 'darwin' ? check(studio) : null) ?? check(null);
+}
+
+export function androidJavaFix(env = process.env, platform = process.platform, studio = STUDIO_JAVA_HOME) {
+  const rejected = env.JAVA_HOME ? `JAVA_HOME=${env.JAVA_HOME}`
+    : platform === 'darwin' && existsSync(resolve(studio, 'bin/java')) ? `Android Studio JDK at ${studio} and java/javac on PATH` : 'java/javac on PATH';
+  return `Android needs a JDK 17 or newer (${rejected} is unusable): set JAVA_HOME to a JDK directory${env.JAVA_HOME ? '' : ', or put java and javac on PATH'}`;
 }
 
 function sdkManager(env, platform) {
@@ -686,15 +701,98 @@ export function runGradle(args, options, platform = process.platform, { studio, 
   return gradle.status === 0;
 }
 
+// The adaptive icon's layer, 108 dp, and the maskable image on it, 82.5 dp, in pixels at xxxhdpi (4 px a dp). At
+// 82.5 dp the image's W3C safe zone (the centred circle of 80% diameter) is the layer's 66 dp one (developer.android.com,
+// "Adaptive icons").
+const LAYER = 432, MASKABLE = 330;
+// What the key of the made resources names besides their sources: a change to how they are made makes them again.
+const ANDROID_ICONS = ['icons-v1', LAYER, MASKABLE];
+/** A CSS hex colour (#RGB, #RRGGBB or #RRGGBBAA) as an Android colour resource's #AARRGGBB. */
+const androidColour = (css) => {
+  const hex = css.length === 4 ? [...css.slice(1)].map((c) => c + c).join('') : css.slice(1);
+  return `#${hex.slice(6) || 'ff'}${hex.slice(0, 6)}`.toUpperCase();
+};
+
+/** The launcher icon and TV banner from the manifest's `icons` (LLP 1163 D6), written as resources under `res`, and
+ * the references to them: `icon` for `android:icon` and `android:roundIcon`, `banner` for `android:banner`, each null
+ * when the manifest has none. A square `maskable` PNG of at least 432 px becomes an adaptive icon over
+ * `background_color`, else over the image's top-left pixel, and a square `monochrome` one of that size, its alpha drawn
+ * white, its themed layer. Without one, a square `any` PNG of at least 192 px is the legacy icon, which the launcher
+ * encloses itself. A 16:9 `any` PNG of at least 640×360 px is the banner, the size Android TV asks for at xxxhdpi.
+ * Every refusal is thrown at once, before anything is written. */
+export function androidIcons(manifest, dir, res) {
+  const problems = [], slot = (fields) => ({ formats: ['png'], native: true, ...fields });
+  const pick = (fields) => { try { return pickIcon(manifest, dir, slot(fields)); } catch (error) { problems.push(error.message); return null; } };
+  // A maskable too small for the adaptive icon leaves the icon to a square `any`, as iOS's slot does; with none it is refused.
+  let adaptive = null, small = null;
+  try { adaptive = pickIcon(manifest, dir, slot({ purposes: ['maskable'], px: LAYER, name: "Android's adaptive icon" })); } catch (error) { small = error.message; }
+  const legacy = adaptive ? null : pick({ purposes: ['any'], px: 192, name: "Android's launcher icon" });
+  if (small && !legacy) problems.unshift(small);
+  const glyph = adaptive && pick({ purposes: ['monochrome'], px: LAYER, glyph: true, name: "Android's themed icon" });
+  const banner = pick({ purposes: ['any'], shape: 16 / 9, px: 640, name: 'the Android TV banner' });
+  if (problems.length) throw new Error(problems.join('\n'));
+  const refs = { icon: adaptive || legacy ? '@mipmap/exact_icon' : null, banner: banner ? '@drawable/exact_banner' : null };
+  // Made again only when a picked file or the background colour changes: the key of what was made is kept beside `res`.
+  const key = createHash('sha256').update(JSON.stringify([ANDROID_ICONS, [adaptive, legacy, glyph, banner].map((file) => file && [file.src, createHash('sha256').update(readFileSync(file.path)).digest('hex')]), manifest.background_color ?? null])).digest('hex');
+  if (existsSync(res) && existsSync(`${res}.key`) && readFileSync(`${res}.key`, 'utf8') === key) return refs;
+  rmSync(res, { recursive: true, force: true });
+  const write = (path, bytes) => { mkdirSync(dirname(resolve(res, path)), { recursive: true }); writeFileSync(resolve(res, path), bytes); };
+  const onLayer = (image) => placeRgba(LAYER, LAYER, resize(image, MASKABLE, MASKABLE), (LAYER - MASKABLE) / 2, (LAYER - MASKABLE) / 2);
+  if (adaptive) {
+    // The corner's colour without its alpha: the background layer is opaque.
+    const image = readPng(adaptive.path), corner = `#${[...image.data.subarray(0, 3)].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+    write('values/exact_icon.xml', `<resources>\n    <color name="exact_icon_background">${androidColour(manifest.background_color ?? corner)}</color>\n</resources>\n`);
+    write('drawable-nodpi/exact_icon_foreground.png', encodePng(onLayer(image)));
+    if (glyph) {
+      const placed = onLayer(readPng(glyph.path)), white = new Uint8Array(LAYER * LAYER * 4).fill(255);
+      for (let i = 3; i < white.length; i += 4) white[i] = placed.data[i];
+      write('drawable-nodpi/exact_icon_monochrome.png', encodePng({ width: LAYER, height: LAYER, data: white }));
+    }
+    write('mipmap-anydpi/exact_icon.xml', ['<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">',
+      '    <background android:drawable="@color/exact_icon_background" />', '    <foreground android:drawable="@drawable/exact_icon_foreground" />',
+      ...(glyph ? ['    <monochrome android:drawable="@drawable/exact_icon_monochrome" />'] : []), '</adaptive-icon>', ''].join('\n'));
+  }
+  if (legacy) write('mipmap-xxxhdpi/exact_icon.png', encodePng(resize(readPng(legacy.path), 192, 192)));
+  if (banner) write('drawable-xxxhdpi/exact_banner.png', encodePng(resize(readPng(banner.path), 640, 360)));
+  mkdirSync(dirname(res), { recursive: true });
+  writeFileSync(`${res}.key`, key);
+  return refs;
+}
+
+/** CI inputs shared by APK and App Bundle builds (LLP 1030.003 D6, D8). Refuse incomplete signing
+ * before compiling; a bundle must use an upload key. Passwords stay in the environment, never command arguments. */
+export function androidReleaseEnvironment(env = process.env, bundle = false) {
+  const code = env.EXACT_BUILD_NUMBER ?? '1', version = env.EXACT_VERSION ?? '0.1.0';
+  if (!/^[1-9]\d*$/.test(code) || Number(code) > 2100000000) throw new Error('EXACT_BUILD_NUMBER must be an integer from 1 to 2100000000 on Android');
+  if (!version.trim()) throw new Error('EXACT_VERSION must not be empty');
+  const keys = ['EXACT_KEYSTORE', 'EXACT_KEYSTORE_PASSWORD', 'EXACT_KEY_ALIAS', 'EXACT_KEY_PASSWORD'];
+  if (bundle || keys.some(key => env[key] !== undefined)) {
+    const missing = keys.filter(key => !env[key]);
+    if (missing.length) throw new Error(`Android signing needs ${missing.join(', ')}; set all four upload-keystore variables`);
+    if (!existsSync(resolve(env.EXACT_KEYSTORE)) || !statSync(resolve(env.EXACT_KEYSTORE)).isFile()) throw new Error('EXACT_KEYSTORE must name an existing keystore file');
+  }
+  return { ...env, EXACT_BUILD_NUMBER: code, EXACT_VERSION: version,
+    ...(env.EXACT_KEYSTORE ? { EXACT_KEYSTORE: resolve(env.EXACT_KEYSTORE) } : {}) };
+}
+
 /** The app on the Canvas reader, as an APK: its `android/` crate (a cdylib over `exact_linux::canvas_jni!`; a game's
- * is generated under `.shells/`) built for the phone's ABI and put, with the app's assets, where the Gradle shell
- * packages them (host/android/app), then `:app:assembleRelease`. An app with a GPU module (LLP 1009) is built as a
- * Linux bake is (`buildBake`): the module first, then the library with the module's digest baked in, so the module
- * ships beside it and must reach the device byte for byte (the Gradle shell extracts it and keeps its symbols).
+ * is generated under `.shells/`) built for the phone's ABI and put, with the app's assets and its icon and banner
+ * (`androidIcons`), where the Gradle shell packages them (host/android/app), then `:app:assembleRelease`. An app with
+ * a GPU module (LLP 1009) is built as a Linux bake is (`buildBake`): the module first, then the library with the
+ * module's digest baked in, so the module ships beside it and must reach the device byte for byte (the Gradle shell extracts it and keeps its symbols).
  * Gradle wants a JDK (17 or newer) and the SDK's platform. The APK's path, or null. */
-export function buildApk(app, env, profile, writeLocks = false) {
+export function buildApk(app, env, profile, writeLocks = false, bundle = false) {
+  env = androidReleaseEnvironment(env, bundle);
+  const java = androidJavaEnv(env);
+  if (!java) throw new Error(androidJavaFix(env));
+  env = java;
   const crate = app.crate('android');
   if (!app.manifest.game && !crateManifest(app, 'android')) throw new Error(`${app.dir} has no android/ crate, the app's library for the Canvas host: bun exact.mjs update adds one to an app that names android in app.json (apps/shelf/android is one)`);
+  // The icon and banner first, so a refused one costs no compile.
+  const dirs = apkDirs(app);
+  let icons;
+  try { icons = androidIcons(app.manifest, app.dir, resolve(dirs.app, 'icons/res')); }
+  catch (error) { for (const line of error.message.split('\n')) console.error(`${app.name}: ${line}`); return null; }
   const built = (name) => resolve(app.target, ANDROID_TARGET, profile, `lib${name.replaceAll('-', '_')}.so`);
   let gpu = null, out = null;
   if (app.manifest.game || app.hasGpu) {
@@ -710,7 +808,7 @@ export function buildApk(app, env, profile, writeLocks = false) {
   }
   const extensions = JSON.parse(readFileSync(resolve(out, 'artifacts.json'), 'utf8')).extensions;
   const bound = androidImplementations(app.dir, extensions);
-  const maven = [...new Set(bound.flatMap(b => b.maven ?? []))].sort();
+  const maven = mavenCoordinates(app, bound);
   if (!writeLocks && !mavenLocksPresent(app, maven)) return null;
   let config;
   try { config = packageConfig(app.dir, 'android', { extensions, release: profile === 'release' }); } catch (error) { console.error(`${app.name}: ${error.message}`); return null; }
@@ -724,7 +822,7 @@ export function buildApk(app, env, profile, writeLocks = false) {
       return null;
     }
   }
-  const dirs = apkDirs(app), started = new Date().toISOString(), staged = resolve(dirs.app, 'rust');
+  const started = new Date().toISOString(), staged = resolve(dirs.app, 'rust');
   rmSync(staged, { recursive: true, force: true });
   mkdirSync(resolve(staged, 'jniLibs/arm64-v8a'), { recursive: true });
   // The reader loads one name whatever the app; the plan names `assets/…` under the APK's `app/`.
@@ -746,17 +844,17 @@ export function buildApk(app, env, profile, writeLocks = false) {
   try {
     // Without file watching Gradle reads its inputs to decide what is up to date; a watcher that missed an edit
     // shipped the reader's old classes once (LLP 1159.002 D1).
-    assembled = runGradle(['--no-watch-fs', ':app:assembleRelease', `-Papp=${app.name}`, `-PappDir=${app.manifest.game ? app.workspace : app.dir}`,
+    assembled = runGradle(['--no-watch-fs', ...(env.CI ? ['--no-daemon'] : []), bundle ? ':app:bundleRelease' : ':app:assembleRelease', `-Papp=${app.name}`, `-PappDir=${app.manifest.game ? app.workspace : app.dir}`,
       `-PexactDevelopment=${development ? '1' : '0'}`,
       `-PappBuildDir=${dirs.app}`, `-PcanvasBuildDir=${dirs.canvas}`, `-PndkPath=${env.ANDROID_NDK_HOME}`, '--project-cache-dir', dirs.cache, `-Pkotlin.project.persistent.dir=${dirs.kotlin}`,
-      ...(gpu ? [`-PgpuModule=${basename(gpu)}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env) } });
+      ...(gpu ? [`-PgpuModule=${basename(gpu)}`] : []), ...(icons.icon ? [`-PappIcon=${icons.icon}`] : []), ...(icons.banner ? [`-PappBanner=${icons.banner}`] : []), ...compose, ...extensionArgs(app, out, config, bound), ...graph.args], { env: { ...env, ANDROID_HOME: androidSdk(env) } });
     if (assembled) graph.kept();
   } finally {
     graph.done();
   }
   if (!assembled) return null;
-  const apk = readerApk(app);
-  const kept = keptLibrary(readFileSync(resolve(staged, 'jniLibs/arm64-v8a/libexactcanvas.so')), zipEntry(readFileSync(apk), 'lib/arm64-v8a/libexactcanvas.so'), [dirs.app, dirs.canvas]);
+  const apk = bundle ? resolve(dirs.app, 'outputs/bundle/release/app-release.aab') : readerApk(app);
+  const kept = keptLibrary(readFileSync(resolve(staged, 'jniLibs/arm64-v8a/libexactcanvas.so')), zipEntry(readFileSync(apk), `${bundle ? 'base/' : ''}lib/arm64-v8a/libexactcanvas.so`), [dirs.app, dirs.canvas]);
   if (kept) { console.error(`exact android: ${kept}`); return null; }
   writeFileSync(resolve(dirname(apk), 'exact-build.json'), JSON.stringify({ started, library: built(crate), workspace: app.workspace ?? app.dir,
     sources: [...READER_SOURCES, ...[resolve(app.dir, 'modules/android')].filter(existsSync)] }) + '\n');
@@ -774,13 +872,34 @@ export function androidLockCommand(app) {
   return `in ${quote(root)}: bun scripts/agent-android.mjs build ${quote(app.name)} --apk --write-locks${named ? '' : `, with EXACT_APP_DIR set to ${quote(app.dir)}`}`;
 }
 
+/** App Kotlin and bound packages share one locked graph (LLP 1133.008 D8 item 5). */
+export function mavenCoordinates(app, bound) {
+  const declarations = [
+    { source: `${resolve(app.dir, 'app.json')} host.android.maven`, values: app.manifest?.host?.android?.maven },
+    ...bound.map(b => ({ source: `${b.mavenSource} maven`, values: b.maven })),
+  ];
+  const versions = new Map();
+  for (const { source, values } of declarations) {
+    const problems = mavenProblems(values, source);
+    if (problems.length) throw new Error(problems.join('\n'));
+    for (const coordinate of values ?? []) {
+      const artifact = coordinate.split(':').slice(0, 2).join(':'), previous = versions.get(artifact);
+      if (previous && previous.coordinate !== coordinate) {
+        throw new Error(`Maven version conflict: ${previous.source} names ${previous.coordinate}; ${source} names ${coordinate}. Use one version of ${artifact}.`);
+      }
+      versions.set(artifact, { coordinate, source });
+    }
+  }
+  return [...versions.values()].map(v => v.coordinate).sort();
+}
+
 function mavenLocksPresent(app, maven) {
   if (!maven.length || ['gradle.lockfile', 'gradle-verification.xml'].every(file => existsSync(resolve(app.dir, file)))) return true;
-  console.error(`${app.name}: its modules name Maven libraries (${maven.join(', ')}); before compiling, write gradle.lockfile and gradle-verification.xml by running ${androidLockCommand(app)}, and keep them with the app`);
+  console.error(`${app.name}: its modules or own Kotlin name Maven libraries (${maven.join(', ')}); before compiling, write gradle.lockfile and gradle-verification.xml by running ${androidLockCommand(app)}, and keep them with the app`);
   return false;
 }
 
-/** The Maven libraries the bound modules name (LLP 1133.008 D8 item 5), as Gradle arguments: one graph with the
+/** The Maven libraries the app and bound modules name (LLP 1133.008 D8 item 5), as Gradle arguments: one graph with the
  * reader's own AndroidX, locked to the app's `gradle.lockfile` and verified against its `gradle-verification.xml`,
  * both beside its other locks. The verification file is Gradle's, which it reads only from the reader's `gradle/`:
  * it is put there for this build (`done` takes it away). `writeLocks` writes both from the graph as it resolves
@@ -918,7 +1037,11 @@ if (import.meta.main && process.argv[2] === 'reverse') {
     process.exit(2);
   }
   // `--headless` wins: an app's `bun exact.mjs android --headless` asks for the Linux host its verb's `--apk` would replace.
-  const apkWanted = args.includes('--apk') && !args.includes('--headless');
+  const bundle = args.includes('--bundle');
+  if (bundle && (args.includes('--headless') || args.includes('--run'))) throw new Error('--bundle takes neither --headless nor --run');
+  if (args.includes('--no-install') && args.includes('--run')) throw new Error('--no-install takes no --run');
+  if (bundle) process.env.EXACT_UPDATE_TRUST = 'production';
+  const apkWanted = (bundle || args.includes('--apk')) && !args.includes('--headless');
   // The pinned toolchain's targets: the app's workspace builds with it, and rustup in the app's own directory, which
   // pins none, would answer for its default.
   // Without rustup (a toolchain installed by hand) Cargo names a missing target itself.
@@ -941,11 +1064,11 @@ if (import.meta.main && process.argv[2] === 'reverse') {
   const env = { ...androidToolchainEnv(process.env, process.platform, linkApi), ...bakeWatchEnv(app), CARGO_TARGET_DIR: app.target };
   if (apkWanted) {
     const started = Date.now();
-    const apk = buildApk(app, env, args.includes('--release') ? 'release' : HOST_DEV, args.includes('--write-locks'));
+    const apk = buildApk(app, env, bundle || args.includes('--release') ? 'release' : HOST_DEV, args.includes('--write-locks'), bundle);
     if (!apk) process.exit(1);
     console.log(apk);
     // `--json`'s object once the install is done: `installed` names the device, or is null when none was ready.
-    const trust = process.env.EXACT_UPDATE_TRUST ?? 'development', install = args.includes('--install') || args.includes('--run');
+    const trust = process.env.EXACT_UPDATE_TRUST ?? 'development', install = !bundle && !args.includes('--no-install') && (args.includes('--install') || args.includes('--run'));
     let serial = null;
     const code = install ? installApk(app, apk, { run: args.includes('--run'), built: Date.now() - started, installed: (s) => { serial = s; } }) : 0;
     if (!code && args.includes('--json')) reportBuilt({ path: apk, target: 'android', trust, ...(install ? { installed: serial } : {}) });

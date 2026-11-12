@@ -474,6 +474,11 @@ open class ExactActivity : Activity() {
         Exact.hidden(false)
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus && reads()) pads.background()
+    }
+
     override fun onStop() {
         stopped = true
         Exact.hidden(true)

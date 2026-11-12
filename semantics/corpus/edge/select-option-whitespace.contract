@@ -1,0 +1,35 @@
+// A `select` whose options have no value: each option's value is its text
+// with HTML's ASCII whitespace stripped and collapsed, so a padded label
+// reports its trimmed text. A nonbreaking space is no ASCII whitespace and
+// stays in the value.
+component App
+  state choice = "a"
+  action pick(v: string)
+    choice = v
+  view
+    select value=choice change=pick testId="sel"
+      option "a"
+      option "  b  "
+      option "\t c \n"
+      option "e   f"
+      option "\u{a0}d"
+
+test "a padded label"
+  type "sel" "b"
+  expect state choice == "b"
+
+test "tabs and newlines"
+  type "sel" "c"
+  expect state choice == "c"
+
+test "an inner run"
+  type "sel" "e f"
+  expect state choice == "e f"
+
+test "a nonbreaking space stays"
+  type "sel" "\u{a0}d"
+  expect state choice == "\u{a0}d"
+
+test "a nonbreaking space is no whitespace"
+  type "sel" "d"
+  expect state choice == "a"

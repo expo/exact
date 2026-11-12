@@ -632,7 +632,7 @@ final class AddressedTapIOSTests: XCTestCase {
     /// popover and place (LLP 1080.000 §13): UIKit puts no identifier on the
     /// element it shows, so the row's popover must be the menu UIKit was last
     /// given to present, and its rows must read as one run of the shown
-    /// rows. A duplicate title or a label that is another's prefix picks
+    /// rows, forward or reversed. A duplicate title or a label that is another's prefix picks
     /// nothing else; another popover's row, however alike its rows read, a
     /// menu shown twice and a menu that scrolls past the screen are refused.
     func testAMenuRowIsItsPlaceInThePresentedMenu() throws {
@@ -693,6 +693,52 @@ final class AddressedTapIOSTests: XCTestCase {
         let tail = menu(["Delete"], at: CGPoint(x: 20, y: 100), scrolls: true)
         XCTAssertTrue(why(agent.shownRow(node(7), of: node(2), in: window)).contains("2 places"), "one Delete shown, two it could be")
         tail.removeFromSuperview()
+        // A menu that opens upward shows its rows last first: the row is
+        // still the one at its authored place, whole or in a scrolled slice.
+        let upward = menu(["Delete", "Delete", "Rename"], at: CGPoint(x: 20, y: 100))
+        XCTAssertTrue(agent.menuShown(in: window))
+        XCTAssertEqual(try agent.shownRow(node(3), of: node(2), in: window).get(), CGRect(x: 20, y: 180, width: 200, height: 40), "Rename, shown last")
+        XCTAssertEqual(try agent.shownRow(node(7), of: node(2), in: window).get(), CGRect(x: 20, y: 100, width: 200, height: 40), "the second Delete, shown first")
+        upward.removeFromSuperview()
+        let upwardSlice = menu(["Delete", "Rename"], at: CGPoint(x: 20, y: 100), scrolls: true)
+        XCTAssertTrue(agent.menuShown(in: window))
+        XCTAssertEqual(try agent.shownRow(node(5), of: node(2), in: window).get(), CGRect(x: 20, y: 100, width: 200, height: 40))
+        XCTAssertEqual(try agent.shownRow(node(3), of: node(2), in: window).get(), CGRect(x: 20, y: 140, width: 200, height: 40))
+        XCTAssertTrue(why(agent.shownRow(node(7), of: node(2), in: window)).contains("scrolled out"))
+        upwardSlice.removeFromSuperview()
+        // A menu and a submenu UIKit recorded with it that read each other
+        // reversed: shown either way up, the rows could be either's, so no
+        // row of either is picked, and with the submenu not recorded the
+        // menu's row is the one at its place.
+        p.menus.given[2] = [GivenRow(node(3), title: "Delete", subtitle: nil), GivenRow(node(5), title: "More", subtitle: nil)]
+        p.menus.given[8] = [GivenRow(node(1), title: "More", subtitle: nil), GivenRow(node(4), title: "Delete", subtitle: nil)]
+        for shown in [["Delete", "More"], ["More", "Delete"]] {
+            let list = menu(shown, at: CGPoint(x: 20, y: 100))
+            present([2, 8])
+            XCTAssertTrue(why(agent.shownRow(node(3), of: node(2), in: window)).contains("read as rows shown"), "\(shown)")
+            XCTAssertTrue(why(agent.shownRow(node(4), of: node(8), in: window)).contains("read as rows shown"), "\(shown)")
+            present([2])
+            XCTAssertEqual(try agent.shownRow(node(3), of: node(2), in: window).get().minY, shown == ["Delete", "More"] ? 100 : 140, "\(shown)")
+            list.removeFromSuperview()
+        }
+        // Rows that read the same both ways: the readings must agree on
+        // the row, so the middle one is picked and the ends are not.
+        p.menus.given[2] = [GivenRow(node(3), title: "Delete", subtitle: nil), GivenRow(node(5), title: "Archive", subtitle: nil), GivenRow(node(7), title: "Delete", subtitle: nil)]
+        present([2])
+        let both = menu(["Delete", "Archive", "Delete"], at: CGPoint(x: 20, y: 100))
+        XCTAssertTrue(why(agent.shownRow(node(3), of: node(2), in: window)).contains("2 places"))
+        XCTAssertEqual(try agent.shownRow(node(5), of: node(2), in: window).get().minY, 140)
+        both.removeFromSuperview()
+        // A submenu not shown that reads some of the rows shown reversed.
+        p.menus.given[2] = [GivenRow(node(3), title: "Rename", subtitle: nil), GivenRow(node(5), title: "Delete", subtitle: nil), GivenRow(node(7), title: "More", subtitle: nil)]
+        p.menus.given[8] = [GivenRow(node(1), title: "More", subtitle: nil), GivenRow(node(4), title: "Delete", subtitle: nil)]
+        present([2, 8])
+        let part = menu(["Rename", "Delete", "More"], at: CGPoint(x: 20, y: 100))
+        XCTAssertTrue(why(agent.shownRow(node(1), of: node(8), in: window)).contains("read as rows shown"))
+        XCTAssertTrue(why(agent.shownRow(node(5), of: node(2), in: window)).contains("read as rows shown"))
+        XCTAssertEqual(try agent.shownRow(node(3), of: node(2), in: window).get().minY, 100, "Rename is the open menu's alone")
+        part.removeFromSuperview()
+        present([2])
         // A row the node no longer is (a reused view): not in the presented menu.
         p.menus.given[2] = [GivenRow(node(3), title: "Rename", subtitle: nil)]
         XCTAssertTrue(why(agent.shownRow(node(5), of: node(2), in: window)).contains("not the menu UIKit shows"))

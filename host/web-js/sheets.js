@@ -56,7 +56,7 @@ export function sheets({ release, retire }) {
       if (value == null) return null;
       if (typeof value !== "object") return refuse("TypeError", `${method}'s ${place} is no object`);
       for (const key of Object.keys(value)) {
-        const code = declared[method]?.refuse?.[key];
+        const refusals = Object.hasOwn(declared, method) ? declared[method].refuse : null, code = refusals && Object.hasOwn(refusals, key) ? refusals[key] : null;
         if (code) return refuse("TypeError", `${code}: \`${key}\` is the bake's, never the app's`);
         if (!(allowed ?? []).includes(key)) return refuse("TypeError", `\`${key}\` is no key of ${method}'s ${place}`);
       }
@@ -64,7 +64,7 @@ export function sheets({ release, retire }) {
     };
     const lines = grants();
     for (const m of list) {
-      const d = declared[m?.supportedMethods];
+      const d = Object.hasOwn(declared, m?.supportedMethods) ? declared[m.supportedMethods] : null;
       if (!d) continue;
       const bad = keys(dataOf(m), d.data, m.supportedMethods, "data");
       if (bad) return bad;
@@ -89,7 +89,7 @@ export function sheets({ release, retire }) {
     const exclusive = new Set();
     for (const modifier of details.modifiers ?? []) {
       if (modifier?.total) amounts.push(["a modifier's total", modifier.total.amount]);
-      const d = declared[modifier?.supportedMethods];
+      const d = Object.hasOwn(declared, modifier?.supportedMethods) ? declared[modifier.supportedMethods] : null;
       if (!d) continue;
       const md = dataOf(modifier), bad = keys(md, d.modifier, modifier.supportedMethods, "modifier");
       if (bad) return bad;

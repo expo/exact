@@ -313,6 +313,14 @@ final class AccessibilityTests: XCTestCase {
         XCTAssertEqual(bar.rangeValueText, "25%", "what UIKit speaks")
         bar.applyProps(set: ["accessibilityRole": "slider"], clear: [])
         XCTAssertEqual(bar.accessibilityRole(), .slider)
+        // A spin button has no bounds unless it says them (WAI-ARIA 1.2), and
+        // its value is its number on iOS too.
+        bar.applyProps(set: ["accessibilityRole": "spinbutton", "accessibilityValueNow": "3"], clear: ["accessibilityValueMax"])
+        XCTAssertEqual(bar.accessibilityRole(), .incrementor)
+        XCTAssertEqual(bar.accessibilityValue() as? NSNumber, 3)
+        XCTAssertNil(bar.accessibilityMinValue())
+        XCTAssertNil(bar.accessibilityMaxValue())
+        XCTAssertEqual(bar.rangeValueText, "3", "what UIKit speaks")
         withExtendedLifetime(w) {}
     }
     private final class Opened: ExactSessionDelegate {

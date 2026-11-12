@@ -464,10 +464,14 @@ final class IframeWindowsTests: XCTestCase {
         var decisions: [String: WKPermissionDecision] = [:]
         ui.webView?(web, requestMediaCapturePermissionFor: frame.securityOrigin, initiatedByFrame: frame, type: .camera) { decisions["camera"] = $0 }
         ui.webView?(web, requestMediaCapturePermissionFor: frame.securityOrigin, initiatedByFrame: frame, type: .microphone) { decisions["microphone"] = $0 }
+        // The 27 SDKs (Swift 6.4) declare the geolocation request; an older SDK has no
+        // such delegate method, and `#available` alone would not compile there.
+        #if compiler(>=6.4)
         if #available(macOS 27.0, iOS 27.0, *) {
             ui.webView?(web, requestGeolocationPermissionFor: frame.securityOrigin, initiatedByFrame: frame) { decisions["location"] = $0 }
             XCTAssertEqual(decisions["location"], .deny)
         }
+        #endif
         #if os(iOS)
         ui.webView?(web, requestDeviceOrientationAndMotionPermissionFor: frame.securityOrigin, initiatedByFrame: frame) { decisions["motion"] = $0 }
         XCTAssertEqual(decisions["motion"], .deny)

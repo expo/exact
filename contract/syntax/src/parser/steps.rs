@@ -698,6 +698,16 @@ impl Parser {
                         }
                     }
                     TokenKind::Ident(w) if w == "mediasession" => self.tap_media_session()?,
+                    TokenKind::Ident(w) if w == "history" => {
+                        self.next();
+                        let delta = self.step_number("the history delta, a nonzero integer")?;
+                        if delta == 0.0 || delta.fract() != 0.0
+                            || !(i32::MIN as f64..=i32::MAX as f64).contains(&delta)
+                        {
+                            return self.err("syntax-expected-step", "`history` takes a nonzero 32-bit integer");
+                        }
+                        TapForm::History(delta as i32)
+                    }
                     _ => TapForm::Press,
                 };
                 let modifiers = if form == TapForm::Press && self.at_ident("modifiers") {

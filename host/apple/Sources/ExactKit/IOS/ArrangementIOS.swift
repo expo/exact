@@ -1,6 +1,107 @@
 #if os(iOS)
 import UIKit
 
+final class ArrangementPaneController: UIViewController {
+    let node: NodeView
+    let room: () -> CGSize
+    let changed: () -> Void
+    init(node: NodeView, room: @escaping () -> CGSize, changed: @escaping () -> Void) {
+        self.node = node; self.room = room; self.changed = changed
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func loadView() {
+        view = PaneView(node: node, room: room)
+        view.clipsToBounds = true
+    }
+    func contentChanged() {
+        guard let pane = viewIfLoaded as? PaneView, pane.refresh() else { return }
+        pane.invalidateIntrinsicContentSize()
+        parent?.view.setNeedsLayout()
+    }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        changed()
+    }
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        changed()
+    }
+
+    private final class PaneView: UIView {
+        private let node: NodeView
+        private let room: () -> CGSize
+        private struct Measurement {
+            let block: HostBlock
+            let stamp: UInt64
+            let size: CGSize?
+        }
+        private var intrinsic: Measurement?
+        private var fitting: Measurement?
+        private var measuring = false
+
+        init(node: NodeView, room: @escaping () -> CGSize) {
+            self.node = node; self.room = room
+            super.init(frame: .zero)
+        }
+        required init?(coder: NSCoder) { nil }
+
+        override var intrinsicContentSize: CGSize {
+            // The enclosing element's room is independent of the pane's allocation.
+            intrinsic = measure(.region(room()), previous: intrinsic)
+            return intrinsic?.size ?? CGSize(width: UIView.noIntrinsicMetric, height: UIView.noIntrinsicMetric)
+        }
+
+        override func sizeThatFits(_ size: CGSize) -> CGSize {
+            fit(size, horizontal: .fittingSizeLevel, vertical: .fittingSizeLevel) ?? .zero
+        }
+
+        override func systemLayoutSizeFitting(_ targetSize: CGSize) -> CGSize {
+            systemLayoutSizeFitting(targetSize, withHorizontalFittingPriority: .fittingSizeLevel, verticalFittingPriority: .fittingSizeLevel)
+        }
+
+        override func systemLayoutSizeFitting(_ targetSize: CGSize, withHorizontalFittingPriority horizontal: UILayoutPriority,
+                                             verticalFittingPriority vertical: UILayoutPriority) -> CGSize {
+            fit(targetSize, horizontal: horizontal, vertical: vertical)
+                ?? super.systemLayoutSizeFitting(targetSize, withHorizontalFittingPriority: horizontal, verticalFittingPriority: vertical)
+        }
+
+        private func fit(_ size: CGSize, horizontal: UILayoutPriority, vertical: UILayoutPriority) -> CGSize? {
+            let axis = { (length: CGFloat, priority: UILayoutPriority) -> HostBlock.Axis in
+                let finite = max(0, min(length, CGFloat(Float.greatestFiniteMagnitude)))
+                return priority == .required ? .size(finite) : .region(finite)
+            }
+            fitting = measure(HostBlock(width: axis(size.width, horizontal), height: axis(size.height, vertical)), previous: fitting)
+            return fitting?.size
+        }
+
+        private func measure(_ block: HostBlock, previous: Measurement?) -> Measurement {
+            let held = previous?.block == block ? previous?.size : nil
+            guard !measuring, let presenter = node.presenter, presenter.views[node.id] === node,
+                  let session = presenter.session, !Owner.shared.isServingMain else {
+                return Measurement(block: block, stamp: 0, size: held)
+            }
+            let stamp = session.runtime.layoutStamp()
+            if stamp != 0, let previous, previous.block == block, previous.stamp == stamp { return previous }
+            measuring = true
+            defer { measuring = false }
+            guard let measured = session.runtime.measureBlock(node.id, in: block) else {
+                // An initial allocation or pending layout may not be measurable yet. Retry after its batch.
+                return Measurement(block: block, stamp: 0, size: held)
+            }
+            return Measurement(block: block, stamp: stamp, size: measured.used)
+        }
+
+        func refresh() -> Bool {
+            let before = (intrinsic?.size, fitting?.size)
+            if intrinsic != nil { intrinsic = measure(.region(room()), previous: intrinsic) }
+            if let last = fitting { fitting = measure(last.block, previous: last) }
+            // Allocation reports advance the layout stamp too; only a different answer invalidates UIKit.
+            return before.0 != intrinsic?.size || before.1 != fitting?.size
+        }
+    }
+}
+
 /// UIKit containment for two retained authored panes
 @available(iOS 27.1, *)
 final class ArrangementHost {
@@ -17,15 +118,15 @@ final class ArrangementHost {
         let node: NodeView
         let controller: UIArrangementViewController
         let panes: [NodeView]
-        let holders: [PaneController]
+        let holders: [ArrangementPaneController]
         init(node: NodeView, controller: UIArrangementViewController, panes: [NodeView], changed: @escaping () -> Void) {
             self.node = node; self.controller = controller; self.panes = panes
-            holders = panes.map { PaneController(node: $0, changed: changed) }
+            holders = panes.map { ArrangementPaneController(node: $0, room: { [weak node] in node?.container.bounds.size ?? .zero }, changed: changed) }
             for holder in holders { holder.loadViewIfNeeded() }
             controller.setViewController(holders[0], for: .primary)
             controller.setViewController(holders[1], for: .secondary)
         }
-        func isHidden(_ holder: PaneController) -> Bool {
+        func isHidden(_ holder: ArrangementPaneController) -> Bool {
             // Read view visibility because an overlay can report hidden while its views remain visible
             var current: UIView? = holder.view
             while let view = current {
@@ -37,29 +138,13 @@ final class ArrangementHost {
         }
     }
 
-    final class PaneController: UIViewController {
-        let node: NodeView
-        let changed: () -> Void
-        init(node: NodeView, changed: @escaping () -> Void) {
-            self.node = node; self.changed = changed
-            super.init(nibName: nil, bundle: nil)
-        }
-        required init?(coder: NSCoder) { nil }
-        override func loadView() {
-            view = UIView()
-            view.clipsToBounds = true
-        }
-        override func viewDidLayoutSubviews() {
-            super.viewDidLayoutSubviews()
-            changed()
-        }
-        override func viewSafeAreaInsetsDidChange() {
-            super.viewSafeAreaInsetsDidChange()
-            changed()
-        }
-    }
-
     init(_ presenter: Presenter) { self.presenter = presenter }
+
+    /// The policy last applied to this backend, until the next inset sync.
+    func insets(_ node: NodeView) -> Bool {
+        guard let scroll = node.scrollView else { return false }
+        return insetScrollers[node.id] === scroll
+    }
 
     func set(_ node: UInt32, controller: UIArrangementViewController?) -> Bool {
         guard let root = presenter.views[node] else { return false }
@@ -105,7 +190,14 @@ final class ArrangementHost {
             for holder in entry.holders { holder.view.addSubview(holder.node) }
         }
         syncInsets()
+        refreshContentSizes()
         presenter.owners.publish()
+    }
+
+    private func refreshContentSizes() {
+        for entry in entries.values {
+            for holder in entry.holders { holder.contentChanged() }
+        }
     }
 
     /// Promote flat leaves so both authored children can enter UIKit containment
@@ -149,6 +241,7 @@ final class ArrangementHost {
             layoutPending = false
             guard !entries.isEmpty || !insetScrollers.isEmpty else { return }
             syncInsets()
+            refreshContentSizes()
             presenter.owners.publish()
             presenter.navigation.coversChanged()
         }
@@ -169,9 +262,14 @@ final class ArrangementHost {
             guard !touching.isEmpty, holders.allSatisfy({ holder in
                 touching.contains { $0 === holder } || (top ? holder.view.safeAreaInsets.top : holder.view.safeAreaInsets.bottom) < 1
             }), touching.allSatisfy({ holder in
+                // Compare the pane with the block it was last told, not with UIKit's allocation: when a cover's answer
+                // resizes the arrangement, UIKit resizes the allocation a layout before the pane follows, and a pane
+                // measured against it then gives up the edge, which pads the route and resizes the allocation back.
+                // The top needs no block, since the pane sits at its allocation's origin.
                 let pane = holder.node, frame = pane.convert(pane.bounds, to: holder.view)
+                guard case .size(let height)? = presenter.owners.told[pane.id]?.block.height else { return false }
                 return pane.scrollView != nil && pane.scrollsVertically && pane.transform.isIdentity && pane.clipPath == nil && NavigationHost.inFlow(pane)
-                    && abs(top ? frame.minY : holder.view.bounds.maxY - frame.maxY) < 1
+                    && abs(top ? frame.minY : height - frame.maxY) < 1
             }) else { return [] }
             return touching.map(\.node)
         }

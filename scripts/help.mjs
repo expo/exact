@@ -43,10 +43,10 @@ const DRIVE = [
   ['--device · --phone <udid|name> · --reader · --headless', 'a connected iPhone (built with ios --device), and which · Android: the APK (an `exact new` app\'s default) · the Linux host under adb shell'],
   ['--plan <file>', 'a compiled plan (contract build -o) in place of the app\'s'],
   ['--world <file> · --open <file>', 'a game: a saved world to load · macOS: a document on its command line'],
-  ['--family <name> · --mode fullColor|accented|vibrant · --scheme light|dark · --props <json> · --placement <name> · --state <json>', 'gallery: widget variant/props or activity placement/state; --size large|xxxl is widget text size'],
+  ['--family <name> · --mode fullColor|accented|vibrant · --scheme light|dark · --props <json> · --configuration <json> · --placement <name> · --state <json>', 'gallery: widget variant/props/configuration choices or activity placement/state; --size large|xxxl is widget text size'],
   ['--json', 'one compact JSON object per op reply, one per line (default: short text)'],
 ];
-const TEST_IGNORES = ['--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--placement <name>', '--state <json>'];
+const TEST_IGNORES = ['--bind <extension>', '--timing <v>', '--world <file>', '--open <file>', '--json', '--family <name>', '--mode <name>', '--scheme <name>', '--props <json>', '--configuration <json>', '--placement <name>', '--state <json>'];
 // The drive flags a first build reaches for; `--help all` shows the rest.
 const DRIVE_FIRST = ['--storage', '--size', '--chrome', '--epoch', '--sim', '--json'];
 const naming = (names, keep) => ([row]) => specs(row).some((spec) => names.includes(name(spec))) === keep;
@@ -136,7 +136,8 @@ Ports    none. Runs to completion: exit 0 when it built. test web and agent web 
 file at its path; else, for a browser's navigation to a path a route in routes.json matches,
 shell.html with 200, or for a render=request or cached route its page rendered under Bun
 (curl's request too); else 404.html with 404. A static host serves the directory so, with
-those routes' shell. Beside the app's sources, a page asked for after a source changed
+those routes' shell. A request preferring text/markdown (its Accept header) for a page whose
+.md file is beside it gets that file, with Vary: Accept. Beside the app's sources, a page asked for after a source changed
 builds the site again first (no restart); a build that fails is the answer, with its errors.
 Ports    one HTTP port, on 127.0.0.1 (--lan: every interface). Runs in the foreground until ^C.`,
     example: 'bun exact.mjs serve dist --port 3000',
@@ -311,20 +312,28 @@ Ports    none. Runs to completion.`,
   },
   android: {
     line: 'build the APK and install it (test, agent and verify android drive it)',
-    usage: 'bun exact.mjs android [--run] [--headless] [--json]',
+    usage: 'bun exact.mjs android [--run | --no-install | --bundle] [--release] [--headless] [--json]',
     flags: [
       ['--run', 'launch it once installed'],
+      ['--no-install', 'build without querying or installing on a device'],
+      ['--release', 'optimize the APK for speed; set EXACT_UPDATE_TRUST=production for distribution'],
+      ['--bundle', 'build a production .aab with an upload key; implies --release and no install'],
       ['--headless', 'build the Linux host for Android instead (agent android --headless runs it under adb shell)'],
       jsonBuilt(', installed (the device\'s serial, or null with none ready)', '; printed after the install; not with --run'),
     ],
     // `--apk --install` are the verb's own; --release builds the release profile, for measuring; --write-locks writes
     // the Gradle lock and verification files of an app whose modules name Maven libraries.
-    internal: ['--apk', '--install', '--release', '--write-locks'],
+    internal: ['--apk', '--install', '--write-locks'],
     body: `Builds android/ for aarch64-linux-android, packages it with exact2's Canvas reader
 (host/android) into an APK under target/android/, prints its path and installs it on the
 device: ANDROID_SERIAL, else the one adb lists (with several and none named, it refuses).
 With no device it builds and says so. test android and agent android drive the installed
 APK and refuse one older than its sources, naming this command.
+CI       EXACT_BUILD_NUMBER (1 by default) is versionCode; EXACT_VERSION (0.1.0) is versionName.
+         EXACT_KEYSTORE, EXACT_KEYSTORE_PASSWORD, EXACT_KEY_ALIAS and EXACT_KEY_PASSWORD sign
+         with an upload key. All four are required together, and --bundle requires them.
+         An APK without them uses the debug key. --bundle writes
+         target/android/app/outputs/bundle/release/app-release.aab; --json reports its path.
 Needs    the SDK (ANDROID_HOME) with platform 37.2 and an NDK, a JDK 17+ (JAVA_HOME), the
          pinned toolchain's aarch64-linux-android target and the Android Hermes bundle (exact
          setup installs both).

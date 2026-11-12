@@ -2,6 +2,7 @@ use crate::keyboard::key_names;
 use exact_ink::counters;
 use exact_linux::{
     app::{self, Config},
+    presenter::PointerKind,
     Presenter,
 };
 use exact_runner::DataSource;
@@ -20,6 +21,9 @@ use winit::{
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::{CursorIcon, Fullscreen, Theme, Window, WindowId},
 };
+
+mod frames;
+use frames::{next_frame_deadline, presentation_resumes, FrameSchedule};
 
 struct App<D: DataSource> {
     service_causes: u8,
@@ -42,6 +46,7 @@ struct App<D: DataSource> {
     cursor: CursorIcon,
     buttons: u32,
     clicks: crate::clicks::Clicks,
+    touches: crate::touch::Touches,
     scale: f64,
     refit_after_scale: bool,
     next_frame: Instant,
@@ -101,54 +106,6 @@ fn system_theme<D: DataSource>(p: &mut Presenter<D>, theme: Theme) {
         if let Some(error) = p.set_preferences(preferences) {
             eprintln!("exact-windows: appearance: {error}");
         }
-    }
-}
-
-fn next_frame_deadline(deadline: Instant, started: Instant, period: Duration) -> Instant {
-    if started < deadline {
-        // An input-triggered redraw does not move the display's cadence.
-        deadline
-    } else if started < deadline + period {
-        // Keep timer wake-up latency from accumulating on every frame.
-        deadline + period
-    } else {
-        // After a stall or suspension, resume without a burst of catch-up frames.
-        started + period
-    }
-}
-
-struct FrameSchedule {
-    cadence: Option<Instant>,
-    retry: Option<Instant>,
-    present: Option<Instant>,
-}
-
-fn presentation_resumes(event: &WindowEvent) -> bool {
-    matches!(
-        event,
-        WindowEvent::Occluded(false)
-            | WindowEvent::Focused(true)
-            | WindowEvent::Resized(_)
-            | WindowEvent::ScaleFactorChanged { .. }
-    )
-}
-
-impl FrameSchedule {
-    fn admit(&self, now: Instant) -> Instant {
-        self.cadence
-            .into_iter()
-            .chain(self.present)
-            .fold(now, Instant::max)
-    }
-
-    fn defer(&self, now: Instant, pending: &mut bool) -> bool {
-        *pending = self.admit(now) > now;
-        *pending
-    }
-
-    fn redraw(&self, now: Instant, requested: bool) -> Option<Instant> {
-        let requested = if requested { Some(now) } else { self.retry }?;
-        Some(requested.max(self.admit(now)))
     }
 }
 
@@ -321,6 +278,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         focused: true,
         cursor: CursorIcon::Default,
         clicks: Default::default(),
+        touches: Default::default(),
         buttons: 0,
         scale: 1.,
         next_frame: started,
@@ -898,6 +856,8 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 .with_no_redirection_bitmap(self.direct)
                 .with_visible(false)
                 .with_title(&self.name)
+                .with_window_icon(crate::icon::small())
+                .with_taskbar_icon(crate::icon::large())
                 .with_fullscreen(
                     (self.frame_limit.is_some()
                         && std::env::var_os("EXACT_AGENT_WINDOW_FULLSCREEN").is_some())
@@ -1161,6 +1121,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 p.surface_lifecycle(self.minimized || self.occluded, !focused);
                 if !focused {
                     self.buttons = 0;
+                    self.touches.forget();
                     let _ = p.pointer_lost(now);
                     p.set_window_active(false);
                     // Unfocused, the pads are not read: what they were is no longer known.
@@ -1184,6 +1145,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                     position.x as f32 / self.scale as f32,
                     position.y as f32 / self.scale as f32,
                 );
+                p.set_pointer_kind(PointerKind::Mouse);
                 let _ = p.pointer_move(self.pointer.0, self.pointer.1, now);
             }
             WindowEvent::CursorLeft { .. } => {
@@ -1206,6 +1168,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                     (x, y)
                 };
                 let down = state == ElementState::Pressed;
+                p.set_pointer_kind(PointerKind::Mouse);
                 if down {
                     self.caret.activity(Instant::now());
                     if button != MouseButton::Left {
@@ -1252,6 +1215,12 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                     _ => {}
                 }
             }
+            WindowEvent::Touch(touch) => {
+                self.clicks.clear();
+                if self.touches.event(p, touch, self.scale, now) {
+                    self.caret.activity(Instant::now());
+                }
+            }
             WindowEvent::MouseWheel { delta, .. } => {
                 self.clicks.clear();
                 crate::wheel::dispatch(p, (x, y), delta, self.scale);
@@ -1292,12 +1261,9 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 if handled {
                     self.edit_menu = menu;
                 } else {
-                    p.hardware_key(
-                        &code,
-                        &key,
-                        event.state == ElementState::Pressed,
-                        event.repeat,
-                    );
+                    let down = event.state == ElementState::Pressed;
+                    let text = event.text.as_deref();
+                    crate::keyboard::press(p, (&code, &key), text, down, event.repeat);
                 }
             }
             WindowEvent::Ime(event) => {

@@ -604,13 +604,26 @@ async function inChrome(fixture, modules = ['/textflow-glue.js', '/timer-glue.js
 
 browserTest('flowed links keep press ownership and native Enter activation', async () => {
   const result = await inChrome(flowInputFixture, undefined, {}, false, async (cdp, sessionId, deliveries) => {
+    const focus = await cdp.send('Runtime.evaluate', { expression: `(() => {
+      const link = document.querySelector('[data-flow-fragment] a');
+      globalThis.enterActivation = { clicks: [], navigations: [], errors: [] };
+      addEventListener('click', e => enterActivation.clicks.push({ trusted: e.isTrusted, prevented: e.defaultPrevented }));
+      navigation.addEventListener('navigate', e => enterActivation.navigations.push(new URL(e.destination.url).hash));
+      addEventListener('error', e => enterActivation.errors.push(e.message));
+      return { focused: document.activeElement === link, connected: link.isConnected, href: link.getAttribute('href') };
+    })()`, returnByValue: true }, sessionId);
+    expect(focus.result.value).toEqual({ focused: true, connected: true, href: '#story' });
     for (const type of ['rawKeyDown', 'keyUp']) await cdp.send('Input.dispatchKeyEvent', {
       type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13,
     }, sessionId);
-    const hash = await cdp.send('Runtime.evaluate', { expression: 'location.hash', returnByValue: true }, sessionId);
-    return { deliveries, hash: hash.result.value };
+    const activation = await cdp.send('Runtime.evaluate', {
+      expression: '({ hash: location.hash, ...enterActivation })', returnByValue: true,
+    }, sessionId);
+    return { deliveries, activation: activation.result.value };
   });
-  expect(result.hash).toBe('#story');
+  expect(result.activation).toEqual({
+    hash: '#story', clicks: [{ trusted: true, prevented: false }], navigations: ['#story'], errors: [],
+  });
   expect(result.deliveries).toEqual([
     { press: 1, navigate: 0, prevented: true },
     { press: 1, navigate: 0, prevented: true },
@@ -1024,7 +1037,8 @@ async function flowInputFixture() {
   const { createInputHandlers } = await import('/input-glue.js');
   const root = document.getElementById('root'), views = new Map(), results = [];
   let presses = 0, navigates = 0;
-  globalThis.exact = { wasm: { exact_route_match: () => 1, exact_log() {} }, writeIn: s => s,
+  // Only /story is routed; this fixture document's #story link uses native navigation.
+  globalThis.exact = { wasm: { exact_route_match: path => Number(path === '/story'), exact_log() {} }, writeIn: s => s,
     navigate() { navigates++; return { ops: [{ op: 'router' }] }; } };
   createInputHandlers({ root, views, retiredViews: new WeakSet(), ready: () => true, inertAncestor: () => false, dispatch() {} });
   for (const [press, navigate, modified] of [[true, true, false], [true, false, false], [false, true, false], [true, true, true], [false, false, false]]) {

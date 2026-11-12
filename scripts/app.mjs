@@ -1,6 +1,6 @@
 import { webHostFiles, hostModuleSources } from '../host/web-js/glue.mjs';
 export { webHostFiles } from '../host/web-js/glue.mjs';
-import { compilerPaths, unitDepInfo, cargoBakeInputs, inputHashes, sourcePath } from './cargo-dep-info.mjs';
+import { compilerPaths, unitDepInfo, cargoBakeInputs, bakeSourceInputs, pendingSourceInputs, inputHashes, sourcePath } from './cargo-dep-info.mjs';
 export { compilerPaths, unitDepInfo } from './cargo-dep-info.mjs';
 import { LIBRARY_CACHE, directDependencies, prepareLibrary } from './package-libraries.mjs';
 import { ensureBun } from './bun.mjs';
@@ -413,13 +413,13 @@ function checkoutOf(dir) {
 }
 
 /** The web build's output directory: `EXACT_WEB_DIST` when set; for an app
- * outside this repository, its own `target/web-dist` — a checkout's
+ * selected by path or `EXACT_APP_DIR`, its own `target/web-dist` — a checkout's
  * `host/web/dist` is one slot every in-repo build writes (the checks rebuild
  * Caltrain into it), and an outside app served from it silently became
  * Caltrain (LLP 1054 O5); otherwise `host/web/dist`. */
-export function webDist() {
+export function webDist(app) {
   if (process.env.EXACT_WEB_DIST) return resolve(process.env.EXACT_WEB_DIST);
-  if (process.env.EXACT_APP_DIR) return resolve(resolveApp().target, 'web-dist');
+  if (app ? app.outside : process.env.EXACT_APP_DIR) return resolve((app ?? resolveApp()).target, 'web-dist');
   return resolve(ROOT, 'host/web/dist');
 }
 
@@ -428,7 +428,7 @@ export function webDist() {
 export function webBuildCommand(app, dist, flags = '', otherwise = null) {
   const quote = value => "'" + String(value).replaceAll("'", "'\\''") + "'";
   const own = app.dir ? resolve(app.dir, 'exact.mjs') : null;
-  if (own && process.env.EXACT_APP_DIR && !process.env.EXACT_WEB_DIST && existsSync(own) && !own.startsWith(`${ROOT}/`))
+  if (own && app.outside && !process.env.EXACT_WEB_DIST && existsSync(own) && !own.startsWith(`${ROOT}/`))
     return `cd ${quote(app.dir)} && bun exact.mjs web-build${flags}`;
   return otherwise ?? `EXACT_APP_DIR=${quote(app.dir)} EXACT_WEB_DIST=${quote(resolve(dist))} bun host/web/build.mjs ${app.crate('web')}${flags}`;
 }
@@ -460,16 +460,16 @@ export function moduleDirectory(dir, platform) {
 
 /** The app `nameOrCrate` names (`caltrain`, `caltrain-web`, …; `EXACT_APP_DIR`'s basename when unset): its directory, cargo workspace, target directory, crate names, and manifest. */
 export function resolveApp(nameOrCrate) {
-  // A path (`--app ../my-app`, `--app /abs/app`, `--app .`) names an app as
-  // EXACT_APP_DIR does, which the processes it starts inherit: its name is
-  // its directory's, so nothing built from the name (a crate, a target
-  // subdirectory) lands in the app's own directory.
-  if (nameOrCrate && /[\\/]|^\.\.?$/.test(String(nameOrCrate))) {
-    process.env.EXACT_APP_DIR = resolve(String(nameOrCrate));
-    nameOrCrate = undefined;
-  }
-  const outside = process.env.EXACT_APP_DIR ? resolve(process.env.EXACT_APP_DIR) : null;
+  const path = nameOrCrate && /[\\/]|^\.\.?$/.test(String(nameOrCrate)) ? resolve(String(nameOrCrate)) : null;
+  const outside = path ?? (process.env.EXACT_APP_DIR ? resolve(process.env.EXACT_APP_DIR) : null);
+  if (path) nameOrCrate = undefined;
   let name = nameOrCrate ? String(nameOrCrate).replace(/-(web|apple|ios|macos|linux|windows|gpu)$/, '') : outside ? basename(outside) : 'caltrain';
+  // What selects this app again, by name and directory, here and in a child
+  // that inherits this environment: the path given, else the name, which an
+  // unchanged `EXACT_APP_DIR` places as it did now. The directory alone would
+  // rename an app `EXACT_APP_DIR` holds under another name (`--app original`
+  // with `EXACT_APP_DIR=…/copy`); a game's name below is its crate's.
+  const selector = path ?? name;
   let dir = outside ?? resolve(ROOT, 'apps', name);
   if (!outside && !existsSync(resolve(dir, 'app.contract')) && existsSync(resolve(ROOT, 'game/games', name, 'app.contract'))) dir = resolve(ROOT, 'game/games', name);
   if (!existsSync(resolve(dir, 'app.contract'))) throw new Error(`no app at ${dir} (no app.contract)${outside ? '' : '; set EXACT_APP_DIR for an app outside this repo'}`);
@@ -550,7 +550,8 @@ export function resolveApp(nameOrCrate) {
     return packages.find(pkg => pkg.name === crate(kind));
   };
   return {
-    name, dir, target, crate, generated, rust,
+    name, dir, target, crate, generated, rust, outside: !!outside,
+    selector,
     get workspace() { return rust(); },
     cargoPackage, prepare,
     get hasGpu() {
@@ -608,29 +609,26 @@ export function readManifest(dir, name) {
     // LLP 1046.008 amendment (2026-10-04): the GPU hooks crate was renamed.
     : /^game\.presentation: /.test(p)
       ? 'game.presentation is now game.render: rename the key, move presentation/ to render/, name the crate <name>-render and rename its "type" to "hooks" (LLP 1046.008, amendment of 2026-10-04)'
-      : p).filter((p) => !/^host\.web\.head(\[|: )/.test(p)).concat(webHeadProblems(parsed));
-  if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...appleIconProblems(parsed, dir));
+      // LLP 1163 D2: the dark launch colour moved into the W3C member.
+      : /^background_color_dark: /.test(p) ? 'background_color_dark is now color_scheme_dark.background_color: "color_scheme_dark": { "background_color": "#000000" } (LLP 1163 D2)'
+      : p).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed));
+  if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...appIconProblems(parsed, dir), ...launchImageProblems(parsed, dir));
   if (problems.length) throw new Error(`${path} does not conform to scripts/app.schema.json:\n  ${problems.join('\n  ')}`);
   nativeResourceMappings(parsed); nativeResourceMappings(parsed, 'ios');
   return { host: {}, deploy: {}, ...parsed };
 }
 
 import { DOCUMENT_UTIS } from './document-utis.mjs';
-import { webHeadProblems } from './web-head.mjs';
+import { webCspProblems, webHeadProblems } from './web-head.mjs';
+import { appIconProblems, publishedIcons } from './app-icons.mjs';
 export { DOCUMENT_UTIS };
 ;
 
-// The icon the Apple bundles are drawn from (host/apple/build.mjs
-// `appIcon`): the first square one of at least 512 px, which must be there,
-// as must the iOS launch screen's picture (`launchScreen`); refused when any
-// build reads the manifest, as the file types are.
-function appleIconProblems(manifest, dir) {
-  const icon = (manifest.icons ?? []).find((i) => { const m = /^(\d+)x(\d+)$/.exec(i.sizes ?? ''); return m && m[1] === m[2] && Number(m[1]) >= 512; });
+// The iOS launch screen's picture (`launchScreen`) must be there; refused when any build reads
+// the manifest, as the icons (scripts/app-icons.mjs) and the file types are.
+function launchImageProblems(manifest, dir) {
   const launch = manifest.host?.ios?.launchImage?.src;
-  return [
-    ...(icon && !existsSync(resolve(dir, icon.src)) ? [`icons: ${icon.src}, the square icon the Apple bundles are drawn from, does not exist`] : []),
-    ...(launch && !existsSync(resolve(dir, launch)) ? [`host.ios.launchImage: ${launch}, the launch screen's picture, does not exist`] : []),
-  ];
+  return launch && !existsSync(resolve(dir, launch)) ? [`host.ios.launchImage: ${launch}, the launch screen's picture, does not exist`] : [];
 }
 
 /** An app's own document format (studio diary R13): a MIME type in IANA's
@@ -671,15 +669,20 @@ function protocolHandlerProblems({ protocol_handlers = [], host }) {
 /** The W3C keys of `app.json`, as the web builds write `manifest.json`
  * (LLP 1030 D2/D10; 1030.000 D7). A browser opens files only, so
  * `inode/directory` (the Apple bake's word for a folder) goes, and it
- * registers neither `http` nor `https`, so those handlers go too. */
-export function webAppManifest(manifest, name, notes = []) {
-  const keys = ['name', 'short_name', 'description', 'id', 'start_url', 'display', 'display_override', 'theme_color', 'background_color', 'icons', 'lang', 'orientation', 'file_handlers', 'protocol_handlers', 'launch_handler', 'shortcuts'];
+ * registers neither `http` nor `https`, so those handlers go too.
+ * `color_scheme_dark` keeps only the W3C draft's members, and with the app's
+ * `dir` each icon gets the `sizes` and `type` of its file (LLP 1163 D2). */
+export function webAppManifest(manifest, name, notes = [], dir = null) {
+  const keys = ['name', 'short_name', 'description', 'id', 'start_url', 'display', 'display_override', 'theme_color', 'background_color', 'icons', 'lang', 'orientation', 'file_handlers', 'protocol_handlers', 'launch_handler', 'shortcuts', 'categories'];
   const web = Object.fromEntries(keys.filter((k) => manifest[k] !== undefined).map((k) => [k, manifest[k]]));
   if (web.file_handlers) web.file_handlers = web.file_handlers.filter((h) => !Object.keys(h.accept ?? {}).includes('inode/directory'));
   if (web.protocol_handlers) web.protocol_handlers = web.protocol_handlers.filter((h) => !isWebScheme(h.protocol));
   // A shortcut's `apple` and `android` words are the native bakes' (LLP 1133.023 D11).
   if (web.shortcuts) web.shortcuts = web.shortcuts.map(({ apple, android, ...item }) => item);
   if (manifest.share_target) web.share_target = webShareTarget(manifest.share_target, notes);
+  const { icons: _, ...dark } = manifest.color_scheme_dark ?? {};
+  if (Object.keys(dark).length) web.color_scheme_dark = dark;
+  if (dir && web.icons) web.icons = publishedIcons(web.icons, dir);
   for (const key of ['file_handlers', 'protocol_handlers', 'shortcuts']) if (!web[key]?.length) delete web[key];
   web.name ??= name;
   web.start_url ??= '/';
@@ -688,10 +691,14 @@ export function webAppManifest(manifest, name, notes = []) {
   web.lang ??= 'en';
   return web;
 }
-export function nativeManifestMetadata(manifest, platform) { return {app:manifest.app,host:manifest.host?.[platform]??{},icons:manifest.icons??[],...(manifest.frame_health ? {frame_health:manifest.frame_health} : {}),...(['macos','ios'].includes(platform) && manifest.protocol_handlers?.length ? {protocol_handlers:manifest.protocol_handlers} : {}),...(['ios','android'].includes(platform) && manifest.orientation ? {orientation:manifest.orientation} : {}),...(['macos','ios'].includes(platform) && ['light','dark'].includes(manifest.userInterfaceStyle) ? {userInterfaceStyle:manifest.userInterfaceStyle} : {})}; }
+export function nativeManifestMetadata(manifest, platform) { return {app:manifest.app,host:manifest.host?.[platform]??{},icons:manifest.icons??[],...(platform === 'ios' && manifest.color_scheme_dark?.icons ? {dark_icons:manifest.color_scheme_dark.icons} : {}),...(manifest.frame_health ? {frame_health:manifest.frame_health} : {}),...(['macos','ios'].includes(platform) && manifest.protocol_handlers?.length ? {protocol_handlers:manifest.protocol_handlers} : {}),...(['ios','android'].includes(platform) && manifest.orientation ? {orientation:manifest.orientation} : {}),...(['macos','ios'].includes(platform) && ['light','dark'].includes(manifest.userInterfaceStyle) ? {userInterfaceStyle:manifest.userInterfaceStyle} : {}),...(['macos','ios'].includes(platform) && manifest.categories ? {categories:manifest.categories} : {})}; }
 let cachedSchema = null;
 function schema() {
   return cachedSchema ??= JSON.parse(readFileSync(resolve(ROOT, 'scripts/app.schema.json'), 'utf8'));
+}
+/** Apps and package implementations share the Maven grammar (LLP 1133.008 D8 item 5). */
+export function mavenProblems(value, at) {
+  return value === undefined ? [] : validate(value, schema().properties.host.properties.android.properties.maven, at, schema());
 }
 /** The subset of JSON Schema the manifest's schema uses — type, required, properties, additionalProperties, items, minItems, enum, pattern, minLength, oneOf, $ref into $defs — checked by hand so the reader needs no dependency. Every problem in one pass. */
 export function validate(value, node, at, root) {
@@ -909,6 +916,23 @@ export const executableName = (app) => app.displayName.replace(/[<>:"/\\|?*\x00-
 /** Match CFBundle's decomposed executable path so codesign excludes the main executable
  * from its resource seal. Directory traversal preserves the filename's spelling. */
 export const appleExecutableName = (app) => executableName(app).normalize('NFD');
+/** The App Clip `host.ios.appClip` declares, or null: its bundle id (`<app id>.Clip`, as Xcode names one), its
+ * name (the app's) and the executable's name. An App Clip is an app (LLP 1126 D12): the clip bundle runs the whole
+ * app under this second identity, using the same executable target. The web build names its id in the origin's
+ * `apple-app-site-association` (LLP 1030). */
+/** The `applinks:` and other associated domains `host.ios.associatedDomains` claims: its list as written, or, when it
+ * is `true`, the declared origin's host (LLP 1038 D8). The entitlements sign these, and the origin's association file
+ * claims the app only when they name its host. */
+export const associatedDomains = (app) => {
+  const ios = app.manifest.host?.ios ?? {};
+  return Array.isArray(ios.associatedDomains) ? ios.associatedDomains : ios.associatedDomains && app.origin ? [`applinks:${new URL(app.origin).host}`] : [];
+};
+export const appClip = (app) => {
+  const clip = app.manifest.host?.ios?.appClip;
+  if (!clip) return null;
+  const id = clip.id ?? `${app.id}.Clip`, name = clip.name ?? app.displayName;
+  return { id, name, executable: appleExecutableName({ id, displayName: name ?? '' }) };
+};
 export const windowsFile = (app, path) => basename(path) === `${app.crate('windows')}.exe` ? `${executableName(app)}.exe` : basename(path);
 export function bakeTarget(platform) {
   if (platform === 'web') return 'wasm32-unknown-unknown';
@@ -1013,6 +1037,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
     throw new Error(`compiler input has no captured source identity: ${path}`);
   };
   const inputs = new Map(), absent = new Map(), directories = new Map(), hashes = inputHashes(app, env);
+  const sourceInputs = new Set(['assets', 'deck'].map(path => resolve(app.dir, path)).concat(shaderRoots(app)));
   const add = (path, optional = false, declarer = null) => {
     path = resolve(path); if (replaced.has(path)) return;
     if (!existsSync(path)) { if (optional) { absent.set(nameOf(path, declarer), path); return; } throw new Error(`stale compiler dependency names missing input ${path}; rebuild that Cargo unit`); }
@@ -1038,15 +1063,23 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
   for (const m of scripts) {
     if(!usedPackages.has(m.package_id))continue;
     const role = roleOf(m.out_dir); if (!graph.roles.get(m.package_id).has(role)) continue;
-    const pkg = graph.packages.get(m.package_id), source = pkg.targets.find((t) => t.kind.includes('custom-build'));
-    if (source) add(source.src_path);
+    const pkg = graph.packages.get(m.package_id);
+    const compilers = messages.filter(unit => unit.reason === 'compiler-artifact' && unit.package_id === pkg.id && unit.target.kind.includes('custom-build'));
+    if (!compilers.length) throw new Error(`Cargo did not report compiler inputs for ${pkg.name}'s build script`);
+    for (const compiler of compilers) {
+      const dep = readFileSync(unitDepInfo(compiler,graph.metadata.workspace_root,graph.metadata), 'utf8');
+      for (const path of compilerPaths(dep,graph.metadata.workspace_root)) add(path, false, pkg);
+    }
     // The script's stdout: `output` beside `out`, or `run/stdout` in Cargo's new build-dir layout (the web toolchain's).
     const output = readFileSync([resolve(m.out_dir,'../output'), resolve(m.out_dir,'../run/stdout')].find(existsSync) ?? resolve(m.out_dir,'../output'),'utf8'); const environment = [];
     for (const line of output.split('\n')) {
       const changed = /^cargo::?rerun-if-changed=(.*)$/.exec(line);
       // The app's plan/manifest/static watches are inputs of replaceable
       // artifacts. Its generated entry and typed metadata are binary inputs.
-      if (changed && pkg.id !== graph.root.id) {
+      // Windows freshness also needs the replaceable sources, outside the binary fingerprint.
+      if (changed && pkg.id === graph.root.id && platform === 'windows') {
+        sourceInputs.add(resolve(dirname(pkg.manifest_path), changed[1]));
+      } else if (changed && pkg.id !== graph.root.id) {
         const path = resolve(dirname(pkg.manifest_path), changed[1]);
         if (!shaderRoots(app).some(root => under(root, path))) add(path, true, pkg);
       }
@@ -1124,7 +1157,10 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
   const fingerprint={files:files.map(({name,sha256})=>({name,sha256})),absent:[...absent.keys()].sort(),configuration,metadata};
   const products=roots.flatMap((r)=>messages.filter((m)=>m.reason==='compiler-artifact'&&m.package_id===r.package&&m.target.name===r.name).flatMap((m)=>m.filenames)).filter((p)=>!p.endsWith('.d')&&!p.endsWith('.dSYM')).map((path)=>prepared.get(path)??path).map((path)=>{const info=statSync(path);return {path,bytes:info.size,sha256:hashes.of(path,info)};});
   hashes.save();
-  return {version:1,...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(baked!==rootOutput?{linkedPlan:baked}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inputs:files,directories:[...directories.values()],missing:[...absent.values()]},products};
+  const sourceRecord = platform === 'windows' ? {sourceInputs:bakeSourceInputs(app, sourceInputs, [
+    app.target, graph.metadata.build_directory, env.EXACT_BAKE_OUTPUT, env.OUT_DIR, ...scripts.map(script => script.out_dir),
+  ])} : {};
+  return {version:1,...sourceRecord,...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(baked!==rootOutput?{linkedPlan:baked}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inputs:files,directories:[...directories.values()],missing:[...absent.values()]},products};
 }
 
 // The permanent companion inode owns exclusion; the JSON claim is only its diagnostic record.
@@ -1231,7 +1267,7 @@ export function buildBake(app, platform, target, options = {}) {
   // logic to determinism lints; the gpu-dev loop runs them in its preceding check.
   if(app.manifest.game&&(options.profile??'')!=='gpu-dev')lintGame(app.dir,app.manifest.game,{env});
   const gpuPackage=(pkg)=>pkg.id===graph.surface?.id||graph.modules.some((m)=>m.id===pkg.id), moduleProducts={}, preparedProducts=new Map();
-  delete env.EXACT_GPU_PRODUCT; delete env.EXACT_GPU_MODULES; delete env.EXACT_BAKE_INPUTS;
+  delete env.EXACT_GPU_PRODUCT; delete env.EXACT_GPU_MODULES; delete env.EXACT_GPU_WEB_PRODUCTS; delete env.EXACT_BAKE_INPUTS;
   if (options.part && !bindGpuProduct(options.profile, env.EXACT_UPDATE_TRUST) && graph.surface) {
     const extension = target.includes('apple') ? 'dylib' : target.includes('windows') ? 'dll' : 'so';
     env.EXACT_GPU_DEVELOPMENT = `lib${cargoLibraryTarget(graph.surface).name.replaceAll('-','_')}.${extension}`;
@@ -1267,7 +1303,7 @@ export function buildBake(app, platform, target, options = {}) {
         buildCommand('cargo',['build',...args.slice(3)],app,{...env,EXACT_BAKED:dir},'inherit');
       });
     } else delete env.EXACT_BAKED;
-    const recordInputs = pkg.id === graph.root.id ? cargoBakeInputs(pkg,target,profile,env) : () => {};
+    const recordInputs = pkg.id === graph.root.id ? cargoBakeInputs(pkg,target,profile,env,platform === 'windows' ? app : null) : () => {};
     const result=buildCommand('cargo',args,app,env,'inherit');
     const output=result.stdout.split('\n').filter(Boolean).map((line)=>JSON.parse(line));messages.push(...output);roots.push({package:pkg.id,name:unit.name});
     recordInputs(output);
@@ -1285,6 +1321,8 @@ export function buildBake(app, platform, target, options = {}) {
       if (module) { moduleProducts[module.name] = prepared; env.EXACT_GPU_MODULES = JSON.stringify(moduleProducts); }
       else if (!options.part || bindGpuProduct(options.profile, env.EXACT_UPDATE_TRUST)) env.EXACT_GPU_PRODUCT = prepared;
     }
+    // The web's bake binds no GPU digest but reads each wasm product's surface arguments (expo/exact#176).
+    if (gpuPackage(pkg) && platform === 'web') env.EXACT_GPU_WEB_PRODUCTS = JSON.stringify([...JSON.parse(env.EXACT_GPU_WEB_PRODUCTS ?? '[]'), ...output.filter(m => m.reason === 'compiler-artifact' && m.package_id === pkg.id).flatMap(m => m.filenames).filter(f => f.endsWith('.wasm'))]);
   }
   if (options.part === 'gpu') {
     // The proof completes the independent input/product receipt. There is no
@@ -1356,8 +1394,9 @@ export function developmentCandidate(build, plan, assets, surfaces) {
 }
 
 /** Source staleness is provisional until the next actual bake. These paths
- * came from the previous compiler receipt, including absent watched inputs. */
-export function pendingBuildInputs(build) {
+ * came from the previous compiler receipt, including absent watched inputs.
+ * `includeSources` also checks replaceable artifacts for a packaged Windows drive. */
+export function pendingBuildInputs(build, { includeSources = false } = {}) {
   const changed=[];
   try {if(build.binary.assetCatalogApp && canonicalBuild(appleAssetCatalogInventory(build.binary.assetCatalogApp, build.binary.assetCatalogApp.platform)) !== canonicalBuild(build.binary.metadata.appleAssetCatalogs ?? [])) changed.push('Apple asset catalogs');} catch {changed.push('Apple asset catalogs');}
   const resources=build.binary.nativeResourceApp, resourceKey=`host.${resources?.platform ?? 'macos'}.resources`; try {if(resources && canonicalBuild(nativeResourceInventory(resources, null, resources.platform)) !== canonicalBuild(build.binary.metadata.nativeResources)) changed.push(resourceKey);} catch {changed.push(resourceKey);}
@@ -1371,6 +1410,7 @@ export function pendingBuildInputs(build) {
     try {if(!statSync(path).isDirectory()||canonicalBuild(readdirSync(path).sort())!==canonicalBuild(names))changed.push(path);}
     catch {changed.push(path);}
   }
+  if (includeSources) changed.push(...pendingSourceInputs(build.sourceInputs));
   return changed;
 }
 

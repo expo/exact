@@ -322,7 +322,7 @@ function recoverDevice() {
     pendingCutover = {module, staged, outcome};
     for (const [old, entry] of staged) {
       if (live(old.view) !== old) { retainEdits(entry, module); module.gpu_destroy(entry.id); continue; }
-      entry.values = old.values;
+      entry.values = old.values; entry.bound = null;
       detached.add(old);
       installCanvas(old, entry);
       surfaces.set(entry.view, entry);
@@ -467,6 +467,31 @@ const editable = target => target instanceof Element && target.closest('input, t
 // Pads go to the world whose canvas has focus, as keys do.
 padPoller(() => [...surfaces.values()].find(e => e.pads && live(e.view) === e && e.host.contains(document.activeElement) && !editable(document.activeElement)) ?? null);
 
+// Bind `values`. A named object after an accepted named bind sends only the arguments whose JSON differs from that
+// bind's (`gpu_bind_changed_at`); the module keeps the rest, so a large unchanged argument is neither serialized nor
+// copied into the module again. A bind is whole (`gpu_bind_at`) at creation (`whole`), after a recovery, which
+// forgets the baseline, for positional values, and when an argument is gone, which only a whole bind returns to its
+// default. What was sent becomes the baseline only once the module accepts it.
+function bindValues(entry, module, values, at, whole = false) {
+  const named = values !== null && typeof values === "object" && !Array.isArray(values);
+  const last = named && !whole ? entry.bound : null;
+  const object = (keys, wire) => `{${keys.map(k => `${JSON.stringify(k)}:${wire.get(k)}`).join(",")}}`;
+  if (last && Object.keys(last.values).every(k => Object.hasOwn(values, k))) {
+    const wire = new Map(last.wire), changed = [];
+    for (const k of Object.keys(values)) {
+      if (Object.hasOwn(last.values, k) && Object.is(values[k], last.values[k])) continue;
+      const text = JSON.stringify(values[k]);
+      if (text !== wire.get(k)) { wire.set(k, text); changed.push(k); }
+    }
+    if (!module.gpu_bind_changed_at(entry.id, object(changed, wire), at)) return false;
+    entry.bound = {values, wire};
+    return true;
+  }
+  const wire = named ? new Map(Object.keys(values).map(k => [k, JSON.stringify(values[k])])) : null;
+  if (!module.gpu_bind_at(entry.id, named ? object([...wire.keys()], wire) : JSON.stringify(values), at)) return false;
+  entry.bound = named ? {values, wire} : null;
+  return true;
+}
 // Creation/binding is a hard result. Staging never publishes or attaches listeners.
 function create(entry, module, carry) {
   const { w, h, s } = size(entry.host);
@@ -475,7 +500,7 @@ function create(entry, module, carry) {
   entry.id = module.gpu_create(entry.name, entry.el, entry.el.width, entry.el.height);
   if (!entry.id) throw new Error(`surface ${entry.name}: create: ${module.gpu_error()}`);
   module.gpu_lifecycle(entry.id, hidden ? 0 : 1);
-  if (!module.gpu_bind_at(entry.id, JSON.stringify(entry.values), exact.now?.())) throw new Error(`surface ${entry.name}: bind: ${module.gpu_error()}`);
+  if (!bindValues(entry, module, entry.values, exact.now?.(), true)) throw new Error(`surface ${entry.name}: bind: ${module.gpu_error()}`);
   if (carry !== undefined) {
     entry.carry = carry;
     if (module.gpu_restore(entry.id, worldSize(carry), 1)) {
@@ -982,7 +1007,7 @@ const api = {
       const id = entry.id, at = exact.now?.();
       const bind = () => {
         const current = live(view); if (current?.id !== id) return;
-        if (!gpu.gpu_bind_at(id, JSON.stringify(values), at)) console.error("exact gpu:", gpu.gpu_error());
+        if (!bindValues(current, gpu, values, at)) console.error("exact gpu:", gpu.gpu_error());
         current.values = values; messages(current); schedule();
       };
       if (recoveringDevice) recoveringDevice.then(bind); else bind();
@@ -1093,7 +1118,7 @@ const api = {
     schedule();
   },
   /// Time moved (the agent's `clock`): render what wants a frame, once.
-  schedule() { for (const entry of surfaces.values()) if (entry.id && !entry.terminal && entry.wants) { entry.wants = false; gpu.gpu_bind_at(entry.id, JSON.stringify(entry.values), exact.now?.()); } schedule(); },
+  schedule() { for (const entry of surfaces.values()) if (entry.id && !entry.terminal && entry.wants) { entry.wants = false; bindValues(entry, gpu, entry.values, exact.now?.()); } schedule(); },
 };
 // Standalone, the one module is `exact.gpu`. Routed, the router hands this
 // instance the surfaces queued for its artifact before its script arrived.

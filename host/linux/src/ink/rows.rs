@@ -401,6 +401,18 @@ impl Ink {
                         self.path_clip(groups, ts.post_translate(origin.0, origin.1))?;
                     }
                     Marker::Path(instance, bindings, geometry) => {
+                        let mut i = instance.translated(offset);
+                        if bindings.path.0 != 0
+                            && i.rect[0] >= 0.
+                            && i.rect[1] >= 0.
+                            && i.rect[0] + i.rect[2] <= self.size[0] as f32
+                            && i.rect[1] + i.rect[3] <= self.size[1] as f32
+                        {
+                            self.emit(i, *bindings)?;
+                            continue;
+                        }
+                        // tiny-skia clips curves before scan conversion. Cropping a
+                        // kept mask can differ from rasterizing the visible path.
                         let ts = geometry.transform.post_translate(origin.0, origin.1);
                         let clips: Vec<_> = geometry.clips.iter().map(|(p, r)| (p, *r)).collect();
                         let dev = self.device_transform(ts);
@@ -413,7 +425,6 @@ impl Ink {
                             dev,
                             Some(self.size),
                         )? {
-                            let mut i = instance.translated(offset);
                             i.rect = c.rect;
                             i.uv = c.entry.uv;
                             let mut b = *bindings;

@@ -167,6 +167,7 @@ final class NodeExtras {
     var retainedScrollTop: CGFloat?
     var materialKind: String?
     var materialInteractive: Bool = false
+    var materialTint: CGColor?
     var hiddenBeforePlacement = false
     var placementHidden = false
     var materialView: UIVisualEffectView?
@@ -372,9 +373,7 @@ extension NodeView {
         canvas.needsCapture = true
         canvases?.scheduleCapture()
     }
-    /// Its filter published new pixels, at once or when its chain landed: the
-    /// canvas it is drawn through captures it again, as that picture
-    /// (`filterPicture`).
+    /// Its filter's pixels or layer effect changed: its canvas captures again.
     func filterPublished() {
         guard let canvas = canvasAbove else { return }
         canvas.needsCapture = true
@@ -428,6 +427,7 @@ extension NodeView {
     var glassGroupView: GlassGroupView? { get { extras?.glassGroupView } set { if newValue != nil || extras != nil { more.glassGroupView = newValue } } }
     var glassSlot: GlassSlot? { get { extras?.glassSlot } set { if newValue != nil || extras != nil { more.glassSlot = newValue } } }
     var materialInteractive: Bool { get { extras?.materialInteractive ?? false } set { if newValue || extras != nil { more.materialInteractive = newValue } } }
+    var materialTint: CGColor? { get { extras?.materialTint } set { if newValue != nil || extras != nil { more.materialTint = newValue } } }
     var readingAnchors: [(node: NodeView, y: CGFloat)] {
         get { extras?.readingAnchors ?? [] }
         set { if !newValue.isEmpty || extras != nil { more.readingAnchors = newValue } }

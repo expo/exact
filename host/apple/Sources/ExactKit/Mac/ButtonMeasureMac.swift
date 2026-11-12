@@ -59,11 +59,13 @@ final class ButtonMeasureCache: @unchecked Sendable {
             // Push buttons do not wrap at the offered width. A required width
             // constraint makes fittingSize answer the real constrained frame;
             // window/Auto Layout ground truth is covered by the macOS tests.
-            if widthKind == 0 {
+            let image = ButtonConfigurationMac.imageSizing(face, button: button)
+            if widthKind == 0, image == nil {
                 button.translatesAutoresizingMaskIntoConstraints = false
                 button.widthAnchor.constraint(equalToConstant: max(0, width)).isActive = true
             }
-            let size = button.fittingSize
+            var size = image?.size ?? button.fittingSize
+            if widthKind == 0, image != nil { size.width = max(0, width) }
             result = ExactButtonMeasure(width: Float(ceil(max(0, size.width) * scale) / scale),
                 height: Float(ceil(max(0, size.height) * scale) / scale), provisional: 0)
         }

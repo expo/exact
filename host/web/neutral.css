@@ -489,19 +489,39 @@
   @media not (forced-colors: active) { #exact-root :is([role="menu"], [data-exact-chooser]) button[data-button-style]:enabled:focus-visible { outline: none; } }
   @media (any-pointer: coarse) { #exact-root :is([role="menu"], [data-exact-chooser]) button[data-button-style] { min-height: 44px; } }
   /* A menu with a row of its own that can be checked (`aria-checked`, any role) gives each of its own rows a leading
-     column for the mark, as UIMenu and NSMenu do: the row's `::after`, in a grid track before the face's first line,
-     so it leads whatever template the face's direction makes, and the label follows it after whatever padding the row
-     has (a written width takes the look's). The labels stay aligned. A checked row paints the checkbox's checkmark
-     there in its own ink, a 1em square centred on the face: the mark's box spans the face's rows with no height of its
-     own, and the row centres those rows rather than stretching them (an empty subtitle row would take half the
-     slack). Its own rows are its children, or a List's items; a menu written inside it has its own. Under forced
-     colours the mark opts out of forcing, which would take its fill, and is drawn in the system's colour for a
-     button's text, GrayText when disabled: its `currentColor` would be the row's unforced colour. */
-  #exact-root :is([role="menu"]:has(> button[data-button-style][aria-checked], > [data-exact-list-item] > button[data-button-style][aria-checked]) > button[data-button-style], [role="menu"]:has(> button[data-button-style][aria-checked], > [data-exact-list-item] > button[data-button-style][aria-checked]) > [data-exact-list-item] > button[data-button-style]) {
-    align-content: center;
-    &::after { content: ""; grid-column: span 1 / 1; grid-row: 1 / -1; align-self: stretch; width: 1em; margin-inline-end: .5em; forced-color-adjust: none; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 1em 1em no-repeat; }
-    &[aria-checked="true"]::after { background-color: currentColor; }
-    @media (forced-colors: active) { &[aria-checked="true"]::after { background-color: ButtonText; } &[aria-checked="true"]:disabled::after { background-color: GrayText; } }
+     column for the mark, as UIMenu and NSMenu do: the row's `::after`, after whatever padding the row has and before
+     its face (a written width takes the look's), so the faces stay aligned. A native face places it in a grid track
+     before its first line, which leads whatever template the face's direction makes; its box spans the face's rows
+     with no height of its own, and the row centres those rows rather than stretching them (an empty subtitle row would
+     take half the slack). A raster face is laid out by its author, so its row's inline-start padding is the padding
+     the author wrote on that side plus the column. The inline style outranks the sheet, so the runtimes copy a bare
+     button's padding into `--exact-padding-left`, `-right` and `-inline-start` (button_css.rs), which no other node
+     inherits, and the side is the direction's (`--exact-separator-dir`, as index.html and css.rs set it). The mark
+     takes its static position, the content box's start, whatever the author's padding resolves to, and moves back
+     into the column: it is placed only where a flex row starts its items. The row's borders stay the author's. A
+     checked row paints the checkbox's checkmark there in its own ink, a 1em square centred on the face. Its own rows
+     are its children, or a List's items; a menu written inside it has its own. Under forced colours the mark opts out
+     of forcing, which would take its fill, and is drawn in the system's colour for a button's text, GrayText when
+     disabled: its `currentColor` would be the row's unforced colour. */
+  @property --exact-padding-left { syntax: "*"; inherits: false; }
+  @property --exact-padding-right { syntax: "*"; inherits: false; }
+  @property --exact-padding-inline-start { syntax: "*"; inherits: false; }
+  #exact-root [role="menu"]:has(> button[aria-checked], > [data-exact-list-item] > button[aria-checked]) {
+    & > button:is([data-button-style], :has(> img:not([data-symbol-source])):not(:has(> :not(img, [data-exact-text])))),
+    & > [data-exact-list-item] > button:is([data-button-style], :has(> img:not([data-symbol-source])):not(:has(> :not(img, [data-exact-text])))) {
+      &::after { content: ""; width: 1em; forced-color-adjust: none; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 1em 1em no-repeat; }
+      &[data-button-style] {
+        align-content: center;
+        &::after { grid-column: span 1 / 1; grid-row: 1 / -1; align-self: stretch; margin-inline-end: .5em; }
+      }
+      &:not([data-button-style]) {
+        position: relative;
+        padding-inline-start: calc((1 + var(--exact-separator-dir, 1)) / 2 * var(--exact-padding-left, var(--exact-padding-inline-start, .625em)) + (1 - var(--exact-separator-dir, 1)) / 2 * var(--exact-padding-right, var(--exact-padding-inline-start, .625em)) + 1em + .5em) !important;
+        &::after { display: block; position: absolute; top: calc(50% - .5em); height: 1em; margin-inline-start: calc(-1em - .5em); align-self: start; justify-self: start; }
+      }
+      &[aria-checked="true"]::after { background-color: currentColor; }
+      @media (forced-colors: active) { &[aria-checked="true"]::after { background-color: ButtonText; } &[aria-checked="true"]:disabled::after { background-color: GrayText; } }
+    }
   }
 
 

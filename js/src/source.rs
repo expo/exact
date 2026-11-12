@@ -91,9 +91,10 @@ impl DataSource for Module {
         &mut self,
         store: &Store,
         in_flight: InFlight<'_>,
+        fetch: Option<u64>,
     ) -> Option<(u64, Request)> {
         let _ = store;
-        self.timer_first(&in_flight)
+        self.timer_first(&in_flight, fetch)
     }
 
     fn module_landed(
@@ -157,7 +158,6 @@ impl DataSource for Module {
     }
 
     fn dispatch(&mut self, token: u64, store: &Store) -> Dispatch {
-        let _ = store;
         if let Some(dispatch) = self.host.secrets.dispatch(token) {
             return dispatch;
         }
@@ -169,7 +169,8 @@ impl DataSource for Module {
             .iter()
             .any(|(_, p)| p.call == token && p.ticket == WAITING)
         {
-            return self.wake(token).unwrap_or_else(|| {
+            self.refresh_waiting();
+            return self.wake(token, store.clock_ms()).unwrap_or_else(|| {
                 self.waiters.push(token);
                 Dispatch::Held
             });
@@ -184,19 +185,8 @@ impl DataSource for Module {
     }
 
     fn release(&mut self, store: &Store) -> Vec<(u64, Dispatch)> {
-        let _ = store;
-        // Waiting answers whose wait may be over are asked again.
-        let mut released = self.host.secrets.release();
-        for token in std::mem::take(&mut self.waiters) {
-            match self.wake(token) {
-                Some(work) => released.push((token, work)),
-                None if self.parked.iter().any(|(_, p)| p.call == token) => {
-                    self.waiters.push(token)
-                }
-                None => {}
-            }
-        }
-        released
+        self.refresh_waiting();
+        self.release_ready(store.clock_ms())
     }
 
     fn continuation(&mut self, token: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {
@@ -237,7 +227,11 @@ impl DataSource for Module {
     }
 
     fn activate(&mut self) -> Result<(), DataError> {
-        self.load().map_err(DataError::Unavailable)
+        if self.reached {
+            self.load().map_err(DataError::Unavailable)
+        } else {
+            Ok(())
+        }
     }
 
     fn activate_for_validation(&mut self) -> Result<(), DataError> {
@@ -295,6 +289,7 @@ impl DataSource for Module {
             return;
         };
         let (_, parked) = self.parked.remove(at);
+        self.parked.retain(|(_, p)| p.call != parked.call);
         self.waiters.retain(|waiter| *waiter != token);
         self.forget_calls(vec![parked.call]);
     }
@@ -325,10 +320,10 @@ impl DataSource for Module {
         Some(self.native_slot.clone())
     }
 
-    /// Not before the host loads it (LLP 1027 D4): the runner boots
-    /// store-reading resources from their kept answers meanwhile.
+    /// An entry reaching this module waits for its load (LLP 1027 D4),
+    /// using kept answers for store-reading resources meanwhile.
     fn ready(&self) -> bool {
-        self.is_loaded()
+        !self.reached || self.is_loaded()
     }
 
     fn canvas_surfaces(&self) -> Vec<(String, usize)> {
@@ -366,6 +361,14 @@ impl DataSource for Module {
 
     /// The seam's signatures, from the plan's `sources` table (LLP 1027 D2).
     fn bind(&mut self, plan: &Plan) {
+        self.reached = plan.sources.iter().any(|row| {
+            let name = plan.str(row.name);
+            !exact_plan::runner_owned_source(name) && plan.module_named(name).is_none()
+        }) || plan.surfaces.iter().any(|row| {
+            self.canvas_surfaces
+                .iter()
+                .any(|(name, _)| name == plan.str(row.name))
+        });
         if self.keeps_plan {
             self.plan = Some(plan.clone());
         }
@@ -492,6 +495,28 @@ impl DataSource for Module {
         outcome: Outcome,
     ) -> Result<Answer, DataError> {
         let answer = self.resume(Some(store), Some(target), source, args, outcome);
+        self.refresh_background();
+        answer
+    }
+
+    fn more_for(&mut self, target: Target) -> Vec<Request> {
+        self.parked
+            .iter_mut()
+            .filter(|(key, _)| key.0 == Some(target))
+            .filter_map(|(_, p)| p.more.take())
+            .collect()
+    }
+
+    fn parse_fetch_for(
+        &mut self,
+        target: Target,
+        fetch: Option<u64>,
+        store: &mut Store,
+        source: &str,
+        args: &[Value],
+        outcome: Outcome,
+    ) -> Result<Option<Answer>, DataError> {
+        let answer = self.resume_fetch(Some(store), Some(target), fetch, source, args, outcome);
         self.refresh_background();
         answer
     }

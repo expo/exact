@@ -112,7 +112,6 @@ impl Module {
                 }
                 self.host.between_answers = false;
                 if failed {
-                    self.progress += 1;
                     self.read_background();
                     return Ok(self.background_request());
                 }
@@ -138,8 +137,6 @@ impl Module {
             self.finish_let_go();
         }
         self.host.between_answers = false;
-        // What landed may settle an answer waiting on the background's work.
-        self.progress += 1;
         self.read_background();
         match delivered {
             Ok(true) => Ok(self.background_request()),

@@ -216,6 +216,13 @@ pub fn calls(file: &mut File) -> std::collections::HashSet<String> {
     seen.called
 }
 
+/// Every source named by a resource, send, command, placeholder or route.
+pub fn sources(file: &mut File) -> std::collections::HashSet<String> {
+    let mut seen = Seen::default();
+    walk(file, &Scope::default(), Some(&mut seen)).expect("an empty scope refuses nothing");
+    seen.sources
+}
+
 /// Every named type referenced by annotations in `file`.
 pub fn type_names(file: &mut File) -> std::collections::HashSet<String> {
     let mut seen = Seen::default();
@@ -229,6 +236,7 @@ struct Seen {
     bound: std::collections::HashSet<String>,
     called: std::collections::HashSet<String>,
     typed: std::collections::HashSet<String>,
+    sources: std::collections::HashSet<String>,
 }
 
 fn walk(file: &mut File, scope: &Scope, seen: Option<&mut Seen>) -> Result<(), SyntaxError> {
@@ -323,7 +331,10 @@ fn walk(file: &mut File, scope: &Scope, seen: Option<&mut Seen>) -> Result<(), S
                 // `pages=source(args)` names a data source, as a resource
                 // does; only its arguments are Contract.
                 match (&*field.name, &mut field.value) {
-                    ("pages", Expr::Call(_, args, _)) => r.exprs(args)?,
+                    ("pages", Expr::Call(source, args, _)) => {
+                        r.source(source);
+                        r.exprs(args)?;
+                    }
                     _ => r.expr(&mut field.value)?,
                 }
             }
@@ -422,6 +433,7 @@ impl Rewriter<'_> {
             self.expr(&mut b.expr)?;
         }
         for res in resources {
+            self.source(&res.source);
             self.scope.rename_source(&mut res.source);
             // Over a list, the arguments and the key read the element.
             let inner = match &mut res.each {
@@ -441,6 +453,7 @@ impl Rewriter<'_> {
             }
             self.ty(&mut res.shape)?;
             if let Some(p) = &mut res.placeholder {
+                self.source(&p.source);
                 self.exprs(&mut p.args)?;
             }
         }
@@ -571,6 +584,12 @@ impl Rewriter<'_> {
         }
     }
 
+    fn source(&mut self, name: &str) {
+        if let Some(seen) = &mut self.seen {
+            seen.sources.insert(name.to_owned());
+        }
+    }
+
     fn stmts(&mut self, stmts: &mut [Stmt]) -> R {
         let mark = self.locals.len();
         for stmt in stmts {
@@ -582,10 +601,12 @@ impl Rewriter<'_> {
                 Stmt::Assign { expr, .. } => self.expr(expr)?,
                 // A send that answers nothing is a statement (LLP 1133.004 D5).
                 Stmt::Command { name, args, .. } => {
+                    self.source(name);
                     self.scope.rename_source(name);
                     self.exprs(args)?
                 }
                 Stmt::Send { source, args, .. } => {
+                    self.source(source);
                     self.scope.rename_source(source);
                     self.exprs(args)?
                 }

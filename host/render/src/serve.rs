@@ -28,6 +28,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
+#[path = "deferred.rs"]
+pub(crate) mod deferred;
+use deferred::{hex, Checkpoints};
+
 /// The largest page the server sends (D10's bound on output bytes).
 pub(crate) const MAX_PAGE: usize = 16 << 20;
 const MAX_CACHED_PAGES: usize = 64;
@@ -101,6 +105,7 @@ struct Shared {
     serve: Serve,
     plan: Plan,
     shell: String,
+    /// A page's CSP header lines, none when the app sends none (D11).
     csp: String,
     /// The header lines a page adds beside its CSP: its `Permissions-Policy`
     /// (LLP 1069.008 D6), and the client hints it asks for and varies by
@@ -109,6 +114,7 @@ struct Shared {
     /// What of the viewport the plan reads (LLP 1048.006).
     reads: crate::viewport::Reads,
     pages: Mutex<VecDeque<CachedPage>>,
+    checkpoints: Checkpoints,
     best: Arc<crate::best::Compressor>,
     variants: Variants,
     generations: Option<crate::generations::Generations>,
@@ -170,7 +176,8 @@ impl Server {
             .find_map(|name| std::fs::read_to_string(serve.dist.join(name)).ok())
             .ok_or_else(|| std::io::Error::other("the dist has no shell"))?;
         let listener = TcpListener::bind(("127.0.0.1", serve.port))?;
-        let csp = csp(grants, &serve.dist);
+        let csp = csp::headers(grants, &serve.dist, &shell, serve.origin.as_deref())
+            .map_err(std::io::Error::other)?;
         let permissions = exact_runner::device::permissions_policy(grants);
         let reads = crate::viewport::Reads::of(&plan);
         let mut page_headers = reads.headers();
@@ -222,6 +229,7 @@ impl Server {
                 page_headers,
                 reads,
                 pages: Mutex::new(VecDeque::new()),
+                checkpoints: Checkpoints::default(),
                 best: Arc::default(),
                 variants,
                 generations,
@@ -431,7 +439,8 @@ impl Response {
         self
     }
 
-    /// `page_headers`: the header lines a page carries beside its CSP.
+    /// `csp`: a page's CSP header lines (`csp::headers`); `page_headers`: the
+    /// others it carries.
     fn write(
         &self,
         stream: &mut impl Write,
@@ -443,7 +452,7 @@ impl Response {
         let connection = if keep { "keep-alive" } else { "close" };
         // Header values can contain app data; refuse the entire response before
         // writing anything, including on the 304 path.
-        if self.headers.iter().any(|(_, value)| invalid_header(value)) || invalid_header(csp) {
+        if self.headers.iter().any(|(_, value)| invalid_header(value)) {
             Response::text(500, "invalid response header\n").write(stream, head, "", "", keep);
             return;
         }
@@ -493,7 +502,7 @@ impl Response {
         // worker made from it, and a module worker evaluates the module text
         // it verified against the receipt (LLP 1027.002 D2).
         if page {
-            let _ = write!(out, "Content-Security-Policy: {csp}\r\n");
+            out.push_str(csp);
             // A page's own code never reaches a device the app was not
             // granted: the same promise the CSP makes for `connect-src`.
             out.push_str(page_headers);
@@ -784,8 +793,11 @@ fn respond<D: DataSource + 'static>(
     if path == "/.exact/health" {
         return Response::text(200, "ok\n").header("Cache-Control", "no-store");
     }
+    if let Some(response) = deferred::response(path, &shared.checkpoints) {
+        return response;
+    }
     if path == "/sitemap.xml" {
-        return sitemap(shared, data);
+        return sitemap::sitemap(shared, data);
     }
     if path == "/robots.txt" {
         // Neutral until hosting decides a crawler policy (LLP 1048 §9.9).
@@ -1185,6 +1197,8 @@ fn document<D: DataSource + 'static>(
         origin: serve.origin.as_deref(),
     };
     let location = request.target.as_str();
+    let checkpoints = matches!(policy, Some(RenderPolicy::Request | RenderPolicy::Cached))
+        .then_some(&shared.checkpoints);
     // @ref LLP 1071 D6 — the early flush (crate::stream): a browser's
     // navigation gets the page's head now; its rest follows the render.
     let js = shared.js && !notfound && request.method == "GET";
@@ -1240,6 +1254,7 @@ fn document<D: DataSource + 'static>(
                 at,
                 late,
                 MAX_PAGE.saturating_sub(head.len()),
+                checkpoints,
                 &mut send,
             )? {
                 streamed_body = true;
@@ -1265,11 +1280,21 @@ fn document<D: DataSource + 'static>(
                 Some((_, head, at)) => {
                     let late =
                         !preload && crate::page::activate_js(rendered.activate) != "interaction";
-                    head.clone() + &crate::page::body_js(&shared.shell, at, &rendered, late, false)
+                    head.clone()
+                        + &crate::page::body_js(
+                            &shared.shell,
+                            at,
+                            &rendered,
+                            late,
+                            false,
+                            checkpoints,
+                        )
                 }
                 None => match &shared.early {
-                    Some((at, _)) => crate::page::page_with(&shared.shell, at, &rendered),
-                    None => page(&shared.shell, &rendered)?,
+                    Some((at, _)) => {
+                        crate::page::page_with(&shared.shell, at, &rendered, checkpoints)
+                    }
+                    None => page::page_at(&shared.shell, &rendered, checkpoints)?,
                 },
             };
             if html.len() > MAX_PAGE {
@@ -1384,74 +1409,6 @@ fn document<D: DataSource + 'static>(
 const UNAVAILABLE_AFTER_HEAD: &str =
     "<title>Unavailable</title>\n<p>This page couldn't be rendered.</p>\n";
 
-/// The sitemap (LLP 1048.000 D2): every rendered route's location — a
-/// parameterized one's as its `pages=` source lists them now, a route
-/// without one left out — absolute against the configured origin. Without
-/// an origin there is none.
-fn sitemap<D: DataSource + 'static>(shared: &Shared, data: fn() -> D) -> Response {
-    let Some(origin) = shared.serve.origin.as_deref() else {
-        return Response::text(404, "no origin, no sitemap\n");
-    };
-    let plan = &shared.plan;
-    let mut locations = Vec::new();
-    for row in plan
-        .routes
-        .iter()
-        .filter(|r| r.render != RenderPolicy::Client && !r.notfound)
-    {
-        let pattern = plan.str(row.pattern);
-        if !pattern.split('/').any(|s| s.starts_with(':')) {
-            locations.push(pattern.to_string());
-            continue;
-        }
-        let listed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::pages(plan, data(), row, shared.serve.deadline)
-        }))
-        .unwrap_or_else(|_| Err("the pages source panicked".into()));
-        match listed {
-            Ok(found) => locations.extend(found),
-            Err(error) => {
-                crate::log(format_args!("sitemap 503 error={error:?}"));
-                return Response::text(503, "the sitemap's pages didn't answer\n")
-                    .header("Cache-Control", "no-store")
-                    .header("Retry-After", "1");
-            }
-        }
-    }
-    let locations = indexed(shared, data, locations);
-    let xml = |t: &str| {
-        t.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    };
-    let origin = origin.trim_end_matches('/');
-    let mut body = String::from(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
-    );
-    for location in &locations {
-        let _ = writeln!(
-            body,
-            "  <url><loc>{}</loc></url>",
-            xml(&format!("{origin}{location}"))
-        );
-    }
-    body.push_str("</urlset>\n");
-    let lifetime = shared.serve.lifetime.as_secs();
-    Response {
-        status: 200,
-        headers: vec![
-            ("Content-Type", "application/xml; charset=utf-8".into()),
-            (
-                "Cache-Control",
-                format!("public, max-age=0, s-maxage={lifetime}"),
-            ),
-        ],
-        body: body.into_bytes(),
-        file: None,
-        streamed: false,
-    }
-}
-
 /// The surrogate keys (D11): each answer's source, and its source with a
 /// digest of its arguments — `post` purges every post page, `post:<hex>`
 /// the pages that showed that one.
@@ -1468,20 +1425,14 @@ fn keys(rendered: &Rendered) -> Vec<String> {
     keys
 }
 
-fn hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut out, b| {
-            let _ = write!(out, "{b:02x}");
-            out
-        })
-}
-
 #[path = "csp.rs"]
 mod csp;
+#[cfg(test)]
 use csp::csp;
 
 #[cfg(test)]
 #[path = "serve_tests.rs"]
 mod tests;
+
+#[path = "sitemap.rs"]
+mod sitemap;

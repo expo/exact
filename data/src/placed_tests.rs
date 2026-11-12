@@ -254,6 +254,7 @@ fn a_coalesced_retirement_still_lets_go_what_an_earlier_one_did() {
         target: Target::Resource(0),
         source: "read",
         args: &args,
+        fetch: None,
         continuation: Some(replacement),
     }];
     placed.forgotten(&store, &in_flight);
@@ -314,6 +315,7 @@ fn a_key_both_coalesced_retirements_keep_stays_in_flight() {
             target: Target::Resource(0),
             source: "read",
             args: &args,
+            fetch: None,
             continuation: Some(continuation),
         }]
     };
@@ -456,6 +458,7 @@ fn a_turn_not_yet_handed_over_survives_a_retirement_that_keeps_its_call() {
         target: Target::Resource(0),
         source: "read",
         args: &args,
+        fetch: None,
         continuation: None,
     }];
     placed.forgotten(&empty, &in_flight);
@@ -510,7 +513,7 @@ fn coalesced_retirements_let_go_what_retiring_each_in_order_does() {
                     };
                     let live: Vec<Key> = view
                         .iter()
-                        .map(|(t, s, a)| (Some(*t), s.clone(), a.concat()))
+                        .map(|((t, s, a), _)| (Some(*t), s.clone(), a.concat()))
                         .collect();
                     parked.retain(|(id, k)| {
                         let keep = live.contains(k);
@@ -554,7 +557,12 @@ fn coalesced_retirements_let_go_what_retiring_each_in_order_does() {
         for _ in 0..30 {
             match next(3) {
                 0 => {
-                    let view: Vec<_> = keys.iter().filter(|_| next(2) == 0).cloned().collect();
+                    let view: Vec<_> = keys
+                        .iter()
+                        .filter(|_| next(2) == 0)
+                        .cloned()
+                        .map(|call| (call, None))
+                        .collect();
                     coalesced.forgotten((view.clone(), Vec::new()));
                     // In order: each its own marker, never merged.
                     ordered.pending = None;

@@ -11,17 +11,32 @@ package exact.quickactions
 import android.content.Intent
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
+import android.graphics.drawable.Icon
 import android.net.Uri
 import dev.exact.canvas.ExactExtension
 import dev.exact.canvas.ExtensionContext
 import org.json.JSONArray
 import org.json.JSONObject
+import org.xmlpull.v1.XmlPullParser
 
 class QuickActionsModule(context: ExtensionContext) : ExactExtension(context) {
     private val app get() = context.application
     private val manager get() = app.getSystemService(ShortcutManager::class.java)
     /** A list a rate limit refused, set again at the next foreground. */
     private var pending: List<ShortcutInfo>? = null
+    /** The build resolves the schema's symbol spellings to the same vectors static shortcuts use. */
+    private val icons: Map<String, Int> by lazy {
+        val id = app.resources.getIdentifier("exact_shortcut_symbols", "xml", app.packageName)
+        buildMap {
+            if (id != 0) app.resources.getXml(id).use { xml ->
+                while (xml.next() != XmlPullParser.END_DOCUMENT) {
+                    if (xml.eventType == XmlPullParser.START_TAG && xml.name == "symbol") {
+                        put(xml.getAttributeValue(null, "name"), xml.getAttributeResourceValue(null, "drawable", 0))
+                    }
+                }
+            }
+        }
+    }
 
     override fun later(name: String, args: JSONObject, reply: (JSONObject) -> Unit) {
         when (name) {
@@ -72,6 +87,12 @@ class QuickActionsModule(context: ExtensionContext) : ExactExtension(context) {
             .setLongLabel(name)
             .setRank(rank)
             .setIntent(intent)
+            .apply {
+                val symbol = item.optJSONObject("apple")?.optString("symbol").orEmpty()
+                val key = if (symbol.startsWith("sf/")) symbol else symbol.replace('.', '-').replace('_', '-')
+                // Missing and unknown symbols leave the launcher's default icon, as static shortcuts do.
+                if (key.isNotEmpty()) icons[key]?.takeIf { it != 0 }?.let { setIcon(Icon.createWithResource(app, it)) }
+            }
             .build()
     }
 }

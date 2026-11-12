@@ -117,11 +117,14 @@ export function glueWorkers(cores = availableParallelism(), load = loadavg()[0])
 // Glue files left out: `bundle-size` reads RealWorld's production app.js (`EXACT_REALWORLD_JS`), which no step prepares
 // before the glue; `document-agent` fails here (QUEUE.md, "The page's frames drop to one a second")
 const LEFT_OUT = /^host\/web-js\/(bundle-size|document-agent)\.test\.mjs$/;
+/** The glue step's files: every test file of the web hosts, of the modules and of `scripts/`, so a new one runs without
+ * being named, less `LEFT_OUT`'s. */
 export function glueTests(root) {
-  const files = [...['host/web', 'host/web-js'].flatMap(dir => [...new Bun.Glob(`${dir}/**/*.test.{mjs,js}`).scanSync({ cwd: root, onlyFiles: true })]),
-    ...new Bun.Glob('modules/*/tests/*.test.mjs').scanSync({ cwd: root, onlyFiles: true })].filter(file => !LEFT_OUT.test(file)).sort().map(file => `./${file}`);
+  const glob = pattern => [...new Bun.Glob(pattern).scanSync({ cwd: root, onlyFiles: true })];
+  const files = [...glob('host/web/**/*.test.{mjs,js}'), ...glob('host/web-js/**/*.test.{mjs,js}'), ...glob('modules/*/tests/*.test.mjs'),
+    ...glob('scripts/*.test.mjs')].filter(file => !LEFT_OUT.test(file)).sort().map(file => `./${file}`);
   // The glue lane is macOS: link.test reads Mach-O load commands with Apple tools.
-  return [...files, './host/apple/link.test.mjs', './host/apple/cloak.test.mjs', ...['app-workspace', 'app-bake', 'app-apple', 'app-keychain', 'app-manifest', 'exact', 'check-watchdog', 'push', 'agent', 'agent-launch', 'agent-drag', 'tamber-server', 'tamber-watch', 'tamber-events-get', 'tamber-edit-held', 'test-children', 'scale-check', 'tool-drive', 'help-parity', 'tamber-builds', 'tamber-inspect', 'tamber-select-walk', 'tamber-scrub', 'tamber-dtcg', 'design-tool-levels', 'tamber-tool-answers', 'design-tool', 'design-tool-ops', 'design-tool-library', 'design-tool-canvas', 'design-tool-scrub', 'design-tool-kinds', 'design-tool-inspect', 'design-tool-noaxes', 'design-tool-commit', 'design-tool-fields', 'design-tool-dock', 'design-tool-edit-dock', 'design-tool-poll', 'design-tool-scale', 'library-gate', 'stage12-gate', 'position-reads', 'wasm-check', 'tamber-body-limit', 'tamber-upstream', 'tamber-request', 'tamber-tool-via', 'design-tool-harness', 'tamber-timing', 'agent-clock-until', 'agent-held', 'android-manifest', 'app-hosts', 'verify-signal'].map(name => `./scripts/${name}.test.mjs`), './scripts/deploy-paths.test.mjs', './scripts/async-inputs.test.mjs', './scripts/coverage.test.mjs', './scripts/affected.test.mjs'];
+  return [...files, './host/apple/link.test.mjs', './host/apple/cloak.test.mjs'];
 }
 /**
  * What a commit's checks run (scripts/affected.mjs): the suites whose inputs the files changed since the last commit

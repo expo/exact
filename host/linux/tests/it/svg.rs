@@ -3,6 +3,91 @@
 use exact_linux::{presenter::PainterChoice, Presenter};
 
 #[test]
+fn an_inline_svg_reports_its_cost_limit_once_per_node_lifetime() {
+    let app = r##"component App
+  state shown = true
+  state limited = false
+  action toggle
+    limited = !limited
+  action replace
+    shown = !shown
+  view
+    column background-color="#ffffff"
+      if shown
+        svg testId="chart" width=100 height=40
+          path d=(limited ? "M0 10H100000" : "M0 10H100") stroke="#ff0000" stroke-width=4 stroke-dasharray="0.25"
+      button testId="toggle" press=toggle
+        text "Toggle limit"
+      button testId="replace" press=replace
+        text "Replace node"
+"##;
+    let plan = contract::compile(app).unwrap().encode();
+    let (mut p, error) = Presenter::boot_with(
+        &plan,
+        (),
+        (200., 200.),
+        1.,
+        std::path::PathBuf::new(),
+        PainterChoice::Cpu,
+    )
+    .unwrap();
+    assert!(error.is_none(), "{error:?}");
+    let id = |p: &Presenter<()>, name: &str| {
+        let k = p.host().kernel();
+        k.node_by_key(k.find_by_test_id(name)[0]).unwrap().id
+    };
+    let warnings = |p: &Presenter<()>| {
+        let logs: serde_json::Value =
+            serde_json::from_str(&p.host().agent(r#"{"op":"logs","since":0}"#)).unwrap();
+        logs["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|line| line.as_str()?.split_once(' ').map(|(_, message)| message))
+            .filter(|line| line.starts_with("svg #"))
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    assert!(p.frame().pixel(1, 10).unwrap().green() < 255);
+    assert!(warnings(&p).is_empty());
+    let chart = id(&p, "chart");
+    let toggle = id(&p, "toggle");
+    let replace = id(&p, "replace");
+    p.tap(toggle).unwrap();
+    assert_eq!(p.frame().pixel(1, 10).unwrap().green(), 255);
+    let expected = format!(
+        "svg #{chart}: {}; drawing nothing",
+        exact_kernel::svg::scene::Limit::Dashes
+    );
+    assert_eq!(warnings(&p).as_slice(), std::slice::from_ref(&expected));
+    for size in [210., 220.] {
+        assert!(p.resize(size, size).is_none());
+        p.frame();
+    }
+    p.tap(toggle).unwrap();
+    assert!(p.frame().pixel(1, 10).unwrap().green() < 255);
+    p.tap(toggle).unwrap();
+    p.frame();
+    assert_eq!(warnings(&p).as_slice(), std::slice::from_ref(&expected));
+    let old_key = p.host().kernel().find_by_test_id("chart")[0];
+    assert!(p.reload(&plan, ()).unwrap().is_none());
+    assert_eq!(p.host().kernel().find_by_test_id("chart")[0], old_key);
+    assert_eq!(p.frame().pixel(1, 10).unwrap().green(), 255);
+    assert_eq!(warnings(&p).as_slice(), std::slice::from_ref(&expected));
+    assert!(p.resize(230., 230.).is_none());
+    p.frame();
+    assert_eq!(warnings(&p), [expected]);
+    p.tap(replace).unwrap();
+    p.frame();
+    p.tap(replace).unwrap();
+    p.frame();
+    assert_ne!(p.host().kernel().find_by_test_id("chart")[0], old_key);
+    let chart = id(&p, "chart");
+    assert_eq!(warnings(&p).len(), 2);
+    assert!(warnings(&p)[1].starts_with(&format!("svg #{chart}: ")));
+}
+
+#[test]
 fn svg_overflow_clips_to_its_content_box() {
     for overflow in [
         "",

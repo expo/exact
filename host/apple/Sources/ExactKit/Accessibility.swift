@@ -249,20 +249,27 @@ extension NodeView {
     /// (a `progress`'s indicator) says its role and value itself.
     static let rangeRoles: Set<String> = ["progressbar", "slider", "meter", "scrollbar", "spinbutton"]
     var rangeRole: String? { kind == "control" ? nil : props["accessibilityRole"].flatMap { Self.rangeRoles.contains($0) ? $0 : nil } }
-    /// A range role's numbers, ARIA's 0 and 100 where a bound is unsaid;
-    /// nil with no readable `aria-valuenow` or another role.
-    var rangeNumbers: (now: Double, min: Double, max: Double)? {
+    /// A range role's numbers, ARIA's 0 and 100 where a bound is unsaid,
+    /// except a `spinbutton`'s, which ARIA leaves unbounded (WAI-ARIA 1.2,
+    /// `spinbutton`); nil with no readable `aria-valuenow` or another role.
+    var rangeNumbers: (now: Double, min: Double?, max: Double?)? {
         let number = { (key: String) in self.props[key].flatMap { Double($0.trimmingCharacters(in: .whitespaces)) }.flatMap { $0.isFinite ? $0 : nil } }
-        guard rangeRole != nil, let now = number("accessibilityValueNow") else { return nil }
-        return (now, number("accessibilityValueMin") ?? 0, number("accessibilityValueMax") ?? 100)
+        guard let role = rangeRole, let now = number("accessibilityValueNow") else { return nil }
+        let unbounded = role == "spinbutton"
+        return (now, number("accessibilityValueMin") ?? (unbounded ? nil : 0), number("accessibilityValueMax") ?? (unbounded ? nil : 100))
     }
     /// What the platform speaks for a range role: `aria-valuetext`, else
     /// its value as a percentage of its bounds, as UIKit's progress view and
-    /// slider speak theirs ("30%"); nil with neither.
+    /// slider speak theirs ("30%"), or a `spinbutton`'s number itself, as
+    /// WebKit on iOS speaks one ("3"); nil with neither.
     var rangeValueText: String? {
-        if rangeRole != nil, let text = props["accessibilityValueText"], !text.isEmpty { return text }
+        guard let role = rangeRole else { return nil }
+        if let text = props["accessibilityValueText"], !text.isEmpty { return text }
         guard let n = rangeNumbers else { return nil }
-        let fraction = n.max > n.min ? (Swift.min(Swift.max(n.now, n.min), n.max) - n.min) / (n.max - n.min) : 0
+        guard role != "spinbutton", let low = n.min, let high = n.max else {
+            return NumberFormatter.localizedString(from: NSNumber(value: n.now), number: .decimal)
+        }
+        let fraction = high > low ? (Swift.min(Swift.max(n.now, low), high) - low) / (high - low) : 0
         return NumberFormatter.localizedString(from: NSNumber(value: fraction), number: .percent)
     }
     var accessibilityVisible: Bool {
@@ -455,7 +462,7 @@ extension NodeView {
             setAccessibilityElement(true)
             if accessibilityRole() != axRole { setAccessibilityRole(axRole) }
             let n = rangeNumbers
-            let now = n.map { NSNumber(value: $0.now) }, low = n.map { NSNumber(value: $0.min) }, high = n.map { NSNumber(value: $0.max) }
+            let now = n.map { NSNumber(value: $0.now) }, low = n?.min.map { NSNumber(value: $0) }, high = n?.max.map { NSNumber(value: $0) }
             if (accessibilityValue() as? NSNumber) != now { setAccessibilityValue(now) }
             if (accessibilityMinValue() as? NSNumber) != low { setAccessibilityMinValue(low) }
             if (accessibilityMaxValue() as? NSNumber) != high { setAccessibilityMaxValue(high) }
@@ -1183,6 +1190,12 @@ extension Agent {
             var row = row
             if let id = row["id"] as? Int, let node = presenter.views[UInt32(id)] {
                 row["focused"] = focus == id
+                if row["type"] as? String == "NativeView" {
+                    let parts = Agent.packageParts(in: node)
+                    let existing = row["parts"] as? [[String: Any]] ?? []
+                    let ids = Set(existing.compactMap { $0["id"] as? String })
+                    if !parts.isEmpty { row["parts"] = existing + parts.filter { !ids.contains($0["id"] as? String ?? "") } }
+                }
                 if node.props["popover"] != nil { row["open"] = presenter.menus.isOpen(node) }
                 #if os(iOS) || os(tvOS)
                 if let why = unshown[node.id] { row["unshown"] = why }

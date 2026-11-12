@@ -29,8 +29,9 @@ pub fn lean_path(path: &Path, name: &str) -> Result<String, CompileError> {
     lean_file(path, name, true)
 }
 
-/// [`lean`] of the expansion the plan compiler makes, its uses' arguments
-/// not ascribed (`difftest expansion` compares it with the Lean expander).
+/// The component expansion before row-delete lowering, with its uses'
+/// arguments not ascribed (`difftest expansion` compares it with the Lean
+/// expander).
 pub fn lean_plain(src: &str, name: &str) -> Result<String, CompileError> {
     lean_source(src, name, false)
 }
@@ -126,7 +127,8 @@ fn emit_file(
 pub fn emit_checked(checked: &Checked, name: &str) -> Result<String, CompileError> {
     // The same expansion, every prop's and inject's argument ascribed its
     // declared type: the checker's judgment of each use rides along.
-    let (typed, _) = contract_syntax::expand_typed(checked.file);
+    let (mut typed, _) = contract_syntax::expand_typed(checked.file);
+    typed.root.view = contract_lower::expand_row_deletes(&typed.root.view, &checked.file.styles);
     let mut e = Emitter {
         out: String::new(),
         checked,
@@ -724,16 +726,15 @@ impl Emitter<'_> {
             Expr::NamedArg(n, v, _) => format!("(.named {} {})", string(n), self.expr(v)?),
             Expr::Typed(e, t, _) => {
                 let resolved = self.checked.types.shapes.resolve(t).ok();
-                // A literal at its own type is the literal: the ascription
-                // changes nothing, and the compiler reads literals as
-                // literals (a template's text, an attribute's value).
+                // At its own Lean type a literal needs no ascription.
+                // Enums are strings in the semantics.
                 let literal = match **e {
-                    Expr::Number(..) => Some(Ty::Number),
-                    Expr::Str(..) => Some(Ty::String),
-                    Expr::Bool(..) => Some(Ty::Bool),
-                    _ => None,
+                    Expr::Number(..) => resolved == Some(Ty::Number),
+                    Expr::Str(..) => resolved.as_ref().is_some_and(Ty::is_string),
+                    Expr::Bool(..) => resolved == Some(Ty::Bool),
+                    _ => false,
                 };
-                if literal.is_some() && literal == resolved {
+                if literal {
                     return self.expr(e);
                 }
                 let t = resolved.map_or_else(|| ".unknown".to_string(), |t| ty(&t));

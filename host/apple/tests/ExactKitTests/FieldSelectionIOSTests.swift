@@ -254,6 +254,7 @@ final class FieldSelectionIOSTests: XCTestCase {
         XCTAssertFalse(manager.canUndo)
         XCTAssertFalse(manager.canRedo)
     }
+
     func testRangeTextPreservesSelectionWithoutFocusOrUndo() throws {
         let p = presenter()
         let node = try XCTUnwrap(p.views[2])
@@ -304,37 +305,250 @@ final class FieldSelectionIOSTests: XCTestCase {
         }
     }
 
-    func testRangeTextWhileEditingAddsNoUndoStep() throws {
+    func testRangeTextWhileEditingIsOneUndoStep() throws {
+        let p = presenter()
+        var replacements = 0, inputs: [String] = []
+        p.onInput = { id, value in
+            let selection = p.fieldSelections.reported(id, value)
+            let type = p.fieldSelections.input(id)?.inputType ?? "none"
+            inputs.append("\(value):\(type):\(selection?.start ?? -1)-\(selection?.end ?? -1)")
+        }
+        p.fieldSelections.onReplacement = { id, value, _ in
+            replacements += 1
+            XCTAssertEqual(p.fieldSelections.input(id)?.inputType, "insertReplacementText")
+            p.views[id]?.applyProps(set: ["value": value], clear: [])
+        }
+        for (name, id) in [("editor", UInt32(2)), ("line", UInt32(3))] {
+            let node = try XCTUnwrap(p.views[id])
+            let editor: UIView & UITextInput = try XCTUnwrap((node.textArea as (UIView & UITextInput)?) ?? node.field)
+            XCTAssertTrue(editor.becomeFirstResponder())
+            let manager = try XCTUnwrap(editor.undoManager)
+            manager.removeAllActions()
+            manager.groupsByEvent = false
+            defer { manager.groupsByEvent = true }
+            p.fieldSelections.setSelectionRange([name, 5, 5])
+            manager.beginUndoGrouping()
+            editor.insertText("!")
+            manager.endUndoGrouping()
+            inputs.removeAll()
+            p.fieldSelections.setSelectionRange([name, 1, 4, "backward"])
+            let before = replacements
+            p.fieldSelections.setRangeText([name, "X"])
+            p.fieldSelections.setRangeText([name, "X", 1, 2, "select"])
+            XCTAssertEqual(replacements, before + 2, "an unchanged value emits input without adding an undo step")
+            XCTAssertEqual(inputs, [], "a script emits only the replacement input")
+            XCTAssertEqual(node.fieldText, "hXo!")
+            XCTAssertEqual(p.fieldSelections.current(node), FieldSelection(start: 1, end: 2))
+            XCTAssertTrue(node.editingField)
+            XCTAssertTrue(manager.canUndo)
+            p.fieldSelections.setSelectionRange([name, 0, 0])
+            manager.undo()
+            XCTAssertEqual(node.fieldText, "hello!")
+            XCTAssertEqual(inputs, ["hello!:historyUndo:1-4"])
+            XCTAssertEqual(p.fieldSelections.current(node), FieldSelection(start: 1, end: 4, direction: "backward"))
+            manager.undo()
+            XCTAssertEqual(node.fieldText, "hello")
+            manager.redo()
+            XCTAssertEqual(node.fieldText, "hello!")
+            inputs.removeAll()
+            manager.redo()
+            XCTAssertEqual(inputs, ["hXo!:historyRedo:1-2"])
+            XCTAssertEqual(node.fieldText, "hXo!")
+            XCTAssertEqual(p.fieldSelections.current(node), FieldSelection(start: 1, end: 2))
+            node.replaceFieldValue("hello")
+            node.toldText = nil
+            editor.resignFirstResponder()
+        }
+    }
+
+    func testRangeTextHistoryPublishesCanonicallyEquivalentUTF16Changes() throws {
+        let p = presenter()
+        let original = "caf\u{e9}", replacement = "cafe\u{301}"
+        var types: [String] = [], values: [[UInt16]] = []
+        p.onInput = { id, value in
+            types.append(p.fieldSelections.input(id)?.inputType ?? "none")
+            values.append(Array(value.utf16))
+            p.views[id]?.applyProps(set: ["value": value], clear: [])
+        }
+        p.fieldSelections.onReplacement = { id, value, _ in
+            types.append(p.fieldSelections.input(id)?.inputType ?? "none")
+            values.append(Array(value.utf16))
+            p.views[id]?.applyProps(set: ["value": value], clear: [])
+        }
+        for (name, id) in [("editor", UInt32(2)), ("line", UInt32(3))] {
+            let node = try XCTUnwrap(p.views[id])
+            node.applyProps(set: ["value": original], clear: [])
+            let editor: UIView & UITextInput = try XCTUnwrap((node.textArea as (UIView & UITextInput)?) ?? node.field)
+            XCTAssertTrue(editor.becomeFirstResponder())
+            let manager = try XCTUnwrap(editor.undoManager)
+            manager.removeAllActions()
+            types.removeAll()
+            values.removeAll()
+            p.fieldSelections.setSelectionRange([name, 3, 4])
+            p.fieldSelections.setRangeText([name, "e\u{301}", 3, 4, "select"])
+            waitFor("the replacement's event group closes") { manager.groupingLevel == 0 }
+            XCTAssertEqual(Array(node.fieldText.utf16), Array(replacement.utf16))
+            manager.undo()
+            XCTAssertEqual(Array(node.fieldText.utf16), Array(original.utf16))
+            XCTAssertEqual(Array((node.props["value"] ?? "").utf16), Array(original.utf16))
+            XCTAssertEqual(p.fieldSelections.current(node), FieldSelection(start: 3, end: 4))
+            manager.redo()
+            waitForMainQueue("the history edit's queued events")
+            XCTAssertEqual(Array(node.fieldText.utf16), Array(replacement.utf16))
+            XCTAssertEqual(Array((node.props["value"] ?? "").utf16), Array(replacement.utf16))
+            XCTAssertEqual(p.fieldSelections.current(node), FieldSelection(start: 3, end: 5))
+            XCTAssertEqual(types, ["insertReplacementText", "historyUndo", "historyRedo"], name)
+            XCTAssertEqual(values, [Array(replacement.utf16), Array(original.utf16), Array(replacement.utf16)], name)
+            editor.resignFirstResponder()
+        }
+    }
+
+    func testAnAuthoritativeValueClearsRangeAndTypingHistory() throws {
+        let p = presenter()
+        p.fieldSelections.onReplacement = { id, value, _ in
+            p.views[id]?.applyProps(set: ["value": value], clear: [])
+        }
+        for (name, id) in [("editor", UInt32(2)), ("line", UInt32(3))] {
+            let node = try XCTUnwrap(p.views[id])
+            let editor: UIView & UITextInput = try XCTUnwrap((node.textArea as (UIView & UITextInput)?) ?? node.field)
+            XCTAssertTrue(editor.becomeFirstResponder())
+            let manager = try XCTUnwrap(editor.undoManager)
+            for typing in [false, true] {
+                for undo in [false, true] {
+                    node.applyProps(set: ["value": "hello"], clear: [])
+                    manager.removeAllActions()
+                    p.fieldSelections.setSelectionRange([name, 1, 4])
+                    if typing { editor.insertText("!") }
+                    else { p.fieldSelections.setRangeText([name, "X"]) }
+                    node.applyProps(set: ["value": node.fieldText], clear: [])
+                    XCTAssertTrue(manager.canUndo, "an echo preserves history: \(name)")
+                    if undo {
+                        manager.undo()
+                        XCTAssertTrue(manager.canRedo)
+                    }
+                    if let field = node.field { node.writeValue("goodbye", into: field) }
+                    else { node.writeValue("goodbye", into: try XCTUnwrap(node.textArea)) }
+                    XCTAssertEqual(node.fieldText, "goodbye")
+                    XCTAssertFalse(manager.canUndo, "\(name): typing=\(typing), undo=\(undo)")
+                    XCTAssertFalse(manager.canRedo, "\(name): typing=\(typing), undo=\(undo)")
+                }
+            }
+            editor.resignFirstResponder()
+        }
+    }
+
+    func testRangeTextHistoryInvalidatesScriptedSelectionBeforeInput() throws {
+        let p = presenter()
+        for (name, id) in [("editor", UInt32(2)), ("line", UInt32(3))] {
+            let node = try XCTUnwrap(p.views[id])
+            let editor: UIView & UITextInput = try XCTUnwrap((node.textArea as (UIView & UITextInput)?) ?? node.field)
+            XCTAssertTrue(editor.becomeFirstResponder())
+            let manager = try XCTUnwrap(editor.undoManager)
+            manager.removeAllActions()
+            p.fieldSelections.setSelectionRange([name, 1, 4])
+            p.fieldSelections.setRangeText([name, "X"])
+            waitFor("the replacement's event group closes") { manager.groupingLevel == 0 }
+            for (type, value, restored, command) in [
+                ("historyUndo", "hello", FieldSelection(start: 1, end: 4), FieldSelection(start: 1, end: 2)),
+                ("historyRedo", "hXo", FieldSelection(start: 1, end: 2), FieldSelection(start: 0, end: 0)),
+            ] {
+                p.fieldSelections.setSelectionRange([name, command.start, command.end])
+                waitForMainQueue("the replacement's queued select")
+                selects.removeAll()
+                var inputs = 0
+                p.onInput = { view, text in
+                    inputs += 1
+                    XCTAssertEqual(view, id)
+                    XCTAssertEqual(text, value)
+                    XCTAssertEqual(p.fieldSelections.input(id)?.inputType, type)
+                    XCTAssertEqual(p.fieldSelections.current(node), restored)
+                    p.fieldSelections.setSelectionRange([name, command.start, command.end])
+                }
+                if type == "historyUndo" { manager.undo() } else { manager.redo() }
+                waitForMainQueue("the history edit's queued events")
+                XCTAssertEqual(inputs, 1, "\(name): \(type)")
+                XCTAssertEqual(selects, ["\(id) \(value) \(command.start)-\(command.end) none"], "\(name): \(type)")
+                p.fieldSelections.setSelectionRange([name, command.start, command.end])
+                XCTAssertEqual(selects.count, 1, "a repeated command still suppresses select")
+                p.onInput = nil
+            }
+            editor.resignFirstResponder()
+        }
+    }
+
+    func testRangeTextSeparatesConsecutiveCallsAndFollowingTyping() throws {
+        let p = presenter()
+        for (name, id) in [("editor", UInt32(2)), ("line", UInt32(3))] {
+            let node = try XCTUnwrap(p.views[id])
+            let editor: UIView & UITextInput = try XCTUnwrap((node.textArea as (UIView & UITextInput)?) ?? node.field)
+            XCTAssertTrue(editor.becomeFirstResponder())
+            let manager = try XCTUnwrap(editor.undoManager)
+            manager.removeAllActions()
+            p.fieldSelections.setSelectionRange([name, 5, 5])
+            editor.insertText("!")
+            p.fieldSelections.setRangeText([name, "X", 1, 4, "end"])
+            p.fieldSelections.setRangeText([name, "Y", 2, 2, "end"])
+            waitFor("the replacement's event group closes") { manager.groupingLevel == 0 }
+            editor.insertText("?")
+            waitFor("the typing's event group closes") { manager.groupingLevel == 0 }
+            XCTAssertEqual(node.fieldText, "hXY?o!")
+            for (value, caret) in [("hXYo!", 3), ("hXo!", 2), ("hello!", 6), ("hello", 5)] {
+                XCTAssertTrue(manager.canUndo)
+                manager.undo()
+                XCTAssertEqual(node.fieldText, value)
+                XCTAssertEqual(p.fieldSelections.current(node), FieldSelection(start: caret, end: caret))
+            }
+            XCTAssertFalse(manager.canUndo, "no empty group remains")
+            for (value, caret) in [("hello!", 6), ("hXo!", 2), ("hXYo!", 3), ("hXY?o!", 4)] {
+                XCTAssertTrue(manager.canRedo)
+                manager.redo()
+                XCTAssertEqual(node.fieldText, value)
+                XCTAssertEqual(p.fieldSelections.current(node), FieldSelection(start: caret, end: caret))
+            }
+            XCTAssertFalse(manager.canRedo)
+            editor.resignFirstResponder()
+        }
+    }
+
+    func testRangeTextIgnoresReadOnlyAndMaxLengthAndKeepsCompositionFallback() throws {
         let p = presenter()
         var replacements = 0
-        p.onInput = { _, _ in XCTFail("a scripted edit must not also emit a user input") }
         p.fieldSelections.onReplacement = { _, _, _ in replacements += 1 }
         for (name, id) in [("editor", UInt32(2)), ("line", UInt32(3))] {
             let node = try XCTUnwrap(p.views[id])
-            #if os(macOS)
-            if let editor = node.textArea { window.makeFirstResponder(editor) }
-            else { window.makeFirstResponder(node.field) }
-            let editor = try XCTUnwrap(node.textArea ?? node.field?.currentEditor() as? NSTextView)
-            editor.undoManager?.removeAllActions()
-            #else
-            if let editor = node.textArea { XCTAssertTrue(editor.becomeFirstResponder()) }
-            else { XCTAssertTrue(node.field?.becomeFirstResponder() ?? false) }
-            let undo = node.textArea?.undoManager ?? node.field?.undoManager
-            undo?.removeAllActions()
-            #endif
-            p.fieldSelections.setSelectionRange([name, 1, 4])
+            let editor: UIView & UITextInput = try XCTUnwrap((node.textArea as (UIView & UITextInput)?) ?? node.field)
+            node.applyProps(set: ["editable": "false", "maxlength": "5"], clear: [])
+            XCTAssertTrue(editor.becomeFirstResponder())
+            let manager = try XCTUnwrap(editor.undoManager)
+            manager.removeAllActions()
+            p.onInput = { _, _ in XCTFail("a scripted edit emits only its replacement input") }
+            p.fieldSelections.onBeforeInput = { _, _, _, _ in XCTFail("a script asks no editing permission") }
+            node.handlers.insert("beforeinput")
             let before = replacements
-            p.fieldSelections.setRangeText([name, "X"])
+            p.edited = nil
+            p.fieldSelections.setRangeText([name, " world", 5, 5, "end"])
+            XCTAssertEqual(node.fieldText, "hello world")
             XCTAssertEqual(replacements, before + 1)
-            XCTAssertEqual(node.fieldText, "hXo")
-            XCTAssertEqual(p.fieldSelections.current(node), FieldSelection(start: 1, end: 2))
-            #if os(macOS)
-            XCTAssertEqual(editor.string, "hXo", "the NSTextField's active editor agrees")
-            XCTAssertFalse(editor.undoManager?.canUndo ?? false)
-            #else
-            XCTAssertFalse(undo?.canUndo ?? false)
-            #endif
-            XCTAssertTrue(node.editingField)
+            XCTAssertTrue(editor.isFirstResponder, name)
+            XCTAssertNil(p.edited, "a script leaves no pending user change")
+            XCTAssertEqual(node.props["editable"], "false")
+            if let area = node.textArea { XCTAssertFalse(area.isEditable) }
+            waitFor("the read-only replacement's group closes") { manager.groupingLevel == 0 }
+            p.onInput = nil
+            XCTAssertTrue(manager.canUndo, name)
+            manager.undo()
+            XCTAssertEqual(node.fieldText, "hello")
+            manager.redo()
+            XCTAssertEqual(node.fieldText, "hello world")
+            node.applyProps(set: ["editable": "true"], clear: ["maxlength"])
+            p.fieldSelections.onBeforeInput = nil
+            editor.setMarkedText("あ", selectedRange: NSRange(location: 1, length: 0))
+            XCTAssertNotNil(editor.markedTextRange)
+            p.fieldSelections.setRangeText([name, "script", 0, node.fieldText.utf16.count, "end"])
+            XCTAssertEqual(node.fieldText, "script")
+            XCTAssertFalse(manager.canUndo, "composition keeps the authoritative-write fallback")
+            editor.unmarkText()
+            editor.resignFirstResponder()
         }
     }
 

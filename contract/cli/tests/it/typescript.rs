@@ -142,6 +142,12 @@ impl Drop for Fixture {
 /// which the default checks skip: an Ibex refresh once replaced the
 /// declaration with the engine's positional binding and nothing failed.
 #[test]
+fn generated_request_init_names_every_fetch_cache_mode() {
+    let declarations = contract::typescript(&contract::compile(CONTRACT).unwrap()).unwrap();
+    assert!(declarations.contains("cache?: \"default\" | \"no-store\" | \"reload\" | \"no-cache\" | \"force-cache\" | \"only-if-cached\";"));
+}
+
+#[test]
 fn compress_image_is_declared_as_the_docs_give_it() {
     let declared = include_str!("../../../../vendor/ibex/crates/ibex2/src/bindings/storage.d.ts");
     for line in [

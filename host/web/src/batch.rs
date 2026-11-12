@@ -40,6 +40,7 @@ pub(crate) fn request_refusal(request: &exact_runner::Request) -> Option<&'stati
     }
     (request.ceiling_refusal())
         .or(request.timeout_refusal())
+        .or(request.protocols_refusal())
         .or(request.body_from_refusal())
         .or(request.body_to_refusal())
         .or(request.long_poll_refusal())
@@ -263,44 +264,21 @@ impl Batch {
     }
 
     /// `{"op":"create","id":…,"tag":…,"props":{…},"css":…,"handlers":[…]}`,
-    /// plus `"ns":"http://www.w3.org/2000/svg"` for an SVG element (LLP 1055 D4).
+    /// plus `"ns":"http://www.w3.org/2000/svg"` when `svg`, an SVG node by its
+    /// type (LLP 1055 D4). The tag cannot say: a module's custom element may
+    /// be named `felt-haptics` (LLP 1024 D1).
     pub fn create(
         &mut self,
         id: u32,
         tag: &str,
+        svg: bool,
         props: &[(&str, String)],
         css: &str,
         handlers: &[&str],
     ) {
         let mut s = text!("{{\"op\":\"create\",\"id\":{},\"tag\":", id);
         quote(tag, &mut s);
-        if matches!(
-            tag,
-            "svg"
-                | "g"
-                | "path"
-                | "polyline"
-                | "polygon"
-                | "circle"
-                | "ellipse"
-                | "line"
-                | "rect"
-                | "defs"
-                | "linearGradient"
-                | "radialGradient"
-                | "stop"
-                | "use"
-                | "symbol"
-                | "clipPath"
-                | "marker"
-                | "mask"
-                | "pattern"
-                | "foreignObject"
-                | "filter"
-                | "text"
-                | "tspan"
-        ) || tag.starts_with("fe")
-        {
+        if svg {
             s.push_str(",\"ns\":\"http://www.w3.org/2000/svg\"");
         }
         s.push_str(",\"props\":");
@@ -570,6 +548,10 @@ impl Batch {
     /// — a request the runner handed the host to run (LLP 1016 D2); the
     /// reply comes back through `exact_fulfill`.
     pub fn request(&mut self, r: &exact_runner::RequestOut) {
+        if let Err(message) = r.request.check_protocols() {
+            self.refuse(r.ticket, &message);
+            return;
+        }
         if let Some(message) = request_refusal(&r.request) {
             self.refuse(r.ticket, message);
             return;
@@ -655,6 +637,17 @@ impl Batch {
         if let Some(ms) = r.request.timeout_ms {
             push_text!(&mut s, ",\"timeoutMs\":{}", ms);
         }
+        if !r.request.protocols.is_empty() {
+            s.push_str(",\"protocols\":");
+            string_list(
+                &r.request
+                    .protocols
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                &mut s,
+            );
+        }
         // `exactHeld` (LLP 1016.000 D9): the page lists it, and no clock waits on it.
         if r.request.is_held() {
             s.push_str(",\"held\":true");
@@ -703,9 +696,18 @@ impl Batch {
         }
         s.push_str(",\"body\":\"");
         s.push_str(&exact_runner::agent::base64(&r.request.body));
-        s.push_str("\",\"cache\":\"");
-        s.push_str(if r.forced { "reload" } else { "default" });
         s.push('"');
+        if r.forced || r.request.cache != exact_runner::CacheMode::Unspecified {
+            s.push_str(",\"cache\":\"");
+            s.push_str(
+                if r.forced && r.request.cache != exact_runner::CacheMode::NoStore {
+                    "reload"
+                } else {
+                    r.request.cache.name()
+                },
+            );
+            s.push('"');
+        }
         // An answer that keeps coming (LLP 1016.000): the page reads the
         // body as events and delivers each as a message (kind 8).
         if r.request.stream {

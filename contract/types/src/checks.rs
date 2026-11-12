@@ -1008,6 +1008,9 @@ pub(super) fn check_command(
     if name == "setRootFontSize" {
         return root_font_size_args(args, scope, shapes, span);
     }
+    if name == "setLocale" {
+        return super::strings::set_locale_args(args, scope, shapes, span);
+    }
     // @ref LLP 1021 §5.3.1 — one factor, CSS px per device-independent
     // pixel: 1 is Actual Size.
     if name == "setPageZoom" {

@@ -33,7 +33,7 @@ mod crypto {
             Err("injected OS entropy failure".into())
         }
     }
-    #[path = "/Users/ccheever/projects/exact-release/data/src/crypto/ecdsa.rs"]
+    #[path = "/Users/<user>/projects/exact-release/data/src/crypto/ecdsa.rs"]
     pub mod ecdsa;
 }
 fn main() {

@@ -266,6 +266,285 @@ component App
   } finally { await app.close(); }
 }, 30000);
 
+test.each(['finished', 'skipped'].flatMap(outcome => ['arm', 'row', 'match', 'list'].map(region => [outcome, region])))('a bound exit keeps the preceding commit value behind a %s view transition (%s)', async (outcome, region) => {
+  const rows = region === 'row' || region === 'list';
+  const value = rows ? 'row.k' : region === 'match' ? 'value' : 'k';
+  const loop = 'for row in rows key=(broken ? row.id / (row.id - row.id) : row.id)';
+  const branch = region === 'list' ? `list virtualized=true height=100 estimated-item-height=40\n        ${loop}` : region === 'row' ? loop : region === 'match' ? 'match first(shown ? [k] : [])\n        case some(value)' : 'if shown';
+  const indent = region === 'match' || region === 'list' ? '          ' : '        ';
+  const app = await exitApp('chromium', `keyframes leave
+  to opacity=0
+
+shape Row
+  id: number
+  k: number
+
+component App
+  state rows = [Row(id=1, k=0)]
+  state broken = false
+  state swapped = false
+  state shown = true
+  state k = 0
+  action swap
+    swapped = not swapped
+  action corrupt
+    broken = true
+  action next
+    broken = false
+    rows = shown ? [Row(id=1, k=(k + 1) % 3)] : []
+    k = (k + 1) % 3
+  action drop
+    shown = false
+    rows = []
+    k = (k + 1) % 3
+  action idle
+    shown = shown
+  action show
+    k = 0
+    rows = [Row(id=1, k=0)]
+    shown = true
+  view
+    column
+      button "Swap" press=swap testId="swap"
+      button "Next" press=next testId="next"
+      button "Corrupt" press=corrupt testId="corrupt"
+      button "Drop" press=drop testId="drop"
+      button "Show" press=show testId="show"
+      button "Idle" press=idle testId="idle"
+      if swapped
+        text "After" sharedElement="marker" -exact-layout-transition="20ms linear"
+      else
+        text "Before" sharedElement="marker" -exact-layout-transition="20ms linear"
+      ${branch}
+${indent}text "Card" testId="card" -exact-exit-animation=(${value} == 0 ? "none" : ${value} == 1 ? "leave 2000ms linear both" : "leave 4000ms linear both")
+${region === 'match' ? '        case none\n          text "Gone"' : ''}
+`);
+  try {
+    for (const [changes, later, corrupt] of [[2, 0], [3, 0], [4, 0], [2, 1], [2, 3], [2, 'idle'], [2, 0, true]]) {
+      const observed = await app.page.evaluate(async ({ changes, later, corrupt, outcome }) => {
+        const press = id => document.querySelector(`[data-testid="${id}"]`).click();
+        const card = document.querySelector('[data-testid="card"]');
+        const gate = Promise.withResolvers(), start = document.startViewTransition.bind(document);
+        let transition;
+        document.startViewTransition = update => {
+          transition = start(async () => { await gate.promise; return update(); });
+          transition.ready.catch(() => {});
+          return transition;
+        };
+        try {
+          press('swap');
+          if (corrupt) press('corrupt');
+          for (let i = 0; i < changes; i++) press('next');
+          press('drop');
+          if (later === 'idle') press('idle');
+          else for (let i = 0; i < later; i++) press('next');
+          const deferred = !!transition, before = card.hasAttribute('data-exiting');
+          const css = card.style.getPropertyValue('--exact-exit-animation');
+          if (outcome === 'skipped') transition.skipTransition();
+          gate.resolve();
+          await transition.updateCallbackDone;
+          await transition.ready.catch(() => {});
+          const ghosts = [...document.querySelectorAll('[data-exiting]')];
+          const animations = ghosts.flatMap(node => node.getAnimations());
+          const durations = animations.map(animation => animation.effect.getTiming().duration);
+          await Promise.all(document.getAnimations().map(animation => (animation.finish(), animation.finished)));
+          await transition.finished;
+          return { deferred, before, css, ghosts: ghosts.length, durations, removed: !card.isConnected };
+        } finally { document.startViewTransition = start; }
+      }, { changes, later, corrupt, outcome });
+      const durations = changes === 3 ? [] : [changes === 2 ? 4000 : 2000];
+      expect(observed).toEqual({ deferred: true, before: false, css: '', ghosts: durations.length, durations, removed: true });
+      await app.page.locator('[data-testid="show"]').click();
+      await app.page.locator('[data-testid="card"]').waitFor();
+    }
+  } finally { await app.close(); }
+}, 60000);
+
+test('presence binding probes read the committed clock and release their dependencies', async () => {
+  const app = await exitApp('chromium', SOURCE);
+  try {
+    const observed = await app.page.evaluate(async () => {
+      const rt = await import('/rt.js'), bindings = await import('/presence-bindings.js');
+      rt.clock.agent = true; rt.clock.now = 0; rt.commit(() => {});
+      const root = document.getElementById('exact-root'), exit = document.createElement('div'), layout = document.createElement('div');
+      root.append(exit, layout);
+      const signal = rt.sig(0), value = () => { signal(); return rt.x_performanceNow() < 1000 ? 'none' : 'curve'; };
+      const own = rt.scope(() => {
+        rt.px(exit); rt.S(exit, '--exact-exit-animation', '', value);
+        rt.lt(layout, ['curve'], value);
+      });
+      const listeners = signal.n.obs.size;
+      // Moving the clock alone does not publish a new committed time.
+      rt.clock.now = 2000;
+      for (let i = 0; i < 3; i++) bindings.captureExits();
+      const result = { exit: rt.exitOf(exit), gains: bindings.gains().length, listeners: signal.n.obs.size - listeners };
+      rt.end(own); exit.remove(); layout.remove();
+      return result;
+    });
+    expect(observed).toEqual({ exit: 'none', gains: 0, listeners: 0 });
+  } finally { await app.close(); }
+}, 30000);
+
+test('presence row maps stay cached until their subject or key dependencies change', async () => {
+  const app = await exitApp('chromium', SOURCE);
+  try {
+    const observed = await app.page.evaluate(async () => {
+      const rt = await import('/rt.js'), bindings = await import('/presence-bindings.js');
+      const items = Array.from({ length: 100_000 }, (_, i) => [i, 1000]);
+      const subject = rt.sig(items), salt = rt.sig(0), unrelated = rt.sig(0);
+      const root = document.getElementById('exact-root'), exit = document.createElement('div');
+      root.append(exit);
+      let keys = 0;
+      const own = rt.scope(() => {
+        const offset = rt.memo(() => salt() % 2);
+        const row = bindings.presenceRows((p, item) => {
+          rt.px(exit);
+          rt.S(exit, '--exact-exit-animation', '', () => `leave ${item()[1]}ms linear both`);
+        }, subject, item => { keys++; return item()[0] + offset(); });
+        rt.scope(() => row(root, rt.sig(items[1]), rt.sig(1), 'number:1'));
+      });
+      const capture = () => {
+        bindings.captureExits();
+        const result = [keys, rt.exitOf(exit)];
+        keys = 0;
+        return result;
+      };
+      const uninspected = keys, first = capture(), idle = [];
+      for (let i = 0; i < 3; i++) {
+        rt.commit(() => rt.W(unrelated, unrelated() + 1));
+        idle.push(capture());
+      }
+      rt.commit(() => rt.W(subject, items.with(1, [1, 7000])));
+      const changed = capture();
+      rt.commit(() => rt.W(salt, 2));
+      const equalKeyInput = capture();
+      rt.commit(() => rt.W(salt, 1));
+      const rekeyed = capture();
+      rt.commit(() => rt.W(subject, []));
+      const removed = capture();
+      rt.end(own); exit.remove();
+      return { uninspected, first, idle, changed, equalKeyInput, rekeyed, removed,
+        listeners: subject.n.obs.size + salt.n.obs.size };
+    });
+    expect(observed).toEqual({ uninspected: 0, first: [100_000, 'leave 1000ms linear both'],
+      idle: Array.from({ length: 3 }, () => [0, 'leave 1000ms linear both']),
+      changed: [100_000, 'leave 7000ms linear both'], equalKeyInput: [0, 'leave 7000ms linear both'],
+      rekeyed: [100_000, 'leave 1000ms linear both'], removed: [0, 'leave 1000ms linear both'], listeners: 0 });
+  } finally { await app.close(); }
+}, 30000);
+
+// runner/collection.rs: a report with both edges armed dispatches reachend in that report after a reachstart that
+// changes nothing; after one that changes something, reachend waits for a later report. A row or arm whose value an
+// earlier commit changed behind a view transition has its exit read when reachstart commits; publishing that value to
+// the row or arm is no change of reachstart's.
+test.each(['row', 'match'])('a reachstart that writes nothing offers reachend in its report while a changed %s waits behind a view transition', async region => {
+  const branch = region === 'row' ? 'for row in rows key=row.id' : 'match first(rows)\n        case some(row)';
+  const indent = region === 'row' ? '        ' : '          ';
+  const app = await exitApp('chromium', `keyframes leave
+  to opacity=0
+
+shape Row
+  id: number
+  k: number
+
+component App
+  state rows = [Row(id=1, k=0)]
+  state swapped = false
+  state ends = 0
+  action swap
+    swapped = not swapped
+  action next
+    rows = [Row(id=1, k=1)]
+  action earlier
+    let n = 1
+  action later
+    ends = ends + 1
+  view
+    column
+      button "Swap" press=swap testId="swap"
+      button "Next" press=next testId="next"
+      text \`\${ends}\` testId="ends"
+      if swapped
+        text "After" sharedElement="marker" -exact-layout-transition="20ms linear"
+      else
+        text "Before" sharedElement="marker" -exact-layout-transition="20ms linear"
+      ${branch}
+${indent}text "Card" testId="card" -exact-exit-animation=(row.k == 0 ? "none" : "leave 2000ms linear both")
+${region === 'match' ? '        case none\n          text "Gone"\n' : ''}      list virtualized=true height=100 estimated-item-height=40 reachstart=earlier reachend=later
+        for x in [1] key=x
+          text "Row"
+`);
+  try {
+    // The first report reaches both edges: reachstart writes nothing, so reachend follows it.
+    await app.page.waitForFunction(() => document.querySelector('[data-testid="ends"]')?.textContent === '1');
+    const observed = await app.page.evaluate(async () => {
+      const ends = () => document.querySelector('[data-testid="ends"]').textContent;
+      const press = id => document.querySelector(`[data-testid="${id}"]`).click();
+      const gate = Promise.withResolvers(), start = document.startViewTransition.bind(document);
+      let transition;
+      document.startViewTransition = update => {
+        transition = start(async () => { await gate.promise; return update(); });
+        transition.ready.catch(() => {});
+        return transition;
+      };
+      try {
+        press('swap');
+        press('next');
+        // Both edges armed again, and a report asked for: the list's rows are as they were. A microtask the
+        // reachstart handler queues runs after the report that called it.
+        const c = [...exact.lists.internals.Lists.values()][0], heard = [], [earlier, later] = c.edges;
+        c.edges = [() => { queueMicrotask(() => heard.push('report done')); heard.push('reachstart'); return earlier(); },
+          () => { heard.push('reachend'); return later(); }];
+        c.edgeArmed = [true, true];
+        for (const m of c.mounted) m.epoch = ++c.nextEpoch;
+        c.revision++;
+        exact.lists.internals.settled();
+        await exact.lists.settle();
+        const deferred = !!transition, waiting = ends();
+        gate.resolve();
+        await transition.finished.catch(() => {});
+        return { deferred, waiting, after: ends(), heard };
+      } finally { document.startViewTransition = start; }
+    });
+    expect(observed).toEqual({ deferred: true, waiting: '1', after: '2', heard: ['reachstart', 'reachend', 'report done'] });
+  } finally { await app.close(); }
+}, 30000);
+
+// The stand-in that paints a box while its size moves carries the box's own translate as the box resolves it: 50% of
+// its `transform-box`, here its content box (200px less 20px padding and 5px border a side: 150px), so 75px, not 50%
+// of the stand-in's own border box.
+test('a resizing box\'s stand-in paints at its translate, resolved in the box\'s transform-box', async () => {
+  const app = await exitApp('chromium', `component App
+  state tall = false
+  action grow
+    tall = not tall
+  view
+    column
+      button "grow" press=grow testId="grow"
+      box testId="card" width=200 height=(tall ? 160 : 100) box-sizing="border-box" padding="10px 20px" border="5px solid #333" background-color="#4a90d9" transform-box="content-box" translate="50% 0" -exact-layout-transition="2000ms linear"
+`);
+  try {
+    const { page } = app;
+    const at = await page.evaluate(async () => {
+      const card = document.querySelector('[data-testid="card"]');
+      const rest = card.getBoundingClientRect().left;
+      document.querySelector('[data-testid="grow"]').click();
+      await new Promise(resolve => setTimeout(resolve));
+      const stand = card.previousElementSibling?.hasAttribute('data-exiting') ? card.previousElementSibling.firstElementChild : null;
+      const animations = [card, ...(stand ? [stand.parentElement, stand] : [])].flatMap(node => node.getAnimations());
+      await Promise.all(animations.map(async animation => { animation.pause(); await animation.ready; animation.currentTime = 1000; }));
+      const result = { rest, card: card.getBoundingClientRect().left, surface: stand?.getBoundingClientRect().left ?? null,
+        height: stand?.getBoundingClientRect().height ?? null };
+      await Promise.all(animations.map(animation => (animation.finish(), animation.finished)));
+      return result;
+    });
+    // Mid-transition the card is where it rests, and its stand-in, half grown, paints over it.
+    expect(at.card).toBeCloseTo(at.rest, 1);
+    expect(at.height).toBeCloseTo(130, 1);
+    expect(at.surface).toBeCloseTo(at.card, 1);
+  } finally { await app.close(); }
+}, 30000);
+
 /** `source` compiled to the JS target and opened in `engine` with presence loaded. `drop(button)` presses `button`,
  * reports the exit animations that start, then finishes them; `close()` removes the page, server and app. */
 async function exitApp(engine, source, pageOptions) {

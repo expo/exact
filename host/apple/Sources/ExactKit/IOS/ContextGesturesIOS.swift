@@ -60,16 +60,37 @@ extension NodeView {
     var hasInlineContextMenu: Bool { inlineText.contains { $0.handlers.contains("contextmenu") || $0.props["contextPopover"]?.isEmpty == false } }
     var hasInlinePlainContextMenu: Bool { inlineText.contains { $0.handlers.contains("contextmenu") && $0.props["contextPopover"]?.isEmpty != false } }
     func inlineContextTarget(at point: CGPoint) -> InlineText? {
+        inlineRun(at: point) { $0.handlers.contains("contextmenu") || $0.props["contextPopover"]?.isEmpty == false }
+    }
+    /// The innermost run under `point`, or one enclosing it, that `matches`; nil past an inert one.
+    private func inlineRun(at point: CGPoint, where matches: (InlineText) -> Bool) -> InlineText? {
         var run = inlineTarget(at: point)
         while let current = run {
             guard presenter?.inlineInert(current.id) == false else { return nil }
-            if current.handlers.contains("contextmenu") || current.props["contextPopover"]?.isEmpty == false { return current }
+            if matches(current) { return current }
             run = presenter?.inlineText(current.parent)
         }
         return nil
     }
+    /// The link a long press here lifts with the host's own menu (LLP 1021
+    /// §5.1, "A link's own menu"): the nearest run with an `href` under
+    /// `point`, else the node's own, where nothing authored answers it.
+    func peekedLink(at point: CGPoint) -> (href: String, run: InlineText?)? {
+        guard !hasOwnContextMenu, inlineContextTarget(at: point) == nil else { return nil }
+        if let run = inlineRun(at: point, where: { $0.props["href"].map(Self.hasLinkMenu) == true }), let href = run.props["href"] { return (href, run) }
+        return props["href"].flatMap { Self.hasLinkMenu($0) ? ($0, nil) : nil }
+    }
 
     #endif
+
+    /// Whether a link to `href` gets the host's own menu: a web link, `http` or
+    /// `https`, or one with no scheme, which resolves in the app. A `mailto:`,
+    /// `tel:` or `javascript:` link, or an app's own scheme, gets none.
+    static func hasLinkMenu(_ href: String) -> Bool {
+        guard !href.isEmpty else { return false }
+        guard let scheme = URL(string: href)?.scheme?.lowercased() else { return true }
+        return scheme == "http" || scheme == "https"
+    }
 
     func deliverContext(at point: CGPoint, inline inlineID: UInt32? = nil) {
         guard let presenter else { return }

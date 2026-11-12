@@ -89,6 +89,9 @@ pub mod pads;
 pub mod paint;
 pub mod picker;
 mod placement;
+// Asked only on Linux: elsewhere this host refuses the document pickers.
+#[cfg_attr(any(not(unix), target_os = "android"), allow(dead_code))]
+mod portal;
 pub mod presence_secrets;
 pub mod presenter;
 pub mod raster;

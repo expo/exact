@@ -161,7 +161,7 @@ check was run.
 | `bun host/apple/build.mjs` and `bun host/apple/build.mjs caltrain-apple` | Pass; the latter refreshed the signed app after a stale-receipt drive refusal. |
 | `bun scripts/agent.mjs macos --plan target/gradients.plan --size 390x555 tree "tap dark" state logs "screenshot target/gradients-macos.png"` | Pass; screenshot inspected. An earlier drive including `check both` stopped because macOS does not implement that operation. |
 | `bun host/web-js/conform.mjs --synthetic --only gradients --build --strict --wasm-root target/gradients-wasm --out target/gradients-conformance` | Failed before comparison: missing WASM dist. |
-| `EXACT_WEB_LINK=all EXACT_WEB_DIST=/Users/ccheever/projects/exact2-iss-gradients/target/gradients-wasm/caltrain bun host/web/build.mjs caltrain-web --wasm` | Canceled during the redundant Caltrain server-renderer build in favor of the direct JS fixture drive. |
+| `EXACT_WEB_LINK=all EXACT_WEB_DIST=/Users/<user>/projects/exact2-iss-gradients/target/gradients-wasm/caltrain bun host/web/build.mjs caltrain-web --wasm` | Canceled during the redundant Caltrain server-renderer build in favor of the direct JS fixture drive. |
 | `cargo test -p exact-linux --lib --tests --no-fail-fast` | Pass after the final GPU correction: 737 unit, 103 integration, 78 pinned pixel and 1 additional test. |
 | `cargo fmt --all -- --check` | Pass on the final source. |
 | `git add -A && bun scripts/caps.mjs` | Pass. |
@@ -169,8 +169,8 @@ check was run.
 | `cargo clippy -p exact-linux --all-targets -- -D warnings` | Pass on the final GPU source. |
 | `bun host/web-js/build.mjs caltrain --plan target/gradients-conformance/synthetic-gradients.plan --out target/gradients-js --render none` | Canceled during the cold Caltrain data-module build; the self-contained fixture uses the existing `hello` host instead. |
 | `bun host/web-js/build.mjs hello --plan target/gradients-conformance/synthetic-gradients.plan --out target/gradients-js --render none` | Pass, zero compiler warnings. Direct output lacks the complete-build receipt, so the first agent invocation refused it. |
-| `EXACT_APP_DIR=/Users/ccheever/projects/exact2-iss-gradients/apps/hello EXACT_WEB_DIST=/Users/ccheever/projects/exact2-iss-gradients/target/gradients-js bun host/web/build.mjs hello-web` | Pass; produces the authenticated base build. |
-| `EXACT_WEB_DIST=/Users/ccheever/projects/exact2-iss-gradients/target/gradients-js bun scripts/agent.mjs web --app hello --plan target/gradients-conformance/synthetic-gradients.plan --size 420x555 tree "check both" "screenshot target/gradients-web-before.png" "tap change" tree state logs "screenshot target/gradients-web.png"` | Pass; both appearances have no findings, state changes to width 240/period 12, both screenshots inspected. |
+| `EXACT_APP_DIR=/Users/<user>/projects/exact2-iss-gradients/apps/hello EXACT_WEB_DIST=/Users/<user>/projects/exact2-iss-gradients/target/gradients-js bun host/web/build.mjs hello-web` | Pass; produces the authenticated base build. |
+| `EXACT_WEB_DIST=/Users/<user>/projects/exact2-iss-gradients/target/gradients-js bun scripts/agent.mjs web --app hello --plan target/gradients-conformance/synthetic-gradients.plan --size 420x555 tree "check both" "screenshot target/gradients-web-before.png" "tap change" tree state logs "screenshot target/gradients-web.png"` | Pass; both appearances have no findings, state changes to width 240/period 12, both screenshots inspected. |
 
 ## c1 continuation (2026-10-12)
 

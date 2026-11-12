@@ -145,7 +145,7 @@ enum ResetGate {
         // The session's own steps, which run outside the hold: never set off by a teardown.
         "boot(width:height:)": "the session's boot, outside any hold",
         "bootPlan(_:width:height:)": "the session's boot, outside any hold",
-        "bootEntry(_:kind:props:width:height:)": "a widget entry's boot, outside any hold",
+        "bootEntry(_:kind:props:configuration:width:height:)": "a widget entry's boot, outside any hold",
         "preparePlan(_:width:height:token:)": "a restart's own preparation, before its reset",
         "prepareModule(_:module:token:width:height:letGo:)": "a restart's own preparation, before its reset",
         "commitPlan()": "a restart's own commit, before its reset",

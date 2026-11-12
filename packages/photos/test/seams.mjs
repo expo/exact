@@ -112,6 +112,7 @@ const CONTRACT = `use swatchStatus, forget, SwatchStatus, Forgotten from "@fixtu
 
 component Fixture
   state shown = ""
+  state commits = 0
   state errors = ""
   state loads = 0
   state literalLoads = 0
@@ -127,6 +128,12 @@ component Fixture
     literalLoads = literalLoads + 1
   action showBlue
     shown = "swatch:blue"
+  action showGreen
+    shown = "swatch:green"
+  action hide
+    shown = ""
+  action tick
+    commits = commits + 1
   action forgetBlue
     send forgot = forget(name="blue")
   view
@@ -134,11 +141,18 @@ component Fixture
       text status.state testId="state"
       text errors testId="errors"
       text loads.toString() testId="loads"
+      text commits.toString() testId="commits"
       image "swatch:red" testId="literal" width=40 height=30 error=literalFailed load=literalLoaded
       if shown != ""
         image shown testId="bound" width=50 height=20 error=boundFailed load=boundLoaded
       button press=showBlue testId="show"
         text "Show"
+      button press=showGreen testId="replace"
+        text "Replace"
+      button press=hide testId="hide"
+        text "Hide"
+      button press=tick testId="tick"
+        text "Tick"
       button press=forgetBlue testId="forget"
         text "Forget"
 `;
@@ -157,7 +171,7 @@ function makeApp(grants) {
   const manifest = JSON.parse(readFileSync(join(app, 'package.json'), 'utf8'));
   manifest.dependencies = { ...manifest.dependencies, '@fixture/swatches': `file:${swatches}` };
   writeFileSync(join(app, 'package.json'), JSON.stringify(manifest, null, 2));
-  run('bun', ['install'], app);
+  run('bun', ['install', '--offline'], app);
   // The native workspace written before the build starts: one the build wrote
   // is newer than the build, and the driver refuses the build as stale.
   ensureShells(app);
@@ -229,17 +243,48 @@ if (engines.includes('macos')) {
   }
   if (s) try {
     await s.clock('settle');
+    const scale = (await s.prefer({})).page['display-scale'];
+    const drew = (lines, source, width, height) => lines.some(l => l.endsWith(`drew swatch:${source} at ${Math.ceil(width * scale)}x${Math.ceil(height * scale)}`));
     const refused = (await s.state()).slots.errors;
     // The host binds its implementations after first pixel, so the first frame's refusal can say so.
     check(where, 'while prompt, the literal picture is refused with the reason', /^literal:(permission swatches is prompt|no implementation bound);$/.test(refused ?? ''), JSON.stringify(refused));
+    const counts = async () => (await s.state()).extensions?.swatches?.pictures;
+    const unchanged = async (expected, why) => {
+      for (let i = 0; i < 3; i++) await s.tap('tick');
+      await s.clock('settle');
+      const now = await counts();
+      check(where, why, now?.refused === expected && now?.admitted === 0, JSON.stringify(now));
+    };
+    check(where, 'the initial view counts one refusal', (await counts())?.refused === 1, JSON.stringify(await counts()));
+    await unchanged(1, 'unrelated commits do not count the refused picture again');
+    await s.prefer({ 'permission.swatches': 'denied' });
+    await unchanged(1, 'a changed refusal reason does not count a new draw');
+    await s.tap('show');
+    await unchanged(2, 'a second view counts its own source admission');
+    await s.tap('replace');
+    await unchanged(3, 'a replacement source counts one admission attempt');
     await s.prefer({ 'permission.swatches': 'granted' });
+    await s.clock('settle');
+    const replaced = ((await s.logs())?.lines ?? []).filter(l => /swatches: drew/.test(l));
+    check(where, 'granted, the replacement loads and the previous source is forgotten',
+      (await s.state()).slots.loads === 1 && drew(replaced, 'green', 50, 20) && !replaced.some(l => /drew swatch:blue /.test(l)), replaced.join(' | '));
+    check(where, 'each admitted view counts once when permission is granted',
+      (await counts())?.admitted === 2 && (await counts())?.refused === 3, JSON.stringify(await counts()));
+    await s.prefer({ 'permission.swatches': 'denied' });
+    await s.tap('show');
+    await s.tap('hide');
+    await s.prefer({ 'permission.swatches': 'granted' });
+    await s.clock('settle');
+    check(where, 'a removed refused view never loads after permission is granted',
+      (await counts())?.admitted === 2 && (await counts())?.refused === 4 && (await s.state()).slots.loads === 1,
+      JSON.stringify(await counts()));
     await s.tap('show');
     await s.clock('settle');
-    const loads = (await s.state()).slots.loads, drawn = ((await s.logs())?.lines ?? []).filter(l => /swatches: drew/.test(l));
-    check(where, 'granted, the bound picture is asked at its device pixels and loads', loads === 1 && drawn.some(l => /drew swatch:blue at 100x40$/.test(l)), `${loads} ${drawn.join(' | ')}`);
+    const loads = (await s.state()).slots.loads, drawn = [...replaced, ...((await s.logs())?.lines ?? []).filter(l => /swatches: drew/.test(l))];
+    check(where, 'granted, the bound picture is asked at its device pixels and loads', loads === 2 && drawn.some(l => /drew swatch:blue at 100x40$/.test(l)), `${loads} ${drawn.join(' | ')}`);
     check(where, 'the literal picture refused while prompt is drawn once granted', (await s.state()).slots.literalLoads === 1 && drawn.some(l => /drew swatch:red at 80x60$/.test(l)), `${(await s.state()).slots.literalLoads} ${drawn.join(' | ')}`);
     const { extensions } = await s.state();
-    check(where, 'state.extensions counts the admissions and refusals', extensions?.swatches?.pictures?.admitted >= 1 && extensions.swatches.pictures.refused >= 1, JSON.stringify(extensions?.swatches));
+    check(where, 'state.extensions counts the admissions and refusals', extensions?.swatches?.pictures?.admitted === 3 && extensions.swatches.pictures.refused === 4, JSON.stringify(extensions?.swatches));
     await s.tap('forget');
     await s.clock('settle');
     const errors = (await s.state()).slots.errors;

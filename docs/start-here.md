@@ -1,6 +1,6 @@
 # Start here: building an app with Exact
 
-The only required reading; the rest is lookup. A website reads [start-here-site.md](start-here-site.md) instead.
+The only required reading; the rest is lookup. A website reads [Start here: a website with Exact](start-here-site.md) instead.
 
 ## The idea
 
@@ -83,7 +83,28 @@ the two differ, and draws `home.diff.png`, so neither picture needs viewing. On 
 `agent web --url /item/7` opens at a page, and a capture of the whole page compares at its height.
 
 `agent ios` is the app as a person sees it, UIKit's bars included, with screenshots a pixel a
-point (`--scale 3`: the device's): no other simulator tool is needed ([ios-driving](recipes/ios-driving.md)).
+point (`--scale 3`: the device's): no other simulator tool is needed ([driving iOS](recipes/ios-driving.md)).
+
+## Platform checks
+
+Read the app's AGENTS.md and `app.json` before choosing a host. Once the features
+work, check each target platform; a native-only app does not need a web build. If a
+required tool, device or simulator is unavailable, report that target as untested.
+
+|Target|Checks|Open the app|
+|---|---|---|
+|Web|`bun exact.mjs verify web`|`bun exact.mjs web`|
+|iOS|`bun exact.mjs verify ios`|`bun exact.mjs ios --run`|
+|Android|`bun exact.mjs verify android`|`bun exact.mjs android --run`|
+|Windows|`bun exact.mjs verify windows`|`bun exact.mjs windows --run`|
+|macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos "screenshot mac.png"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
+|Linux|`bun exact.mjs linux`, then `bun exact.mjs test linux`|The Linux host is headless; inspect it with `bun exact.mjs agent linux tree` after building.|
+
+There is no `verify macos` or `verify linux`. Inspect the launched native app for
+features that headless checks cannot exercise, such as hardware capture or native
+panels, and say what remains untested. Read the whole verification report:
+counted findings can accompany exit zero. Fix app findings for at most three
+rounds, then report what remains without weakening the tests.
 
 ## Look it up
 
@@ -96,6 +117,8 @@ bun exact.mjs contract vocab list-rows search swipe            # a list with sea
 bun exact.mjs contract vocab for match persist grouped-form choice   # keywords, a settings form
 bun exact.mjs contract vocab timers dates-and-days task        # a timer, a day's log
 ```
+
+For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md).
 
 |Pattern|Already has|
 |---|---|
@@ -160,8 +183,8 @@ fragment is the same screen: `/item/7#moves` opens at its `id="moves"` once its 
 and a `link href="#moves"` goes there. Every host, the web
 too, hides a stack's covered routes itself (not the page under a sheet, nor a wide split's list
 beside its detail); `for e in stack(nav)` keeps them mounted with their scroll, which `[top(nav)]`
-loses. A query follows the path:
-`` path("home") + `?q=${v}` ``. This list takes the scroll's place:
+loses. A query follows the path, its value encoded:
+`` path("home") + `?q=${encodeURIComponent(v)}` ``. This list takes the scroll's place:
 
 ```contract
 shape Item
@@ -255,10 +278,10 @@ field fails a resource or voids a mutation’s reply, whose slot keeps its old v
 Type the function returning a reply (`Promise<Result<'post'>>`) so the build names
 an extra field. It reaches only what its `grants` name. A value fixed at build, such as an
 API's origin, is `const API = import.meta.env.API_BASE_URL` at its top level, the name declared
-in `app.json`'s `env` ([rest-backend](recipes/rest-backend.md)). A failed read should
+in `app.json`'s `env` ([your own REST server](recipes/rest-backend.md)). A failed read should
 fail its resource so Exact can retain its previous answer; a mutation may return
 a shaped domain refusal for its action to handle
-([fetch-loading-error](recipes/fetch-loading-error.md)). The clock and
+([fetch with loading, error and retry](recipes/fetch-loading-error.md)). The clock and
 randomness are refused there; time comes as an argument. A date from a value
 works (`new Date(ms)`, `Intl.DateTimeFormat`). `console.log` appears in the agent’s
 `logs` and its last lines in a failed test’s notes. It imports its own `.ts`/`.js` and pure-JS npm

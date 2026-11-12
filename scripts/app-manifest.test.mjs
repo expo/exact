@@ -5,6 +5,23 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
+test('a widget declares fixed enum configuration choices', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'widget-configuration-'));
+  const parameter = { name: 'rows', title: 'Rows', type: 'enum', values: [{ value: 'one', title: '1' }], default: 'one' };
+  const manifest = { name: 'Choices', app: { id: 'dev.exact.choices', name: 'Choices' }, widgets: [{
+    kind: 'card', families: ['systemSmall'], component: 'Card', props: 'Props', refresh: 'refresh', preview: {},
+    configuration: { title: 'Card', parameters: [parameter] },
+  }] };
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
+    assert.deepEqual(readManifest(dir, 'choices').widgets[0].configuration.parameters[0], parameter);
+    parameter.type = 'entity';
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
+    assert.throws(() => readManifest(dir, 'choices'), /type/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('each painted host admits ink, carries it in native metadata and refuses gpu', async () => {
   const { readManifest, nativeManifestMetadata } = await import('./app.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'manifest-painter-'));
@@ -192,10 +209,11 @@ test('readManifest admits the app\'s design, `tamber` (LLP 1121 D2)', async () =
 test('manifest colours follow the web and retired launch and alias keys are refused', async () => {
   const { readManifest } = await import('./app.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-manifest-'));
-  const manifest = { name: 'Manifest', app: { id: 'test.manifest', name: 'Manifest' }, background_color: '#fff', background_color_dark: '#123456' };
+  const manifest = { name: 'Manifest', app: { id: 'test.manifest', name: 'Manifest' }, background_color: '#fff', color_scheme_dark: { background_color: '#123456' } };
   const read = value => { writeFileSync(resolve(dir, 'app.json'), JSON.stringify(value)); return readManifest(dir, 'fixture'); };
   try {
-    assert.equal(read(manifest).background_color_dark, '#123456');
+    assert.equal(read(manifest).color_scheme_dark.background_color, '#123456');
+    assert.throws(() => read({ ...manifest, background_color_dark: '#123456' }), /background_color_dark/);
     assert.throws(() => read({ ...manifest, launch: { background: '#fff' } }), /launch/);
     assert.throws(() => read({ ...manifest, typescript: { aliases: { '@/*': './*' } } }), /aliases/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -330,9 +348,36 @@ test("host.web.head writes a script's text as it is, refuses one HTML would read
     assert.equal(problems.length, 1, code);
     assert.match(problems[0], new RegExp(`^host\\.web\\.head\\[0\\]\\.script\\.text: holds "${seen}", .*write it so the parser cannot see it`), code);
   }
+  // An attribute's `>` is escaped too, so a reader that ends the start tag at a `>` reads the whole tag.
+  assert.equal(webHead({ host: { web: { head: [{ script: { 'data-x': 'a>b"<&', text: 'x()' } }] } } }), '<script data-x="a&gt;b&quot;&lt;&amp;">x()</script>\n');
   // A JSON text reads `\u003C` as `<`.
   const json = webHead(head({ name: '</script><!--<script>' }, 'application/ld+json'));
   assert.equal(JSON.parse(json.slice(json.indexOf('>') + 1, json.lastIndexOf('</script>'))).name, '</script><!--<script>');
+});
+
+// LLP 1048.000 D11: the app's part of the render server's CSP. The build refuses only what would not be one directive
+// of one policy (CSP3 §2.3); the browser reads the rest.
+test('host.web.csp takes lists to add and strings to replace, and refuses what would end a directive or a policy', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const { webCspFile } = await import('./web-head.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-manifest-'));
+  const read = (web) => { writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Csp', app: { id: 'test.csp', name: 'Csp' }, host: { web } })); return readManifest(dir, 'fixture'); };
+  try {
+    const web = { csp: { 'script-src': ['https://tags.example'], 'img-src': "exact https://img.example", 'upgrade-insecure-requests': '' }, cspReportOnly: false };
+    assert.equal(webCspFile(read(web)), JSON.stringify(web) + '\n');
+    assert.equal(webCspFile(read({ csp: false })), '{"csp":false}\n');
+    assert.equal(webCspFile(read({})), null);
+    const refused = [
+      [{ csp: { 'Script-Src': ['a.example'] } }, /host\.web\.csp: "Script-Src" is not a directive name in lower case/],
+      [{ csp: { 'img-src': ['a.example b.example'] } }, /host\.web\.csp\.img-src\[0\]: "a\.example b\.example" is not one source/],
+      [{ csp: { 'img-src': "'self'; script-src *" } }, /host\.web\.csp\.img-src: .* holds a comma, a semicolon/],
+      [{ cspReportOnly: { 'img-src': 'a.example, b.example' } }, /host\.web\.cspReportOnly\.img-src: .* holds a comma/],
+      [{ csp: { 'img-src': 'a.example\nX-Injected: 1' } }, /host\.web\.csp\.img-src: .* a line break/],
+      [{ csp: true }, /host\.web\.csp: expected false or an object of directives/],
+      [{ csp: { 'img-src': 1 } }, /host\.web\.csp\.img-src: expected a list of sources to add, or a string/],
+    ];
+    for (const [web, says] of refused) assert.throws(() => read(web), says, JSON.stringify(web));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('readManifest names the game.presentation rename instead of an unknown key', async () => {
@@ -604,5 +649,23 @@ test('`userInterfaceStyle` takes Expo\'s three values, refusing others by name, 
     // `automatic` is the default: a binary built with it is the one built without the key.
     assert.deepEqual(nativeManifestMetadata(read('automatic'), 'ios'), nativeManifestMetadata(read(undefined), 'ios'));
     assert.throws(() => read('Dark'), /userInterfaceStyle: "Dark" is not one of "automatic", "light", "dark"/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('host.android.maven accepts only pinned group:artifact:version coordinates', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-maven-'));
+  const read = maven => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Maps', app: { id: 'dev.exact.maps', name: 'Maps' }, host: { android: { maven } } }));
+    return readManifest(dir, 'maps');
+  };
+  try {
+    for (const maven of [[], ['org.maplibre.gl:android-sdk:12.0.0', 'androidx.camera:camera-core:1.6.0-alpha01']]) {
+      assert.deepEqual(read(maven).host.android.maven, maven);
+    }
+    for (const bad of [null, 'g:a:1', [12], ['g:a'], ['g:a:'], ['g:a:+'], ['g:a:1.+'], ['g:a:[1,2)'],
+      ['g:a:latest.release'], ['g:a:LATEST'], ['g:a:RELEASE'], ['g:a:1-SNAPSHOT'], ['g:a:1:classifier'], ['g:a:1@aar'], ['https://repo/g:a:1'], ['g:a:1\n']]) {
+      assert.throws(() => read(bad), /maven/, JSON.stringify(bad));
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

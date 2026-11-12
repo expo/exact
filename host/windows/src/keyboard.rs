@@ -1,9 +1,6 @@
-//! Windows key names and held modifiers.
-#[cfg(windows)]
+//! Windows key names, what a key types, and held modifiers.
 use exact_linux::Presenter;
-#[cfg(windows)]
-use exact_runner::DataSource;
-use exact_runner::KeyModifiers;
+use exact_runner::{DataSource, KeyModifiers};
 
 #[cfg(windows)]
 pub(super) fn key_names(
@@ -19,9 +16,41 @@ pub(super) fn key_names(
     let key = match logical {
         Key::Character(s) => s.to_string(),
         Key::Named(k) => format!("{k:?}"),
+        // The DOM's name ([UI Events KeyboardEvent key
+        // Values](https://www.w3.org/TR/uievents-key/#keys-composition)).
+        Key::Dead(_) => "Dead".into(),
         _ => text.unwrap_or("Unidentified").to_owned(),
     };
     (code, key)
+}
+
+/// What a pressed key types when that is not `key`, its logical key's name.
+/// After a dead key, Windows translates the next key with it: Space to the
+/// accent alone, and a character the accent does not combine with to the
+/// accent and then the character, as two `WM_CHAR` messages
+/// ([Dead-Character Messages](https://learn.microsoft.com/windows/win32/inputdev/about-keyboard-input#dead-character-messages)).
+/// winit gives that text beside the key's own logical key (Space, or the
+/// letter alone). A control character (Enter's `"\r"`, Tab's) is no text.
+pub(super) fn typed<'a>(key: &str, text: Option<&'a str>) -> Option<&'a str> {
+    let text = text?;
+    let own = if key == "Space" { " " } else { key };
+    (text != own && !text.chars().any(char::is_control)).then_some(text)
+}
+
+/// A device key to the presenter. The app's `key` handlers hear `key`; a
+/// press's default action types [`typed`]'s text when there is one, as a
+/// browser's `keydown` names the key and its `input` carries the text.
+pub(super) fn press<D: DataSource>(
+    presenter: &mut Presenter<D>,
+    (code, key): (&str, &str),
+    text: Option<&str>,
+    down: bool,
+    repeat: bool,
+) {
+    match typed(key, text).filter(|_| down) {
+        Some(text) => presenter.hardware_key_typing(code, key, text, repeat),
+        None => presenter.hardware_key(code, key, down, repeat),
+    }
 }
 
 /// Outside ModifiersChanged, only clear releases consumed by a menu or focus change.
@@ -198,6 +227,54 @@ mod tests {
             .unwrap()
             .value;
         assert_eq!(value, "name@example.comx");
+    }
+
+    /// A dead key then Space, a letter it does not combine with, and one it
+    /// does, as winit reports them on US-International.
+    #[test]
+    fn a_dead_key_types_what_windows_translates() {
+        let plan = contract::compile(
+            "component App\n  state keys = \"\"\n  action heard(value: string)\n    keys = `${keys}[${value}]`\n  view\n    column\n      input testId=\"field\" value=\"h\" key=heard width=200 height=40\n      text keys testId=\"keys\" height=20\n",
+        )
+        .unwrap()
+        .encode();
+        let (mut p, warning) = Presenter::boot_with(
+            &plan,
+            (),
+            (240., 80.),
+            1.,
+            Default::default(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(warning.is_none());
+        let k = p.host().kernel();
+        let field = k.node_by_key(k.find_by_test_id("field")[0]).unwrap().id;
+        p.tap(field).unwrap();
+        p.hardware_key("End", "End", true, false);
+        p.hardware_key("End", "End", false, false);
+        let mut typed = Vec::new();
+        for (code, key, text) in [
+            ("Space", "Space", "'"),
+            ("KeyT", "t", "'t"),
+            ("KeyE", "é", "é"),
+        ] {
+            press(&mut p, ("Quote", "Dead"), None, true, false);
+            press(&mut p, ("Quote", "Dead"), None, false, false);
+            press(&mut p, (code, key), Some(text), true, false);
+            press(&mut p, (code, key), None, false, false);
+            let value = p.access_tree().0.into_iter().find(|n| n.view == field);
+            typed.push(value.unwrap().value);
+        }
+        assert_eq!(typed, ["h'", "h''t", "h''té"]);
+        assert_eq!(
+            p.host().runner().slot("keys"),
+            Some(&exact_runner::Value::str(
+                "[End][Dead][ ][Dead][t][Dead][é]"
+            ))
+        );
+        assert_eq!(super::typed("Enter", Some("\r")), None);
+        assert_eq!(super::typed("Space", Some(" ")), None);
     }
 
     #[test]

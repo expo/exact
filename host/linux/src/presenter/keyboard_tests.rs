@@ -186,6 +186,39 @@ fn tab_keeps_a_focused_negative_index_control_when_there_are_no_stops() {
     }
 }
 
+/// A `tabindex=-1` box a click focused is the starting point too, as in
+/// Chrome: the same four elements as HTML give `b` for Tab and `a` for
+/// Shift+Tab.
+#[test]
+fn tab_from_a_clicked_negative_index_box_continues_in_tree_order() {
+    let mut p = boot(
+        r#"component App
+  view
+    column width=400 height=300
+      button "A" testId="a" height=30
+      box tabindex=-1 testId="mid" width=100 height=30
+        text "Heading"
+      button "B" testId="b" height=30
+      button "C" testId="c" height=30
+"#,
+    );
+    let mut actual = Vec::new();
+    for backward in [false, true] {
+        let (x, y, w, h) = p.rect_of(id(&p, "mid")).unwrap();
+        p.pointer_down(x + w / 2., y + h / 2., 0.).unwrap();
+        p.pointer_up(x + w / 2., y + h / 2., 1.).unwrap();
+        let clicked = focused(&p);
+        p.hold_modifier("ShiftLeft", backward);
+        actual.push((clicked, walk(&mut p, &["Tab"])));
+        p.hold_modifier("ShiftLeft", false);
+    }
+    let mid = || "mid".to_string();
+    assert_eq!(
+        actual,
+        [(mid(), vec!["b".into()]), (mid(), vec!["a".into()])]
+    );
+}
+
 #[test]
 fn space_and_enter_at_a_file_or_date_control_click_it() {
     let source = r#"component App

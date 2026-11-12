@@ -76,6 +76,20 @@ Object.assign(ElementProto, {
   closest() { return null; }, focus() {}, blur() {}, click() {}, scrollTo() {},
   contains(n) { for (; n; n = n.parentNode) if (n === this) return true; return false; },
 });
+// A `<style>`'s sheet, as much as lower.js's arms sheet uses: each rule one nested
+// rule's declarations, kept unread, since a drive observes no style.
+const Declarations = probe.createElement('i').style.constructor;
+Object.defineProperty(ElementProto, 'sheet', {
+  get() {
+    if (this.localName !== 'style') return undefined;
+    return this.$sheet ??= {
+      cssRules: [],
+      insertRule(_, at) { this.cssRules.splice(at, 0, { cssRules: [{ style: new Declarations() }] }); return at; },
+      deleteRule(at) { this.cssRules.splice(at, 1); },
+    };
+  },
+  configurable: true,
+});
 // A date, time or datetime-local input holds HTML's value format, within its
 // `min` and `max`, or nothing (runner/src/runner/control.rs).
 const DATE = '\\d{4,}-(0[1-9]|1[0-2])-(0[1-9]|[12]\\d|3[01])', TIME = '([01]\\d|2[0-3]):[0-5]\\d(:[0-5]\\d(\\.\\d{1,3})?)?';
@@ -130,8 +144,16 @@ async function build(compiler, dir, file) {
   for (const f of ['app.js', 'names.js']) rmSync(resolve(dir, f), { force: true });
   const c = spawnSync(compiler, ['js', file, '-o', dir], { encoding: 'utf8' });
   if (c.status !== 0) return { outside: (c.stderr || c.stdout || `exit ${c.status}`).trim() };
+  // Each native extension's chunk, which the module's loaders import: here
+  // without a web implementation, as build.mjs writes one that has none.
+  const modules = resolve(dir, 'modules.flag');
+  for (const extension of existsSync(modules) ? Object.keys(JSON.parse(readFileSync(modules, 'utf8')).extensions) : []) {
+    writeFileSync(resolve(dir, `ext-${extension}.js`), 'export const implementation = null;\n');
+  }
   entry(dir);
-  const r = await Bun.build({ entrypoints: [resolve(dir, 'entry.js')], format: 'iife', target: 'browser', define: { 'import.meta.url': '"http://difftest.invalid/app.js"' } });
+  // A failed bundle throws an AggregateError whose message is only "Bundle failed": its causes are its `errors`.
+  const r = await Bun.build({ entrypoints: [resolve(dir, 'entry.js')], format: 'iife', target: 'browser', define: { 'import.meta.url': '"http://difftest.invalid/app.js"' } })
+    .catch(e => { throw new Error((e.errors ?? [e]).map(String).join('\n')); });
   if (!r.success) throw new Error(r.logs.map(String).join('\n'));
   return { code: await r.outputs[0].text() };
 }
@@ -153,7 +175,7 @@ async function drive(code, c, hostSources) {
     addEventListener() {}, removeEventListener() {}, navigator: {},
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }),
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
-    setTimeout, clearTimeout, queueMicrotask, performance, console: quiet, fetch: () => Promise.reject(new Error('no network in a drive')), URL, URLSearchParams, TextEncoder, TextDecoder,
+    setTimeout, clearTimeout, queueMicrotask, performance, structuredClone, console: quiet, fetch: () => Promise.reject(new Error('no network in a drive')), URL, URLSearchParams, TextEncoder, TextDecoder,
     Event: class {}, CustomEvent: class {},
     // No browser layout runs here; symbol projection's observer has nothing to report.
     MutationObserver: class { observe() {} disconnect() {} },
@@ -308,10 +330,14 @@ async function drive(code, c, hostSources) {
       const e = find(id);
       // What a browser can deliver, as the runner holds a host to it
       // (runner/src/runner/control.rs): a select reports one of its enabled
-      // options, a checkbox or a radio no text.
+      // options, a checkbox or a radio no text. An option's value is its
+      // `value` attribute, else its text with HTML's ASCII whitespace
+      // stripped and collapsed (HTML, "the option element"; kernel
+      // `option_label`): a nonbreaking space stays.
       const options = e?.localName === 'select' ? e.getElementsByTagName('option') : null;
+      const optionValue = o => o.getAttribute('value') ?? o.textContent.split(/[\t\n\f\r ]+/).filter(Boolean).join(' ');
       const deliverable = e && e.type !== 'checkbox' && e.type !== 'radio' && datetime(e, text)
-        && (!options || options.some(o => !o.hasAttribute('disabled') && (o.getAttribute('value') ?? o.textContent) === text));
+        && (!options || options.some(o => !o.hasAttribute('disabled') && optionValue(o) === text));
       const event = e?.$listeners?.input?.length ? 'input' : 'change';
       if (!deliverable || !e.$listeners?.[event]?.length) refused = true; else { e.value = text; fire(e, event); }
     } else if (ev.land) {

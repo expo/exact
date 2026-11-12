@@ -1,26 +1,81 @@
-//! Typed props replace only the snapshot entry's root slot (LLP 1126 D2).
+//! Typed props replace only the snapshot entry's root slot (LLP 1126 D2),
+//! and a widget's chosen configuration its configuration slot.
 use exact_plan::{Plan, TypeKind, TypesId, Value};
 use exact_runner::Carried;
 
-pub(crate) fn props(plan: &Plan, bytes: &[u8]) -> Result<Carried, String> {
-    let row = plan
-        .slots
-        .iter()
-        .find(|s| {
-            (plan.str(s.name)
-                == if plan.activity_slots.is_empty() {
-                    "snapshot_props"
-                } else {
-                    "snapshot_state"
+/// The entry's slots the host supplies: its props (or an activity's state)
+/// and a configured widget's chosen values. Either left out keeps the value
+/// the bake compiled in (the preview, the configuration's defaults).
+pub(crate) fn slots(
+    plan: &Plan,
+    props: Option<&[u8]>,
+    configuration: Option<&[u8]>,
+) -> Result<Carried, String> {
+    let props_slot = if plan.activity_slots.is_empty() {
+        "snapshot_props"
+    } else {
+        "snapshot_state"
+    };
+    let mut slots = Vec::new();
+    for (name, bytes, what) in [
+        (props_slot, props, "props"),
+        ("snapshot_configuration", configuration, "configuration"),
+    ] {
+        let Some(bytes) = bytes else { continue };
+        let row = plan
+            .slots
+            .iter()
+            .find(|s| plan.str(s.name) == name && s.owner.is_none());
+        let Some(row) = row else {
+            // A widget the person configured before an update that removed
+            // its configuration renders with none.
+            if what == "configuration" {
+                continue;
+            }
+            return Err("entry has no props slot".into());
+        };
+        let json: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|e| format!("entry {what}: {e}"))?;
+        let value = if what == "configuration" {
+            let shape = plan.type_(row.ty);
+            if shape.kind != TypeKind::Record
+                || shape.fields.iter().any(|id| {
+                    let field = plan.type_(plan.field(id).ty);
+                    field.kind != TypeKind::String || field.fields.len == 0
                 })
-                && s.owner.is_none()
-        })
-        .ok_or("entry has no props slot")?;
-    let json = serde_json::from_slice(bytes).map_err(|e| format!("entry props: {e}"))?;
-    let value =
-        decode(plan, row.ty, &json).ok_or("entry props do not match their declared shape")?;
+            {
+                return Err("entry configuration has no fixed choices".into());
+            }
+            // LLP 1126: ignore removed parameters and default missing or removed
+            // values. The compiler puts each parameter's default first in its enum.
+            Value::record(
+                plan.type_(row.ty)
+                    .fields
+                    .iter()
+                    .map(|id| {
+                        let field = plan.field(id);
+                        json.get(plan.str(field.name))
+                            .and_then(|v| decode(plan, field.ty, v))
+                            .unwrap_or_else(|| {
+                                let first = plan
+                                    .type_(field.ty)
+                                    .fields
+                                    .iter()
+                                    .next()
+                                    .expect("configuration enum");
+                                Value::str(plan.str(plan.field(first).name))
+                            })
+                    })
+                    .collect(),
+            )
+        } else {
+            decode(plan, row.ty, &json)
+                .ok_or_else(|| format!("entry {what}: not of the declared shape"))?
+        };
+        slots.push((name.into(), value));
+    }
     Ok(Carried {
-        slots: vec![(plan.str(row.name).into(), value)],
+        slots,
         ..Carried::default()
     })
 }
@@ -159,6 +214,7 @@ impl<D: exact_runner::DataSource> crate::Host<D> {
                         executor
                             .run(
                                 exact_runner::RequestOut {
+                                    class: exact_runner::RequestClass::Ordered,
                                     ticket: 1,
                                     target: "widget refresh".into(),
                                     request,

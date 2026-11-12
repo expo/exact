@@ -249,3 +249,151 @@ fn a_select_menu_is_painted_chosen_and_dismissed_on_both_frame_paths() {
     }
     assert!(failures.is_empty(), "{}", failures.join("; "));
 }
+
+/// A select with a disabled option, then a button.
+const SOME_DISABLED: &str = r#"component App
+  state pick = "a"
+  action choose(v: string)
+    pick = v
+  view
+    column
+      select value=pick change=choose testId="pick"
+        option "Alpha" value="a"
+        option "Beta" value="b" disabled=true
+        option "Gamma" value="c"
+      button testId="after"
+        text "after"
+"#;
+
+/// HTML-AAM's `select` and the ARIA combobox pattern: a closed select is an
+/// expandable dropdown; open, the tree is it, expanded, over a listbox of
+/// its options, the chosen one selected, and a service chooses an option
+/// as a press on its row does.
+#[test]
+fn an_open_menu_tells_its_options_and_a_service_chooses_one() {
+    use super::access::{act, flag, role};
+    let mut p = boot(SOME_DISABLED, (300., 400.));
+    p.frame();
+    let id = named(&p, "pick");
+    let now = p.host.now();
+    assert!(p.reader_access(1., true).is_some());
+    let tree = p.access_told().to_vec();
+    let dropdown = tree.iter().find(|n| n.view == id).unwrap().clone();
+    assert_eq!(dropdown.role, role::DROPDOWN);
+    let expand = flag::EXPANDABLE | flag::EXPANDED;
+    assert_eq!(dropdown.flags & expand, flag::EXPANDABLE, "collapsed");
+    assert!(tree.iter().any(|n| n.name == "after"));
+    assert!(!tree.iter().any(|n| n.role == role::OPTION));
+
+    // Android's expand and UI Automation's Expand press it.
+    assert!(p.access_act(dropdown.id, act::CLICK, 0., now));
+    assert_eq!(p.menu, Some(id));
+    assert!(
+        p.reader_access(1., false).is_some(),
+        "the open menu is told"
+    );
+    let tree = p.access_told().to_vec();
+    let roles: Vec<(i32, &str)> = tree.iter().map(|n| (n.role, n.name.as_str())).collect();
+    assert_eq!(
+        roles,
+        [
+            (role::DROPDOWN, ""),
+            (role::LIST_BOX, ""),
+            (role::OPTION, "Alpha"),
+            (role::OPTION, "Beta"),
+            (role::OPTION, "Gamma"),
+        ],
+        "the page under the menu is left out"
+    );
+    let (open, list, options) = (&tree[0], &tree[1], &tree[2..]);
+    assert_eq!((open.id, open.parent), (dropdown.id, 0));
+    assert_eq!(open.flags & expand, expand, "expanded");
+    assert_eq!(open.value, "Alpha");
+    assert_eq!(list.parent, open.id);
+    let menu = p.menu_paint().unwrap();
+    for (at, option) in options.iter().enumerate() {
+        assert_eq!(option.parent, list.id);
+        assert_eq!(option.set, (at as i32 + 1, 3));
+        let [x, y, w, h] = option.rect;
+        let (mx, my, mw, mh) = menu.rect;
+        assert!(x >= mx && y >= my && x + w <= mx + mw && y + h <= my + mh);
+    }
+    let flags: Vec<i32> = options.iter().map(|n| n.flags).collect();
+    assert_eq!(
+        flags,
+        [flag::CLICK | flag::SELECTED, flag::DISABLED, flag::CLICK]
+    );
+
+    // A disabled option is not chosen; another is, and the menu closes.
+    assert!(!p.access_act(options[1].id, act::CLICK, 0., now));
+    assert_eq!(p.menu, Some(id));
+    assert!(p.access_act(options[2].id, act::CLICK, 0., now));
+    assert_eq!((p.menu, slot(&p, "pick")), (None, "c".into()));
+    p.frame();
+    assert!(p.reader_access(1., false).is_some());
+    let tree = p.access_told().to_vec();
+    let closed = tree.iter().find(|n| n.view == id).unwrap();
+    assert_eq!(
+        (closed.flags & expand, closed.value.as_str()),
+        (flag::EXPANDABLE, "Gamma")
+    );
+    assert!(tree.iter().any(|n| n.name == "after"));
+
+    // Android's collapse and UI Automation's Collapse press it again.
+    assert!(p.access_act(closed.id, act::CLICK, 0., now));
+    assert_eq!(p.menu, Some(id));
+    p.reader_access(1., false);
+    let open = p.access_told()[0].id;
+    assert!(p.access_act(open, act::CLICK, 0., now));
+    assert_eq!((p.menu, slot(&p, "pick")), (None, "c".into()));
+}
+
+/// The focus is on the row the keys are at, the combobox pattern's active
+/// descendant, and a menu longer than the window tells the rows that show
+/// and scrolls by a service's action.
+#[test]
+fn an_open_menu_has_the_focus_at_its_row_and_scrolls_for_a_service() {
+    use super::access::{act, flag, role};
+    let (mut p, id) = focused(&long(0), (300., 400.));
+    p.frame();
+    p.reader_access(1., true);
+    assert!(p.access_told().iter().any(|n| n.view == id));
+    assert_eq!(p.access_menu_focus(), None, "the select's own while closed");
+    key(&mut p, "ArrowDown");
+    key(&mut p, "ArrowDown");
+    p.reader_access(1., false);
+    let option = |p: &Presenter<()>, name: &str| {
+        (p.access_told().iter())
+            .find(|n| n.role == role::OPTION && n.name == name)
+            .map(|n| n.id)
+    };
+    assert_eq!(p.access_menu_focus(), option(&p, "Option 1"));
+    let told = p.access_told();
+    let list = told
+        .iter()
+        .find(|n| n.role == role::LIST_BOX)
+        .unwrap()
+        .clone();
+    let shown = told.iter().filter(|n| n.role == role::OPTION).count();
+    assert!(shown > 5 && shown < 60, "{shown} rows show");
+    assert_eq!(list.flags & (flag::FORWARD | flag::BACKWARD), flag::FORWARD);
+    assert!(option(&p, "Option 59").is_none());
+
+    assert!(p.access_act(list.id, act::FORWARD, 0., p.host.now()));
+    assert!(p.reader_access(1., false).is_some(), "the scroll is told");
+    let list = (p.access_told().iter())
+        .find(|n| n.role == role::LIST_BOX)
+        .unwrap()
+        .clone();
+    assert_eq!(
+        list.flags & (flag::FORWARD | flag::BACKWARD),
+        flag::FORWARD | flag::BACKWARD
+    );
+    assert!(option(&p, "Option 0").is_none(), "scrolled out of view");
+    while p.access_act(list.id, act::FORWARD, 0., p.host.now()) {}
+    p.reader_access(1., false);
+    let last = option(&p, "Option 59").expect("the last row shows at the end");
+    assert!(p.access_act(last, act::CLICK, 0., p.host.now()));
+    assert_eq!((p.menu, slot(&p, "pick")), (None, "v59".into()));
+    assert!(!p.access_act(list.id, act::BACKWARD, 0., p.host.now()));
+}

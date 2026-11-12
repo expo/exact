@@ -31,6 +31,7 @@ fn workers_start_with_the_first_request() {
     assert!(core.idle.lock().unwrap().is_some());
     core.run(
         RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket: 1,
             target: "test".into(),
             request: Request::continuation(1),
@@ -50,6 +51,7 @@ fn workers_start_with_the_first_request() {
     assert_eq!(done[0].0, 1);
     core.run(
         RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket: 2,
             target: "test".into(),
             request: Request::get("https://example.test/").independent_http(4096),
@@ -80,6 +82,7 @@ fn an_idle_pool_is_not_woken() {
     let (core, woke) = core();
     core.run(
         RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket: 1,
             target: "test".into(),
             request: Request::continuation(1),

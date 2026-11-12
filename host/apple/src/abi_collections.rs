@@ -140,9 +140,10 @@ impl<D: DataSource> Bridge<D> {
     }
 
     /// What `view`'s subtree would measure in a block (`Kernel::measure_block`,
-    /// a popover's position-area option): the border box's width and height,
-    /// then the margins, top, right, bottom and left, as the layout resolved
-    /// them, six LE f32s in the output buffer, and 24; 0 when refused. Each axis is a
+    /// a pane's fitting proposal or a popover's position-area option): the used
+    /// width and height, the border box's width and height, then the margins,
+    /// top, right, bottom and left, as the layout resolved them. Eight LE f32s
+    /// in the output buffer, and 32; 0 when refused. Each axis is a
     /// length and a policy as `covers`' kind 4 takes them, 3 being a region.
     /// No batch: nothing is laid out, published or sent.
     pub fn measure_block(&mut self, view: u32, lengths: [f32; 2], policies: [u32; 2]) -> u32 {
@@ -156,10 +157,12 @@ impl<D: DataSource> Bridge<D> {
             .and_then(|h| h.measure_block(view, block));
         self.output = used.map_or_else(Vec::new, |m| {
             let [top, right, bottom, left] = m.margin;
-            [m.border.0, m.border.1, top, right, bottom, left]
-                .iter()
-                .flat_map(|v| v.to_le_bytes())
-                .collect()
+            [
+                m.used.0, m.used.1, m.border.0, m.border.1, top, right, bottom, left,
+            ]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect()
         });
         self.output.len() as u32
     }
