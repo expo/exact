@@ -75,7 +75,7 @@ extension NavigationHost {
             let whole = presented || (wantsWholeView && !covered)
             let shows = nav.map(barShows) ?? !ExactEnv.authoredChrome
             guard shows || whole || covered else { continue }
-            let edges: HostCover.Edges?
+            var edges: HostCover.Edges?
             // A collapsing title's scroller goes under the bar, which insets it;
             // its expanded inset is where CSS scrollTop 0 rests.
             // While the bar is not as the route wants it (mid-transition to or
@@ -158,6 +158,13 @@ extension NavigationHost {
                     let top = max(0, max(stretched ? min(safe.top, title) : safe.top, title) - node.pageBand.top), bottom = max(0, max(safe.bottom, reach) - node.pageBand.bottom)
                     if top > 0 || bottom > 0 { wanted[node.id] = .inset(top: top, bottom: bottom) }
                 } else if case .inset? = covers[node.id] { wanted[node.id] = covers[node.id] }
+            }
+            // A cover-bottom band clears the document inset too. Reserve
+            // its uncredited part in layout before children fill the port
+            // (LLP 1131 D2 and LLP 1123 D3, issue #223 amendment).
+            if settled, covered, !presented, var layout = edges, layout.bottom > 0 {
+                layout.bottom += presenter.coverBottomLayoutInset(in: c)
+                edges = layout
             }
             guard let edges else { continue }
             if edges != .init(top: 0, right: 0, bottom: 0, left: 0) { wanted[c.node.id] = .edges(edges) }

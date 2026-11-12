@@ -33,12 +33,13 @@ final class TabEdgeIOSTests: XCTestCase {
         let host = UIViewController()
         let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
         let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
-        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.frame = window.screen.bounds
         window.rootViewController = host
         window.makeKeyAndVisible()
         host.view.addSubview(view)
         self.window = window
-        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: CGSize(width: 402, height: 874)).error)
+        XCTAssertNil(session.boot(plan: try Data(contentsOf: URL(fileURLWithPath: path)), size: window.bounds.size).error)
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.frame = host.view.bounds
         view.layoutIfNeeded()
         try waitForRoute("scrolls")
@@ -124,6 +125,192 @@ final class TabEdgeIOSTests: XCTestCase {
             XCTAssertEqual(nav.viewControllers.count, 2, "\(tab) pushed")
             try assertClear(pushed, tabs)
         }
+    }
+
+    // LLP 1131 D2 and LLP 1123 D3 (#223 amendment): a cover route keeps its layout cover,
+    // but its open bottom scrolls through it with one inset owner.
+    func testCoverBottomReachesTheTabBarAndCreditsAuthoredPadding() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "cover insets belong to the route in its window") }
+        let session = try fixture(), p = session.presenter
+        let tabs = try XCTUnwrap(p.navigation.tabController)
+        try tap("toggle-cover", route: "scrolls")
+        let list = try node("content-scrolls"), sv = try XCTUnwrap(list.scrollView)
+        let route = try XCTUnwrap(p.navigation.activeRoute)
+        waitFor("cover layout settles") { p.viewportFit == "cover" && !Agent(session: session).nativeInFlight() }
+        XCTAssertNil(route.edgeScroll, "the layout cover stays the route's")
+        XCTAssertGreaterThan(list.pageBand.bottom, 0)
+        XCTAssertEqual(box(sv).maxY, box(route.node).maxY, accuracy: 0.5)
+        XCTAssertEqual(sv.adjustedContentInset.bottom, list.bandInset.bottom, accuracy: 0.5, "UIKit adds no second inset")
+        try assertClear("scrolls", tabs)
+        let bareInset = sv.adjustedContentInset.bottom
+        try tap("toggle-padding", route: "scrolls")
+        waitFor("authored padding is laid out") { route.node.padding("bottom") > 0 }
+        let padding = route.node.padding("bottom")
+        XCTAssertGreaterThan(padding, 0)
+        XCTAssertEqual(box(sv).maxY, box(route.node).maxY, accuracy: 0.5, "padding does not stop the surface above the bar")
+        XCTAssertEqual(sv.adjustedContentInset.bottom, bareInset, accuracy: 0.5, "the author’s safe-area padding is credited, not added again")
+        try assertClear("scrolls", tabs)
+        let inset = sv.adjustedContentInset
+        for _ in 0..<3 { p.reachPageEdges() }
+        XCTAssertEqual(sv.adjustedContentInset, inset, "repeated layout does not accumulate insets")
+        try tap("toggle-padding", route: "scrolls")
+        try tap("toggle-pixels", route: "scrolls")
+        waitFor("pixel padding is laid out") { route.node.padding("bottom") == 16 }
+        XCTAssertEqual(sv.adjustedContentInset.bottom, bareInset + 16, accuracy: 0.5, "ordinary padding adds to clearance")
+        try tap("toggle-pixels", route: "scrolls")
+        try tap("toggle-short", route: "scrolls")
+        waitFor("the short content fits") { list.content.height < 100 }
+        XCTAssertLessThanOrEqual(sv.contentSize.height + sv.adjustedContentInset.top + sv.adjustedContentInset.bottom, sv.bounds.height + 0.5,
+                                "the band creates no scroll range for short content")
+    }
+
+    func testCoverBottomKeepsTheExtraPixelsInSafeAreaPadding() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "cover insets belong to the route in its window") }
+        let session = try fixture(), p = session.presenter
+        try tap("toggle-cover", route: "scrolls")
+        waitFor("cover safe area is reported") { p.viewportFit == "cover" && p.insets.bottom > 0 && !Agent(session: session).nativeInFlight() }
+        let list = try node("content-scrolls"), sv = try XCTUnwrap(list.scrollView)
+        let route = try XCTUnwrap(p.navigation.activeRoute)
+        let bareInset = sv.adjustedContentInset.bottom
+        XCTAssertGreaterThan(bareInset, 0)
+        for (control, padding) in [("toggle-calc", p.insets.bottom + 8), ("toggle-max", max(100, p.insets.bottom))] {
+            try tap(control, route: "scrolls")
+            XCTAssertEqual(route.node.padding("bottom"), padding, accuracy: 0.5)
+            XCTAssertEqual(sv.adjustedContentInset.bottom, bareInset + padding - p.insets.bottom, accuracy: 0.5,
+                           "only the safe-area part is credited")
+            let (_, last) = try end(of: "scrolls")
+            let tabs = try XCTUnwrap(p.navigation.tabController)
+            XCTAssertEqual(last.maxY, box(tabs.tabBar).minY - (padding - p.insets.bottom), accuracy: 1)
+            try tap(control, route: "scrolls")
+        }
+    }
+
+    func testCoverPushedRouteKeepsItsAutomaticInsets() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "cover insets belong to the route in its window") }
+        let session = try fixture(), p = session.presenter
+        try tap("toggle-cover", route: "scrolls")
+        waitFor("cover safe area is reported") { p.viewportFit == "cover" && p.insets.bottom > 0 && !Agent(session: session).nativeInFlight() }
+        _ = try end(of: "scrolls")
+        try tap("scrolls-30", route: "scrollsPushed")
+        let list = try node("content-scrollsPushed"), sv = try XCTUnwrap(list.scrollView)
+        let route = try XCTUnwrap(p.navigation.activeRoute)
+        XCTAssertTrue(route.collapseScroll === list)
+        XCTAssertNil(route.edgeScroll)
+        XCTAssertEqual(list.pageBand.bottom, 0, "UIKit already owns this scroller")
+        XCTAssertEqual(sv.contentInsetAdjustmentBehavior, .automatic)
+        XCTAssertEqual(box(sv).maxY, box(route.node).maxY, accuracy: 0.5)
+        let tabs = try XCTUnwrap(p.navigation.tabController)
+        try assertClear("scrollsPushed", tabs)
+        let (_, last) = try end(of: "scrollsPushed")
+        XCTAssertEqual(last.maxY, box(tabs.tabBar).minY, accuracy: 0.5, "the last row has no extra gap above the bar")
+        let inset = sv.adjustedContentInset
+        for _ in 0..<3 { p.reachPageEdges() }
+        XCTAssertEqual(sv.adjustedContentInset, inset)
+    }
+
+    func testCoverBottomKeepsPercentageAndFlexFilledContentWithinTheScrollport() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "cover insets belong to the route in its window") }
+        let session = try fixture(), p = session.presenter
+        try tap("toggle-cover", route: "scrolls")
+        waitFor("cover safe area is reported") { p.viewportFit == "cover" && p.insets.bottom > 0 && !Agent(session: session).nativeInFlight() }
+        let list = try node("content-scrolls"), sv = try XCTUnwrap(list.scrollView)
+        for control in ["toggle-percent", "toggle-flex"] {
+            try tap(control, route: "scrolls")
+            let route = try XCTUnwrap(p.navigation.activeRoute)
+            XCTAssertGreaterThan(list.pageBand.bottom, 0)
+            XCTAssertEqual(box(sv).maxY, box(route.node).maxY, accuracy: 0.5)
+            let child = try node("fill-child")
+            XCTAssertGreaterThan(child.bounds.height, 100)
+            XCTAssertEqual(child.bounds.height, list.scrollPort(sv).height, accuracy: 0.5,
+                           "layout and UIKit agree on the usable height")
+            XCTAssertEqual(sv.contentSize.height + sv.adjustedContentInset.top + sv.adjustedContentInset.bottom,
+                           sv.bounds.height, accuracy: 0.5, "filled content has no scroll range")
+            try tap(control, route: "scrolls")
+        }
+    }
+
+    func testCoverBottomRejectsAVirtualizedBandLargerThanItsFinalPort() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "cover insets belong to the route in its window") }
+        let session = try fixture(), p = session.presenter
+        try tap("tab-plain", route: "plain")
+        try tap("toggle-virtual", route: "plain")
+        let report = p.onCovers
+        var reports = 0
+        p.onCovers = { changes in
+            reports += 1
+            guard reports < 20 else { XCTFail("cover feedback does not settle: \(changes)"); return }
+            report?(changes)
+        }
+        defer { p.onCovers = report }
+        try tap("toggle-cover", route: "plain")
+        let list = try node("content-plain"), sv = try XCTUnwrap(list.scrollView)
+        let route = try XCTUnwrap(p.navigation.activeRoute)
+        XCTAssertNotNil(p.collections.entries[list.id], "the list is virtualized")
+        XCTAssertGreaterThan(list.pageBand.bottom, 0, "a tall enough list takes the band")
+        try tap("toggle-small", route: "plain")
+        let available = route.node.bounds.height - list.convert(list.bounds, to: route.node).minY
+        let clearance = route.bottomClearance + p.insets.bottom
+        XCTAssertGreaterThan(available - route.bottomClearance, route.bottomClearance, "the unaugmented band fits")
+        XCTAssertLessThan(available - clearance, clearance, "the final band does not fit")
+        let frame = box(sv), offset = sv.contentOffset
+        for _ in 0..<3 {
+            p.navigation.reportCovers()
+            p.settlePump()
+            p.reachPageEdges()
+            XCTAssertEqual(list.pageBand.bottom, 0, "the prospective band exceeds the final port")
+            if case .edges(let edges)? = p.navigation.covers[route.node.id] {
+                XCTAssertEqual(edges.bottom, route.bottomClearance, accuracy: 0.5,
+                               "a rejected band reserves no extra layout clearance")
+            } else { XCTFail("the route retains its bottom cover") }
+            XCTAssertEqual(box(sv), frame)
+            XCTAssertEqual(sv.contentOffset, offset)
+        }
+        try tap("toggle-small", route: "plain")
+        XCTAssertGreaterThan(list.pageBand.bottom, 0, "growing the port restores the band")
+        XCTAssertEqual(box(sv).maxY, box(route.node).maxY, accuracy: 0.5)
+    }
+
+    func testCoverBottomLeavesAFooterAndRestoresAutomaticInsets() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "cover insets belong to the route in its window") }
+        let session = try fixture(), p = session.presenter
+        let tabs = try XCTUnwrap(p.navigation.tabController)
+        try tap("toggle-cover", route: "scrolls")
+        let list = try node("content-scrolls"), sv = try XCTUnwrap(list.scrollView)
+        XCTAssertGreaterThan(list.pageBand.bottom, 0, "a band exists before the footer takes the edge")
+        try tap("toggle-footer", route: "scrolls")
+        waitFor("footer is laid out") { (try? self.node("footer"))?.bounds.height == 44 }
+        XCTAssertEqual(list.pageBand.bottom, 0)
+        XCTAssertLessThanOrEqual(box(sv).maxY, box(try node("footer")).minY + 0.5)
+        try tap("toggle-footer", route: "scrolls")
+        try tap("toggle-cover", route: "scrolls")
+        waitFor("automatic bottom owner returns") { p.navigation.activeRoute?.edgeScroll === list }
+        XCTAssertEqual(list.pageBand.bottom, 0)
+        try assertClear("scrolls", tabs)
+    }
+
+    func testCoverBottomTracksHiddenTabBarAndRotation() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "cover insets belong to the route in its window") }
+        let session = try fixture(), p = session.presenter
+        try tap("toggle-cover", route: "scrolls")
+        let list = try node("content-scrolls"), sv = try XCTUnwrap(list.scrollView)
+        let route = try XCTUnwrap(p.navigation.activeRoute)
+        let scene = try XCTUnwrap(window?.windowScene)
+        let before = window!.bounds.size
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .landscapeRight)) { XCTFail("rotation: \($0)") }
+        waitFor("the scene rotates") { self.window!.bounds.width > self.window!.bounds.height }
+        session.view?.fit()
+        waitFor("rotated layout settles") { !Agent(session: session).nativeInFlight() && route.node.bounds.width > route.node.bounds.height }
+        XCTAssertNotEqual(window!.bounds.size, before)
+        XCTAssertEqual(box(sv).maxY, box(route.node).maxY, accuracy: 0.5)
+        XCTAssertEqual(sv.adjustedContentInset.bottom, list.bandInset.bottom, accuracy: 0.5)
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) { XCTFail("rotation: \($0)") }
+        waitFor("the scene returns to portrait") { self.window!.bounds.height > self.window!.bounds.width }
+        try tap("toggle-tabs", route: "scrolls")
+        waitFor("the hidden tab bar releases its cover") { list.pageBand.bottom == 0 && !Agent(session: session).nativeInFlight() }
+        XCTAssertEqual(sv.adjustedContentInset.bottom, 0, accuracy: 0.5)
+        try tap("toggle-tabs", route: "scrolls")
+        waitFor("the shown tab bar restores its band") { list.pageBand.bottom > 0 && !Agent(session: session).nativeInFlight() }
+        try assertClear("scrolls", XCTUnwrap(p.navigation.tabController))
     }
 
     func testRouteWaitIncludesDelayedPressDelivery() throws {

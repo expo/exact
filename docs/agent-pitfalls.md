@@ -566,6 +566,15 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   the bar's cover is added to the route's padding, but a cover-fit root has no top
   safe area. Fix: put `env(safe-area-inset-top)` on the route column, not on each
   authored header. (Signal Clone, build 5.)
+- **A cover route's bottom scroller can draw under the tab bar on iOS 26 and later.**
+  A route's last vertical scroller can draw through the bottom
+  cover when nothing in flow follows it and no clipping or transformed wrapper
+  blocks it (LLP 1131 D2, issue #223 amendment). Its last row clears the tab bar.
+  Route padding that references the bottom safe area receives credit up to the
+  document inset; extra pixels in `calc()` or `max()` and ordinary pixel padding
+  still add to the clearance (LLP 1123 D3, issue #223 amendment). A footer below
+  the scroller keeps its existing layout. Earlier iOS versions and tvOS keep
+  their existing behavior.
 - **A banner at the root of a tabbed app stays under the status bar on iOS.** A
   root-level `position="absolute" top=0` box padded with `env(safe-area-inset-top)`
   is drawn at y 0, and one at `top="calc(env(safe-area-inset-top) + 8px)"` at y 8.

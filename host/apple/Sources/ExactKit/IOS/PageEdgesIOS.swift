@@ -66,7 +66,7 @@ extension Presenter {
                         found.band.bottom += keyboardAccessoryHeight
                     }
                     #endif
-                    own = found.band
+                    own = found.inset ?? found.band
                     // UIKit clips the inherited safe area at the node's layout box,
                     // even though its scroll view draws the band outside that box.
                     if !route.ridingBars.isEmpty { own.top += min(found.band.top, route.view.safeAreaInsets.top) }
@@ -74,7 +74,7 @@ extension Presenter {
                     // The bar follows the route's scroller drawn under it, as UIKit's follows a list that is the controller's
                     // own: the automatic one, which an app's selection overrides until it gives the edge back with nil.
                     if !found.top.isEmpty || found.band.top > 0.5, navigation.automaticContentScroller(of: route) === v { r.top = sv }
-                    if !found.bottom.isEmpty { r.bottom = sv }
+                    if !found.bottom.isEmpty || found.underBar { r.bottom = sv }
                     routes[ObjectIdentifier(route)] = r
                 } else { found = pageBands(of: v, sv, margins: m, area: area, edgeEffect ? judge : nil); own = found.band }
             }
@@ -93,7 +93,10 @@ extension Presenter {
     }
 
     /// A scroller's bands, and the control bars it is drawn through on each edge.
-    struct Bands { var band = UIEdgeInsets.zero, top: [NodeView] = [], bottom: [NodeView] = [] }
+    struct Bands {
+        var band = UIEdgeInsets.zero, top: [NodeView] = [], bottom: [NodeView] = []
+        var inset: UIEdgeInsets?, underBar = false
+    }
 
     /// A page's scroller, laid out in the document with nothing between them
     /// that clips, transforms, scrolls or hides. LLP 1130 D3: an edge at the
@@ -135,7 +138,62 @@ extension Presenter {
         if let nav = c.navigationController, navigation.routeShowsBar(c, in: nav), c.navigationItem.largeTitleDisplayMode == .always, c.ridingBars.isEmpty { return Bands() }
         #endif
         if !c.ridingBars.isEmpty, case .edges(let edges)? = navigation.covers[c.node.id], edges.top > 0.5 { return Bands() }
-        return controlBands(of: v, in: c.node, judge, apart: c.collapseScroll !== v)
+        let found = controlBands(of: v, in: c.node, judge, apart: c.collapseScroll !== v)
+        return found.band == .zero ? coverBottomBand(of: v, sv, in: c, judge) : found
+    }
+
+    /// LLP 1131 D2, issue #223 amendment: an unobstructed cover bottom also
+    /// reaches the route's edge. The caller keeps D4's iOS 26 gate and D6's
+    /// tvOS exclusion. A collapse scroller keeps UIKit's existing ownership.
+    private func coverBottomBand(of v: NodeView, _ sv: UIScrollView, in c: RouteController, _ judge: ControlBars) -> Bands {
+        guard viewportFit == "cover", c.edgeScroll == nil, c.collapseScroll !== v,
+              v.transform.isIdentity, v.clipPath == nil, v.layer.boxMask == nil,
+              case .edges(let edges)? = navigation.covers[c.node.id], edges.bottom > 0.5,
+              judge.bars(of: v, in: c.node, top: false)?.isEmpty == true else { return Bands() }
+        let r = v.convert(v.bounds, to: c.node), room = c.node.contentBox()
+        let padding = c.node.padding("bottom"), foot = c.node.bounds.height - r.maxY
+        guard foot > 0.5, foot <= edges.bottom + padding + 0.5,
+              abs(r.minX - room.minX - edges.left) <= 0.5,
+              abs(r.maxX - room.maxX + edges.right) <= 0.5 else { return Bands() }
+        let band = UIEdgeInsets(top: 0, left: 0, bottom: foot, right: 0)
+        // The layout cover includes the uncredited document inset, but
+        // bottomClearance is the bar's part alone, before that addition.
+        let local = c.bottomClearance + insets.bottom
+        let credit = coverBottomCredit(c.node)
+        let clearance = local + padding - credit
+        if collections.entries[v.id] != nil {
+            // Judge the final band and port together, before layout reserves
+            // the document inset. Using today's box alternates eligibility
+            // when that reservation makes the port shorter than the band.
+            let port = c.node.bounds.height - r.minY - clearance - (sv.adjustedContentInset.top - v.bandInset.top)
+            guard clearance <= port + 0.5 else { return Bands() }
+        }
+        let native = sv.adjustedContentInset.bottom - sv.contentInset.bottom
+        let own = UIEdgeInsets(top: 0, left: 0, bottom: max(0, clearance - native), right: 0)
+        return Bands(band: band, inset: own, underBar: true)
+    }
+
+    /// Only the document-safe-area part of the route's padding clears that
+    /// inset; extra pixels in calc/max stay additive (LLP 1123 D3, #223 amendment).
+    private func coverBottomCredit(_ route: NodeView) -> CGFloat {
+        route.style["safe_area_padding_bottom"] == .bool(true) ? min(insets.bottom, route.padding("bottom")) : 0
+    }
+
+    /// Reserve the same clearance in layout and UIKit's scrollport, so a
+    /// percentage-height or flex-filled child fits. The surface extends
+    /// through this cover; reachPageEdges alone writes its bottom inset.
+    func coverBottomLayoutInset(in c: RouteController) -> CGFloat {
+        #if os(iOS)
+        guard #available(iOS 26.0, *),
+              case .edges(let edges)? = navigation.covers[c.node.id],
+              let v = NavigationHost.bottomScroller(in: c.node, cover: edges.bottom),
+              let sv = v.scrollView, (sv as? ScrollView)?.scrollsY ?? true, v.window != nil,
+              v.style["scroll_edge_effect"]?.string != "none",
+              routeBands(of: v, sv, in: c, ControlBars(self)).underBar else { return 0 }
+        return max(0, insets.bottom - coverBottomCredit(c.node))
+        #else
+        return 0
+        #endif
     }
 
     /// Collapse adoption and banding must agree about both edges and paint

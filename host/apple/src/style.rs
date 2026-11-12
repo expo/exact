@@ -101,7 +101,27 @@ fn presenter_ignores(name: &str) -> bool {
 pub fn style_json_sized(style: &StyleProps, env: &Env, keep: StyleMask) -> (String, Vec<Skipped>) {
     // An undefined segment length is its row's initial value (LLP 1078 D3).
     let resolved = style.env_resolved(env);
-    style_json_rows(&resolved, Some(env), keep)
+    let (mut json, skipped) = style_json_rows(&resolved, Some(env), keep);
+    // LLP 1123 D3: retain the reference before resolution so the presenter
+    // credits safe-area padding without crediting an ordinary pixel inset.
+    let credits_bottom = match &style.padding_bottom {
+        Dimension::Env(exact_kernel::Edge::Bottom, _)
+        | Dimension::Region(
+            exact_kernel::style::Region::SafeAreaCorners,
+            exact_kernel::Edge::Bottom,
+            _,
+        ) => true,
+        Dimension::Compare(c) => c.reads(exact_kernel::Edge::Bottom, env),
+        _ => false,
+    };
+    if credits_bottom {
+        json.pop();
+        if json.len() > 1 {
+            json.push(',');
+        }
+        json.push_str("\"safe_area_padding_bottom\":true}");
+    }
+    (json, skipped)
 }
 
 /// Native button face geometry was resolved by the kernel against its live
