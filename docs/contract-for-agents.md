@@ -3105,7 +3105,7 @@ each field. `head edited=dirty` marks a document with unsaved changes (the dot i
 a Mac window's close button; nothing elsewhere). Before a window closes or the app
 quits, every element with a `beforeunload` handler hears it, DOM's event: an action
 that calls `preventDefault()` keeps the window open — the browser asks "Leave
-site?", a Mac app asks its own question — and `close()` closes the window once
+site?", a Mac or Windows app asks its own question — and `close()` closes the window once
 it is answered (studio diary R17). Any other element's `title` is HTML's tooltip. `scroll document` declares page scrolling. Route `render`/`activate`
 policy belongs to the site's renderer/build pipeline; follow
 [the document fixture](../contract/corpus/document.contract) and
@@ -3594,11 +3594,11 @@ when there is none. On macOS the button takes no room in the page; elsewhere,
 Windows included (its notification-area icon is not built), it is an
 ordinary button. An accessory app's status menu ends with the host's Quit,
 which `-exact-menu-remove="status-quit"` removes. Bare `focus()` brings the
-window forward on macOS, showing it if it was hidden (Windows and Linux log
+window forward on macOS and Windows, showing it if it was hidden (Linux logs
 it as unsupported); `hideWindow()` puts it away again with the app still
-running, as the person's ⌘W does while a status item is placed or under
-`keepRunning` (macOS only; refused in the journal elsewhere, and where the
-app would end without its window); the agent lists the items as
+running, as the person's close does while a status item is placed or under
+`keepRunning` (macOS and Windows; refused in the journal elsewhere, and where
+the app would end without its window); the agent lists the items as
 `state.statusItems` and `state.dockMenu`.
 
 
@@ -3811,8 +3811,8 @@ choose an in-window message over a system notification), `persisted` and
 `restores` (the back/forward cache: `persisted` is true while the page is put
 away, from a `pagehide` with `persisted` until the `pageshow`; `restores`
 counts those `pageshow` events, so `task t when page.restores > 0
-key=page.restores` runs once for each return, never at launch; a Mac window a
-`keepRunning` close hid is put away, a minimized one only hidden). A reminder that should
+key=page.restores` runs once for each return, never at launch; a Mac or Windows
+window a `keepRunning` close hid is put away, a minimized one only hidden). A reminder that should
 open a route uses `showNotification(title="Done", navigate="/thread/42")`
 (`@exact/notifications`); its click reaches the navigation root as a warm
 `navigate` event or a cold launch location, and without `navigate=` it is
@@ -3880,6 +3880,28 @@ P1; `apps/harness/terminal.contract` shows the task). Declare its shape
 (`resource terminal = exactSurface("terminal") as shape Terminal`); on any
 other host it stays unloaded. A new host fact uses this channel before
 anyone proposes a new reserved source (LLP 1101.002 §0 P11).
+
+A GPU canvas's record (`canvas surface=world()`, read as `exactSurface("world")`)
+carries one host fact beside what its module publishes: `presented`, true once a
+complete frame of the canvas's current picture has been handed to the compositor,
+on every host. It is false until then, and again after a restore, a restarted
+world, a lost GPU device or a new target, until the next such frame. It changes
+only at those moments, never per frame. Keep a loader over the canvas until it is
+true; a record that says the world is set up is not proof that a frame has
+drawn. A module cannot publish a field of that name.
+
+```contract
+shape Table
+  presented: bool
+
+component App
+  resource table = exactSurface("world") as shape Table
+  view
+    main width="100%" height="100%"
+      canvas surface=world() width="100%" height="100%" position="relative"
+        if !table.presented
+          text "Setting the table" position="absolute" inset=0 aria-busy=true
+```
 
 The terminal's `colors` is the selected output bit depth: `0` (monochrome),
 `4` (16 ANSI colours), `8` (256 colours), or `24` (RGB). The host reduces
@@ -3982,7 +4004,8 @@ and missed frames for the last 0.5 s and 5 s; pacing; and charts of frame rate a
 frame time, or a table of work time, late frames, maximum frame time and pacing
 changes. A tap on a chart expands it; a tap on the title defines each figure; Share,
 at its top right, asks what to share, Agent Report, Summary or Image, and opens the
-system's share sheet with that one item. The card states no pass or fail of its own;
+system's share sheet with that one item; where the card measures the screen, it offers
+two agent reports, the screen's and Exact's frames'. The card states no pass or fail of its own;
 Details, beside Share, swaps everything below the header for `perf frames health`'s
 three results over the last 5 s with their reasons and the counts behind them, in rows
 that scroll within the card. These are timing proxies; actual presentation and
@@ -4032,6 +4055,11 @@ Open the four-finger menu and choose **Frame Health**, which in a production bak
 collection, reproduce the hitch, then tap Share on the card and choose Agent Report; the share sheet takes
 the JSON text. Exact creates no report file or automatic upload. A person can send
 that text to an agent. The system share destination controls any storage it creates.
+On iOS 18 and later the card measures the screen, and Share offers **Agent Report:
+Screen** (`ui-update`) and **Agent Report: Exact's Frames** (`exact-app-display-link`),
+each a report of its own within 4 KB. The screen's has no frame times; an app drawn by
+GPU surfaces, whose canvases Exact's frame clock ticks, has its frame times and their
+work in Exact's, its GPU execution and presentation unobserved.
 
 For controlled device checks, `scripts/fixtures/frame-health-app` is a minimal fixture:
 one Start/Stop button, one moving canvas tile and 32 static rows. It starts paused;
@@ -4094,7 +4122,9 @@ packets. No report is automatically persisted, queued for retry or sent periodic
 
 A report covers one source. The default selects the source with the most recent
 retained hitch; `report app` or `report scroll` selects explicitly. `source` identifies
-it, and `otherSources` names retained evidence in other sources. Counts and generations
+it, `otherSources` names retained evidence in other sources, and `selection` says how
+to get another: an agent's request, or, for a report the card's Share gave, its other
+agent report. Counts and generations
 belong to their named source. Forwarded apply context does not count an app apply or
 its deadline again as a native-scroll event.
 
@@ -4248,7 +4278,12 @@ maximum, including above 120 Hz; press clocks are per window and update when its
 changes.
 
 `exact.frame-health/2` is a versioned JSON schema. Field explanations stay here to
-leave bytes for evidence. `columns` names each field in a `hitches` row. Export keeps
+leave bytes for evidence. `coreSinceReload` counts every frame since the collector's
+last reset, not only the retained rows: callbacks, frame intervals, missed and late
+frames, and `frameTimeBoundsNs` and `workBoundsNs`, the bounds of the bins holding the
+median, p99 and maximum frame time and work (`perf frames health`'s bins; a null upper
+bound is the open last bin). A field is null where its source does not measure it, as
+the screen's frame times, or where its bins do not hold every frame. `columns` names each field in a `hitches` row. Export keeps
 the newest rows that fit, in chronological order, with `retention.omittedForBudget`;
 it never reduces timing precision to fit. Sequences, captures and generations are
 decimal strings; other numbers are safe JSON integers. `time.clamped` invalidates
@@ -5112,7 +5147,15 @@ and Android follow (LLP 1121 stage 8 B). A look's `color` reaches the node's tex
 as its own `color` does (a descendant that writes its own keeps it), so
 `:hover color="ink"` on a link recolours its words, under a `color-scheme`
 boundary too; the web and Apple (a Mac's pointer, an iPad's) show it, and
-Linux's looks paint the box alone. Native buttons and list rows accept
+Linux's looks paint the box alone. They also take `scale`, which stands in for
+the node's own `scale` while the look holds: like it, it never lays out, and a
+`-exact-press-scale` multiplies onto it. It moves there and back on the node's
+own `transition` for `scale`, as a `:hover` rule's value moves in a browser, on
+every host with a pointer (the web, a Mac's, an iPad's, Linux and Windows); with
+none it snaps, and on the web so does one under a `-exact-spring`. An icon
+button that grows on hover:
+`button scale=1 transition="scale 150ms ease"` with `:hover` `scale = 1.08`.
+Native buttons and list rows accept
 `:active`; their other states remain the platform's. Active properties keep a
 button native, including with `appearance="auto"`. Each written property overrides
 that field; unwritten fields keep the native highlighted state. Clearing a target

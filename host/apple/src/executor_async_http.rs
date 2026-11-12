@@ -14,7 +14,7 @@ impl Machine {
         sized: bool,
         abort: AbortController,
         retiring: AbortRegistration,
-        scoped: Option<ibex2::host::Fetch>,
+        scoped: Option<ibex2::grant::GrantSet>,
     ) {
         let refuse = |outcome| self.answer(lane, run, outcome);
         if abort.signal().aborted() {
@@ -37,7 +37,12 @@ impl Machine {
                 "exactBodyTo: not on the native DarwinLane (URLSession) yet",
             ));
         }
-        let fetch = super::super::reach::gate_fetch(scoped.unwrap_or(fetch), request.reach);
+        // A source's narrower scope runs on the lane's transport too.
+        let fetch = match scoped {
+            Some(scope) => fetch.with_grants(scope),
+            None => fetch,
+        };
+        let fetch = super::super::reach::gate_fetch(fetch, request.reach);
         let limit = super::super::body_to::limit(&request);
         if request.body_from.is_some() {
             let file = FileJob {

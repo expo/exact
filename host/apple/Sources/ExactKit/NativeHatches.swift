@@ -11,7 +11,7 @@
 //
 // The host's table, handed to the module once (`module_connect`):
 //
-//    0  u32 size                184
+//    0  u32 size                192
 //    8  resolve(host, routeKey, keyLen, id, idLen) → node (0: none)
 //   16  act(host, node, action) → 0 done   action 0 click, 1 focus, 2 blur
 //   24  log(host, text, len)
@@ -50,6 +50,8 @@
 //  176  service(host, module, moduleLen, json, len, ctx, reply): a module's
 //        service query (`ExactServices.query`); replies once on any thread,
 //        with len 0 for no answer
+//  184  after_coalescing(host, token, ms): refresh at the next clock instant
+//        at or past the deadline, without adding a seek stop (HatchClock.swift)
 //
 // `host` is the session's runtime handle, as for `changed` and `now`: a
 // destroyed session's is answered with nothing. Service queries use the
@@ -124,6 +126,9 @@ private typealias HatchFramesFn = @convention(c) (UnsafeMutableRawPointer?, UInt
 private typealias HatchAfterFn = @convention(c) (UnsafeMutableRawPointer?, UInt64, Double) -> Void
 private let hatchFrames: HatchFramesFn = { host, token, on in hatchSession(host)?.natives.hatchClock.frames(token, on: on != 0) }
 private let hatchAfter: HatchAfterFn = { host, token, ms in hatchSession(host)?.natives.hatchClock.after(token, ms: ms) }
+private let hatchAfterCoalescing: HatchAfterFn = { host, token, ms in
+    hatchSession(host)?.natives.hatchClock.after(token, ms: ms, coalescing: true)
+}
 
 private typealias HatchArrangementFn = @convention(c) (UnsafeMutableRawPointer?, UInt32, UnsafeMutableRawPointer?) -> Int32
 private let hatchArrangement: HatchArrangementFn = { host, node, object in
@@ -395,7 +400,7 @@ private let hatchService: @convention(c) (UnsafeMutableRawPointer?, UnsafePointe
 /// The host's callbacks, one table for the process: each finds its session
 /// by the handle it is called with.
 private let hatchHostTable: UnsafeRawPointer = {
-    let size = 184
+    let size = 192
     let t = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 8)
     t.initializeMemory(as: UInt8.self, repeating: 0, count: size)
     t.storeBytes(of: UInt32(size), as: UInt32.self)
@@ -420,6 +425,7 @@ private let hatchHostTable: UnsafeRawPointer = {
     t.storeBytes(of: unsafeBitCast(hatchInvoke, to: UnsafeRawPointer.self), toByteOffset: 160, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchArrangement, to: UnsafeRawPointer.self), toByteOffset: 168, as: UnsafeRawPointer.self)
     t.storeBytes(of: unsafeBitCast(hatchService, to: UnsafeRawPointer.self), toByteOffset: 176, as: UnsafeRawPointer.self)
+    t.storeBytes(of: unsafeBitCast(hatchAfterCoalescing, to: UnsafeRawPointer.self), toByteOffset: 184, as: UnsafeRawPointer.self)
     return UnsafeRawPointer(t)
 }()
 

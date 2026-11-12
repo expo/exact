@@ -196,7 +196,11 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertTrue(overlay.card.detailsScroll.isHidden, "a second tap returns the charts")
         overlay.card.activate?(.share)
         let choices = try presented(UIAlertController.self)
-        XCTAssertEqual(choices.actions.map(\.title), ["Agent Report", "Summary", "Image", "Cancel"])
+        // Measuring the screen, Share gives Exact's frames as an agent report of their own too
+        XCTAssertEqual(choices.actions.map(\.title), overlay.observing
+            ? ["Agent Report: Screen", "Agent Report: Exact's Frames", "Summary", "Image", "Cancel"]
+            : ["Agent Report", "Summary", "Image", "Cancel"])
+        if #available(iOS 18.0, *) { XCTAssertTrue(overlay.observing) }
         close()
         overlay.share(.image)
         // On a phone the sheet rises from the bottom edge, and UIKit replaces the popover's source
@@ -468,6 +472,91 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertFalse(health.hudEffectiveVisible)
         XCTAssertFalse(overlay.observing)
         overlay.setVisible(false)
+    }
+
+    /// Measuring the screen, the card's Share gives the screen's report and Exact's frames' as two, each naming the other:
+    /// an app drawn by GPU surfaces has frame times only on Exact's clock, in a production bake too (LLP 1079.000 §7.4)
+    func testMeasuringTheScreenShareGivesExactsFramesAsAReportOfTheirOwn() throws {
+        guard #available(iOS 18.0, *) else { throw XCTSkip("UIUpdateLink is available from iOS 18") }
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "a real host window for the frame-health card")
+        }
+        let health = FrameHealth(enabled: true), scroll = FrameHealth(enabled: true, source: "native-scroll-ui-update")
+        health.nativeHealth = scroll
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlay(health: health)
+        let window = hosted(overlay, in: scene, size: CGSize(width: 393, height: 852)), dot = CALayer()
+        window.layer.addSublayer(dot)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        overlay.setVisible(true)
+        defer { overlay.setVisible(false) }
+        XCTAssertTrue(overlay.observing)
+        // The app draws 45 frames, on Exact's clock too, the 30th late
+        let ticker = Ticker {
+            dot.position.x += 1
+            let t = CACurrentMediaTime()
+            health.record(arrival: t, target: t + 1 / 60, period: 1 / 60, finished: t + (dot.position.x == 30 ? 0.03 : 0.002))
+        }
+        let link = CADisplayLink(target: ticker, selector: #selector(Ticker.tick))
+        link.add(to: .main, forMode: .common)
+        waitFor("45 of the app's frames") { ticker.ticks >= 45 }
+        link.invalidate()
+        // Then a native scroll's late frame, newer than any of Exact's: still none of Exact's frames
+        scroll.setHUDVisible(true)
+        let late = CACurrentMediaTime()
+        scroll.record(arrival: late, target: late + 1 / 120, period: 1 / 120, finished: late + 0.03)
+        XCTAssertTrue(health.reportSource === scroll, "the scroll's late frame is the newest")
+        func report(_ kind: FrameHealthShare) throws -> [String: Any] {
+            var data: Data?
+            overlay.report(kind) { data = $0 }
+            waitFor("the report is encoded") { data != nil }
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: try XCTUnwrap(data)) as? [String: Any])
+        }
+        let clock = try report(.clockReport)
+        XCTAssertEqual(clock["source"] as? String, health.source)
+        XCTAssertEqual(clock["selection"] as? String, "one-source; the card's Share gives ui-update as a report of its own")
+        XCTAssertTrue((clock["otherSources"] as? [[String: Any]])?.contains { $0["source"] as? String == "ui-update" } == true)
+        let core = try XCTUnwrap(clock["coreSinceReload"] as? [String: Any])
+        XCTAssertGreaterThan(Int(core["frameIntervals"] as? String ?? "") ?? 0, 30, "its frame times")
+        XCTAssertNotNil((core["frameTimeBoundsNs"] as? [String: Any])?["p99"])
+        XCTAssertEqual(((core["workBoundsNs"] as? [String: Any])?["maximum"] as? [UInt64])?.first, 24_000_000, "and the work of every frame, in its bin")
+        XCTAssertFalse((clock["hitches"] as? [[Any]] ?? []).isEmpty, "with its late frame")
+        let screen = try report(.report)
+        XCTAssertEqual(screen["source"] as? String, "ui-update")
+        XCTAssertEqual(screen["selection"] as? String, "one-source; the card's Share gives \(health.source) as a report of its own")
+    }
+
+    /// The face draws each band as a picture of its own, and a read draws again only the bands whose figures changed, so
+    /// the card's drawing within the app's frames stays small (LLP 1079.000 §7.4)
+    func testAReadDrawsOnlyTheBandsWhoseFiguresChanged() throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else {
+            throw missing("scene", "a real host window for the frame-health card")
+        }
+        let health = FrameHealth(enabled: true)
+        defer { health.destroy() }
+        let overlay = FrameHealthOverlay(health: health)
+        _ = hosted(overlay, in: scene, size: CGSize(width: 393, height: 852))
+        overlay.setVisible(true)
+        defer { overlay.setVisible(false) }
+        let card = overlay.card
+        card.drawNow()
+        let content = try XCTUnwrap(card.subviews.first)
+        let bands = content.subviews.filter { $0.layer is FrameHealthCardView.Pictured.Picture && !($0 is FrameHealthCardView.DetailsView) }
+        XCTAssertEqual(bands.map { $0.frame.minY / card.scale }, [0, 44, 82, 126, 170, 206], "header, context, figures, pacing, toolbar, charts")
+        func drawn(_ change: (inout FrameHealthCardPresentation) -> Void) -> [Bool] {
+            let before = bands.map { $0.layer.contents as AnyObject? }
+            var next = card.presentation
+            change(&next)
+            card.update(next)
+            card.drawNow()
+            return zip(before, bands.map { $0.layer.contents as AnyObject? }).map { $0 !== $1 }
+        }
+        XCTAssertTrue(bands.allSatisfy { $0.layer.contents != nil })
+        XCTAssertEqual(drawn { $0.rows = [("Last 0.5s", "59", "1"), ("Last 5s", "60", "2")] }, [false, false, true, false, false, false],
+            "new figures draw their band alone")
+        XCTAssertEqual(drawn { $0.pacing = ("Even", "300 frames at 16.7ms") }, [false, false, false, true, false, false])
+        XCTAssertEqual(drawn { $0.status = .paused }, [true, false, false, false, false, false])
+        XCTAssertEqual(drawn { _ in }, [false, false, false, false, false, false], "the same figures draw nothing")
     }
 
     /// A card measuring the screen holds two readers' places; with one free, it shows Exact's frames until a second is

@@ -20,6 +20,7 @@ import { sourceMapReaders, identifyResources, identifyInspectedNode, identifyLay
 import { LAUNCH_MEDIA, preferGroups, preferOp, preferWeb } from './agent-prefer.mjs';
 import { guardFlags } from './help.mjs';
 import { nativeBuild, planOverride, refuseBuild } from './agent-build.mjs';
+import { refuseBackendOrigin } from './agent-launch.mjs';
 import { axTree } from './agent-ax.mjs';
 export { sourceMapReader, identifyInspectedNode, render, tapRefusal, worldView, lookPicture } from './agent-inspect.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -527,6 +528,7 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
 async function openIOS({ plan, app, size, env: extra = {}, session, hostFixture = false, touch = 'agent', onProcess }) {
   const a = resolveApp(app);
   const built = nativeBuild('ios', a, { sample: hostFixture, checked: process.env.EXACT_BUILD_CHECKED }), bundle = built.built;
+  if (!built.missing) refuseBackendOrigin(built, a);
   const id = hostFixture ? `${a.id}.host` : a.id;
   // An app's exact.mjs builds first instead, or bakes a plan-only edit to run on this build (agent-build.mjs, LLP 1116.003).
   const override = plan || hostFixture ? null : planOverride('ios', a, built);

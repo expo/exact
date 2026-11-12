@@ -239,7 +239,7 @@ test('host.web.head takes script, link and meta entries and refuses the rest by 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('host.windows.window takes its size and refuses keepRunning, which the Windows host does not build', async () => {
+test('host.windows.window takes its size and keepRunning, and refuses a keepRunning that is not a boolean', async () => {
   const { readManifest } = await import('./app.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-manifest-'));
   const read = window => {
@@ -248,7 +248,8 @@ test('host.windows.window takes its size and refuses keepRunning, which the Wind
   };
   try {
     assert.doesNotThrow(() => read({ width: 800, height: 600 }));
-    assert.throws(() => read({ keepRunning: true }), /host\.windows\.window\.keepRunning: not a known key/);
+    assert.doesNotThrow(() => read({ keepRunning: true }));
+    assert.throws(() => read({ keepRunning: 'yes' }), /host\.windows\.window\.keepRunning/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

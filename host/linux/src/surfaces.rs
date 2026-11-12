@@ -36,6 +36,7 @@ pub(crate) mod apple;
 pub(crate) mod controls;
 mod pixels;
 mod shaders;
+mod size;
 #[cfg(windows)]
 pub(crate) mod window;
 
@@ -453,6 +454,8 @@ pub(crate) struct Surfaces {
     pub(crate) error: Option<String>,
     work: Vec<RequestOut>,
     outcomes: Vec<(u64, Outcome)>,
+    /// Records taken after a frame presented, for the next sync (`owe_records`).
+    owed: Vec<(String, String)>,
     /// The canvas pointer's last event (canvas, viewport point), for its motion.
     pointer: Option<(u32, f32, f32)>,
     /// The device's motion for the next canvas pointer event, when it has one.
@@ -534,7 +537,7 @@ impl Surfaces {
         compat: &str,
         assets: &crate::image::Assets,
     ) -> bool {
-        let mut changed = false;
+        let mut changed = self.forward_owed(host);
         let dead: Vec<_> = self
             .canvases
             .keys()
@@ -677,6 +680,7 @@ impl Surfaces {
             }
             let c = self.canvases.get_mut(&update.view).unwrap();
             let values = update.arguments_json();
+            size::give(abi, host, update.view, c.id, &update.name);
             let code = unsafe {
                 abi.symbol::<unsafe extern "C" fn(u32, *const u8, usize, f64) -> u32>(
                     b"gpu_bind_at",

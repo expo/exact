@@ -8,10 +8,12 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'node:os';
 import { basename, delimiter, dirname, relative, resolve } from 'node:path';
 import { appleArtifacts, appleRunBinary } from '../host/apple/build.mjs';
-import { moduleGraph, notBuildInput, receiptChanges } from './agent-launch.mjs';
+import { moduleGraph, notBuildInput, receiptChanges, refuseBinaryBackend } from './agent-launch.mjs';
 import { buildArgs, buildFirst, buildReason, childFailure, failureSummary, linuxRebuild, lockHolder, logged, nativeBuild, overrideDir, planOverride, planSource, planSources, ownVerb, prebuild, rebuildCommand, refuseBuild } from './agent-build.mjs';
 import { openStdio } from './agent-stdio.mjs';
-import { hermesBundle, hermesTarget, linuxBinary, resolveApp, PINNED_RUST } from './app.mjs';
+import { bakeOutput, hermesBundle, hermesTarget, linuxBinary, resolveApp, windowsFile, PINNED_RUST } from './app.mjs';
+import { recordBuiltSettings } from '../js/bake/src/__exact_env.mjs';
+import { writePackagedReceipt } from '../host/windows/build.mjs';
 
 test('Mac drives use the assembled app bundle even without catalogs or widgets', () => {
   const { dir } = scratchApp('ats-drive');
@@ -118,6 +120,279 @@ test('macOS freshness checks the full product receipt when the bundle carries a 
     write('source.swift', 'before');
   } finally {
     if (previous === undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR = previous;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('native drives refuse a baked backend that the drive did not select', async () => {
+  const { dir, write } = scratchApp('backend-drive');
+  const saved = { ...process.env };
+  try {
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'PORT']) delete process.env[key];
+    const literal = 'http://127.0.0.1:4400', other = 'http://127.0.0.1:4412';
+    write('app.ts', `// const origin = 'http://comment.invalid';\nexport const origin = \`${literal}/\` as const;\n`);
+    const app = resolveApp(dir), paths = appleArtifacts(app), receipt = resolve(paths.products, 'receipt.json');
+    const bundled = resolve(paths.bundle, 'Contents/Resources/receipt.json');
+    const ios = resolve(appleArtifacts(app, { destination: 'ios-simulator' }).bundle, 'receipt.json');
+    write(relative(dir, appleRunBinary(app)), '');
+    const time = new Date(Date.now() + 60_000);
+    const record = origin => {
+      for (const path of [receipt, bundled, ios]) {
+        write(relative(dir, path), JSON.stringify({ target: paths.target, build: { trust: 'development', backendOrigin: origin } }));
+        utimesSync(path, time, time);
+      }
+    };
+    const check = () => {
+      assert.deepEqual(receiptChanges(receipt, app), []);
+      for (const host of ['macos', 'ios']) {
+        const state = nativeBuild(host, app);
+        assert.deepEqual(state.changed, []);
+        assert.doesNotThrow(() => refuseBuild(host, state, app));
+      }
+    };
+    record(literal); check();
+    const replaced = JSON.parse(readFileSync(bundled, 'utf8'));
+    replaced.build.backendOrigin = other;
+    writeFileSync(bundled, JSON.stringify(replaced));
+    assert.deepEqual(nativeBuild('macos', app).changed, [bundled]);
+    record(other);
+    for (const checked of [null, createHash('sha256').update(readFileSync(receipt)).digest('hex')]) {
+      assert.deepEqual(receiptChanges(receipt, app, { hashed: !!checked }), []);
+      for (const host of ['macos', 'ios']) assert.throws(() => refuseBuild(host, nativeBuild(host, app, { checked }), app), /baked backend.*4412.*app.ts origin.*4400/);
+    }
+    const unexpected = () => assert.fail('a refused backend must neither build nor bake');
+    await assert.rejects(buildFirst('macos', app, { wait: () => {}, build: unexpected, bake: unexpected }), /baked backend/);
+    const { open } = await import('./agent.mjs');
+    for (const host of ['macos', 'ios']) {
+      await assert.rejects(open({ host, app: dir, plan: resolve(dir, 'replacement.plan'), onProcess: unexpected }), /baked backend/);
+    }
+    // --backend sets this variable; selecting another origin never authorizes the baked one.
+    process.env.EXACT_BACKEND_ORIGIN = `${other}/`; check();
+    process.env.EXACT_BACKEND_ORIGIN = literal;
+    assert.throws(() => refuseBuild('macos', nativeBuild('macos', app), app), /baked backend.*EXACT_BACKEND_ORIGIN/);
+    delete process.env.EXACT_BACKEND_ORIGIN;
+    write('.exact/backend-origin', other); check();
+    rmSync(resolve(dir, '.exact/backend-origin'));
+    // A checkout's fixture port is also the bake's default selection.
+    write('app.ts', `const origin = '${literal}';\n`);
+    write('app.json', JSON.stringify({ ...app.manifest, commands: { server: ['bun', 'fixture/server.mjs', '--port', '4412'] } }));
+    check();
+    record(literal);
+    assert.throws(() => refuseBuild('macos', nativeBuild('macos', app), app), /baked backend.*commands.server --port/);
+    record(undefined);
+    assert.deepEqual(receiptChanges(receipt, app), []);
+    assert.throws(() => refuseBuild('macos', nativeBuild('macos', app), app), /receipt has no backend origin; run .*exact\.mjs (mac|ios)/);
+    for (const path of [receipt, bundled, ios]) rmSync(path);
+    for (const host of ['macos', 'ios']) assert.throws(() => refuseBuild(host, nativeBuild(host, app), app), /receipt has no backend origin; run .*exact\.mjs (mac|ios)/);
+    write('app.ts', "const origin = 'https://example.com/app';\n");
+    record(other);
+    for (const host of ['macos', 'ios']) assert.throws(() => refuseBuild(host, nativeBuild(host, app), app), /baked backend.*example.com/);
+    write('app.ts', `// const origin = '${literal}';\nconst config = { origin: '${literal}' };\n`);
+    check();
+  } finally {
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'PORT']) {
+      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the backend command reads a literal declaration rather than a commented origin', () => {
+  mkdirSync(resolve(import.meta.dir, '../target'), { recursive: true });
+  const dir = mkdtempSync(resolve(import.meta.dir, '../target/exact-backend-'));
+  try {
+    const app = resolve(dir, 'app'), server = resolve(dir, 'node_modules/snapback4/bin/snapback4.js');
+    mkdirSync(app);
+    mkdirSync(dirname(server), { recursive: true });
+    writeFileSync(server, 'console.log(JSON.stringify(process.argv.slice(2)));\n');
+    writeFileSync(resolve(app, 'app.json'), '{}');
+    const env = { ...process.env };
+    delete env.EXACT_BACKEND_ORIGIN;
+    const run = () => spawnSync(process.execPath, [resolve(import.meta.dir, 'exact.mjs'), 'backend', app], { encoding: 'utf8', env });
+    writeFileSync(resolve(app, 'app.ts'), "// const origin = 'http://comment.invalid';\nconst origin = ('http://127.0.0.1:4410' as const);\n");
+    const selected = run();
+    assert.equal(selected.status, 0, selected.stderr);
+    assert.deepEqual(JSON.parse(selected.stdout), ['dev', '--port', '4410']);
+    writeFileSync(resolve(app, 'app.ts'), "// const origin = 'http://comment.invalid';\n");
+    const absent = run();
+    assert.equal(absent.status, 1);
+    assert.match(absent.stderr, /needs a literal const origin/);
+    assert.equal(absent.stdout, '');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('an app launcher selects a native backend before checking its build', () => {
+  const { dir, write } = scratchApp('backend-launcher');
+  const literal = 'http://127.0.0.1:4400', selected = 'http://127.0.0.1:4412';
+  const app = resolveApp(dir), mac = appleArtifacts(app), ios = appleArtifacts(app, { destination: 'ios-simulator' });
+  write('app.ts', `const origin = '${literal}';\n`);
+  write(relative(dir, appleRunBinary(app)), '');
+  const receipt = JSON.stringify({ target: mac.target, build: { trust: 'development', backendOrigin: selected } });
+  for (const path of [resolve(mac.products, 'receipt.json'), resolve(mac.bundle, 'Contents/Resources/receipt.json'), resolve(ios.bundle, 'receipt.json')]) {
+    write(relative(dir, path), receipt);
+    const time = new Date(Date.now() + 60_000);
+    utimesSync(path, time, time);
+  }
+  const script = `
+    import { mock } from 'bun:test';
+    import * as processes from 'node:child_process';
+    const spawn = processes.spawn;
+    mock.module(${JSON.stringify(resolve(import.meta.dir, 'app-shells.mjs'))}, () => ({
+      platformOf: () => null,
+    }));
+    mock.module('node:child_process', () => ({ ...processes, spawn(command, args, options) {
+      if (args[0].endsWith('/scripts/agent.mjs')) {
+        return spawn(command, ['-e', 'console.log(process.env.EXACT_BACKEND_ORIGIN)'], options);
+      }
+      return spawn(command, args, options);
+    } }));
+    const { run } = await import('./scripts/app-cli.mjs');
+    process.exitCode = await run({ dir: ${JSON.stringify(dir)}, name: 'backend-launcher',
+      exact2: ${JSON.stringify(resolve(import.meta.dir, '..'))}, args: process.argv.slice(1) });
+  `;
+  const env = { ...process.env };
+  for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_MAC_BIN', 'EXACT_BUILD_CHECKED', 'PORT']) delete env[key];
+  try {
+    for (const host of ['macos', 'ios']) {
+      const drive = backend => spawnSync(process.execPath, ['-e', script, 'agent', host, ...(backend ? ['--backend', backend] : []), 'tree'], {
+        cwd: resolve(import.meta.dir, '..'), encoding: 'utf8', env, timeout: 15_000,
+      });
+      for (const backend of [undefined, literal]) {
+        const refused = drive(backend);
+        assert.equal(refused.status, 1, refused.stdout + refused.stderr);
+        assert.match(refused.stderr, /baked backend.*4412.*4400/);
+        assert.equal(refused.stdout, '');
+      }
+      const overridden = drive(selected);
+      assert.equal(overridden.status, 0, overridden.stdout + overridden.stderr);
+      assert.equal(overridden.stdout.trim(), selected);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('stdio drives check backend receipts before desktop spawns or phone installation', async () => {
+  const { dir, write } = scratchApp('backend-stdio');
+  const saved = { ...process.env };
+  try {
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'PORT']) delete process.env[key];
+    write('app.ts', "const origin = 'http://127.0.0.1:4400';\n");
+    const app = resolveApp(dir), other = 'http://127.0.0.1:4412';
+    const bin = resolve(dir, 'probe.app/Contents/MacOS/probe'), backend = { backendOrigin: other };
+    write(relative(dir, bin), 'never run');
+    write('baked/app.module.json', JSON.stringify(backend));
+    recordBuiltSettings(bin, app, resolve(dir, 'baked'));
+    // The next bake alone must not change the backend recorded for an existing executable.
+    write('baked/app.module.json', JSON.stringify({ backendOrigin: 'http://127.0.0.1:4400' }));
+    write('probe.app/Contents/Resources/receipt.json', JSON.stringify({ build: backend }));
+    const phone = appleArtifacts(app, { destination: 'ios' }).bundle;
+    write(relative(dir, resolve(phone, 'receipt.json')), JSON.stringify({ build: backend }));
+    const product = `${app.crate('windows')}.exe`, dll = resolve(dirname(bin), 'backend.dll');
+    write(relative(dir, resolve(dirname(bin), windowsFile(app, product))), readFileSync(bin));
+    write(relative(dir, dll), 'selected backend module');
+    writePackagedReceipt(app, { ...backend, products: [product, dll].map(path => ({ path,
+      sha256: createHash('sha256').update(readFileSync(resolve(dirname(bin), windowsFile(app, path)))).digest('hex') })) }, dirname(bin));
+    for (const host of ['macos', 'windows', 'linux', 'android']) {
+      process.env[`EXACT_${host === 'macos' ? 'MAC' : host.toUpperCase()}_BIN`] = bin;
+      await assert.rejects(openStdio({ host, app: dir, onProcess: () => assert.fail('refusal must precede spawn') }), /baked backend.*4412.*4400/);
+    }
+    await assert.rejects(openStdio({ host: 'ios', device: true, app: dir }), /baked backend.*4412.*4400/);
+    process.env.EXACT_BACKEND_ORIGIN = other;
+    for (const options of [{}, { packaged: true }, { receipt: resolve(phone, 'receipt.json') }]) {
+      assert.doesNotThrow(() => refuseBinaryBackend(bin, app, options));
+    }
+    write(relative(dir, dll), 'a different backend module');
+    assert.throws(() => refuseBinaryBackend(bin, app, { packaged: true }), /windows build is stale: .*backend.dll.*run .*windows/);
+    await assert.rejects(openStdio({ host: 'windows', app: dir, onProcess: () => assert.fail('refusal must precede spawn') }), /windows build is stale: .*backend.dll.*run .*windows/);
+    write(relative(dir, bin), 'another executable without a bound record');
+    for (const options of [{}, { packaged: true }]) {
+      assert.throws(() => refuseBinaryBackend(bin, app, options), /receipt has no backend origin/);
+    }
+  } finally {
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_UPDATE_TRUST', 'PORT', 'EXACT_MAC_BIN', 'EXACT_WINDOWS_BIN', 'EXACT_LINUX_BIN', 'EXACT_ANDROID_BIN']) {
+      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The bake cache keeps one record per target; a directory packaged before the next build keeps its own.
+test('a Windows package keeps its backend after the same target is packaged elsewhere for another', () => {
+  const { dir, write } = scratchApp('backend-packages');
+  const saved = process.env.EXACT_BACKEND_ORIGIN;
+  try {
+    write('app.ts', "const origin = 'http://127.0.0.1:4400';\n");
+    const app = resolveApp(dir), exe = `${app.crate('windows')}.exe`;
+    const sha = text => createHash('sha256').update(text).digest('hex');
+    const pack = (into, origin) => {
+      const products = [[exe, `executable for ${origin}`], ['backend.dll', `module for ${origin}`]].map(([path, text]) => {
+        write(`${into}/${windowsFile(app, path)}`, text);
+        return { path: resolve(app.target, 'gpu-dev', path), sha256: sha(text) };
+      });
+      const build = { version: 1, backendOrigin: origin, compat: { inputs: { app: app.id } }, products };
+      // What buildBake leaves in the cache: the target's one record, which the next build replaces.
+      write(relative(dir, resolve(bakeOutput(app), 'windows-probe.build.json')), JSON.stringify(build));
+      writePackagedReceipt(app, build, resolve(dir, into));
+      return resolve(dir, into, windowsFile(app, exe));
+    };
+    const a = pack('a', 'http://127.0.0.1:4412'), b = pack('b', 'http://127.0.0.1:4400');
+    process.env.EXACT_BACKEND_ORIGIN = 'http://127.0.0.1:4412';
+    assert.doesNotThrow(() => refuseBinaryBackend(a, app, { packaged: true }));
+    assert.throws(() => refuseBinaryBackend(b, app, { packaged: true }), /baked backend http:\/\/127\.0\.0\.1:4400 differs/);
+    // A's receipt is bound to A's executable and DLL, not to whatever the directory now holds.
+    write('a/backend.dll', 'module for http://127.0.0.1:4400');
+    assert.throws(() => refuseBinaryBackend(a, app, { packaged: true }), /windows build is stale: .*backend\.dll/);
+    write(`a/${windowsFile(app, exe)}`, 'executable for http://127.0.0.1:4400');
+    assert.throws(() => refuseBinaryBackend(a, app, { packaged: true }), /receipt has no backend origin; run bun host\/windows\/build\.mjs/);
+  } finally {
+    if (saved === undefined) delete process.env.EXACT_BACKEND_ORIGIN; else process.env.EXACT_BACKEND_ORIGIN = saved;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A bare `cargo build` of the Linux host writes no `<executable>.settings.json`, so a refusal for want of one names
+// the build that writes it, and what that build records after Cargo satisfies the check.
+test('a Linux build without a backend record is told the build that writes one', async () => {
+  const { dir, write } = scratchApp('fixture-backend'), saved = { ...process.env };
+  try {
+    rmSync(resolve(dir, 'exact.mjs')); // exact2's own build, not an app's verb
+    write('app.ts', "const origin = 'http://127.0.0.1:4400';\n");
+    Object.assign(process.env, { EXACT_APP_DIR: dir });
+    for (const key of ['EXACT_BACKEND_ORIGIN', 'EXACT_LINUX_BIN', 'CARGO_TARGET_DIR']) delete process.env[key];
+    const app = resolveApp('fixture-backend'), bin = linuxBinary(app);
+    assert.equal(linuxRebuild(app), 'bun scripts/build-linux.mjs fixture-backend');
+    write(relative(dir, bin), 'linked by cargo');
+    await assert.rejects(openStdio({ host: 'linux', app: 'fixture-backend', onProcess: () => assert.fail('refusal must precede spawn') }),
+      { message: 'the native build receipt has no backend origin; run bun scripts/build-linux.mjs fixture-backend before driving this app' });
+    // What scripts/build-linux.mjs does once Cargo has linked: the record the bake's module names, bound to the executable.
+    const out = resolve(app.target, 'host-dev/build/fixture-backend-linux-0/out');
+    write(relative(dir, resolve(out, 'app.module.json')), JSON.stringify({ backendOrigin: 'http://127.0.0.1:4400' }));
+    write(relative(dir, `${bin}.d`), `${bin}: ${resolve(out, 'app.hbc')}\n`);
+    recordBuiltSettings(bin, app);
+    assert.doesNotThrow(() => refuseBinaryBackend(bin, app));
+  } finally {
+    for (const key of ['EXACT_APP_DIR', 'EXACT_BACKEND_ORIGIN', 'EXACT_LINUX_BIN', 'CARGO_TARGET_DIR']) {
+      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('missing native products name their build command before checking backend metadata', async () => {
+  const { dir, write } = scratchApp('backend-missing'), saved = { ...process.env };
+  try {
+    write('app.ts', "const origin = 'http://127.0.0.1:4400';\n");
+    for (const host of ['macos', 'windows', 'linux', 'android']) {
+      const key = `EXACT_${host === 'macos' ? 'MAC' : host.toUpperCase()}_BIN`;
+      delete process.env[key];
+      await assert.rejects(openStdio({ host, app: dir }), /run .* first/);
+      process.env[key] = resolve(dir, 'absent');
+      await assert.rejects(openStdio({ host, app: dir }), host === 'macos' ? /EXACT_MAC_BIN names no file/ : /run .* first/);
+    }
+    await assert.rejects(openStdio({ host: 'ios', device: true, app: dir }), /run bun host\/apple\/build.mjs --device first/);
+  } finally {
+    for (const key of ['EXACT_MAC_BIN', 'EXACT_WINDOWS_BIN', 'EXACT_LINUX_BIN', 'EXACT_ANDROID_BIN']) {
+      if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -393,7 +393,7 @@ if (verb === 'contract') {
   // first rather than refusing a stale build. An ios or macos drive builds first
   // when its build is missing or older than its sources, saying so on one line
   // (scripts/agent-build.mjs, LLP 1116.002 D4); a phone's stays explicit.
-  const backendFlag = ['test', 'agent', 'verify'].includes(verb) && host === 'web' ? rest.indexOf('--backend') : -1;
+  const backendFlag = ['test', 'agent', 'verify'].includes(verb) ? rest.indexOf('--backend') : -1;
   if (backendFlag >= 0) {
     const value = rest[backendFlag + 1];
     if (!value || value.startsWith('--')) { console.error('--backend <url>: name the backend origin'); return log(2); }

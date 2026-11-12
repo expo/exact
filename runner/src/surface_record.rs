@@ -56,9 +56,29 @@ enum Json {
     Object(BTreeMap<String, Json>),
 }
 
+/// The members a host adds to a surface's record, never the module's: a GPU
+/// canvas's `presented` (LLP 1009 D9). A kept record never holds them.
+pub const HOST_FIELDS: &[&str] = &["presented"];
+
 /// Decode one JSON object, filling absent fields and ignoring extra keys.
 /// Errors name the field path; the runner adds the resource's name.
 pub fn decode(plan: &Plan, ty: TypesId, text: Option<&str>) -> Result<Value, String> {
+    decode_with(plan, ty, text, false)
+}
+
+/// [`decode`] what the surface's module published, [`HOST_FIELDS`] read as
+/// absent: the record kept for the next launch (LLP 1156.005 D5), where a
+/// host fact of this launch would be stale.
+pub fn decode_published(plan: &Plan, ty: TypesId, text: &str) -> Result<Value, String> {
+    decode_with(plan, ty, Some(text), true)
+}
+
+fn decode_with(
+    plan: &Plan,
+    ty: TypesId,
+    text: Option<&str>,
+    published: bool,
+) -> Result<Value, String> {
     if plan.type_(ty).kind != TypeKind::Record {
         return Err("expected a record shape".into());
     }
@@ -74,10 +94,15 @@ pub fn decode(plan: &Plan, ty: TypesId, text: Option<&str>) -> Result<Value, Str
             if reader.at != text.len() {
                 return Err(reader.error("trailing input"));
             }
-            if !matches!(value, Json::Object(_)) {
+            let Json::Object(mut fields) = value else {
                 return Err("record: expected JSON object".into());
+            };
+            if published {
+                for field in HOST_FIELDS {
+                    fields.remove(*field);
+                }
             }
-            Some(value)
+            Some(Json::Object(fields))
         }
     };
     shaped(plan, ty, json.as_ref(), "record", 0)

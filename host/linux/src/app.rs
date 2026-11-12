@@ -49,9 +49,19 @@ use std::time::{Duration, Instant};
 
 /// The first non-flag path or scheme argument. @ref LLP 1038 D8
 pub fn launch_location(args: impl IntoIterator<Item = String>) -> String {
-    args.into_iter()
-        .find(|arg| !arg.starts_with('-'))
-        .map_or_else(|| "/".into(), |href| exact_route::location_of(&href))
+    launch_argument(args).map_or_else(|| "/".into(), |href| exact_route::location_of(&href))
+}
+
+/// The first non-flag argument, as it was given, or `None`. The `hidden`
+/// after a login item's `--login` (the Windows host's `Run` value, LLP
+/// 1133.025 D2) is that flag's, not a location.
+pub fn launch_argument(args: impl IntoIterator<Item = String>) -> Option<String> {
+    let mut after_login = false;
+    args.into_iter().find(|arg| {
+        let login_word = after_login && arg == "hidden";
+        after_login = arg == "--login";
+        !arg.starts_with('-') && !login_word
+    })
 }
 
 /// `EXACT_SCALE`: device pixels per point, 1 when unset. A scale the
@@ -1149,6 +1159,10 @@ mod tests {
             (vec!["--flag", "post/42", "/later"], "/post/42"),
             (vec!["notes", "1bad:thing"], "/notes"),
             (vec!["--agent", "--url=/post/7"], "/"),
+            (vec!["--login", "hidden"], "/"),
+            (vec!["--login"], "/"),
+            (vec!["--login", "hidden", "/add"], "/add"),
+            (vec!["hidden"], "/hidden"),
         ] {
             assert_eq!(
                 launch_location(args.into_iter().map(str::to_owned)),

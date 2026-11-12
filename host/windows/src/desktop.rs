@@ -113,9 +113,10 @@ fn run_value(exe: &str, hidden: bool) -> String {
     format!("\"{exe}\" --login{}", if hidden { " hidden" } else { "" })
 }
 
-/// The launch the login item made, from the process's arguments.
+/// The launch the login item made, from the process's arguments: whether
+/// its registration asked `hidden`, or `None` for any other launch.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn login_launch(args: &[String]) -> Option<bool> {
+pub(crate) fn login_launch(args: &[String]) -> Option<bool> {
     let at = args.iter().position(|a| a == "--login")?;
     Some(args.get(at + 1).is_some_and(|a| a == "hidden"))
 }

@@ -2,7 +2,8 @@
 
 Start with the [runnable example](../README.md#the-programming-model) or the
 [starter game](../new/logic/src/lib.rs). Gameplay implements `Game::setup` and
-`Game::tick`; components and resources hold its saved state. `World` owns time
+`Game::tick`, and `Game::first_frame` for what depends on the canvas's size before
+anything is drawn; components and resources hold its saved state. `World` owns time
 and randomness; `Sim` owns input. The renderer interpolates completed ticks.
 
 ## State and queries

@@ -62,7 +62,7 @@ const { chromium } = await import('./agent-launch.mjs');
 const { androidLockCommand, androidSdk, androidSdkPackages, androidSdkFix, androidJavaEnv, androidJavaFix, androidToolchainEnv } = await import('./agent-android.mjs');
 const { hermesAndroidBundle } = await import('./hermes-android.mjs');
 const { guardFlags, helpText } = await import('./help.mjs');
-const { backendOrigin } = await import('../js/bake/src/typescript.mjs');
+const { backendOrigin, literalBackendOrigin } = await import('../js/bake/src/typescript.mjs');
 // Snapback's client (snapback4/) is optional: a checkout without it builds every app that does not mount it.
 const snapbackDevice = existsSync(new URL('../snapback4/web/device-build.mjs', import.meta.url)) ? await import('../snapback4/web/device-build.mjs') : null;
 const { generate: gameVocabulary } = await import('../game/vocab.mjs');
@@ -1414,7 +1414,7 @@ async function main(argv) {
   if (verb === 'backend') {
     const dir = resolve(name), parent = resolve(dir, '..');
     const source = readFileSync(resolve(dir, 'app.ts'), 'utf8');
-    const origin = backendOrigin(dir) ?? /const origin\s*=\s*['"`](https?:\/\/[^'"`]+)['"`]/.exec(source)?.[1];
+    const origin = backendOrigin(dir) ?? literalBackendOrigin(source, (await import('rolldown/utils')).parseSync);
     if (!origin) throw new Error('exact backend: app.ts needs a literal const origin (bun exact.mjs snapback --port N writes it)');
     const url = new URL(origin);
     if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) throw new Error('exact backend: the origin must be loopback to launch a local server');
@@ -1435,7 +1435,7 @@ async function main(argv) {
     console.log(wireSnapback(dir, { port: port < 0 ? null : args[port + 1] ?? '', online: args.includes('--online') ? true : null, artifactOnly: args.includes('--artifact-only'), rebuild: args.includes('--rebuild') }));
     app.manifest = JSON.parse(readFileSync(resolve(dir, 'app.json'), 'utf8'));
     const updated = readFileSync(resolve(dir, 'app.ts'), 'utf8');
-    const nextOrigin = backendOrigin(dir) ?? /const origin\s*=\s*['"`](https?:\/\/[^'"`]+)['"`]/.exec(updated)?.[1];
+    const nextOrigin = backendOrigin(dir) ?? literalBackendOrigin(updated, (await import('rolldown/utils')).parseSync);
     await snapbackDevice.devicePreflight(app, nextOrigin ? [nextOrigin] : []);
     return;
   }

@@ -857,7 +857,16 @@ as before.
 
 Replay the parameter and its test on a refresh.
 
-## Local patch 36, a speculative fetch
+## Local patch 36, a fetch binding under a narrower grant set
+
+`Fetch::with_grants` is the binding's transport and gate under another
+`GrantSet`. Exact's native executor runs a request that carries a source's
+narrower scope (`exact_data::Mixed` sets one on each of its sources'
+requests) on the worker's or lane's own transport with the scope's grants,
+so it reuses the connections that transport keeps rather than opening its
+own. Replay on a refresh.
+
+## Local patch 37, a speculative fetch
 
 `stdlib::fetch::Request` carries `speculative`. `stdlib::fetch_async::HopRequest`
 keeps it on every redirect hop, and `run_blocking` passes it to the blocking

@@ -294,7 +294,8 @@ complete frame for the current generation, false again after a restore or a
 lost device. The app binds its own pause and loading cover to it; `PENDING`
 still permits ticks and the runtime adds no barrier. The Minecraft consumer,
 whose player took damage before its terrain drew, is the consumer. Take: none
-offered; waived by Charlie. It follows Nathan Schroeder's #967.
+offered; waived by Charlie. It follows Nathan Schroeder's #967. Built
+2026-11-12 as every canvas's `presented` (LLP 1009 D9, expo/exact#75).
 
 **Expanded (Charlie, 2026-09-23: "ok let's do pre-rendering etc."; "let's use
 Interview as our website"):** web rendering across the curve (LLP 1048), with
@@ -643,6 +644,17 @@ box alone. Take: waived (Charlie, 2026-11-10) on the condition that the Mac
 host applies the hover colour too: a look the author writes that a host
 with a pointer drops would be a tell. Still out: a look's `color` on
 Linux.
+
+**Expanded (expo/exact#151, 2026-11-12; LLP 1121 D8 as amended that day):**
+`:hover` and `:focus-visible` take `scale`, CSS's individual transform,
+which stands in for the node's own `scale` while the look holds and moves
+there on the node's own `transition`, as a browser moves a `:hover` rule's
+value. It never lays out. Consumer: hirbod's port, whose icon buttons grow
+1.08 and 1.12 on hover. Every host with a pointer shows it: the web, the Mac,
+an iPad's pointer, and Linux and Windows through the painted presenter. Take:
+none offered; waived by Charlie's ask (2026-11-12: work the open issues through
+to the ideal end state). Still out: `rotate` and `translate` in a look, and
+`scale` in `:disabled` or `:checked`.
 
 **Runtime**
 

@@ -705,6 +705,18 @@ test('a named update sends the module only the arguments that changed since its 
   assert.deepEqual(last(), [['full', {saved: '<saved>', count: 6}], ['changed', {count: 7}]]);
 });
 
+test('R14 the canvas size reaches the module before each bind, whole or changed, which may tick a new world',async()=>{
+  const f=await fixture(), calls=[];
+  f.gpu.gpu_size=(id,w,h)=>{calls.push(['size',id,w,h]);return true;};
+  f.gpu.gpu_bind_at=id=>{calls.push(['bind',id]);return true;};
+  f.gpu.gpu_bind_changed_at=id=>{calls.push(['changed',id]);return true;};
+  f.create(1);
+  for(const seed of [2,3]) await f.applyBatch({ops:[{op:'surface',id:1,name:'world',values:{seed}}],timers:false,motion:false});
+  f.exact.gpu.retier('high'); f.exact.gpu.schedule();
+  const size=['size',1,10,10];
+  assert.deepEqual(calls,[size,['bind',1],size,['bind',1],size,['changed',1],size,['changed',1]]);
+});
+
 test('E10 focused Contract buttons consume activation keys before the world', async () => {
   const f = await fixture({input:true}), canvas=f.create(1), pause=new f.Element('button');
   let prevented=0; pause.click=()=>{};

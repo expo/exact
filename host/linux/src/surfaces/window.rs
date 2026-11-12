@@ -138,6 +138,7 @@ impl<D: DataSource> Presenter<D> {
                 };
                 if result == 0 {
                     self.surfaces.window_artifact = Some(canvas.artifact.clone());
+                    self.surfaces.owe_records([view]);
                     return Ok(None);
                 }
                 return Err(abi

@@ -17,7 +17,7 @@ public final class ExactLaunch: NSObject {
     public static let shared = ExactLaunch()
 
     public enum Mark: String, CaseIterable {
-        case process, constructor, main, delegateInit, didFinishLaunching, scene, boot, commit, present, activated, interactive
+        case process, constructor, main, delegateInit, didFinishLaunching, scene, boot, commit, present, world, activated, interactive
     }
 
     let facts = exact_launch_constructor_facts()
@@ -248,6 +248,14 @@ public final class ExactLaunch: NSObject {
         marks[.commit] = CACurrentMediaTime()
         if link == nil { link = mainDisplayLink(self, #selector(tick(_:))) }
         resolvePresent()
+    }
+
+    /// A GPU canvas's frame went to the compositor (`gpu_on_presented`): the
+    /// first after the first tree's commit marks `world`, so the report reads
+    /// `present → world → interactive` for an app whose first screen is a canvas.
+    public func worldPresented() {
+        guard marks[.commit] != nil, marks[.world] == nil else { return }
+        marks[.world] = CACurrentMediaTime()
     }
 
     @objc private func tick(_ link: CADisplayLink) { frame(Vsync(link)) }

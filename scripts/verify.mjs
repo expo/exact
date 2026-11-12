@@ -561,11 +561,11 @@ function typedFields(before, after, touched, states) {
 export const draftFields = (before, after, touched, states) => typedFields(before, after, touched, states).drafts;
 
 /** The root states the app says `persist` on (LLP 1116 D5), by name, read from app.contract: only the root's may, and the root is
- * its first component. A trailing comment is not read. */
+ * its first component. A state may name its type (`state saved: string[] = [] persist`). A trailing comment is not read. */
 export function persistedStates(dir) {
   const names = [];
   for (const line of (readIn(dir, 'app.contract') ?? '').split('\n')) {
-    const m = line.replace(/\s\/\/.*$/, '').match(/^\s*state\s+([A-Za-z_][\w-]*)\s*=.*\spersist\s*$/);
+    const m = line.replace(/\s\/\/.*$/, '').match(/^\s*state\s+([A-Za-z_][\w-]*)\s*(?::[^=]*)?=.*\spersist\s*$/);
     if (m) names.push(m[1]);
   }
   return names;
@@ -1343,7 +1343,6 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   const value = (flag) => args.indexOf(flag) >= 0 ? args[args.indexOf(flag) + 1] : undefined;
   const json = args.includes('--json'), sim = value('--sim'), copyTo = value('--shots');
   const flagged = new Set([args.indexOf('--app') + 1, args.indexOf('--sim') + 1, args.indexOf('--shots') + 1].filter((i) => i > 0));
-  if (args.includes('--shots') && (!copyTo || copyTo.startsWith('-'))) { console.error('verify: --shots takes a directory: the screenshots are copied there, under the names in .exact/verify/'); return declined(2); }
   const host = args.find((a, i) => !a.startsWith('-') && !flagged.has(i)) ?? 'web';
   if (!['web', 'ios', 'windows', 'android'].includes(host)) { console.error(`verify: web, ios, windows or android, not ${host} (test ${host} runs the tests there)`); return declined(2); }
   if (host === 'windows' && process.platform !== 'win32') { console.error('verify windows runs on Windows (bun exact.mjs verify windows there)'); return declined(2); }

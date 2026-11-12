@@ -299,11 +299,12 @@ impl Surfaces {
 
     /// Each buffered canvas's newest finished frame, where a reader on
     /// another thread finds it ([`buffer_frame`]). Whether one still has a
-    /// complete frame to publish: the GPU finishes a frame after the turn
+    /// complete frame to publish (the GPU finishes a frame after the turn
     /// that submitted it, so a canvas that asked for no further frame needs
-    /// turns that only publish until it is out.
-    fn publish_buffers(&mut self, only: Option<&BTreeSet<u32>>) -> bool {
-        let mut owed = false;
+    /// turns that only publish until it is out), and the views given a new
+    /// one, whose records may now say `presented` (LLP 1009).
+    fn publish_buffers(&mut self, only: Option<&BTreeSet<u32>>) -> (bool, Vec<u32>) {
+        let (mut owed, mut handed) = (false, Vec::new());
         for (view, w) in &self.windows {
             if !w.attached || only.is_some_and(|views| !views.contains(view)) {
                 continue;
@@ -350,8 +351,9 @@ impl Surfaces {
                     buffer: buffer as usize,
                 }),
             );
+            handed.push(*view);
         }
-        owed
+        (owed, handed)
     }
 
     fn detach(&mut self, view: u32) {
@@ -544,7 +546,11 @@ impl<D: DataSource> Presenter<D> {
                 }
             }
         }
-        let owed = self.surfaces.publish_buffers(retry.then_some(&recorded));
-        wants || owed
+        let (owed, handed) = self.surfaces.publish_buffers(retry.then_some(&recorded));
+        // A frame just flushed, or a buffer just handed to the reader, may be
+        // its canvas's first presented one.
+        self.surfaces
+            .owe_records(recorded.iter().copied().chain(handed));
+        wants || owed || self.surfaces.owes_records()
     }
 }

@@ -101,7 +101,7 @@ required tool, device or simulator is unavailable, report that target as unteste
 |iOS|`bun exact.mjs verify ios`|`bun exact.mjs ios --run`|
 |Android|`bun exact.mjs verify android`|`bun exact.mjs android --run`|
 |Windows|`bun exact.mjs verify windows`|`bun exact.mjs windows --run`|
-|macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos "screenshot mac.png"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
+|macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos --chrome platform "clock data" "screenshot .exact/mac.png window"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
 |Linux|`bun exact.mjs linux`, then `bun exact.mjs test linux`|The Linux host is headless; inspect it with `bun exact.mjs agent linux tree` after building.|
 
 There is no `verify macos` or `verify linux`. Inspect the launched native app for

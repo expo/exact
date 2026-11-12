@@ -1000,6 +1000,8 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
   const baked = existsSync(resolve(rootOutput, 'compat.json')) ? rootOutput : env.EXACT_BAKED /* a bake before Cargo keeps the plan and its receipts apart (linked-plan.mjs) */, compat = JSON.parse(readFileSync(resolve(baked, 'compat.json'), 'utf8'));
   if (compat.target !== target || compat.inputs.platform !== platform || compat.inputs.app !== app.id) throw new Error('actual bake receipt names another target, platform or app');
   const bundleGraph = JSON.parse(readFileSync(resolve(baked, 'artifacts.json'), 'utf8'));
+  const moduleReceipt = resolve(baked, 'app.module.json');
+  const backendOrigin = existsSync(moduleReceipt) ? JSON.parse(readFileSync(moduleReceipt, 'utf8')).backendOrigin : null;
   // Recreate packaging outputs from Cargo's actual bake, even on a cache hit.
   // A build script must never watch its own receipt: writing it dirties every next build.
   const stem = `${platform}-${target}`;
@@ -1162,7 +1164,7 @@ function completeBuild(app, platform, target, graph, messages, roots, env, prepa
   const sourceRecord = platform === 'windows' ? {sourceInputs:bakeSourceInputs(app, sourceInputs, [
     app.target, graph.metadata.build_directory, env.EXACT_BAKE_OUTPUT, env.OUT_DIR, ...scripts.map(script => script.out_dir),
   ])} : {};
-  return {version:1,...sourceRecord,watchedDirectories:packageDirectories([...sourceInputs]),...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inputs:files,directories:[...directories.values()],missing:[...absent.values()]},products};
+  return {version:1,backendOrigin,...sourceRecord,watchedDirectories:packageDirectories([...sourceInputs]),...(env.EXACT_RUST_BUNDLE?{rust:resolve(baked,'rust')}:{}),...(optionalInputs.size?{optionalInputs:[...optionalInputs].sort()}:{}),...(baked!==rootOutput?{linkedPlan:baked,linkedInputs:linkedInputs(baked)}:{}),...bakedSettings(baked,app.dir),trust:env.EXACT_UPDATE_TRUST??'development',compat,graph:bundleGraph,binary:{...(assetCatalogApp ? {assetCatalogApp} : {}),...(nativeResources.length ? {nativeResourceApp:{dir:app.dir,manifest:app.manifest,platform}} : {}),sha256:buildHash(canonicalBuild(fingerprint)),...fingerprint,inputs:files,directories:[...directories.values()],missing:[...absent.values()]},products};
 }
 
 // The permanent companion inode owns exclusion; the JSON claim is only its diagnostic record.

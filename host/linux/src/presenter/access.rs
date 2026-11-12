@@ -403,7 +403,8 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// A node's description: the words of what `aria-describedby` names,
-    /// else its `aria-description`.
+    /// else its `aria-description`, else its `title` where that is not its
+    /// name (HTML-AAM's accessible description).
     fn access_hint(&self, node: &NodeRef<'_>) -> String {
         let kernel = self.host.kernel();
         let described = node
@@ -420,6 +421,10 @@ impl<D: DataSource> Presenter<D> {
             });
         (described.filter(|words| !words.is_empty()))
             .or_else(|| (node.props.str(PropId::AccessibilityHint)).map(str::to_string))
+            .or_else(|| {
+                let title = node.props.str(PropId::Title).filter(|t| !t.is_empty())?;
+                (self.access_name(node) != title).then(|| title.to_string())
+            })
             .unwrap_or_default()
     }
 
@@ -544,7 +549,7 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// A node's accessible name: its label, else a button's face, else its
-    /// words.
+    /// words, else its `title` (accname's tooltip attribute, step 2I).
     fn access_name(&self, node: &NodeRef<'_>) -> String {
         if let Some(label) = self.access_label(node) {
             return label;
@@ -556,7 +561,11 @@ impl<D: DataSource> Presenter<D> {
         if let Some(title) = face.and_then(|face| face.title.or(face.label)) {
             return title;
         }
-        self.access_words(node, false)
+        let words = self.access_words(node, false);
+        match node.props.str(PropId::Title) {
+            Some(title) if words.trim().is_empty() && !title.is_empty() => title.to_string(),
+            _ => words,
+        }
     }
 
     /// How a live region speaks: its `aria-live`, else its role's

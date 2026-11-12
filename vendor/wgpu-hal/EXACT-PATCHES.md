@@ -10,8 +10,9 @@ place is marked `EXACT (EXACT-PATCHES.md, n)` in the source.
 - Upstream VCS revision: 40f4a34ebaf56f9a046231f54125ad046239d3f3
 - Implemented: 2026-09-30, the rest lane of the performance program; vendoring
   ruled by the orchestrator the same day (LLP 1009 D7).
-- Only `exact-gpu` links this version (LLP 1009 D1); the 2D canvas's vello
-  uses wgpu-hal 29 from crates.io, untouched.
+- `exact-gpu` (LLP 1009 D1) and `exact-ink` (`host/ink`, through wgpu 30)
+  link this version; the 2D canvas's vello uses wgpu-hal 29 from crates.io,
+  untouched.
 
 ## Why
 

@@ -137,7 +137,7 @@ public final class ExactPackageContext {
     /// The process's pad slots (LLP 1133.022 D10 item 1); nil on a host
     /// older than them, where a pad module reads no pads (item 4).
     public let pads: ExactPads?
-    private let afterFn: (Double, @escaping () -> Void) -> () -> Void
+    private let afterFn: (Double, Bool, @escaping () -> Void) -> () -> Void
     /// The host's region carrier (LLP 1133.021 D14).
     public let regions: ExactRegions
     /// The app's remote-notification registration, kept by the host (LLP
@@ -159,7 +159,7 @@ public final class ExactPackageContext {
                 wakes: ExactWakes = ExactWakes { _, _ in },
                 transfers: ExactTransfers = ExactTransfers { _, _ in nil },
                 pads: ExactPads? = nil,
-                after: @escaping (Double, @escaping () -> Void) -> () -> Void = { ms, body in
+                after: @escaping (Double, Bool, @escaping () -> Void) -> () -> Void = { ms, _, body in
                     let work = DispatchWorkItem(block: body)
                     DispatchQueue.main.asyncAfter(deadline: .now() + ms / 1000, execute: work)
                     return work.cancel
@@ -182,7 +182,13 @@ public final class ExactPackageContext {
     /// agent, where a seek runs it at its own instant, so a drive repeats.
     /// Call what it returns to cancel it first. Main thread.
     @discardableResult
-    public func after(_ ms: Double, _ body: @escaping () -> Void) -> () -> Void { afterFn(ms, body) }
+    public func after(_ ms: Double, _ body: @escaping () -> Void) -> () -> Void { afterFn(ms, false, body) }
+
+    /// Coalesce a refresh across an agent seek: run at the next clock instant
+    /// at or past the deadline, without adding a stop or advancing settlement.
+    /// On the live clock this waits as `after` does. Main thread.
+    @discardableResult
+    public func after(_ ms: Double, coalescing: Bool, _ body: @escaping () -> Void) -> () -> Void { afterFn(ms, coalescing, body) }
 
     /// Raise the interface's wake event `name` with `args` for the platform
     /// object `id` (LLP 1133.017 D8): the events of one id are one wake, run

@@ -132,6 +132,11 @@ impl Tooltip {
         point: Option<(f32, f32)>,
         moved: bool,
     ) {
+        // A move Windows made from a touch or a pen shows no tip, as touch
+        // hosts show none; it reads the message being dispatched.
+        let point = point.filter(|_| {
+            !(moved && crate::touch::from_touch_or_pen(unsafe { GetMessageExtraInfo() }))
+        });
         let tip = point.and_then(|point| title_at(p, point));
         let Ok(handle) = window.window_handle() else {
             return;

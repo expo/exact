@@ -724,8 +724,8 @@ impl Module {
                     .set(later.map(|handler| -> exact_runner::NativeHandler {
                         std::sync::Arc::new(move |body: Vec<u8>, reply| {
                             let reply = NativeReply::new(reply);
-                            match serde_json::from_slice(&body) {
-                                Ok(request) => handler(request, reply),
+                            match exact_js_value::json::parse(&body) {
+                                Ok(request) => handler(request.into(), reply),
                                 Err(e) => reply.send(Err(format!("native.later: {e}"))),
                             }
                         })

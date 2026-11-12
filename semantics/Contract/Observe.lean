@@ -274,9 +274,16 @@ def dispatchAt (p : Program) (o : Oracle) (c : Config) (target event : String)
       | (c₂, .ok) => (c₂, o₁)
       | (c₂, o₂) => (c₂, o₂)
 
+/-- What typing into `target` dispatches: `input` where the element has an
+`input` handler, else `change`, as the hosts and `CompSem.cstep` deliver it. -/
+def typed (c : Config) (target : String) : String :=
+  if ((findTestId target c.view).map fun n => n.handlers.any (·.1 == "input")).getD false then
+    "input"
+  else "change"
+
 def step (p : Program) (o : Oracle) (c : Config) : Event → Config × Outcome
   | .tap t => dispatchAt p o c t "press" .none
-  | .change t s => dispatchAt p o c t "change" (.some (.str s))
+  | .change t s => dispatchAt p o c t (typed c t) (.some (.str s))
   | .clock ms => advance p o c (c.now + ms)
   | .other t e v => dispatchAt p o c t e v
 
@@ -295,7 +302,7 @@ def dispatchAtTrace (p : Program) (o : Oracle) (c : Config) (target event : Stri
 
 def stepTrace (p : Program) (o : Oracle) (c : Config) : Event → (Config × Outcome) × List Ran
   | .tap t => dispatchAtTrace p o c t "press" .none
-  | .change t s => dispatchAtTrace p o c t "change" (.some (.str s))
+  | .change t s => dispatchAtTrace p o c t (typed c t) (.some (.str s))
   | .clock ms => advanceTrace p o c (c.now + ms)
   | .other t e v => dispatchAtTrace p o c t e v
 
@@ -349,6 +356,30 @@ def checkedLines (p : Program) (label : String) (result twin : Config × Outcome
 #guard let c : Config := { (default : Config) with now := F64.ofBits 0x7ff8000000000000 }
   !(checkedLines default "land" (c, .ok) (c, .ok) 0 []).contains "trace disagrees"
 
+/-- An `input` whose handlers are `events`, each calling the action of its name. -/
+private def typingProgram (events : List String) : Program :=
+  { states := [{ name := "text", ty := .string, init := .str "" }],
+    actions := [
+      { name := "input", params := [("value", .string)],
+        body := [.assign "text" (.var "value")] },
+      { name := "change", params := [("value", .string)],
+        body := [.assign "text" (.str "changed")] }],
+    view := [.element "column" [] [] [] [
+      .element "input" [] [("testId", .str "field")]
+        (events.map fun e => (e, e, [])) []]] }
+
+-- Typing reaches an `input` handler first and a `change` handler without one,
+-- in `step` (what LowerCheck replays) and its traced twin alike.
+#guard [(["input"], "typed"), (["change"], "changed"), (["change", "input"], "typed")].all
+  fun (handlers, expected) =>
+    let p := typingProgram handlers
+    let (c, _) := boot p {}
+    let holds (r : Config × Outcome) := match r with
+      | (c, .ok) => (lookup "text" c.slots).any (Value.same (.str expected))
+      | _ => false
+    holds (step p {} c (.change "field" "typed"))
+      && holds (stepTrace p {} c (.change "field" "typed")).1
+
 /-- Boot, then every script event. The originals own the state and outcome;
 a traced twin that disagrees replaces the configuration with a failing line. -/
 def runScript (p : Program) (o : Oracle) (events : List ScriptEvent) : List String := Id.run do
@@ -361,15 +392,9 @@ def runScript (p : Program) (o : Oracle) (events : List ScriptEvent) : List Stri
   for e in events do
     let before := c.commands.length
     let (label, result, twin, ran) := match e.event with
-      | .some authored =>
-        let ev := match authored with
-          | .change target text =>
-            if ((findTestId target c.view).map fun n => n.handlers.any (·.1 == "input")).getD false then
-              .other target "input" (.some (.str text))
-            else authored
-          | _ => authored
+      | .some ev =>
         let (twin, ran) := stepTrace p o c ev
-        (authored.label, step p o c ev, twin, ran)
+        (ev.label, step p o c ev, twin, ran)
       | .none =>
         let (result, ran) := land p o c
         (e.label, result, result, ran)

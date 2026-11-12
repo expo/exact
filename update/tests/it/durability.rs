@@ -174,6 +174,44 @@ fn a_crash_truncated_record_keeps_the_rollback_floor() {
     }
 }
 
+/// The floor comes from the signed head alone: an entry whose asset index
+/// was lost or damaged still says which seq was accepted when the record
+/// must be recovered too.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "Windows durable store is not qualified (LLP 1026 D11a)"
+)]
+fn a_damaged_asset_index_keeps_the_rollback_floor() {
+    let temp = Temp::new("index-floor");
+    let four = Bundle::new(4, b"plan four").asset("mark.png", b"four");
+    let six = Bundle::new(6, b"plan six").asset("mark.png", b"six");
+    let mut store = open(&temp);
+    let Check::Staged { entry, .. } = Origin::of(&six).check(&mut store).unwrap() else {
+        panic!("stage");
+    };
+    drop(store);
+    let index = temp.path().join("entries").join(&entry).join("assets.json");
+    let record = temp.path().join("record.json");
+    for damage in ["remove", "corrupt"] {
+        // The index is a link to its blob: replaced, not written through.
+        std::fs::remove_file(&index).unwrap();
+        if damage == "corrupt" {
+            std::fs::write(&index, b"{\"assets\":[]}").unwrap();
+        }
+        std::fs::write(&record, b"").unwrap();
+        let mut store = open(&temp);
+        let refusal = Origin::of(&four).check(&mut store).unwrap_err();
+        assert!(
+            refusal.contains("below the accepted seq 6"),
+            "{damage}: {refusal}"
+        );
+        // Staging the accepted head again restores the entry whole.
+        assert!(Origin::of(&six).check(&mut store).is_ok(), "{damage}");
+        assert_eq!(std::fs::read(&index).unwrap(), six.index(), "{damage}");
+    }
+}
+
 #[test]
 #[cfg_attr(
     windows,

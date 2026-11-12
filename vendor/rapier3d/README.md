@@ -104,19 +104,55 @@ Please make sure to familiarize yourself with our [Code of Conduct](CODE_OF_COND
 and our [Contribution Guidelines](CONTRIBUTING.md) before contributing or participating in
 discussions with the community.
 
-## Exact snapshot patch (2026-09-18)
+## Exact patches
 
-Vendored from the locally pinned rapier3d 0.35.3 Cargo source; Apache-2.0.
-`src/geometry/broad_phase_bvh/mod.rs` serializes `deferred_optimize_pending`.
-The collision-only pipeline can leave it set between steps; dropping it on load
-changes the next BVH update. The game engine wraps this representation as EXPHYS
-v2 and refuses v1. `RigidBodyActivation::request_sleep` (marked Exact2) makes a
-body sleep-eligible at a given pose without flagging it asleep, so the engine can
-ask for sleep and let the island decide. All other behavior and dependency
-versions are unchanged.
+Vendored from the crates.io rapier3d 0.35.3 archive (Apache-2.0) on 2026-09-18.
+`game/physics/Cargo.toml` depends on this copy by path; the root workspace does
+not depend on it. The list below is every change from the archive. In the
+source, change 1 is marked `Exact:` and changes 2 to 6 `Exact2`.
+
+1. **Pending optimization survives snapshots** (`src/geometry/broad_phase_bvh/mod.rs`).
+   `deferred_optimize_pending` is serialized. The collision-only pipeline can
+   leave it set between steps, and dropping it on load changes the next BVH
+   update. `game/physics` wraps this representation in its versioned `EXPHYS`
+   snapshot.
+2. **Sleep on request** (`src/dynamics/rigid_body_components_more.rs`).
+   `RigidBodyActivation::request_sleep` makes a body sleep-eligible at a given
+   pose without flagging it asleep, so the engine can ask for sleep and let the
+   island decide.
+3. **Collision types filter pairs as groups do** (`src/geometry/collider.rs`,
+   `src/geometry/broad_phase_bvh/update.rs`). `Collider::set_active_collision_types`
+   marks the collider's groups changed when the types change, so the broad
+   phase re-inserts its leaf and finds pairs the old types suppressed. A pair
+   whose types now reject it (a sensor turned solid between two fixed colliders)
+   ends as a separation does.
+4. **Snapshots with holes** (`src/data/arena.rs`, `src/geometry/collider_set.rs`,
+   `src/geometry/collider.rs`, `src/pipeline/physics_world.rs`; re-exported from
+   `src/geometry/mod.rs` and `src/pipeline/mod.rs`). `PhysicsWorld::with_holes`
+   serializes as the derived `Serialize` does, except that each collider the
+   caller selects is written as a hole; slots, generations, the free list and
+   the modification lists are kept. `FillHoles` reads it back, rebuilding each
+   hole through the caller's function. `Collider::settled` clears pending change
+   flags, so a rebuilt collider compares bit-exactly with one in a set.
+   `game/physics` saves worlds in this format.
+5. **Weight-bounded friction** (`src/dynamics/integration_parameters.rs`,
+   `src/dynamics/solver/contact_constraint/contact_with_coulomb_friction.rs`,
+   `src/dynamics/solver/staged_island_solver/worker.rs`).
+   `IntegrationParameters::friction_gravity` bounds the friction of a touching
+   contact point by its weight (cannon-es's model) instead of its normal
+   impulse; below `friction_slip_speed` a point keeps the Coulomb bound. Both
+   default to zero and are not serialized. With `friction_gravity` zero the
+   solver is upstream's.
+6. **A pair's touching state** (`src/geometry/contact_pair.rs`).
+   `ContactPair::start_event_emitted` says whether the pair's last collision
+   event was `Started`.
+7. **Workspace boundary** (`Cargo.toml`). An empty `[workspace]` keeps the crate
+   out of enclosing workspaces.
+
+`LICENSE` (the Apache-2.0 text) is added; the archive has no license file.
+`.cargo_vcs_info.json` and `Cargo.lock` are left out.
 
 Three upstream files over 1,500 lines are split using same-module `include!`:
 `rigid_body`, `rigid_body_components`, and `multibody`, each with a `_more.rs`
 continuation. These splits change neither declarations nor visibility. Upstream
-unsafe code is vendored unchanged; Exact adds no unsafe implementation. The root
-workspace does not depend on this crate; only game/Cargo.toml patches it in.
+unsafe code is vendored unchanged; Exact adds no unsafe implementation.

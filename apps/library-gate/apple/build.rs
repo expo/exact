@@ -43,7 +43,8 @@ fn main() {
             contract::rust_entry(
                 "library_gate_data::Gate",
                 "library_gate_data::Gate",
-                compat.inputs["rustMode"].as_str().unwrap()
+                compat.inputs["rustMode"].as_str().unwrap(),
+                &compat.inputs,
             )
             .unwrap(),
             linked

@@ -125,6 +125,9 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
     catch(error:any) { return {text:'refused: ' + error.message}; }
   }
   if (op === 'native-direct') return {text: String(native!.call({value}).text)}; // no bake branch
+  // A number each way across the native seam, read back exactly (native_later.rs).
+  if (op === 'native-number') return {text: String(native!.call({n: Number(value)}).text)};
+  if (op === 'later-number') return {text: String((await native!.later({n: Number(value)})).text)};
   // A turn over its budget the first time, then at once (a load-caused refusal asked again: overrun.rs).
   if (op === 'busy-once') { if (!busyOnceDone) { busyOnceDone = true; let acc = 0; for (let i = 0; i < 30000000; i++) acc = (acc + i * 7) % 1000003; return {text: String(acc)}; } return {text: 'answered'}; }
   // A turn of the module's own work, `value` iterations long (the turn budget's test: turn_budget.rs).

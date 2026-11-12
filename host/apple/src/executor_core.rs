@@ -260,8 +260,8 @@ pub(super) struct Core {
     machine: Option<Arc<asynch::Machine>>,
     preloads: Mutex<Option<preload::Preloads>>,
 }
-/// Makes the host (and its transport) an owner, a scoped grant or a stream
-/// fetches through: the platform's, unless the embedder names another.
+/// Makes the host (and its transport) an owner or a stream fetches
+/// through: the platform's, unless the embedder names another.
 pub(super) type StreamHost = Arc<dyn Fn() -> ibex2::host::Host + Send + Sync>;
 
 /// The ordered owner (the boot's bindings) and the independent ones.
@@ -1089,48 +1089,42 @@ fn worker(
                 roots: shared.roots_for(&request),
                 grants: &grants,
             };
-            match scoped_bindings(&grants, request.grants.as_deref(), &host) {
-                Some(Err(message)) => failed(FailureKind::Refused, message),
-                Some(Ok(ref scoped)) => execute(
-                    Ok(scoped),
-                    request,
-                    forced,
-                    work,
-                    &abort,
-                    &files,
-                    overlap && class == RequestClass::Read,
-                    (&shared, ticket, class),
-                ),
-                None => execute(
-                    bindings.as_ref().ok_or(unbound.as_str()),
-                    request,
-                    forced,
-                    work,
-                    &abort,
-                    &files,
-                    overlap && class == RequestClass::Read,
-                    (&shared, ticket, class),
-                ),
-            }
+            // A source's narrower scope runs on this worker's own transport,
+            // so it reuses the connections that transport keeps.
+            let scoped = match scoped_grants(&grants, request.grants.as_deref()) {
+                Some(Err(message)) => return failed(FailureKind::Refused, message),
+                Some(Ok(scope)) => Some(bindings.as_ref().map(|b| b.fetch.with_grants(scope))),
+                None => None,
+            };
+            let fetch = match &scoped {
+                Some(scoped) => scoped.as_ref(),
+                None => bindings.as_ref().map(|b| &b.fetch),
+            };
+            execute(
+                fetch.ok_or(unbound.as_str()),
+                request,
+                forced,
+                work,
+                &abort,
+                &files,
+                overlap && class == RequestClass::Read,
+                (&shared, ticket, class),
+            )
         }))
         .unwrap_or_else(|_| failed(FailureKind::Aborted, "native work panicked"));
         complete(&shared, ticket, outcome);
     }
 }
 
-/// A source's narrower grant scope, as its own bindings; `None` unscoped.
-fn scoped_bindings(
+/// A source's narrower grant scope, checked against the app's; `None` unscoped.
+fn scoped_grants(
     grants: &str,
     scope: Option<&str>,
-    host: &StreamHost,
-) -> Option<Result<ibex2::host::Bindings, String>> {
+) -> Option<Result<ibex2::grant::GrantSet, String>> {
     scope.map(|scope| {
-        exact_data::storage::scope(grants, Some(scope))
-            .and_then(|s| {
-                ibex2::grant::GrantSet::parse(&exact_runner::io_grants(s))
-                    .map_err(|e| e.to_string())
-            })
-            .map(|g| host().endow(g))
+        exact_data::storage::scope(grants, Some(scope)).and_then(|s| {
+            ibex2::grant::GrantSet::parse(&exact_runner::io_grants(s)).map_err(|e| e.to_string())
+        })
     })
 }
 
@@ -1152,7 +1146,7 @@ struct Files<'a> {
 
 #[allow(clippy::too_many_arguments)]
 fn execute(
-    bindings: Result<&ibex2::host::Bindings, &str>,
+    fetch: Result<&ibex2::host::Fetch, &str>,
     mut request: Request,
     forced: bool,
     work: Option<Work>,
@@ -1186,8 +1180,8 @@ fn execute(
     if let Some(work) = work {
         return work();
     }
-    let b = match bindings {
-        Ok(b) => b,
+    let fetch = match fetch {
+        Ok(fetch) => fetch,
         Err(unbound) => return failed(FailureKind::Refused, unbound),
     };
     if let Some(why) = request.timeout_refusal().or(request.long_poll_refusal()) {
@@ -1196,7 +1190,7 @@ fn execute(
     let limit = body_to::limit(&request);
     let within = overlap || reads_within_ceiling(&request);
     let timeout = request.timeout_ms;
-    let fetch = reach::gate_fetch(b.fetch.clone(), request.reach);
+    let fetch = reach::gate_fetch(fetch.clone(), request.reach);
     // The whole exchange, headers and body, ends by the deadline: the
     // platform's idle timeout alone would let a server that trickles bytes
     // hold the ordered lane for as long as it likes. It is armed before a
@@ -1348,6 +1342,9 @@ mod read_tests;
 #[cfg(test)]
 #[path = "executor_idle_tests.rs"]
 mod idle_tests;
+#[cfg(test)]
+#[path = "executor_scope_tests.rs"]
+mod scope_tests;
 #[cfg(test)]
 #[path = "executor_tests.rs"]
 pub(super) mod tests;

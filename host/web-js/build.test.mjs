@@ -680,7 +680,7 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
   try {
     mkdirSync(app);
     writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'Site', app: { id: 'test.site', name: 'Site' } }));
-    const source = 'shape Note\n  text: string\n\nroutes nav\n  home "/" render=build\n  item "/item/:id"\n  live "/live" render=request\n  feed "/feed" render=cached\n  notfound render=build\n\n'
+    const source = 'shape Note\n  text: string\n\nroutes nav\n  home "/" render=build\n  item "/item/:id"\n  live "/live" render=request\n  feed "/feed" render=cached\n  doc "/doc/:id" render=request\n  notfound render=build\n\n'
       + 'component App\n  resource note = note("rendered") as shape Note\n  view\n    column\n      text top(nav).url\n      text note.text\n';
     writeFileSync(resolve(app, 'app.contract'), source);
     writeFileSync(resolve(app, 'app.ts'), "import type { Answer, Result, Sources } from './app.contract.d.ts';\nexport const appId = 'test.site';\nexport const grants = '';\n"
@@ -699,6 +699,7 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
       { name: 'item', pattern: '/item/:id', render: 'client', notfound: false },
       { name: 'live', pattern: '/live', render: 'request', notfound: false },
       { name: 'feed', pattern: '/feed', render: 'cached', notfound: false },
+      { name: 'doc', pattern: '/doc/:id', render: 'request', notfound: false },
       { name: 'notfound', pattern: '', render: 'build', notfound: true },
     ]);
     const files = readdirSync(out);
@@ -768,8 +769,9 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     writeFileSync(resolve(out, 'live.md'), '# Live\n');
     const md = await fetch(`http://127.0.0.1:${serve.port}/live`, { headers: { accept: 'text/markdown' } });
     expect([md.headers.get('content-type'), md.headers.get('vary'), await md.text()]).toEqual(['text/markdown; charset=utf-8', 'Accept', '# Live\n']);
-    const feedAsked = await fetch(`http://127.0.0.1:${serve.port}/feed`, { headers: { accept: 'text/markdown, text/html;q=0.9' } });
-    expect([feedAsked.status, (await feedAsked.text()).includes('>/feed<')]).toEqual([200, true]);
+    const docAsked = await fetch(`http://127.0.0.1:${serve.port}/doc/7`, { headers: { accept: 'text/markdown, text/html;q=0.9' } });
+    const docBody = await docAsked.text();
+    expect([docAsked.status, docBody.includes('>/doc/7<'), docBody.includes('>/doc/7.md<')]).toEqual([200, true, false]);
     const file = await raw('/app.js');
     const hosted = await serving(root, out, { fromEnv: true });
     try { expect((await hosted.get('/live')).body).toContain('The note, rendered.'); } finally { await hosted.stop(); }
@@ -808,8 +810,10 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     await heard((text) => rebuilds(text) === 2);
     writeFileSync(resolve(app, 'app.contract'), source.replace('text note.text\n', 'text note.text\n      nosuchtag "x"\n'));
     await new Promise(ok => setTimeout(ok, 350));
-    const broken = await get('/live');
-    expect([broken.status, broken.body.startsWith("The app's build failed"), broken.body.includes('nosuchtag')]).toEqual([500, true, true]);
+    writeFileSync(resolve(out, 'live.md'), '# Stale live\n');
+    const broken = await fetch(`http://127.0.0.1:${serve.port}/live`, { headers: { accept: 'text/markdown' } });
+    const brokenBody = await broken.text();
+    expect([broken.status, brokenBody.startsWith("The app's build failed"), brokenBody.includes('nosuchtag')]).toEqual([500, true, true]);
   } finally {
     await serve?.stop();
     if (server) { server.closeAllConnections(); await new Promise(ok => server.close(ok)); }

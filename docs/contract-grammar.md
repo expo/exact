@@ -158,7 +158,8 @@ and `-exact-tint-color`, and fold into the node's own rows, `:checked` under
 `:disabled`; `:active` takes `background-color`, `color`, `opacity` and
 `-exact-press-scale` and lowers to the press paint (LLP 1061 D7: its `opacity` an
 absolute target), `:hover` and `:focus-visible` take `background-color`,
-`color`, `border-color`, `opacity` and `box-shadow`. Active targets may compute or clear
+`color`, `border-color`, `opacity`, `box-shadow` and `scale` (which stands in for the
+node's and moves on its `transition`). Active targets may compute or clear
 with `none`; hover and focus targets are literals (`lower-state-literal`; a
 token's name is one). Another row is `lower-state-row`;
 native buttons and list rows accept `:active` and keep their other native states.
@@ -2132,9 +2133,11 @@ Every element that declares it hears it; an action that calls `preventDefault()`
 keeps the window open. The browser then asks "Leave site?" itself; a Mac app asks
 its own question, and calls the host command `close()` once it is answered,
 which closes the window without asking again (on the web, `window.close()`, which
-a browser honours only for a window a script opened). On Windows, bare `close()`
-closes the window and ends the one-window app; Windows does not ask
-`beforeunload`. iOS and Linux close no window. `head edited=…` marks the document
+a browser honours only for a window a script opened). Windows asks it as the Mac
+does, before its close button, Alt+F4 or the taskbar's Close window closes the
+window (a window that `keepRunning` hides asks nothing), and its bare `close()`
+closes the window and ends the one-window app without asking again. iOS and
+Linux close no window. `head edited=…` marks the document
 as unsaved: on macOS the dot in the window's close button, beside the proxy icon
 of the file the window opened;
 other hosts show nothing (a declared deviation: the web has no unsaved mark).
@@ -2142,7 +2145,11 @@ other hosts show nothing (a declared deviation: the web has no unsaved mark).
 HTML's global `title` attribute, on any element but `head` (whose `title` is the
 document's), is advisory text: the browser's tooltip on the web, `toolTip` on
 macOS, and the system tooltip control on Windows (including its hover delay and
-dismissal). Linux and touch hosts show none.
+dismissal), drawn in the current style by the common controls the executable's
+manifest names. Linux, touch hosts, and a touch or a pen on Windows show none.
+The painted hosts' accessibility (UI Automation on Windows, TalkBack on Android)
+reads it as the element's description where it is not its name, and as its name
+where nothing else names it (an icon-only button), as HTML-AAM has it.
 
 ### Clipboard
 
@@ -2698,15 +2705,20 @@ the virtual clock).
   stays an ordinary button in the window. With
   `host.macos.activationPolicy: "accessory"` the app has no Dock tile and
   opens no window at launch. Bare `focus()` is the window's, as the web's
-  `window.focus()`: on macOS it shows the session's window if hidden, brings
-  it forward and activates the app; Windows and Linux bring no window forward
-  yet and log it as unsupported. `focus(id)` stays an element's.
+  `window.focus()`: on macOS and Windows it shows the session's window if
+  hidden, brings it forward and activates the app; Linux brings no window
+  forward and logs it as unsupported. `focus(id)` stays an element's.
   `hideWindow()` puts the session's window away as the person's close does
   while a status item is placed or under `keepRunning`, and the app keeps
   running; the next `focus()` shows it.
-  Windows opens a window on every launch and exits when it closes; it has no
-  `keepRunning` setting. The login package stores `hidden`, but Windows does
-  not yet honor it at launch (LLP 1133.025 §14).
+  On Windows `host.windows.window.keepRunning: true` makes closing the window
+  hide it, as on the Mac, and a login item registered `hidden` opens no
+  window at that launch. A Windows app is one process: launching it again
+  shows the window it has, and a location on that command line (a
+  jump-list task) opens in it. Windows' notification-area icon is not built
+  (LLP 1133.025 §14), so an app that keeps running there gives the person
+  its own way back (a global shortcut whose action calls `focus()`) and its
+  own way out (a button whose action calls `close()`).
 
   `@exact/global-shortcuts` on Windows accepts `PrintScreen` and modified
   chords such as `Control+PrintScreen`. Bare `PrintScreen` answers
@@ -2838,7 +2850,7 @@ argument validation. Use the working implementation when selecting arguments:
 | `setRootFontSize(px)`, `setRootFontSize("125%")`, `setRootFontSize("medium")`: CSS's `:root { font-size }`, the root font size every `rem` follows, in px above 0, laid out in the action's own commit; `px` lengths stay. It stands over the host's own size (the browser's setting, iOS Dynamic Type, 16 on macOS and Linux), as an author's `html { font-size: 20px }` stands over a browser's font-size setting, and `"medium"` hands the size back to the host. A percentage (CSS's number syntax, above 0) is that share of the host's size and follows it as the host's changes (LLP 1121 D6). A literal of 0 or less is refused here, a computed one in the log when it runs. Not kept across a launch: set it again from a mount task (LLP 1069.000 D3) | [rem tests](../contract/cli/tests/it/rem.rs) |
 | `setPageZoom(factor)`: the window's page zoom, as View ▸ Zoom In sets it and Electron's `webContents.setZoomFactor`: a CSS px is `factor` points, so the viewport, media queries, `px` and `rem` all follow; `setPageZoom(1)` is Actual Size, and a factor is clamped to 0.25–5. For an app whose own ⌘0, ⌘= and ⌘- commands keep their own steps ([The Mac's menu bar](#keys)). The Mac's; iOS, Linux, Windows and the web refuse it in the journal (LLP 1021 §5.3.1) | [`PageZoomMacTests`](../host/apple/tests/ExactKitTests/PageZoomMacTests.swift) |
 | `exitFullscreen()`, `setWindowOpacity(opacity)`: what a quit the app holds does to its window before it quits, as Electron's `setFullScreen(false)` and `setOpacity(0)`. `exitFullscreen()` is the web's `document.exitFullscreen()`: on the Mac the session's window leaves its full-screen space (a video's own full screen is `requestFullscreen(id)`'s); nothing happens when nothing is full screen. `setWindowOpacity` draws the session's window at an opacity from 0 (unseen, still key and still hearing keys) to 1 (`NSWindow.alphaValue`); a literal outside 0–1 is refused here (`type-window-opacity`). The Mac's; the web refuses `setWindowOpacity`, and iOS and Linux refuse both, in the journal. The agent's `state.windows` shows each window's `fullScreen` and `opacity` (LLP 1069.010) | [calls tests](../contract/cli/tests/it/calls.rs), [`WindowCommandsMacTests`](../host/apple/tests/ExactKitTests/WindowCommandsMacTests.swift) |
-| `hideWindow()`: the session's window put away with the app still running, as Electron's `BrowserWindow.hide`, for a menu-bar utility whose window goes once its work is done. On the Mac it is what the person's ⌘W does under `host.macos.window.keepRunning` or while a status item is placed: the window is ordered out, its session kept, `exactPage().visibilityState` reads `hidden` and `persisted` `true`, and the next bare `focus()`, Dock click or status-item press shows it as a restore (`restores`). Where the app would end without its window (neither, or a `navigate-new` app), it is refused in the journal and the window stays; `close()` still closes the window and ends the app. iOS, Linux, Windows, Android and the web refuse it in the journal (LLP 1133.025 D4) | [window command tests](../contract/cli/tests/it/window_commands.rs), [`WindowCommandsMacTests`](../host/apple/tests/ExactKitTests/WindowCommandsMacTests.swift) |
+| `hideWindow()`: the session's window put away with the app still running, as Electron's `BrowserWindow.hide`, for a menu-bar utility whose window goes once its work is done. On the Mac it is what the person's ⌘W does under `host.macos.window.keepRunning` or while a status item is placed: the window is ordered out, its session kept, `exactPage().visibilityState` reads `hidden` and `persisted` `true`, and the next bare `focus()`, Dock click or status-item press shows it as a restore (`restores`). Where the app would end without its window (neither, or a `navigate-new` app), it is refused in the journal and the window stays; `close()` still closes the window and ends the app. On Windows it is what the close button does under `host.windows.window.keepRunning`, and refused in the journal without it. iOS, Linux, Android and the web refuse it in the journal (LLP 1133.025 D4) | [window command tests](../contract/cli/tests/it/window_commands.rs), [`WindowCommandsMacTests`](../host/apple/tests/ExactKitTests/WindowCommandsMacTests.swift) |
 | `share(title=, text=, url=, files=)`: the system share sheet by the Web Share API's names, at least one of `text`, `url` and `files`, each its own item of the sheet (pass a picture alone to share only it, as a Share Card button does; `contract vocab share`); `url` absolute `http(s)`. `files=` lists `app:/` files, each behind the app's `fs.read` grant (on Apple a regular file of at most 64 MB, reached through no symbolic link), and `"#id"` entries: a PNG of that element as it is drawn now, at the display's scale, named by the share's `title` (else by the id) (iOS and macOS; the web refuses it, `share: refused: a picture of an element is not available on the web`; Android and Linux refuse files). A literal `#id` no element carries is refused here (`lower-share-picture`), a missing one at run time in the journal. Offer it where `exactPage()`'s `canShareFiles` and `canSharePictures` hold (LLP 1125 D12). The outcome is a journal line | [share corpus](../contract/corpus/share.contract), [Metronome](../apps/metronome/app.contract) |
 | `showPicker(id)`, export `saveFile(id, from, suggestedName)`: the host copies the `app:/` file `from` to where the person chooses; `change` at `id` carries the chosen name, `cancel` a dismissal. `saveFile(id, text=…, suggestedName=…)` saves the text itself (UTF-8), no file written first and no grant, so "export what's on screen" is one press | [picker tests](../contract/cli/tests/it/picker.rs), [Fieldnotes](../apps/fieldnotes/app.contract), [Linux's save tests](../host/linux/src/presenter/save_tests.rs) |
 | `showOpenFilePicker(id[, multiple])` | [file-picker corpus](../contract/corpus/file-pickers.contract) |

@@ -231,6 +231,12 @@ pub trait Surface {
     /// The canvas's inputs from the plan, as typed values; before the
     /// first render and whenever they change. A refusal names the input.
     fn bind(&mut self, inputs: &[Value], at_ms: Option<f64>) -> Result<(), SurfaceError>;
+    /// The canvas's size in points, given before a bind when the host knows
+    /// it, since a stamped bind may advance the surface's state before its
+    /// first `render`. True when it changed what the canvas shows.
+    fn size(&mut self, _width: f32, _height: f32) -> bool {
+        false
+    }
     /// Drain asset requests and retirements together; hosts cancel old flights first.
     fn assets(&mut self) -> AssetChanges {
         AssetChanges::default()
@@ -360,8 +366,10 @@ pub trait Surface {
         Vec::new()
     }
     /// The surface's public record — one JSON object — when it changed since last
-    /// asked. The host offers it to the app as `exactSurface("<name>")`.
-    /// The first live instance owns a surface name; other instances cannot publish or clear its record.
+    /// asked. The host offers it to the app as `exactSurface("<name>")`, with the
+    /// module's `presented` member added (LLP 1009), a name the record
+    /// cannot use. The first live instance owns a surface name; other
+    /// instances cannot publish or clear its record.
     fn published(&mut self) -> Option<String> {
         None
     }
@@ -373,6 +381,12 @@ pub trait Surface {
     /// `now_ms` is the host's monotonic clock, including polls while rendering is idle.
     fn take_performance(&mut self, _now_ms: f64) -> Option<String> {
         None
+    }
+    /// Which picture the surface draws (a world restarted or restored draws a
+    /// new one): a change makes the canvas's `presented` false until a frame
+    /// of the new picture is presented.
+    fn generation(&self) -> u64 {
+        0
     }
     /// An agent request and reply as JSON objects; the host adds clock and size (S3).
     fn agent(&mut self, _request: &str) -> Option<String> {
@@ -500,6 +514,7 @@ pub(crate) fn swapchains<R>(f: impl FnOnce() -> R) -> R {
     f()
 }
 
+mod presented;
 mod recovery;
 
 /// Frames a presented canvas may have queued for the compositor. Android
@@ -545,6 +560,8 @@ struct Instance {
     /// Its first frame has been handed to the compositor (`Module::seen`);
     /// shared with the callback that says so.
     seen: Arc<AtomicBool>,
+    /// Whether its current picture has been presented, for its record.
+    presented: presented::Presented,
     children: Option<Children>,
     children_generation: u32,
     /// Per-child textures (LLP 1014 D5), by index.
@@ -589,6 +606,7 @@ impl Instance {
         if let Some(record) = self.surface.published() {
             self.published = Some(record);
         }
+        self.presented.generation(self.surface.generation());
     }
 }
 
@@ -918,28 +936,6 @@ impl Module {
         true
     }
 
-    /// The newest frame a canvas with buffers has finished: `[generation,
-    /// slot, serial]` and the `AHardwareBuffer*`.
-    #[cfg(target_os = "android")]
-    pub fn buffer(&mut self, id: u32) -> Option<([u32; 3], *mut std::ffi::c_void)> {
-        if let Some(gpu) = &self.gpu {
-            let _ = gpu.device.poll(wgpu::PollType::Poll);
-        }
-        let ring = self.instances.get_mut(&id)?.ring.as_mut()?;
-        ring.settle();
-        ring.take()
-    }
-
-    /// Whether a canvas with buffers has a complete frame [`Module::buffer`]
-    /// has not published yet.
-    #[cfg(target_os = "android")]
-    pub fn unpublished(&self, id: u32) -> bool {
-        self.instances
-            .get(&id)
-            .and_then(|i| i.ring.as_ref())
-            .is_some_and(|r| r.unpublished())
-    }
-
     /// Create surface ownership without a device, target, or registered shaders.
     pub fn create_headless(&mut self, name: &str) -> Option<u32> {
         let Some((_, _, factory)) = self.registry.surfaces.iter().find(|(n, _, _)| *n == name)
@@ -989,6 +985,7 @@ impl Module {
                 inputs: Vec::new(),
                 dirty: false,
                 seen: Default::default(),
+                presented: Default::default(),
                 children: None,
                 children_generation: 0,
                 each: Vec::new(),
@@ -1080,9 +1077,11 @@ impl Module {
             .unwrap_or_default()
     }
 
-    /// Take the latest changed public record exactly once.
+    /// Take the latest changed public record exactly once, with its
+    /// `presented` member; the last record again when only that changed.
     pub fn take_published(&mut self, id: u32) -> Option<String> {
-        self.instances.get_mut(&id).and_then(|i| i.published.take())
+        let inst = self.instances.get_mut(&id)?;
+        inst.presented.take(inst.published.take())
     }
 
     /// Ask this canvas an agent question; an answer or posted message marks it dirty.
@@ -1218,6 +1217,8 @@ impl Module {
                 // be delivered alongside the restored state. Refusals keep them.
                 inst.messages.clear();
                 inst.published = None;
+                inst.presented.forget_record();
+                inst.presented.reset();
                 inst.drain();
                 inst.dirty = true;
                 true

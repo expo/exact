@@ -13,10 +13,15 @@ Media
 
 The following images are by Daehyeon Mun and are included with permission:
   examples/calendar/assets/themes/
-  apps/exact-live/ (photographs)
-  apps/interaction-gallery/ (photographs)
   apps/duo-lab/art/
   tamber/tests/import/figma/ (Figma kit fixtures)
+
+The landscape pictures in apps/exact-live/assets, apps/interaction-gallery/assets
+and apps/duo-lab/assets, and their JPEG copies in apps/shared-elements/assets,
+are not photographs: they were generated with OpenAI's image generation, of
+imagined places, and no photographer or licence is claimed. The provenance.json
+beside each set records how, and the PNGs carry C2PA content credentials that
+name OpenAI's generator.
 
 game/games/skinned-fixture/art/fox.glb is a modified copy of the Khronos glTF
 sample Fox: the model by PixelMannen (CC0 1.0); rigging and animation (c) 2014

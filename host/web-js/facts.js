@@ -212,7 +212,7 @@ function surfaceKeeps(readers) {
         if (row[0] !== surface || !wanted.has(name)) continue;
         seeds.delete(name);
         if (json == null || !available()) continue;
-        const value = read(name), text = `[${JSON.stringify(surface)},${JSON.stringify(row[2])},${keptEncode(row[1], value)}]`;
+        const value = withoutHostFacts(row[1], read(name)), text = `[${JSON.stringify(surface)},${JSON.stringify(row[2])},${keptEncode(row[1], value)}]`;
         let size;
         try { size = entry(name, text).size; } catch { remove(name); say(`too big to keep: resource ${name}`); continue; }
         try {
@@ -226,6 +226,13 @@ function surfaceKeeps(readers) {
       }
     }
   };
+}
+// The members a host adds to a surface's record (a GPU canvas's `presented`, LLP 1009 D9) are this
+// launch's: a kept record holds each as absent, as the runner's `HOST_FIELDS`.
+function withoutHostFacts(t, v) {
+  if (typeof t !== 'object' || Array.isArray(t) || !Object.hasOwn(t, 'presented')) return v;
+  const at = Object.keys(t).indexOf('presented'), absent = t.presented === 'b' ? false : null;
+  return v.map((x, i) => i === at ? absent : x);
 }
 function keptFits(t, v) {
   if (typeof t === 'string') return t === 'n' ? typeof v === 'number' && Number.isFinite(v) : t === 's' ? typeof v === 'string' : t === 'b' ? typeof v === 'boolean' : v === null;

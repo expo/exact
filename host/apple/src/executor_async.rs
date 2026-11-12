@@ -13,8 +13,8 @@
 //! run (ticket and generation): a parked upload's next run ignores the last
 //! one's late events.
 use super::{
-    body, bounded_outcome, failed, fetch_failure, fetch_request, handoff, retained,
-    scoped_bindings, Completed, Job, Running, Shared, State, StreamHost, BYTES, MAX_HEADERS,
+    body, bounded_outcome, failed, fetch_failure, fetch_request, handoff, retained, scoped_grants,
+    Completed, Job, Running, Shared, State, StreamHost, BYTES, MAX_HEADERS,
 };
 use exact_runner::{FailureKind, Outcome, Reply, Request, Response, Work as OwnedWork};
 use ibex2::boundary::HostError;
@@ -287,7 +287,6 @@ pub(super) struct Machine {
     threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
     pub(super) timer: Arc<Timer>,
     grants: String,
-    host: StreamHost,
     /// Retired: a starter starts nothing more.
     retired: AtomicBool,
     #[cfg(test)]
@@ -340,7 +339,6 @@ impl Machine {
             threads: Mutex::new(Vec::new()),
             timer: Arc::new(Timer::default()),
             grants: grants.to_string(),
-            host,
             retired: AtomicBool::new(false),
             #[cfg(test)]
             reader_hook: Mutex::new(None),
@@ -674,10 +672,11 @@ impl Machine {
         }
         // A source's narrower scope, refused before any work runs, as on
         // the workers.
-        let scoped = scoped_bindings(&self.grants, request.grants.as_deref(), &self.host);
-        if let Some(Err(message)) = scoped {
-            return refuse(failed(FailureKind::Refused, message));
-        }
+        let scoped = match scoped_grants(&self.grants, request.grants.as_deref()) {
+            Some(Err(message)) => return refuse(failed(FailureKind::Refused, message)),
+            Some(Ok(scope)) => Some(scope),
+            None => None,
+        };
         // Retirement aborts every job; forgetting aborts a safe read.
         let retiring = {
             let abort = abort.clone();
@@ -725,8 +724,7 @@ impl Machine {
                 {
                     return refuse(outcome);
                 }
-                let fetch = scoped.map(|s| s.expect("checked").fetch);
-                self.http(lane, run, request, forced, sized, abort, retiring, fetch)
+                self.http(lane, run, request, forced, sized, abort, retiring, scoped)
             }
         }
     }

@@ -97,6 +97,33 @@ fn static_trees_omit_finder_metadata_and_keep_other_dotfiles() {
 }
 
 #[test]
+fn a_copy_into_its_own_source_copies_what_the_source_held() {
+    let fixture = Fixture::new();
+    let root = fixture.dir("src");
+    fixture.dir("src/deck");
+    fs::write(fixture.path("src/a.txt"), "a").unwrap();
+    fs::write(fixture.path("src/deck/b.txt"), "b").unwrap();
+    let target = fixture.path("src/output");
+    operate(
+        &root,
+        &json!({"op":"copy", "target":target, "token":TOKEN}),
+        None,
+    )
+    .unwrap();
+    assert_eq!(fs::read(target.join("a.txt")).unwrap(), b"a");
+    assert_eq!(fs::read(target.join("deck/b.txt")).unwrap(), b"b");
+    let copied: Vec<_> = fs::read_dir(&target)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        copied.len(),
+        2,
+        "{copied:?}: the target holds no copy of itself"
+    );
+}
+
+#[test]
 #[cfg(unix)]
 fn a_static_inventory_refuses_a_fifo() {
     let fixture = Fixture::new();

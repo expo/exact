@@ -477,6 +477,22 @@ impl<D: DataSource> Runner<D> {
         // enter the kept entry or its budget.
         let row = self.resource_row(i).clone();
         let args = &args[..row.args.len as usize - usize::from(row.context)];
+        // The record the module published, without the host's own members
+        // (`presented`, LLP 1009 D9): those are this launch's.
+        let published;
+        let value = if surface {
+            let record = crate::surface_record::surface_name(&self.plan, &row)
+                .and_then(|name| self.surface_records.get(name));
+            let Some(Ok(v)) = record
+                .map(|text| crate::surface_record::decode_published(&self.plan, row.ty, text))
+            else {
+                return;
+            };
+            published = v;
+            &published
+        } else {
+            value
+        };
         let surface_args;
         let args = if surface {
             let Some(signature) = crate::surface_record::keep_signature(&self.plan, row.ty) else {

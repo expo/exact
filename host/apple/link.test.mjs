@@ -7,7 +7,28 @@ import { spawnSync } from 'node:child_process';
 import { assertActivityRefusals } from './activities.mjs';
 import { resolveApp } from '../../scripts/app.mjs';
 import { appleComposition, assertCapabilityFrameworks, assertLinkedSdk, compiledTargets, deploymentTargets, iosSimulatorTarget, loadedDylibs } from './link.mjs';
-import { systemFrameworks } from './compose.mjs';
+import { composedModule, moduleSeam, systemFrameworks } from './compose.mjs';
+import { writeDataKeys } from './data-keys.mjs';
+
+for (const [sdk, ios, tv] of [['appletvsimulator', true, true], ['iphonesimulator', true, false], ['macosx', false, false]]) {
+  test.skipIf(process.platform !== 'darwin')(`native-fixture's Apple module typechecks for ${sdk}`, async () => {
+    const { moduleTripleFor } = await import('./build.mjs');
+    const { useXcode } = await import('./devices.mjs');
+    useXcode();
+    const root = join(import.meta.dir, '../..'), app = resolveApp(join(root, 'apps/native-fixture'));
+    mkdirSync(join(root, 'target'), { recursive: true });
+    const dir = mkdtempSync(join(root, 'target/native-fixture-module-'));
+    try {
+      const keys = join(dir, 'ExactDataKeys.swift'), composed = join(dir, 'ExactComposed.swift');
+      writeDataKeys(app, keys, ios ? 'ios' : 'macos');
+      writeFileSync(composed, composedModule([], true));
+      const built = spawnSync('xcrun', ['--sdk', sdk, 'swiftc', '-typecheck', '-parse-as-library', '-swift-version', '5',
+        '-target', moduleTripleFor(app, ios, false, tv), ...moduleSeam(join, root), keys, composed, ...app.modules.apple],
+      { encoding: 'utf8', maxBuffer: 8 << 20 });
+      assert.equal(built.status, 0, built.stderr);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  }, 60_000);
+}
 
 test('a live watch entry in an app with TypeScript reaches the bake', async () => {
   const { buildWatch } = await import('./watch.mjs');

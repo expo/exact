@@ -157,12 +157,14 @@ export function modules(rows, bound = {}, views = {}, events = {}) {
     if (send && row.sub.shortcuts === "pin") return { now: rc.pin(row, args) };
     // A `default` written `null` is a value: an option source's none, as the runner's `value_of`.
     if (!send) return { now: valueOf(row) ?? ("default" in row.sub ? null : { error: "NotSupportedError" }) };
-    // A send that answers another source's value, raising it when it matches `raise.when` (D10).
+    // A send that raises another source's value when `raise.when` matches and its optional `raise.grant` is declared.
     const answers = sibling(row, row.sub.answers);
     if (answers) {
       const value = decide(answers, false).now ?? {};
       const when = row.sub.raise?.when;
-      return when && Object.entries(when).every(([k, v]) => value[k] === v) ? { hold: "raise" } : { now: value };
+      const grant = row.sub.raise?.grant;
+      const granted = typeof grant !== "string" || (data.grants ?? "").split("\n").some(l => l.trim().split(/\s+/)[0] === grant);
+      return granted && when && Object.entries(when).every(([k, v]) => value[k] === v) ? { hold: "raise" } : { now: value };
     }
     const from = sibling(row, row.sub.from), v = from && prefers(from);
     if (v !== undefined) return { now: v };

@@ -921,6 +921,57 @@ test('a send with nothing preferred answers its declared default, a copy each ti
   expect([await call('read'), await call('find'), await call('bare')]).toEqual([{ token: null, status: 0 }, [], { error: 'NotSupportedError' }]);
 });
 
+test.each(['device.geolocation-approximate', 'device.geolocation'])('a precision substitute respects the app grant %s', async grant => {
+  const { modules } = await import(resolve(dir, 'modules.js'));
+  const { data, clock } = await import(resolve(dir, 'rt.js'));
+  const previous = { grants: data.grants, agent: clock.agent };
+  const declaration = JSON.parse(readFileSync(new URL('../../../packages/geolocation/exact.json', import.meta.url), 'utf8'));
+  const type = { available: 'b', state: 's', accuracy: 's' };
+  const install = web => {
+    const rows = Object.fromEntries(declaration.names.filter(n => ['geolocationStatus', 'requestPreciseLocation'].includes(n.source ?? n.send)).map(n => {
+      const name = n.source ?? n.send, sub = { ...n.substitute, permission: declaration.permission, grants: declaration.grants };
+      // Exercise the shared raise rule; the web's restriction is checked with the unmodified declaration below.
+      if (!web) delete sub.unsupported;
+      return [name, [`geolocation.${name}`, !!n.send, sub, type, n.request ? 'always' : 'never', null, !!n.live]];
+    }));
+    modules(rows);
+    return globalThis.exact.extensions;
+  };
+  try {
+    clock.agent = true;
+    data.grants = `${grant} locationPurpose`;
+    let api = install(false);
+    const call = () => api.call({ extension: 'geolocation', send: 'requestPreciseLocation', args: { purposeKey: 'forecastPurpose' } });
+    const tap = (capability, choice) => {
+      const holds = api.holds();
+      expect(holds).toHaveLength(1);
+      expect(holds[0].device.capability).toBe(capability);
+      expect(api.answer({ op: 'tap', ticket: holds[0].ticket, choice }).error).toBeUndefined();
+    };
+    const first = call();
+    tap('permission', 'allow');
+    expect(api.holds()).toEqual([]);
+    const accuracy = grant === 'device.geolocation' ? 'precise' : 'approximate';
+    expect(await first).toEqual({ available: true, state: 'granted', accuracy });
+    if (accuracy === 'precise') {
+      expect(api.prefer({ extension: { 'geolocation.geolocationStatus': { available: true, accuracy: 'approximate' } } }).error).toBeUndefined();
+      for (const choice of ['deny', 'cancel', 'allow']) {
+        const pending = call();
+        tap('precision', choice);
+        const expected = { available: true, state: 'granted', accuracy: choice === 'allow' ? 'precise' : 'approximate' };
+        expect(await pending).toEqual(expected);
+        expect(await api.call({ extension: 'geolocation', source: 'geolocationStatus' })).toEqual(expected);
+      }
+    }
+    const again = call();
+    expect(api.holds()).toEqual([]);
+    expect(await again).toEqual({ available: true, state: 'granted', accuracy });
+    api = install(true);
+    expect(await call()).toEqual({ error: 'NotSupportedError' });
+    expect(api.holds()).toEqual([]);
+  } finally { data.grants = previous.grants; clock.agent = previous.agent; }
+});
+
 // LLP 1133.004 D6, LLP 1133.002 D12: a module event's origin on the JS target.
 test('a command keeps the origin of the commit that queued it, whenever its tail runs', async () => {
   const { commit, C, Hosts, Origin } = await import(resolve(dir, 'rt.js'));

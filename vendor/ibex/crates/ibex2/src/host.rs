@@ -465,6 +465,16 @@ impl Fetch {
         self
     }
 
+    /// This binding's transport and gate under `grants` instead (Exact
+    /// patch 36): a narrower scope rides the connections the transport keeps.
+    pub fn with_grants(&self, grants: GrantSet) -> Self {
+        Self {
+            transport: Arc::clone(&self.transport),
+            grants: Arc::new(grants),
+            gate: self.gate.clone(),
+        }
+    }
+
     /// Adapt this binding's configured blocking transport to caller-supplied
     /// bounded workers. Pass the adapter to `start_async` so this binding still
     /// admits each hop with its own grant; no raw grant extraction is needed.

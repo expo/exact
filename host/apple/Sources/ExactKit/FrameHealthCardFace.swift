@@ -8,6 +8,22 @@ import Foundation
 enum FrameHealthCardFace {
     enum Status { case live, paused, idle }
     enum Control: Equatable { case close, title, status, details, share, charts, table }
+    /// The face's bands, top to bottom, which change apart: a card can draw each as a picture of its own, so a read
+    /// that changes the figures draws only theirs
+    enum Band: CaseIterable {
+        case header, context, figures, pacing, toolbar, charts
+        /// Where it lies, from the top of the face, in points
+        var span: ClosedRange<CGFloat> {
+            switch self {
+            case .header: 0...44
+            case .context: 44...82
+            case .figures: 82...126
+            case .pacing: 126...170
+            case .toolbar: 170...206
+            case .charts: 206...height
+            }
+        }
+    }
 
     /// What the face shows; the platform view fills it from the reader on each refresh.
     struct State {
@@ -161,11 +177,68 @@ enum FrameHealthCardFace {
             y: axis(origin.y, area.minY, area.maxY - size.height, area.height))
     }
 
-    /// Draw the header, context, figures, pacing and, unless compact, the toolbar into the layout's width × 206 points.
-    static func draw(_ ctx: CGContext, _ layout: Layout, state: State, palette p: FrameHealthCardDrawing.Palette) {
-        let (width, compact, corners) = (layout.width, layout.compact, layout.corners)
+    /// Draw the header, context, figures, pacing and, unless compact, the toolbar into the layout's width × 206 points,
+    /// or only those of `bands`.
+    static func draw(_ ctx: CGContext, _ layout: Layout, state: State, palette p: FrameHealthCardDrawing.Palette,
+                     bands: Set<Band> = Set(Band.allCases)) {
+        let (width, compact) = (layout.width, layout.compact)
         ctx.setFillColor(p.background)
         ctx.fill(CGRect(x: 0, y: 0, width: width, height: 206))
+        typealias D = FrameHealthCardDrawing
+        if bands.contains(.header) { header(ctx, layout, state: state, palette: p) }
+        guard !state.showsDetails else { return }
+        if bands.contains(.context) {
+            // Context: the request and any system limit, then the display
+            let request = state.request.0 + (state.request.1.isEmpty ? "" : " ")
+            D.text(ctx, request, x: 12, y: 52, body, p.label, .left, limit: width - 24)
+            if !state.request.1.isEmpty {
+                D.text(ctx, "· " + state.request.1, x: 12 + D.width(request, body), y: 52, body, p.secondary, .left)
+            }
+            D.text(ctx, state.display, x: 12, y: 68, body, p.secondary, .left, limit: width - 24)
+            separator(ctx, y: 80, width: width, p)
+        }
+        if bands.contains(.figures) {
+            // One row per window, digits right-aligned in reserved tabular columns so nothing moves
+            let digits = D.width("000", strong), count = D.width("0000", strong)
+            for (index, row) in state.rows.enumerated() {
+                let y = 94 + CGFloat(index) * 18
+                D.text(ctx, row.0, x: 12, y: y, body, p.secondary, .left)
+                D.text(ctx, row.1, x: 78 + digits, y: y, strong, p.label, .right)
+                D.text(ctx, "FPS", x: 78 + digits + 3.6, y: y, body, p.label, .left)
+                D.text(ctx, row.2, x: 162 + count, y: y, strong, p.label, .right)
+                D.text(ctx, state.unit, x: 162 + count + 3.6, y: y, body, p.label, .left)
+            }
+            separator(ctx, y: 125, width: width, p)
+        }
+        if bands.contains(.pacing) {
+            let label = "\(state.pacingName) (\(state.pacingWindow))", verdict = 12 + D.width(label, body) + 3.6
+            D.text(ctx, label, x: 12, y: 138, body, p.secondary, .left)
+            D.text(ctx, state.pacing.0, x: verdict, y: 138, strong, p.label, .left, limit: width - 12 - verdict)
+            D.text(ctx, state.pacing.1, x: 12, y: 154, Self.digits, p.label, .left, limit: width - 24)
+        }
+        guard !compact, bands.contains(.toolbar) else { return }
+        // The segmented control: a track, and the chosen segment a chip of the card's ground
+        let track = layout.track
+        ctx.setFillColor(p.track)
+        ctx.addPath(D.continuous(track, radius: 8))
+        ctx.fillPath()
+        let (charts, table) = layout.segments
+        for (rect, name, control, chosen) in [(charts, "Charts", Control.charts, !state.table), (table, "Table", .table, state.table)] {
+            // The chosen segment is a chip of the card's ground; the other washes when hovered or pressed
+            let fill = chosen ? p.chip : state.pressed == control ? p.statusPressed : state.hovered == control ? p.statusHover : nil
+            if let fill {
+                ctx.setFillColor(fill)
+                ctx.addPath(D.continuous(rect, radius: 6))
+                ctx.fillPath()
+            }
+            let w = D.width(name, body)
+            D.text(ctx, name, x: rect.midX - w / 2, y: rect.midY, body, chosen || state.hovered == control ? p.label : p.secondary, .left)
+        }
+    }
+
+    /// The header: Close, the title, the status, Details and Share.
+    private static func header(_ ctx: CGContext, _ layout: Layout, state: State, palette p: FrameHealthCardDrawing.Palette) {
+        let (width, compact, corners) = (layout.width, layout.compact, layout.corners)
         typealias D = FrameHealthCardDrawing
         // A button's fill keeps 2 points within the card's outline, so in a rounded corner its outer corner follows the card's
         ctx.saveGState()
@@ -200,48 +273,6 @@ enum FrameHealthCardFace {
         }
         let word = state.status == .paused ? "Paused" : state.status == .live ? "Live" : "Idle"
         D.text(ctx, word, x: symbol.maxX + 4.8, y: status.midY, strong, p.label, .left)
-        guard !state.showsDetails else { return }
-        // Context: the request and any system limit, then the display
-        let request = state.request.0 + (state.request.1.isEmpty ? "" : " ")
-        D.text(ctx, request, x: 12, y: 52, body, p.label, .left, limit: width - 24)
-        if !state.request.1.isEmpty {
-            D.text(ctx, "· " + state.request.1, x: 12 + D.width(request, body), y: 52, body, p.secondary, .left)
-        }
-        D.text(ctx, state.display, x: 12, y: 68, body, p.secondary, .left, limit: width - 24)
-        separator(ctx, y: 80, width: width, p)
-        // One row per window, digits right-aligned in reserved tabular columns so nothing moves
-        let digits = D.width("000", strong), count = D.width("0000", strong)
-        for (index, row) in state.rows.enumerated() {
-            let y = 94 + CGFloat(index) * 18
-            D.text(ctx, row.0, x: 12, y: y, body, p.secondary, .left)
-            D.text(ctx, row.1, x: 78 + digits, y: y, strong, p.label, .right)
-            D.text(ctx, "FPS", x: 78 + digits + 3.6, y: y, body, p.label, .left)
-            D.text(ctx, row.2, x: 162 + count, y: y, strong, p.label, .right)
-            D.text(ctx, state.unit, x: 162 + count + 3.6, y: y, body, p.label, .left)
-        }
-        separator(ctx, y: 125, width: width, p)
-        let label = "\(state.pacingName) (\(state.pacingWindow))", verdict = 12 + D.width(label, body) + 3.6
-        D.text(ctx, label, x: 12, y: 138, body, p.secondary, .left)
-        D.text(ctx, state.pacing.0, x: verdict, y: 138, strong, p.label, .left, limit: width - 12 - verdict)
-        D.text(ctx, state.pacing.1, x: 12, y: 154, Self.digits, p.label, .left, limit: width - 24)
-        guard !compact else { return }
-        // The segmented control: a track, and the chosen segment a chip of the card's ground
-        let track = layout.track
-        ctx.setFillColor(p.track)
-        ctx.addPath(D.continuous(track, radius: 8))
-        ctx.fillPath()
-        let (charts, table) = layout.segments
-        for (rect, name, control, chosen) in [(charts, "Charts", Control.charts, !state.table), (table, "Table", .table, state.table)] {
-            // The chosen segment is a chip of the card's ground; the other washes when hovered or pressed
-            let fill = chosen ? p.chip : state.pressed == control ? p.statusPressed : state.hovered == control ? p.statusHover : nil
-            if let fill {
-                ctx.setFillColor(fill)
-                ctx.addPath(D.continuous(rect, radius: 6))
-                ctx.fillPath()
-            }
-            let w = D.width(name, body)
-            D.text(ctx, name, x: rect.midX - w / 2, y: rect.midY, body, chosen || state.hovered == control ? p.label : p.secondary, .left)
-        }
     }
 
     /// The table: for the last 5s and 30s, the figures the face does not show, then the deadline.

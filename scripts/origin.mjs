@@ -103,20 +103,14 @@ const FILE_EXTENSIONS = new Set(['.html', '.htm', '.css', '.js', '.mjs', '.json'
 /** Whether a request's `Accept` names text/markdown at a quality above zero and no lower than text/html's,
  * which is that of the most specific range matching it (RFC 9110 §12.5.1): text/html, then text/*, then *\/*. */
 export function prefersMarkdown(accept = '') {
-  const ranges = String(accept ?? '').toLowerCase().split(',').map((range) => {
-    const [type, ...params] = range.split(';').map((part) => part.trim()), q = params.find((param) => param.startsWith('q='));
-    return [type, q ? Number(q.slice(2)) || 0 : 1];
-  });
+  const ranges = acceptRanges(accept);
   const quality = (...types) => ranges.find(([type]) => type === types.find((t) => ranges.some(([r]) => r === t)))?.[1] ?? 0;
   const markdown = quality('text/markdown');
   return markdown > 0 && markdown >= quality('text/html', 'text/*', '*/*');
 }
 
-/** Whether a request's `Accept` takes HTML (RFC 9110: the media type, any
- * case, at a quality above zero), as a browser's navigation does. With
- * `wildcard`, a range taking any type or any text type, or no header at
- * all, does too (curl's request) unless it names `text/html` at quality zero. */
-export function acceptsHTML(accept = '', { wildcard = false } = {}) {
+// Media ranges and numeric qualities shared by both negotiation paths.
+function acceptRanges(accept) {
   // Split on commas and semicolons outside a quoted parameter value.
   const ranges = [[[]]];
   let quoted = false;
@@ -128,10 +122,18 @@ export function acceptsHTML(accept = '', { wildcard = false } = {}) {
     if (!quoted && c === ';') { range.push([]); continue; }
     param.push(c);
   }
-  const types = ranges.map(([type, ...params]) => {
+  return ranges.map(([type, ...params]) => {
     const q = params.map((p) => p.join('').trim().toLowerCase()).find((p) => p.startsWith('q='));
-    return [type.join('').trim().toLowerCase(), q === undefined || Number(q.slice(2)) > 0];
+    return [type.join('').trim().toLowerCase(), q === undefined ? 1 : Math.max(0, Math.min(1, Number(q.slice(2)) || 0))];
   });
+}
+
+/** Whether a request's `Accept` takes HTML (RFC 9110: the media type, any
+ * case, at a quality above zero), as a browser's navigation does. With
+ * `wildcard`, a range taking any type or any text type, or no header at
+ * all, does too (curl's request) unless it names `text/html` at quality zero. */
+export function acceptsHTML(accept = '', { wildcard = false } = {}) {
+  const types = acceptRanges(accept).map(([type, q]) => [type, q > 0]);
   const html = types.filter(([type]) => type === 'text/html');
   if (html.length || !wildcard) return html.some(([, taken]) => taken);
   return !String(accept ?? '').trim() || types.some(([type, taken]) => taken && (type === '*/*' || type === 'text/*'));

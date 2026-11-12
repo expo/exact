@@ -232,7 +232,7 @@ impl Manifest {
 
     /// `host.windows.window` as the Rust expression of the
     /// `exact_windows::Window` the app opens in: the fields it names, the
-    /// host's defaults for the rest (no `..` when it names all four, which
+    /// host's defaults for the rest (no `..` when it names all five, which
     /// Clippy's `needless_update` would flag in the generated entry).
     pub fn windows_window(&self) -> Result<String, String> {
         let window = self.host("windows");
@@ -258,7 +258,14 @@ impl Manifest {
                 named += 1;
             }
         }
-        let rest = if named < 4 {
+        if let Some(value) = window.get("keepRunning") {
+            let keep = value
+                .as_bool()
+                .ok_or("host.windows.window.keepRunning is true or false")?;
+            fields.push_str(&format!("keep_running: {keep}, "));
+            named += 1;
+        }
+        let rest = if named < 5 {
             "..exact_windows::Window::default() "
         } else {
             ""
@@ -652,12 +659,18 @@ mod windows_tests {
              ..exact_windows::Window::default() }"
         );
         let all = manifest(serde_json::json!({"host": {"windows": {"window": {
-            "width": 1100, "height": 760, "minWidth": 360, "minHeight": 500,
+            "width": 1100, "height": 760, "minWidth": 360, "minHeight": 500, "keepRunning": true,
         }}}}));
         assert_eq!(
             all.windows_window().unwrap(),
             "exact_windows::Window { width: 1100.0_f32, height: 760.0_f32, min_width: 360.0_f32, \
-             min_height: 500.0_f32, }"
+             min_height: 500.0_f32, keep_running: true, }"
+        );
+        let kept =
+            manifest(serde_json::json!({"host": {"windows": {"window": {"keepRunning": true}}}}));
+        assert_eq!(
+            kept.windows_window().unwrap(),
+            "exact_windows::Window { keep_running: true, ..exact_windows::Window::default() }"
         );
         let unsaid = manifest(serde_json::json!({"host": {"windows": {}}}));
         assert_eq!(
@@ -666,5 +679,8 @@ mod windows_tests {
         );
         let wrong = manifest(serde_json::json!({"host": {"windows": {"window": {"width": 0}}}}));
         assert!(wrong.windows_window().unwrap_err().contains("window.width"));
+        let wrong =
+            manifest(serde_json::json!({"host": {"windows": {"window": {"keepRunning": 1}}}}));
+        assert!(wrong.windows_window().unwrap_err().contains("keepRunning"));
     }
 }

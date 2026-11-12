@@ -23,7 +23,7 @@ import { canonical, matchPattern } from '../web-js/route-pattern.js';
 import { guardFlags } from '../../scripts/help.mjs';
 
 import { INSTALL_FILES, INSTALL_PUBLIC, INSTALL_ROOT, installRoute, installNetworkPage } from '../../scripts/install-page.mjs';
-import { generationOf, keepGeneration, reapGenerations, servedFile, withGenerationBase } from './generations.mjs';
+import { generationOf, generationPath, keepGeneration, reapGenerations, servedFile, withGenerationBase } from './generations.mjs';
 
 const PUBLIC_FILES = new Set([
   ...INSTALL_PUBLIC,
@@ -900,7 +900,8 @@ export async function serveBuildTree(dist, req, res, { pinned = null, pages = nu
     sendStaticBody(req, res, answers.body, { 'content-type': answers.status === 200 ? 'application/json' : 'text/plain; charset=utf-8', 'cache-control': answers.status === 200 ? 'private, max-age=3600, immutable' : 'no-store' }, answers.status);
     return;
   }
-  const negotiated = !!target && !extname(target.pathname), markdown = negotiated && prefersMarkdown(req.headers.accept) ? await servedFile(dist, `${target.pathname.replace(/\/+$/, '') || '/index'}.md`, req.headers.accept, { pinned }) : null;
+  const under = target && generationPath(target.pathname), path = under?.path ?? target?.pathname;
+  const negotiated = !!target && under !== 'bad' && !extname(path), markdown = negotiated && prefersMarkdown(req.headers.accept) ? await servedFile(dist, `${under ? target.pathname.slice(0, -path.length) : ''}${path.replace(/\/+$/, '') || '/index'}.md`, req.headers.accept, { pinned }) : null;
   let r = markdown?.status === 200 && markdown.route.endsWith('.md') ? markdown : target ? await servedFile(dist, target.pathname, req.headers.accept, { pinned }) : { status: 404 };
   // A request taking any type (curl's) is answered as a navigation where that is a page rendered for it, as any
   // server rendering pages answers it; a route the client draws stays a browser's.
@@ -1292,7 +1293,7 @@ async function main() {
   const pages = js ? sitePages(dist, await import('../web-js/render.mjs')) : null;
   const rebuild = rebuildOnChange(dist);
   const server = createServer(async (req, res) => {
-    if (rebuild && asksPage(req, webRequestURL(req.url)?.pathname)) {
+    if (rebuild && (asksPage(req, webRequestURL(req.url)?.pathname) || (prefersMarkdown(req.headers.accept) && appDocumentPath(webRequestURL(req.url)?.pathname ?? '')))) {
       const failed = await rebuild();
       if (failed) { res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(`The app's build failed, so this is the last build's page no more:\n\n${failed.slice(-6000)}`); return; }
     }

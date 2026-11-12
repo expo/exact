@@ -4,7 +4,7 @@ import { test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { PINNED_RUST } from './app.mjs';
 import { Cdp, agentPage, chromium, chromiumBuilds, launchFacts, launchEnvironment, parseFlags, launchLog, launchFailure, webPort, pollUntil } from './agent-launch.mjs';
 import { PassThrough } from 'node:stream';
@@ -659,7 +659,7 @@ test('a selected backend on this machine is a loopback origin or one of its priv
 });
 
 test('backend selection changes captured origin and grants while preserving unrelated literals', async () => {
-  const {backendOrigin, injectBackendOrigin} = await import('../js/bake/src/typescript.mjs');
+  const {backendOrigin, injectBackendOrigin, literalBackendOrigin} = await import('../js/bake/src/typescript.mjs');
   const {parseSync} = await import('rolldown/utils');
   const code = `// const origin = 'http://comment';
 const label = '☃';
@@ -677,9 +677,31 @@ const other = 'http://127.0.0.1:4400';`;
   expect(next).toContain("const other = 'http://127.0.0.1:4400'");
   expect(next).toContain("// const origin = 'http://comment'");
   expect(() => injectBackendOrigin('const origin = compute();', 'http://new', parseSync)).toThrow(/top-level literal/);
+  for (const init of ["'http://127.0.0.1:4400' as const", "('http://127.0.0.1:4400' satisfies string)", '`http://127.0.0.1:4400` as const']) {
+    const wrapped = `export const origin = ${init}; export const grants = \`net.fetch \${origin}\`;`;
+    expect(literalBackendOrigin(wrapped, parseSync)).toBe('http://127.0.0.1:4400');
+    const moved = injectBackendOrigin(wrapped, 'https://backend.example', parseSync);
+    expect(literalBackendOrigin(moved, parseSync)).toBe('https://backend.example');
+    expect(parseSync('app.ts', moved).errors).toEqual([]);
+  }
   for (const value of ['file:///tmp/a', 'https://user:pw@backend.example', 'http://backend.example/path', ''])
     expect(() => backendOrigin('.', {EXACT_BACKEND_ORIGIN: value})).toThrow(/EXACT_BACKEND_ORIGIN/);
   expect(backendOrigin('.', {EXACT_BACKEND_ORIGIN: 'https://backend.example/'})).toBe('https://backend.example');
+  expect(literalBackendOrigin("const origin = 'https://example.com/app?query#fragment';", parseSync)).toBe('https://example.com');
+});
+
+test('fixture backend selection reads the declared origin through TypeScript syntax', async () => {
+  const { backendOriginSelection } = await import('../js/bake/src/typescript.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'exact-fixture-origin-'));
+  try {
+    writeFileSync(join(dir, 'app.json'), JSON.stringify({ commands: { server: ['bun', 'fixture/server.ts', '--port', '4412'] } }));
+    for (const declaration of ["const origin = 'http://127.0.0.1:4400';", 'export const origin = `http://127.0.0.1:4400` as const;']) {
+      writeFileSync(join(dir, 'app.ts'), `// const origin = 'http://localhost:1';\n${declaration}`);
+      expect(backendOriginSelection(dir, {})).toEqual({ origin: 'http://127.0.0.1:4412', source: 'commands.server --port' });
+    }
+    writeFileSync(join(dir, 'app.ts'), "// const origin = 'http://127.0.0.1:1';\nconst config = { origin: 'http://127.0.0.1:4400' };\n");
+    expect(backendOriginSelection(dir, {})).toBe(null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('a grant line beginning with development is kept without the word in a development build and left out of a production one', async () => {
@@ -942,11 +964,15 @@ test('a reused captured stage restores the authored backend after an override is
     writeFileSync(join(app,'.exact/backend-origin'),'http://127.0.0.1:4412');
     configure(stage,true,parseSync);
     expect(readFileSync(join(stage,'app.ts'),'utf8')).toContain('4412');
+    const backend = () => JSON.parse(readFileSync(join(stage,'__exact_backend.json'),'utf8'));
+    expect(backend()).toEqual({origin:'http://127.0.0.1:4412',warning:expect.stringContaining('overriding')});
     rmSync(join(app,'.exact/backend-origin'));configure(stage,true,parseSync);
     expect(readFileSync(join(stage,'app.ts'),'utf8')).toBe(source);
+    expect(backend()).toEqual({origin:'http://127.0.0.1:4400',warning:null});
     // An authored edit equal to the previous injection is still a new captured source.
     const edited=source.replace('4400','4412');writeFileSync(join(stage,'__exact_backend_source.json'),JSON.stringify(edited));
     configure(stage,true,parseSync);expect(readFileSync(join(stage,'app.ts'),'utf8')).toBe(edited);
+    expect(backend()).toEqual({origin:'http://127.0.0.1:4412',warning:null});
   } finally {if(env!==undefined) process.env.EXACT_BACKEND_ORIGIN=env;rmSync(root,{recursive:true,force:true});}
 });
 

@@ -562,7 +562,7 @@
     },
     "intents": {
       "type": "object",
-      "description": "Faces: the app's tools offered to the system's callers, compiled into each native binary (LLP 1133.023 D8). A tool with no face is offered to none of them. A face's tool must exist; its parameters are strings, numbers or bools, and a destroys tool's face names only the apple door (D10).",
+      "description": "Faces: the app's tools offered to the system's callers, compiled into each native binary (LLP 1133.023 D8). A tool with no face is offered to none of them. A face's tool must exist; its parameters are strings, numbers or bools, a destroys tool's face names only the apple door (D10), and a face that reaches the web door needs a tool with a description and a name of at most 128 characters (WebMCP).",
       "additionalProperties": false,
       "properties": {
         "entities": {
@@ -1062,7 +1062,8 @@
                 "width": { "type": "number", "minimum": 1, "maximum": 16384 },
                 "height": { "type": "number", "minimum": 1, "maximum": 16384 },
                 "minWidth": { "type": "number", "minimum": 1, "maximum": 16384 },
-                "minHeight": { "type": "number", "minimum": 1, "maximum": 16384 }
+                "minHeight": { "type": "number", "minimum": 1, "maximum": 16384 },
+                "keepRunning": { "type": "boolean", "description": "Closing the window (its close button, Alt+F4, the taskbar's Close window) hides it, and the app keeps running, its session and timers alive; launching the app again (Start, its taskbar pin, a shortcut) or a bare `focus()` shows it as it was. The app's own `close()` still ends it, as does signing out. For an app with work the person expects to go on without the window, as a chat client's or a sync's. Until the notification-area icon is built (LLP 1133.025 §14), give the person a way back and a way out of their own: a global shortcut whose action calls `focus()`, and a button whose action calls `close()`. Absent or false: the app ends with its window." }
               },
               "additionalProperties": false
             }

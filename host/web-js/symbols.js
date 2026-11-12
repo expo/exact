@@ -14,7 +14,7 @@ import { After, PropHooks, Hooks, inflight, journal, clock, data, onEnd } from "
 // place of two document-wide queries a commit (LLP 1071.001 A7).
 const Images = new Set();
 const image = e => { if (!Images.has(e)) { Images.add(e); onEnd(() => Images.delete(e)); } };
-Hooks.image = e => { const s = e.getAttribute("data-symbol-source"); if (s?.startsWith("symbol:icon|") && !e.hasAttribute("data-symbol-path") && !e.hasAttribute("data-symbol-file")) draw(e, s.slice(7)); else image(e); };
+Hooks.image = e => { const s = e.getAttribute("data-symbol-source"); if (s?.startsWith("symbol:icon|")) draw(e, s.slice(7)); else image(e); };
 
 let Table = {}, All = null; // every role: not asked for, loading, or loaded (true)
 let Pending = false;
@@ -65,8 +65,8 @@ const draw = (e, name) => {
   e.setAttribute("data-symbol-path", path); e.toggleAttribute("data-symbol-fill", !!filled);
   // An icon's paths are each filled nonzero under its own viewBox (`d`s joined by `;`), or
   // even-odd where its SVG says so (the mask's `fill-rule`, `refresh`).
-  e.toggleAttribute("data-symbol-nonzero", !!box && !evenOdd);
-  e.toggleAttribute("data-symbol-evenodd", !!box && !!evenOdd);
+  e.toggleAttribute("data-symbol-nonzero", (!!form || !!box) && !evenOdd);
+  e.toggleAttribute("data-symbol-evenodd", (!!form || !!box) && !!evenOdd);
   if (box) e.setAttribute("data-symbol-viewbox", box); else e.removeAttribute("data-symbol-viewbox");
 };
 function everyRole() {

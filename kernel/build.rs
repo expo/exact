@@ -59,6 +59,8 @@ struct PropRow {
 struct EnumDef {
     values: Vec<String>,
     default: String,
+    #[serde(default)]
+    refused: Vec<String>,
 }
 #[derive(Deserialize)]
 struct StyleRow {
@@ -744,6 +746,7 @@ fn generate(schema: &Schema, digest: u64) -> String {
     writeln!(w, "            _ => &[],").unwrap();
     writeln!(w, "        }}").unwrap();
     writeln!(w, "    }}").unwrap();
+    write_refused_enum_names(w, schema);
     for (method, doc, pred) in [
         (
             "admits_auto",
@@ -1440,8 +1443,9 @@ fn strip_prose(value: serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => serde_json::Value::Object(
             map.into_iter()
-                // A style row's `hosts` says what a host draws, which no wire carries.
-                .filter(|(k, _)| !k.starts_with('_') && k != "hosts")
+                // A style row's `hosts` says what a host draws and an enum's `refused` what
+                // an author may not write, which no wire carries.
+                .filter(|(k, _)| !k.starts_with('_') && k != "hosts" && k != "refused")
                 .map(|(k, v)| (k, strip_prose(v)))
                 .collect(),
         ),

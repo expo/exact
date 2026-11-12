@@ -477,6 +477,10 @@ padPoller(() => [...surfaces.values()].find(e => e.pads && live(e.view) === e &&
 // forgets the baseline, for positional values, and when an argument is gone, which only a whole bind returns to its
 // default. What was sent becomes the baseline only once the module accepts it.
 function bindValues(entry, module, values, at, whole = false) {
+  // The canvas's size goes first: a stamped bind may tick a new world, which
+  // frames itself for its canvas before its first tick (`Game::first_frame`).
+  const r = entry.host.getBoundingClientRect();
+  if (r.width > 0 && r.height > 0 && module.gpu_size && !module.gpu_size(entry.id, r.width, r.height)) console.error("exact gpu:", module.gpu_error());
   const named = values !== null && typeof values === "object" && !Array.isArray(values);
   const last = named && !whole ? entry.bound : null;
   const object = (keys, wire) => `{${keys.map(k => `${JSON.stringify(k)}:${wire.get(k)}`).join(",")}}`;

@@ -489,8 +489,11 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                 "exactBodyTo cannot cross the Rust module seam".into(),
             )),
         ),
-        // A two-way socket crosses as a WebSocket alone (LLP 1016.003 D5).
-        Ok(Answer::Later(r)) if r.socket && (!r.stream || r.listen.is_some() || r.is_process()) => {
+        // A two-way socket crosses as a WebSocket alone (LLP 1016.003 D5),
+        // and a listener (LLP 1133.005) not at all, socket mark or none.
+        Ok(Answer::Later(r))
+            if r.listen.is_some() || (r.socket && (!r.stream || r.is_process())) =>
+        {
             encode_result(
                 w,
                 Err(DataError::Unavailable(
@@ -498,6 +501,13 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                 )),
             )
         }
+        // Nor a byte stream: refused, never read as events instead.
+        Ok(Answer::Later(r)) if r.bytes => encode_result(
+            w,
+            Err(DataError::Unavailable(
+                "a byte stream cannot cross the Rust module seam yet".into(),
+            )),
+        ),
         Ok(Answer::Now(v)) => {
             w.u8(0);
             v.encode(w);

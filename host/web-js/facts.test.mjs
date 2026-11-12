@@ -115,6 +115,9 @@ export function R(r){data.reserved[r.source](null,null,r.name);} export function
     expect(saved.size).toBe(1); boot({text:'s'}); expect(read()[0].length).toBe(max);
     exact.surfaceRecord('world',JSON.stringify({text:'x'.repeat(max + 1)}));
     expect(saved.size).toBe(0);
+    // A canvas's `presented` is the host's fact of this launch: never kept.
+    boot({count:'n',presented:'b'}); exact.surfaceRecord('world','{"count":4,"presented":true}');
+    expect(read()).toEqual([4,true]); boot({count:'n',presented:'b'}); expect(read()).toEqual([4,false]);
     boot(); exact.surfaceRecord('world','{"count":8}'); data.keepSurfaceAnswers = false;
     boot(); expect(read()).toEqual([0]); expect(saved.size).toBe(0); data.keepSurfaceAnswers = true;
     Object.defineProperty(globalThis,'localStorage',{configurable:true,get(){throw Error('storage blocked');}});

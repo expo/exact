@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { types as utilTypes } from 'node:util';
 import { filesystemLock } from './filesystem.mjs';
 import { boundSettings, settingChanges, settingInputs, settingLines } from '../js/bake/src/__exact_env.mjs';
+import { backendOriginSelection, literalBackendOrigin } from '../js/bake/src/typescript.mjs';
 import { besidePattern } from '../host/web/beside.mjs';
 import { chooseSimulator, phone } from '../host/apple/devices.mjs';
 import { androidDevice } from './agent-android.mjs';
@@ -835,7 +836,7 @@ export function bakedSettingChanges(bin, app) {
   if (!app.manifest?.env?.length) return [];
   const record = boundSettings(bin);
   if (!record) return [`${bin}.settings.json (none, or another build's)`];
-  return settingChanges(record, process.env, app.dir).map(({ name }) => `import.meta.env.${name}`);
+  return settingChanges(record.env, process.env, app.dir).map(({ name }) => `import.meta.env.${name}`);
 }
 
 /** A packaged Windows app keeps compiler provenance in the private bake cache.
@@ -847,12 +848,7 @@ export function packagedBuildChanges(receipt, directory, app) {
   const changed = pendingBuildInputs(build, { includeSources: true });
   const products = build.products.filter(product => /\.(exe|dll)$/.test(product.path));
   if (!products.some(product => product.path.endsWith('.exe'))) changed.push('receipt has no executable');
-  for (const product of products) {
-    const path = resolve(directory, windowsFile(app, product.path));
-    try {
-      if (createHash('sha256').update(readFileSync(path)).digest('hex') !== product.sha256) changed.push(path);
-    } catch { changed.push(path); }
-  }
+  changed.push(...packagedProductChanges(build, directory, app));
   const compatibility = resolve(directory, 'compat.json');
   if (existsSync(compatibility)) {
     const assets = JSON.parse(readFileSync(compatibility, 'utf8')).embedded?.assets ?? [];
@@ -865,6 +861,13 @@ export function packagedBuildChanges(receipt, directory, app) {
     }
   }
   return changed;
+}
+
+function packagedProductChanges(build, directory, app) {
+  return build.products.filter(product => /\.(exe|dll)$/.test(product.path)).flatMap(product => {
+    const path = resolve(directory, windowsFile(app, product.path));
+    return fileDigest(path) === product.sha256 ? [] : [path];
+  });
 }
 
 /** The plans a development bake of this app left a source map beside (LLP 1012.001.000 D6), as `sourceMapReader` locators: the Linux binary's own (its dep-info names the plan in OUT_DIR) and each platform's in the bake output (Apple, web). Which one describes the running plan is the reply's digest's to say. */
@@ -1022,9 +1025,45 @@ export function otherHosts(app, kept = []) {
 }
 
 const fileDigest = path => { try { return createHash('sha256').update(readFileSync(path)).digest('hex'); } catch { return null; } };
+
+/** A native bake must name the backend this drive selected before any app process starts. `command` is the rebuild
+ * the refusal names. */
+export function refuseBackendOrigin(build, app, command = null) {
+  const source = resolve(app.dir, 'app.ts');
+  if (!existsSync(source)) return;
+  const literal = literalBackendOrigin(readFileSync(source, 'utf8'), createRequire(import.meta.url)('rolldown/utils').parseSync);
+  if (!literal) return;
+  const selected = backendOriginSelection(app.dir) ?? { origin: literal, source: 'app.ts origin' };
+  const actual = build?.backendOrigin;
+  if (!actual) throw new Error(`the native build receipt has no backend origin; ${command ? `run ${command}` : 'rebuild'} before driving this app`);
+  if (actual !== selected.origin) throw new Error(
+    `baked backend ${actual} differs from ${selected.source} ${selected.origin}; nothing was launched. ` +
+    `Rebuild for ${selected.origin}${command ? ` (${command})` : ''}, or select this baked backend explicitly with --backend ${actual}`);
+}
+
+/** Backend metadata for carriers without the default Apple build check. A portable executable's record is bound
+ * to its bytes; an interrupted bake cannot authorize the executable left from the preceding build. A packaged
+ * Windows directory carries its own receipt (host/windows/build.mjs `writePackagedReceipt`), since the bake cache
+ * keeps only a target's latest build and a directory packaged before it would lose its record. */
+export function refuseBinaryBackend(bin, app, { receipt, packaged = false, command = packaged ? `bun host/windows/build.mjs ${app.crate('windows')}` : null } = {}) {
+  let build = null;
+  if (packaged) {
+    let record = null;
+    try { record = JSON.parse(readFileSync(resolve(dirname(bin), 'receipt.json'), 'utf8')).build; } catch { /* packaged without one */ }
+    const digest = fileDigest(bin);
+    if (record?.products?.some(product => product.path.endsWith('.exe') && product.sha256 === digest)) {
+      build = record;
+      refuseStale('windows', bin, packagedProductChanges(build, dirname(bin), app), command);
+    }
+  } else if (receipt) {
+    if (existsSync(receipt)) build = JSON.parse(readFileSync(receipt, 'utf8')).build;
+  } else build = boundSettings(bin);
+  refuseBackendOrigin(build, app, command);
+}
+
 /** An Apple build's receipt: its Rust and Swift inputs by digest, then by mtime the app's own files the receipt leaves out on purpose (the root build script's watches: the contract, app.json, data, shaders, assets — what the baked plan and bundle are made from). */
 export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hashed`: this drive compared its inputs' bytes already
-  if (!existsSync(receipt)) return [];
+  if (!receipt || !existsSync(receipt)) return [];
   const { build, target, started } = JSON.parse(readFileSync(receipt, 'utf8'));
   // A file edited while the build ran is newer than what it read, though older than the receipt written at its end
   // (LLP 1116.008 D2): the build's own start bounds it, else (an older receipt) the receipt's time.

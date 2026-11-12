@@ -14,6 +14,7 @@ test = false
 bench = false
 
 [dependencies]
+ibex2-sqlite = { path = "../../../vendor/ibex/crates/ibex2-sqlite" }
 exact-logic = { path = "../../../logic" }
 exact-apple = { path = "../../../host/apple" }
 exact-apple-update = { path = "../../../host/apple-update" }

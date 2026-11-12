@@ -999,6 +999,13 @@ export function renderFrameHealthReport(report) {
   out.push(`build ${identity.build ?? 'unknown'}${identity.buildDirty ? ' (dirty)' : ''} · app build ${identity.appBuild ?? 'unknown'} · ${identity.buildKind ?? 'unknown build kind'} · ${identity.simulator === true ? 'simulator' : identity.simulator === false ? 'physical device' : 'unknown device type'}`,
     `${identity.device ?? 'unknown device'} · ${identity.os ?? 'unknown OS'} · display maximum ${identity.displayMaximumHz ?? '?'} Hz · live-agent parity ${report.scope?.liveAgentParity ?? 'unknown'}`);
   if (report.time?.clamped) out.push('Timing values were clamped; exact durations are unavailable beyond the integer range.');
+  // Every frame since the collector's reset, which the rows' late frames are a few of: bin bounds, null unmeasured
+  const core = report.coreSinceReload ?? {};
+  const bounds = value => Array.isArray(value) && value.length === 2 ? `${(Number(value[0]) / 1e6).toFixed(2)}–${value[1] == null ? '∞' : (Number(value[1]) / 1e6).toFixed(2)} ms` : 'unknown';
+  const spread = b => b ? `median ${bounds(b.median)}, p99 ${bounds(b.p99)}, maximum ${bounds(b.maximum)}` : 'unmeasured';
+  out.push(`since reset: ${core.callbacks ?? '?'} ${screen ? 'updates' : 'callbacks'} · ${screen ? '' : `frame intervals ${core.frameIntervals ?? '?'} · missed ${core.missedFrames ?? 'unknown'} · `}late ${core.lateFrames ?? 'unknown'}`,
+    `  ${screen ? '' : `frame time ${spread(core.frameTimeBoundsNs)} · `}work ${spread(core.workBoundsNs)}`);
+  if (report.otherSources?.length) out.push(`other sources: ${report.otherSources.map(s => `${s.source} (${s.retainedEvents ?? '?'} retained)`).join(', ')} · ${report.selection ?? 'one source per report'}`);
   const ms = value => value == null ? 'unknown' : `${(value / 1e3).toFixed(3)} ms`;
   for (const row of hitches) {
     if (!Array.isArray(row) || row.length !== columns.length || row.slice(0, 3).some(value => typeof value !== 'string' || !/^\d{1,20}$/.test(value)) ||
