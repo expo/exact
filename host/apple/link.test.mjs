@@ -459,4 +459,6 @@ test('outside production trust the SDK compiles for iOS 17.0, and the app keeps 
   assert.deepEqual(compiledTargets(app, 'development'), { ios: '17.0', macos: '15.0' });
   assert.deepEqual(compiledTargets(app, 'production'), { ios: '18.0', macos: '15.0' });
   assert.deepEqual(compiledTargets({ manifest: {} }, 'development'), deploymentTargets({ manifest: {} }));
+  const launching = { manifest: { launch: ['player'], host: { ios: { minimumOS: '18.0' } } } };
+  assert.deepEqual(compiledTargets(launching, 'development'), deploymentTargets(launching), 'launch Swift compiles in the host package at the app minimum');
 });
