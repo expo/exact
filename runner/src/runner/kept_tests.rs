@@ -327,7 +327,10 @@ fn async_activation_is_provisional_and_a_context_change_supersedes_its_full_requ
     r.data.ready = true;
     r.data.later = true;
     r.data_ready().unwrap();
-    let first = r.take_requests().remove(0).ticket;
+    let first = r.take_requests().remove(0);
+    // The launch's own ask, not a refresh (LLP 1162.000 D1).
+    assert!(!first.forced);
+    let first = first.ticket;
     shows(&r, "kept");
     assert!(
         !state(&r).kept_seed,

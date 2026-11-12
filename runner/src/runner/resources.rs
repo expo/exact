@@ -19,6 +19,10 @@ pub(crate) struct ResourceRow {
     pub(super) watching: Vec<String>,
     /// A stand-in waiting for its source to become ready.
     pub(super) stale: bool,
+    /// Its next ask is the launch's own, replacing a stand-in. Nobody asked
+    /// for fresh data, so the request is not sent as a refresh, and a reply
+    /// fetched for this launch may answer it (LLP 1162.000 D1).
+    pub(super) launch_ask: bool,
     /// No answer yet because the source is not ready: the resource reads pending.
     pub(super) awaiting: bool,
     pub(super) member: Option<each::Member>,

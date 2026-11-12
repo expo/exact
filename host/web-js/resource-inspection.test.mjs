@@ -600,3 +600,39 @@ test("refresh carries a Rust request's forced cache mode through runtime dispatc
     expect(observed).toEqual(['force-cache', 'no-store', 'reload', 'no-store']);
   } finally { await browser.close(); server.stop(true); }
 });
+
+test("the ask made when the source becomes ready is not a refresh, and a refresh asked while waiting is", async () => {
+  const server = runtimeServer(), browser = await suiteBrowser(), page = await browser.newPage();
+  try {
+    await page.goto(server.url.href);
+    const observed = await page.evaluate(async () => {
+      globalThis.__exactRender = true;
+      const sent = [], callbacks = [];
+      globalThis.fetch = async (_input, init) => { sent.push(init.cache ?? 'default'); return new Response('reply'); };
+      const rt = await import('/host/web-js/rt.js');
+      const { createRequestExecutor, setAppGrantSet, appGrantSet } = await import('/host/web-js/admission.js');
+      setAppGrantSet();
+      rt.clock.agent = true;
+      rt.data.fetch = createRequestExecutor('test.launch', appGrantSet());
+      rt.data.parse = () => ({ v: 'reply' });
+      let ready = false;
+      rt.data.answer = () => ready ? { req: { method: 'GET', url: '/assets/cache.txt', headers: [] } } : null;
+      rt.data.ready = f => callbacks.push(f);
+      let a, b;
+      rt.mount(root => {
+        a = rt.res('a', 'a', () => [], undefined, undefined, 's', '');
+        b = rt.res('b', 'b', () => [], undefined, undefined, 's', '');
+        rt.hd(root, { headTitle: () => a() + b() });
+      });
+      rt.commit(() => rt.R(b)); // asked while its source is not ready
+      ready = true;
+      for (const f of callbacks) f();
+      while (rt.inflight.n) await new Promise(resolve => setTimeout(resolve, 0));
+      const launch = sent.splice(0).sort();
+      rt.commit(() => rt.R(a));
+      while (rt.inflight.n) await new Promise(resolve => setTimeout(resolve, 0));
+      return { launch, later: sent };
+    });
+    expect(observed).toEqual({ launch: ['default', 'reload'], later: ['reload'] });
+  } finally { await browser.close(); server.stop(true); }
+});

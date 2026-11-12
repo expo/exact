@@ -500,7 +500,8 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
       if (r.ticket && equal(a, r.ticket.args)) return r.value;
     }
     let ans; Inspections.begin(r);
-    try { ans = ask(source, a, name, false, forced); Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
+    const refresh = forced && !r.launch; // the launch's own ask is sent as an ordinary one (LLP 1162.000 D1, `launch_ask` in the runner)
+    try { ans = ask(source, a, name, false, refresh); if (ans) r.launch = false; Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
     catch (e) {
       if (data.threwRead?.()) r.store = true;
       if (e instanceof Refusal && !(reconciling && e instanceof Failed)) throw e;
@@ -524,7 +525,7 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
     }
     if (ans && (ans.req || ans.promise || ans.stream)) {
       hold();
-      const t = { id: ++Ticket, name, owner: r, args: a, forced, req: ans.req && { ...ans.req, forced }, promise: ans.promise, call: ans.call, stream: ans.stream, upload: ans.upload, baked, r, origin: Ov.tick(), generation: r.inspection?.request }; if (t.call) t.call.ticket = t; if (baked) say(`${name} shows its build-time answer until its source answers`);
+      const t = { id: ++Ticket, name, owner: r, args: a, forced: refresh, req: ans.req && { ...ans.req, forced: refresh }, promise: ans.promise, call: ans.call, stream: ans.stream, upload: ans.upload, baked, r, origin: Ov.tick(), generation: r.inspection?.request }; if (t.call) t.call.ticket = t; if (baked) say(`${name} shows its build-time answer until its source answers`);
       if (r.ticket) say(`forget ticket ${r.ticket.id} (${name})`);
       r.ticket = t; flag(pend, true); send(t, land(t));
       return r.value;
@@ -532,6 +533,7 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
     // Not ready (Rust loads after first paint): the bake's answer stands, not pending, asked at `ready` as at data_ready (review B3); another compiled
     // value stands, stale, forced then (LLP 1027 D4). That ask's refusal fails it, not the commit; a commit refused otherwise is followed by one failing it.
     const shown = baked && eq(a, r.settled);
+    r.launch = !forced && r.launch !== false; // a refresh asked while waiting stays one
     if (!shown) { hold(); flag(pend, true); }
     if (!r.waiting) { r.waiting = true; data.ready(() => { r.waiting = false; r.forced = r.reconciling = true; r.baked ||= shown; recommit(() => { r.ov = null; W(ver, ver.n.v + 1); W(pend, false); }, `data ready ${name}`); }); }
     return r.value;

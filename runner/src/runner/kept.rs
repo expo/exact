@@ -409,7 +409,7 @@ impl<D: DataSource> Runner<D> {
                 origin: 0,
             });
             match ready {
-                true => self.refresh_next.push(i),
+                true => self.ask_at_launch(i),
                 false => self.resources[i].stale = true,
             }
         }
@@ -642,6 +642,16 @@ impl<D: DataSource> Runner<D> {
             .collect()
     }
 
+    /// The asks `data_ready` makes are the launch's own, but for a resource
+    /// a refresh already waits to ask.
+    fn launch_asks(&mut self, stale: &[usize]) {
+        for &i in stale {
+            if !self.refresh_next.contains(&i) {
+                self.resources[i].launch_ask = true;
+            }
+        }
+    }
+
     /// The data source is ready — a host loaded its TypeScript module after
     /// the first pixel (LLP 1027 D4): every deferred resource shown
     /// from a placeholder is asked again, and every send made before now
@@ -684,7 +694,15 @@ impl<D: DataSource> Runner<D> {
                 return Ok(None);
             }
             self.owe(&stale);
-            return (self.reasking(|r| r.commit_again(stale, "data_ready"))).map(Some);
+            self.launch_asks(&stale);
+            let result = self.reasking(|r| r.commit_again(stale.clone(), "data_ready"));
+            // Refused, its resources failed: what asks them next is a refresh.
+            if result.is_err() {
+                for i in stale {
+                    self.resources[i].launch_ask = false;
+                }
+            }
+            return result.map(Some);
         }
         let what = format!(
             "data_ready ({} asked again, {} sent)",
@@ -693,6 +711,7 @@ impl<D: DataSource> Runner<D> {
         );
         let was_poisoned = self.poisoned;
         let checkpoint = self.checkpoint();
+        self.launch_asks(&stale);
         self.refresh_next.extend(&stale);
         self.owe(&stale);
         let result = if self.poisoned {

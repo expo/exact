@@ -950,17 +950,19 @@ impl<D: DataSource> Runner<D> {
         if ready && device_state {
             // … and asked now when it can answer, showing the rendered
             // answer until it does.
-            runner.refresh_next.extend(
-                (0..seeded.len()).filter(|&i| seeded[i] && runner.plan.resources[i].reader),
-            );
+            for i in 0..seeded.len() {
+                if seeded[i] && runner.plan.resources[i].reader {
+                    runner.ask_at_launch(i);
+                }
+            }
         }
         // An open stream's rendered answer shows until the stream, asked
         // again, answers: now when its source can, else at `data_ready`.
         for i in open {
             if !ready {
                 runner.resources[i].stale = true;
-            } else if !runner.refresh_next.contains(&i) {
-                runner.refresh_next.push(i);
+            } else {
+                runner.ask_at_launch(i);
             }
         }
         runner.pending_mut = vec![false; runner.plan.mutations.len()];

@@ -805,7 +805,18 @@ impl<D: DataSource> Runner<D> {
 
     /// Ask resource `r` again, forced, at the next settlement that can.
     pub(super) fn force_refresh(&mut self, r: usize) {
+        self.resources[r].launch_ask = false;
         if !self.refresh_next.contains(&r) {
+            self.refresh_next.push(r);
+        }
+    }
+
+    /// Ask resource `r` in place of the stand-in the launch shows, at the
+    /// next settlement that can. The ask replaces whatever is in flight, as
+    /// a refresh does, and is sent as an ordinary one (LLP 1162.000 D1).
+    pub(super) fn ask_at_launch(&mut self, r: usize) {
+        if !self.refresh_next.contains(&r) {
+            self.resources[r].launch_ask = true;
             self.refresh_next.push(r);
         }
     }
@@ -880,8 +891,11 @@ impl<D: DataSource> Runner<D> {
         let reasks = self.overrun_reasks(target, &args, forced);
         self.forget_ticket(target);
         let first = self.pending.len();
+        let launch = matches!(target, Target::Resource(i)
+            if std::mem::take(&mut self.resources[i].launch_ask));
+        let refresh = forced && !launch;
         for request in requests {
-            self.append_request(target, source.clone(), args.clone(), request, forced);
+            self.append_request(target, source.clone(), args.clone(), request, refresh);
         }
         let origin = self.pending[first].origin;
         for p in &mut self.pending[first..] {
@@ -897,13 +911,14 @@ impl<D: DataSource> Runner<D> {
             && request.surface.is_none()
     }
 
+    /// `refresh`: the executor bypasses what it holds for the request.
     pub(super) fn append_request(
         &mut self,
         target: Target,
         source: String,
         args: Vec<Value>,
         request: Request,
-        forced: bool,
+        refresh: bool,
     ) {
         let keepable = Self::keepable(target, &request);
         let ticket = self.next_ticket;
@@ -976,7 +991,7 @@ impl<D: DataSource> Runner<D> {
                     _ => RequestClass::Ordered,
                 },
                 request,
-                forced,
+                forced: refresh,
             }));
         // An abort heard before this request was enqueued (in the same
         // commit, or a worker's turn that landed late) names it now.
