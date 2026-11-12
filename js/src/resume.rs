@@ -133,6 +133,7 @@ impl Module {
                         .map_err(DataError::Unavailable)?;
                 }
             } else {
+                self.host.secrets.landed(ticket);
                 engine
                     .call("__exact_fulfill", [&ticket.to_string(), &outcome_text, ""])
                     .map_err(|e| DataError::Unavailable(format!("`{source}` threw: {e}")))?;

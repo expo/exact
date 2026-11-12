@@ -1047,6 +1047,7 @@ mod tests {
                 target: Target::Mutation(0),
                 source: "source",
                 args: &[Value::str("ab")],
+                fetch: None,
                 continuation: Some(1),
             }],
         );

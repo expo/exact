@@ -233,6 +233,8 @@ pub struct InFlight<'a> {
     pub source: &'a str,
     /// The arguments it asks with.
     pub args: &'a [Value],
+    /// The request's fetch within its answer's set (LLP 1162 D2).
+    pub fetch: Option<u64>,
     /// The continuation token the source handed out for it, when it is one
     /// (`None` for a fetch or storage request, or where a forwarder can no
     /// longer tell): what tells two calls with equal arguments apart.

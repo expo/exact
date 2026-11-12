@@ -335,6 +335,7 @@ fn changing_day_during_initial_load_replaces_the_retired_read() {
             target: Target::Mutation(0),
             source: "loadCalendar",
             args: &args,
+            fetch: request.fetch,
             continuation: request.continuation,
         }],
     );

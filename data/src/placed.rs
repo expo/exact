@@ -63,9 +63,9 @@ enum Job {
     },
 }
 
-/// A call still in flight as the owner hears it: its target, source and
-/// encoded arguments, without a token.
-type Flight = (Target, String, Vec<Vec<u8>>);
+type Call = (Target, String, Vec<Vec<u8>>);
+/// A request as the owner hears it: its call and fetch (LLP 1162 D2).
+type Flight = (Call, Option<u64>);
 
 type Retirement = (Vec<Flight>, Vec<(String, Vec<u8>)>);
 
@@ -78,7 +78,7 @@ struct OwnerQueue {
     /// takes it out, as the instance lets a parked call go, and its job is
     /// then never sent: it would begin after the marker that let it go, and
     /// park for good.
-    unqueued: HashMap<u64, Option<Flight>>,
+    unqueued: HashMap<u64, Option<Call>>,
 }
 
 /// A dispatched turn's entry in [`OwnerQueue::unqueued`], removed when its
@@ -103,7 +103,7 @@ impl OwnerQueue {
                 // lets go stays let go. What stays in flight is what both say
                 // is; the newer storage snapshot stands.
                 let (mut in_flight, snapshot) = retirement;
-                in_flight.retain(|entry| was.contains(entry));
+                in_flight.retain(|(call, _)| was.iter().any(|(prior, _)| prior == call));
                 *current = Some((in_flight, snapshot));
                 return;
             }
@@ -242,7 +242,7 @@ pub struct Placed<D> {
     owner: Option<Arc<Mutex<OwnerQueue>>>,
     recorded: BTreeMap<u64, Recorded>,
     hosted: HashMap<u64, u64>,
-    sent: HashMap<Key, u64>,
+    sent: HashSet<(Key, u64)>,
     kept: HashMap<u64, Option<u64>>,
     deliveries: HashMap<u64, Arc<Mutex<Option<Outcome>>>>,
     delivery_waiters: HashSet<u64>,
@@ -299,7 +299,7 @@ impl<D: DataSource + 'static> Placed<D> {
             owner: None,
             recorded: BTreeMap::new(),
             hosted: HashMap::new(),
-            sent: HashMap::new(),
+            sent: HashSet::new(),
             kept: HashMap::new(),
             deliveries: HashMap::new(),
             delivery_waiters: HashSet::new(),
@@ -434,7 +434,9 @@ impl<D: DataSource + 'static> Placed<D> {
                 Ok(Some(Answer::Later(request)))
             }
             Some(Stage::Yielded) => {
-                self.sent.remove(&call_key);
+                if let Some(fetch) = fetch {
+                    self.sent.remove(&(call_key.clone(), fetch));
+                }
                 self.record(
                     call_key,
                     Recorded::Resume {
@@ -460,7 +462,7 @@ impl<D: DataSource + 'static> Placed<D> {
         if let Some(fetch) = request.fetch.filter(|fetch| {
             request.has_effects() && self.inner.as_ref().is_some_and(|s| s.keeps_sent(*fetch))
         }) {
-            self.sent.insert(k.clone(), fetch);
+            self.sent.insert((k.clone(), fetch));
         }
         if let Some(child) = request.continuation {
             if self
@@ -515,16 +517,22 @@ impl<D: DataSource + 'static> Placed<D> {
                             if let Ok(source) = &mut source {
                                 let decoded: Vec<_> = calls
                                     .iter()
-                                    .filter_map(|(target, name, args)| {
-                                        Some((*target, name.as_str(), decode_args(args).ok()?))
+                                    .filter_map(|((target, name, args), fetch)| {
+                                        Some((
+                                            *target,
+                                            name.as_str(),
+                                            decode_args(args).ok()?,
+                                            *fetch,
+                                        ))
                                     })
                                     .collect();
                                 let view: Vec<_> = decoded
                                     .iter()
-                                    .map(|(target, name, args)| InFlight {
+                                    .map(|(target, name, args, fetch)| InFlight {
                                         target: *target,
                                         source: name,
                                         args,
+                                        fetch: *fetch,
                                         continuation: None,
                                     })
                                     .collect();
@@ -636,21 +644,20 @@ impl<D: DataSource + 'static> Placed<D> {
 /// Tell the instance on its owner what is still in flight, without tokens:
 /// the proxy's mean nothing there. An argument that doesn't cross leaves its
 /// request out, which only lets its call go too.
-fn forget<D: DataSource>(
-    source: &mut D,
-    store: &Store,
-    in_flight: &[(Target, String, Vec<Vec<u8>>)],
-) {
-    let decoded: Vec<(Target, &str, Vec<Value>)> = in_flight
+fn forget<D: DataSource>(source: &mut D, store: &Store, in_flight: &[Flight]) {
+    let decoded: Vec<_> = in_flight
         .iter()
-        .filter_map(|(target, name, args)| Some((*target, name.as_str(), decode_args(args).ok()?)))
+        .filter_map(|((target, name, args), fetch)| {
+            Some((*target, name.as_str(), decode_args(args).ok()?, *fetch))
+        })
         .collect();
     let view: Vec<InFlight<'_>> = decoded
         .iter()
-        .map(|(target, source, args)| InFlight {
+        .map(|(target, source, args, fetch)| InFlight {
             target: *target,
             source,
             args,
+            fetch: *fetch,
             continuation: None,
         })
         .collect();
@@ -1068,7 +1075,12 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
                         Some(Recorded::Answer { .. })
                     )
                 })
-                .map(|f| (f.target, f.source.to_string(), encode_args(f.args)))
+                .map(|f| {
+                    (
+                        (f.target, f.source.to_string(), encode_args(f.args)),
+                        f.fetch,
+                    )
+                })
                 .collect();
             let snapshot = envelope::snapshot(store, &self.grants);
             let mut queue = owner.lock().unwrap();
@@ -1076,9 +1088,10 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
             // go is never sent: under the same lock as the marker, so it is
             // either queued before the marker or not at all. By key, as the
             // instance lets parked calls go (a wrapper may not pass tokens).
-            queue
-                .unqueued
-                .retain(|_, key| key.as_ref().is_none_or(|key| view.contains(key)));
+            queue.unqueued.retain(|_, key| {
+                key.as_ref()
+                    .is_none_or(|key| view.iter().any(|(call, _)| call == key))
+            });
             queue.forgotten((view, snapshot));
         } else if let Some(inner) = self.inner.as_mut() {
             inner.forgotten(store, in_flight);
@@ -1313,7 +1326,13 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         let kept = let_go
             .iter()
             .map(|f| {
-                let child = self.sent.remove(&key(Some(f.target), f.source, f.args))?;
+                let child = f.fetch?;
+                if !self
+                    .sent
+                    .remove(&(key(Some(f.target), f.source, f.args), child))
+                {
+                    return None;
+                }
                 let token = self.token().ok()?;
                 self.kept.insert(token, Some(child));
                 Some(token)
@@ -1321,7 +1340,12 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
             .collect();
         let calls = let_go
             .iter()
-            .map(|f| (f.target, f.source.to_owned(), encode_args(f.args)))
+            .map(|f| {
+                (
+                    (f.target, f.source.to_owned(), encode_args(f.args)),
+                    f.fetch,
+                )
+            })
             .collect();
         let unsent = owner.lock().unwrap().turn(Job::Keep {
             calls,

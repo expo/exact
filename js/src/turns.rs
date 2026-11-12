@@ -23,13 +23,18 @@ impl Module {
     }
 
     /// Whether anything in the module may yet settle a waiting answer: a
-    /// fetch, a storage step, a stream, a yield. The module's storage queued or in flight counts, an answer's or the
+    /// fetch, a storage step, a stream, a yield, or a re-ask still owed after
+    /// progress: it may own an unclaimed fetch (LLP 1162 D2).
+    /// The module's storage queued or in flight counts, an answer's or the
     /// background's (LLP 1097 D2: an answer may await background work).
     pub(crate) fn outstanding(&self) -> bool {
         !self.streams.is_empty()
             || self.host.module_outstanding > 0
             || self.background.state.queued + self.background.state.in_flight > 0
-            || self.parked.iter().any(|(_, p)| p.ticket != WAITING)
+            || self
+                .parked
+                .iter()
+                .any(|(_, p)| p.ticket != WAITING || p.progress < self.progress)
     }
 
     /// Ask a waiting answer again when something landed since it parked,

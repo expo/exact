@@ -194,6 +194,7 @@ impl<D: DataSource> Runner<D> {
                 target: p.target,
                 source: &p.source,
                 args: &p.args,
+                fetch: p.fetch,
                 continuation: p.continuation,
             })
             .collect();

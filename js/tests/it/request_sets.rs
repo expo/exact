@@ -28,6 +28,10 @@ component App
     send output = shared()
   action waiter(name: string)
     send output = waiter(name)
+  action ownership(role: string)
+    send output = ownership(role)
+  action handoff(role: string)
+    send output = handoff(role)
   action gone
     send output = gone()
   action rejected
@@ -114,6 +118,7 @@ fn deliver(
 
 fn run(dispatch: Dispatch) -> Outcome {
     match dispatch {
+        Dispatch::Again => Dispatch::again_outcome(),
         Dispatch::Run(Work::Now(work)) => work(),
         Dispatch::Run(Work::Later(work)) => {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -274,6 +279,7 @@ fn twenty_waiters_own_the_fetches_a_shared_reply_runs() {
             target: Target::Resource(i + 1),
             source: "waiter",
             args: a,
+            fetch: waits[i].fetch,
             continuation: waits[i].continuation,
         })
         .collect();
@@ -299,6 +305,7 @@ fn twenty_waiters_own_the_fetches_a_shared_reply_runs() {
             target: Target::Resource(i + 1),
             source: "waiter",
             args: a,
+            fetch: requests[i].as_ref().unwrap().fetch,
             continuation: None,
         })
         .collect();
@@ -318,6 +325,133 @@ fn twenty_waiters_own_the_fetches_a_shared_reply_runs() {
             Some(Answer::Now(value("mine")))
         );
     }
+    assert_eq!(m.calls_open(), Some(0));
+}
+
+#[test]
+fn an_observer_cannot_claim_a_live_owners_continuation_fetch() {
+    let (mut m, mut s) = (module(), store());
+    let loader = Target::Resource(0);
+    let observer = Target::Resource(1);
+    let owner = Target::Resource(2);
+    let loader_args = [Value::str("loader")];
+    let observer_args = [Value::str("observer")];
+    let owner_args = [Value::str("owner")];
+    let load = start(&mut m, &mut s, loader, "ownership", &loader_args);
+    let b = start(&mut m, &mut s, observer, "ownership", &observer_args).remove(0);
+    assert!(matches!(
+        m.dispatch(b.continuation.unwrap(), &s),
+        Dispatch::Held
+    ));
+    let a = start(&mut m, &mut s, owner, "ownership", &owner_args).remove(0);
+    assert!(matches!(
+        m.dispatch(a.continuation.unwrap(), &s),
+        Dispatch::Held
+    ));
+    assert_eq!(
+        deliver(
+            &mut m,
+            &mut s,
+            loader,
+            "ownership",
+            &loader_args,
+            &load[0],
+            "loaded"
+        ),
+        Some(Answer::Now(value("loaded")))
+    );
+    let mut released = m.release(&s);
+    let mut again = |token| {
+        let at = released
+            .iter()
+            .position(|(t, _)| *t == token)
+            .expect("the waiter is re-asked");
+        run(released.remove(at).1)
+    };
+    let outcome = again(b.continuation.unwrap());
+    let b = later(
+        m.parse_for(observer, &mut s, "ownership", &observer_args, outcome)
+            .unwrap(),
+    );
+    assert!(b.continuation.is_some(), "the observer still waits");
+    assert!(b.fetch.is_none(), "the live owner's detail stays its own");
+    let outcome = again(a.continuation.unwrap());
+    let detail = later(
+        m.parse_for(owner, &mut s, "ownership", &owner_args, outcome)
+            .unwrap(),
+    );
+    assert_eq!(detail.url, "https://context.test/detail");
+    assert!(m.more_for(observer).is_empty());
+    m.forgotten(
+        &s,
+        &[InFlight {
+            target: owner,
+            source: "ownership",
+            args: &owner_args,
+            fetch: detail.fetch,
+            continuation: None,
+        }],
+    );
+    assert_eq!(m.in_flight(), 1);
+    assert_eq!(
+        deliver(
+            &mut m,
+            &mut s,
+            owner,
+            "ownership",
+            &owner_args,
+            &detail,
+            "detail"
+        ),
+        Some(Answer::Now(value("detail")))
+    );
+    assert_eq!(m.calls_open(), Some(0));
+}
+
+#[test]
+fn a_waiter_claims_a_finished_owners_continuation_fetch() {
+    let (mut m, mut s) = (module(), store());
+    let owner = Target::Resource(0);
+    let waiter = Target::Resource(1);
+    let owner_args = [Value::str("owner")];
+    let waiter_args = [Value::str("waiter")];
+    let load = start(&mut m, &mut s, owner, "handoff", &owner_args);
+    let wait = start(&mut m, &mut s, waiter, "handoff", &waiter_args).remove(0);
+    assert!(matches!(
+        m.dispatch(wait.continuation.unwrap(), &s),
+        Dispatch::Held
+    ));
+    assert_eq!(
+        deliver(
+            &mut m,
+            &mut s,
+            owner,
+            "handoff",
+            &owner_args,
+            &load[0],
+            "loaded"
+        ),
+        Some(Answer::Now(value("owner")))
+    );
+    let (_, dispatch) = m.release(&s).pop().expect("the waiter is re-asked");
+    let orphan = later(
+        m.parse_for(waiter, &mut s, "handoff", &waiter_args, run(dispatch))
+            .unwrap(),
+    );
+    assert_eq!(orphan.url, "https://context.test/orphan");
+    assert_eq!(
+        deliver(
+            &mut m,
+            &mut s,
+            waiter,
+            "handoff",
+            &waiter_args,
+            &orphan,
+            "adopted"
+        ),
+        Some(Answer::Now(value("adopted")))
+    );
+    assert_eq!(m.in_flight(), 0);
     assert_eq!(m.calls_open(), Some(0));
 }
 
@@ -519,6 +653,7 @@ fn a_timer_adopts_the_fetch_it_names_when_siblings_have_different_wakes() {
         target,
         source: "timerSet",
         args: &[],
+        fetch: requests[1].fetch,
         continuation: None,
     };
     let (token, request) = m

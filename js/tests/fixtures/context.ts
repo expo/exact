@@ -37,6 +37,9 @@ function answer(source: string, args: unknown[], store: any): unknown {
   if (source === "wave") return wave();
   if (source === "shared") return sharedAnswer();
   if (source === "waiter") return waiter(String(args[0]));
+  if (source === "ownership") return ownership(String(args[0]));
+  if (source === "handoff") return handoff(String(args[0]));
+  if (source === "secret" && args[0] === "protected") return protectedPosts(store);
   if (source === "gone") return letGoSet();
   if (source === "rejected") return { text: String(rejectedFetches) };
   if (source === "throws") { void fetch(`${API}/before-throw`); throw new Error("after sending"); }
@@ -90,4 +93,36 @@ async function timerSet(): Promise<{ text: string }> {
     fetch(`${API}/timed-first`, { signal }), fetch(`${API}/timed-second`),
   ]);
   return { text: String(replies.length) };
+}
+
+let resolveDetail: (text: string) => void;
+const detailDone = new Promise<string>(resolve => { resolveDetail = resolve; });
+async function ownership(role: string): Promise<{ text: string }> {
+  if (role === "observer") return { text: await detailDone };
+  const loaded = await load();
+  if (role === "loader") return { text: loaded };
+  const text = await (await fetch(`${API}/detail`)).text();
+  resolveDetail(text);
+  return { text };
+}
+
+let resolveHandoff: (text: string) => void;
+const handedOff = new Promise<string>(resolve => { resolveHandoff = resolve; });
+function handoff(role: string): unknown {
+  if (role === "waiter") return handedOff.then(text => ({ text }));
+  void load().then(async () => {
+    resolveHandoff(await (await fetch(`${API}/orphan`)).text());
+  });
+  return { text: "owner" };
+}
+
+function protectedPosts(store: any): Promise<{ text: string }> {
+  return store.exclusive("token", async () => {
+    const values = await Promise.all(["a", "b"].map(async name => {
+      const text = await (await fetch(`${API}/protected/${name}`, { method: "POST" })).text();
+      store.set("token", `${store.get("token")}/${name}:${text}`);
+      return text;
+    }));
+    return { text: values.join("/") };
+  });
 }

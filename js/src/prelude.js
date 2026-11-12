@@ -1142,7 +1142,7 @@
     var due = timers.wait(call), later = due === undefined || due > timers.now();
     if (moduleWide) {
       var unclaimed;
-      pending.forEach(function (p, ticket) { if (unclaimed === undefined && !p.claimed && !p.stream && !p.module) unclaimed = ticket; });
+      pending.forEach(function (p, ticket) { if (unclaimed === undefined && !p.claimed && !p.stream && !p.module && (!p.call || p.call.status !== "pending" || p.call.letGo || !calls.has(p.call.id))) unclaimed = ticket; });
       if (unclaimed !== undefined) return claim(call, unclaimed);
       var left = false;
       // Never the background's: only its own round holds the storage

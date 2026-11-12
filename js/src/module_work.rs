@@ -74,8 +74,8 @@ impl Module {
         forget
     }
 
-    /// The let-go requests the runner keeps: the call set aside on each
-    /// one's key has its fetch adopted, and its token is that fetch's ticket.
+    /// The let-go requests the runner keeps: each key and fetch identifies
+    /// its parked request (LLP 1162 D2), whose adopted token is its ticket.
     /// Every call set aside is then forgotten, its other fetches rejected,
     /// unless the commit was `refused` and put its request back in flight:
     /// then it is parked again, and the call that replaced it forgotten.
@@ -91,7 +91,8 @@ impl Module {
         let mut forget = Vec::new();
         for f in let_go {
             let key = Module::key(Some(f.target), f.source, f.args);
-            let Some(at) = (self.work.calls.iter()).position(|(k, p)| *k == key && p.effects)
+            let Some(at) = (self.work.calls.iter())
+                .position(|(k, p)| *k == key && Some(p.ticket) == f.fetch && p.effects)
             else {
                 kept.push(None);
                 continue;
