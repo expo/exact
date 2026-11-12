@@ -178,7 +178,9 @@ impl<D: DataSource> Runner<D> {
         else {
             return false;
         };
-        if self.pending[pos].replay_unsafe {
+        if self.pending[pos].replay_unsafe
+            || self.pending.iter().filter(|p| p.target == target).count() > 1
+        {
             return false;
         }
         let reasks = self.pending[pos].reasks;

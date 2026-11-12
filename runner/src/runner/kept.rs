@@ -797,6 +797,7 @@ impl<D: DataSource> Runner<D> {
             let answer = self
                 .data
                 .answer_for(target, &mut self.store, &source, &args);
+            let answer = self.single_answer(target, answer);
             self.refuse_locked(answer)
         };
         // What its turn sent as an answer (LLP 1016.000 D7, the amendment

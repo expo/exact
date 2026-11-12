@@ -433,6 +433,7 @@ impl<D: DataSource> Runner<D> {
             self.module_send(target, source, args)
         } else {
             let answer = self.data.answer_for(target, &mut self.store, source, args);
+            let answer = self.single_answer(target, answer);
             self.refuse_locked(answer)
         };
         // What its source staged on sockets goes out only with an answer

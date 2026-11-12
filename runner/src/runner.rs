@@ -13,6 +13,9 @@ mod background;
 mod commit;
 mod control;
 mod errors;
+mod reply;
+#[cfg(test)]
+mod request_set_tests;
 pub use errors::RunnerError;
 mod event;
 pub mod faults;

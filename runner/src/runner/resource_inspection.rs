@@ -57,7 +57,13 @@ impl<D: DataSource> Runner<D> {
                 } else {
                     self.inspection_id()
                 };
-                self.pending[at].inspection_generation = generation;
+                for p in self
+                    .pending
+                    .iter_mut()
+                    .filter(|p| p.target == Target::Resource(i))
+                {
+                    p.inspection_generation = generation;
+                }
                 self.ids.work.resources[i].request = generation;
             } else if self.failed_args[i].is_some() {
                 self.ids.work.resources[i].request = self.inspection_id();

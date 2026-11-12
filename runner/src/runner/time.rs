@@ -266,20 +266,26 @@ impl<D: DataSource> Runner<D> {
             }
             // A stream keeps no reply to wait for, and a refused request
             // never ran: those are asked now, as before.
-            let flight = self.pending.iter_mut().find(|p| {
+            let mut in_flight = false;
+            let mut log = None;
+            for p in self.pending.iter_mut().filter(|p| {
                 p.target == crate::Target::Resource(i)
                     && p.stream.is_none()
                     && !p.refused
                     && p.refusal.is_none()
-            });
-            match flight {
-                Some(p) if p.ask_again => {}
-                Some(p) => {
+            }) {
+                in_flight = true;
+                if !p.ask_again {
                     p.ask_again = true;
-                    let (ticket, name) = (p.ticket, self.target_name(crate::Target::Resource(i)));
-                    self.log(super::lines::waits_for(topic, ticket, &name));
+                    log.get_or_insert(p.ticket);
                 }
-                None => which.push(i),
+            }
+            if let Some(ticket) = log {
+                let name = self.target_name(crate::Target::Resource(i));
+                self.log(super::lines::waits_for(topic, ticket, &name));
+            }
+            if !in_flight {
+                which.push(i);
             }
         }
         // Each reader asks again under its own last ask's origin (LLP 1133.002 D12).

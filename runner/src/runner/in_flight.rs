@@ -95,8 +95,8 @@ impl<D: DataSource> Runner<D> {
         }
     }
 
-    /// Drop the request in flight for `target`, if any: its reply, when it
-    /// comes, is dropped too (a `POST` already sent is not unsent — LLP 1016 D5).
+    /// Drop the requests in flight for `target`: their replies are dropped too
+    /// (a `POST` already sent is not unsent — LLP 1016 D5).
     pub(super) fn forget(&mut self, target: Target) {
         self.forget_ticket(target);
         if let Target::Mutation(_) = target {
@@ -105,13 +105,13 @@ impl<D: DataSource> Runner<D> {
         self.sync_pending_flags();
     }
 
-    /// Let go of `target`'s request in flight, keeping a send that waits
+    /// Let go of `target`'s requests in flight, keeping a send that waits
     /// for the source; `false` keeps a child (LLP 1133.007 D13).
     pub(super) fn forget_ticket(&mut self, target: Target) -> bool {
         if self.holds_child(target) {
             return false;
         }
-        if let Some(pos) = self.pending.iter().position(|p| p.target == target) {
+        while let Some(pos) = self.pending.iter().position(|p| p.target == target) {
             let p = self.pending.remove(pos);
             self.note_retired(&p);
             let t = p.ticket;

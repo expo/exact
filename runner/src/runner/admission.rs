@@ -82,7 +82,7 @@ impl<D: DataSource> Runner<D> {
     }
 
     /// Record a host admission refusal on a still-current ticket. Repeating
-    /// refusals cannot grow a queue: there is at most one ticket per target.
+    /// refusals cannot grow a queue: each request already has its ticket.
     pub fn refuse_request(&mut self, ticket: u64, reason: &'static str, ordered: bool) {
         if let Some(pending) = self.pending.iter_mut().find(|p| p.ticket == ticket) {
             pending.refusal = Some((reason, ordered));
@@ -302,6 +302,7 @@ impl<D: DataSource> Runner<D> {
             .map(|p| (Some(p.args.clone()), p.ask_again, p.write, p.upload, p.sent))
             .unwrap_or_default();
         self.pending.retain(|p| p.ticket != ticket);
+        self.forget_ticket(target);
         self.forgot = true;
         self.sync_pending_flags();
         let name = self.target_name(target);
