@@ -501,7 +501,7 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
       if (r.ticket && equal(a, r.ticket.args)) return r.value;
     }
     let ans; Inspections.begin(r);
-    const refresh = forced && waited !== true; // the launch's own ask is sent as an ordinary one (LLP 1162.000 D1, `launch_ask` in the runner)
+    const refresh = forced && waited !== true; // the launch's own ask is sent as an ordinary one (LLP 1162.000 D1; `Runner::launch` in the runner)
     try { ans = ask(source, a, name, false, refresh); Out.push(...(ans?.effects ?? [])); } // what its source sent on a socket goes once this commit stands (LLP 1016.000 D7, amended 2026-10-18)
     catch (e) {
       if (data.threwRead?.()) r.store = true;
