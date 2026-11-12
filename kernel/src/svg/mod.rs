@@ -427,6 +427,10 @@ impl DashArray {
             return Vec::new();
         }
         let mut out: Vec<f32> = self.0.iter().map(|v| v * scale).collect();
+        // pathLength calibration can collapse or underflow the whole pattern.
+        if out.iter().all(|v| *v == 0.0) {
+            return Vec::new();
+        }
         if out.len() % 2 == 1 {
             out.extend_from_within(..);
         }

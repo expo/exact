@@ -239,6 +239,19 @@ fn paint_and_dasharray_grammar() {
         DashArray::parse("0 0").unwrap().pattern(1.0).is_empty(),
         "a zero sum is solid"
     );
+    assert!(
+        DashArray::parse("1 2").unwrap().pattern(0.0).is_empty(),
+        "pathLength calibration can collapse a nonzero pattern"
+    );
+    assert!(
+        DashArray::parse("1e-30").unwrap().pattern(1e-30).is_empty(),
+        "calibrated entries can underflow to zero"
+    );
+    assert_eq!(
+        DashArray::parse("0 2").unwrap().pattern(0.5),
+        vec![0.0, 1.0],
+        "an individual zero dash does not make a pattern solid"
+    );
     assert_eq!(DashArray::parse("1").unwrap().css(), "1");
 }
 
