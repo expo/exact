@@ -1451,7 +1451,7 @@ sits on that list carries the trade it would take.
 - **Kernel / layout** (LLP 1001, 1010): `position: fixed`; `text_align: start`;
   presentation transforms in scrollable overflow; `overscroll-behavior`;
   `scroll-snap-stop` and proximity (not admitted); AppKit and Linux desktop snapping;
-  Android snapping; Linux scroll events.
+  Android unmounted snap targets; Linux scroll events.
 - **Durable state** (LLP 1018 §5, built 2026-08-30 for Weird Castle's token): the
   `plain` tier — persisted slots, with Caltrain's "last station"; `me`; the iOS
   first-launch keychain wipe; the data-protection keychain on macOS (a bundle and a

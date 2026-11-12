@@ -68,10 +68,10 @@ const PAGE_OF_SCROLLERS: &str = r#"component App
 /// What a statement says of scroller `id`: its flags, its revision, where
 /// it is, where its rows were painted, and its farthest offset.
 fn told(words: &[i32], id: ViewId) -> (i32, i32, [f32; 6]) {
-    let s = words
-        .chunks(9)
-        .find(|s| s[0] == id as i32)
-        .unwrap_or_else(|| panic!("scroller {id} is not in {words:?}"));
+    let mut s = words;
+    while s[0] != id as i32 {
+        s = &s[11 + s[10] as usize * 2..];
+    }
     (
         s[1],
         s[2],
@@ -648,4 +648,250 @@ fn a_tap_scrolls_the_page_clear_of_its_own_sticky_header() {
     let mid = p.box_of(under).map(|b| b.rect.1 + b.rect.3 / 2.0).unwrap();
     assert!(mid >= 60.0, "{mid}");
     p.tap(under).unwrap();
+}
+
+#[test]
+fn mandatory_snap_transports_current_ranges_on_both_axes() {
+    let mut p = boot(
+        r#"component App
+  state enabled = true
+  action disable
+    enabled = false
+  view
+    column width=400 height=400
+      button testId="disable" press=disable height=20
+        text "Disable"
+      scroll testId="rail" width=400 height=100 overflow-x="scroll" overflow-y="hidden" scroll-snap-type=(enabled ? "x mandatory" : "none")
+        row
+          for i in [0, 1, 2, 3] key=i
+            box width=300 height=100 flex-shrink=0 scroll-snap-align="center"
+      scroll testId="pager" width=400 height=200 scroll-snap-type="y mandatory"
+        column
+          for i in [0, 1, 2] key=i
+            box width=400 height=200 flex-shrink=0 scroll-snap-align="end"
+          box width=400 height=500 flex-shrink=0 scroll-snap-align="center"
+"#,
+    );
+    let (rail, pager) = (id(&p, "rail"), id(&p, "pager"));
+    let limits = p.collection_scroll_limits();
+    for id in [rail, pager] {
+        let s = p.scroller(id, &limits).unwrap();
+        p.reader_revision(&s);
+    }
+    let ranges = |words: &[i32], id| {
+        let mut w = words;
+        while w[0] != id as i32 {
+            w = &w[11 + 2 * w[10] as usize..];
+        }
+        let mut rests: Vec<_> = w[11..11 + 2 * w[10] as usize]
+            .chunks_exact(2)
+            .map(|v| {
+                (
+                    f32::from_bits(v[0] as u32) / 2.0,
+                    f32::from_bits(v[1] as u32) / 2.0,
+                )
+            })
+            .collect();
+        rests.sort_by(|a, b| a.0.total_cmp(&b.0));
+        (w[9], rests)
+    };
+    let words = p.reader_scrollers(&[], 2.0).unwrap();
+    assert_eq!(
+        ranges(&words, rail),
+        (X, vec![(0., 0.), (250., 250.), (550., 550.), (800., 800.)])
+    );
+    assert_eq!(
+        ranges(&words, pager),
+        (Y, vec![(0., 0.), (200., 200.), (400., 400.), (600., 900.)])
+    );
+    assert_eq!(p.reader_scrollers(&[], 2.0), None);
+    p.reader_scrolled(rail, (260., 0.), 0).unwrap();
+    settle(&mut p);
+    let words = p.reader_scrollers(&[], 2.0).unwrap();
+    assert_eq!(
+        ranges(&words, rail).1,
+        vec![(0., 0.), (250., 250.), (550., 550.), (800., 800.)]
+    );
+    p.tap(id(&p, "disable")).unwrap();
+    settle(&mut p);
+    let words = p.reader_scrollers(&[], 2.0).unwrap();
+    assert_eq!(ranges(&words, rail), (0, vec![]));
+}
+
+#[test]
+fn snap_ownership_stops_at_hidden_but_not_clip() {
+    for overflow in ["visible", "clip", "scroll", "auto", "hidden"] {
+        let mut p = boot(&format!(
+            r#"component App
+  view
+    scroll testId="outer" width=400 height=200 overflow-x="scroll" overflow-y="hidden" scroll-snap-type="x mandatory"
+      row
+        view testId="inner" width=300 height=200 flex-shrink=0 overflow-x="{overflow}" overflow-y="{overflow}" scroll-snap-type="x mandatory" scroll-snap-align="center"
+          row
+            for i in [0, 1, 2] key=i
+              box width=300 height=200 flex-shrink=0 scroll-snap-align="start"
+        box width=600 height=200 flex-shrink=0 scroll-snap-align="end"
+        view display="none" scroll-snap-align="start"
+"#
+        ));
+        let limits = p.collection_scroll_limits();
+        let expected = if matches!(overflow, "clip" | "visible") {
+            vec![(0., 0.), (0., 0.), (300., 300.), (300., 500.), (500., 500.)]
+        } else {
+            vec![(0., 0.), (300., 500.)]
+        };
+        let s = p.scroller(id(&p, "outer"), &limits).unwrap();
+        let mut words = Vec::new();
+        p.write_snaps(&s, 1.0, &mut words);
+        let mut actual: Vec<_> = words[2..]
+            .chunks_exact(2)
+            .map(|w| (f32::from_bits(w[0] as u32), f32::from_bits(w[1] as u32)))
+            .collect();
+        actual.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        assert_eq!(actual, expected, "{overflow}");
+    }
+}
+
+#[test]
+fn snap_ranges_use_the_scrollers_coordinates_under_a_scaled_ancestor() {
+    for vertical in [false, true] {
+        let (axis, direction, width, height) = if vertical {
+            ("y", "column", 100, 300)
+        } else {
+            ("x", "row", 300, 100)
+        };
+        let source = format!(
+            r#"component App
+  view
+    view scale=2
+      scroll testId="port" width={width} height={height} overflow-x="scroll" overflow-y="scroll" scroll-snap-type="{axis} mandatory"
+        view display="flex" flex-direction="{direction}"
+          view width={width} height={height} flex-shrink=0
+          view width={} height={} flex-shrink=0 scroll-snap-align="center"
+          view width={width} height={height} flex-shrink=0
+"#,
+            if vertical { 100 } else { 150 },
+            if vertical { 150 } else { 100 }
+        );
+        let mut p = boot(&source);
+        let limits = p.collection_scroll_limits();
+        let s = p.scroller(id(&p, "port"), &limits).unwrap();
+        p.reader_revision(&s);
+        for offset in [0., 100.] {
+            p.reader_scrolled(s.id, if vertical { (0., offset) } else { (offset, 0.) }, 0)
+                .unwrap();
+            settle(&mut p);
+            let s = p.scroller(s.id, &limits).unwrap();
+            let mut words = Vec::new();
+            p.write_snaps(&s, 2., &mut words);
+            assert_eq!(
+                words,
+                vec![if vertical { Y } else { X }, 1, bits(450.), bits(450.)],
+                "axis {axis}, offset {offset}"
+            );
+        }
+    }
+}
+
+#[test]
+fn snap_areas_belong_to_their_nearest_scroll_container() {
+    let mut p = boot(
+        r#"component App
+  view
+    scroll testId="outer" width=400 height=200 overflow-x="scroll" overflow-y="hidden" scroll-snap-type="x mandatory"
+      row
+        scroll testId="inner" width=300 height=200 flex-shrink=0 overflow-x="scroll" overflow-y="hidden" scroll-snap-type="x mandatory" scroll-snap-align="center"
+          row
+            for i in [0, 1, 2] key=i
+              box width=300 height=200 flex-shrink=0 scroll-snap-align="start"
+        box width=600 height=200 flex-shrink=0 scroll-snap-align="end"
+        view display="none" scroll-snap-align="start"
+"#,
+    );
+    let limits = p.collection_scroll_limits();
+    for (name, expected) in [
+        ("outer", vec![(0., 0.), (300., 500.)]),
+        ("inner", vec![(0., 0.), (300., 300.), (600., 600.)]),
+    ] {
+        let s = p.scroller(id(&p, name), &limits).unwrap();
+        let mut words = Vec::new();
+        p.write_snaps(&s, 1.0, &mut words);
+        let mut actual: Vec<_> = words[2..]
+            .chunks_exact(2)
+            .map(|w| (f32::from_bits(w[0] as u32), f32::from_bits(w[1] as u32)))
+            .collect();
+        actual.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(actual, expected, "{name}");
+    }
+}
+
+#[test]
+fn snap_ranges_exclude_asymmetric_borders_on_both_axes() {
+    for vertical in [false, true] {
+        for (align, rest) in [("start", 300.), ("center", 225.), ("end", 150.)] {
+            let (axis, direction, width, height, card_width, card_height) = if vertical {
+                ("y", "column", 100, 300, 100, 150)
+            } else {
+                ("x", "row", 300, 100, 150, 100)
+            };
+            let mut p = boot(&format!(
+                r#"component App
+  view
+    scroll testId="port" width={width} height={height} border-left-width=10 border-right-width=30 border-top-width=20 border-bottom-width=40 border-style="solid" overflow-x="scroll" overflow-y="scroll" scroll-snap-type="{axis} mandatory"
+      view display="flex" flex-direction="{direction}"
+        view width={width} height={height} flex-shrink=0
+        view width={card_width} height={card_height} flex-shrink=0 scroll-snap-align="{align}"
+        view width={width} height={height} flex-shrink=0
+"#
+            ));
+            let limits = p.collection_scroll_limits();
+            let s = p.scroller(id(&p, "port"), &limits).unwrap();
+            assert_eq!(
+                if vertical { s.max.1 } else { s.max.0 },
+                450.,
+                "{axis} maximum excludes borders"
+            );
+            let mut words = Vec::new();
+            p.write_snaps(&s, 1., &mut words);
+            assert_eq!(
+                words,
+                vec![if vertical { Y } else { X }, 1, bits(rest), bits(rest)],
+                "{axis} {align}"
+            );
+        }
+    }
+}
+
+#[test]
+fn virtualized_snap_lists_do_not_export_an_incomplete_mounted_window() {
+    for vertical in [false, true] {
+        let (axis, flow) = if vertical {
+            ("y", "estimated-item-height=150")
+        } else {
+            (
+                "x",
+                r#"display="flex" overflow-x="scroll" overflow-y="hidden" estimated-item-width=150"#,
+            )
+        };
+        let mut p = boot(&format!(
+            r#"component App
+  view
+    list testId="port" virtualized=true width=300 height=300 {flow} scroll-snap-type="{axis} mandatory"
+      for i in range(1000) key=i
+        view testId=`card-${{i}}` width=150 height=150 flex-shrink=0 scroll-snap-align="center"
+"#
+        ));
+        let limits = p.collection_scroll_limits();
+        let s = p.scroller(id(&p, "port"), &limits).unwrap();
+        assert_eq!(p.host.kernel().find_by_test_id("card-0").len(), 1);
+        assert!(p.host.kernel().find_by_test_id("card-500").is_empty());
+        assert!(if vertical { s.max.1 } else { s.max.0 } > 8000.);
+        p.reader_revision(&s);
+        let words = p.reader_scrollers(&[], 1.).unwrap();
+        assert_eq!(
+            &words[9..],
+            &[0, 0],
+            "{axis}: incomplete targets must not truncate the fling"
+        );
+    }
 }

@@ -29,6 +29,8 @@ use super::contact::Candidate;
 use super::*;
 use std::collections::BTreeSet;
 
+mod snap;
+
 #[cfg(test)]
 mod hidden_tests;
 
@@ -458,11 +460,13 @@ impl<D: DataSource> Presenter<D> {
     }
 
     /// What the reader is told after a frame of the scrollers it knows, when
-    /// that is not what it was last told (`None`): nine words a scroller:
+    /// that is not what it was last told (`None`): eleven words plus snap ranges per scroller:
     /// id, flags (as [`Presenter::reader_under`]'s, for any drag), revision,
     /// then as float bits where it is (x, y), the offset its rows were last
     /// painted at (x, y; `drawn` names them for a scroller that has rows)
-    /// and its farthest offset (x, y), in the reader's pixels. A scroller the
+    /// and its farthest offset (x, y), in the reader's pixels; then the snap
+    /// axis (0 none, 1 x, 2 y), range count and each range's two float bits.
+    /// Ranges use the same pixels and refresh with geometry or style. A scroller the
     /// reader knew that is not in a statement is gone (its node went, or a
     /// driver took it over): the reader forgets it.
     pub fn reader_scrollers(
@@ -476,7 +480,7 @@ impl<D: DataSource> Presenter<D> {
         }
         let limits = self.collection_scroll_limits();
         let ids: Vec<ViewId> = self.reader.tracked.keys().copied().collect();
-        let mut out = Vec::with_capacity(ids.len() * 9);
+        let mut out = Vec::with_capacity(ids.len() * 11);
         for id in ids {
             let Some(mut s) = self.scroller(id, &limits) else {
                 self.reader.tracked.remove(&id);
@@ -489,6 +493,12 @@ impl<D: DataSource> Presenter<D> {
             out.extend([id as i32, self.reader_flags(&s), rev as i32]);
             let px = [s.offset.0, s.offset.1, at.0, at.1, s.max.0, s.max.1];
             out.extend(px.iter().map(|v| bits(v * scale)));
+            // A mounted window cannot choose the rest of a fling beyond it.
+            if limits.contains_key(&id) {
+                out.extend([0, 0]);
+            } else {
+                self.write_snaps(&s, scale, &mut out);
+            }
         }
         if out == self.reader.last {
             return None;

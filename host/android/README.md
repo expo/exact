@@ -305,7 +305,7 @@ Three calls cross, all in the view's pixels:
 |---|---|---|
 | `Native.under(x, y)` (`CanvasHost::under`, `Presenter::reader_under`) | reader asks, at a touch's down | Which scrollers are under the point, innermost first, then the page itself where the document is larger than the viewport (id 0). For each: its id, the axes it takes a drag from here on, its revision, its offset, its farthest offset and the box it shows in. Also the axes exact2's own gestures claim there: a swipe row sideways, a reorder grip or a height handle up and down, a transform drag both, a `pan` whatever its `touch-action` does not give to scrolling. And, from D8 on, the hosted text field the touch is for (below) |
 | `Native.scrolled(id, dx, dy, rev)` (`CanvasHost::scrolled`, `Presenter::reader_scrolled`) | reader tells | It moved scroller `id` by that much, knowing revision `rev` of it. exact2 clamps the move to the scroller's travel |
-| `Native.scrollers()` (`CanvasHost::scrollers`, `Presenter::reader_scrollers`) | exact2 tells, with each stream | For every scroller it has told the reader of: its id, its axes, its revision, where it is, the offset its rows were last painted at, and its farthest offset. Null when nothing of it changed; a scroller it leaves out is gone, and the reader forgets it |
+| `Native.scrollers()` (`CanvasHost::scrollers`, `Presenter::reader_scrollers`) | exact2 tells, with each stream | For every scroller it has told the reader of: its id, its axes, its revision, where it is, the offset its rows were last painted at, its farthest offset, and its snap axis and resting ranges. Null when nothing of it changed; a scroller it leaves out is gone, and the reader forgets it |
 
 **Who is the authority.** While a drag or a fling runs, the reader: exact2 takes each move as told. A scroll the app
 makes goes the other way (a `scrollTop` or `scrollLeft` write, `scrollIntoView` of an element, `scrollBy`, a field kept
@@ -343,6 +343,20 @@ scrolls, with the theme's thumb, shown as the scroller moves and faded by `View`
 up or down, or the one a driver's `scroll` found under the centre (found again when its node is gone); it is what
 exact2 times its collection passes for and what the reader's row heuristics follow (`Native.feed`).
 
+CSS mandatory scroll snap on x or y, with start, center or end alignment, uses the
+nearest candidate to `OverScroller`'s projected rest (LLP 1008 §9). The Linux presenter
+sends mounted areas' resting ranges with each scroller statement, so a release
+reads current geometry and style. Oversized areas remain free while covering the
+port; nested containers own their descendants, including `hidden` but not `clip`.
+Ranges use the scroller's padding box, excluding borders, in its own coordinates,
+including beneath transformed ancestors.
+A release settles every snapping container the drag or ordinary fling moved, through
+`OverScroller.startScroll` with its default timing. Interrupting a settle preserves
+the gesture's full chain for nested scrolling. Snap-stop and proximity are not
+admitted. Virtualized lists emit no snap ranges and retain the platform fling;
+unmounted targets and layout-change re-snapping are not built.
+JVM tests cover the reader; snapping has not been run on a device.
+
 Not built of D7:
 
 - **A scroller with no node of its own does not move at once** (D7.2). The recorder gives a node only to a scroller
@@ -350,8 +364,7 @@ Not built of D7:
   a scroller nested in a list's row, and the page itself are drawn inside their surroundings, so they move when
   exact2's paint arrives; the frame waits up to 2 ms for it, as it does for a drag's moves. They have no stretch at
   their ends either. Giving each a node needs the recorder to open a group inside a row's recording.
-- `scroll-snap-type` is not read by this host (a swipe row written as a snapping scroller
-  rests wherever it is let go). `keyboardDismissMode`, pull-to-refresh and a sheet's part in the hand-off are later
+- `keyboardDismissMode`, pull-to-refresh and a sheet's part in the hand-off are later
   stages. A hosted `EditText` takes part as a child of a ScrollView does (below).
 - A mouse's wheel and a trackpad do not scroll (`onGenericMotionEvent`), and nothing scrolls for TalkBack.
 - A pressable under the finger shows its press at the down, not after the platform's tap delay, so a row may flash

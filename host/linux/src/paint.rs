@@ -1323,19 +1323,19 @@ pub fn text_spec(s: &StyleProps, text: &str) -> Spec {
 
 pub use field::effective_overflow;
 
-/// A scroll container's content extent: the kernel's scrollable overflow,
-/// floored with its children's extent plus the end padding (Taffy's block
-/// containers do not always count it), never less than the box itself. A
-/// child in a block of its own (a popover's, the viewport) is elsewhere.
+/// The document extent including borders, so subtracting the border-box frame
+/// leaves the padding box's scroll range. Include end padding that Taffy's
+/// block overflow may omit. A child in a block of its own is elsewhere.
 pub fn content_size(node: &NodeRef<'_>, kernel: &Kernel) -> (f32, f32) {
     // Read the end padding the engine laid out with, a bar's cover included
     let (_, _, pad_right, pad_bottom) = kernel.layout_padding(node.key).unwrap_or_default();
-    let mut w = node.frame.width.max(node.content.0);
-    let mut h = node.frame.height.max(node.content.1);
+    let [top, right, bottom, left] = node.style.border_widths();
+    let mut w = node.frame.width.max(node.content.0 + left + right);
+    let mut h = node.frame.height.max(node.content.1 + top + bottom);
     for child in node.children() {
         if let Some(c) = kernel.node_unblocked(child) {
-            w = w.max(c.frame.x - node.frame.x + c.frame.width + pad_right);
-            h = h.max(c.frame.y - node.frame.y + c.frame.height + pad_bottom);
+            w = w.max(c.frame.x - node.frame.x + c.frame.width + pad_right + right);
+            h = h.max(c.frame.y - node.frame.y + c.frame.height + pad_bottom + bottom);
         }
     }
     (w, h)

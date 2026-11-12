@@ -59,11 +59,11 @@ fn attach(p: &mut Presenter<()>) {
 /// The reader's revision of `port`, as its statement says it.
 fn revision(p: &mut Presenter<()>, port: ViewId) -> u32 {
     let words = p.reader_scrollers(&[], 1.).unwrap();
-    let at = words
-        .chunks(9)
-        .position(|w| w[0] as ViewId == port)
-        .unwrap();
-    words[at * 9 + 2] as u32
+    let mut w = words.as_slice();
+    while w[0] as ViewId != port {
+        w = &w[11 + 2 * w[10] as usize..];
+    }
+    w[2] as u32
 }
 
 /// A port scrolled to 600, painted, with the reader holding it, as a fling's start does.

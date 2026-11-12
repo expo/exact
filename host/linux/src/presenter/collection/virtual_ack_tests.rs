@@ -62,11 +62,11 @@ fn press(p: &mut Presenter<Rows>, name: &str) {
 
 fn revision(p: &mut Presenter<Rows>, port: ViewId) -> u32 {
     let words = p.reader_scrollers(&[], 1.).unwrap();
-    let at = words
-        .chunks(9)
-        .position(|w| w[0] as ViewId == port)
-        .unwrap();
-    words[at * 9 + 2] as u32
+    let mut w = words.as_slice();
+    while w[0] as ViewId != port {
+        w = &w[11 + 2 * w[10] as usize..];
+    }
+    w[2] as u32
 }
 
 fn held(p: &mut Presenter<Rows>, port: ViewId) -> u32 {

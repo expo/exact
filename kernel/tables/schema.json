@@ -3486,7 +3486,7 @@
       "field": "scroll_snap_type",
       "codec": "enum:ScrollSnapType",
       "cold": true,
-      "_comment": "LLP 1008 §9: x or y mandatory snapping to the nearest projected rest; UIKit owns the motion; the web executes CSS."
+      "_comment": "LLP 1008 §9: x or y mandatory snapping to the nearest projected rest; UIKit and Android own the motion, the web executes CSS."
     },
     {
       "bit": 82,

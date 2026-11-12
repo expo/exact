@@ -563,7 +563,7 @@ impl<D: DataSource> Presenter<D> {
         b.scroll_bounds(&mapping)
     }
 
-    fn reveal_geometry(&mut self, id: ViewId) -> Option<([f32; 9], PaintedBox)> {
+    pub(super) fn reveal_geometry(&mut self, id: ViewId) -> Option<([f32; 9], PaintedBox)> {
         let b = self.box_of(id)?;
         let mut mapping = b.scroll_mapping()?;
         let page = self.boxes_page;
