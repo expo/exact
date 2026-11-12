@@ -37,9 +37,10 @@ mod stream;
 mod viewport;
 
 pub use direct::boot_swap_js;
-pub use executor::Executor;
+pub use executor::{pump, Executor};
 pub use page::{capture, capture_js, page, page_with_rules, scroll_document_js};
 pub use pages::pages;
+pub use requests::settle;
 pub use serve::{expire_renders, Serve, Server, Stopper};
 pub use source::Anonymous;
 
@@ -48,9 +49,7 @@ pub use source::Anonymous;
 pub(crate) use activation::{activation, inference};
 use exact_kernel::Kernel;
 use exact_plan::{Plan, RenderPolicy};
-use exact_runner::{
-    DataSource, Dispatch, FailureKind, Interrupt, Outcome, RequestOut, Runner, RunnerError,
-};
+use exact_runner::{DataSource, Dispatch, FailureKind, Interrupt, Outcome, RequestOut, Runner};
 use exact_web::document::{
     build_locations, checkpoint, digest, project, read_checkpoint, route_at, Document, Site,
 };
@@ -776,75 +775,6 @@ fn activate<D: DataSource>(runner: &mut Runner<D>, until: Instant) -> Result<(),
         .data_ready()
         .map_err(|e| format!("data ready: {e:?}"))?;
     Ok(())
-}
-
-/// Run `runner`'s requests through `executor` until none is in flight but
-/// the ones the environment refused, or until `deadline`. Each reply is a
-/// commit, as on a host; a failed request is the source's data to shape
-/// (LLP 1016 D4). A reply the source cannot shape is the render's failure.
-pub fn settle<D: DataSource>(
-    runner: &mut Runner<D>,
-    executor: &Executor,
-    deadline: Instant,
-) -> Result<Settled, RunnerError> {
-    let mut held = Held::default();
-    loop {
-        requests::hand_out(runner, executor, &mut held);
-        if requests::settle_aborts(runner, executor)? {
-            continue;
-        }
-        // Check before taking the next reply: an open stream may always have
-        // one waiting.
-        if runner
-            .pending()
-            .iter()
-            // A re-ask's wait is the runner's, never the executor's: no timer
-            // fires here, and the checkpoint lists it for the client to ask.
-            // A stream that has answered is open, not in flight: the page
-            // shows its message, and the checkpoint lists it for the client
-            // to subscribe again. A mutation's stream ends with the render.
-            .all(|(_, t)| {
-                held.refused.contains(t)
-                    || held.busy.contains(t)
-                    || runner.is_reask_wait(*t)
-                    || runner.is_open_stream(*t)
-            })
-        {
-            return Ok(if held.busy.is_empty() {
-                Settled::Complete
-            } else {
-                Settled::Busy
-            });
-        }
-        let outcomes = executor.drain();
-        if !outcomes.is_empty() {
-            for (ticket, outcome, timing) in outcomes {
-                // Refused by the environment (a grant the host doesn't hold):
-                // the resource keeps its placeholder for the client.
-                if matches!(
-                    outcome,
-                    Outcome::Failed {
-                        kind: FailureKind::Refused,
-                        ..
-                    }
-                ) {
-                    held.refused.insert(ticket);
-                    continue;
-                }
-                runner.fulfill_measured(ticket, outcome, timing)?;
-            }
-            // Replies that keep coming (an answer re-asked without end) still
-            // meet the deadline.
-            if Instant::now() >= deadline {
-                return Ok(Settled::Deadline);
-            }
-            continue;
-        }
-        if Instant::now() >= deadline {
-            return Ok(Settled::Deadline);
-        }
-        executor.wait(deadline);
-    }
 }
 
 /// What the last commit asked for goes to the executor (LLP 1016 D2); a

@@ -472,8 +472,8 @@ impl Core {
             .map_err(|(reason, _work)| reason)
     }
 
-    /// One complete transaction per pump. Alternate ready lanes; never drain
-    /// and lose later results when parsing one reply fails.
+    /// Take one outcome in lane order (LLP 1162 D3): a pump requests the
+    /// next only after fulfilling this one, so a shaping error loses none.
     pub(super) fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
         self.drain_with_clock(std::time::Instant::now)
     }

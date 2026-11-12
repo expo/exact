@@ -1464,23 +1464,6 @@ fn a_native_call_is_handed_off_and_never_holds_the_ordered_lane() {
     assert_eq!(collect(&core, &woke, 1)[0].0, 20);
 }
 
-#[test]
-fn completed_latency_is_measured_before_the_ui_drains_it() {
-    let (core, fixture, woke) = setup();
-    let before = Instant::now();
-    core.run(job(991, Request::get("https://example.test/hold")), None)
-        .unwrap();
-    fixture.wait_held(1);
-    fixture.release();
-    woke.recv_timeout(Duration::from_secs(5)).unwrap();
-    let completed_by = before.elapsed().as_millis() as u64;
-    let now = Instant::now() + Duration::from_millis(20);
-    let (ticket, outcome, elapsed) = core.drain_with_clock(|| now).pop().unwrap();
-    assert_eq!(ticket, 991);
-    assert!(matches!(outcome, Outcome::Response(_)));
-    assert!(elapsed.unwrap().elapsed_ms <= completed_by);
-}
-
 #[path = "executor_timeout_tests.rs"]
 mod timeout;
 
@@ -1495,3 +1478,6 @@ mod body_to;
 
 #[path = "executor_abort_tests.rs"]
 pub(crate) mod abort;
+
+#[path = "executor_pump_tests.rs"]
+mod pump;

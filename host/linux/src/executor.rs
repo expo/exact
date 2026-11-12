@@ -7,6 +7,8 @@ use std::io::{Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 #[path = "../../apple/src/executor_core.rs"]
 mod core;
+#[path = "../../apple/src/executor_pump.rs"]
+pub mod pump;
 /// A new executor waits for a native-worker slot under test: the crate's own
 /// tests, and the integration binaries, whose every test's presenters share
 /// one process's bound (`test-wait`, which only the dev-dependency on this
@@ -144,7 +146,7 @@ impl Executor {
     pub(crate) fn take_wake(&self) -> bool {
         (&self.wake).read(&mut [0; 1]).is_ok_and(|n| n > 0)
     }
-    /// One completion per turn, rearming the FD if more remain.
+    /// Take the next ready outcome, rearming the FD if more remain.
     pub fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
         self.core.drain()
     }

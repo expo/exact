@@ -5,6 +5,8 @@ use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::ffi::c_void;
 #[path = "executor_core.rs"]
 mod core;
+#[path = "executor_pump.rs"]
+pub mod pump;
 /// A new executor waits for a native-worker slot only under test (the core's `reserve`).
 const WAIT_FOR_SLOT: bool = cfg!(test);
 
@@ -140,7 +142,7 @@ impl Executor {
     pub fn begin_pump(&self) {
         self.core.begin_pump();
     }
-    /// Take at most one result; remaining outcomes schedule another pump.
+    /// Take the next ready outcome; remaining outcomes schedule another wake.
     pub fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
         self.core.drain()
     }

@@ -8,6 +8,8 @@ use std::time::Instant;
 #[path = "../../apple/src/executor_core.rs"]
 #[allow(dead_code)] // `run` is the core's own tests' entry
 mod core;
+#[path = "../../apple/src/executor_pump.rs"]
+pub mod pump;
 /// A new executor waits for a native-worker slot under test: the crate's own
 /// tests, and the integration binary, whose every test's servers and renders
 /// share one process's bound (`test-wait`, which only the dev-dependency on
@@ -80,9 +82,13 @@ impl Executor {
         self.core.run_owned(request, work)
     }
 
-    /// At most one completion, oldest ordered first; more rewake.
-    pub fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
+    /// Acknowledge the wake before draining a bounded group of replies.
+    pub fn begin_pump(&self) {
         self.core.begin_pump();
+    }
+
+    /// Take the next ready completion; more ready outcomes wake again.
+    pub fn drain(&self) -> Vec<(u64, Outcome, Option<CompletionTiming>)> {
         self.core.drain()
     }
 
@@ -119,6 +125,9 @@ impl Executor {
 
     /// Wait until the core has news, or until `until`.
     pub fn wait(&self, until: Instant) {
+        // A direct drain may have consumed the wake: rearm before a later
+        // stream message must wake this waiter (LLP 1162 D3).
+        self.core.begin_pump();
         let (woken, ready) = &*self.wake;
         let mut guard = woken.lock().unwrap();
         while !*guard {
