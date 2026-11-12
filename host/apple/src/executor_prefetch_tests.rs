@@ -92,6 +92,68 @@ fn an_inflight_prefetch_has_one_exchange_for_a_later_read_and_a_second_prefetch(
 }
 
 #[test]
+fn a_forgotten_prefetch_waiter_releases_its_reservation_when_another_prefetch_answers() {
+    forgotten_waiter(false);
+}
+
+#[test]
+fn a_forgotten_prefetch_waiter_releases_its_reservation_when_a_launch_preload_answers() {
+    forgotten_waiter(true);
+}
+
+fn forgotten_waiter(launch: bool) {
+    for asynchronous in [false, true] {
+        let server = Server::new();
+        let release = held_plan(&server, "/next");
+        let (core, woke) = server.core(asynchronous, true);
+        if launch {
+            let set = Preloads::start(
+                vec![Definition {
+                    name: "next".into(),
+                    request: server.request("/next"),
+                    deadline_ms: None,
+                    secrets: Vec::new(),
+                }],
+                &format!("net.fetch http://{}", server.address),
+                ibex2::host::Host::new,
+            );
+            assert!(core.adopt_preloads(set).is_ok());
+        }
+        let _clock = clock(&core);
+        let bytes = core.shared.state.lock().unwrap().bytes;
+        if !launch {
+            core.run(job(1, server.request("/next").prefetch()), None)
+                .unwrap();
+        }
+        server.seen(1);
+        core.run(job(2, server.request("/next").prefetch()), None)
+            .unwrap();
+        assert!(core.shared.state.lock().unwrap().jobs[0]
+            .iter()
+            .any(|j| j.ticket == 2));
+        core.forget(|ticket| ticket == 1);
+        release.send(()).unwrap();
+        if !launch {
+            assert_eq!(collect(&core, &woke).0, 1);
+        }
+        let (reply, cached) = read(&core, &woke, &server, 3, "/next");
+        assert!(cached);
+        assert_eq!(reply.body, b"prefetched");
+        let state = core.shared.state.lock().unwrap();
+        let (state, timeout) = core
+            .shared
+            .ready
+            .wait_timeout_while(state, HANG, |s| !s.running.is_empty())
+            .unwrap();
+        assert!(!timeout.timed_out(), "exchange did not end");
+        assert_eq!(state.bytes, bytes);
+        drop(state);
+        assert!(core.ordered_idle(), "asynchronous={asynchronous}");
+        assert_eq!(server.count(), 1);
+    }
+}
+
+#[test]
 fn forgetting_a_prefetch_keeps_it_and_an_explicit_abort_after_forgetting_cancels_it() {
     for asynchronous in [false, true] {
         for aborted in [false, true] {

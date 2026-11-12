@@ -443,6 +443,52 @@ fn a_manifest_start_leaves_while_rust_fetch_is_blocked_and_boot_does_not_wait() 
 }
 
 #[test]
+fn manifest_foreground_leaves_at_opened_while_the_function_is_blocked_in_fetch() {
+    for opened in 0..3 {
+        let manifest = Server::new(1);
+        let token = Server::new(1);
+        let (fetched, fetching) = channel();
+        let token_url = format!("http://{}/token", token.address);
+        let mut source = source(&manifest, move |ctx| {
+            ctx.fetch(Request::get(&token_url)).unwrap();
+            fetched.send(()).unwrap();
+        });
+        source.base.definitions = manifest.source(PreloadWhen::Foreground, false).definitions;
+        source
+            .base
+            .grants
+            .push_str(&format!("\nnet.fetch http://{}", token.address));
+        source.manifest = true;
+        let launch = fixture();
+        if opened == 0 {
+            signal(&launch, &source, true);
+        } else {
+            begin(&launch, &source, false);
+        }
+        token.request();
+        let running = launch.0.rust.get().unwrap();
+        if opened == 2 {
+            running.expire_now();
+        }
+        if opened != 0 {
+            assert_eq!(manifest.count.load(Ordering::Acquire), 0);
+            signal(&launch, &source, true);
+        }
+        manifest.request();
+        assert!(
+            fetching.try_recv().is_err(),
+            "function's fetch is still held"
+        );
+        manifest.release(0);
+        token.release(0);
+        running.wait_returned();
+        definitions(&launch);
+        ready(&launch);
+        assert_eq!(manifest.count.load(Ordering::Acquire), 1);
+    }
+}
+
+#[test]
 fn a_launch_past_its_deadline_releases_reads_and_discards_late_requests() {
     for asynchronous in [false, true] {
         ASYNCHRONOUS.with(|v| v.set(asynchronous));
@@ -1182,26 +1228,93 @@ fn a_function_secret_write_drops_a_request_built_with_the_old_value() {
     }
 }
 
+struct HeldWrite {
+    value: Mutex<String>,
+    entered: Sender<()>,
+    release: Mutex<Receiver<()>>,
+}
+impl Backend for HeldWrite {
+    fn read(&self, _: &str) -> Result<Option<String>, String> {
+        Ok(Some(self.value.lock().unwrap().clone()))
+    }
+    fn write(&self, _: &str, value: Option<&str>) -> Result<(), String> {
+        *self.value.lock().unwrap() = value.unwrap().into();
+        if value == Some("A") {
+            self.entered.send(()).unwrap();
+            self.release.lock().unwrap().recv_timeout(HANG).unwrap();
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn a_handoff_waiting_for_secret_persistence_is_refused_at_the_launch_deadline() {
+    let server = Server::new(1);
+    let (write_entered, write_entering) = channel();
+    let (release, released) = channel();
+    let backend = Arc::new(HeldWrite {
+        value: Mutex::new("old".into()),
+        entered: write_entered,
+        release: Mutex::new(released),
+    });
+    let (entered, entering) = channel();
+    let (handoff, handing) = channel();
+    let handing = Mutex::new(handing);
+    let (answer, answered) = channel();
+    let url = format!("http://{}/feed", server.address);
+    let source = source(&server, move |ctx| {
+        entered.send(()).unwrap();
+        handing.lock().unwrap().recv_timeout(HANG).unwrap();
+        answer
+            .send(ctx.preload(LaunchRequest::new("late", Request::get(&url))))
+            .unwrap();
+    });
+    let launch = fixture();
+    *launch.0.backend.lock().unwrap() = Some(backend.clone());
+    begin(&launch, &source, false);
+    entering.recv_timeout(HANG).unwrap();
+    let now = Arc::new(Mutex::new(std::time::Instant::now()));
+    let clock = now.clone();
+    let (checking, checked) = channel();
+    let running = launch.0.rust.get().unwrap();
+    running.test_clock(Arc::new(move || {
+        let now = *clock.lock().unwrap();
+        checking.send(()).unwrap();
+        now
+    }));
+    let app = launch.clone();
+    let stored = backend.clone();
+    let writer = std::thread::spawn(move || {
+        app.with_secret_write("session", || stored.write("session", Some("A")))
+    });
+    write_entering.recv_timeout(HANG).unwrap();
+    assert!(launch.0.invalidated.try_lock().is_err());
+    handoff.send(()).unwrap();
+    checked.recv_timeout(HANG).unwrap();
+    *now.lock().unwrap() += rust::LAUNCH_DEADLINE;
+    release.send(()).unwrap();
+    writer.join().unwrap().unwrap();
+    let result = answered.recv_timeout(HANG).unwrap();
+    running.wait_returned();
+    definitions(&launch);
+    assert_eq!(result, Err("launch deadline".into()));
+    assert_eq!(launch.count(), 0);
+    assert_eq!(server.count.load(Ordering::Acquire), 0);
+    let journal = launch.journal();
+    assert!(journal
+        .iter()
+        .any(|f| f.name == "late" && f.outcome == PreloadEvent::Refused));
+    assert!(journal
+        .iter()
+        .any(|f| matches!(f.outcome, PreloadEvent::LaunchDeadline { .. })));
+    assert!(!journal.iter().any(|f| matches!(
+        f.outcome,
+        PreloadEvent::Sent | PreloadEvent::LaunchPanicked { .. }
+    )));
+}
+
 #[test]
 fn launch_secret_persistence_holds_the_version_lock_against_the_app_writer() {
-    struct HeldWrite {
-        value: Mutex<String>,
-        entered: Sender<()>,
-        release: Mutex<Receiver<()>>,
-    }
-    impl Backend for HeldWrite {
-        fn read(&self, _: &str) -> Result<Option<String>, String> {
-            Ok(Some(self.value.lock().unwrap().clone()))
-        }
-        fn write(&self, _: &str, value: Option<&str>) -> Result<(), String> {
-            *self.value.lock().unwrap() = value.unwrap().into();
-            if value == Some("A") {
-                self.entered.send(()).unwrap();
-                self.release.lock().unwrap().recv_timeout(HANG).unwrap();
-            }
-            Ok(())
-        }
-    }
     let server = Server::new(0);
     let (entered, entering) = channel();
     let (release, released) = channel();

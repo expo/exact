@@ -19,8 +19,21 @@ pub(super) struct Running {
     launch: std::sync::Weak<Launch>,
     #[cfg(test)]
     returned: (Mutex<bool>, Condvar),
+    #[cfg(test)]
+    clock: Mutex<Option<Arc<dyn Fn() -> Instant + Send + Sync>>>,
 }
 impl Running {
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(clock) = self.clock.lock().unwrap().as_ref() {
+            return clock();
+        }
+        Instant::now()
+    }
+    #[cfg(test)]
+    pub(super) fn test_clock(&self, clock: Arc<dyn Fn() -> Instant + Send + Sync>) {
+        *self.clock.lock().unwrap() = Some(clock);
+    }
     #[cfg(test)]
     pub(super) fn expire_now(&self) {
         self.expire(self.started + LAUNCH_DEADLINE);
@@ -91,6 +104,8 @@ pub(super) fn run(
         launch: Arc::downgrade(&launch.0),
         #[cfg(test)]
         returned: Default::default(),
+        #[cfg(test)]
+        clock: Default::default(),
     });
     #[cfg(test)]
     struct Returned(Arc<Running>);
@@ -127,7 +142,7 @@ pub(super) fn run(
             let expired = !*done;
             drop(done);
             if expired {
-                watch.expire(Instant::now());
+                watch.expire(watch.now());
             }
         })
         .is_err()
@@ -138,7 +153,7 @@ pub(super) fn run(
     let mut context = Context::new(launch, app, grants, running.clone(), definitions);
     let result =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (entry.run)(&mut context)));
-    running.expire(Instant::now());
+    running.expire(running.now());
     let mut done = running.done.lock().unwrap();
     if result.is_err() {
         launch
@@ -290,14 +305,20 @@ impl LaunchContext for Context<'_> {
         }: LaunchRequest,
     ) -> Result<(), String> {
         self.requests += 1;
-        self.running.expire(Instant::now());
+        self.running.expire(self.running.now());
         let done = self.running.done.lock().unwrap();
         let versions = self.launch.0.invalidated.lock().unwrap();
         let valid_name = name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
             && name
                 .bytes()
                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-');
-        let refusal = if *done {
+        let refusal = if *done
+            || self
+                .running
+                .now()
+                .saturating_duration_since(self.running.started)
+                >= LAUNCH_DEADLINE
+        {
             Some((PreloadEvent::Refused, "launch deadline"))
         } else if !valid_name
             || !self.names.insert(name.clone())

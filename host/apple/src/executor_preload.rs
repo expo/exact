@@ -801,6 +801,12 @@ pub(super) fn serve_ready(state: &mut State) {
             index += 1;
             continue;
         }
+        if job.forgotten {
+            let job = state.jobs[0].remove(index).expect("forgotten preload read");
+            state.counts[0] -= 1;
+            state.bytes[0] -= job.charge;
+            continue;
+        }
         let outcome = match cache::granted(&cache.grants, &job.request) {
             Err(outcome) => outcome,
             Ok(()) => {

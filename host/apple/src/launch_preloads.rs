@@ -3,7 +3,7 @@ use crate::executor::{Io, Preload, PreloadControl, PreloadFact, PreloadObservati
 use exact_runner::{request::PreloadWhen, DataSource, Runner};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 #[path = "launch_rust.rs"]
 mod rust;
 
@@ -55,7 +55,6 @@ impl Drop for DefinitionsPending {
 struct Set {
     owner: Mutex<Option<Preloads>>,
     control: PreloadControl,
-    opened: mpsc::Sender<()>,
 }
 #[derive(Default)]
 struct Marks {
@@ -119,11 +118,8 @@ impl LaunchPreloads {
             .phase
             .fetch_or(LAUNCHED | if opened { OPENED } else { 0 }, Ordering::AcqRel);
         self.start(factory);
-        if opened && previous & OPENED == 0 {
-            if let Some(set) = self.0.set.get() {
-                let _ = set.opened.send(());
-                self.start_rust_foreground();
-            }
+        if opened && previous & OPENED == 0 && self.0.set.get().is_some() {
+            self.start_foreground();
         }
     }
     fn start<D: DataSource>(&self, factory: impl FnOnce() -> D + Send + 'static) {
@@ -133,22 +129,20 @@ impl LaunchPreloads {
         {
             return;
         }
-        let mut new_receiver = None;
+        let mut started = false;
         self.0.set.get_or_init(|| {
             let owner = Preloads::start(Vec::new(), "", ibex2::host::Host::new);
             let control = owner.control();
             control.definitions_pending(true);
-            let (opened, receive) = mpsc::channel();
-            new_receiver = Some(receive);
+            started = true;
             Set {
                 owner: Mutex::new(Some(owner)),
                 control,
-                opened,
             }
         });
-        let Some(receive) = new_receiver else {
+        if !started {
             return;
-        };
+        }
         if self.0.selected_update.load(Ordering::Acquire) {
             self.0.set.get().unwrap().control.select_update();
         }
@@ -180,32 +174,13 @@ impl LaunchPreloads {
                 );
                 drop(marks);
                 launch.start_definitions(&definitions, &secrets, &grants, PreloadWhen::Start);
+                launch.start_definitions(&definitions, &secrets, &grants, PreloadWhen::Foreground);
                 if let Some(entry) = entry {
                     launch.0.set.get().unwrap().control.handed();
                     rust::run(&launch, entry, &app, &grants, &definitions);
                 }
                 launch.0.set.get().unwrap().control.launch_pending(None);
                 drop(pending);
-                if !definitions
-                    .iter()
-                    .any(|d| d.when == PreloadWhen::Foreground)
-                {
-                    return;
-                }
-                let opened = launch.0.phase.load(Ordering::Acquire) & OPENED != 0;
-                let weak = Arc::downgrade(&launch.0);
-                drop(launch);
-                if !opened && receive.recv().is_err() {
-                    return;
-                }
-                if let Some(launch) = weak.upgrade().map(LaunchPreloads) {
-                    launch.start_definitions(
-                        &definitions,
-                        &secrets,
-                        &grants,
-                        PreloadWhen::Foreground,
-                    );
-                }
             });
         if spawned.is_err() {
             self.0.set.get().unwrap().control.definitions_pending(false);
@@ -252,12 +227,27 @@ impl LaunchPreloads {
                         self.record_definition(definition, outcome);
                         continue;
                     }
-                    ready.push(Preload {
+                    let preload = Preload {
                         name: definition.name.into(),
                         request,
                         deadline_ms: definition.timeout_ms,
                         secrets: definition.secrets.iter().map(|s| (*s).into()).collect(),
-                    });
+                    };
+                    if when == PreloadWhen::Foreground
+                        && self.0.phase.load(Ordering::Acquire) & OPENED == 0
+                    {
+                        self.0.foreground.lock().unwrap().push(rust::Prepared {
+                            preload,
+                            grants: grants.into(),
+                            versions: definition
+                                .secrets
+                                .iter()
+                                .map(|s| ((*s).into(), 0))
+                                .collect(),
+                        });
+                    } else {
+                        ready.push(preload);
+                    }
                 }
                 Err(_) => {
                     self.record_definition(definition, crate::executor::PreloadEvent::MissingSecret)
@@ -383,7 +373,7 @@ impl LaunchPreloads {
     fn with_secret_write<T>(&self, name: &str, write: impl FnOnce() -> T) -> T {
         self.with_secret_version(name, |_| write())
     }
-    fn start_rust_foreground(&self) {
+    fn start_foreground(&self) {
         let versions = self.0.invalidated.lock().unwrap();
         let mut foreground = self.0.foreground.lock().unwrap();
         for definition in foreground.drain(..) {
