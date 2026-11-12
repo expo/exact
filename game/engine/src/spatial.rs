@@ -472,7 +472,24 @@ pub(crate) fn layout(world: &World, viewport: Vec2, entity: Entity) -> Layout {
     let view = View::new(world, viewport);
     let pose = displayed_bounds_pose(world, entity, view.as_ref());
     let mesh = world.get::<Mesh>(entity);
-    let (half, center) = bounds(world, entity, mesh.as_deref());
+    // Inspection may read registered cosmetic geometry; simulation bounds may not.
+    let cosmetic = match mesh.as_deref() {
+        Some(Mesh::Asset(name))
+            if world.assets.cosmetic.contains(name)
+                && world.get::<crate::asset::ModelBounds>(entity).is_none() =>
+        {
+            world.assets.models.get(name).map(|m| m.bounds)
+        }
+        _ => None,
+    };
+    let (half, center) = cosmetic.map_or_else(
+        || bounds(world, entity, mesh.as_deref()),
+        |b| {
+            let lo = Vec3::from_slice(&b[..3]);
+            let hi = Vec3::from_slice(&b[3..]);
+            ((hi - lo) * 0.5, (hi + lo) * 0.5)
+        },
+    );
     let corners = corners(pose, half, center);
     let (screen, visibility) = view.as_ref().map_or((None, None), |v| {
         let (screen, visibility) = v.layout(&corners, pose.translation.into());
@@ -483,7 +500,8 @@ pub(crate) fn layout(world: &World, viewport: Vec2, entity: Entity) -> Layout {
         corners,
         screen,
         visibility,
-        unbounded: matches!(mesh.as_deref(), Some(Mesh::Asset(name)) if world.model(name).is_none() && world.get::<crate::asset::ModelBounds>(entity).is_none()),
+        unbounded: cosmetic.is_none()
+            && matches!(mesh.as_deref(), Some(Mesh::Asset(name)) if world.model(name).is_none() && world.get::<crate::asset::ModelBounds>(entity).is_none()),
     }
 }
 impl<G: crate::Game> crate::Sim<G> {

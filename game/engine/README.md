@@ -441,6 +441,12 @@ restores keep it resident, and the present that follows registers what the new w
 shows. A name is immutable while registered and may take new content once it retired;
 a declared, generated or delivered model's name is refused.
 
+Agent `layout` and `Sim::layout` can project the CPU bounds registered by
+`cosmetic_model`, even while textures are pending. An authored `ModelBounds`
+still takes precedence. These read-only inspection bounds describe the current
+`Mesh`, not the renderer's temporary fallback. `World::model`, simulation
+bounds, picking, saves and hashes remain independent of cosmetic residency.
+
 Until a model a `Mesh` names can draw, the stock renderer keeps drawing the rigid model
 that entity drew before (keyed by the full entity id), so a swapped skin never shows
 blank, and keeps it if the new one fails; no game code reads readiness. A skinned or

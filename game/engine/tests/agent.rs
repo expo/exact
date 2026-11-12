@@ -262,3 +262,128 @@ fn reported_paranoid_mode_and_completed_samples_follow_the_executor() {
         );
     }
 }
+
+#[derive(Default, Args)]
+struct CosmeticLayoutArgs {
+    #[live]
+    wide: bool,
+}
+struct CosmeticLayout;
+impl Game for CosmeticLayout {
+    const ID: &'static str = "cosmetic-layout";
+    type Args = CosmeticLayoutArgs;
+    fn setup(w: &mut World, _: &Self::Args) {
+        let parent = w.spawn(Transform::at(0.5, 0., 0.));
+        w.spawn_named(
+            "triangle",
+            (
+                Transform {
+                    scale: Vec3::new(1.5, 0.5, 1.),
+                    ..Default::default()
+                },
+                Parent(parent),
+                Mesh::asset("small.model"),
+            ),
+        );
+        w.spawn_named(
+            "authored",
+            (
+                Transform::default(),
+                Mesh::asset("small.model").bounds([-0.25, -0.25, 0., 0.25, 0.25, 0.]),
+            ),
+        );
+        w.spawn((Transform::at(0., 0., 10.), Camera::orthographic(4.)));
+    }
+    fn tick(w: &mut World, _: &Input, a: &Self::Args) {
+        let name = if a.wide { "wide.model" } else { "small.model" };
+        if !matches!(&*w.require::<Mesh>("triangle"), Mesh::Asset(n) if n == name) {
+            *w.require_mut::<Mesh>("triangle") = Mesh::asset(name);
+        }
+    }
+    fn present(p: &mut Present<'_>, _: &Self::Args) {
+        let mut names = Vec::new();
+        p.for_each::<Mesh>(|_, mesh| {
+            if let Mesh::Asset(name) = mesh {
+                names.push(name.clone());
+            }
+        });
+        for name in names {
+            p.cosmetic_model(&name, || {
+                let wide = name == "wide.model";
+                let (x, bottom, top) = if wide { (2., -1., 2.) } else { (1., 0., 1.) };
+                let bounds = [-x, bottom, 0., x, top, 0.];
+                asset::Model {
+                    meshes: vec![asset::MeshData {
+                        positions: vec![-x, bottom, 0., x, bottom, 0., 0., top, 0.],
+                        normals: [0., 0., 1.].repeat(3),
+                        uvs: vec![0.; 6],
+                        indices: vec![0, 1, 2],
+                        bounds,
+                        ..Default::default()
+                    }],
+                    materials: vec![asset::MaterialData {
+                        base_color_texture: Some(0),
+                        ..Default::default()
+                    }],
+                    textures: vec![name.replace(".model", ".tex")],
+                    nodes: vec![asset::Node {
+                        mesh: Some(0),
+                        ..Default::default()
+                    }],
+                    bounds,
+                    ..Default::default()
+                }
+            })
+            .unwrap();
+        }
+    }
+}
+#[test]
+fn registered_cosmetic_layout_is_read_only_and_independent_of_texture_arrival() {
+    let mut s = Sim::<CosmeticLayout>::new(Default::default()).unwrap();
+    s.viewport(200., 200.);
+    let hash = s.world().hash();
+    let saved = s.save().unwrap();
+    let rect = s.layout("triangle").unwrap().screen;
+    assert!(
+        (rect.w - 150.).abs() < 0.001 && (rect.h - 25.).abs() < 0.001,
+        "{rect:?}"
+    );
+    let reply = s.agent(r#"{"op":"layout","entity":"triangle"}"#);
+    assert!(!reply.contains("\"bounds\":null"), "{reply}");
+    assert!(
+        reply.contains("\"min\":[-1,0,0]") && reply.contains("\"max\":[2,0.5,0]"),
+        "{reply}"
+    );
+    assert!(s.world().model("small.model").is_none());
+    assert_eq!(s.world().hash(), hash);
+    assert_eq!(s.save().unwrap(), saved);
+    let authored = s.layout("authored").unwrap().screen;
+    assert!((authored.w - 25.).abs() < 0.001 && (authored.h - 25.).abs() < 0.001);
+    assert_eq!(s.take_assets(), ["small.tex"]);
+    let texture = bin::to_vec(&asset::TextureData {
+        width: 1,
+        height: 1,
+        mips: vec![vec![255; 4]],
+        srgb: true,
+        ..Default::default()
+    });
+    s.asset("small.tex", Some(&texture)).unwrap();
+    assert_eq!(s.agent(r#"{"op":"layout","entity":"triangle"}"#), reply);
+    assert_eq!(s.world().hash(), hash);
+    assert_eq!(s.save().unwrap(), saved);
+    s.restore(&saved).unwrap();
+    assert_eq!(s.agent(r#"{"op":"layout","entity":"triangle"}"#), reply);
+    s.bind(&[Value::Bool(true)], None).unwrap();
+    s.run(20.);
+    let hash = s.world().hash();
+    let saved = s.save().unwrap();
+    let rect = s.layout("triangle").unwrap().screen;
+    assert!(
+        (rect.w - 300.).abs() < 0.001 && (rect.h - 75.).abs() < 0.001,
+        "{rect:?}"
+    );
+    assert!(s.world().model("wide.model").is_none());
+    assert_eq!(s.world().hash(), hash);
+    assert_eq!(s.save().unwrap(), saved);
+}
