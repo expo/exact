@@ -252,5 +252,82 @@ final class ContextMenuIOSTests: XCTestCase {
         host.contextMenuInteraction(interaction, willEndFor: again, animator: nil)
         session.presenter.onPress = press
     }
+
+    /// A link no authored menu answers lifts with the host's own menu: the
+    /// link itself on its platter, its URL over Open Link, Copy Link and Share.
+    func testALinkNoMenuAnswersLiftsItselfWithTheLinksOwnMenu() throws {
+        let session = try boot()
+        let host = session.presenter.menus.context
+        func titles(_ menu: UIMenu) -> [String] { menu.children.map { ($0 as? UIAction)?.title ?? "" } }
+        func interaction(_ node: NodeView) -> UIContextMenuInteraction? { node.interactions.compactMap { $0 as? UIContextMenuInteraction }.first }
+
+        let link = try node(session, "plain-link")
+        let linked = try XCTUnwrap(interaction(link), "a link gets UIKit's interaction with no menu authored")
+        let configuration = try XCTUnwrap(host.contextMenuInteraction(linked, configurationForMenuAtLocation: CGPoint(x: link.bounds.midX, y: link.bounds.midY)))
+        let lifted = try XCTUnwrap(host.contextMenuInteraction(linked, configuration: configuration, highlightPreviewForItemWithIdentifier: configuration.identifier))
+        XCTAssertTrue(lifted.view === link, "the link itself lifts")
+        let owner = try XCTUnwrap(host.open)
+        XCTAssertNil(host.lift(owner), "no preview: UIKit shows the lifted link")
+        let menu = try XCTUnwrap(host.menu(owner))
+        XCTAssertEqual(menu.title, "https://example.com/fixture")
+        XCTAssertEqual(titles(menu), ["Open Link", "Copy Link", "Share…"])
+        host.contextMenuInteraction(linked, willEndFor: configuration, animator: nil)
+
+        // A card's authored menu answers a long press on a link inside it.
+        XCTAssertNil(interaction(try node(session, "card-link")))
+        let card = try node(session, "peek-card"), inCard = try node(session, "card-link")
+        let cardMenu = try XCTUnwrap(interaction(card))
+        let authored = try XCTUnwrap(host.contextMenuInteraction(cardMenu, configurationForMenuAtLocation: inCard.convert(CGPoint(x: inCard.bounds.midX, y: inCard.bounds.midY), to: card)))
+        XCTAssertEqual(host.open?.isLink, false)
+        XCTAssertEqual(host.open?.name, "peek")
+        host.contextMenuInteraction(cardMenu, willEndFor: authored, animator: nil)
+
+        // A run's link: its words leave the paragraph while their picture is
+        // lifted, and tapping that picture follows the link.
+        let paragraph = try node(session, "link-text")
+        let run = try XCTUnwrap(paragraph.inlineText.first { $0.props["testId"] == "run-link" })
+        let box = try XCTUnwrap(paragraph.inlineRects(run).first)
+        let runs = try XCTUnwrap(interaction(paragraph))
+        let at = try XCTUnwrap(host.contextMenuInteraction(runs, configurationForMenuAtLocation: CGPoint(x: box.midX, y: box.midY)))
+        let runOwner = try XCTUnwrap(host.open)
+        XCTAssertTrue(runOwner.isLink)
+        XCTAssertEqual(runOwner.name, "/detail")
+        XCTAssertEqual(runOwner.inlineID, run.id)
+        XCTAssertEqual(titles(try XCTUnwrap(host.menu(runOwner))), ExactEnv.appMetadata["ExactOrigin"] == nil ? ["Open Link"] : ["Open Link", "Copy Link", "Share…"],
+                       "a path in the app is copied and shared only on the app's declared origin")
+        let ink = try XCTUnwrap(paragraph.textRasterLayer)
+        XCTAssertNil(ink.mask)
+        _ = try XCTUnwrap(host.contextMenuInteraction(runs, configuration: at, highlightPreviewForItemWithIdentifier: at.identifier))
+        let cut = try XCTUnwrap(ink.mask as? CAShapeLayer, "the run's words are cut out of the paragraph")
+        XCTAssertFalse(try XCTUnwrap(cut.path).contains(paragraph.layer.convert(CGPoint(x: box.midX, y: box.midY), to: ink), using: .evenOdd))
+        let commit = Commit()
+        host.contextMenuInteraction(runs, willPerformPreviewActionForMenuWith: at, animator: commit)
+        XCTAssertEqual(commit.preferredCommitStyle, .dismiss)
+        XCTAssertNotNil(try node(session, "route-detail"), "the run's link followed")
+        host.contextMenuInteraction(runs, willEndFor: at, animator: nil)
+        XCTAssertNil(ink.mask, "and back when the menu ends")
+    }
+
+    /// A link's Copy Link and Share take its URL as a browser resolves it, on the app's declared origin; only web
+    /// links get the host's menu (LLP 1021 §5.1).
+    func testALinksMenuTakesTheURLABrowserWouldResolve() {
+        let origin = "https://example.com", visit = "/docs/guide?tab=2#top"
+        let url = { (href: String) in ContextMenuHost.linkURL(href, origin: origin, visit: visit)?.absoluteString }
+        XCTAssertEqual(url("/detail"), "https://example.com/detail")
+        XCTAssertEqual(url("about"), "https://example.com/docs/about")
+        XCTAssertEqual(url("#moves"), "https://example.com/docs/guide?tab=2#moves")
+        XCTAssertEqual(url("?tab=3"), "https://example.com/docs/guide?tab=3")
+        XCTAssertEqual(url("//cdn.example.org/x"), "https://cdn.example.org/x")
+        XCTAssertEqual(url("https://other.example/a b"), "https://other.example/a%20b")
+        XCTAssertNil(ContextMenuHost.linkURL("/detail", origin: nil, visit: visit), "a link in the app has no URL without a declared origin")
+        XCTAssertEqual(ContextMenuHost.linkURL("https://other.example/", origin: nil, visit: visit)?.absoluteString, "https://other.example/")
+        for href in ["mailto:a@example.com", "tel:+15555550100", "javascript:alert(1)", "JavaScript:void(0)", "myapp://open", ""] {
+            XCTAssertFalse(NodeView.hasLinkMenu(href), href)
+            XCTAssertNil(url(href), href)
+        }
+        for href in ["https://example.com", "HTTP://example.com", "/detail", "about", "#moves", "//cdn.example.org/x"] {
+            XCTAssertTrue(NodeView.hasLinkMenu(href), href)
+        }
+    }
 }
 #endif

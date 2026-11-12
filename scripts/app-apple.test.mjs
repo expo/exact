@@ -677,6 +677,15 @@ test('`allowsArbitraryLoads` turns ATS off on macOS, iOS and tvOS, written alone
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
+// A link's Copy Link and Share put a path in the app on it.
+test("the app's declared origin bakes `ExactOrigin` on iOS and macOS, and no origin bakes none", () => {
+  const app = (origin) => ({ id: 'com.example.fixture', displayName: 'Fixture', name: 'fixture', origin, manifest: { host: {} } });
+  for (const plist of [infoPlist(app('https://example.com/'), false), macInfoPlist(app('https://example.com/'))]) {
+    assert.match(plist, /<key>ExactOrigin<\/key><string>https:\/\/example\.com<\/string>/);
+  }
+  assert.doesNotMatch(infoPlist(app(undefined), false), /ExactOrigin/);
+});
+
 test('a manifest `start_url` other than the root bakes `ExactStartURL` on iOS and macOS (W3C App Manifest)', () => {
   const app = (manifest) => ({ id: 'com.example.fixture', displayName: 'Fixture', name: 'fixture', manifest: { host: {}, ...manifest } });
   for (const plist of [infoPlist(app({ start_url: '/today' }), false), macInfoPlist(app({ start_url: '/today' }))]) {

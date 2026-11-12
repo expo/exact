@@ -606,6 +606,18 @@ component NativeFixture
                         hr margin-left=0 margin-right=0
                         button press=askClear destructive=true popovertarget="peek" popovertargetaction="hide" testId="peek-clear" height=44
                           text "Clear"
+                      // A link no authored menu answers gets the host's own on iOS (LLP 1021
+                      // §5.1, "A link's own menu"): the link lifted, Open Link, Copy Link
+                      // and Share. Inside a card with a menu, the card's menu answers.
+                      link href="https://example.com/fixture" testId="plain-link" padding=8 border-radius=8
+                        text "Example"
+                      text testId="link-text"
+                        text "Open "
+                        text "Detail" href="/detail" testId="run-link"
+                        text " from a run."
+                      column contextPopover="peek" testId="peek-card" padding=8
+                        link href="https://example.com/card" testId="card-link"
+                          text "A link in a card with a menu"
                       // The platform's alert (LLP 1115 D6): a title (its
                       // aria-label), a message (its text), a destructive action
                       // and Cancel, centred on iOS; opened by its button or by

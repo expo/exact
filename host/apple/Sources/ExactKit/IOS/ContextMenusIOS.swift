@@ -9,8 +9,9 @@
 // so the preview grows into the destination; any other is `.dismiss`.
 // The node's own `contextmenu` action fires as the menu is about to show,
 // before its rows or preview are read (D1's "both fire"), so a popover a
-// list's rows share shows the row pressed. While the agent paints, this host
-// is off and the popover opens painted (D4, `MenuHost.agentContext`).
+// list's rows share shows the row pressed. A link no authored menu answers
+// gets the host's own (`linkMenu`). While the agent paints, this host is off
+// and the popover opens painted (D4, `MenuHost.agentContext`).
 #if os(iOS)
 import AVFoundation
 import UIKit
@@ -37,8 +38,11 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     final class Open {
         weak var source: NodeView?
         weak var popover: NodeView?
+        /// The popover's name, or the `href` of the link the host's own menu is for (`isLink`).
         let name: String
         let inlineID: UInt32?
+        /// Whether this is a link's own menu (`linkMenu`) rather than an authored popover.
+        let isLink: Bool
         let point: CGPoint
         /// Whether the source's own `contextmenu` has fired (once, lazily).
         var fired = false
@@ -65,10 +69,12 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         /// finger lands: its picture and path stay the same from the lift to the
         /// dismissal.
         var runPreview: UITargetedPreview?
+        /// The paragraph's ink with the run's words cut out while its picture is lifted (`hideRun`).
+        var hiddenInk: CALayer?
         /// Whether the preview was tapped, and whether its press navigated.
         var committed = false, navigated = false
-        init(source: NodeView, popover: NodeView, name: String, point: CGPoint, inlineID: UInt32? = nil) {
-            self.source = source; self.popover = popover; self.name = name; self.point = point; self.inlineID = inlineID
+        init(source: NodeView, popover: NodeView?, name: String, point: CGPoint, inlineID: UInt32? = nil, isLink: Bool = false) {
+            self.source = source; self.popover = popover; self.name = name; self.point = point; self.inlineID = inlineID; self.isLink = isLink
         }
     }
     private(set) var open: Open?
@@ -133,8 +139,21 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         if let owner = open, let pop = current(owner) { menus?.rejectActiveMenuProperties(in: pop) }
         var wanted: [UInt32: NodeView] = [:]
         if !ExactEnv.agentPaints {
-            for v in presenter.textViews.values where v.hasInlineContextPopover { wanted[v.id] = v }
+            // A link takes the host's own menu only where no authored menu answers at it or above;
+            // each view is asked once a batch, however many links share it as an ancestor.
+            var authored: [ObjectIdentifier: Bool] = [:]
+            func authoredMenu(at view: UIView) -> Bool {
+                if let known = authored[ObjectIdentifier(view)] { return known }
+                let answer = (view as? NodeView)?.hasOwnContextMenu == true
+                    || presenter.listenerParent(of: view).map(authoredMenu(at:)) == true
+                authored[ObjectIdentifier(view)] = answer
+                return answer
+            }
+            for v in presenter.textViews.values where v.hasInlineContextPopover || (v.hasInlineLink && !authoredMenu(at: v)) { wanted[v.id] = v }
             for v in presenter.carrying("contextPopover") where v.props["contextPopover"]?.isEmpty == false { wanted[v.id] = v }
+            for id in presenter.chrome.ids("href") where wanted[id] == nil {
+                if let v = presenter.views[id], v.props["href"].map(NodeView.hasLinkMenu) == true, !authoredMenu(at: v) { wanted[id] = v }
+            }
         }
         for (key, interaction) in projected {
             if let view = interaction.view as? (UIView & GroupedMenuSurface) { syncProjected(view) }
@@ -144,6 +163,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         for (id, interaction) in interactions where wanted[id] == nil || interaction.view !== wanted[id] {
             // A commit in flight keeps its interaction until it completes.
             if let owner = open, owner.committed, owner.interaction === interaction { continue }
+            // A menu it shows ends with it: a link's interaction goes when an authored menu comes to answer above it.
+            if let owner = open, owner.interaction === interaction { restore(owner); open = nil; interaction.dismissMenu() }
             // A view destroyed with it has taken it along: its record goes too.
             if interaction.view == nil { recognizers[ObjectIdentifier(interaction)] = nil }
             if let view = interaction.view {
@@ -267,14 +288,15 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     private func contextName(_ owner: Open) -> String? {
         guard let source = owner.source else { return nil }
         if let id = owner.inlineID {
-            guard presenter?.textHost(id) === source, presenter?.inlineInert(id) == false else { return nil }
-            return presenter?.inlineText(id)?.props["contextPopover"]
+            guard presenter?.textHost(id) === source, presenter?.inlineInert(id) == false, let run = presenter?.inlineText(id) else { return nil }
+            return run.props[owner.isLink ? "href" : "contextPopover"]
         }
-        return source.props["contextPopover"]
+        return source.props[owner.isLink ? "href" : "contextPopover"]
     }
 
     /// The popover as it is now, if its source still names it.
     private func current(_ owner: Open) -> NodeView? {
+        guard !owner.isLink else { return nil }
         // A cell may have been reused while UIKit still holds its menu.
         if let cell = owner.interaction?.view as? GroupedMenuSurface, cell.menuSource !== owner.source { return nil }
         // Its own action, which has run, may have disabled, hidden or moved it.
@@ -317,18 +339,21 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             // menu, unless a node in the sheet is nearer (`MountRelay`)
             source = found; point = mount.convert(location, to: found); hit = mount.hitTest(location, with: nil)
         } else { return nil }
-        let run = source.inlineContextTarget(at: point)
-        guard live(source), let name = run?.props["contextPopover"] ?? (run == nil ? source.props["contextPopover"] : nil),
-              menus.eligible(source, contextMenu: true) else { return nil }
+        var run = source.inlineContextTarget(at: point)
+        let authored = run?.props["contextPopover"] ?? (run == nil ? source.props["contextPopover"] : nil)
+        let link = authored == nil && view is NodeView ? source.peekedLink(at: point) : nil
+        if let link { run = link.run }
+        guard live(source), let name = authored ?? link?.href, menus.eligible(source, contextMenu: true) else { return nil }
         // UIKit's row menu wins over text selection. An authored menu
         // nearer the hit still belongs to that node (LLP 1115.000 D11.6).
         if view is NodeView ? NodeView.nativeEditor(hit, below: view) : NodeView.nativeInputOwns(hit, below: view) { return nil }
         if let hit = hit as? NodeView,
            let nearest = hit.contextMenuSource(at: hit.convert(location, from: view)), nearest !== source { return nil }
-        guard let pop = popover(named: name) else { log("context menu \(name) refused: no popover has that id"); return nil }
+        let pop = link == nil ? popover(named: name) : nil
+        guard link != nil || pop != nil else { log("context menu \(name) refused: no popover has that id"); return nil }
         // A press released before its menu showed never reached `willEnd`.
         if let previous = open { restore(previous) }
-        let owner = Open(source: source, popover: pop, name: name, point: point, inlineID: run?.id)
+        let owner = Open(source: source, popover: pop, name: name, point: point, inlineID: run?.id, isLink: link != nil)
         owner.interaction = interaction
         if !(view is NodeView) { owner.touched = hit }
         open = owner
@@ -399,6 +424,11 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
 
     /// The popover's menu rows as the UIMenu, titled by its `aria-label`.
     func menu(_ owner: Open) -> UIMenu? {
+        if owner.isLink {
+            // A link menu is only where no `contextmenu` answers (`sync`), so there is none to fire; marked fired, it shows in `observation`.
+            owner.fired = true
+            return linkMenu(owner, owner.name)
+        }
         fire(owner)
         guard let menus, let pop = current(owner) else { return nil }
         let items = menus.items(of: pop, opener: owner.source) // a row's popover opens from the pressed node (LLP 1021)
@@ -408,6 +438,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// The preview row, moved into a controller sized by its layout; nil
     /// leaves UIKit's own (the lifted node) as the preview.
     func lift(_ owner: Open) -> UIViewController? {
+        guard !owner.isLink else { return nil }
         fire(owner)
         // Asked again, the same controller: the row is already in it.
         if owner.preview != nil, let controller = owner.controller { return controller }
@@ -435,6 +466,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// (filmed and logged, iOS 27.1).
     private func restore(_ owner: Open) {
         menus?.coverClosed()
+        owner.hiddenInk?.mask = nil
+        owner.hiddenInk = nil
         owner.runPreview?.view.removeFromSuperview()
         owner.runPreview = nil
         if let pop = owner.popover, owner.toggled { owner.toggled = false; presenter?.popoverEvents.changed(pop, open: false) }
@@ -473,6 +506,7 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             // The picture the finger landed on, else one taken now, from the run's place now
             guard let preview = owner.runPreview ?? Self.runPreview(lines, of: source) else { return nil }
             owner.runPreview = preview
+            hideRun(owner, lines)
             return preview.retargetedPreview(with: lines.target)
         }
         // A view the touch fell on that has left the window gives way to the node
@@ -481,6 +515,61 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
         parameters.visiblePath = Self.rounded(shown)
         guard let target = Self.target(shown) else { return nil }
         return UITargetedPreview(view: shown, parameters: parameters, target: target)
+    }
+
+    /// The run's words cut out of its paragraph's ink until `restore`. UIKit
+    /// hides a view it lifts, but the paragraph stays shown, and its words
+    /// showed beside their picture as the picture grew (filmed, iOS 27.1).
+    private func hideRun(_ owner: Open, _ lines: RunLines) {
+        guard owner.hiddenInk == nil, let ink = owner.source?.textRasterLayer, ink.mask == nil else { return }
+        let path = UIBezierPath(rect: ink.bounds)
+        for box in lines.boxes { path.append(UIBezierPath(rect: lines.container.layer.convert(box, to: ink))) }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        ink.mask = ClipPath.mask(path.cgPath, .evenOdd)
+        CATransaction.commit()
+        owner.hiddenInk = ink
+    }
+
+    /// A link's own menu, where nothing an author wrote answers its long
+    /// press: what a browser offers for a link, Open Link, Copy Link and
+    /// Share…, under its URL, over the link itself, lifted. The actions hold
+    /// `owner`, which UIKit may end (`open = nil`) before it runs them.
+    private func linkMenu(_ owner: Open, _ href: String) -> UIMenu {
+        let url = Self.linkURL(href, origin: ExactEnv.appMetadata["ExactOrigin"] as? String,
+                               visit: presenter?.session?.routerOp?["url"] as? String ?? "/")
+        var items: [UIMenuElement] = [UIAction(title: "Open Link", image: UIImage(systemName: "safari")) { [weak self, owner] _ in
+            self?.follow(owner)
+        }]
+        if let url {
+            items.append(UIAction(title: "Copy Link", image: UIImage(systemName: "doc.on.doc")) { [weak self] _ in
+                guard let session = self?.presenter?.session else { return }
+                AgentPasteboard.copy(url.absoluteString, to: session.agentPasteboard, log: session.log)
+            })
+            items.append(UIAction(title: "Share…", image: UIImage(systemName: "square.and.arrow.up")) { [weak self, owner] _ in
+                guard let self, let source = owner.source, self.live(source), let session = self.presenter?.session else { return }
+                let rect = owner.inlineID.flatMap { self.presenter?.inlineText($0) }.flatMap { source.inlineRects($0).first } ?? source.bounds
+                ShareSheet.present([url], title: nil, from: source, at: rect) { session.log($0) }
+            })
+        }
+        return UIMenu(title: url?.absoluteString ?? href, children: items)
+    }
+    /// `href` as a URL the reader can take out of the app (Copy Link and
+    /// Share): as written when it has a scheme, else resolved as a browser
+    /// resolves it, against the visit shown on the app's declared origin
+    /// (`app.origin`, baked as `ExactOrigin`). Nil without a declared origin,
+    /// and for a scheme `NodeView.hasLinkMenu` refuses.
+    static func linkURL(_ href: String, origin: String?, visit: String) -> URL? {
+        guard NodeView.hasLinkMenu(href) else { return nil }
+        if let url = URL(string: href), url.scheme != nil { return url }
+        guard let origin, let base = URL(string: origin + visit) else { return nil }
+        return URL(string: href, relativeTo: base)?.absoluteURL
+    }
+    /// Open Link, and a tap on the lifted link: a run's own activation, else a tap where the press was.
+    private func follow(_ owner: Open) {
+        guard let source = owner.source, live(source), menus?.eligible(source, contextMenu: true) == true else { return }
+        if let id = owner.inlineID { _ = source.activateInline(id); return }
+        source.activate(at: source.convert(owner.point, to: nil))
     }
 
     /// `view`'s outline in its own coordinates where its corners are rounded,
@@ -1115,6 +1204,11 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
     /// The preview tapped: its row's press, as a tap on it would be.
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction, willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration, animator: UIContextMenuInteractionCommitAnimating) {
         animator.preferredCommitStyle = .dismiss
+        // A link's preview is the link: tapping it opens the link, once it is back in place.
+        if let owner = open, owner.isLink {
+            animator.addCompletion { [weak self, owner] in self?.follow(owner) }
+            return
+        }
         // The row still a row of the popover its source names, pressable and
         // enabled where it is authored (it is not in that tree while lifted).
         guard let owner = open, let presenter, let row = owner.preview, live(row), row.handlers.contains("press"),
