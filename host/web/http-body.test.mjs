@@ -6,7 +6,7 @@ import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {boundedHttpBody as readBody, longPollTiming, request, waitForInflight} from './http-body.js';
-import {admittingGrant, scopedGrantSet} from './grant-admission.js';
+import {admittingGrant, createGrantSet, grantError, scopedGrantSet} from './grant-admission.js';
 import {createRequestExecutor} from '../web-js/admission.js';
 
 const ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'../..'),sets=new Map();
@@ -25,6 +25,13 @@ function responseAt(url, body, init) {
   return Object.defineProperty(new Response(body, init), 'url', { value: String(url) });
 }
 
+// LLP 1153.002 D2: the bake's line for a setting a launch may give is exact2's own; the page admits the set, and the
+// line grants nothing there.
+test('an env.launch line is admitted as an exact-only line and grants no I/O',()=>{
+  const set=createGrantSet(structuredClone(normalized('net.fetch https://api.example\nenv.launch API_BASE_URL')));
+  expect(grantError(set)).toBeNull();
+  expect(set.entries[1]).toEqual([2,'env.launch API_BASE_URL',null,null]);
+});
 test('independent HTTP collects only a bounded complete response',async()=>{
   assert.deepEqual(await readBody(new Response('four'),4),new TextEncoder().encode('four'));
   assert.deepEqual(await readBody(new Response(null),4),new Uint8Array());

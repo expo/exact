@@ -322,6 +322,8 @@
       if (stream) {
         call.stream = stream;
         call.upload = !!upload;
+        // Its refusal names the setting a launch gave its origin (prelude.js `__exact_message`).
+        call.streamUrl = url;
       }
       var owner = socket
         ? (call.socket = listen ? listenOwner(ticket) : own ? own(ticket, call) : socketOwner(ticket, call.mutation))
@@ -342,6 +344,8 @@
           set: !stream && !poll && !upload && bodyFrom === undefined && bodyTo === undefined && /^https?:/i.test(url),
           bodyTo: bodyTo,
           head: method === "HEAD",
+          // A refusal names the setting a launch gave its origin (prelude.js `launchRefusal`).
+          url: url,
         };
         pending.set(ticket, p);
         // The caller's abort also makes its socket handle stale (D7); the

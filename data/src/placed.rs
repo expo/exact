@@ -622,6 +622,13 @@ impl<D: DataSource + 'static> exact_runner::DataSourceWrapper for Placed<D> {
         }
     }
 
+    /// On the template, which an owner's instance is built from.
+    fn render_web(&mut self) {
+        if let Some(inner) = &mut self.inner {
+            inner.render_web();
+        }
+    }
+
     /// The wrapper's envelope lines, plus the inline module's journal.
     /// A worker owner keeps the module's journal (LLP 1097 D6): nothing of
     /// it is forwarded while the owner holds it.
