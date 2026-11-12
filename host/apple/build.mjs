@@ -1176,7 +1176,7 @@ async function main(args, lockHeld = false) {
     let swiftBinDir = existsSync(answer) ? readFileSync(answer, 'utf8') : '';
     if (!swiftBinDir || !existsSync(swiftBinDir)) {
       const located = read('swift', [...swiftArgs, '--show-bin-path'], { cwd: pkg, env });
-      if (located.status !== 0) throw new Error(`swift output path: ${located.stderr}`);
+      if (located.status !== 0) throw new Error(`swift output path: ${located.error?.message ?? (located.signal ? `swift ended by ${located.signal}` : located.stderr)}`);
       swiftBinDir = located.stdout.trim();
       if (!swiftBinDir || !isAbsolute(swiftBinDir)) throw new Error('swift returned no absolute binary output path');
       mkdirSync(swiftBuildRoot, { recursive: true });
