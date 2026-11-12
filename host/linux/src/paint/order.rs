@@ -12,6 +12,24 @@ use super::*;
 const FULL_EVERY: u32 = 64;
 
 impl Painter {
+    pub(super) fn order_children(&self, children: &mut [ViewId], ranks: &BTreeMap<ViewId, i64>) {
+        if self.placements.is_empty() && !children.iter().any(|c| ranks.contains_key(c)) {
+            return;
+        }
+        children.sort_by(
+            |a, b| match (self.placements.get(a), self.placements.get(b)) {
+                (Some(a), Some(b)) => a.depth().total_cmp(&b.depth()),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                _ => ranks
+                    .get(a)
+                    .copied()
+                    .unwrap_or(0)
+                    .cmp(&ranks.get(b).copied().unwrap_or(0)),
+            },
+        );
+    }
+
     /// The ranks for this paint's kernel epoch.
     pub(super) fn refresh_ranks(&mut self, kernel: &exact_kernel::Kernel) {
         let full = !self.rows.active() || self.rank_increments >= FULL_EVERY;

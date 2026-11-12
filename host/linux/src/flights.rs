@@ -142,6 +142,7 @@ impl<D: DataSource> Host<D> {
             let flying = engine.is_active(node, Property::Layout) && !landed;
             if !flying {
                 engine.remove(node);
+                self.row_dirty.node(f.frame.to);
             }
             flying
         });
@@ -382,6 +383,63 @@ component App
         host.tick(1100.0);
         assert!(host.flight_frames().is_empty());
         assert!(!host.motion());
+    }
+
+    #[test]
+    fn display_submission_reveals_a_new_arrival_before_the_first_flight_stream() {
+        for (gap, expected) in [(60, 0.), (260, 150.)] {
+            let app = format!(
+                r#"component App
+  state open = false
+  action toggle
+    open = not open
+  view
+    column
+      button "Toggle" press=toggle testId="toggle"
+      if open
+        scroll width=300 height=200 testId="port"
+          column
+            box height={gap}
+            view sharedElement="card" testId="arrival" width=120 height=90 -exact-layout-transition="1s linear"
+            box height=600
+      else
+        view sharedElement="card" width=120 height=90 -exact-layout-transition="1s linear"
+"#
+            );
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(&app),
+                (),
+                (400., 800.),
+                1.,
+                std::path::PathBuf::new(),
+                PainterChoice::Canvas,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.host_mut().flights.enabled = true;
+            let first = p.display_frame().unwrap();
+            assert!(p.display_complete(&first));
+            p.tap(id(p.host(), "toggle")).unwrap();
+            let port = id(p.host(), "port");
+            let arrival = id(p.host(), "arrival");
+            assert_eq!(p.host().flights.reveal.len(), 1);
+            let next = p.display_frame().unwrap();
+            assert_eq!(
+                p.scroll_of(port).1,
+                expected,
+                "reveal uses the new scroller before its stream is submitted"
+            );
+            assert!(p.host().flights.reveal.is_empty());
+            assert!(
+                !p.boxes().iter().any(|b| b.id == arrival),
+                "input still sees the acknowledged picture"
+            );
+            assert!(p.display_complete(&next));
+            let boxes = p.boxes();
+            let target = boxes.iter().find(|b| b.id == arrival).unwrap().rect;
+            let port = boxes.iter().find(|b| b.id == port).unwrap().rect;
+            assert!(target.1 >= port.1 && target.1 + target.3 <= port.1 + port.3);
+        }
     }
 
     #[test]

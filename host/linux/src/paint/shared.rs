@@ -15,24 +15,7 @@ impl SharedState {
     pub(crate) fn update<D: exact_runner::DataSource>(&mut self, host: &crate::Host<D>) {
         self.frames = host.flight_frames();
         self.reduced = host.runner().viewport().preferences.reduced_motion;
-        if self.epoch != Some(host.kernel().epoch()) {
-            self.epoch = Some(host.kernel().epoch());
-            let nodes = if host.kernel().has_prop(PropId::SharedElement) {
-                host.preorder()
-            } else {
-                Vec::new()
-            };
-            self.alive = nodes
-                .into_iter()
-                .filter_map(|id| {
-                    let node = host.kernel().node(id)?;
-                    node.props
-                        .str(PropId::SharedElement)
-                        .filter(|s| !s.is_empty())?;
-                    Some(motion_node(node.key))
-                })
-                .collect();
-        }
+        self.epoch = Some(host.kernel().epoch());
     }
 }
 
@@ -50,6 +33,40 @@ pub struct SharedElement<'a> {
 }
 
 impl Painter {
+    /// Kept rows do not visit their names again. Publish their current paint order
+    /// with the lifecycle so flights retain stacking when those rows are reused.
+    pub(super) fn order_shared(&mut self, scene: &Scene<'_>) {
+        self.shared.alive.clear();
+        if !scene.kernel.has_prop(PropId::SharedElement) {
+            return;
+        }
+        let mut stack: Vec<_> = scene.roots.iter().copied().rev().collect();
+        while let Some(id) = stack.pop() {
+            let Some(node) = scene.kernel.node(id) else {
+                continue;
+            };
+            if node
+                .props
+                .str(PropId::SharedElement)
+                .is_some_and(|s| !s.is_empty())
+            {
+                self.shared.alive.push(motion_node(node.key));
+            }
+            let mut children = node.children();
+            self.order_children(&mut children, &self.ranks);
+            if let Some((_, lifted)) = self.lift.arrange.filter(|(owner, _)| *owner == node.key) {
+                if let Some(at) = children
+                    .iter()
+                    .position(|id| scene.kernel.node(*id).is_some_and(|n| n.key == lifted))
+                {
+                    let lifted = children.remove(at);
+                    children.push(lifted);
+                }
+            }
+            stack.extend(children.into_iter().rev());
+        }
+    }
+
     pub(super) fn node_at(
         &mut self,
         walk: &mut Walk<'_, '_>,
@@ -72,7 +89,6 @@ impl Painter {
             self.node_content(walk, id, ts, offset, clip);
             return;
         }
-        self.row_refuse();
         let node = walk.scene.kernel.node(id).expect("named live node");
         let rect = paint_rect(node.frame, sticky(walk.scene, id, offset));
         let shown = (walk.scene.presented)(id);
@@ -101,6 +117,9 @@ impl Painter {
                 .is_some_and(|s| s.starts_with("symbol:"))
             && image_tint(&node, &shown, self.dark).is_none()
             && image.is_none_or(|(i, _)| i.animation_file().is_none())
+            && node.style.filter.is_none()
+            && node.style.rare.mask_image.gradient().is_none()
+            && node.style.rare.clip_path.commands().is_empty()
             && paint.background[3] == 0
             && paint.gradients.is_empty()
             && paint.widths.iter().all(|w| *w == 0.0)

@@ -167,6 +167,10 @@ pub fn drawing(b: &[u32]) -> Option<(Vec<u32>, bool)> {
 
 /// Carry only retained definitions into a newer frame. Unknown streams stay whole.
 fn carry_definitions(older: &[u32], newer: &mut Vec<u32>) -> bool {
+    // The reader captures shared sources before any earlier definitions mutate them.
+    if newer.first() == Some(&shared::STATE) {
+        return false;
+    }
     let mut definitions = Vec::new();
     let mut row_sets = false;
     let mut i = 0;
@@ -258,6 +262,18 @@ impl Recorder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entering_shared_state_after_an_ordinary_frame_preserves_both_boundaries() {
+        let old = vec![IMAGE_DEF, 7, 10, 10, IMAGE, 7, 0, 0, 10, 10];
+        let state = vec![shared::STATE, 5, 0, 0, 1, 9, 0, shared::DRAW, 9, 0];
+        let mut new = state.clone();
+        assert!(!carry_definitions(&old, &mut new));
+        assert_eq!(
+            new, state,
+            "STATE must remain first before reader mutations"
+        );
+    }
 
     #[test]
     fn turned_boxes_record_shapes_without_cpu_pictures() {

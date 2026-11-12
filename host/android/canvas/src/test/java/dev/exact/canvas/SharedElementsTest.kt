@@ -145,6 +145,45 @@ class SharedElementsTest {
         }
     }
 
+    @Test fun retainedFlightLayersFollowTheNewPaintOrderWithoutNewDefinitions() {
+        val t = Fixture()
+        val box = RectF(0f, 0f, 100f, 100f)
+        t.pictures[7] = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
+        t.pictures[8] = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.BLUE) }
+        t.shared.begin(state(listOf(1, 2)))
+        t.define(definition(1, box, 7, 1)); t.define(definition(2, box, 8, 1)); t.shared.finish()
+        val pairs = listOf(Triple(1L, 1L, 0.5f), Triple(2L, 2L, 0.5f))
+        val pixels = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+        for ((order, color) in listOf(listOf(1L, 2L) to Color.BLUE, listOf(2L, 1L) to Color.RED)) {
+            t.shared.begin(state(order, pairs)); t.shared.finish()
+            pixels.eraseColor(Color.TRANSPARENT)
+            t.shared.draw(Canvas(pixels))
+            assertEquals(color, pixels.getPixel(50, 50))
+        }
+    }
+
+    @Test fun retainedNamesSurviveAFrameWithoutStateAndCaptureTheirMovedRow() {
+        val t = Fixture()
+        val thumb = RectF(10f, 20f, 110f, 120f)
+        t.shared.begin(state(listOf(1)))
+        t.define(definition(1, thumb, row = 7))
+        t.shared.placeRow(7, 0f, 30f)
+        t.shared.finish()
+        val slot = t.shared.node(1)
+        assertTrue(slot.hasDisplayList())
+        t.shared.begin(IntBuffer.wrap(intArrayOf(17, 7, f(0f), f(60f))))
+        t.shared.placeRow(7, 0f, 60f)
+        t.shared.finish()
+        assertSame(slot, t.shared.node(1))
+        assertTrue(slot.hasDisplayList())
+        t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0f))))
+        t.define(definition(2, RectF(0f, 0f, 400f, 400f)))
+        t.shared.finish(); t.draw()
+        assertRect(RectF(10f, 80f, 110f, 180f), t.shared.shown(2)!!.box)
+        t.shared.begin(state(emptyList())); t.shared.finish()
+        assertTrue(t.shared.nodes().isEmpty())
+    }
+
     @Test fun differentDecodeCropsKeepTheNaturalImageMappingContinuous() {
         val from = SharedElements.Pose(RectF(10f, 20f, 110f, 120f), 12f,
             RectF(-40f, 20f, 160f, 120f), 7, 400f, 200f, RectF(0.25f, 0f, 0.75f, 1f))

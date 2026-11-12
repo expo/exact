@@ -846,7 +846,6 @@ impl Painter {
             self.backend.begin(viewport.0, viewport.1, self.scale);
             false
         };
-        self.backend.shared_frame(&self.shared);
         if partial {
             self.damage.last = self.damage.next.clone();
         } else {
@@ -856,12 +855,14 @@ impl Painter {
         self.damage.unsupported = false;
         if self.paint_epoch != Some(scene.kernel.epoch()) {
             self.refresh_ranks(scene.kernel);
+            self.order_shared(scene);
             self.paint_epoch = Some(scene.kernel.epoch());
             #[cfg(test)]
             {
                 self.rank_passes += 1;
             }
         }
+        self.backend.shared_frame(&self.shared);
         let mut walk = Walk {
             scene,
             boxes: Vec::with_capacity(self.boxes_hint),

@@ -73,7 +73,11 @@ internal class SharedElements(
         flights.clear(); flights.putAll(next)
         val live = 4 + b.get(3) * 5
         alive.clear()
-        repeat(b.get(live)) { alive.add(key(b, live + 1 + it * 2)) }
+        repeat(b.get(live)) { order ->
+            val key = key(b, live + 1 + order * 2)
+            alive.add(key)
+            elements[key]?.order = order
+        }
         for ((key, element) in elements) element.slot.alpha = if (!reduced && key in flights) 0f else 1f
     }
 

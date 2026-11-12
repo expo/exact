@@ -10,8 +10,14 @@ pub(super) const DRAW: u32 = 51;
 #[derive(Default)]
 pub(super) struct Shared {
     open: Vec<Open>,
-    order: u32,
+    order: std::collections::HashMap<u64, u32>,
+    sent: Vec<u32>,
     active: bool,
+}
+impl Shared {
+    pub(super) fn opened(&self) -> bool {
+        !self.open.is_empty()
+    }
 }
 struct Open {
     header: Vec<u32>,
@@ -27,7 +33,6 @@ impl Recorder {
             return;
         }
         self.shared.active = active;
-        self.shared.order = 0;
         let mut words = vec![
             STATE,
             3 + state.frames.len() as u32 * 5 + state.alive.len() as u32 * 2,
@@ -45,6 +50,16 @@ impl Recorder {
         for key in &state.alive {
             words.extend([*key as u32, (key >> 32) as u32]);
         }
+        if words == self.shared.sent {
+            return;
+        }
+        self.shared.sent.clone_from(&words);
+        self.shared.order = state
+            .alive
+            .iter()
+            .enumerate()
+            .map(|(i, key)| (*key, i as u32))
+            .collect();
         // begin() may already have announced freed images. Capture first.
         words.append(&mut self.ops);
         self.ops = words;
@@ -78,12 +93,11 @@ impl Recorder {
         let image = e.image.map_or(0, |(image, _)| {
             self.image_id(&picture::Picture::Bitmap(image.clone()))
         });
-        self.shared.order += 1;
         let scale = e.transform.sx.hypot(e.transform.ky) * self.scale;
         let mut header = vec![
             e.key as u32,
             (e.key >> 32) as u32,
-            self.shared.order,
+            self.shared.order.get(&e.key).copied().unwrap_or(0),
             self.group.unwrap_or(0),
             self.row.as_ref().map_or(0, |r| r.id),
         ];
@@ -110,6 +124,7 @@ impl Recorder {
             clips: std::mem::take(&mut self.clips),
             matrix: self.matrix.take(),
         });
+        self.direct.isolation += 1;
         true
     }
 
@@ -129,6 +144,7 @@ impl Recorder {
         self.ops.extend(body);
         self.clips = clips;
         self.matrix = matrix;
+        self.direct.isolation -= 1;
     }
 }
 
@@ -141,6 +157,265 @@ mod tests {
         FINISHED
             .with(|f| f.borrow_mut().take())
             .expect("painted stream")
+    }
+
+    fn sets(ops: &[u32]) -> Vec<&[u32]> {
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at < ops.len() {
+            let end = stream::end(ops, at).expect("valid op");
+            match ops[at] {
+                SET => {
+                    let h = at + 2;
+                    out.push(&ops[h..end]);
+                    let parents = h + 30 + ops[h + 29] as usize;
+                    out.extend(sets(&ops[parents + 1 + ops[parents] as usize * 2..end]));
+                }
+                ROW_BEGIN => out.extend(sets(&ops[at + 6..end - 1])),
+                _ => (),
+            }
+            at = end;
+        }
+        out
+    }
+
+    #[test]
+    fn shared_full_window_surface_cannot_mark_an_inner_index_as_direct() {
+        let mut r = Recorder::new();
+        r.begin(400., 800., 1.);
+        let e = SharedElement {
+            key: 1,
+            rect: (0., 0., 400., 800.),
+            radius: 0.,
+            opacity: 1.,
+            transform: Transform::identity(),
+            image: None,
+            fit: 0,
+            content: (0., 0., 400., 800.),
+        };
+        assert!(r.shared_begin(&e));
+        assert!(r.shared_begin(&SharedElement { key: 2, ..e }));
+        r.native(
+            91,
+            crate::paint::NativeKind::Surface,
+            &Shape::rect(e.rect),
+            e.transform,
+            "{}",
+            true,
+        );
+        assert_eq!(r.direct.at, None);
+        r.shared_end();
+        r.shared_end();
+        assert_eq!(r.direct.isolation, 0);
+        let expected = r.ops.clone();
+        r.finish().unwrap();
+        assert_eq!(
+            take(),
+            expected,
+            "finish must not corrupt a shared header or drawing"
+        );
+    }
+
+    #[test]
+    fn decorated_shared_images_use_the_live_subtree() {
+        for (style, fit) in [
+            ("", 3),
+            ("filter=\"blur(2px)\"", 0),
+            ("mask-image=\"linear-gradient(black, transparent)\"", 0),
+            ("clip-path=\"path('M0 0 L80 0 L40 60 Z')\"", 0),
+        ] {
+            let app = format!("component App\n  view\n    image \"\" sharedElement=\"photo\" object-fit=\"cover\" width=80 height=60 {style}\n");
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(&app),
+                (),
+                (400., 800.),
+                1.,
+                std::path::PathBuf::new(),
+                PainterChoice::Canvas,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            p.frame();
+            let ops = take();
+            let defs = sets(&ops);
+            assert_eq!(defs.len(), 1);
+            assert_eq!(defs[0][17], fit, "{style}");
+        }
+    }
+
+    #[test]
+    fn idle_named_rows_are_retained_and_emit_no_repeated_lifecycle() {
+        let app = "component App\n  view\n    scroll width=300 height=300\n      column\n        box sharedElement=\"a\" width=100 height=80 background-color=\"red\"\n        box sharedElement=\"b\" width=100 height=80 background-color=\"blue\"\n";
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(app),
+            (),
+            (400., 800.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.frame();
+        let first = take();
+        assert_eq!(sets(&first).len(), 2);
+        let expected = drawing(&first).unwrap().0;
+        for _ in 0..3 {
+            p.repaint();
+            p.frame();
+            let ops = take();
+            assert!(
+                sets(&ops).is_empty(),
+                "named rows must not re-record at rest"
+            );
+            assert_eq!(
+                drawing(&ops),
+                Some((expected.clone(), false)),
+                "the reader can skip unchanged frames"
+            );
+        }
+    }
+
+    #[test]
+    fn shared_lifecycle_orders_retained_names_by_css_stacking() {
+        let app = r#"component App
+  state reversed = false
+  action reverse
+    reversed = not reversed
+  view
+    column
+      button "Reverse" press=reverse testId="reverse"
+      scroll width=300 height=300
+        column
+          box sharedElement="front" testId="front" z-index=(reversed ? 0 : 2) width=100 height=80 background-color="red"
+          box sharedElement="back" testId="back" z-index=1 width=100 height=80 background-color="blue"
+"#;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(app),
+            (),
+            (400., 800.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        let key = |name| motion_node(p.host().kernel().find_by_test_id(name)[0]);
+        let (front, back) = (key("front"), key("back"));
+        for expected in [[back, front], [front, back]] {
+            p.frame();
+            let ops = take();
+            assert_eq!(ops[0], STATE);
+            let names: Vec<_> = ops[5..9]
+                .chunks_exact(2)
+                .map(|k| u64::from(k[0]) | u64::from(k[1]) << 32)
+                .collect();
+            assert_eq!(names, expected);
+            for def in sets(&ops) {
+                let key = u64::from(def[0]) | u64::from(def[1]) << 32;
+                assert_eq!(
+                    def[2] as usize,
+                    expected.iter().position(|k| *k == key).unwrap()
+                );
+            }
+            let toggle = p.host().kernel().find_by_test_id("reverse")[0];
+            p.tap(p.host().kernel().node_by_key(toggle).unwrap().id)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn retained_flight_corners_refresh_when_reduced_motion_changes_or_the_flight_lands() {
+        let app = r#"component App
+  state open = false
+  action toggle
+    open = not open
+  view
+    column
+      button "Toggle" press=toggle testId="toggle"
+      scroll width=300 height=300
+        column
+          if open
+            box sharedElement="card" width=100 height=80 border-radius=20 background-color="red" -exact-layout-transition="10s linear"
+          else
+            box sharedElement="card" width=100 height=80 border-radius=10 background-color="red" -exact-layout-transition="10s linear"
+          box height=300
+"#;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(app),
+            (),
+            (400., 800.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        p.host_mut().flights.enabled = true;
+        p.frame();
+        take();
+        let toggle = p.host().kernel().find_by_test_id("toggle")[0];
+        p.tap(p.host().kernel().node_by_key(toggle).unwrap().id)
+            .unwrap();
+        let assert_corner = |ops: &[u32], radius: f32| {
+            let defs = sets(ops);
+            assert_eq!(defs.len(), 1, "flight-dependent drawing must be refreshed");
+            let def = defs[0];
+            let parents = 30 + def[29] as usize;
+            let mut at = parents + 1 + def[parents] as usize * 2;
+            while at < def.len() {
+                if def[at] == RRECT {
+                    assert_eq!(def[at + 6..at + 14], [radius.to_bits(); 8]);
+                    return;
+                }
+                at = stream::end(def, at).unwrap();
+            }
+            panic!("the rounded destination must paint its red surface");
+        };
+        p.frame();
+        assert_corner(&take(), 0.);
+        for reduced in [true, false] {
+            let mut preferences = p.host().runner().viewport().preferences;
+            preferences.reduced_motion = reduced;
+            assert!(p.set_preferences(preferences).is_none());
+            p.frame();
+            assert_corner(&take(), if reduced { 20. } else { 0. });
+            p.repaint();
+            p.frame();
+            assert!(
+                sets(&take()).is_empty(),
+                "unchanged flight rows remain reusable"
+            );
+        }
+        p.clock(11000.);
+        p.frame();
+        assert_corner(&take(), 20.);
+    }
+
+    #[test]
+    fn a_shared_image_reloads_its_header_with_its_row() {
+        let mut r = Recorder::new();
+        r.begin(400., 800., 1.);
+        r.row_begin(1, (0., 0.), None);
+        let e = SharedElement {
+            key: 1,
+            rect: (0., 0., 100., 100.),
+            radius: 0.,
+            opacity: 1.,
+            transform: Transform::identity(),
+            image: None,
+            fit: 3,
+            content: (0., 0., 100., 100.),
+        };
+        r.shared_begin(&e);
+        r.slot_begin(42);
+        r.slot_end();
+        r.shared_end();
+        let row = r.row_end(e.rect);
+        assert!(
+            !r.slot_again(row, 42),
+            "a new decode must refresh the shared image metadata, not just its pixels"
+        );
     }
 
     fn definitions(ops: &[u32], out: &mut Vec<(u64, u32, Vec<u64>)>) {

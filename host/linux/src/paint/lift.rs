@@ -53,7 +53,7 @@ impl Painter {
         // A native button's children are its face, painted above (LLP 1069.011 D5).
         let native =
             node.node_type == NodeType::Control && node.props.str(PropId::Type) == Some("button");
-        let children: Vec<_> = node
+        let mut children: Vec<_> = node
             .children()
             .into_iter()
             .filter(|id| Some(*id) != lift && !native)
@@ -62,24 +62,7 @@ impl Painter {
         // projective depth, as the web gives them negative indices by
         // depth; then every other child by its rank, then tree order.
         // All in flow and none placed (most parents): tree order as it is.
-        let ordered =
-            self.placements.is_empty() && !children.iter().any(|c| walk.ranks.contains_key(c));
-        let order: Vec<(ViewId, usize)> = children.iter().copied().zip(0..).collect();
-        let mut order = order;
-        if !ordered {
-            order.sort_by(|(a, i), (b, j)| {
-                match (self.placements.get(a), self.placements.get(b)) {
-                    (Some(a), Some(b)) => a.depth().total_cmp(&b.depth()).then(i.cmp(j)),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    _ => {
-                        let rank = |id: &ViewId| walk.ranks.get(id).copied().unwrap_or(0);
-                        rank(a).cmp(&rank(b)).then(i.cmp(j))
-                    }
-                }
-            });
-        }
-        let children: Vec<ViewId> = order.into_iter().map(|(id, _)| id).collect();
+        self.order_children(&mut children, &walk.ranks);
         // A scroller's rows are its children; a scroller holding one
         // container (a column of settings) keeps that container's children
         // apart instead, so one of them changing records only itself.
