@@ -65,7 +65,7 @@ test('strip and feed chrome follow the colour scheme while content cards keep th
           expect(card.ink).toEqual([255, 255, 255]);
           expect(ratio(card.ink, card.fill)).toBeGreaterThanOrEqual(4.5);
         }
-        const launch = scheme === 'light' ? manifest.background_color : manifest.background_color_dark;
+        const launch = scheme === 'light' ? manifest.background_color : manifest.color_scheme_dark?.background_color;
         const surface = '#' + paint.page.fill.map(n => n.toString(16).padStart(2, '0')).join('');
         require(launch === surface, { page, scheme, expected: 'launch matches page', launch, surface });
         const checked = await checkOp(session, [scheme]);

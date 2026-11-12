@@ -3,7 +3,7 @@ import { resolve, relative } from 'node:path';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync, copyFileSync, cpSync, rmSync } from 'node:fs';
 import { buildBake, bakeOutput, developmentBuildEnv, HOST_DEV, appleExecutableName } from '../../scripts/app.mjs';
-import { plistFile } from './assets.mjs';
+import { appleAssets, plistFile } from './assets.mjs';
 import { appleProduction, stripProductionExecutable } from './link.mjs';
 import { reportBuilt } from '../../scripts/help.mjs';
 import { copyStaticTreeIfPresent } from '../web/serve.mjs';
@@ -75,8 +75,8 @@ export async function buildWatch(app, args, { runApple, appleArtifacts, appleBui
       '-Xswiftc', '-Xclang-linker', '-Xswiftc', '-isysroot', '-Xswiftc', '-Xclang-linker', '-Xswiftc', sdk];
     const swiftEnv = { ...process.env, WATCHOS_DEPLOYMENT_TARGET: '10.0', EXACT_LIB_DIR: libDir, EXACT_LIB: crate.replaceAll('-', '_'), EXACT_WIDGET_GALLERY: '0', EXACT_UPDATE_TRUST: production ? 'production' : 'development' };
     delete swiftEnv.SDKROOT;
-    const prepared = prepareWidgetCore({ app: watch, directory: resolve(directory, 'core'), swiftBuildRoot: swiftRoot, swiftArgs, triple, platform: 'watchos', device: false,
-      swiftc: runApple('xcrun', ['swiftc', '--version'], { read: true }).stdout });
+    const swiftc = runApple('xcrun', ['swiftc', '--version'], { read: true }).stdout;
+    const prepared = prepareWidgetCore({ app: watch, directory: resolve(directory, 'core'), swiftBuildRoot: swiftRoot, swiftArgs, triple, platform: 'watchos', device: false, swiftc });
     const shared = sharedWidgetCore({ app: watch, prepared, libDir, crate, env: swiftEnv, runApple });
     const group = `group.${watch.id}`, entitlements = plistFile({ 'com.apple.security.application-groups': [group] });
     const entitlementPath = resolve(directory, 'watch-entitlements.plist');
@@ -90,12 +90,13 @@ export async function buildWatch(app, args, { runApple, appleArtifacts, appleBui
     if (live) copyFileSync(resolve(output, 'plans/watch.plan'), resolve(bundle, 'plans/watch.plan'));
     for (const name of ['assets', 'deck']) copyStaticTreeIfPresent(resolve(app.dir, name), resolve(bundle, name));
     const appInfo = JSON.parse(runApple('plutil', ['-convert', 'json', '-o', '-', resolve(parent.bundle, 'Info.plist')], { read: true }).stdout);
+    const icon = appleAssets(app, bundle, { platform: 'watchos', kept: { dir: resolve(directory, 'assets'), stamp: swiftc } });
     const info = { CFBundleIdentifier: watch.id, CFBundleName: app.displayName, CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWatch', CFBundlePackageType: 'APPL',
       CFBundleVersion: appInfo.CFBundleVersion, CFBundleShortVersionString: appInfo.CFBundleShortVersionString, CFBundleSupportedPlatforms: ['WatchSimulator'], MinimumOSVersion: '10.0', UIDeviceFamily: [4],
       WKApplication: true, WKCompanionAppBundleIdentifier: app.id, WKRunsIndependentlyOfCompanionApp: true,
       ExactAppGroup: group, ExactAppIdentifier: app.id, ExactWidgetTypeScript: false, ExactWidgetGeneration: createHash('sha256').update(JSON.stringify([baked.compat.id, baked.graph.artifacts])).digest('hex'),
       ExactWatchEntries: entries.map(({ kind, families, title }) => ({ kind, families, title: title ?? kind })),
-      ...(live ? { ExactWatchPlan: 'plans/watch.plan' } : {}) };
+      ...(live ? { ExactWatchPlan: 'plans/watch.plan' } : {}), ...icon };
     writeFileSync(resolve(bundle, 'Info.plist'), plistFile(info));
     const executableArgs = [...swiftArgs, '-Xlinker', '-rpath', '-Xlinker', '@executable_path/Frameworks',
       '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath];

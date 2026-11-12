@@ -192,10 +192,11 @@ test('readManifest admits the app\'s design, `tamber` (LLP 1121 D2)', async () =
 test('manifest colours follow the web and retired launch and alias keys are refused', async () => {
   const { readManifest } = await import('./app.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-manifest-'));
-  const manifest = { name: 'Manifest', app: { id: 'test.manifest', name: 'Manifest' }, background_color: '#fff', background_color_dark: '#123456' };
+  const manifest = { name: 'Manifest', app: { id: 'test.manifest', name: 'Manifest' }, background_color: '#fff', color_scheme_dark: { background_color: '#123456' } };
   const read = value => { writeFileSync(resolve(dir, 'app.json'), JSON.stringify(value)); return readManifest(dir, 'fixture'); };
   try {
-    assert.equal(read(manifest).background_color_dark, '#123456');
+    assert.equal(read(manifest).color_scheme_dark.background_color, '#123456');
+    assert.throws(() => read({ ...manifest, background_color_dark: '#123456' }), /background_color_dark/);
     assert.throws(() => read({ ...manifest, launch: { background: '#fff' } }), /launch/);
     assert.throws(() => read({ ...manifest, typescript: { aliases: { '@/*': './*' } } }), /aliases/);
   } finally { rmSync(dir, { recursive: true, force: true }); }

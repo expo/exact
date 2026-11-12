@@ -10,6 +10,7 @@ import { HERMES_INSTALLER, PINNED_RUST, hermesBundle, hermesLeanSysRoots } from 
 import { androidHermes, checkHermesBundles, appleCrossTargets, appleSetupTargets, platformRowNames } from './exact.mjs';
 import { iosAssets, iosTarget, entitlements, infoPlist, macInfoPlist, documentTypes, importedTypes, exportedTypes, writeUsageStrings, designCompatible, COMPATIBLE_SDK, moduleTripleFor } from '../host/apple/build.mjs';
 import { useXcode } from '../host/apple/devices.mjs';
+import { encodePng } from './png.mjs';
 import { macReleaseEntitlements, launchImageInventory } from '../host/apple/assets.mjs';
 
 // Profile selection reads DEVELOPMENT_TEAM; a test that means a team names it.
@@ -130,8 +131,7 @@ test.skipIf(!packagingTools)('production iOS bundles preserve Rust frameworks, s
     run('clang', ['-g', '-dynamiclib', source, '-o', dylib]);
     assert.match(run('nm', ['-a', dylib]).stdout, / _local_value$/m);
     const icon = resolve(dir, 'icon.png');
-    writeFileSync(icon, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+afo0AAAAASUVORK5CYII=', 'base64'));
-    run('sips', ['-z', '1024', '1024', icon]);
+    writeFileSync(icon, encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
     const app = { dir, id: 'com.exact.fixture', name: 'Fixture', manifest: {} };
     const libraries = resolve(dir, 'libraries'); mkdirSync(libraries);
     copyFileSync(dylib, resolve(libraries, 'library.dylib'));
@@ -304,7 +304,7 @@ test.skipIf(process.platform === 'win32')('an iOS, phone, Apple TV or iOS test b
   } finally { rmSync(bin, { recursive: true, force: true }); }
 });
 
-test.skipIf(process.platform === 'win32')('an archive of an app without a 512 px icon is refused before anything compiles', () => {
+test.skipIf(process.platform === 'win32')('an archive of an app without a 1024 px icon is refused before anything compiles', () => {
   const scratch = mkdtempSync(resolve(tmpdir(), 'exact-early-refusal-'));
   try {
     const bin = resolve(scratch, 'bin'), app = resolve(scratch, 'noicon'), log = resolve(scratch, 'log');
@@ -313,13 +313,15 @@ test.skipIf(process.platform === 'win32')('an archive of an app without a 512 px
     // Every compiler the build could start records that it was started, and compiles nothing.
     for (const tool of ['cargo', 'rustc', 'swift', 'swiftc', 'xcodebuild', 'xcrun']) writeFileSync(resolve(bin, tool), `#!/bin/sh\necho "${tool} $*" >> '${log}'\nexit 9\n`, { mode: 0o755 });
     writeFileSync(resolve(app, 'app.contract'), 'component A\n');
+    mkdirSync(resolve(app, 'assets'));
+    writeFileSync(resolve(app, 'assets/small.png'), encodePng({ width: 192, height: 192, data: new Uint8Array(192 * 192 * 4).fill(255) }));
     writeFileSync(resolve(app, 'app.json'), JSON.stringify({ name: 'No Icon', id: 'com.example.noicon', app: { id: 'com.example.noicon', name: 'No Icon' },
-      icons: [{ src: 'small.png', sizes: '192x192' }] }));
+      icons: [{ src: 'assets/small.png', sizes: '192x192' }] }));
     const result = spawnSync(process.execPath, ['host/apple/build.mjs', '--device', '--archive', resolve(scratch, 'out.ipa'), '--unsigned', app],
       { encoding: 'utf8', env: { ...process.env, EXACT_APP_DIR: '', EXACT_UPDATE_GENESIS: '', EXACT_UPDATE_RECEIPT: '', RUSTUP_TOOLCHAIN: 'stable', PATH: bin + delimiter + process.env.PATH } });
     assert.equal(result.status, 1, result.stderr);
     // Every refusal at once, the icon's in the words packaging would use.
-    assert.match(result.stderr, /noicon's distribution bundle requires an AppIcon; declare host\.ios\.icon or a square icon of at least 512 px/);
+    assert.match(result.stderr, /noicon: icons\[0\]: assets\/small\.png is 192×192 px, and the iOS icon needs at least 1024 px/);
     assert.match(result.stderr, /set EXACT_UPDATE_RECEIPT to its authenticated publisher receipt/);
     assert.equal(existsSync(log) ? readFileSync(log, 'utf8') : '', '', 'nothing was compiled');
   } finally { rmSync(scratch, { recursive: true, force: true }); }
@@ -330,20 +332,33 @@ test('the early refusals are the ones packaging makes', async () => {
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-refusals-'));
   try {
     const app = (manifest) => ({ dir, name: 'fixture', manifest });
-    assert.deepEqual(appleRefusals(app({ icons: [{ src: 'icon.png', sizes: '1024x1024' }] }), 'ios', { archive: true }), []);
-    assert.deepEqual(appleRefusals(app({ icons: [{ src: 'icon.png', sizes: '1024x512' }] }), 'ios', { archive: true }).length, 1, 'the icon must be square');
+    mkdirSync(resolve(dir, 'assets'));
+    writeFileSync(resolve(dir, 'assets/icon.png'), encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
+    writeFileSync(resolve(dir, 'assets/wide.png'), encodePng({ width: 1024, height: 512, data: new Uint8Array(1024 * 512 * 4).fill(255) }));
+    assert.deepEqual(appleRefusals(app({ icons: [{ src: 'assets/icon.png' }] }), 'ios', { archive: true }), []);
+    assert.deepEqual(appleRefusals(app({ icons: [{ src: 'assets/wide.png' }] }), 'ios', { archive: true }).length, 1, 'the icon must be square');
     // A development build needs no icon; a distributed one does, and so do alternate icons.
     assert.deepEqual(appleRefusals(app({}), 'ios'), []);
     const archived = appleRefusals(app({}), 'ios', { archive: true });
-    assert.deepEqual(archived, ["host/apple: fixture's distribution bundle requires an AppIcon; declare host.ios.icon or a square icon of at least 512 px"]);
+    assert.deepEqual(archived, ["host/apple: fixture's distribution bundle requires an AppIcon; declare host.ios.icon or a square icon of at least 1024 px"]);
     const bundle = resolve(dir, 'Fixture.app'); mkdirSync(bundle);
     assert.throws(() => iosAssets(app({}), bundle, true, { catalog: true }), { message: archived[0] });
     const set = resolve(dir, 'modules/apple/Icons.xcassets/Alternate.appiconset');
     mkdirSync(set, { recursive: true });
     writeFileSync(resolve(set, 'Contents.json'), '{}');
-    assert.deepEqual(appleRefusals(app({}), 'ios'), ["host/apple: fixture's alternate icons require a primary; declare host.ios.icon or a square icon of at least 512 px"]);
+    assert.deepEqual(appleRefusals(app({}), 'ios'), ["host/apple: fixture's alternate icons require a primary; declare host.ios.icon or a square icon of at least 1024 px"]);
     assert.deepEqual(appleRefusals(app({ host: { ios: { icon: 'Missing.icon' } } }), 'ios', { archive: true }), ['host.ios.icon: Missing.icon does not exist'], 'one reason, not the primary it leaves missing as well');
-    assert.deepEqual(appleRefusals(app({}), 'tvos', { archive: true }), [], 'tvOS takes no app icon from the manifest');
+    // tvOS's icon is a 5:3 one; a Caltrain-shaped 8:3 icon is none, which only a distributed bundle refuses.
+    writeFileSync(resolve(dir, 'assets/caltrain.png'), encodePng({ width: 320, height: 120, data: new Uint8Array(320 * 120 * 4).fill(255) }));
+    writeFileSync(resolve(dir, 'assets/tv.png'), encodePng({ width: 640, height: 384, data: new Uint8Array(640 * 384 * 4).fill(255) }));
+    assert.deepEqual(appleRefusals(app({ icons: [{ src: 'assets/caltrain.png' }] }), 'tvos'), []);
+    assert.deepEqual(appleRefusals(app({ icons: [{ src: 'assets/caltrain.png' }] }), 'tvos', { archive: true }), ["host/apple: fixture's distribution bundle requires a tvOS app icon; declare a 5:3 icon of at least 1280×768 px, or brand assets in a catalog"]);
+    assert.deepEqual(appleRefusals(app({ icons: [{ src: 'assets/tv.png' }] }), 'tvos'), ['host/apple: fixture: icons[0]: assets/tv.png is 640×384 px, and the tvOS icon needs at least 1280×768 px; use a larger file']);
+    for (const name of ['Brand', 'Other']) {
+      mkdirSync(resolve(dir, `modules/apple/Icons.xcassets/${name}.brandassets`));
+      writeFileSync(resolve(dir, `modules/apple/Icons.xcassets/${name}.brandassets/Contents.json`), '{}');
+    }
+    assert.deepEqual(appleRefusals(app({ icons: [{ src: 'assets/tv.png' }] }), 'tvos', { archive: true }), ["host/apple: fixture's catalogs hold several brand assets (Brand, Other); keep one, the tvOS app icon"]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -495,10 +510,10 @@ test.skipIf(process.platform !== 'darwin')('iOS distribution assets retain the i
   useXcode();
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-ios-assets-'));
   try {
-    writeFileSync(resolve(dir, 'icon.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64'));
+    writeFileSync(resolve(dir, 'icon.png'), encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
     const bundle = resolve(dir, 'Fixture.app');
     mkdirSync(bundle);
-    const app = { dir, name: 'fixture', manifest: { icons: [{ src: 'icon.png', sizes: '1024x1024' }], background_color: '#fff', background_color_dark: '#123456',
+    const app = { dir, name: 'fixture', manifest: { icons: [{ src: 'icon.png', sizes: '1024x1024' }], background_color: '#fff', color_scheme_dark: { background_color: '#123456' },
       host: { ios: { launchImage: { src: 'icon.png', width: 40 } } } } };
     const keys = iosAssets(app, bundle, true, { catalog: true });
     assert.equal(keys.CFBundleIcons.CFBundlePrimaryIcon.CFBundleIconName, 'AppIcon');
@@ -742,11 +757,11 @@ test('the launch handler bakes `ExactLaunchMode` with or without documents (LLP 
     assert.match(macInfoPlist(own), /<key>UTExportedTypeDeclarations<\/key>/);
     write({ 'application/vnd.example.sheet': [] });
     assert.throws(() => readManifest(dir, 'types'), /application\/vnd\.example\.sheet, the app's own type, names no extension/);
-    // So are a launch colour iOS cannot draw and the Apple icon's missing file.
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Types', app: { id: 'com.example.types', name: 'Types' }, background_color: 'white', icons: [{ src: 'icon.png', sizes: '1024x1024' }] }));
+    // So are a launch colour iOS cannot draw and an icon's missing file.
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Types', app: { id: 'com.example.types', name: 'Types' }, background_color: 'white', icons: [{ src: 'assets/icon.png', sizes: '1024x1024' }] }));
     assert.throws(() => readManifest(dir, 'types'), /background_color: "white" does not match/);
-    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Types', app: { id: 'com.example.types', name: 'Types' }, background_color: '#fff', icons: [{ src: 'icon.png', sizes: '1024x1024' }] }));
-    assert.throws(() => readManifest(dir, 'types'), /icons: icon\.png, the square icon the Apple bundles are drawn from, does not exist/);
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Types', app: { id: 'com.example.types', name: 'Types' }, background_color: '#fff', icons: [{ src: 'assets/icon.png', sizes: '1024x1024' }] }));
+    assert.throws(() => readManifest(dir, 'types'), /icons\[0\]\.src: assets\/icon\.png does not exist/);
     writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Types', app: { id: 'com.example.types', name: 'Types' }, host: { ios: { launchImage: { src: 'splash.png', width: 276 } } } }));
     assert.throws(() => readManifest(dir, 'types'), /host\.ios\.launchImage: splash\.png, the launch screen's picture, does not exist/);
   } finally { rmSync(dir, { recursive: true, force: true }); }

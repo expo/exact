@@ -44,6 +44,7 @@ import { closeFilesystemReader } from '../../scripts/filesystem.mjs';
 import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
 import { BINARYEN_DOWNLOAD, splitStages, unsplitReason } from './stages.mjs';
 import { interfaceStyle, withInterfaceStyle, withLook } from './look.mjs';
+import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { appManifestDigest, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
 import { foreignBeside } from './generations.mjs';
 
@@ -366,17 +367,16 @@ writeFileSync(resolve(stage, 'bake.json'), JSON.stringify(buildReceipt) + '\n');
 writeFileSync(resolve(stage, 'exact.json'), JSON.stringify({ ...webEnvelope(app, planBytes, copiedAssets), ...(pairedModule ? { module: pairedModule } : {}), ...(pairedRust ? { rust: pairedRust } : {}) }) + '\n');
 // The web app manifest (LLP 1030 D2/D10; 1030.000 D7): the W3C keys of
 // `app.json`, copied out as `manifest.json`; the page links it, takes its
-// name as the title, and its first icon as the favicon. An installed PWA's
-// icon and name are the browser's cached copies of these — the origin's
-// carrier, at its real strength.
+// name as the title, and its favicons and Apple touch icon from its icons
+// (LLP 1163 D7). An installed PWA's icon and name are the browser's cached
+// copies of these — the origin's carrier, at its real strength.
 const manifestNotes = [];
-const webManifest = webAppManifest(app.manifest, app.displayName, manifestNotes);
+const webManifest = webAppManifest(app.manifest, app.displayName, manifestNotes, app.dir);
 for (const note of manifestNotes) console.log(note);
 writeFileSync(resolve(stage, 'manifest.json'), JSON.stringify(webManifest, null, 2) + '\n');
 const sourceRevision = spawnSync('git', ['rev-parse', '--short=10', 'HEAD'], {cwd:app.dir,encoding:'utf8'});
 const sourceChanges = spawnSync('git', ['status', '--porcelain'], {cwd:app.dir,encoding:'utf8'});
 writeInstallPages(stage, app.manifest, {id:buildReceipt.binary.sha256, source:sourceRevision.status === 0 ? sourceRevision.stdout.trim() : null, dirty:sourceChanges.status === 0 && !!sourceChanges.stdout.trim(), builtAt:new Date().toISOString(), mode:buildEnv.EXACT_UPDATE_TRUST === 'production' ? 'Release build' : 'Development build', reach:bakedReceipt.reach?.rows ?? []});
-const icon = webManifest.icons?.[0];
 const escapeHtml = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 // The shell's <style> ships without its comments and indentation: they are
 // for readers of host/web/index.html, and every served document's first bytes
@@ -411,7 +411,7 @@ const pageNative = app.modules.web;
 // app that chose dark showed beside its root; Markdown's conformance).
 // A fixed `userInterfaceStyle` takes its side alone, as the iOS launch screen does.
 const hex = (value) => /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value ?? '') ? value : null;
-const launchLight = app.manifest.background_color, launchDark = interfaceStyle(app.manifest) === 'light' ? null : hex(app.manifest.background_color_dark);
+const launchLight = app.manifest.background_color, launchDark = interfaceStyle(app.manifest) === 'light' ? null : hex(app.manifest.color_scheme_dark?.background_color);
 const launchHtml = 'html:has(#exact-root:empty)';
 const launchCss = !hex(launchLight) ? '' : interfaceStyle(app.manifest) === 'dark' ? `${launchHtml}{background-color:${launchDark ?? launchLight}}`
   : `${launchHtml}{background-color:${launchLight}}${launchDark ? `@media (prefers-color-scheme:dark){${launchHtml}{background-color:${launchDark}}}` : ''}`;
@@ -419,14 +419,14 @@ writeFileSync(resolve(stage, 'index.html'), readFileSync(resolve(stage, 'index.h
   .replace(/<style>([\s\S]*?)<\/style>/, (_, css) => `<style>${minifyCss(css)}${launchCss}</style>`)
   .replace('<html lang="en">', `<html lang="${escapeHtml(webManifest.lang)}">`)
   .replace('<title>Exact</title>', `<title>${escapeHtml(webManifest.name)}</title>`)
-  // LLP 1116 D8: the app's icon in place of the shell's default one.
-  .replace(/<link rel="icon"[^>]*>/, (link) => icon ? `<link rel="icon" type="${escapeHtml(icon.type ?? 'image/png')}" href="./${escapeHtml(icon.src)}">` : link)
+  // The manifest's favicons and Apple touch icon, else the shell's default favicon (LLP 1163 D7).
+  .replace(/<link rel="icon"[^>]*>/, (link) => webIconLinks(app.manifest, app.dir, link))
   // `app.json`'s `audio_session` (LLP 1096 D7), which sound-glue.js gives the Audio Session API where it exists, and
   // its `host.web.head` before the root, after the sheet, as the JS target writes it (LLP 1048.000 D3).
   .replace('<div id="exact-root"></div>', `${webHead(app.manifest)}${app.manifest.audio_session ? `<div id="exact-root" data-audio-session="${escapeHtml(app.manifest.audio_session)}"></div>` : '<div id="exact-root"></div>'}`)
   .replace(
     '<script type="module" src="./glue.js"></script>',
-    `<link rel="alternate" type="application/vnd.exact.envelope+json" href="./exact.json">\n<link rel="manifest" href="./manifest.json">\n${webManifest.theme_color ? `<meta name="theme-color" content="${escapeHtml(webManifest.theme_color)}">\n` : ''}${pageNative ? '<meta name="exact-native" content="./modules/index.js">\n' : ''}<script type="module" src="./glue.js"></script>`,
+    `<link rel="alternate" type="application/vnd.exact.envelope+json" href="./exact.json">\n<link rel="manifest" href="./manifest.json">\n${webThemeColors(app.manifest).map((meta) => `${meta}\n`).join('')}${pageNative ? '<meta name="exact-native" content="./modules/index.js">\n' : ''}<script type="module" src="./glue.js"></script>`,
   ));
 // The app's part of the render server's CSP (LLP 1048.000 D11), which it reads at start.
 const cspFile = webCspFile(app.manifest);

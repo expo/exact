@@ -4,6 +4,7 @@
 import { test, spyOn } from 'bun:test';
 import * as childProcess from 'node:child_process';
 import { pathFrom } from './app.mjs';
+import { encodePng } from './png.mjs';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -876,7 +877,7 @@ test.skipIf(process.platform !== 'darwin')('Icon Composer supplies the primary i
   const macKeys = appleAssets(app, mac, { platform: 'macos', kept });
   assert.equal(macKeys.CFBundleIconName, 'Primary');
   assert.ok(inspect(mac).some(asset => asset.AssetType === 'IconImageStack'));
-  writeFileSync(resolve(dir, 'raster.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64'));
+  writeFileSync(resolve(dir, 'raster.png'), encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
   app.manifest.icons = [{ src: 'raster.png', sizes: '1024x1024' }];
   assert.deepEqual(appIcon(app, mac, 'macos'), {}, 'the raster must not overwrite the selected Mac icon');
   delete app.manifest.host.ios.icon;
@@ -894,7 +895,7 @@ test.skipIf(process.platform !== 'darwin')('iOS alternate icon sets compile besi
   const { iosAssets } = require('../host/apple/assets.mjs');
   useXcode();
   const primary = resolve(dir, 'icon.png');
-  writeFileSync(primary, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64'));
+  writeFileSync(primary, encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
   const set = resolve(dir, 'modules/apple/Icons.xcassets/Nested/Alternate.appiconset');
   mkdirSync(set, { recursive: true });
   const sized = spawnSync('sips', ['-z', '1024', '1024', primary, '--out', resolve(set, 'icon.png')], { encoding: 'utf8' });
@@ -975,7 +976,7 @@ test.skipIf(process.platform !== 'darwin')('the iOS launch screen is the app\'s 
   // A page of the platform's own stays the system's launch screen (`systemBackground`, light and dark).
   for (const options of [{ launch: 'system' }, {}]) assert.deepEqual(made({}, options).keys, {});
   // The author's colours name it whatever the first route stands on.
-  const named = made({ background_color: '#ffeedd', background_color_dark: '#102030' }, { launch: 'grouped' });
+  const named = made({ background_color: '#ffeedd', color_scheme_dark: { background_color: '#102030' } }, { launch: 'grouped' });
   assert.deepEqual(named.colours, [['light', [255, 238, 221, 255]], ['UIAppearanceDark', [16, 32, 48, 255]]]);
 }), 60000);
 
@@ -994,8 +995,8 @@ test.skipIf(process.platform !== 'darwin')('Apple asset catalogs retain named im
   json(`${source}/Badge.imageset/Contents.json`, { info, images: [{ idiom: 'universal', filename: 'image.png' }] });
   const colour = red => ({ info, colors: [{ idiom: 'universal', color: { 'color-space': 'srgb', components: { red, green: '0.0', blue: '0.0', alpha: '1.0' } } }] });
   json(`${source}/Ink.colorset/Contents.json`, colour('0.2'));
-  put('icon.png', png);
-  const app = { dir, name: 'Catalog', manifest: { icons: [{ src: 'icon.png', sizes: '1024x1024' }], background_color: '#fff', background_color_dark: '#123456' } };
+  put('icon.png', encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
+  const app = { dir, name: 'Catalog', manifest: { icons: [{ src: 'icon.png', sizes: '1024x1024' }], background_color: '#fff', color_scheme_dark: { background_color: '#123456' } } };
   const cache = { dir: resolve(dir, 'cache'), stamp: 'fixture-toolchain' };
   const inventory = appleAssetCatalogInventory(app, 'ios');
   const ios = resolve(dir, 'iOS.app'); mkdirSync(ios);

@@ -609,8 +609,10 @@ export function readManifest(dir, name) {
     // LLP 1046.008 amendment (2026-10-04): the GPU hooks crate was renamed.
     : /^game\.presentation: /.test(p)
       ? 'game.presentation is now game.render: rename the key, move presentation/ to render/, name the crate <name>-render and rename its "type" to "hooks" (LLP 1046.008, amendment of 2026-10-04)'
+      // LLP 1163 D2: the dark launch colour moved into the W3C member.
+      : /^background_color_dark: /.test(p) ? 'background_color_dark is now color_scheme_dark.background_color: "color_scheme_dark": { "background_color": "#000000" } (LLP 1163 D2)'
       : p).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed));
-  if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...appleIconProblems(parsed, dir));
+  if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...appIconProblems(parsed, dir), ...launchImageProblems(parsed, dir));
   if (problems.length) throw new Error(`${path} does not conform to scripts/app.schema.json:\n  ${problems.join('\n  ')}`);
   nativeResourceMappings(parsed); nativeResourceMappings(parsed, 'ios');
   return { host: {}, deploy: {}, ...parsed };
@@ -618,20 +620,15 @@ export function readManifest(dir, name) {
 
 import { DOCUMENT_UTIS } from './document-utis.mjs';
 import { webCspProblems, webHeadProblems } from './web-head.mjs';
+import { appIconProblems, publishedIcons } from './app-icons.mjs';
 export { DOCUMENT_UTIS };
 ;
 
-// The icon the Apple bundles are drawn from (host/apple/build.mjs
-// `appIcon`): the first square one of at least 512 px, which must be there,
-// as must the iOS launch screen's picture (`launchScreen`); refused when any
-// build reads the manifest, as the file types are.
-function appleIconProblems(manifest, dir) {
-  const icon = (manifest.icons ?? []).find((i) => { const m = /^(\d+)x(\d+)$/.exec(i.sizes ?? ''); return m && m[1] === m[2] && Number(m[1]) >= 512; });
+// The iOS launch screen's picture (`launchScreen`) must be there; refused when any build reads
+// the manifest, as the icons (scripts/app-icons.mjs) and the file types are.
+function launchImageProblems(manifest, dir) {
   const launch = manifest.host?.ios?.launchImage?.src;
-  return [
-    ...(icon && !existsSync(resolve(dir, icon.src)) ? [`icons: ${icon.src}, the square icon the Apple bundles are drawn from, does not exist`] : []),
-    ...(launch && !existsSync(resolve(dir, launch)) ? [`host.ios.launchImage: ${launch}, the launch screen's picture, does not exist`] : []),
-  ];
+  return launch && !existsSync(resolve(dir, launch)) ? [`host.ios.launchImage: ${launch}, the launch screen's picture, does not exist`] : [];
 }
 
 /** An app's own document format (studio diary R13): a MIME type in IANA's
@@ -672,8 +669,10 @@ function protocolHandlerProblems({ protocol_handlers = [], host }) {
 /** The W3C keys of `app.json`, as the web builds write `manifest.json`
  * (LLP 1030 D2/D10; 1030.000 D7). A browser opens files only, so
  * `inode/directory` (the Apple bake's word for a folder) goes, and it
- * registers neither `http` nor `https`, so those handlers go too. */
-export function webAppManifest(manifest, name, notes = []) {
+ * registers neither `http` nor `https`, so those handlers go too.
+ * `color_scheme_dark` keeps only the W3C draft's members, and with the app's
+ * `dir` each icon gets the `sizes` and `type` of its file (LLP 1163 D2). */
+export function webAppManifest(manifest, name, notes = [], dir = null) {
   const keys = ['name', 'short_name', 'description', 'id', 'start_url', 'display', 'display_override', 'theme_color', 'background_color', 'icons', 'lang', 'orientation', 'file_handlers', 'protocol_handlers', 'launch_handler', 'shortcuts'];
   const web = Object.fromEntries(keys.filter((k) => manifest[k] !== undefined).map((k) => [k, manifest[k]]));
   if (web.file_handlers) web.file_handlers = web.file_handlers.filter((h) => !Object.keys(h.accept ?? {}).includes('inode/directory'));
@@ -681,6 +680,9 @@ export function webAppManifest(manifest, name, notes = []) {
   // A shortcut's `apple` and `android` words are the native bakes' (LLP 1133.023 D11).
   if (web.shortcuts) web.shortcuts = web.shortcuts.map(({ apple, android, ...item }) => item);
   if (manifest.share_target) web.share_target = webShareTarget(manifest.share_target, notes);
+  const { icons: _, ...dark } = manifest.color_scheme_dark ?? {};
+  if (Object.keys(dark).length) web.color_scheme_dark = dark;
+  if (dir && web.icons) web.icons = publishedIcons(web.icons, dir);
   for (const key of ['file_handlers', 'protocol_handlers', 'shortcuts']) if (!web[key]?.length) delete web[key];
   web.name ??= name;
   web.start_url ??= '/';
@@ -689,7 +691,7 @@ export function webAppManifest(manifest, name, notes = []) {
   web.lang ??= 'en';
   return web;
 }
-export function nativeManifestMetadata(manifest, platform) { return {app:manifest.app,host:manifest.host?.[platform]??{},icons:manifest.icons??[],...(manifest.frame_health ? {frame_health:manifest.frame_health} : {}),...(['macos','ios'].includes(platform) && manifest.protocol_handlers?.length ? {protocol_handlers:manifest.protocol_handlers} : {}),...(['ios','android'].includes(platform) && manifest.orientation ? {orientation:manifest.orientation} : {}),...(['macos','ios'].includes(platform) && ['light','dark'].includes(manifest.userInterfaceStyle) ? {userInterfaceStyle:manifest.userInterfaceStyle} : {})}; }
+export function nativeManifestMetadata(manifest, platform) { return {app:manifest.app,host:manifest.host?.[platform]??{},icons:manifest.icons??[],...(platform === 'ios' && manifest.color_scheme_dark?.icons ? {dark_icons:manifest.color_scheme_dark.icons} : {}),...(manifest.frame_health ? {frame_health:manifest.frame_health} : {}),...(['macos','ios'].includes(platform) && manifest.protocol_handlers?.length ? {protocol_handlers:manifest.protocol_handlers} : {}),...(['ios','android'].includes(platform) && manifest.orientation ? {orientation:manifest.orientation} : {}),...(['macos','ios'].includes(platform) && ['light','dark'].includes(manifest.userInterfaceStyle) ? {userInterfaceStyle:manifest.userInterfaceStyle} : {})}; }
 let cachedSchema = null;
 function schema() {
   return cachedSchema ??= JSON.parse(readFileSync(resolve(ROOT, 'scripts/app.schema.json'), 'utf8'));

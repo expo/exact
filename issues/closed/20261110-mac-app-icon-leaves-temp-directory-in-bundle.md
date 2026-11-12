@@ -1,6 +1,7 @@
 # Every Mac bundle with a manifest icon ships an empty `.icon-XXXXXX` directory in its Resources
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** appIcon builds the Mac iconset under the OS temporary directory and removes it, so Resources holds only AppIcon.icns (LLP 1163)
 **Systems:** host/apple/assets.mjs (`appIcon`), host/apple/bundle.mjs
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

@@ -117,7 +117,7 @@ test('Recorder follows the scheme with readable recording and saved states', asy
           require(ratio(surface.ink, surface.fill) >= 4.5,
             { state, scheme, name, expected: 'contrast >= 4.5', surface });
         }
-        const launch = scheme === 'light' ? manifest.background_color : manifest.background_color_dark;
+        const launch = scheme === 'light' ? manifest.background_color : manifest.color_scheme_dark?.background_color;
         const surface = '#' + paint.page.fill.map(n => n.toString(16).padStart(2, '0')).join('');
         require(launch === surface, { state, scheme, expected: 'launch matches page', launch, surface });
         const checked = await checkOp(session, [scheme]);

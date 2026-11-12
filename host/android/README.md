@@ -44,7 +44,12 @@ It needs the Android SDK (`ANDROID_HOME`, else `~/Library/Android/sdk` or `~/And
 NDK (`ANDROID_NDK_HOME`, else the newest under the SDK), a JDK (17 or newer) and the Rust target
 (`exact setup` adds it to the pinned toolchain). It:
 
-1. builds the app's `android/` crate for `aarch64-linux-android` at `host-dev` (`--release`: at `release` with fat
+1. writes the app's launcher icon and TV banner, from its manifest's `icons` (LLP 1163 D6), as resources under
+   `app/build/<app>/icons/res/`: from a square `maskable` PNG an adaptive icon, with a `monochrome` glyph as its
+   themed layer; without one, a legacy icon from a square `any` PNG; and a banner from a 16:9 `any` PNG. A file its
+   slot refuses (smaller than the slot, or a glyph with no transparent pixels) fails the build here, before anything
+   compiles;
+2. builds the app's `android/` crate for `aarch64-linux-android` at `host-dev` (`--release`: at `release` with fat
    LTO, as a production build links, for measuring). The crate is a cdylib whose source is `exact_linux::canvas_jni!(<the data source>, hatches =
    crate::exact_hatches())`, with a build script that bakes the plan and calls `contract::native::android_entry`,
    which writes the app's hatches' install (`hatches.rs`) and the plan's uses (`uses.txt`) beside it; `apps/caltrain/android` is the one to copy for an app whose data is Rust and
@@ -55,12 +60,13 @@ NDK (`ANDROID_NDK_HOME`, else the newest under the SDK), a JDK (17 or newer) and
    macOS, signed 64-bit Mach-O code omits the signature and normalizes its three size fields, matching
    the definition in `update/src/gpu.rs` through a parity-tested host copy; other files hash whole. Completed development receipts always
    bind the whole file. Both the process cache and Android's persistent cache distinguish these digests;
-2. copies the library to `app/build/<app>/rust/jniLibs/arm64-v8a/libexactcanvas.so`, the GPU module beside it under
+3. copies the library to `app/build/<app>/rust/jniLibs/arm64-v8a/libexactcanvas.so`, the GPU module beside it under
    its own name, the app's `assets/` to `app/build/<app>/rust/assets/app/assets/`, and a GPU module's shaders
    (`gpu/shaders/*.wgsl`, as a Linux bake packs them) to `app/build/<app>/rust/assets/app/shaders/`, where the host
    registers them from before a canvas is made;
-3. runs `./gradlew :app:assembleRelease -Papp=<app> -PappDir=<the app's directory>` here (a game's `.shells/`, whose
-   `app.json` is resolved), with `-PgpuModule=<file>` for a module: the APK then extracts its libraries and leaves
+4. runs `./gradlew :app:assembleRelease -Papp=<app> -PappDir=<the app's directory>` here (a game's `.shells/`, whose
+   `app.json` is resolved), with `-PappIcon` and `-PappBanner` naming the icon and banner it wrote, with
+   `-PgpuModule=<file>` for a module: the APK then extracts its libraries and leaves
    the module unstripped, since the host opens it by path and checks its digest; with `-Pcompose=1` when the plan's
    uses name `dates` (a date or time control), which links Compose Material 3 for its pickers; and with the Kotlin
    in the app's `modules/android`, its hatches and module roster, compiled in,
@@ -1182,8 +1188,9 @@ Not tried: Android 11 (no device), and a TypeScript data module: the Android Her
 
 ## Android TV (LLP 1115.001.003)
 
-The phone's APK also runs on an Android TV, and its manifest puts the app in the TV launcher with a plain banner
-(`app/src/main/res/drawable/banner.xml`). Build it as for a phone, then install it on a TV emulator:
+The phone's APK also runs on an Android TV, and its manifest puts the app in the TV launcher with the app's banner: a
+16:9 `any` PNG of its manifest's `icons` (LLP 1163 D6), else a plain one (`app/src/main/res/drawable/banner.xml`).
+Build it as for a phone, then install it on a TV emulator:
 
 ```sh
 bun scripts/agent-android.mjs build caltrain --apk
@@ -1209,8 +1216,7 @@ On a TV:
 
 A drive with `--reader` restarts the app, and its `type … key ArrowDown` reaches the presenter, not Android's input.
 To test the real keys, send them with `adb shell input keyevent KEYCODE_DPAD_DOWN` while the drive waits on real time
-(`"clock +15000 real"`). `focusGuide`, the media keys, text entry with the TV's keyboard and a banner per app are not
-built.
+(`"clock +15000 real"`). `focusGuide`, the media keys and text entry with the TV's keyboard are not built.
 
 ## Still the benchmark's
 
@@ -1302,7 +1308,7 @@ The cut was the smallest one. Left in the reader:
 - **Only the async lane's second tier builds it** (LLP 1133.002 stage 4): Weatherlight's APK, hourly, which
   compiles `exact-linux` for the Android target and the reader's Kotlin with a module's. Gradle is in none of the
   six checks.
-- **The shell is a development build**: signed with the debug key, with no icon. Its one activity turns keys on for
+- **The shell is a development build**: signed with the debug key. Its one activity turns keys on for
   every app, and gives none an app's own native module (LLP 1024) or a video player, which the benchmark's apps
   passed from an activity of their own. A package's implementation of a module is the exception (below, "Module
   implementations").

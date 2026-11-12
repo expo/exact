@@ -86,7 +86,7 @@ for (const scheme of ['light', 'dark']) {
       }
       const manifest = JSON.parse(readFileSync(new URL('./app.json', import.meta.url), 'utf8'));
       expect(manifest.theme_color).toBe('#000000');
-      expect(scheme === 'dark' ? manifest.background_color_dark ?? manifest.background_color
+      expect(scheme === 'dark' ? manifest.color_scheme_dark?.background_color ?? manifest.background_color
         : manifest.background_color).toBe('#000000');
       expect((await session.state()).slots.ready).toBe(true);
       await session.tap('rotate');

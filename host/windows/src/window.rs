@@ -898,6 +898,8 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 .with_no_redirection_bitmap(self.direct)
                 .with_visible(false)
                 .with_title(&self.name)
+                .with_window_icon(crate::icon::small())
+                .with_taskbar_icon(crate::icon::large())
                 .with_fullscreen(
                     (self.frame_limit.is_some()
                         && std::env::var_os("EXACT_AGENT_WINDOW_FULLSCREEN").is_some())

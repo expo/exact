@@ -751,8 +751,24 @@ must hold at every box size; use a single unit when mixed units could cross.
 Restricted paint values are literals or choices of literals, so their admission
 is checked at bake.
 
-App icons come from `app.json`'s Web App Manifest `icons` array: Apple uses
-the first square raster of at least 512 px. To select an
+App icons come from `app.json`'s Web App Manifest `icons` array, and in a dark
+scheme from `color_scheme_dark.icons`, which replaces it there (LLP 1163). Each
+host picks by `purpose`, then shape and size, and refuses a file smaller than
+its slot. iOS and macOS take the smallest square `maskable`, else `any`, PNG of
+at least 1024 px; iOS, watchOS and tvOS pass over one with transparent pixels,
+and refuse it when no opaque file fits. iOS's dark icon is picked the same way
+from `color_scheme_dark.icons`, and its tinted icon is a square `monochrome`
+PNG, whose alpha iOS draws white on black. The web links each scheme's favicons
+(the smallest square raster of at least 32 px, then an SVG when there is one)
+and an Apple touch icon (the smallest opaque square PNG of at least 180 px, else
+the largest). Android takes a square `maskable` of at least 432 px as its
+adaptive icon, a `monochrome` one as its themed layer, a square `any` of 192 px
+when there is no `maskable`, and a 16:9 `any` of at least 640×360 px as the TV
+banner. tvOS takes the brand assets in the app's catalogs, else a 5:3 `any` of
+at least 1280×768 px (an 8:3 and a 29:9 one give the Top Shelf images); the
+watch app a square one of 1024 px, or `host.ios.icon` when its `icon.json` lists
+watchOS; Windows a square `any` of at least 256 px, linked into the executable.
+To select an
 [Icon Composer project](https://developer.apple.com/documentation/xcode/creating-your-app-icon-using-icon-composer),
 set `host.ios.icon` or `host.macos.icon` to its app-relative `.icon` directory,
 for example `"host": { "ios": { "icon": "art/Primary.icon" }, "macos": { "icon": "art/Primary.icon" } }`.
@@ -936,7 +952,7 @@ on the runner. The runner needs Xcode 27.1 or later selected (`DEVELOPER_DIR`,
 or `xcode-select -s`), rustup and Bun 1.4.2; then `bun <exact2>/scripts/exact.mjs setup` installs the
 pinned Rust with its iOS targets and the Hermes bundles, and `setup --check`
 names what is still missing. An archive needs a square icon of at least
-512 px in `icons` (or `host.ios.icon`), which the build checks before it
+1024 px in `icons` (or `host.ios.icon`), which the build checks before it
 compiles. An archive, and a simulator build with `--release` (the build that
 ships), bake production trust: with an update store (`deploy.store.ios` not
 `"0"`) each needs `EXACT_UPDATE_RECEIPT` or `EXACT_UPDATE_GENESIS=1`. A cold

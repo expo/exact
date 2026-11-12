@@ -1,44 +1,89 @@
-// PNG, the little the fixtures and the agent's film need and nothing more:
-// decode an 8-bit, non-interlaced RGB or RGBA image to RGBA bytes; encode RGBA
+// PNG, the little the fixtures, the agent's film and app icons need and nothing more:
+// decode any PNG to RGBA bytes; encode RGBA
 // bytes as an unfiltered RGBA image, as an animated PNG of equal frames, or as
 // a contact sheet of them; shrink one. Node's zlib does the compression; this does the
 // chunks, the filters, and the CRC. No dependency (rules/RULES.md: none).
 import { deflateSync, inflateSync } from 'node:zlib';
 
-/** {width, height, data: Uint8Array of RGBA} from a PNG buffer. */
+/** {width, height, data: Uint8Array of RGBA} from a PNG buffer: every colour type and bit depth, a palette and its
+ * transparency, interlaced or not. */
 export function decodePng(buf) {
   const sig = [137, 80, 78, 71, 13, 10, 26, 10];
   for (let i = 0; i < 8; i++) if (buf[i] !== sig[i]) throw new Error('not a PNG');
-  let pos = 8, width = 0, height = 0, depth = 0, color = 0, interlace = 0;
+  let pos = 8, width = 0, height = 0, depth = 0, color = 0, interlace = 0, palette = null, trns = null;
   const idat = [];
   while (pos + 8 <= buf.length) {
     const len = buf.readUInt32BE(pos);
     const type = buf.toString('latin1', pos + 4, pos + 8);
     const data = buf.subarray(pos + 8, pos + 8 + len);
     if (type === 'IHDR') { width = data.readUInt32BE(0); height = data.readUInt32BE(4); depth = data[8]; color = data[9]; interlace = data[12]; }
+    else if (type === 'PLTE') palette = data;
+    else if (type === 'tRNS') trns = data;
     else if (type === 'IDAT') idat.push(data);
     else if (type === 'IEND') break;
     pos += 12 + len;
   }
-  if (depth !== 8 || interlace !== 0 || (color !== 2 && color !== 6)) throw new Error(`unsupported PNG: depth ${depth}, color type ${color}, interlace ${interlace}`);
-  const bpp = color === 6 ? 4 : 3, stride = width * bpp;
-  const raw = inflateSync(Buffer.concat(idat));
-  const out = new Uint8Array(width * height * 4);
+  const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[color];
+  if (!channels || (color === 3 && !palette)) throw new Error(`unsupported PNG: color type ${color}${color === 3 ? ' without a palette' : ''}`);
+  if (depth === 8 && !interlace && (color === 6 || (color === 2 && !trns))) return direct(width, height, color === 6 ? 4 : 3, inflateSync(Buffer.concat(idat)));
+  const bits = channels * depth, bpp = Math.max(1, bits >> 3), raw = inflateSync(Buffer.concat(idat)), out = new Uint8Array(width * height * 4);
+  const sample = (row, x, c) => {
+    const bit = (x * channels + c) * depth;
+    if (depth === 16) return (row[bit >> 3] << 8) | row[(bit >> 3) + 1];
+    if (depth === 8) return row[bit >> 3];
+    return (row[bit >> 3] >> (8 - depth - (bit & 7))) & ((1 << depth) - 1);
+  };
+  const byte = (v) => depth === 16 ? v >> 8 : depth === 8 ? v : Math.round((v * 255) / ((1 << depth) - 1));
+  // Adam7's seven passes, each a smaller image of every dx-th pixel of every dy-th row.
+  const passes = interlace ? [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]] : [[0, 0, 1, 1]];
+  let at = 0;
+  for (const [x0, y0, dx, dy] of passes) {
+    const w = Math.ceil((width - x0) / dx), h = Math.ceil((height - y0) / dy);
+    if (w <= 0 || h <= 0) continue;
+    const stride = Math.ceil((w * bits) / 8);
+    let prev = new Uint8Array(stride), cur = new Uint8Array(stride);
+    for (let y = 0; y < h; y++) {
+      unfilter(raw[at], raw.subarray(at + 1, at + 1 + stride), prev, cur, bpp);
+      at += 1 + stride;
+      for (let x = 0; x < w; x++) {
+        const d = ((y0 + y * dy) * width + x0 + x * dx) * 4;
+        if (color === 3) {
+          const k = sample(cur, x, 0);
+          out[d] = palette[3 * k]; out[d + 1] = palette[3 * k + 1]; out[d + 2] = palette[3 * k + 2]; out[d + 3] = trns && k < trns.length ? trns[k] : 255;
+        } else {
+          const grey = color === 0 || color === 4, v = grey ? [sample(cur, x, 0)] : [0, 1, 2].map((c) => sample(cur, x, c));
+          const [r, g, b] = (grey ? [v[0], v[0], v[0]] : v).map(byte);
+          // Without an alpha channel, tRNS names the one colour that is transparent.
+          const keyed = trns && v.every((s, c) => s === trns.readUInt16BE(2 * c));
+          out[d] = r; out[d + 1] = g; out[d + 2] = b; out[d + 3] = color === 4 || color === 6 ? byte(sample(cur, x, channels - 1)) : keyed ? 0 : 255;
+        }
+      }
+      [prev, cur] = [cur, prev];
+    }
+  }
+  return { width, height, data: out };
+}
+/** One scanline's bytes into `cur`, undoing its filter `f` against the line before (`prev`); `bpp` is the bytes a
+ * pixel takes, at least one. */
+function unfilter(f, line, prev, cur, bpp) {
+  for (let i = 0; i < line.length; i++) {
+    const a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
+    let x = line[i];
+    switch (f) {
+      case 1: x += a; break;
+      case 2: x += b; break;
+      case 3: x += (a + b) >> 1; break;
+      case 4: { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); x += pa <= pb && pa <= pc ? a : pb <= pc ? b : c; break; }
+    }
+    cur[i] = x & 255;
+  }
+}
+/** An 8-bit, non-interlaced RGB or RGBA image's pixels, the form screenshots take, in one tight pass. */
+function direct(width, height, bpp, raw) {
+  const stride = width * bpp, out = new Uint8Array(width * height * 4);
   let prev = new Uint8Array(stride), cur = new Uint8Array(stride);
   for (let y = 0; y < height; y++) {
-    const f = raw[y * (stride + 1)];
-    const line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
-    for (let i = 0; i < stride; i++) {
-      const a = i >= bpp ? cur[i - bpp] : 0, b = prev[i], c = i >= bpp ? prev[i - bpp] : 0;
-      let x = line[i];
-      switch (f) {
-        case 1: x += a; break;
-        case 2: x += b; break;
-        case 3: x += (a + b) >> 1; break;
-        case 4: { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); x += pa <= pb && pa <= pc ? a : pb <= pc ? b : c; break; }
-      }
-      cur[i] = x & 255;
-    }
+    unfilter(raw[y * (stride + 1)], raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)), prev, cur, bpp);
     for (let x = 0; x < width; x++) {
       const s = x * bpp, d = (y * width + x) * 4;
       out[d] = cur[s]; out[d + 1] = cur[s + 1]; out[d + 2] = cur[s + 2]; out[d + 3] = bpp === 4 ? cur[s + 3] : 255;

@@ -1,6 +1,7 @@
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, packageConfig, webImplementations } from '../../js/bake/src/typescript.mjs';
 import { writeCrawlerFiles } from '../web/crawl.mjs';
 import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, resolveApp, webAppManifest } from '../../scripts/app.mjs';
+import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { fileIdentity, resourceIdentities } from '../apple/assets.mjs';
 import { launchModules } from '../../scripts/launch-modules.mjs';
@@ -99,7 +100,7 @@ const manifest = JSON.parse(readFileSync(resolve(appDir, 'app.json'), 'utf8'));
 // documents-glue reads the app's web manifest lazily. The JS path exits from
 // host/web/build.mjs after this builder succeeds, so it owns the same artifact.
 const manifestNotes = [];
-const webManifest = webAppManifest(manifest, manifest.app?.name ?? manifest.name, manifestNotes);
+const webManifest = webAppManifest(manifest, manifest.app?.name ?? manifest.name, manifestNotes, appDir);
 for (const note of manifestNotes) console.log(note);
 writeFileSync(resolve(out, 'manifest.json'), JSON.stringify(webManifest, null, 2) + '\n');
 // Rust data: the app's own module (`rust.module`), or a module generated
@@ -856,10 +857,9 @@ if (how !== 'none' || markdownReaders) {
 const shell = withInterfaceStyle(withLook(readFileSync(resolve(root, 'host/web/index.html'), 'utf8')), interfaceStyle(manifest));
 const base = shell.match(/<style>([\s\S]*?)<\/style>/)[1]
   .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s*\n\s*/g, '').replace(/\s*([{};,>])\s*/g, '$1').replace(/:\s+/g, ':').replace(/;}/g, '}');
-// LLP 1116 D8: the app's first manifest icon, else the shell's default one.
-const appIcon = webManifest.icons?.[0];
 const attr = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
-const icon = appIcon ? `<link rel="icon" type="${attr(appIcon.type ?? 'image/png')}" href="./${attr(appIcon.src)}">` : shell.match(/<link rel="icon"[^>]*>/)[0];
+// The manifest's favicons and Apple touch icon, else the shell's default favicon (LLP 1163 D7).
+const icon = webIconLinks(manifest, appDir, shell.match(/<link rel="icon"[^>]*>/)[0]);
 const css = readFileSync(resolve(gen, 'app.css'), 'utf8');
 const viewport = existsSync(resolve(gen, 'viewport.txt')) ? readFileSync(resolve(gen, 'viewport.txt'), 'utf8') : 'width=device-width, initial-scale=1';
 // The entry and the chunks it imports statically (none, unless a split
@@ -890,7 +890,7 @@ ${args.includes('--inline') ? `<script type="module">${readFileSync(resolve(out,
 `);
 if (production && !opt('--plan')) {
   // No bake, so no envelope to link: the web manifest written above, as a bake's page links it.
-  const links = ['<link rel="manifest" href="./manifest.json">', ...(webManifest.theme_color ? [`<meta name="theme-color" content="${attr(webManifest.theme_color)}">`] : [])];
+  const links = ['<link rel="manifest" href="./manifest.json">', ...webThemeColors(manifest)];
   writeFileSync(resolve(out, 'index.html'), readFileSync(resolve(out, 'index.html'), 'utf8').replace(/(<meta name="viewport"[^>]*>\n)/, `$1${links.map(l => l + '\n').join('')}`));
 } else if (production) {
   const bake = dirname(resolve(opt('--plan')));
