@@ -14,6 +14,7 @@ import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, cpSync } fr
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { intentsMetadata as emittedIntentsMetadata } from './intents-metadata.mjs';
+import { extensionModuleCache } from './extensions.mjs';
 
 const toolchain = '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain';
 /** The protocols whose conformers' constant values the metadata pass reads (Xcode's list for App Intents). */
@@ -240,7 +241,7 @@ export function buildIntents({ app, compat, directory, sdkName, sdk, triple, pla
     writeFileSync(file, source);
     const started = Date.now();
     runApple('xcrun', ['--sdk', sdkName, 'swiftc', '-parse-as-library', '-wmo', '-O', '-swift-version', '5', '-module-name', 'ExactIntents',
-      '-module-cache-path', resolve(directory, 'module-cache'), '-target', triple, '-sdk', sdk,
+      '-module-cache-path', extensionModuleCache, '-target', triple, '-sdk', sdk,
       ...constValueArgs(values, dir),
       '-c', file, '-o', object]);
     if (process.platform === 'linux') {

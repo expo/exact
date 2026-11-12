@@ -8,6 +8,10 @@ import { stripProductionExecutable } from './link.mjs';
 import { appleActivationRule, appleShareMembers } from '../../scripts/share-target.mjs';
 import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
+/** The Clang module cache every extension compile shares (widget, Live Activity, share, intents): a cache per build
+ * directory rebuilt the system frameworks' modules for each, about two minutes for one alarm extension. Clang keys
+ * its entries by compiler, SDK and flags, and writes them safely across concurrent builds. */
+export const extensionModuleCache = resolve(root, 'target', 'apple-extension-module-cache');
 
 /** An extension executable's link: application-extension API only, entered at `NSExtensionMain`. A bundle with an
  * `@main` (WidgetKit's) keeps its `main` with `keepMain`. */
@@ -50,7 +54,7 @@ export function packageShareExtension({ app, bundle, directory, sdk, triple, dev
   const entitlementPath = resolve(directory, 'share-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
   runApple('xcrun', ['--sdk', mac ? 'macosx' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-O', ...(production ? ['-g'] : []), ...appexArgs,
-    '-module-name', 'ExactShare', '-target', triple, '-sdk', sdk, '-module-cache-path', resolve(directory, 'cache'),
+    '-module-name', 'ExactShare', '-target', triple, '-sdk', sdk, '-module-cache-path', extensionModuleCache,
     ...(!device && !mac ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
     resolve(root, 'host/apple/share/ShareInbox.swift'), resolve(root, 'host/apple/share/ShareViewController.swift'), '-o', binary]);
   stripProductionExecutable(binary, { production, dsym: resolve(symbols, 'ExactShare.appex.dSYM'), sourceDsym: `${binary}.dSYM` });
