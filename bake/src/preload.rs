@@ -334,6 +334,9 @@ fn check(entries: Vec<(String, Value)>, grants: Option<&str>) -> Result<Value, S
                 let value = value
                     .as_str()
                     .ok_or_else(|| fail(&field, "expected a string"))?;
+                if !fetch::is_valid_value(value) || fetch::normalize_value(value) != value {
+                    return Err(fail(&field, "expected a Fetch field value"));
+                }
                 headers.push(json!([key, template(&field, value)?]));
             }
         }

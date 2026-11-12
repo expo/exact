@@ -1046,3 +1046,103 @@ fn definitions_arriving_after_the_wait_bound_still_hold_their_replies() {
         assert_eq!(server.count(), 2);
     }
 }
+
+#[test]
+fn held_request_allocations_are_charged_and_released_when_the_hold_ends() {
+    for asynchronous in [false, true] {
+        for expired in [false, true] {
+            let server = Server::new();
+            server.plan(
+                "/retained",
+                Plan::new(200, &[("Cache-Control", "max-age=60")], b"held"),
+            );
+            let mut def = definition(&server, "/retained");
+            let mut value = String::with_capacity(3 << 20);
+            value.push('x');
+            def.request.headers.push(("X-Note".into(), value));
+            def.secrets.push("session".into());
+            let request = def.request.clone();
+            let (set, clock) = fresh_clock(&server, vec![def]);
+            complete_set(&set);
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            let (bytes, ready) = {
+                let state = core.shared.state.lock().unwrap();
+                let cache = state.cache.as_ref().unwrap();
+                (cache.bytes, cache.preloads[0].used().is_some())
+            };
+            assert!(ready);
+            assert!(
+                bytes >= 3 << 20,
+                "request header capacity was not charged: {bytes}"
+            );
+            if expired {
+                *clock.lock().unwrap() += HOLD;
+                let mut state = core.shared.state.lock().unwrap();
+                expire(state.cache.as_mut().unwrap());
+            } else {
+                core.drop_preload_secret("session");
+            }
+            let (gone, request_dropped, answered, headers, url, bytes) = {
+                let state = core.shared.state.lock().unwrap();
+                let cache = state.cache.as_ref().unwrap();
+                let held = &cache.preloads[0];
+                (
+                    matches!(held.reply, ReplyState::Gone),
+                    held.request.is_none(),
+                    held.answered_at.is_none(),
+                    held.key.headers.capacity(),
+                    held.key.url.capacity(),
+                    cache.bytes,
+                )
+            };
+            assert!(gone && request_dropped && answered);
+            assert_eq!((headers, url), (0, 0));
+            assert!(bytes < 4096, "ended hold retained its charge");
+            if expired {
+                assert!(
+                    ask(&core, &woke, job(1, request.clone())).1,
+                    "HTTP freshness survives the hold"
+                );
+                core.drop_preload_secret("session");
+            }
+            server.plan("/retained", Plan::new(200, &[], b"sent"));
+            assert!(
+                !ask(&core, &woke, job(2, request)).1,
+                "secret writes still invalidate the HTTP copy"
+            );
+            let facts = core.take_preload_journal();
+            assert!(facts
+                .iter()
+                .all(|f| f.name == "retained" && f.origin == format!("http://{}", server.address)));
+        }
+    }
+}
+
+#[test]
+fn equal_preloads_keep_every_secrets_invalidation_after_their_holds_expire() {
+    for asynchronous in [false, true] {
+        for secret in ["first", "second"] {
+            let server = Server::new();
+            let definitions = ["first", "second"].map(|name| {
+                server.plan(
+                    "/equal",
+                    Plan::new(200, &[("Cache-Control", "max-age=60")], b"held"),
+                );
+                let mut def = definition(&server, "/equal");
+                def.name = name.into();
+                def.secrets.push(name.into());
+                def
+            });
+            let (set, clock) = fresh_clock(&server, definitions.into());
+            complete_set(&set);
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            *clock.lock().unwrap() += HOLD;
+            assert!(read(&core, &woke, &server, 1, "/equal").1);
+            core.drop_preload_secret(secret);
+            server.plan("/equal", Plan::new(200, &[], b"sent"));
+            assert!(!read(&core, &woke, &server, 2, "/equal").1);
+        }
+    }
+}

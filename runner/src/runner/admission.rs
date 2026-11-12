@@ -331,6 +331,7 @@ impl<D: DataSource> Runner<D> {
         let mut again = Vec::new();
         let next = match target {
             Target::Resource(i) => {
+                self.resources[i].launch_ask = false;
                 // Keep the standing answer's arguments. Failure suppresses
                 // another ask independently of that answer's store revision.
                 // An upload's failure is never asked again at its arguments,

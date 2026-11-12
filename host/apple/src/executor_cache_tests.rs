@@ -723,6 +723,7 @@ fn age_and_freshness_use_rfc_9111_arithmetic_and_monotonic_residence() {
         body: vec![],
     };
     let mut entry = Entry {
+        preloads: 0,
         key: Key::of(&request),
         response,
         stored: at,

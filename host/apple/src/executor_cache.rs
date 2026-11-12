@@ -31,6 +31,8 @@ impl Key {
 
 struct Entry {
     key: Key,
+    // Secret writes reach HTTP copies after the holds release their keys (LLP 1162.000 D3).
+    preloads: u8,
     response: Response,
     stored: Instant,
     age: Duration,
@@ -551,13 +553,17 @@ pub(super) fn response(state: &mut State, ticket: u64, response: &mut Response, 
             run.cached = true;
         }
     }
+    let preloads = previous.as_ref().map_or(0, |entry| entry.preloads);
     drop(previous);
-    store_response(cache, key, started, store, response, run.cached, now, wall);
+    store_response(
+        cache, key, started, store, response, run.cached, preloads, now, wall,
+    );
 }
 
 #[allow(dead_code)] // Some shells expose no launch entry (LLP 1162.000 D4).
 pub(super) fn store_preload(
     cache: &mut Cache,
+    index: usize,
     request: &Request,
     response: &mut Response,
     started: Instant,
@@ -571,6 +577,7 @@ pub(super) fn store_preload(
             !Directives::of(&request.headers).no_store,
             response,
             false,
+            1 << index,
             Instant::now(),
             SystemTime::now(),
         );
@@ -585,6 +592,7 @@ fn store_response(
     store: bool,
     response: &mut Response,
     cached: bool,
+    preloads: u8,
     now: Instant,
     wall: SystemTime,
 ) {
@@ -594,6 +602,12 @@ fn store_response(
     if response.status != 200 && !Directives::of(&response.headers).no_store {
         return;
     }
+    let preloads = preloads
+        | cache
+            .entries
+            .iter()
+            .find(|e| e.key == key)
+            .map_or(0, |e| e.preloads);
     cache.drop_key(&key);
     cache.collect();
     if response.status != 200 {
@@ -631,6 +645,7 @@ fn store_response(
     };
     cache.insert(Entry {
         key,
+        preloads,
         response,
         stored: now,
         age,
@@ -762,9 +777,9 @@ fn drop_urls(state: &mut State, urls: &[String]) {
     cache.collect();
 }
 #[allow(dead_code)] // Some shells expose no launch entry (LLP 1162.000 D4).
-pub(super) fn drop_preload_copy(cache: &mut Cache, request: &Request) {
+pub(super) fn drop_preload_copy(cache: &mut Cache, index: usize) {
     for i in (0..cache.entries.len()).rev() {
-        if cache.entries[i].key == Key::of(request) {
+        if cache.entries[i].preloads & (1 << index) != 0 {
             cache.remove(i);
         }
     }
@@ -810,7 +825,7 @@ fn set(headers: &mut Headers, name: &str, value: &str) {
     headers.retain(|(k, _)| !k.eq_ignore_ascii_case(name));
     headers.push((name.into(), value.into()));
 }
-fn header_bytes(headers: &Headers) -> usize {
+pub(super) fn header_bytes(headers: &Headers) -> usize {
     headers.capacity() * std::mem::size_of::<(String, String)>()
         + headers
             .iter()
