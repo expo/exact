@@ -263,7 +263,10 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> WorldSurface<G, 
         if ASSETS && !sim.device_assets_ready() {
             return sim.assets_pending();
         }
-        sim.viewport(frame.width, frame.height);
+        // A new world's first size runs `Game::first_frame`: this frame shows it.
+        if sim.viewport(frame.width, frame.height) {
+            self.dirty = true;
+        }
         self.look.points = (frame.width, frame.height);
         self.look.held = Some(*frame);
         if self.format != Some(format) {

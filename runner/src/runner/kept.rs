@@ -91,16 +91,17 @@ pub(super) fn refuse(
         .push((i, super::lines::kept_refused(name, Some(&json(kept)), &why)));
 }
 
-/// The store name a resource's kept answer lives under.
-/// The kept entries in `snapshot` no declared reader of `plan` seeds. A
+/// The kept entries in `names` no declared reader of `plan` seeds. A
 /// cold boot seeds a first frame only from declared readers' kept answers,
 /// so any other entry (a reader made `transient`, a resource removed) is
 /// forgotten on disk, not carried forever. A reload's carried readers are
 /// checked for compatibility instead.
-pub(super) fn obsolete(plan: &exact_plan::Plan, snapshot: &[(String, Vec<u8>)]) -> Vec<String> {
-    snapshot
-        .iter()
-        .filter_map(|(name, _)| {
+pub(super) fn obsolete<'n>(
+    plan: &exact_plan::Plan,
+    names: impl Iterator<Item = &'n String>,
+) -> Vec<String> {
+    names
+        .filter_map(|name| {
             let resource = name.strip_prefix(Store::KEPT)?;
             (!(0..plan.resources.len()).any(|i| {
                 (kept_surface(plan, i)
@@ -131,16 +132,16 @@ pub(super) fn transient<'n>(
         .collect()
 }
 
-/// Every kept entry in `snapshot`: what an app that keeps no answers
+/// Every kept entry in `names`: what an app that keeps no answers
 /// forgets (LLP 1069.008.000 D7).
-pub(super) fn all(snapshot: &[(String, Vec<u8>)]) -> Vec<String> {
-    snapshot
-        .iter()
-        .filter(|(name, _)| name.starts_with(Store::KEPT))
-        .map(|(name, _)| name.clone())
+pub(super) fn all<'n>(names: impl Iterator<Item = &'n String>) -> Vec<String> {
+    names
+        .filter(|name| name.starts_with(Store::KEPT))
+        .cloned()
         .collect()
 }
 
+/// The store name a resource's kept answer lives under.
 pub(super) fn kept_name(resource: &str) -> String {
     let mut name = String::from(Store::KEPT);
     name.push_str(resource);
@@ -445,7 +446,7 @@ impl<D: DataSource> Runner<D> {
                 origin: 0,
             });
             match ready {
-                true => self.refresh_next.push(i),
+                true => self.ask_at_launch(i),
                 false => self.resources[i].stale = true,
             }
         }
@@ -477,6 +478,22 @@ impl<D: DataSource> Runner<D> {
         // enter the kept entry or its budget.
         let row = self.resource_row(i).clone();
         let args = &args[..row.args.len as usize - usize::from(row.context)];
+        // The record the module published, without the host's own members
+        // (`presented`, LLP 1009 D9): those are this launch's.
+        let published;
+        let value = if surface {
+            let record = crate::surface_record::surface_name(&self.plan, &row)
+                .and_then(|name| self.surface_records.get(name));
+            let Some(Ok(v)) = record
+                .map(|text| crate::surface_record::decode_published(&self.plan, row.ty, text))
+            else {
+                return;
+            };
+            published = v;
+            &published
+        } else {
+            value
+        };
         let surface_args;
         let args = if surface {
             let Some(signature) = crate::surface_record::keep_signature(&self.plan, row.ty) else {
@@ -658,6 +675,21 @@ impl<D: DataSource> Runner<D> {
         result
     }
 
+    /// After a cold boot, the kept entries the host has and left out of the
+    /// snapshot (past [`Store::KEPT_TOTAL_BYTES`]): those the boot would
+    /// have forgotten had they been read are forgotten, which needs no
+    /// value. A name the store holds was read, and the boot judged it.
+    pub fn forget_unread_kept(&mut self, names: &[String]) {
+        let unread = names.iter().filter(|name| self.store.kept(name).is_none());
+        let forgotten = match crate::device::keeps_no_answers(self.data.grants()) {
+            true => all(unread),
+            false => obsolete(&self.plan, unread),
+        };
+        for name in &forgotten {
+            self.store.forget_unread_kept(name);
+        }
+    }
+
     fn restore_store(
         &mut self,
         snapshot: Vec<(String, Vec<u8>)>,
@@ -707,6 +739,17 @@ impl<D: DataSource> Runner<D> {
         &mut self,
         change: crate::StoreChange,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
+        let result = self.activate(change);
+        self.launch.clear();
+        result
+    }
+
+    /// The asks it makes are the launch's own (`launch`), but for a resource
+    /// a refresh already waits to ask.
+    fn activate(
+        &mut self,
+        change: crate::StoreChange,
+    ) -> Result<Option<CommitReceipt>, RunnerError> {
         if !self.data.ready() {
             self.log("data_ready: the data source is not ready");
             return Ok(None);
@@ -722,6 +765,9 @@ impl<D: DataSource> Runner<D> {
         let stale: Vec<usize> = (0..self.resources.len())
             .filter(|i| self.resources[*i].stale || readers.contains(i))
             .collect();
+        let launch: Vec<usize> = (stale.iter().copied())
+            .filter(|i| !self.refresh_next.contains(i))
+            .collect();
         // Writes made before the source was ready are overlaid from here
         self.resources
             .iter_mut()
@@ -732,6 +778,7 @@ impl<D: DataSource> Runner<D> {
                 return Ok(None);
             }
             self.owe(&stale);
+            self.launch = launch;
             return (self.reasking(|r| r.commit_again(stale, "data_ready"))).map(Some);
         }
         let what = format!(
@@ -741,6 +788,7 @@ impl<D: DataSource> Runner<D> {
         );
         let was_poisoned = self.poisoned;
         let checkpoint = self.checkpoint();
+        self.launch = launch;
         self.refresh_next.extend(&stale);
         self.owe(&stale);
         let result = if self.poisoned {

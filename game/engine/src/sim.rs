@@ -106,6 +106,15 @@ pub trait Game: 'static {
     fn register(_world: &mut World, _args: &std::collections::BTreeMap<&str, Value>) {}
     /// Construct the world after argument decoding succeeds.
     fn setup(world: &mut World, args: &Self::Args);
+    /// Finish a new world with the canvas's size, as a launch camera framed
+    /// for the screen and its HUD needs: once for each world `setup` made,
+    /// when the canvas first reports its size (`input.viewport()`), before
+    /// the world's first tick and before its first frame is drawn. A restored
+    /// world never runs it, since its save holds what it wrote; a world given
+    /// no size before its first tick (a hostless `Sim` never sent
+    /// `Sim::viewport`) never runs it either. It writes the simulation as
+    /// `setup` does, and presentation as `setup` may not.
+    fn first_frame(_world: &mut World, _input: &Input, _args: &Self::Args) {}
     /// Stop world time while continuing to serve reads.
     fn paused(_args: &Self::Args) -> bool {
         false
@@ -226,6 +235,8 @@ impl Paranoid {
 pub struct Sim<G: Game> {
     pub(crate) world: World,
     setup_pending: bool,
+    // A world `setup` made that has not run `Game::first_frame` (`frame_first`).
+    unframed: bool,
     // The first required asset last seen not ready (`required_ready`).
     ready_hint: Option<String>,
     asset_mesh_revision: u64,
@@ -432,6 +443,7 @@ impl<G: Game> Sim<G> {
     ) -> Result<Self, String> {
         Ok(Self {
             setup_pending: !world.assets.ready(),
+            unframed: true,
             world,
             asset_mesh_revision: u64::MAX,
             asset_sprite_names: Vec::new(),
@@ -544,6 +556,7 @@ impl<G: Game> Sim<G> {
                 .checked_add(1)
                 .expect("presentation generation exhausted");
             self.setup_pending = !world.assets.ready();
+            self.unframed = true;
             self.ready_hint = None;
             self.asset_mesh_revision = u64::MAX;
             self.edits_admitted |= self.world.set_seen.get();
@@ -566,7 +579,9 @@ impl<G: Game> Sim<G> {
         }
         self.args_json = args_json;
         self.args = args;
-        if changed {
+        // A restarted world on a canvas that has its size is framed at once,
+        // which presents it.
+        if !self.frame_first() && changed {
             self.invalidate();
             // Drawn state follows the arguments it reads at once, paused or not.
             if !self.setup_pending {
@@ -580,12 +595,38 @@ impl<G: Game> Sim<G> {
         Ok(())
     }
     /// Set canvas dimensions in points, for touch regions and agent projection.
-    pub fn viewport(&mut self, width: f32, height: f32) {
+    /// The first size a new world hears runs `Game::first_frame`: true when
+    /// this call did, and the world changed.
+    pub fn viewport(&mut self, width: f32, height: f32) -> bool {
         assert!(
             width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0,
             "viewport dimensions must be positive finite points"
         );
         self.input.viewport = Vec2::new(width, height);
+        self.frame_first()
+    }
+    /// Run `Game::first_frame` on a world `setup` made, once it has run and
+    /// has a canvas size, while it is still at tick 0. True when it ran.
+    // @ref LLP 1046.003 — launch framing: setup never reads the size.
+    pub(crate) fn frame_first(&mut self) -> bool {
+        if !self.unframed
+            || self.setup_pending
+            || self.world.tick() != 0
+            || self.input.viewport.min_element() <= 0.0
+        {
+            return false;
+        }
+        self.unframed = false;
+        self.world.clear_presentation();
+        G::first_frame(&mut self.world, &self.input, &self.args);
+        if let Some(name) = self.world.presentation_written() {
+            panic!("Game::first_frame wrote presentation component `{name}`; write presentation state in Game::present, which runs right after it");
+        }
+        crate::scene::place_followers(&self.world);
+        self.world.propagate();
+        Self::present(&mut self.world, &self.args);
+        self.invalidate();
+        true
     }
     fn projected(&self, e: &Queued) -> i64 {
         e.world_us.unwrap_or_else(|| {

@@ -245,11 +245,7 @@ fn check(all: Vec<(String, Vec<String>)>, owed: &[&str]) {
 #[test]
 fn positioned_boxes_roots_and_ratios_match_chrome() {
     let fixture = include_str!("fixtures/browser_position.tsv");
-    // QUEUE: the auto-height column shrinks to 60px instead of its 100px cap.
-    check(
-        failures(fixture, true),
-        &["Chrome 151 ratio text wrapping column height cap"],
-    );
+    check(failures(fixture, true), &[]);
 }
 
 /// The same Chrome frames hold when the ratio container is the root in a

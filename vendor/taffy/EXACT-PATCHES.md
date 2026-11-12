@@ -902,9 +902,8 @@ the text in two lines spilling out. Patch 25's fit-content clamp held only for
 the final layout. The base-size and minimum-content probes now pass a
 fit-content cross size measured from the item's own max- and min-content
 contributions, clamped to its min and max and floored at its padding and
-border, through the helper and condition determine_hypothetical_cross_size already
-uses for the final width (`common::fit_content_width`; a column, an auto
-cross size, no ratio, not a compressible replaced element), so the two agree.
+border (`common::fit_content_width`). Non-ratio items use that helper for
+their final width too; a ratio item's final width follows its flexed height.
 That helper's clamp is corrected to CSS's order, max(min-content,
 min(max-content, available)): it let max-content win when a negative margin
 inverts the two, where Chrome takes the min-content (patch 25's grid, column
@@ -913,9 +912,10 @@ when a probe needs it. A leaf is measured so too: a leaf wraps to the space
 only while its min-content fits it, and a word that only `overflow-wrap:
 break-word` breaks makes its fit-content width its `max-width`; measured at
 the space, a padded chat bubble at `max-width: 100%` of a 75% column was two
-lines taller than its text (chat-rooms, round 26). Stretched items, sizing
-keywords and items with a ratio are as before; a wrapping column in a row (an item whose own main axis is
-the parent's cross axis) is not covered.
+lines taller than its text (chat-rooms, round 26). Stretched items and sizing
+keywords retain their own paths; non-replaced ratio items use the same
+fit-content width for main-size measurement. A wrapping column in a row
+(an item whose own main axis is the parent's cross axis) is not covered.
 
 **Held by** `browser_flex::a_fit_content_flex_item_in_a_column_is_as_tall_as_its_wrapped_lines`
 (six Chrome 154 cases through the web host: the row holding a wrapping row
@@ -2062,8 +2062,11 @@ normalizing both letters and spaces to 10px. Seven failed when the helper
 also handled column cross-size resolution: the reported leaf measured
 130×100 instead of 100×100. They cover flexed and percentage heights,
 ratios and box sizing, with stretch, overflow, inline bounds, row, block
-and absolute controls. The auto-height column with a 100px height cap
-already measured 60×60 before Patch 64; it remains an owed case in `QUEUE.md`.
+and absolute controls. Main-size measurement resolves an auto-height
+column item's fit-content width before deriving its ratio height. The
+100px height cap gives a 100×100 box even though the text wraps into
+60px-wide lines; the 60px cap, definite-height and flexed-height cases
+retain their measured frames.
 
 ## Cargo workspace boundary
 

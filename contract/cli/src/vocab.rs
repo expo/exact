@@ -245,7 +245,11 @@ fn entry(name: &str) -> Option<Entry> {
         .or_else(|| vocab::compile_attr(name).map(compile_attr_json));
     let value_of: Vec<&'static str> = vocab::attrs()
         .into_iter()
-        .filter(|(n, a)| rows_of(n, a).iter().any(|r| r.enum_names().contains(&name)))
+        .filter(|(n, a)| {
+            rows_of(n, a)
+                .iter()
+                .any(|r| vocab::authored_names(*r).contains(&name))
+        })
         .map(|(n, _)| n)
         .collect();
     let concept = concepts::concept(name);
@@ -961,9 +965,13 @@ fn row_json(row: StyleId) -> Value {
     let mut doc = json!({
         "row": row.name(),
         "codec": vocab::codec(row),
-        "values": row.enum_names(),
+        "values": vocab::authored_names(row),
         "default": vocab::default(row),
     });
+    // LLP 1043.000 §3 D1: keywords the wire keeps and the compiler refuses.
+    if !row.refused_enum_names().is_empty() {
+        doc["refused"] = row.refused_enum_names().into();
+    }
     // Only a row with entries has the key: none recorded is not "every host draws it".
     let hosts = vocab::style_hosts(row);
     if !hosts.is_empty() {
@@ -1089,6 +1097,7 @@ fn attr_json(name: &str, a: &AttrTarget) -> Value {
         doc["note"] = GRID_TRACKS.into();
     }
     if name == "buttonStyle" {
+        doc["values"] = exact_kernel::generated::BUTTON_STYLES.into();
         doc["note"] = vocab::BUTTON_DEFAULT_NOTE.into();
     }
     if name == "appearance" {
@@ -1156,12 +1165,15 @@ fn tag_text(t: &Tag) -> String {
 /// One row's codec, values and default, as one phrase.
 fn row_text(row: StyleId) -> String {
     let mut text = vocab::codec(row);
-    let values = row.enum_names();
+    let values = vocab::authored_names(row);
     if !values.is_empty() {
         text += &format!(" {}", values.join("|"));
     }
     if let Some(default) = vocab::default(row) {
         text += &format!(", default {default}");
+    }
+    if !row.refused_enum_names().is_empty() {
+        text += &format!("; refused: {}", row.refused_enum_names().join("|"));
     }
     text
 }

@@ -39,6 +39,7 @@ extern "C" {
         body_length: usize,
         body_ctx: *mut c_void,
         timeout_seconds: f64,
+        speculative: c_int,
         refusal: *const c_char,
         ctx: *mut c_void,
     ) -> *mut c_void;
@@ -165,6 +166,7 @@ impl AsyncTransport for DarwinLane {
                 body_length,
                 body_ctx,
                 timeout,
+                c_int::from(request.speculative),
                 refusal.map_or(std::ptr::null(), |r| r.as_ptr()),
                 ctx,
             )

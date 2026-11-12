@@ -24,7 +24,7 @@ pub fn rust_entry(
         }
         _ => String::new(),
     };
-    let supplemental = if let Some(directory) = std::env::var_os("EXACT_RUST_BUNDLE") {
+    let mut supplemental = if let Some(directory) = std::env::var_os("EXACT_RUST_BUNDLE") {
         let receipt: serde_json::Value = serde_json::from_slice(
             &std::fs::read(std::path::Path::new(&directory).join("app.module.json"))
                 .map_err(|e| e.to_string())?,
@@ -47,8 +47,17 @@ pub fn rust_entry(
     } else {
         format!("exact_logic::Swappable::{mode}({constructor}){native}")
     };
+    let has_preloads = inputs["preload"]
+        .as_array()
+        .is_some_and(|entries| !entries.is_empty());
+    if has_preloads {
+        supplemental = format!(
+            "({supplemental}).with_preloads({})",
+            crate::preload_expression(&inputs["preload"])
+        );
+    }
     match mode {
-        "off" if inputs["platform"] == "web" => Ok(format!("type AppData = {data};\n#[allow(dead_code)]\nfn app_data() -> AppData {{ {constructor} }}\n")),
+        "off" if inputs["platform"] == "web" && !has_preloads => Ok(format!("type AppData = {data};\n#[allow(dead_code)]\nfn app_data() -> AppData {{ {constructor} }}\n")),
         "off" | "native" | "tiered" | "wasm" | "browser" => Ok(format!(
             "exact_logic::configured!(AppData, {data}, || {supplemental});\n#[allow(dead_code)]\nfn app_data() -> AppData {{ Default::default() }}\n"
         )),

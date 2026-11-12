@@ -1,6 +1,6 @@
 # The authoring diary
 
-For the agent working on an Exact app. The exact2 team asks you to keep a diary of
+For the agent working on an Exact app. The Exact team asks you to keep a diary of
 how Exact went, so it can fix what was rough and keep what was good. The diary
 stays on this machine. Nothing is sent unless the person you work for says yes.
 
@@ -27,7 +27,7 @@ something took several tries, or a command was confusing.
 bun exact.mjs feedback note "verify ios: the signing error never named the setting"
 ```
 
-The note joins the diary (`.exact/diary/<date>-notes.md`) with exact2's commit, the last
+The note joins the diary (`.exact/diary/<date>-notes.md`) with Exact's commit, the last
 command's verb, exit code and duration, and the machine's OS and whether the note was
 written from a terminal. It never carries any command's output, the app's code or files,
 or command arguments: write what went wrong in the note itself (a short error line is
@@ -44,7 +44,7 @@ this command, and so does a `test` or `verify` that passes; each at most once a 
 Nothing leaves this machine unless the standing answer allows it: `always`, or a yes to
 `ask`. What is sent goes to Expo, at `https://exact-diaries.ccheever-0f6.workers.dev` (or
 `EXACT_FEEDBACK_URL`): the redacted diary and notes, the command log (verb, exit code,
-duration and exact2 commit of each command), the platform, and the README only with its
+duration and Exact commit of each command), the platform, and the README only with its
 own yes. `bun exact.mjs feedback` prints exactly that before anything goes. The first
 nudge or note on a machine says so once.
 

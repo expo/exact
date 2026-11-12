@@ -17,7 +17,6 @@
     "exact": "scripts/exact.mjs"
   },
   "dependencies": {
-    "@exact/scale-fixture-cards": "workspace:*",
     "@exact/actions": "workspace:*",
     "@exact/browser": "workspace:*",
     "@exact/browser-automation": "workspace:*",
@@ -39,7 +38,6 @@
     "@exact/recording": "workspace:*",
     "@exact/speech-recognition": "workspace:*",
     "@exact/speech-synthesis": "workspace:*",
-    "@exact/scale-fixture-notes": "workspace:*",
     "@exact/reading": "workspace:*",
     "@exact/passkeys": "workspace:*",
     "@exact/sign-in": "workspace:*",

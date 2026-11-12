@@ -673,6 +673,83 @@ fn a_hosts_own_mirror_of_the_tree_reads_the_same_rule() {
     assert_eq!(bars::header_shape_words(&[0], 0), None);
 }
 
+/// A child the web does not show (`display: none`), or one inside a box
+/// that is, is no item and no heading: the bar is the header's without it.
+#[test]
+fn a_headers_hidden_children_are_left_out_of_the_rule() {
+    let h1 = fact::HEADING | 1 << fact::LEVEL;
+    // route > header > [back button, heading, hidden button]
+    let button = [
+        0,
+        1,
+        fact::HEADER,
+        3,
+        fact::PRESS | fact::BACK,
+        0,
+        h1,
+        0,
+        fact::PRESS | fact::HIDDEN,
+        0,
+    ];
+    // One leading item and one button: Back.
+    assert_eq!(
+        bars::header_shape_words(&button, 0),
+        Some(vec![1, 3, 1, 0, 0, 0, 1, 0, 1, 2, 2])
+    );
+    // route > header > [heading, hidden box > [button, heading]]
+    let boxed = [
+        0,
+        1,
+        fact::HEADER,
+        2,
+        h1,
+        0,
+        fact::HIDDEN,
+        2,
+        fact::PRESS,
+        0,
+        fact::HEADING,
+        0,
+    ];
+    assert_eq!(
+        bars::header_shape_words(&boxed, 0),
+        Some(vec![1, 2, 1, 0, 0, 0, 0, 0, 0])
+    );
+    // route > header > [heading, hidden heading]: one heading shown.
+    let headings = [
+        0,
+        1,
+        fact::HEADER,
+        2,
+        h1,
+        0,
+        fact::HEADING | fact::HIDDEN,
+        0,
+    ];
+    assert_eq!(
+        bars::header_shape_words(&headings, 0),
+        Some(vec![1, 2, 1, 0, 0, 0, 0, 0, 0])
+    );
+    // A pressable around a hidden heading is an item, not the title's tap.
+    // route > header > [heading, button > hidden heading]
+    let tap = [
+        0,
+        1,
+        fact::HEADER,
+        2,
+        h1,
+        0,
+        fact::PRESS,
+        1,
+        fact::HEADING | fact::HIDDEN,
+        0,
+    ];
+    assert_eq!(
+        bars::header_shape_words(&tap, 0),
+        Some(vec![1, 2, 1, 0, 0, 0, 0, 1, 1, 3, 3])
+    );
+}
+
 #[test]
 fn what_a_route_shows_of_the_bar() {
     assert_eq!(
@@ -753,4 +830,67 @@ fn a_roots_tabs_are_the_panels_its_own_tablist_names() {
     // A root with no tablist of its own is one stack.
     assert_eq!(kernel.root_tabs(5), None);
     assert_eq!(kernel.root_tabs(99), None);
+}
+
+/// LLP 1141.002 D1: the first root tab whose `rel` holds the token
+/// `search`, ASCII case-insensitively, is the app's search tab, known
+/// before its panel holds anything; a `rel` without the token is not.
+#[test]
+fn a_root_tab_with_rel_search_is_the_search_tab() {
+    let tab = |id: u32, props: &'static [(PropId, &'static str)]| {
+        Node(id, NodeType::Pressable, props, vec![])
+    };
+    const TABLIST: &[(PropId, &str)] = &[(PropId::AccessibilityRole, "tablist")];
+    const PLAIN: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tab"),
+        (PropId::AccessibilityControls, "panel-a"),
+        (PropId::Rel, "nofollow"),
+    ];
+    const SEARCH: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tab"),
+        (PropId::AccessibilityControls, "panel-b"),
+        (PropId::Rel, "help  SEARCH"),
+    ];
+    const SECOND: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tab"),
+        (PropId::AccessibilityControls, "panel-c"),
+        (PropId::Rel, "search"),
+    ];
+    let panel =
+        |id: u32, name: &'static [(PropId, &'static str)]| Node(id, NodeType::View, name, vec![]);
+    const PANEL_A: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tabpanel"),
+        (PropId::Id, "panel-a"),
+    ];
+    const PANEL_B: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tabpanel"),
+        (PropId::Id, "panel-b"),
+    ];
+    const PANEL_C: &[(PropId, &str)] = &[
+        (PropId::AccessibilityRole, "tabpanel"),
+        (PropId::Id, "panel-c"),
+    ];
+    let kernel = kernel(view(
+        1,
+        vec![
+            panel(2, PANEL_A),
+            panel(3, PANEL_B),
+            panel(4, PANEL_C),
+            Node(
+                5,
+                NodeType::View,
+                TABLIST,
+                vec![tab(6, PLAIN), tab(7, SEARCH), tab(8, SECOND)],
+            ),
+        ],
+    ));
+    let tabs = kernel.root_tabs(1).unwrap();
+    assert_eq!(tabs.tabs, vec![6, 7, 8]);
+    assert_eq!(
+        tabs.search,
+        Some(1),
+        "the first tab whose rel holds `search`"
+    );
+    assert!(bars::rel_has("noopener Search", "search"));
+    assert!(!bars::rel_has("searching", "search"));
 }

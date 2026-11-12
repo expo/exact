@@ -370,6 +370,29 @@ final class NativeFieldsMacTests: XCTestCase {
         node.applyProps(set: ["type": "text"], clear: [])
         XCTAssertFalse(node.field is NSSearchField)
     }
+
+    /// A style that remakes the field (`appearance`) changes no prop: the new
+    /// field keeps its autocomplete type, its disabled state and its
+    /// placeholder.
+    func testAFieldRemadeByAStyleKeepsWhatItsPropsSay() throws {
+        _ = NSApplication.shared
+        let session = ExactApp.shared.makeSession(label: "remade-search-field")
+        defer { session.destroy() }
+        let node = NodeView(id: 1, kind: "input", presenter: session.presenter)
+        node.frame = NSRect(x: 0, y: 0, width: 240, height: 40)
+        node.applyProps(set: ["type": "search", "disabled": "true", "autocomplete": "email", "placeholder": "Email"], clear: [])
+        node.applyStyle([:])
+        XCTAssertTrue(node.field is NSSearchField)
+        for appearance in ["none", "auto"] {
+            node.applyStyle(["appearance": .string(appearance)])
+            let field = try XCTUnwrap(node.field)
+            XCTAssertEqual(field is NSSearchField, appearance == "auto")
+            XCTAssertEqual(field.contentType, .emailAddress, appearance)
+            XCTAssertFalse(field.isEnabled, appearance)
+            XCTAssertFalse(field.isEditable, appearance)
+            XCTAssertEqual(field.placeholderAttributedString?.string, "Email", appearance)
+        }
+    }
     func testChangingAFocusedFieldsClassKeepsItsEditing() throws {
         _ = NSApplication.shared
         let session = ExactApp.shared.makeSession(label: "field-class-change")

@@ -865,3 +865,14 @@ narrower scope (`exact_data::Mixed` sets one on each of its sources'
 requests) on the worker's or lane's own transport with the scope's grants,
 so it reuses the connections that transport keeps rather than opening its
 own. Replay on a refresh.
+
+## Local patch 37, a speculative fetch
+
+`stdlib::fetch::Request` carries `speculative`. `stdlib::fetch_async::HopRequest`
+keeps it on every redirect hop, and `run_blocking` passes it to the blocking
+transport. Both Darwin transports (`transport/darwin.rs`,
+`transport/darwin_async.rs` and `darwin_task.mm`) send such a request with
+`allowsConstrainedNetworkAccess` false, so URLSession refuses it under Low
+Data Mode; the portable transport ignores the field.
+Exact sets it on a preload, a request made before the app asks for it
+(LLP 1162.000 D4, LLP 1162 D7). Unset, nothing changes. Replay it on a refresh.

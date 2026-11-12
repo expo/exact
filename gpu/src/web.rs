@@ -253,6 +253,11 @@ pub fn bind_changed_at(id: u32, changed: &str, at_ms: Option<f64>) -> bool {
     with(|m| m.bind_changed_json(id, changed, at_ms)).unwrap_or(false)
 }
 
+/// The canvas's size in points, before a bind. `true` on success.
+pub fn size(id: u32, width: f32, height: f32) -> bool {
+    with(|m| m.size(id, width, height)).unwrap_or(false)
+}
+
 /// Record one frame into the open frame (shown at [`flush`]): 1 = wants
 /// another, 0 = done, 2 = failed.
 pub fn render(id: u32, width: f32, height: f32, scale: f32, now_ms: f64) -> u32 {
@@ -522,6 +527,12 @@ macro_rules! module {
         #[::wasm_bindgen::prelude::wasm_bindgen]
         pub fn gpu_bind_changed_at(id: u32, changed: &str, at_ms: Option<f64>) -> bool {
             $crate::web::bind_changed_at(id, changed, at_ms)
+        }
+
+        /// The canvas's size in points, before a bind. `true` on success.
+        #[::wasm_bindgen::prelude::wasm_bindgen]
+        pub fn gpu_size(id: u32, width: f32, height: f32) -> bool {
+            $crate::web::size(id, width, height)
         }
 
         /// Record one frame (shown at `gpu_flush`): 1 = wants another, 0 = done, 2 = failed.

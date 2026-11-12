@@ -177,6 +177,10 @@ impl exact_runner::DataSourceWrapper for Seeded<'_> {
     fn app_id(&self) -> &str {
         self.module.app_id()
     }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        self.module.preloads()
+    }
+
     fn grants(&self) -> &str {
         self.module.grants()
     }

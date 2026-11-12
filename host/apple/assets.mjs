@@ -268,7 +268,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
       // What the compile itself writes: a cache from before `--accent-color` named no accent,
       // one from before `ExactLaunchImageSource` no launch image's source or digest,
       // one from before `digest` launch assets under fixed names
-      'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets'])).digest('hex').slice(0, 16);
+      'live-icons-with-manifest-fallback', 'accent-color', 'launch-image-source', 'launch-image-digest', 'launch-names-digest', 'alternate-app-icons', 'icon-appearances', 'tv-brand-assets', 'launch-color-components'])).digest('hex').slice(0, 16);
     const made = resolve(kept.dir, `assets-${platform}-${key}`);
     if (!existsSync(resolve(made, 'keys.json'))) {
       const making = `${made}.${process.pid}.tmp`;
@@ -357,7 +357,7 @@ export function appleAssets(app, dir, { platform = 'macos', device = false, cata
  * the bake's `launchBackground`, LLP 1116.011 D2.3), `systemGroupedBackground`,
  * which the system shows as #F2F2F7 and black. That is a colour set of its own
  * (a reference to the system colour compiles to its light value alone), so the
- * window under the first frame (`ExactLaunch-…`, read by the presenter) is the
+ * window under the first frame (`ExactLaunchColor`, the same components) is the
  * same grey and nothing lighter shows between the launch screen and the first
  * frame (stopwatch, round 13: "blank white screen for ~1 s").
  * `UILaunchScreen` names colours and images only from an asset catalog, so
@@ -398,7 +398,10 @@ function launchScreen(app, catalog, launch = 'system', picture = null) {
   const name = `ExactLaunch-${digest(colors)}`;
   mkdirSync(resolve(catalog, `${name}.colorset`), { recursive: true });
   writeFileSync(resolve(catalog, `${name}.colorset`, 'Contents.json'), JSON.stringify({ colors, info: { author: 'exact', version: 1 } }));
-  return { UILaunchScreen: { UIColorName: name, ...keys }, ...source };
+  // The host uses the same sRGB components as the catalogue, including its
+  // rounded alpha, without loading Assets.car before UIApplicationMain.
+  const rgba = ({ color: { components: c } }) => [parseInt(c.red, 16) / 255, parseInt(c.green, 16) / 255, parseInt(c.blue, 16) / 255, Number(c.alpha)];
+  return { UILaunchScreen: { UIColorName: name, ...keys }, ExactLaunchColor: { light: rgba(colors[0]), ...(dark ? { dark: rgba(colors[1]) } : {}) }, ...source };
 }
 
 /** A launch asset's name ends in a digest of what it draws: iOS keeps the launch
@@ -713,6 +716,15 @@ export function shareIosResources(manifest, from, to) {
   const root = resolve(from, IOS_RESOURCE_ROOT);
   if (manifest.host?.ios?.resources?.length && lstatSync(root, { throwIfNoEntry: false })?.isDirectory())
     cpSync(root, resolve(to, IOS_RESOURCE_ROOT), { recursive: true });
+}
+
+/** The fallback PNGs actool writes beside Assets.car for the `CFBundleIconFiles` of the icon keys it returned
+ *  (`AppIcon60x60@2x.png`, `AppIcon76x76@2x~ipad.png`, an alternate's), by name in `dir`: a bundle that takes
+ *  those keys (the App Clip's) takes these files too, since iOS looks for them in the bundle that names them. */
+export function iconFiles(keys, dir) {
+  const names = [keys.CFBundleIcons, keys['CFBundleIcons~ipad']].flatMap(icons => icons ? [icons.CFBundlePrimaryIcon, ...Object.values(icons.CFBundleAlternateIcons ?? {})] : [])
+    .flatMap(icon => icon?.CFBundleIconFiles ?? []);
+  return readdirSync(dir).filter(file => names.some(name => file.startsWith(name) && /^(@[0-9]x)?(~ipad)?\.png$/.test(file.slice(name.length))));
 }
 
 /** Validate links before copying. Relative links stay inside their declared

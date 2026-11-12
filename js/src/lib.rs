@@ -323,6 +323,7 @@ pub struct Module {
     snapshot_deadline: Option<(Instant, std::time::Duration)>,
     app_id: String,
     grants: String,
+    preloads: &'static [exact_runner::request::Preload],
     revision: std::sync::OnceLock<String>, // the bytecode's SHA-256, when first asked
     engine: Option<Watched>,
     /// What an interrupt from another thread reaches; a built worker
@@ -423,6 +424,7 @@ impl Module {
             snapshot_deadline: None,
             app_id: app_id.into(),
             grants,
+            preloads: &[],
             engine: None,
             watch: Arc::default(),
             storage: None,
@@ -458,6 +460,12 @@ impl Module {
             background: Default::default(),
         };
         module.with_agent_seed(exact_data::crypto::AgentStream::agent_seed())
+    }
+
+    /// Attach the binary's checked process-start requests (LLP 1162.000 D2).
+    pub fn with_preloads(mut self, preloads: &'static [exact_runner::request::Preload]) -> Self {
+        self.preloads = preloads;
+        self
     }
 
     /// This module with `seed` as the agent's launch seed, or `None` for
@@ -521,6 +529,7 @@ impl Module {
         let bytecode = template.bytecode.clone();
         let app_id = template.app_id.clone();
         let grants = template.grants.clone();
+        let preloads = template.preloads;
         let directories = template.directories.clone();
         let native_factory = template.native_factory;
         let plan = template.plan.as_ref().map(Plan::encode);
@@ -533,7 +542,9 @@ impl Module {
         let native_slot = template.native_slot.clone();
         let secrets = template.host.secrets.clone();
         Box::new(move || {
-            let mut module = Module::new(bytecode, app_id, grants).with_agent_seed(agent_seed);
+            let mut module = Module::new(bytecode, app_id, grants)
+                .with_agent_seed(agent_seed)
+                .with_preloads(preloads);
             // Before `activate`, which loads: a worker's answers wait for
             // their storage (LLP 1097 D6).
             module.main_thread = false;

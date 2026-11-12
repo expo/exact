@@ -640,6 +640,14 @@ pub fn messages(id: u32) -> Option<String> {
     (!messages.is_empty()).then(|| json::strings(&messages))
 }
 
+/// The canvas's size in points, before a bind. Returns 0 on success.
+pub fn size(id: u32, width: f32, height: f32) -> u32 {
+    match with(|m| m.size(id, width, height)) {
+        Some(true) => 0,
+        _ => 1,
+    }
+}
+
 /// Ask the surface; an empty string means no answer.
 pub fn agent(id: u32, request: &str) -> String {
     with(|m| m.agent(id, request)).flatten().unwrap_or_default()
@@ -715,9 +723,10 @@ pub fn seen(id: u32) -> bool {
     with(|m| m.seen(id)).unwrap_or(false)
 }
 
-/// Register the presenter's callback for a canvas's first frame: on Metal it
-/// runs on the thread that scheduled the frame, and the presenter asks
-/// [`seen`] on its own thread. `None` removes it.
+/// Register the presenter's callback for a canvas's first frame, or the
+/// first of its current picture: on Metal it runs on the thread that
+/// scheduled the frame, and the presenter asks [`seen`] and [`published`]
+/// (whose `presented` changed) on its own thread. `None` removes it.
 pub fn on_presented(callback: Option<extern "C" fn()>) {
     crate::frame::on_presented(callback);
 }
@@ -885,6 +894,12 @@ macro_rules! module {
             let Some(text) = (unsafe { $crate::native::bytes("gpu_bind_at", values, len) }) else { return 1 };
             let Ok(text) = ::std::str::from_utf8(text) else { $crate::native::refuse("gpu_bind_at: the values are not UTF-8"); return 1 };
             $crate::native::bind_at(id, text, Some(at_ms))
+        }
+
+        /// The canvas's size in points, before a bind: 0 on success.
+        #[no_mangle]
+        pub extern "C" fn gpu_size(id: u32, width: f32, height: f32) -> u32 {
+            $crate::native::size(id, width, height)
         }
 
         /// Record one frame (shown at `gpu_flush`): 1 = wants another, 0 = done, 2 = failed.
@@ -1223,8 +1238,9 @@ macro_rules! module {
             u32::from($crate::native::seen(id))
         }
 
-        /// The presenter's callback for a canvas's first frame, called on
-        /// the thread that scheduled it; null removes it.
+        /// The presenter's callback for a canvas's first frame, or the first
+        /// of its current picture, called on the thread that scheduled it;
+        /// null removes it.
         #[no_mangle]
         pub extern "C" fn gpu_on_presented(callback: Option<extern "C" fn()>) {
             $crate::native::on_presented(callback)

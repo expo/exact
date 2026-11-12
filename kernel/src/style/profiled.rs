@@ -97,7 +97,7 @@ pub fn parse_profiled(text: &str) -> Option<ColorValue> {
             })
         })?
     };
-    let n = exact_color::number_text;
+    let n = exact_num::js;
     let mut canonical = format!("color({name}");
     for c in &components {
         canonical.push(' ');

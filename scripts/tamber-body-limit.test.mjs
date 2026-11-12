@@ -102,7 +102,7 @@ test("a local client that announces a body over its 16 MiB and sends none of it 
   expect(ms).toBeLessThan(7000); // at once here (Bun closes it), refuseBody's 5 s at most
 }, 30_000);
 
-test("--via's proxy answers a body over 1 MiB 413 and sends nothing on; a body within it goes on byte for byte", async () => {
+test("--via's proxy answers a body over its limit 413 and sends nothing on; a body within it goes on byte for byte", async () => {
   // The dev loop's stand-in: every connection to it counted, every body kept.
   const seen = [];
   let connections = 0;
@@ -132,6 +132,18 @@ test("--via's proxy answers a body over 1 MiB 413 and sends nothing on; a body w
     const ok = await fetch(at, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
     expect(await ok.json()).toEqual({ ok: { bytes: body.length } });
     expect([...seen[0]]).toEqual([...body]);
+    // A request that carries a token may be 16 MiB when it is an import, which the loop then judges as it
+    // judges one sent to it directly (tamber/1.17); any other method stays 1 MiB.
+    const token = { 'content-type': 'application/json', 'x-exact-tamber-token': 'a token the loop judges' };
+    const of = (method) => JSON.stringify({ method, params: { sources: 'a'.repeat(2 << 20) } });
+    const imported = await fetch(at, { method: 'POST', headers: token, body: of('import') });
+    expect(await imported.json()).toEqual({ ok: { bytes: of('import').length } });
+    const proposed = await fetch(at, { method: 'POST', headers: token, body: of('propose') });
+    expect({ status: proposed.status, body: await proposed.text() }).toEqual({ status: 413, body: REFUSED.body });
+    const announcedLocal = await announce(proxy.address().port, 'x-exact-tamber-token: t\r\n', LOCAL_OVER);
+    expect(announcedLocal.got).toStartWith('HTTP/1.1 413');
+    expect(announcedLocal.got).toContain(LOCAL_REFUSED.body);
+    expect(seen.length).toBe(2);
   } finally {
     proxy.close();
     loop.close();

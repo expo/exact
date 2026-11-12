@@ -236,6 +236,8 @@ impl<G: Game> Sim<G> {
             self.world.set_seen.set(self.edits_admitted);
             self.setup_pending = false;
             self.asset_mesh_revision = u64::MAX;
+            self.unframed = true;
+            self.frame_first();
         }
     }
     /// `Assets::ready` resumed from the last required name found not ready:

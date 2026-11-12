@@ -13,6 +13,8 @@ import ExactComposition
 import ExactLaunchParts
 
 ProcessRelaunch.waitIfRequested()
+// The app's preloads leave before AppKit starts (LLP 1162.000 D4).
+ExactLaunch.beginPreloads()
 
 // The process's own start (exec), from the kernel: what happened before
 // `main` — dyld, the Swift runtime, the static library's initializers.
@@ -747,8 +749,11 @@ final class Delegate: NSObject, NSApplicationDelegate {
         // The session already exists and AppKit boots it inside this
         // callback, so launch is measured to this point.
         ExactLaunch.shared.didFinishLaunching(hidden: NSApp.isHidden)
+        // A login item launches hidden: nobody has opened it until it is shown.
+        if !NSApp.isHidden { ExactLaunch.shared.opened() }
         finishLaunching()
     }
+    func applicationDidUnhide(_ notification: Notification) { ExactLaunch.shared.opened() }
     /// Launch Services brought something: a development link, or documents —
     /// a Finder double-click, an Open With, `open -a`, a second `mdview`
     /// while this one runs, or File ▸ Open Recent. A document arriving now is

@@ -760,6 +760,8 @@ pub fn attr(name: &str) -> Option<AttrTarget> {
         // @ref LLP 1039 D6 — vertical tablists retain authored layout.
         "aria-orientation" => AttrTarget::Prop(p("accessibilityOrientation")),
         "aria-controls" => AttrTarget::Prop(p("accessibilityControls")), // LLP 1075.003 §3.7: a tab names its tabpanel.
+        // @ref LLP 1141.002 D1 — HTML's link types; on a root tab, `search` names the search tab.
+        "rel" => AttrTarget::Prop(p("rel")),
         "aria-selected" => AttrTarget::Prop(p("accessibilitySelected")),
         "aria-expanded" => AttrTarget::Prop(p("accessibilityExpanded")),
         "aria-pressed" => AttrTarget::Prop(p("accessibilityPressed")),

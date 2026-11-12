@@ -7,6 +7,7 @@ fn queued(ticket: u64, request: Request, forced: bool) -> Job {
         request,
         forced,
         work: None,
+        waiting_charge: charge,
         charge,
         limit,
         forgotten: false,

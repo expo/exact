@@ -117,37 +117,41 @@ pub(super) fn push_style(
             range.clone(),
         );
     }
-    // CSS `tabular-nums` is the chosen face's own `tnum` feature, never a
-    // substitute face; a face without it keeps its figures (LLP 1053 G4).
-    // `font-variant-ligatures` turns the face's ligature features on or off
-    // (CSS Fonts 4); HarfRust keeps its defaults for the kinds left unsaid.
-    // `font-feature-settings` comes last and wins for a feature either named
-    // (CSS Fonts 4 §7.2).
-    let mut features = Vec::new();
-    if run.font_variant_numeric & 1 != 0 {
-        features.push(parley::FontFeature::new(
-            parley::setting::Tag::new(b"tnum"),
-            1,
-        ));
-    }
-    for (tag, value) in ligature_features(run.font_variant_ligatures) {
-        features.push(parley::FontFeature::new(
-            parley::setting::Tag::new(tag),
-            value,
-        ));
-    }
-    for (tag, value) in run.font_features.features() {
-        let tag = parley::setting::Tag::new(&tag.to_be_bytes());
-        // The kernel keeps no value past 16 bits (`FontFeatures::MAX_VALUE`).
-        let value = u16::try_from(*value).unwrap_or(u16::MAX);
-        features.retain(|f: &parley::FontFeature| f.tag != tag);
-        features.push(parley::FontFeature::new(tag, value));
-    }
+    let features = run.features();
     if !features.is_empty() {
         builder.push(
             StyleProperty::FontFeatures(parley::FontFeatures::List(features.into())),
             range,
         );
+    }
+}
+
+impl Run {
+    /// OpenType features for painted text and hosted fields. Variants set
+    /// the chosen face's features (LLP 1053 G4); explicit settings win for
+    /// the same tag (CSS Fonts 4 §7.2, LLP 1019 D13).
+    pub(crate) fn features(&self) -> Vec<parley::FontFeature> {
+        let mut features = Vec::new();
+        if self.font_variant_numeric & 1 != 0 {
+            features.push(parley::FontFeature::new(
+                parley::setting::Tag::new(b"tnum"),
+                1,
+            ));
+        }
+        for (tag, value) in ligature_features(self.font_variant_ligatures) {
+            features.push(parley::FontFeature::new(
+                parley::setting::Tag::new(tag),
+                value,
+            ));
+        }
+        for (tag, value) in self.font_features.features() {
+            let tag = parley::setting::Tag::new(&tag.to_be_bytes());
+            // The kernel keeps no value past 16 bits (`FontFeatures::MAX_VALUE`).
+            let value = u16::try_from(*value).unwrap_or(u16::MAX);
+            features.retain(|f: &parley::FontFeature| f.tag != tag);
+            features.push(parley::FontFeature::new(tag, value));
+        }
+        features
     }
 }
 

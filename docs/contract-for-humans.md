@@ -40,7 +40,7 @@ collects syntax, operator precedence, built-in functions, tags, and events.
 
 ## Run an app
 
-From an exact2 checkout with its pinned Rust toolchain and Bun installed:
+From an Exact checkout with its pinned Rust toolchain and Bun installed:
 
 ```sh
 bun install --frozen-lockfile
@@ -53,7 +53,7 @@ reports unsupported features rather than silently selecting a different result.
 Native builds require their platform tools. See the root
 [quick start](../README.md#quick-start) for toolchain installation.
 
-To scaffold a separate application, run from exact2:
+To scaffold a separate application, run from the Exact checkout:
 
 ```sh
 bun scripts/exact.mjs new ../hello
@@ -1124,9 +1124,10 @@ the face's own.
 `font-variant-ligatures` turns the face's ligatures on or off, as CSS does:
 `none` keeps a ligating font such as Fira Code from joining `://` or `->` in an
 address or code, and the other keywords (`no-contextual`,
-`discretionary-ligatures`, …) name one kind each. Text fields take it too. A
-terminal draws no ligatures; Android's native text fields, UIKit's grouped list
-cells and content regions keep the font's own; widgets and the watch refuse it.
+`discretionary-ligatures`, …) name one kind each. Text fields take it too,
+including Android's native fields. A terminal draws no ligatures; UIKit's
+grouped list cells and content regions keep the font's own; widgets and the
+watch refuse it.
 
 Any other OpenType feature of the face is set by tag, as CSS sets it:
 `font-feature-settings="'cv05', 'cv11', 'zero'"` draws Inter's tailed `l`,
@@ -1140,8 +1141,8 @@ feature of the same tag (`cv05` is a different letter in each face). Up to
 sixteen features are named in one value.
 It applies after `font-variant-numeric` and `font-variant-ligatures` and wins
 for a feature it names, so `'tnum' 0` undoes `tabular-nums`; prefer those
-properties where they say it. It reaches text and text fields where
-`font-variant-ligatures` does.
+properties where they say it. It reaches text and text fields, including
+Android's native fields, where `font-variant-ligatures` does.
 
 ## Input, events, and commands
 
@@ -1588,7 +1589,10 @@ raw source and has no `iframe` or `video`.
 A hyphenated tag can address the app's native module: the bake checks the tag
 against `app.json`'s `modules` list, and its unknown attributes pass to the
 module unchecked; a known attribute styles or labels the module's box, and one
-the box has no use for is refused. Merely inventing a tag does not create a widget. Native
+the box has no use for is refused. A package view is declared in a dependency's
+`exact.json` `views` and accepts only its declared props and events beyond standard
+box attributes and common module events (`lower-native-attr` for an undeclared
+attribute). Merely inventing a tag does not create a widget. Native
 modules and GPU capabilities are separate optional artifacts; they do not add
 features to every core build. Use [Photo Editor](../apps/photo-editor/app.contract)
 as a concrete native-module example.

@@ -478,6 +478,13 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// where the bar takes an accent as its tint.
     var tabTint: [[Double]]?
     let tabProxy = TabDelegateProxy()
+    /// Each tab's `UITab`, in tab order, when Exact's container is built
+    /// from them (TabsIOS.swift); empty for one built from `viewControllers`.
+    var builtTabs: [AnyObject] = []
+    /// What Exact added to its owner's `additionalSafeAreaInsets` for the
+    /// boxes beside the routes, and that owner (`clearBesideRoutes`).
+    var besideInsets = UIEdgeInsets.zero
+    weak var besideOwner: UIViewController?
     /// A context menu's commit pushes without the stack's animation: UIKit
     /// animates it (`.pop`, LLP 1021 §5.1). The selected route's key tells
     /// whether its press navigated.

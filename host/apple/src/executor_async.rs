@@ -506,12 +506,23 @@ impl Machine {
         }
         let mut index = 0;
         while index < state.jobs[lane].len() {
+            if lane == 0 && !super::preload::reserve_front(state) {
+                break;
+            }
             if super::forget::refuse_crowded(&self.shared, state, lane, index) {
                 continue;
             }
             let job = &state.jobs[lane][index];
             let kind = Kind::of(job);
-            if lane == 0 && (index > 0 || !super::reads::can_start(state, job)) {
+            if lane == 0 && super::preload::waiting(state, job) {
+                index += 1;
+                continue;
+            }
+            // Only a read passes one that waits for a launch reply (LLP 1162.000 D1).
+            if lane == 0
+                && ((index > 0 && job.class != exact_runner::RequestClass::Read)
+                    || !super::reads::can_start(state, job))
+            {
                 break;
             }
             let exchange = kind == Kind::Http && job.request.body_from.is_none();

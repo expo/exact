@@ -66,6 +66,7 @@ pub struct Swappable<D> {
     embedded: Option<D>,
     app_id: String,
     grants: String,
+    preloads: Vec<exact_runner::request::Preload>,
     mode: &'static str,
     loader: Option<Loader>,
     preloader: Option<Preloader>,
@@ -89,6 +90,7 @@ impl<D: DataSource> Swappable<D> {
         Self {
             app_id: embedded.app_id().into(),
             grants: embedded.grants().into(),
+            preloads: embedded.preloads().to_vec(),
             canvas_surfaces: embedded.canvas_surfaces(),
             embedded: Some(embedded),
             mode,
@@ -101,6 +103,12 @@ impl<D: DataSource> Swappable<D> {
             native: None,
         }
     }
+    /// Attach the binary's checked process-start requests (LLP 1162.000 D2).
+    pub fn with_preloads(mut self, preloads: &'static [exact_runner::request::Preload]) -> Self {
+        self.preloads = preloads.to_vec();
+        self
+    }
+
     /// Name the source digest (`scripts/app.mjs` `nativeSource`) the binary
     /// compiled `make`'s data crate from. A Rust candidate whose receipt names
     /// the same source is that code already: replacement makes it natively,
@@ -306,6 +314,10 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
     fn app_id(&self) -> &str {
         &self.app_id
     }
+    fn preloads(&self) -> &[exact_runner::request::Preload] {
+        &self.preloads
+    }
+
     fn grants(&self) -> &str {
         &self.grants
     }
@@ -587,6 +599,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
             if let Some((source, make)) = self.native {
                 if meta["source"].as_str() == Some(source) {
                     let mut native = Self::configured(make(), self.mode, self.loader);
+                    native.preloads = self.preloads.clone();
                     native.preloader = self.preloader;
                     native.native = self.native;
                     return Ok(native);
@@ -599,6 +612,7 @@ impl<D: DataSource> exact_runner::DataSourceWrapper for Swappable<D> {
                 embedded: None,
                 app_id: self.app_id.clone(),
                 grants: self.grants.clone(),
+                preloads: self.preloads.clone(),
                 mode: self.mode,
                 loader: self.loader,
                 preloader: self.preloader,

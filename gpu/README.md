@@ -154,4 +154,6 @@ Canvas 2D, an app with no GPU canvas, or the driver's frozen clock, which
 makes surfaces seekable and opens no output. Under `EXACT_AGENT_TIMING=platform`
 the owner prepares too: surfaces can open output, but the driver drops
 `exact:audio` requests, so they do not raise the prepared ambient session.
-macOS, the web and Linux consume the request without configuring a session.
+macOS, the web, Linux and Android consume the request without configuring a session.
+On Android that means a module's output gets no audio focus and no interruption
+report from Exact: the module asks Android for focus and handles its loss itself.

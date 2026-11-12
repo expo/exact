@@ -18,6 +18,9 @@ use ibex2::boundary::HostError;
 use ibex2::host::{Bindings, Host, Kv, Secrets};
 #[path = "store_secrets.rs"]
 mod shared_secrets;
+pub(crate) use shared_secrets::launch_secrets;
+#[cfg(test)]
+pub(crate) use shared_secrets::read_launch_secrets;
 use shared_secrets::{secret_directory, secret_namespace, SecretBackend};
 
 /// The kv scope the runner's kept answers live in (LLP 1027 D4): beside the
@@ -355,6 +358,9 @@ pub struct Endowed {
     pub bindings: Option<Bindings>,
     /// What the platform's stores held, read before the runner boots.
     pub snapshot: Vec<(String, Vec<u8>)>,
+    /// The kept answers past the read budget, by name: the host names them
+    /// to the runner it boots (`Runner::forget_unread_kept`).
+    pub unread_kept: Vec<String>,
     /// Where a commit's writes go.
     pub secrets: Option<Box<dyn KeptStore>>,
     /// Why the grants bound nothing.
@@ -372,6 +378,7 @@ impl Endowed {
         Endowed {
             bindings: None,
             snapshot: Vec::new(),
+            unread_kept: Vec::new(),
             secrets: None,
             unbound: None,
             presence: None,
@@ -395,10 +402,12 @@ pub fn endowed(grants: &str, app_id: &str, fresh: bool) -> Endowed {
         false => crate::presence_secrets::keychain_backend(bindings.as_ref(), grants, app_id)
             .map(|(b, service)| (b, Some(service))),
     };
-    let mut snapshot = if fresh {
-        snapshot_in(bindings.as_ref(), &prefs)
-    } else {
-        Vec::new()
+    let (mut snapshot, unread_kept) = match bindings.as_ref().filter(|_| fresh) {
+        Some(b) => {
+            let read = snapshot_parts(&b.secrets, &b.kv, &prefs, Vec::new());
+            (read.values, read.omitted)
+        }
+        None => Default::default(),
     };
     if let Some((backend, keystore)) = presence.as_ref().filter(|_| fresh) {
         let capable = keystore.is_none() || crate::presence_secrets::keychain_capable();
@@ -406,6 +415,7 @@ pub fn endowed(grants: &str, app_id: &str, fresh: bool) -> Endowed {
     }
     Endowed {
         snapshot,
+        unread_kept,
         presence,
         secrets: bindings.as_ref().map(|b| {
             Box::new(
@@ -484,6 +494,9 @@ impl Platform {
         if let Some(key) = w.name.strip_prefix(Store::STATE) {
             let text = w.value.as_deref().map(String::from_utf8_lossy);
             return self.prefs.write(&self.kv, key, text.as_deref());
+        }
+        if !w.name.starts_with(Store::KEPT) {
+            crate::launch_preloads::drop_secret(&w.name);
         }
         match (w.name.strip_prefix(Store::KEPT), &w.value) {
             (Some(key), value) => {

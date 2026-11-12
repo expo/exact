@@ -15,7 +15,7 @@ import java.io.File
  * its own and waits on none. An activity attaches one by overriding [ExactActivity.drive].
  */
 fun interface Drive {
-    /** The app's first content has been drawn: called once, on the main thread. */
+    /** The first frame after successful startup, even with an empty page: called once, on the main thread. */
     fun contentReady()
 }
 

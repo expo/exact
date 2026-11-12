@@ -325,6 +325,15 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
     fn timing(&mut self, timing: &exact_gpu::FrameTiming) {
         self.timing = *timing;
     }
+    fn size(&mut self, width: f32, height: f32) -> bool {
+        self.look.points = (width, height);
+        let framed = self
+            .sim
+            .as_mut()
+            .is_some_and(|sim| sim.viewport(width, height));
+        self.dirty |= framed;
+        framed
+    }
     fn retier(&mut self) -> bool {
         self.retier_rung()
     }
@@ -562,6 +571,11 @@ impl<G: Game, P: Executor, const ASSETS: bool, H: crate::Hooks> Surface
     }
     fn frame_ready(&self) -> bool {
         self.frame_ready
+    }
+    // A restarted or restored world is a new picture: its canvas's
+    // `presented` waits for a frame of it.
+    fn generation(&self) -> u64 {
+        self.sim.as_ref().map_or(0, Sim::generation)
     }
     fn submitted(&mut self) {
         self.frame_submitted();

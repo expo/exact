@@ -1310,9 +1310,17 @@ impl Point<'_> {
             local.is_some_and(|(x, y)| b[0] <= x && x < b[2] && b[1] <= y && y < b[3])
         };
         // The padding box on each axis that clips: `clip` beside `visible`
-        // clips its own axis alone (CSS Overflow 3 §3.1).
+        // clips its own axis alone (CSS Overflow 3 §3.1). A `scroll` or
+        // `list` with no `overflow-y` row scrolls on y, as the engine lays
+        // it out (`style.rs`).
         let border = style.border_widths_in(arena.env()).map(f64::from);
-        let (ox, oy) = (style.overflow_x, style.overflow_y);
+        let ox = style.overflow_x;
+        let oy =
+            if !style.mask.has(StyleId::OverflowY) && arena.node_type(slot).scrolls_by_default() {
+                Overflow::Auto
+            } else {
+                style.overflow_y
+            };
         let (x_clips, y_clips) = (
             ox.computed(oy) != Overflow::Visible,
             oy.computed(ox) != Overflow::Visible,

@@ -1,5 +1,5 @@
 ```prompt Add a big number readout
-Add a big number readout to the Exact app in this folder: a value such as a timer or a running total, shown large and updated in place. Use https://github.com/expo/exact/blob/main/docs/recipes/numeric-readout.md as the source for each step. The exact2 checkout has the same page at docs/recipes/numeric-readout.md.
+Add a big number readout to the Exact app in this folder: a value such as a timer or a running total, shown large and updated in place. Use https://github.com/expo/exact/blob/main/docs/recipes/numeric-readout.md as the source for each step. The Exact checkout has the same page at docs/recipes/numeric-readout.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say which number to show and on which screen, ask me before you write code.

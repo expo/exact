@@ -188,6 +188,7 @@ mod scroll_drag;
 mod scroll_grows;
 mod scrollend;
 mod search;
+mod search_tab;
 mod segments;
 mod shadow_and_case;
 mod shape_cycles;

@@ -750,15 +750,15 @@ const GENERATED = /\/build\/[^/]+\/out\/|\.baked\//;
 // entry types. A receipt's inventory distinguishes a deleted extensionless file.
 const DIRECTORY_WATCH = /\/[^./]+$/;
 /** Dep-info's inputs modified after `since`, or gone, generated outputs and absent optional directories aside. */
-export function depInfoNewer(since, bin, info, base, directories = []) {
+export function depInfoNewer(since, bin, info, base, directories = [], products = new Map()) {
   const files = new Set(directories.flatMap(({path, entries}) => (entries ?? []).filter(e => !e.directory).map(e => resolve(path, e.name))));
   const paths = depInfoInputs(bin, info, base).filter(p => !GENERATED.test(p)
     && (existsSync(p) || !DIRECTORY_WATCH.test(p) || files.has(p)));
-  return watchedNewer(since, paths, directories);
+  return watchedNewer(since, paths, directories, products);
 }
 
 /** Of `paths`, files and the directories a build script watches whole, those modified after `since`, or gone. */
-export function watchedNewer(since, paths, directories = []) {
+export function watchedNewer(since, paths, directories = [], products = new Map()) {
   const skips = new Map();
   const inventory = new Map(directories.map(snapshot => [snapshot.path, snapshot]));
   // Directory scans omit output, installed packages and hidden trees, and a package's top-level tests.
@@ -784,7 +784,8 @@ export function watchedNewer(since, paths, directories = []) {
     try { stat = statSync(p); } catch { return [shown(p)]; }
     if (!stat.isDirectory()) return stat.mtimeMs > since ? [shown(p)] : [];
     const dir = resolve(p);
-    return watchedChanges(since, dir, skipFor(dir), inventory, Boolean(packageTests(dir)));
+    // A recorded product is judged by its bytes (receiptChanges), so its entry in a directory's inventory is not.
+    return watchedChanges(since, dir, (path, isDir) => products.has(path) || skipFor(dir)(path, isDir), inventory, Boolean(packageTests(dir)));
   }))];
 }
 
@@ -1088,12 +1089,14 @@ export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hash
   // It names every source the bake captured (its rerun-if-changed): of the app's own, those the
   // walk above skips are no input here either (a backend app.ts never imports); one gone still counts.
   const skipped = path => { const at = resolve(ROOT, path); return at.startsWith(app.dir + '/') && existsSync(at) && skip(at); };
-  // A product the build wrote and then read (the GPU dylib it signs beside Cargo's, whose digest the bake binds) is
-  // newer than the build's start by construction. The receipt records its bytes, which are what the bundle captured
-  // (captureAppleProduct): those decide, not its time. Every other input keeps the build's start as its bound.
+  // A file the build wrote and then read (a game's generated shells, declarations and baked assets; the GPU dylib it
+  // signs beside Cargo's) postdates the build's start by construction. The receipt records the bytes the host compile
+  // read or the bundle captured (captureAppleProduct): those decide, not its time. Every other input keeps the
+  // build's start as its bound.
   const products = new Map((build?.products ?? []).map(p => [resolve(p.path), p.sha256]));
-  const inputs = info ? depInfoInputs(null, info, app.workspace) : [];
-  const replaced = inputs.filter(path => products.has(path) && fileDigest(path) !== products.get(path)).map(shown);
+  const inputs = new Set([...(info ? depInfoInputs(null, info, app.workspace) : []),
+    ...(build?.products ?? []).filter(p => p.input).map(p => resolve(p.path))]);
+  const replaced = [...inputs].filter(path => products.has(path) && fileDigest(path) !== products.get(path)).map(shown);
   // A linked plan's bake ran before Cargo: the dep-info names what it wrote, the receipt's copy of its record
   // (`linkedInputs`) what it read. Its `inputs.json` is the latest bake's, which may be a later, failed build's.
   // A receipt without that copy says nothing of what its bake read: the build is stale.
@@ -1108,17 +1111,8 @@ export function receiptChanges(receipt, app, { hashed = false } = {}) { // `hash
   }
   // Absence recorded by Cargo or the linked bake is unchanged while absent; first creation counts even at an old mtime.
   const absent = new Set([...(build?.binary?.missing ?? []), ...missing]), stillAbsent = path => { const at = resolve(ROOT, path); return absent.has(at) && !existsSync(at); };
-  // gameShells and GPU reflection create these during a cold build. Only the owned outputs lose the mtime
-  // bound; authored sources keep it, and the receipt still checks the generated Rust's recorded bytes.
-  const shells = app.manifest?.game && app.workspace === resolve(app.dir, '.shells') ? app.workspace : null;
-  const captured = new Set(shells ? (build?.binary?.inputs ?? []).map(input => resolve(input.path)) : []);
-  const generatedShell = path => {
-    const at = resolve(ROOT, path), name = shells && relative(shells, at).replaceAll('\\', '/');
-    return name && existsSync(at) && (/^(app|keys|surfaces)\.json$/.test(name)
-      || /^apple\/(build\.rs|src\/lib\.rs)$/.test(name) && captured.has(at));
-  };
-  const tools = info ? [...depInfoNewer(since, null, info, app.workspace, directories), ...watchedNewer(since, baked, directories)].filter(path => !skipped(path) && !products.has(resolve(ROOT, path)) && !stillAbsent(path) && !generatedShell(path)) : [];
-  return [...new Set([...(build?.binary && !hashed ? pendingBuildInputs(build) : []), ...own, ...tools, ...unread, ...replaced])];
+  const tools = info ? [...depInfoNewer(since, null, info, app.workspace, directories, products), ...watchedNewer(since, baked, directories, products)].filter(path => !skipped(path) && !products.has(resolve(ROOT, path)) && !stillAbsent(path)) : [];
+  return [...new Set([...(build?.binary && !hashed ? pendingBuildInputs(build) : []), ...own.filter(path => !products.has(resolve(ROOT, path))), ...tools, ...unread, ...replaced])];
 }
 
 /** A web `dist/`: app and shared runtime sources newer than its build marker.

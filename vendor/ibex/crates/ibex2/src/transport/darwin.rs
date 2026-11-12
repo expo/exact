@@ -37,6 +37,7 @@ extern "C" {
         body_len: usize,
         max_body: usize,
         timeout_seconds: f64,
+        speculative: c_int,
         out_error: *mut *mut c_char,
     ) -> *mut std::ffi::c_void;
     /// 2: the body's bytes sent changed before the headers (`inout_sent`).
@@ -236,6 +237,7 @@ impl Transport for DarwinTransport {
                 body.len(),
                 request.body_limit(),
                 request.timeout.map_or(0.0, |timeout| timeout.as_secs_f64()),
+                c_int::from(request.speculative),
                 &mut error,
             )
         };

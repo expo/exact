@@ -1,6 +1,6 @@
 /* exact.h — the Apple host's C ABI, v10 (LLP 1008 §4; LLP 1031 D2).
  *
- * Every call takes a runtime handle: exact_create() hands one out (a u32,
+ * Session calls take a runtime handle: exact_create() hands one out (a u32,
  * never 0, never reused) and exact_destroy() frees everything attributable
  * to it — the runner, its executor, its buffers, its journal. More than one
  * runtime may live in a process; each is called on one thread (the
@@ -37,6 +37,26 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Process-wide, asynchronous and safe on main (LLP 1162.000 D4).
+ * begin: top of main, with ActivePrewarm. launched: delegate initializer.
+ * opened: didFinishLaunching once a person is known to have opened the app.
+ * Repeated or reordered calls never send a definition twice. */
+void exact_preloads_begin(uint32_t prewarm);
+void exact_preloads_launched(void);
+void exact_preloads_opened(void);
+/* Absolute seconds on CACurrentMediaTime's mach_absolute_time clock, zero if
+ * unobserved. committed marks the Rust batch; sequence identifies its last
+ * runner commit. Read from any thread; these calls never wait for launch I/O. */
+typedef struct ExactPreloadMark {
+    double handed, completed, committed;
+    uint64_t sequence;
+} ExactPreloadMark;
+uint32_t exact_preloads_count(void);
+ExactPreloadMark exact_preloads_mark(uint32_t index);
+/* Full UTF-8 byte count, copying min(capacity, count) bytes without a NUL.
+ * A null buffer reads only the size. An invalid index returns zero. */
+size_t exact_preloads_name(uint32_t index, uint8_t *out, size_t capacity);
 
 /* A runtime handle (LLP 1031 D2). 0 is never a runtime. */
 typedef uint32_t ExactRuntime;

@@ -1,10 +1,20 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, relative, resolve, sep } from 'node:path';
+import { delimiter, dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
+
+/** Add rustup's tools when a non-interactive shell omitted them from PATH. */
+export function cargoOnPath(env = process.env, home = homedir()) {
+  const dirs = (env.PATH ?? '').split(delimiter).filter(Boolean);
+  if (dirs.some(dir => existsSync(resolve(dir, 'cargo')))) return true;
+  const rustup = resolve(env.CARGO_HOME ?? resolve(home, '.cargo'), 'bin');
+  if (!existsSync(resolve(rustup, 'cargo'))) return false;
+  env.PATH = [rustup, ...dirs].join(delimiter);
+  return true;
+}
 
 /** What `resolveApp` asked Cargo of an outside app's authored workspace (`cargo metadata --locked`, ~0.1 s), asked when a
  * build first reads `app.workspace` (LLP 1153 D2.1: a web verb never does), kept while the files Cargo reads for it are

@@ -7,7 +7,8 @@
 //! A header that draws itself (`appearance="none"`) is not warned, here or
 //! as the route's first child (`no_bar`).
 
-use super::{computed, literal, NOT_THE_BAR, OR_NO_BAR};
+use super::header_bar::{NOT_THE_BAR, OR_NO_BAR};
+use super::{computed, literal};
 use crate::LowerError;
 use contract_syntax::Node;
 

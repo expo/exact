@@ -1,5 +1,5 @@
 ```prompt Show money in my app
-Make the Exact app in this folder keep and show amounts of money. Use https://github.com/expo/exact/blob/main/docs/recipes/money.md as the source for each step. The exact2 checkout has the same page at docs/recipes/money.md.
+Make the Exact app in this folder keep and show amounts of money. Use https://github.com/expo/exact/blob/main/docs/recipes/money.md as the source for each step. The Exact checkout has the same page at docs/recipes/money.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say the currency, ask me for its ISO 4217 code (USD, EUR, GBP, JPY) before you write code.

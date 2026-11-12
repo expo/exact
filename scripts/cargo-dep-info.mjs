@@ -196,6 +196,20 @@ export function inputHashes(app, env) {
     },
   };
 }
+
+/** Products consumed by a later build step, captured before that step reads them. */
+export function inputProducts(paths, root) {
+  const products = [...new Set(paths)].filter(existsSync).map(path => {
+    const bytes = readFileSync(path);
+    return {path, bytes:bytes.length, sha256:createHash('sha256').update(bytes).digest('hex'), input:true};
+  });
+  const directories = new Map();
+  for (const {path} of products) for (let dir = dirname(path); dir !== root && under(root, dir); dir = dirname(dir)) {
+    if (!directories.has(dir)) directories.set(dir, directoryInputSnapshot(dir));
+  }
+  return {products, watchedDirectories:[...directories.values()]};
+}
+
 /** A bake's file watches, including optional inputs tracked by the builder rather than Cargo's recursive scan. */
 export function cargoInputPaths(stdout, base) {
   return [...new Set(stdout.split('\n').flatMap(line => {

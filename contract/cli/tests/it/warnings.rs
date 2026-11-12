@@ -290,7 +290,7 @@ fn a_back_control_the_bar_stands_for_or_a_route_with_no_bar_is_not_warned() {
 
 /// A root tab bar: tabs that name their panels, as polls and chat-rooms
 /// wrote with one tab.
-fn tabs(tabs: &str) -> String {
+pub(crate) fn tabs(tabs: &str) -> String {
     let tabs: String = tabs.lines().map(|l| format!("      {l}\n")).collect();
     format!(
         "routes nav\n  tab home \"/\"\n  tab more \"/more\"\ncomponent App\n  view\n    main navigationKey=`${{top(nav).id}}` navigationBack=\"back\"\n      for t in nav.tabs key=t.name\n        column role=\"tabpanel\" id=`panel-${{t.name}}`\n          for e in t.stack key=e.id\n            column navigationKey=`${{e.id}}`\n              text e.name\n      row role=\"tablist\"\n{tabs}"

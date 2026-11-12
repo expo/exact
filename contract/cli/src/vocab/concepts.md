@@ -962,8 +962,8 @@ component App
 A test opens one with `tap "sort"`, a long-press one with `tap "row-1" contextmenu`, then
 taps the item. A row whose `popovertarget` names another menu is its submenu.
 
-## search: the bar's search field, filtering a list or querying a server
-names: searchable, searchbar, search-bar, UISearchBar, UISearchController, search bar, search field, hidesSearchBarWhenScrolling, hideWhenScrolling, sticky search
+## search: the bar's search field, filtering a list or querying a server, and a search tab
+names: searchable, searchbar, search-bar, UISearchBar, UISearchController, search bar, search field, hidesSearchBarWhenScrolling, hideWhenScrolling, sticky search, search tab, UISearchTab, Tab(role: .search), automaticallyActivatesSearch
 
 An `input type="search"` in a route's `header` is the bar's search field: on iOS UIKit's
 search controller (a magnifier, a clear button, Cancel), on the web a field under the title.
@@ -1047,6 +1047,61 @@ component App
   key "Enter"`.
 
 More: docs/recipes/list-rows.md
+
+**A search tab.** The root tab that says `rel="search"` (HTML's link type for "an interface
+for searching") is the app's search tab, a destination of its own: it stays `role="tab"`, and is written last. On iOS 18 and later it is a
+`UISearchTab` with the tab's own symbol and label; its root route's header `input
+type="search"` is its field, which UIKit moves into the bar when the tab is selected. With
+`autofocus` on that field, iOS 26 sets the tab apart at the bar's trailing end and opens the
+field each time the tab is selected; without it, the tab is one among the others. The web,
+the Mac's sidebar and the other hosts keep the tab where it is written.
+
+```contract
+routes nav
+  tab home "/"
+  tab find "/find"
+
+component App
+  state query = ""
+  action pick(name: string)
+    nav = select(nav, name)
+  action follow(url: string)
+    nav = go(nav, url)
+  action edit(v: string)
+    query = v
+  view
+    main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%"
+      display="flex" flex-direction="column"
+      column flex=1 min-height=0 position="relative"
+        for t in nav.tabs key=t.name
+          column role="tabpanel" id=`panel-${t.name}` position="absolute" inset=0
+            for e in t.stack key=e.id
+              column navigationKey=`${e.id}` position="absolute" inset=0 display="flex" flex-direction="column"
+                header
+                  text (e.name == "home" ? "Home" : "Speakers") role="heading" aria-level=1
+                  if e.name == "find"
+                    input type="search" autofocus value=query input=edit placeholder="Search speakers"
+                      testId="speaker-search"
+                scroll flex=1 min-height=0
+                  text query
+      row role="tablist"
+        button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=pick("home")
+          testId="tab-home" flex=1
+          image "symbol:home"
+          text "Home"
+        button role="tab" rel="search" aria-controls="panel-find" aria-selected=(nav.tab == "find")
+          press=pick("find") testId="tab-find" flex=1
+          image "symbol:people"
+          text "Speakers"
+```
+
+- A field on a list's own screen filters that list (`contract vocab search`); a search tab
+  searches the app. Never push a route for the bar's search.
+- `role="search"` on a tab (Expo's trigger) is refused: a tablist owns only tabs. A second
+  `rel="search"`, or one not on the last tab, is a warning.
+- A test taps the tab and types its field: `tap "tab-find"`, `type "speaker-search" "Ada"`.
+
+More: docs/recipes/tabs.md
 
 ## menubar: adding commands to the Mac menu bar
 names: -exact-menu, -exact-menu-remove, -exact-menu-keys

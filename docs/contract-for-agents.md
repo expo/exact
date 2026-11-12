@@ -39,7 +39,7 @@ capabilities.
 
 1. Identify the app, its root `app.contract`, `app.json`, data module, imports,
    authored tests, and requested target hosts. An external app uses `EXACT_APP_DIR`
-   with the same exact2 build/driver scripts.
+   with the same Exact build/driver scripts.
 2. Read the nearest working example for the feature. Search `contract/corpus/`,
    `contract/cli/tests/it/`, and the app's sources before designing new syntax.
 3. Decide whether the change belongs in Contract, the app's data module, its
@@ -98,7 +98,7 @@ hold, such as a script that fetches photos into a folder Git ignores, goes in
 the Bun that runs `exact.mjs`, so it runs on every host): each verb that
 builds, runs, compiles or checks the app runs it first in the app's
 directory, and stops if it fails. Make it finish at once when the files are there.
-`exact.mjs`'s `contract` verb is exact2's compiler, with paths relative to where you run it:
+`exact.mjs`'s `contract` verb is Exact's compiler, with paths relative to where you run it:
 
 ```sh
 bun exact.mjs contract types app.contract -o app.contract.d.ts   # what app.ts imports
@@ -109,7 +109,7 @@ bun exact.mjs contract vocab padding                              # is it accept
 bun exact.mjs web
 ```
 
-Inside the exact2 checkout, for its own apps, the same commands are
+Inside the Exact checkout, for its own apps, the same commands are
 `cargo run -q -p contract -- <command> apps/<name>/app.contract …` and
 `bun host/web/dev.mjs --app <name>`. Run `bun install --frozen-lockfile` there once.
 
@@ -225,7 +225,7 @@ glass, blur and the keyboard as the device draws them. So are a plain one's wher
 or a blur lies in the page; where the display cannot be read (the app not in front, an
 overlay) the reply says its materials are approximate, and why.
 
-Inside the exact2 checkout, for Caltrain:
+Inside the Exact checkout, for Caltrain:
 
 ```sh
 bun host/web/build.mjs caltrain-web
@@ -233,7 +233,7 @@ bun scripts/agent.mjs web tree "tap change-station" "type station-search Palo" s
 bun scripts/agent.mjs web --test apps/caltrain/app.test.contract
 ```
 
-For an external app driven from the exact2 root, set `EXACT_APP_DIR` on both build
+For an external app driven from the Exact root, set `EXACT_APP_DIR` on both build
 and drive. A stale
 artifact is a failed verification; rebuild what the driver names. A successful
 Cargo rlib build does not prove a native app launches or behaves correctly.
@@ -254,7 +254,7 @@ A script drives the same session in JavaScript: `const s = await open({ host:
 CLI's operations by the same names. Their replies are the CLI's `--json` output: `s.tree()`
 is `{ roots, nodes: [{ id, type, depth, props: { testId, text, value, … }, children }] }`,
 every node in one preorder list (`depth` and `children` give the nesting), and `s.state()` is `{ slots, derives, resources,
-pending, … }`. `app` is the app's name; an app outside the exact2
+pending, … }`. `app` is the app's name; an app outside the Exact
 checkout is found through `EXACT_APP_DIR` (its directory), as its own `exact.mjs agent`
 sets it, so a script run with plain `bun` sets it to the app's directory too
 (`EXACT_APP_DIR=/path/to/app bun verify.mjs`; a script that `app.ts` never imports
@@ -808,12 +808,11 @@ where appropriate. Digits alone do not align decimals; do not pad with spaces or
 misleading zeroes.
 
 Supported for ordinary text on macOS, iOS, tvOS, Linux, Windows, Android and both
-web targets, including prerendered pages. Exceptions:
+web targets, including prerendered pages, and for Android's native `input` and
+`textarea`. Exceptions:
 
 - **Terminal:** ordinary digits already occupy equal-width cells. Explicit
   `font-variant-numeric` settings are currently rejected.
-- **Android editable fields:** unsupported on native `input` and `textarea`;
-  they keep their font's default digits.
 - **Native buttons:** unsupported. Keep their typography; use separate `text`
   for a readout. This property also does not style Canvas/GPU drawing or native hatches.
 - **Text wrapping around shapes on web:** a paragraph using `tabular-nums` skips
@@ -1816,7 +1815,7 @@ dialog or popover with `commandfor` and `command="show-modal"`,
 bound, and an empty target is no target. `href`, `action` and swipe attributes
 remain refused. `-exact-enabled` transitions are not available.
 
-**Exact2's menu rule** (LLP 1021): a row of a menu (`popover role="menu"`)
+**Exact's menu rule** (LLP 1021): a row of a menu (`popover role="menu"`)
 whose `popovertarget` (or `commandfor` with `command="show-popover"` or `"toggle-popover"`) names a
 popover that is no menu opens it as if by the menu's own invoker (the button
 that opened the menu, or the node its context menu opened on), as
@@ -1949,7 +1948,7 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | `select` of `option`s | a pop-up button with its menu |
 | `progress value=done max=goal` (a goal, an upload; as wide as what holds it) | `UIProgressView`, tinted by `accent-color` (LLP 1116 D8); never a drawn track and fill |
 | `progress` (no `value`) | `UIActivityIndicatorView`, `.large` from a 37-point box (LLP 1069.001); on Android Material's circular indicator, turning (LLP 1115.001 D9) |
-| `popover="auto" role="menu"` of `button`s, opened by `popovertarget` (a row whose `popovertarget` names another menu: its submenu; one naming any other popover opens it from the menu's own invoker, exact2's menu rule; a `role="group"` box of rows with an `aria-label`: a titled section) | `UIMenu`, nested; a section an inline `UIMenu(title:)` (LLP 1021) |
+| `popover="auto" role="menu"` of `button`s, opened by `popovertarget` (a row whose `popovertarget` names another menu: its submenu; one naming any other popover opens it from the menu's own invoker, Exact's menu rule; a `role="group"` box of rows with an `aria-label`: a titled section) | `UIMenu`, nested; a section an inline `UIMenu(title:)` (LLP 1021) |
 | `dialog role="alertdialog" aria-label="Remove book?"` of a `text`, its action(s) and one Cancel; or a `text` and one closing button alone | `UIAlertController(.alert)`: the label its title, the text its message; the one-button alert when it has no action (LLP 1115 D6; recipe [below](#a-confirmation)) |
 | any other `dialog` (a field, Save, Cancel), opened by `showModal(id)` or a button's `command="show-modal"` | a sheet as tall as its content, up to the large detent, its content laid out as written and centred across it (`width="100%" box-sizing="border-box"` fills it); `close(id)`, its `command="close"` button or a swipe down closes it. `closedby="none"` refuses the swipe, `"any"` also takes a tap on the page behind, and a dismissal the person made fires `cancel` (LLP 1115.000 D11.5). A form with a title bar is still a sheet route |
 | `role="tablist"`: each tab a symbol over a label / one text or image | `UITabBar` / `UISegmentedControl`, the tablist at least its native height unless `min-height` says otherwise (LLP 1059) |
@@ -2190,7 +2189,7 @@ lasts half as long. `pan=` places it from −1 (left) to 1 (right) by Web Audio'
 equal-power law (LLP 1125
 D10). `stopSounds()` (or `stopSounds(group=…)`) ends what
 sounds and cancels what waits. The web plays the first sound after the page's first
-tap or key; Linux and Windows keep the record and play nothing.
+tap or key; Linux, Windows and Android keep the record and play nothing.
 
 ```contract
 sound "assets/ding.wav"
@@ -2620,8 +2619,10 @@ makes it in each session, the same instance that answers its names: Swift
 web implementation, Kotlin `ExactExtension.view`; `id` is the node's. A view declared
 `"displayed": true` is told `displayed(id, shown, origin)` when it shows or hides, and a
 prop marked `"binds": true` `bound(id, prop, origin)` when it changes; `origin` is `app`,
-`tool` or `wake`, that of the commit that did it. A declared prop may take a known
-non-layout attribute's name where it means what CSS means by it (`exact-camera`'s
+`tool` or `wake`, that of the commit that did it. Props and events must be declared;
+an undeclared attribute is `lower-native-attr`. Standard box attributes and the nine
+common module events remain available without a declaration. A declared prop may take
+a known non-layout attribute's name where it means what CSS means by it (`exact-camera`'s
 `object-fit`): written on the tag it goes to the view. A declaration that names a
 layout attribute (`width`, `padding`, `flex`) is refused with `bake-view-prop-layout`,
 naming the package, view and prop; give the view prop another name. A class's rows
@@ -3011,6 +3012,35 @@ main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow displa
   paints (on iOS only when `scripts/agent.mjs` runs alone: `exact.mjs` shows UIKit's
   bars); `--chrome platform` on `macos` shows the sidebar, and a tap naming a tab
   presses its row (`native: "sidebar-row"`).
+- On an iPad (iPadOS 18 and later) the same root tablist, placed as above, is UIKit's
+  sidebar-adaptable tab bar (`UITabBarController.mode = .tabSidebar`): a sidebar of the
+  tabs where the window is regular-width and wide enough (an iPad in landscape), the
+  floating tab bar with its sidebar button otherwise, and the bottom tab bar in a compact
+  width. UIKit switches between them as the window changes; the routes clear the
+  sidebar as they clear any bar, so their content is laid out beside it. A tablist the
+  author places elsewhere, or draws (`appearance="none"`), stays a tab bar, and so,
+  for now, does a bar of six or more tabs.
+- **The search tab**: the root tab that says `rel="search"` (HTML's link type for "an
+  interface for searching"; keep `role="tab"`) is the app's search tab, and is written
+  last. On iOS 18 and later, in a bar of five tabs or fewer, it is a `UISearchTab` with
+  the tab's own symbol and label (none: UIKit's magnifying glass and "Search"); the first `input type="search"` in its
+  root route's header is its field, which UIKit moves into the bar when the tab is
+  selected. `autofocus` on that field is `automaticallyActivatesSearch`: iOS 26 sets the
+  tab apart at the trailing end of the bar and opens the field on every selection;
+  without it the tab is one among the others. The web, the Mac's sidebar, Android and
+  the other hosts keep it where it is written. A header field on a list is that list's
+  filter; a search tab searches the app. `contract vocab search` has the details;
+  Expo's `role="search"` trigger and SwiftUI's `Tab(role: .search)` are `rel="search"`.
+- A tab bar that minimizes as content scrolls (`tabBarMinimizeBehavior`) and an accessory
+  view above it (`bottomAccessory`, iOS 26) are not Contract words: unsaid, the bar is
+  UIKit's default, and an app that wants them sets them from the `tabs` hatch, which
+  hands it the `UITabBarController` (docs/reference.md, "Access hatches"). The routes
+  follow the safe area a minimizing bar changes.
+- A box written beside the routes in the navigation root (a column the routes are offset
+  past) shows on iOS as on the web: the native container that stands for the routes
+  paints under a child no route's box meets, and UIKit lays the navigation bar's title
+  and buttons out past such a column. For a sidebar of sections beside the content,
+  prefer the root tablist above, which an iPad shows as its sidebar.
 - On the Mac a route's `header` is the window's title bar and toolbar: its heading the
   window's title (under a `head title`, over the app's name; there is no large title),
   the first text after the heading the window's subtitle, its buttons toolbar items, a
@@ -3659,15 +3689,17 @@ The compiler warns at a `use` whose unambiguous, unconditional literal target co
 one (`lower-svg-use-foreign-object`). Native hosts refuse `foreignObject` at run
 time; for content on every host, position an ordinary box over the `svg`. Canvas 2D calls
 live in a data module, and GPU/game surfaces in their optional module. A
-hyphenated native tag must be listed in `app.json`'s `modules` (the bake refuses
-others) and implemented by the module; its unknown attributes pass through
-unchecked as the module's props. A known attribute binds to the module's box, which
-takes layout, box and paint rows, handlers, `testId`, `id`, `role`, ARIA, `disabled`
-and `inert`; any other known name (`color`, `value`, `command`, `href`) is refused,
-so give the module prop another name. A package's view is the exception: a prop its
-package declares for the view (`exact-camera`'s `object-fit`) goes to the view when
-written on the tag, even where the name is a known non-layout attribute. Declaring a
-layout attribute as a view prop is `bake-view-prop-layout`. A class's rows style only
+hyphenated native tag must be declared by a dependency's `exact.json` `views` or
+listed in `app.json`'s `modules` (the bake refuses others). An app module's unknown
+attributes pass through unchecked as its props. A package view refuses an attribute
+declared as neither a prop nor an event with `lower-native-attr`, apart from standard
+box attributes and common module events. A known attribute binds to the module's
+box, which takes layout, box and paint rows, handlers, `testId`, `id`, `role`, ARIA,
+`disabled` and `inert`; any other known name (`color`, `value`, `command`, `href`) is refused,
+so give the module prop another name. A package view's declared non-layout prop
+(`exact-camera`'s `object-fit`) goes to the view when written on the tag, even where
+the name is a known attribute. Declaring a layout attribute as a view prop is
+`bake-view-prop-layout`. A class's rows style only
 the box and set no view props; write `object-fit` on the camera tag to configure its
 viewfinder. A renamed spelling (`fontSize`) is refused whatever is declared. Do not
 turn a missing widget or canvas operation into invented Contract syntax.
@@ -3881,6 +3913,28 @@ P1; `apps/harness/terminal.contract` shows the task). Declare its shape
 other host it stays unloaded. A new host fact uses this channel before
 anyone proposes a new reserved source (LLP 1101.002 §0 P11).
 
+A GPU canvas's record (`canvas surface=world()`, read as `exactSurface("world")`)
+carries one host fact beside what its module publishes: `presented`, true once a
+complete frame of the canvas's current picture has been handed to the compositor,
+on every host. It is false until then, and again after a restore, a restarted
+world, a lost GPU device or a new target, until the next such frame. It changes
+only at those moments, never per frame. Keep a loader over the canvas until it is
+true; a record that says the world is set up is not proof that a frame has
+drawn. A module cannot publish a field of that name.
+
+```contract
+shape Table
+  presented: bool
+
+component App
+  resource table = exactSurface("world") as shape Table
+  view
+    main width="100%" height="100%"
+      canvas surface=world() width="100%" height="100%" position="relative"
+        if !table.presented
+          text "Setting the table" position="absolute" inset=0 aria-busy=true
+```
+
 The terminal's `colors` is the selected output bit depth: `0` (monochrome),
 `4` (16 ANSI colours), `8` (256 colours), or `24` (RGB). The host reduces
 authored colours to that palette; at zero it emits no foreground/background
@@ -3958,7 +4012,7 @@ web-view inspection disabled.
 
 An Apple build's dev menu (a four-finger tap, or ⌘D on a hardware keyboard or a simulator's; on a Mac, Develop › App Info…, ⌘D, in a development build: a Mac build with production trust, `EXACT_UPDATE_TRUST=production`, or made by `exact release` has no Develop menu and takes none of its chords unless it is built or launched with `EXACT_DEV_MENU=1`, or a person runs `defaults write <bundle id> ExactDevMenu -bool YES` and the build did not say `0`; an iOS build, a release one too, has the menu unless it is built or launched with `EXACT_DEV_MENU=0`, LLP 1115 D9) uses a native grouped navigation sheet on iOS. Project commands and diagnostics have full-width rows; Build Information opens a separate, selectable text screen. On macOS, App Info opens with the
 build it is in: the app and version, when, where and with which Xcode it was
-built, the exact2 commit and the app's own (with branch and a dirty flag), the
+built, the Exact commit and the app's own (with branch and a dirty flag), the
 build kind, the device, and the app's release notes. `host/apple/build.mjs`
 stamps these into the bundle's Info.plist on every build, `--archive` included,
 so a shipped binary carries the build machine's host name and the commits too.

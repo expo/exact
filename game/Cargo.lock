@@ -480,6 +480,7 @@ dependencies = [
  "exact-filesystem",
  "exact-gpu-reflect",
  "exact-kernel",
+ "exact-logic-abi",
  "exact-plan",
  "exact-runner",
  "exact-svg-file",
@@ -660,6 +661,14 @@ dependencies = [
  "sha2",
  "smol_str",
  "taffy",
+]
+
+[[package]]
+name = "exact-logic-abi"
+version = "0.1.0"
+dependencies = [
+ "exact-plan",
+ "exact-runner",
 ]
 
 [[package]]

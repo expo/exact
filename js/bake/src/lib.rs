@@ -191,6 +191,7 @@ fn module_constants(
     platform: &str,
     linked: bool,
     native: Option<&contract::native::NativeSlot>,
+    preloads: &serde_json::Value,
 ) -> Result<String, String> {
     let app = meta["appId"].as_str().ok_or("missing appId")?;
     let grants = meta["grants"].as_str().ok_or("missing grants")?;
@@ -202,6 +203,15 @@ fn module_constants(
     } else {
         format!("pub const APP: &str = {app:?};\npub const GRANTS: &str = {grants:?};\n")
     };
+    if preloads
+        .as_array()
+        .is_some_and(|entries| !entries.is_empty())
+    {
+        metadata.push_str(&format!(
+            "pub const PRELOAD: &[exact_logic::exact_runner::request::Preload] = {};\n",
+            contract::preload_expression(preloads)
+        ));
+    }
     if !linked {
         let hash = meta["module"]["sha256"]
             .as_str()
@@ -322,8 +332,14 @@ fn build_sources(
     for file in &native.watched {
         println!("cargo:rerun-if-changed={}", file.display());
     }
-    let mut metadata =
-        module_constants(&meta, rust_updates, platform, outside, native.slot.as_ref())?;
+    let mut metadata = module_constants(
+        &meta,
+        rust_updates,
+        platform,
+        outside,
+        native.slot.as_ref(),
+        &compat.inputs["preload"],
+    )?;
     if platform == "windows" {
         metadata.push_str(&format!(
             "/// The window the app opens in (`host.windows.window`).\npub fn window() -> exact_windows::Window {{ {} }}\n",
@@ -865,8 +881,18 @@ fn sources(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, String> {
                     return Err(format!("source is not a regular file: {}", path.display()));
                 }
                 let size = entry.metadata().map_err(|e| e.to_string())?.len();
-                if size > 16 << 20 || *total as u64 + size > 64 << 20 {
-                    return Err("app source capture exceeds 64 MiB (16 MiB per file)".into());
+                if size > 16 << 20 {
+                    return Err(format!(
+                        "app source capture: {} is {size} bytes, exceeding the 16 MiB per-file limit",
+                        path.display()
+                    ));
+                }
+                let next_total = *total as u64 + size;
+                if next_total > 64 << 20 {
+                    return Err(format!(
+                        "app source capture: adding {} ({size} bytes) would bring the total to {next_total} bytes, exceeding the 64 MiB limit",
+                        path.display()
+                    ));
                 }
                 let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
                 *total += bytes.len();
@@ -1395,3 +1421,6 @@ impl Baked {
         result
     }
 }
+
+#[cfg(test)]
+mod preload_tests;

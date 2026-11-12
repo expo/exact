@@ -389,7 +389,7 @@ impl<D: DataSource> Host<D> {
                     Property::Cy => (Value::scalar(cy0 as f64), &[(CY, 0)]),
                     _ => continue,
                 };
-                let track = a.keyframes.track(p, underlying, play.dark);
+                let track = a.keyframes.track(p, underlying, play.dark, &a.easing);
                 for &(code, axis) in axes {
                     out.push(code);
                     f(&mut out, play.start);
@@ -405,7 +405,7 @@ impl<D: DataSource> Host<D> {
                     for (offset, e, v) in &track {
                         f(&mut out, *offset);
                         f(&mut out, if axis == 1 { v.y } else { v.x });
-                        easing(&mut out, *e);
+                        easing(&mut out, Some(*e));
                     }
                 }
             }

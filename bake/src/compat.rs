@@ -30,10 +30,11 @@ const ABI_HEADER: &str = include_str!(concat!(
 ));
 /// The GPU module's C ABI (LLP 1009 D2): unnumbered in the module today.
 pub const GPU_MODULE_ABI: u32 = 1;
-/// The separately linked Rust data-source wire ABI: admitted secret names
-/// before the store snapshot (LLP 1048.000 D9), two-way sockets (LLP 1016.003),
-/// cache-mode tag 12 (LLP 1162 D4), and stream protocol names (LLP 1016.000).
-pub(crate) const RUST_ABI: u32 = 8;
+/// The separately linked Rust data-source wire ABI, as the seam declares it:
+/// admitted secret names before the store snapshot (LLP 1048.000 D9), two-way
+/// sockets (LLP 1016.003), cache-mode tag 12 (LLP 1162 D4), and stream
+/// protocol names (LLP 1016.000).
+pub(crate) const RUST_ABI: u32 = exact_logic_abi::ABI;
 /// The data-module runtime a TypeScript bundle may rely on in the binary's
 /// own prelude (`js/src/prelude.js`, compiled into the host): moved when the
 /// prelude learns something a bundle cannot do without and an older prelude
@@ -270,10 +271,10 @@ pub fn compatibility_id_sources_with_entries(
     )
 }
 
-/// The module a platform's stored bundles are pinned to: the compiled module's
-/// sha256 from a bake's metadata (`module.sha256`) when the platform has a
-/// store, since stores deliver plans and assets and cannot replace the compiled
-/// module; none without one. Metadata without the hash is refused either way.
+/// The compiled module's sha256 (`module.sha256`) to pin in this platform's
+/// compatibility id when it has a store; none without one. Metadata without
+/// the hash is refused either way. This cohort pin does not prohibit a signed
+/// module pair that the installed executor admits.
 pub fn stored_module<'a>(
     meta: &'a serde_json::Value,
     manifest: &Manifest,
@@ -285,13 +286,11 @@ pub fn stored_module<'a>(
     Ok((manifest.store(platform) != "0").then_some(module))
 }
 
-/// As [`compatibility_id_sources_with_entries`], for a module client (its
-/// logic compiled into the binary, LLP 1027) whose binary has an update store.
-/// Bundles carry plan and assets, never code, so a bundle is safe only on a
-/// binary whose module is the one the plan was baked against: `module` (the
-/// compiled module's sha256) enters the id as `typescriptModule`, and any
-/// change to the app's TypeScript is a new cohort, a new stream and a new
-/// binary.
+/// As [`compatibility_id_sources_with_entries`], with an optional compiled-module
+/// pin. When supplied, `module` enters the id as `typescriptModule`, so changing
+/// it changes the baked cohort. Signed delivery may carry a replacement module
+/// pair within an installed cohort, subject to its runtime, identity, grants
+/// and module policy; this helper does not decide candidate admission.
 #[allow(clippy::too_many_arguments)]
 pub fn compatibility_id_pinned(
     app_dir: &Path,
@@ -318,6 +317,8 @@ pub fn compatibility_id_pinned(
         Err(_) => return Err("EXACT_UPDATE_TRUST is not UTF-8".into()),
     };
     crate::reach::parsed(app_dir, grants, rust_grants, trust == "production")?;
+    let ceiling = rust_grants.map(|rust| grant_union(grants.unwrap_or(""), rust));
+    let preloads = crate::preload::checked(app_dir, manifest, ceiling.as_deref().or(grants))?;
     // @ref LLP 1100 D1 — a colour this platform can't show is refused here.
     // The app's plan, compiled once here: its colours checked, and (stage
     // 14 C2) its icons' fill rules read below.
@@ -325,7 +326,6 @@ pub fn compatibility_id_pinned(
     if let Some(plan) = &plan {
         crate::colors::check_plan(app_dir, plan, platform)?;
     }
-    let ceiling = rust_grants.map(|rust| grant_union(grants.unwrap_or(""), rust));
     let mut compat = compatibility_with_trust(
         app_dir,
         platform,
@@ -334,6 +334,13 @@ pub fn compatibility_id_pinned(
         ceiling.as_deref().or(grants),
         &trust,
     )?;
+    if preloads
+        .as_array()
+        .is_some_and(|entries| !entries.is_empty())
+    {
+        compat.inputs["preload"] = preloads;
+        compat.id = compatibility_digest(&compat.inputs);
+    }
     if let Some(rust) = rust_grants {
         source_scopes(&mut compat, grants.unwrap_or(""), rust);
     }

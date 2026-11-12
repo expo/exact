@@ -240,3 +240,74 @@ fn where_no_reach_prompts_a_tool_s_local_fetch_is_sent() {
     ));
     assert_eq!(seen, ["http://192.168.1.40/"]);
 }
+
+#[test]
+fn a_redirected_preload_cannot_answer_a_tools_reach_at_boot_or_on_either_core() {
+    use super::super::{
+        asynch,
+        cache::tests::collect,
+        preload::{Definition, Preloads},
+        WORKERS,
+    };
+    let _turn = prompting(true);
+    for asynchronous in [false, true] {
+        for redirected in [false, true] {
+            let seen = Arc::new(Seen::default());
+            let host = {
+                let seen = seen.clone();
+                move || ibex2::host::Host::with_transport(Box::new(Fake(seen.clone())))
+            };
+            let url = if redirected {
+                "https://public.test/to-lan"
+            } else {
+                "https://public.test/plain"
+            };
+            let set = Preloads::start(
+                vec![Definition {
+                    name: "feed".into(),
+                    request: Request::get(url),
+                    deadline_ms: None,
+                    secrets: vec![],
+                }],
+                GRANTS,
+                host.clone(),
+            );
+            let control = set.control();
+            control.wait_ready(1);
+            let mut request = super::super::cache::tests::job(1, Request::get(url));
+            request.request.reach = reach(CallOrigin::Tool, State::Unknown);
+            assert!(control.settle(&request).is_none());
+            let owners = (0..WORKERS)
+                .map(|_| Some(host().endow(ibex2::grant::GrantSet::parse(GRANTS).unwrap())))
+                .collect();
+            let (wake, woke) = channel();
+            let core = Core::with_owners_lanes(
+                owners,
+                GRANTS,
+                Box::new(move || {
+                    let _ = wake.send(());
+                }),
+                Arc::new(host),
+                asynchronous.then(asynch::asynch_lanes),
+            );
+            core.adopt_preloads(set).ok().unwrap();
+            assert!(core.settle_preload(&request).is_none());
+            core.run(request, None).unwrap();
+            let (_, outcome, timing) = collect(&core, &woke);
+            assert!(!timing.cached);
+            if redirected {
+                assert_eq!(refused(&outcome), "NotAllowedError: person-required");
+                assert_eq!(
+                    *seen.0.lock().unwrap(),
+                    [url, "http://192.168.1.40/json/si", url]
+                );
+            } else {
+                assert!(matches!(outcome, Outcome::Response(_)));
+                assert_eq!(*seen.0.lock().unwrap(), [url, url]);
+            }
+            let app = super::super::cache::tests::job(2, Request::get(url));
+            core.run(app, None).unwrap();
+            assert!(collect(&core, &woke).2.cached);
+        }
+    }
+}

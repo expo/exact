@@ -233,6 +233,8 @@ export function observe(views, inactive = () => false) {
         let inked = false;
         for (let a = el; a && !inked; a = a === e ? null : a.parentElement) inked = !!authored(a, 'color');
         if (!inked && e.hasAttribute('data-native')) item.platformInk = true;
+        // The tinted style's label in the button's accent, over a pale fill of it, as iOS's observer says (`tinted`).
+        if (!inked && e.getAttribute('data-button-style') === 'tinted') item.tinted = true;
         break;
       }
       const ellipsis = cs.textOverflow === 'ellipsis' && cs.overflowX !== 'visible';

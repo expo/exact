@@ -16,6 +16,49 @@ extension NavigationHost {
     /// chrome, where no native container shows.
     var wantsWholeView: Bool { primaryOwner != nil && !ExactEnv.authoredChrome }
 
+    /// @ref LLP 1075.003 §3.7, LLP 1083.000 D4 — the native container stands
+    /// for the routes in the navigation root's paint order, but its box is
+    /// the page's, where the routes' boxes may not be: a column the author
+    /// placed beside routes offset past it shows on the web and would be
+    /// covered here. A child of the root that no shown route's box
+    /// meets, which the routes therefore paint nothing over, paints over the
+    /// container; one a route's box meets keeps CSS's order under it. The
+    /// tab panels and the tablist the bar takes the place of are the
+    /// container's own. Such a child that reaches the container's top edge
+    /// and one side (a column) grows the container's safe area on that side
+    /// by its width, so UIKit lays the bars' contents out clear of it, as a
+    /// hand-built screen insets its bars from a view beside them; the routes
+    /// clear only the part of that inset their own boxes reach (`reportCovers`).
+    func clearBesideRoutes() {
+        guard let owner = primaryOwner, let root = container, let holder = owner.viewIfLoaded, holder.superview === root else { return }
+        let routes = primaryRoutes.filter { $0.viewIfLoaded?.window != nil && presenter.views[$0.node.id] === $0.node }
+            .map { $0.node.convert($0.node.bounds, to: root) }.filter { !$0.isEmpty }
+        let owned = Set(tabPanels + [adoptedTablist].compactMap { $0 })
+        let area = holder.convert(holder.bounds, to: root)
+        var changed = false, reach = UIEdgeInsets.zero
+        for case let child as NodeView in root.subviews {
+            let box = child.convert(child.bounds, to: root)
+            let clears = !ExactEnv.authoredChrome && !routes.isEmpty && !owned.contains(child.id) && !box.isEmpty
+                && box.intersects(area) && !routes.contains { $0.intersects(box) }
+            if child.clearsNavigation != clears {
+                child.clearsNavigation = clears
+                changed = true
+            }
+            guard clears, box.minY <= area.minY + 0.5 else { continue }
+            let left = box.minX <= area.minX + 0.5, right = box.maxX >= area.maxX - 0.5
+            if left, !right { reach.left = max(reach.left, box.maxX - area.minX) }
+            if right, !left { reach.right = max(reach.right, area.maxX - box.minX) }
+        }
+        if changed { PaintOrder.changed(root) }
+        // Exact's part only: what an app's hatch set on its container stays
+        let before = besideOwner === owner ? besideInsets : .zero, now = owner.additionalSafeAreaInsets
+        let wanted = UIEdgeInsets(top: now.top - before.top + reach.top, left: now.left - before.left + reach.left,
+                                  bottom: now.bottom - before.bottom + reach.bottom, right: now.right - before.right + reach.right)
+        if now != wanted { owner.additionalSafeAreaInsets = wanted }
+        besideInsets = reach
+        besideOwner = owner
+    }
+
     /// What covers a route of its controller's safe area (`safe`): the
     /// edges past the document's insets (`env()`, which the page authored
     /// against) for a route in the document, and every edge of its own for a
@@ -52,6 +95,7 @@ extension NavigationHost {
     /// page that did not ask to cover it — and the header a bar replaces,
     /// reported when they change, after the batch being applied.
     func reportCovers() {
+        clearBesideRoutes()
         var changes: [(UInt32, HostCover?)] = []
         var wanted: [UInt32: HostCover] = [:]
         #if os(iOS)
@@ -112,7 +156,12 @@ extension NavigationHost {
                 }
             }
             if settled {
-                let safe = c.view.safeAreaInsets
+                // A route offset in its block, past a box beside it (`clearBesideRoutes`), clears only the part of
+                // each side's inset its box reaches
+                let box = c.node.convert(c.node.bounds, to: c.view)
+                var safe = c.view.safeAreaInsets
+                safe.left = max(0, safe.left - max(0, box.minX))
+                safe.right = max(0, safe.right - max(0, c.view.bounds.maxX - box.maxX))
                 // The route's end with its page unscrolled: scrolling moves the route, not the bars.
                 // A route the keyboard shortens can end above the bars, with no bottom cover.
                 let end = c.node.convert(c.node.bounds, to: c.contentMount).maxY + (c.contentViewport?.frame.minY ?? 0)

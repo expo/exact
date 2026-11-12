@@ -242,10 +242,7 @@ fn enum_refusals_list_accepted_values_and_each_suggestion_compiles() {
     let error =
         contract::compile("component App\n  view\n    view wrap-flow=\"start\"\n").unwrap_err();
     assert_eq!(error.id, "lower-attr-value");
-    assert!(
-        error.message.contains("implements `both` (or `auto`)"),
-        "{error}"
-    );
+    assert!(error.message.contains("Write one of auto, both"), "{error}");
     assert!(
         !error.message.contains("expected one of"),
         "narrow authoring rule remains authoritative"

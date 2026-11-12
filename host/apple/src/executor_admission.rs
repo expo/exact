@@ -14,6 +14,7 @@ impl Core {
         let ordered = r.request.is_ordered();
         let overlap = reads::overlaps(&r, work.is_some());
         let mut state = self.shared.state.lock().unwrap();
+        state.dispatched = true;
         // A deadline on work that cannot take one (a stream but an upload, a continuation, native work), or a
         // long poll that is no stream's HTTP GET (LLP 1016.000 D8), is refused here, before any path.
         let checked = r
@@ -41,7 +42,7 @@ impl Core {
         }
         let effect_read = reads::effect_read(&r, work.is_some());
         let waits_for_effect =
-            (effect_read || waiting) && state.counts[0] - state.light >= COUNTS[0];
+            (effect_read || waiting) && preload::effect_count(&state) >= COUNTS[0];
         if ordered && (state.ordered_barrier || !state.fenced.is_empty() || waits_for_effect) {
             // Later requests, GETs included, wait behind a held read so
             // admission preserves reply order (LLP 1162 D1).
@@ -101,7 +102,7 @@ impl Core {
                 } else if reads::safe_read(&r.request, work.is_some(), r.class) {
                     state.counts[0] - state.agains >= ORDERED_READS
                 } else {
-                    state.counts[0] - state.light >= COUNTS[0]
+                    preload::effect_count(&state) >= COUNTS[0]
                         || state.counts[0] - state.agains >= ORDERED_READS
                 };
                 (full && !one_shot, if one_shot { 0 } else { charge })
@@ -119,7 +120,7 @@ impl Core {
                 // Count every waiting request, including writes. Otherwise
                 // 128 large reads could fill the lane before its first job
                 // can reserve the response bytes it needs to start.
-                let waiting = state.jobs[0].iter().map(|job| job.charge).sum();
+                let waiting = state.jobs[0].iter().map(|job| job.waiting_charge).sum();
                 if charge > ORDERED_WAITING_BYTES.saturating_sub(waiting) {
                     return Err("native ordered queue byte limit reached");
                 }
@@ -233,11 +234,15 @@ impl Core {
             }
             return Ok(());
         }
+        if let Some(cache) = state.cache.as_mut() {
+            preload::refresh(cache, &r);
+        }
         state.jobs[lane].push_back(Job {
             ticket: r.ticket,
             request: r.request,
             forced: r.forced,
             work,
+            waiting_charge: charge,
             charge,
             limit,
             forgotten,

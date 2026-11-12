@@ -73,7 +73,7 @@ for (const p of pages) {
   writeFileSync(join(DIST, p.path === '/' ? 'index.md' : `${p.path.slice(1)}.md`), `${frontmatter(p)}> ## Documentation index\n> Fetch the complete documentation index at: ${ORIGIN}/llms.txt\n> Use this file to discover all available pages before exploring further.\n\n${body}`);
 }
 
-// exact2's mark (assets/brand/exact-mark.svg) as the favicon, in place of the build's placeholder square.
+// Exact's mark (assets/brand/exact-mark.svg) as the favicon, in place of the build's placeholder square.
 copyFileSync(resolve(SITE, '../../assets/brand/exact-mark.svg'), join(DIST, 'favicon.svg'));
 const FAVICON = '<link rel="icon" href="/favicon.svg" type="image/svg+xml">';
 
@@ -119,7 +119,24 @@ for (const f of readdirSync(DIST, { recursive: true, encoding: 'utf8' }).filter(
   prepainted++;
 }
 
-writeFileSync(join(DIST, 'robots.txt'), `User-agent: *\nAllow: /\n${ORIGIN ? `Sitemap: ${ORIGIN}/sitemap.xml\n` : ''}`);
+const SIGNAL = 'Content-Signal: search=yes, ai-input=yes, ai-train=yes';
+const CRAWLERS: [string, string[]][] = [
+  ['OpenAI', ['GPTBot', 'OAI-SearchBot', 'ChatGPT-User']],
+  ['Anthropic', ['ClaudeBot', 'Claude-User', 'Claude-SearchBot']],
+  ['Perplexity', ['PerplexityBot', 'Perplexity-User']],
+  ['Google and Apple usage-control tokens', ['Google-Extended', 'Applebot-Extended']],
+  ['Other AI data crawlers', ['CCBot', 'Meta-ExternalAgent', 'Amazonbot', 'Bytespider']],
+];
+const crawler = (agent: string) => `User-agent: ${agent}\n${SIGNAL}\nAllow: /\n`;
+writeFileSync(
+  join(DIST, 'robots.txt'),
+  [
+    `# Content signals express how ${site.name} content may be used after access.\n# search: building a search index and returning links or excerpts.\n# ai-input: retrieval and grounding for AI-generated answers.\n# ai-train: training or fine-tuning AI models.\n`,
+    crawler('*'),
+    ...CRAWLERS.map(([owner, agents]) => `# ${owner}\n${agents.map(crawler).join('\n')}`),
+    ...(ORIGIN ? [`Sitemap: ${ORIGIN}/sitemap.xml\n`] : []),
+  ].join('\n'),
+);
 
 writeFileSync(
   join(DIST, 'llms.txt'),
@@ -133,7 +150,7 @@ const start = pages.find(p => p.path === '/start');
 function prerequisites(p: Page): string {
   const parent = parentOf(p);
   if (parent) return `[${parent.title}](${mdUrl(parent)})`;
-  if (p.path === '/recipes/website') return 'start-here-site.md in the exact2 checkout (a website reads it in place of Start here)';
+  if (p.path === '/recipes/website') return 'start-here-site.md in the Exact checkout (a website reads it in place of Start here)';
   if (!start || ['Home', 'Get started', 'For AI agents'].includes(p.section)) return 'None';
   return `[${start.title}](${mdUrl(start)})`;
 }

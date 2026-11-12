@@ -249,7 +249,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
     /**
      * exact2's statement of its fields ([Native.fields]), taken before the stream it came with is drawn: a count, then
      * for each field its id, generation, flags and scroller; its box and its clip as float bits; the edit it answers
-     * and the value as of it; its look (eighteen words) and three strings. A field it leaves out is gone.
+     * and the value as of it; its look (eighteen words) and five strings. A field it leaves out is gone.
      */
     fun told(w: IntArray) {
         if (w.isEmpty()) return
@@ -263,7 +263,8 @@ internal class Fields(context: Context) : FrameLayout(context) {
             val (placeholder, afterHint) = string(w, look + LOOK)
             val (autocomplete, afterFill) = string(w, afterHint)
             val (family, afterFamily) = string(w, afterFill)
-            val (axes, end) = string(w, afterFamily)
+            val (axes, afterAxes) = string(w, afterFamily)
+            val (features, end) = string(w, afterAxes)
             seen.add(id)
             var f = fields[id]
             // A view made for a field exact2 already knows (the activity was made again) starts at exact2's count
@@ -286,7 +287,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
                 f.look = words
                 // Setting an input type sets the text again: no edit of the person's.
                 quiet = true
-                try { style(f, w, look, placeholder, autocomplete, family, axes) } finally { quiet = false }
+                try { style(f, w, look, placeholder, autocomplete, family, axes, features) } finally { quiet = false }
             }
             if (sized) size(f) else if (shown) f.dirty = true
             position(f)
@@ -479,15 +480,15 @@ internal class Fields(context: Context) : FrameLayout(context) {
         Extensions.webauthnField(f.text, false)
     }
 
-    /** The field's look and its keyboard, from the look's words ([Native.fields]) and its four strings. */
-    private fun style(f: Field, w: IntArray, at: Int, placeholder: String, autocomplete: String, family: String, axes: String) {
+    /** The field's look and its keyboard, from the look's words ([Native.fields]) and its five strings. */
+    private fun style(f: Field, w: IntArray, at: Int, placeholder: String, autocomplete: String, family: String, axes: String, features: String) {
         val what = w[at]; val keyboard = w[at + 1]; val enter = w[at + 3]
         val text = f.text
         f.multiline = what and MULTILINE != 0
         val type = inputType(what, keyboard, w[at + 2])
         if (text.inputType != type) text.inputType = type
         // Its type after its input type, which sets a password in a monospace face.
-        face(text, fl(w[at + 11]), w[at + 12], what and ITALIC != 0, fl(w[at + 13]), fl(w[at + 14]), family, axes)
+        face(text, fl(w[at + 11]), w[at + 12], what and ITALIC != 0, fl(w[at + 13]), fl(w[at + 14]), family, axes, features)
         f.action = when {
             f.multiline -> 0
             enter in DONE..SEND -> enter
@@ -803,8 +804,9 @@ internal class Fields(context: Context) : FrameLayout(context) {
          * height in px (0: the font's own), the face's file with its index in a collection (`path#index`; empty:
          * the device's default family) and its axes as CSS writes `font-variation-settings` (empty: the weight's
          * alone). The default family's typeface takes no axes, so a field that moves one names the file text is drawn
-         * from instead. */
-        private fun face(v: EditText, size: Float, weight: Int, italic: Boolean, spacing: Float, line: Float, family: String, axes: String) {
+         * from instead. Features combine the numeric and ligature variants with explicit settings, which win for
+         * the same tag; empty restores the font's defaults. */
+        private fun face(v: EditText, size: Float, weight: Int, italic: Boolean, spacing: Float, line: Float, family: String, axes: String, features: String) {
             v.setTextSize(TypedValue.COMPLEX_UNIT_PX, size)
             v.typeface = faces.getOrPut("$family|$weight|$italic|$axes") {
                 val w = weight.coerceIn(1, 1000)
@@ -815,6 +817,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
                 } catch (e: RuntimeException) { null }
                 made ?: Typeface.create(Typeface.DEFAULT, w, italic)
             }
+            v.fontFeatureSettings = features.ifEmpty { null }
             v.letterSpacing = spacing
             if (line > 0f) v.setLineHeight(max(1, line.roundToInt())) else v.setLineSpacing(0f, 1f)
         }
@@ -872,7 +875,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
          * first baseline in px, 21 bits each, or -1 when there is no reader to measure in. [flags]: bit 0 italic, bit
          * 1 a textarea, whose lines wrap at [width] px (negative: as long as they are).
          */
-        @JvmStatic fun measure(size: Float, weight: Int, flags: Int, spacing: Float, line: Float, family: String, axes: String, text: String, width: Float): Long {
+        @JvmStatic fun measure(size: Float, weight: Int, flags: Int, spacing: Float, line: Float, family: String, axes: String, features: String, text: String, width: Float): Long {
             val context = context ?: return -1L
             // A host booting on a thread of exact2's own: a view wants a looper to be made on.
             if (Looper.myLooper() == null) Looper.prepare()
@@ -887,7 +890,7 @@ internal class Fields(context: Context) : FrameLayout(context) {
             val type = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
                 (if (multiline) InputType.TYPE_TEXT_FLAG_MULTI_LINE else 0)
             if (v.inputType != type) v.inputType = type
-            face(v, size, weight, flags and 1 != 0, spacing, line, family, axes)
+            face(v, size, weight, flags and 1 != 0, spacing, line, family, axes, features)
             v.setText(text)
             val free = MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED)
             val wide = if (multiline && width >= 0f) MeasureSpec.makeMeasureSpec(ceil(width).toInt(), MeasureSpec.EXACTLY) else free

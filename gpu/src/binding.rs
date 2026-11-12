@@ -63,4 +63,23 @@ impl Module {
             }
         }
     }
+
+    /// The canvas's size in points ([`crate::Surface::size`]); hosts give it
+    /// before each bind once layout has sized the canvas.
+    pub fn size(&mut self, id: u32, width: f32, height: f32) -> bool {
+        if !(width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0) {
+            self.error = format!("size: {width}x{height} points is not a canvas size");
+            return false;
+        }
+        self.settle(id);
+        let Some(inst) = self.instances.get_mut(&id) else {
+            self.error = "no such canvas".into();
+            return false;
+        };
+        if inst.surface.size(width, height) {
+            inst.dirty = true;
+        }
+        inst.drain();
+        true
+    }
 }

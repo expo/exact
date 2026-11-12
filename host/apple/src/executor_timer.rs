@@ -14,6 +14,7 @@ pub(super) struct Entry {
     pub(super) run: Run,
     pub(super) ms: u32,
     pub(super) abort: AbortController,
+    callback: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl PartialEq for Entry {
@@ -57,6 +58,30 @@ impl Timer {
             run,
             ms,
             abort,
+            callback: None,
+        });
+        self.changed.notify_all();
+    }
+
+    pub(in super::super) fn arm_callback(
+        &self,
+        delay: Duration,
+        callback: Box<dyn FnOnce() + Send>,
+    ) {
+        let mut heap = self.heap.lock().unwrap();
+        if heap.2 {
+            return;
+        }
+        heap.1 += 1;
+        let seq = heap.1;
+        heap.0.push(Entry {
+            at: Instant::now() + delay,
+            seq,
+            lane: 0,
+            run: (0, 0),
+            ms: 0,
+            abort: AbortController::new(),
+            callback: Some(callback),
         });
         self.changed.notify_all();
     }
@@ -68,7 +93,7 @@ impl Timer {
     }
 
     #[cfg(test)]
-    pub(super) fn expire(&self, run: Run) {
+    pub(in super::super) fn expire(&self, run: Run) {
         let mut heap = self.heap.lock().unwrap();
         assert!(heap.0.iter().any(|e| e.run == run), "run has no deadline");
         let mut entries = std::mem::take(&mut heap.0).into_vec();
@@ -97,7 +122,16 @@ impl Timer {
             }
             let now = Instant::now();
             match heap.0.peek().map(|e| e.at) {
-                Some(at) if at <= now => return heap.0.pop(),
+                Some(at) if at <= now => {
+                    let mut entry = heap.0.pop().unwrap();
+                    if let Some(callback) = entry.callback.take() {
+                        drop(heap);
+                        callback();
+                        heap = self.heap.lock().unwrap();
+                    } else {
+                        return Some(entry);
+                    }
+                }
                 Some(at) => heap = self.changed.wait_timeout(heap, at - now).unwrap().0,
                 None => heap = self.changed.wait(heap).unwrap(),
             }

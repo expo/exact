@@ -1019,9 +1019,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
                 if let editor = editingEditor { writeValue(v, into: editor) } else if f.stringValue != v { f.stringValue = v; toldText = nil; pendingValue = nil }
             }
             applyPlaceholder(f)
-            f.contentType = Autofill.contentType(props["autocomplete"], fallback: nil) // LLP 1102 §3.6
-            f.isEnabled = !disabled
-            f.isEditable = !disabled && props["editable"] != "false"
+            applyFieldProps(f)
             styleNativeField()
             updateNumberStepper() // the platform's stepping control for `type="number"` (LLP 1116.007 D4)
         }

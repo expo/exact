@@ -4,23 +4,23 @@ use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::mpsc::{channel, Receiver};
 
-const HANG: Duration = Duration::from_secs(10);
-const FRESH: &[(&str, &str)] = &[("Cache-Control", "private, max-age=60")];
+pub(in super::super) const HANG: Duration = Duration::from_secs(10);
+pub(in super::super) const FRESH: &[(&str, &str)] = &[("Cache-Control", "private, max-age=60")];
 
-struct Plan {
+pub(in super::super) struct Plan {
     status: u16,
     headers: Headers,
     body: Vec<u8>,
-    held: Option<Receiver<()>>,
-    disconnect: bool,
+    pub(in super::super) held: Option<Receiver<()>>,
+    pub(in super::super) disconnect: bool,
     truncated: bool,
     /// The `Content-Length` the head states, when not the body's.
-    declares: Option<u64>,
+    pub(in super::super) declares: Option<u64>,
     /// Held open after the head and body until this is told.
-    after: Option<Receiver<()>>,
+    pub(in super::super) after: Option<Receiver<()>>,
 }
 impl Plan {
-    fn new(status: u16, headers: &[(&str, &str)], body: &[u8]) -> Self {
+    pub(in super::super) fn new(status: u16, headers: &[(&str, &str)], body: &[u8]) -> Self {
         Self {
             status,
             headers: headers
@@ -42,13 +42,13 @@ struct ServerState {
     seen: Vec<(String, String, Headers)>,
     stop: bool,
 }
-struct Server {
-    address: std::net::SocketAddr,
+pub(in super::super) struct Server {
+    pub(in super::super) address: std::net::SocketAddr,
     state: Arc<(Mutex<ServerState>, Condvar)>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Server {
-    fn new() -> Self {
+    pub(in super::super) fn new() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let state = Arc::new((Mutex::new(ServerState::default()), Condvar::new()));
@@ -73,7 +73,7 @@ impl Server {
             thread: Some(thread),
         }
     }
-    fn plan(&self, path: &str, plan: Plan) {
+    pub(in super::super) fn plan(&self, path: &str, plan: Plan) {
         self.state
             .0
             .lock()
@@ -83,17 +83,22 @@ impl Server {
             .or_default()
             .push_back(plan);
     }
-    fn request(&self, path: &str) -> Request {
+    pub(in super::super) fn request(&self, path: &str) -> Request {
         Request::get(&format!("http://{}{path}", self.address))
     }
-    fn core(&self, asynchronous: bool, cache: bool) -> (Core, Receiver<()>) {
+    pub(in super::super) fn core(&self, asynchronous: bool, cache: bool) -> (Core, Receiver<()>) {
         self.core_grants(
             asynchronous,
             cache,
             &format!("net.fetch http://{}", self.address),
         )
     }
-    fn core_grants(&self, asynchronous: bool, cache: bool, grants: &str) -> (Core, Receiver<()>) {
+    pub(in super::super) fn core_grants(
+        &self,
+        asynchronous: bool,
+        cache: bool,
+        grants: &str,
+    ) -> (Core, Receiver<()>) {
         let owners = (0..WORKERS)
             .map(|_| {
                 Some(
@@ -117,10 +122,10 @@ impl Server {
         }
         (core, woke)
     }
-    fn count(&self) -> usize {
+    pub(in super::super) fn count(&self) -> usize {
         self.state.0.lock().unwrap().seen.len()
     }
-    fn seen(&self, count: usize) {
+    pub(in super::super) fn seen(&self, count: usize) {
         let state = self.state.0.lock().unwrap();
         let (state, _) = self
             .state
@@ -210,7 +215,7 @@ fn serve(mut socket: TcpStream, server: Arc<(Mutex<ServerState>, Condvar)>) {
     }
     let _ = socket.shutdown(Shutdown::Write);
 }
-fn job(ticket: u64, request: Request) -> RequestOut {
+pub(in super::super) fn job(ticket: u64, request: Request) -> RequestOut {
     RequestOut {
         ticket,
         target: "cache-test".into(),
@@ -219,7 +224,10 @@ fn job(ticket: u64, request: Request) -> RequestOut {
         class: RequestClass::Read,
     }
 }
-fn collect(core: &Core, woke: &Receiver<()>) -> (u64, Outcome, CompletionTiming) {
+pub(in super::super) fn collect(
+    core: &Core,
+    woke: &Receiver<()>,
+) -> (u64, Outcome, CompletionTiming) {
     let end = Instant::now() + HANG;
     loop {
         core.begin_pump();
@@ -230,7 +238,11 @@ fn collect(core: &Core, woke: &Receiver<()>) -> (u64, Outcome, CompletionTiming)
             .expect("completion");
     }
 }
-fn ask(core: &Core, woke: &Receiver<()>, request: RequestOut) -> (Response, bool) {
+pub(in super::super) fn ask(
+    core: &Core,
+    woke: &Receiver<()>,
+    request: RequestOut,
+) -> (Response, bool) {
     let ticket = request.ticket;
     core.run(request, None).unwrap();
     let (got, outcome, timing) = collect(core, woke);
@@ -240,7 +252,7 @@ fn ask(core: &Core, woke: &Receiver<()>, request: RequestOut) -> (Response, bool
     };
     (response, timing.cached)
 }
-fn read(
+pub(in super::super) fn read(
     core: &Core,
     woke: &Receiver<()>,
     server: &Server,
@@ -711,6 +723,7 @@ fn age_and_freshness_use_rfc_9111_arithmetic_and_monotonic_residence() {
         body: vec![],
     };
     let mut entry = Entry {
+        preloads: 0,
         key: Key::of(&request),
         response,
         stored: at,
@@ -718,6 +731,7 @@ fn age_and_freshness_use_rfc_9111_arithmetic_and_monotonic_residence() {
         lifetime: Duration::from_secs(60),
         validate: false,
         bytes: 0,
+        used: AtomicUsize::new(0),
     };
     assert!(entry.fresh(&request, at + Duration::from_secs(9)));
     assert!(!entry.fresh(&request, at + Duration::from_secs(10)));
@@ -1132,6 +1146,7 @@ fn a_non_app_read_checks_its_reach_outside_the_state_lock_and_can_hit() {
                 request,
                 forced: false,
                 work: None,
+                waiting_charge: charge,
                 charge,
                 limit,
                 forgotten: false,

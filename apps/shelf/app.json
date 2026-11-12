@@ -5,6 +5,9 @@
   "id": "com.exact.shelf",
   "start_url": "/",
   "display": "standalone",
+  "preload": {
+    "discover": { "url": "https://openlibrary.org/subjects/science_fiction.json?limit=20" }
+  },
   "shortcuts": [
     {
       "name": "Add Book",

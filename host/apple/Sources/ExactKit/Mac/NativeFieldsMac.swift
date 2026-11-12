@@ -95,10 +95,20 @@ extension NodeView {
         n.stringValue = f.stringValue
         n.font = f.font
         n.textColor = f.textColor
+        // A style can remake it (`appearance`), and a style's pass assigns
+        // no props.
+        applyPlaceholder(n)
+        applyFieldProps(n)
         replaceField(f, with: n) {
             f.removeFromSuperview()
             (clipBox ?? self).addSubview(n)
         }
+    }
+    /// What the field's props say of it besides its value and placeholder.
+    func applyFieldProps(_ f: NSTextField) {
+        f.contentType = Autofill.contentType(props["autocomplete"], fallback: nil) // LLP 1102 §3.6
+        f.isEnabled = !disabled
+        f.isEditable = !disabled && props["editable"] != "false"
     }
     /// `n` in `f`'s place, which `install` puts it in, keeping the editing
     /// and its selection.

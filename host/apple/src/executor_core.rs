@@ -50,6 +50,8 @@ struct Job {
     /// Charged now: the request's own buffers while an ordered job waits,
     /// the whole ceiling once it runs or while independent work is admitted.
     charge: usize,
+    /// Request buffers in the backlog, excluding a preload waiter's reply reservation.
+    waiting_charge: usize,
     /// The ceiling: request buffers plus the response allowance.
     limit: usize,
     /// The runner no longer wants its reply (`Core::forget`).
@@ -141,6 +143,7 @@ impl Fenced {
 }
 #[derive(Default)]
 struct State {
+    dispatched: bool,
     cache: Option<cache::Cache>,
     jobs: [VecDeque<Job>; 2],
     running: Vec<Running>,
@@ -255,6 +258,7 @@ pub(super) struct Core {
     stream_host: StreamHost,
     /// The asynchronous core instead of workers (LLP 1120), not yet started.
     machine: Option<Arc<asynch::Machine>>,
+    preloads: Mutex<Option<preload::Preloads>>,
 }
 /// Makes the host (and its transport) an owner or a stream fetches
 /// through: the platform's, unless the embedder names another.
@@ -268,6 +272,23 @@ fn owners(bindings: Option<ibex2::host::Bindings>) -> Vec<Option<ibex2::host::Bi
 }
 
 impl Core {
+    #[cfg(test)]
+    #[allow(dead_code)] // Shared hosts build without Apple's launch tests (LLP 1162.000 D4).
+    pub(super) fn test_start(
+        asynchronous: bool,
+        bindings: Option<ibex2::host::Bindings>,
+        grants: &str,
+        wake: Wake,
+    ) -> Self {
+        Self::with_owners_lanes(
+            owners(bindings),
+            grants,
+            wake,
+            Arc::new(ibex2::host::Host::new),
+            asynchronous.then(asynch::asynch_lanes),
+        )
+    }
+
     #[allow(dead_code)] // the tests'; the hosts' executors use `start_switched` or `start_on`
     pub(super) fn start(bindings: Option<ibex2::host::Bindings>, grants: &str, wake: Wake) -> Self {
         // Additional transports are constructed on their own threads, not
@@ -377,6 +398,7 @@ impl Core {
             grants: grants.to_string(),
             stream_host: host,
             machine,
+            preloads: Mutex::new(None),
         }
     }
 
@@ -557,6 +579,7 @@ impl Core {
     /// never started, as all work is.
     pub(super) fn again(&self, ticket: u64) -> Result<(), &'static str> {
         let mut state = self.shared.state.lock().unwrap();
+        state.dispatched = true;
         if self.disabled {
             return Err("native executor worker limit reached");
         }
@@ -602,6 +625,9 @@ impl Core {
         {
             let mut state = self.shared.state.lock().unwrap();
             state.retired = true;
+            if let Some(cache) = state.cache.as_mut() {
+                preload::cancel_all(cache);
+            }
             state.cache = None;
             for run in &mut state.running {
                 run.cache_exchange = None;
@@ -626,6 +652,7 @@ impl Core {
             .worker_notifications
             .fetch_add(1, Ordering::Relaxed);
         self.shared.ready.notify_all();
+        self.preloads.lock().unwrap().take();
         if let Some(machine) = &self.machine {
             machine.retire();
             self.idle.lock().unwrap().take();
@@ -998,10 +1025,21 @@ fn worker(
                     state = shared.state.lock().unwrap();
                     continue;
                 }
+                if let Some(cache) = state.cache.as_mut() {
+                    preload::expire(cache);
+                }
                 if let Some(next) = reads::next_job(&shared, &mut state, lane) {
                     break next;
                 }
-                state = shared.ready.wait(state).unwrap();
+                let delay = state.cache.as_ref().and_then(|cache| {
+                    cache
+                        .preload_definitions_due
+                        .map(|due| due.saturating_duration_since((cache.clock)()))
+                });
+                state = match delay {
+                    Some(delay) => shared.ready.wait_timeout(state, delay).unwrap().0,
+                    None => shared.ready.wait(state).unwrap(),
+                };
             }
         };
         let Job {
@@ -1291,6 +1329,9 @@ mod body_to;
 mod admission;
 #[path = "executor_cache.rs"]
 mod cache;
+#[path = "executor_preload.rs"]
+#[allow(dead_code)] // Launch entry points are host-owned (LLP 1162.000 D4).
+pub(super) mod preload;
 #[path = "executor_reads.rs"]
 mod reads;
 

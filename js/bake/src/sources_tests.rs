@@ -1,6 +1,82 @@
 use super::{sources, Scratch};
 
 #[test]
+fn source_capture_names_a_file_above_the_per_file_limit() {
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    let path = app.0.join("oversized.json");
+    let limit = 16 << 20;
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(limit).unwrap();
+    assert_eq!(
+        sources(&app.0).unwrap()[std::path::Path::new("oversized.json")].len(),
+        limit as usize
+    );
+    file.set_len(limit + 1).unwrap();
+    let error = sources(&app.0).unwrap_err();
+    assert!(error.contains(&path.display().to_string()), "{error}");
+    assert!(error.contains("16777217 bytes"), "{error}");
+    assert!(error.contains("16 MiB per-file limit"), "{error}");
+}
+
+#[test]
+fn source_capture_names_the_file_crossing_the_total_limit() {
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    for index in 0..4 {
+        std::fs::File::create(app.0.join(format!("{index}.json")))
+            .unwrap()
+            .set_len(16 << 20)
+            .unwrap();
+    }
+    assert_eq!(
+        sources(&app.0)
+            .unwrap()
+            .values()
+            .map(Vec::len)
+            .sum::<usize>(),
+        64 << 20
+    );
+    std::fs::write(app.0.join("extra.json"), b"x").unwrap();
+    let error = sources(&app.0).unwrap_err();
+    // Directory enumeration may reach the extra byte before any of the large files.
+    assert!(
+        (0..4)
+            .map(|i| (format!("{i}.json"), 16 << 20))
+            .chain([("extra.json".into(), 1)])
+            .any(|(name, bytes)| error
+                .contains(&format!("{} ({bytes} bytes)", app.0.join(name).display()))),
+        "{error}"
+    );
+    assert!(error.contains("67108865 bytes"), "{error}");
+    assert!(error.contains("64 MiB limit"), "{error}");
+}
+
+#[test]
+fn source_capture_names_the_physical_file_in_an_oversized_mount() {
+    let parent = Scratch::new(&std::env::temp_dir()).unwrap();
+    let app = parent.0.join("app");
+    let shared = parent.0.join("shared");
+    std::fs::create_dir(&app).unwrap();
+    std::fs::create_dir(&shared).unwrap();
+    std::fs::write(
+        app.join("app.json"),
+        r#"{"typescript":{"sources":{"core":"../shared"}}}"#,
+    )
+    .unwrap();
+    let path = shared.join("large.ts");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len((16 << 20) + 1)
+        .unwrap();
+    let error = sources(&app).unwrap_err();
+    assert!(
+        error.contains(&path.canonicalize().unwrap().display().to_string()),
+        "{error}"
+    );
+    assert!(error.contains("16777217 bytes"), "{error}");
+    assert!(error.contains("16 MiB per-file limit"), "{error}");
+}
+
+#[test]
 fn mixed_bake_reads_rust_identity_and_own_grants_without_executing_it() {
     use contract::DataSource;
     struct Rust;
@@ -418,7 +494,8 @@ fn a_linked_bake_gives_the_archive_what_rust_compiles() {
 #[test]
 fn a_linked_module_leaves_its_bytecode_to_the_link() {
     let meta = serde_json::json!({"appId": "a", "grants": "", "module": {"sha256": "beef"}});
-    let linked = super::module_constants(&meta, false, "ios", true, None).unwrap();
+    let linked =
+        super::module_constants(&meta, false, "ios", true, None, &serde_json::Value::Null).unwrap();
     assert!(
         !linked.contains("beef") && !linked.contains("app.hbc"),
         "{linked}"
@@ -427,7 +504,9 @@ fn a_linked_module_leaves_its_bytecode_to_the_link() {
         linked.contains("::exact_apple::baked::bytecode()"),
         "{linked}"
     );
-    let embedded = super::module_constants(&meta, false, "ios", false, None).unwrap();
+    let embedded =
+        super::module_constants(&meta, false, "ios", false, None, &serde_json::Value::Null)
+            .unwrap();
     assert!(
         embedded.contains("REVISION: &str = \"beef\"") && embedded.contains("/app.hbc"),
         "{embedded}"
@@ -496,14 +575,30 @@ fn a_package_declaring_native_writes_the_factory_and_a_second_refuses() {
     // The link reads the rest of `native` from the same declaration.
     assert!(slot.native["library"].is_object(), "{:?}", slot.native);
     let meta = serde_json::json!({"appId": "a", "grants": "", "module": {"sha256": "beef"}});
-    let linux = super::module_constants(&meta, false, "linux", false, Some(&slot)).unwrap();
+    let linux = super::module_constants(
+        &meta,
+        false,
+        "linux",
+        false,
+        Some(&slot),
+        &serde_json::Value::Null,
+    )
+    .unwrap();
     assert!(
         linux.contains(&format!("#[path = {:?}]\n", root.display().to_string()))
             && linux.contains("mod exact_native_shim;")
             && linux.contains("pub fn exact_native(_grants: &str) -> Box<dyn exact_js::NativeModule> {\n    Box::new(exact_native_shim::Vault::new(&APP))\n}"),
         "{linux}"
     );
-    let web = super::module_constants(&meta, false, "web", false, Some(&slot)).unwrap();
+    let web = super::module_constants(
+        &meta,
+        false,
+        "web",
+        false,
+        Some(&slot),
+        &serde_json::Value::Null,
+    )
+    .unwrap();
     assert!(!web.contains("exact_native"), "{web}");
 
     package(

@@ -44,19 +44,28 @@ pub(super) fn next_job(
 ) -> Option<(Job, AbortController)> {
     if worker == 1 {
         while forget::refuse_crowded(shared, state, 1, 0) {}
-        if let Some(next) = take_job(state, 1) {
+        if let Some(next) = take_job(state, 1, 0) {
             return Some(next);
         }
     }
     while forget::refuse_crowded(shared, state, 0, 0) {}
-    let job = state.jobs[0].front()?;
+    if !preload::reserve_front(state) {
+        return None;
+    }
+    let index = state.jobs[0]
+        .iter()
+        .position(|job| !preload::waiting(state, job))?;
+    let job = &state.jobs[0][index];
+    if index > 0 && job.class != RequestClass::Read {
+        return None;
+    }
     if !job.overlap && worker != 0 {
         return None;
     }
     if !can_start(state, job) {
         return None;
     }
-    take_job(state, 0)
+    take_job(state, 0, index)
 }
 
 pub(super) fn can_start(state: &State, job: &Job) -> bool {
@@ -90,8 +99,8 @@ pub(super) fn can_start(state: &State, job: &Job) -> bool {
     true
 }
 
-fn take_job(state: &mut State, lane: usize) -> Option<(Job, AbortController)> {
-    let job = state.jobs[lane].front()?;
+fn take_job(state: &mut State, lane: usize, index: usize) -> Option<(Job, AbortController)> {
+    let job = state.jobs[lane].get(index)?;
     // A module handoff's outcome is the owner's to make; it is charged
     // what it retains when it completes.
     let more = if handed_off(job) {
@@ -102,7 +111,7 @@ fn take_job(state: &mut State, lane: usize) -> Option<(Job, AbortController)> {
     if more > BYTES[lane].saturating_sub(state.bytes[lane]) {
         return None;
     }
-    let mut job = state.jobs[lane].pop_front()?;
+    let mut job = state.jobs[lane].remove(index)?;
     job.charge += more;
     state.bytes[lane] += more;
     let abort = AbortController::new();

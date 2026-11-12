@@ -11,11 +11,24 @@
 #if os(iOS) || os(tvOS)
 import UIKit
 
-/// The launch screen's colour, by the name `UILaunchScreen` gives it, which
-/// host/apple/assets.mjs makes from the colour itself; nil where the build
-/// declares none.
-public let launchScreenColor = ((Bundle.main.object(forInfoDictionaryKey: "UILaunchScreen") as? [String: Any])?["UIColorName"] as? String)
-    .flatMap { UIColor(named: $0) }
+/// The catalogue's sRGB components, emitted by host/apple/assets.mjs so the
+/// host need not load Assets.car before UIApplicationMain.
+public let launchScreenColor = LaunchScreenColor.make(Bundle.main.object(forInfoDictionaryKey: "ExactLaunchColor"))
+
+enum LaunchScreenColor {
+    static func make(_ value: Any?) -> UIColor? {
+        let components = value as? [String: [NSNumber]]
+        func color(_ rgba: [NSNumber]?) -> UIColor? {
+            guard let rgba, rgba.count == 4,
+                  let space = CGColorSpace(name: CGColorSpace.sRGB),
+                  let color = CGColor(colorSpace: space, components: rgba.map { CGFloat($0.doubleValue) }) else { return nil }
+            return UIColor(cgColor: color)
+        }
+        guard let light = color(components?["light"]) else { return nil }
+        guard let dark = color(components?["dark"]) else { return light }
+        return UIColor { $0.userInterfaceStyle == .dark ? dark : light }
+    }
+}
 
 public final class ExactView: UIView {
     public let session: ExactSession
@@ -80,7 +93,7 @@ public final class ExactView: UIView {
     public init(session: ExactSession) {
         self.session = session
         super.init(frame: .zero)
-        // The launch screen's colour (the manifest's `launch`) until the first
+        // The launch screen's colour (the manifest's `background_color`) until the first
         // frame names the canvas; unset, the platform's (LLP 1115 D2).
         backgroundColor = launchScreenColor ?? .platformBackground(in: nil)
         canvas = backgroundColor

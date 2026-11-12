@@ -396,8 +396,8 @@ impl StyleValue<'_> {
                 style, expected: "nonnegative finite length in points/px (percentage shape-margin is not implemented in exact2 v1)",
             });
         }
-        // @ref LLP 1053 G3 — CSS refuses a negative flex factor, gap or
-        // border width.
+        // @ref LLP 1053 G3 — a row CSS gives no negative value refuses a
+        // negative number, as it refuses a negative length written as text.
         if calc::nonnegative_row(style) {
             return match self {
                 StyleValue::Number(n) if (*n as f32).is_finite() && *n >= 0.0 => Ok(*n as f32),

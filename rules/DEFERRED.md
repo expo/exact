@@ -294,7 +294,8 @@ complete frame for the current generation, false again after a restore or a
 lost device. The app binds its own pause and loading cover to it; `PENDING`
 still permits ticks and the runtime adds no barrier. The Minecraft consumer,
 whose player took damage before its terrain drew, is the consumer. Take: none
-offered; waived by Charlie. It follows Nathan Schroeder's #967.
+offered; waived by Charlie. It follows Nathan Schroeder's #967. Built
+2026-11-12 as every canvas's `presented` (LLP 1009 D9, expo/exact#75).
 
 **Expanded (Charlie, 2026-09-23: "ok let's do pre-rendering etc."; "let's use
 Interview as our website"):** web rendering across the curve (LLP 1048), with

@@ -188,12 +188,18 @@ impl Ring {
     }
 
     /// `slot`'s frame was submitted: busy until the GPU has run it, then
-    /// published if `publish`.
-    pub(crate) fn submitted(&mut self, slot: usize, publish: bool, queue: &wgpu::Queue) {
+    /// published if `publish`, and `shown` said when it is ([`Order::take`]).
+    pub(crate) fn submitted(
+        &mut self,
+        slot: usize,
+        publish: bool,
+        queue: &wgpu::Queue,
+        shown: Option<crate::presented::Shown>,
+    ) {
         let done = Arc::new(AtomicBool::new(false));
         let flag = done.clone();
         queue.on_submitted_work_done(move || flag.store(true, Ordering::Release));
-        self.order.submitted(slot, done, publish);
+        self.order.submitted(slot, done, publish, shown);
     }
 
     /// Frames submitted that the GPU has not finished.
@@ -227,6 +233,28 @@ impl Ring {
             [self.generation, slot as u32, serial],
             self.slots[slot].buffer,
         ))
+    }
+}
+
+impl crate::Module {
+    /// The newest frame a canvas with buffers has finished: `[generation,
+    /// slot, serial]` and the `AHardwareBuffer*`.
+    pub fn buffer(&mut self, id: u32) -> Option<([u32; 3], *mut c_void)> {
+        if let Some(gpu) = &self.gpu {
+            let _ = gpu.device.poll(wgpu::PollType::Poll);
+        }
+        let ring = self.instances.get_mut(&id)?.ring.as_mut()?;
+        ring.settle();
+        ring.take()
+    }
+
+    /// Whether a canvas with buffers has a complete frame
+    /// [`crate::Module::buffer`] has not published yet.
+    pub fn unpublished(&self, id: u32) -> bool {
+        self.instances
+            .get(&id)
+            .and_then(|i| i.ring.as_ref())
+            .is_some_and(|r| r.unpublished())
     }
 }
 

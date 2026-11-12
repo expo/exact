@@ -138,3 +138,36 @@ fn kept_shape_metadata_preserves_a_deep_public_record() {
     let next = boot(plan, Source::default(), first.carry().store);
     assert_eq!(next.resource("hud"), Some(&value));
 }
+
+/// A canvas's `presented` is the host's fact of this launch (LLP 1009 D9): a
+/// kept record never carries it, so a loader waiting on it at the next launch
+/// waits for a frame of that launch.
+#[test]
+fn a_kept_record_never_keeps_the_hosts_presented() {
+    let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+    let number = b.primitive(TypeKind::Number);
+    let boolean = b.primitive(TypeKind::Bool);
+    let hud = b.record("Hud", &[("count", number), ("presented", boolean)]);
+    let name = b.str("world");
+    let mut arg = Asm::new();
+    arg.str(name);
+    let arg = b.code(arg);
+    let resource = b.resource("hud", "exactSurface", &[arg], hud, None);
+    b.set_resource_keep(resource);
+    b.surface("world", &[]);
+    b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+    let plan = b.finish().unwrap();
+    let hud = |count: f64, presented: bool| {
+        Some(Value::record(vec![
+            Value::Number(count),
+            Value::Bool(presented),
+        ]))
+    };
+    let mut first = boot(plan.clone(), Source::default(), vec![]);
+    first
+        .set_surface_record("world", Some(r#"{"count":7,"presented":true}"#))
+        .unwrap();
+    assert_eq!(first.resource("hud").cloned(), hud(7., true));
+    let next = boot(plan, Source::default(), first.carry().store);
+    assert_eq!(next.resource("hud").cloned(), hud(7., false));
+}

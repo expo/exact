@@ -81,6 +81,8 @@ const CLEAN = `component CleanFixture
         text testId="detail" color="-exact-secondary-label" "Secondary detail"
       button testId="go" press=bump buttonStyle="bordered-prominent"
         text "Go"
+      button testId="start" press=bump buttonStyle="tinted" accent-color="-exact-system-green"
+        text "Start"
       row gap=8
         button testId="one" press=bump
           text "One"

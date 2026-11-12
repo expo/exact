@@ -483,7 +483,7 @@ function scheduler(game = false) {
   const functions = legacy ? source.slice(source.indexOf('function produceRust()'), source.indexOf('  if (!rustChild)')) + 'calls.push(["rust"]);rustActive=true;}'
     : source.slice(source.indexOf('function produceRust()'), source.indexOf('function produceRustNow()'));
   return new Function('game', `
-    let building=false, rustActive=false, buildPending=false, rustPending=false, rustDirty=false, again=false, changed=new Set(), calls=[];
+    let stopping=false, building=false, rustActive=false, buildPending=false, rustPending=false, rustDirty=false, again=false, changed=new Set(), calls=[];
     let lastFailed=new Set(), failedInputs=new Set(), failing=false;
     const phases=[],early={phase:(...args)=>phases.push(args)},app={manifest:game?{game:{}}:{},dir:'fixture',workspace:'fixture'};
     const process={execPath:'bun',stdout:{write(){}}},root='.',buildEnv={},resolve=(...parts)=>parts.join('/'),existsSync=()=>false;
@@ -527,7 +527,7 @@ test('a failed build\'s files ride with the next build, whatever it touches', ()
   assert.deepEqual(s.calls[2],['gpu',['gpu.rs']],'a success clears the failed set');
 });
 test('compiler cleanup kills the recorded GPU cargo group too', () => {
-  const cleanup=source.slice(source.indexOf('const killCompiler = () => {'),source.indexOf('\nstartCompiler();'));
+  const cleanup=source.slice(source.indexOf('const killCompiler = () => {'),source.indexOf('\nconst stop ='));
   const killed=[];
   new Function('process', `const unasked=()=>{};let gpuBuildChild={pid:123},manualTypescript,rustSourceWatch,rustOutputWatch,rustHeartbeat,rustActive,rustChild,moduleWatch,moduleTimer,moduleRun=0,dev,moduleStage; ${cleanup}; killCompiler();`)
     ({kill:(...args)=>killed.push(args)});

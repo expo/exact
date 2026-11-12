@@ -16,7 +16,6 @@ import { spawnSync } from 'node:child_process';
 import { intentsMetadata as emittedIntentsMetadata } from './intents-metadata.mjs';
 import { extensionModuleCache } from './extensions.mjs';
 
-const toolchain = '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain';
 /** The protocols whose conformers' constant values the metadata pass reads (Xcode's list for App Intents). */
 const gathered = ['AppIntent', 'EntityQuery', 'AppEntity', 'TransientEntity', 'AppEnum', 'AppShortcutProviding', 'AppShortcutsProvider',
   'AnyResolverProviding', 'AppIntentsPackage', 'DynamicOptionsProvider', 'OpenIntent', 'EntityStringQuery'];
@@ -202,15 +201,22 @@ export const constValueArgs = (values, dir) => {
   return ['-emit-const-values-path', values, '-Xfrontend', '-const-gather-protocols-file', '-Xfrontend', resolve(dir, 'protocols.json')];
 };
 
+const xcrunFind = tool => spawnSync('xcrun', ['--find', tool], { encoding: 'utf8' });
+
 /** Xcode's App Intents metadata pass over a compiled module: writes `dir/Metadata.appintents`, which the bundle
- * that holds the binary carries in its resources, or throws. */
-export function intentsMetadata({ moduleName, dir, sdk, triple, platform, deployment, binary, sources, values, runApple }) {
+ * that holds the binary carries in its resources, or throws. The processor is the one of the Xcode that compiled
+ * the module, found as `swiftc` is (`xcrun` honours `DEVELOPER_DIR` and `xcode-select`); its toolchain is the
+ * directory that holds its `usr/bin`. */
+export function intentsMetadata({ moduleName, dir, sdk, triple, platform, deployment, binary, sources, values, runApple, find = xcrunFind }) {
+  const found = find('appintentsmetadataprocessor'), processor = found.status === 0 ? found.stdout.trim() : '';
+  if (!processor) throw new Error(`host/apple: intents: xcrun finds no appintentsmetadataprocessor: ${(found.stderr ?? found.error?.message ?? '').trim()}`);
+  const toolchain = resolve(processor, '../../..');
   const metadata = resolve(dir, 'Metadata.appintents');
   writeFileSync(resolve(dir, 'sources.txt'), sources.join('\n') + '\n');
   writeFileSync(resolve(dir, 'values.txt'), values + '\n');
   writeFileSync(resolve(dir, 'none.txt'), '');
   const xcode = /Build version (\S+)/.exec(spawnSync('xcodebuild', ['-version'], { encoding: 'utf8' }).stdout ?? '')?.[1] ?? '';
-  runApple(resolve(toolchain, 'usr/bin/appintentsmetadataprocessor'), ['--toolchain-dir', toolchain, '--module-name', moduleName, '--sdk-root', sdk,
+  runApple(processor, ['--toolchain-dir', toolchain, '--module-name', moduleName, '--sdk-root', sdk,
     '--xcode-version', xcode, '--platform-family', platform === 'macos' ? 'macOS' : platform === 'watchos' ? 'watchOS' : 'iOS', '--deployment-target', deployment, '--target-triple', triple,
     '--output', dir, '--binary-file', binary, '--source-file-list', resolve(dir, 'sources.txt'), '--swift-const-vals-list', resolve(dir, 'values.txt'),
     '--metadata-file-list', resolve(dir, 'none.txt'), '--static-metadata-file-list', resolve(dir, 'none.txt'),

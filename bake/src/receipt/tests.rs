@@ -547,8 +547,9 @@ fn rust_fixture(plan: &[u8]) -> (PathBuf, Value, Value) {
     // its directory exclusively, including cleanup after staging.
     std::fs::create_dir(&root).unwrap();
     std::fs::create_dir(root.join("input")).unwrap();
-    let inputs =
-        json!({"app":"com.exact.caltrain","grantCeiling":"","rustGrants":"","rustMode":"wasm"});
+    // The inputs a Rust cohort's compatibility gives (`compat.rs`).
+    let inputs = json!({"app":"com.exact.caltrain","grantCeiling":"","rustGrants":"",
+        "rustMode":"wasm","rustAbi":crate::compat::RUST_ABI});
     let module = b"\0asm\x01\0\0\0";
     let receipt = json!({"version":1,"kind":"rust","abi":crate::compat::RUST_ABI,"appId":inputs["app"],"grants":"",
             "target":"wasm32-unknown-unknown","executor":"wasm",
@@ -583,7 +584,7 @@ fn supplemental_rust_is_real_paired_bytes_with_executor_requirements() {
     }
     let graph = artifact_graph(&plan, &inputs, &cards, false, "aarch64-apple-ios").unwrap();
     for row in graph["artifacts"].as_array().unwrap() {
-        assert_eq!(row["requires"]["rustAbi"], 8);
+        assert_eq!(row["requires"]["rustAbi"], inputs["rustAbi"]);
         assert_eq!(row["requires"]["rustMode"], "wasm");
         assert_eq!(row["requires"]["rustTarget"], "wasm32-unknown-unknown");
     }

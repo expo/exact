@@ -246,13 +246,18 @@ impl Bar {
     }
 }
 
-/// Whether any node under `node` is a heading, a `popover` or `dialog`
-/// written there left out as `walk` leaves it: its heading is the top
-/// layer's, so a button wrapping one is an item, not the title's tap.
+/// What the walk leaves out with all it holds: a `popover` or `dialog`
+/// written in the header, whose content is the top layer's, and a node
+/// that is `display: none`, which the web does not show.
+const UNSHOWN: u32 = fact::LAYER | fact::HIDDEN;
+
+/// Whether any node under `node` is a heading, leaving out what `walk`
+/// leaves out: a button wrapping a popover's heading is an item, not the
+/// title's tap.
 fn holds_heading<T: Tree>(tree: &T, node: T::Node) -> bool {
     tree.children(node).into_iter().any(|child| {
         let facts = tree.facts(child);
-        facts & fact::LAYER == 0 && (facts & fact::HEADING != 0 || holds_heading(tree, child))
+        facts & UNSHOWN == 0 && (facts & fact::HEADING != 0 || holds_heading(tree, child))
     })
 }
 
@@ -278,7 +283,7 @@ impl<N: Copy + PartialEq> Walk<N> {
     fn walk<T: Tree<Node = N>>(&mut self, tree: &T, node: N, back_is_platforms: bool) {
         for child in tree.children(node) {
             let facts = tree.facts(child);
-            if facts & fact::LAYER != 0 {
+            if facts & UNSHOWN != 0 {
                 continue;
             }
             if facts & fact::HEADING != 0 {
@@ -508,6 +513,18 @@ pub struct RootTabs {
     pub tabs: Vec<ViewId>,
     /// The panel each names: one tab's stack.
     pub panels: Vec<ViewId>,
+    /// The app's search tab, as an index into `tabs` (LLP 1141.002 D1): the
+    /// first whose `rel` holds the token `search`, as SwiftUI takes the first
+    /// tab with the search role. Known from the first frame, before the tab's
+    /// panel is built.
+    pub search: Option<usize>,
+}
+
+/// Whether a `rel` value holds `token`: HTML's set of space-separated
+/// tokens, compared ASCII case-insensitively.
+pub fn rel_has(rel: &str, token: &str) -> bool {
+    rel.split(|c: char| c.is_ascii_whitespace())
+        .any(|t| t.eq_ignore_ascii_case(token))
 }
 
 impl Kernel {
@@ -578,10 +595,16 @@ impl Kernel {
                     Some((tab, panel))
                 })
                 .unzip();
+            let search = tabs.iter().position(|tab| {
+                self.node(*tab)
+                    .and_then(|n| n.props.str(PropId::Rel).map(|rel| rel_has(rel, "search")))
+                    .unwrap_or(false)
+            });
             (!named.is_empty()).then_some(RootTabs {
                 tablist,
                 tabs,
                 panels: named,
+                search,
             })
         })
     }

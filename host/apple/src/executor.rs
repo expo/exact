@@ -5,6 +5,10 @@ use exact_runner::{CompletionTiming, Outcome, RequestOut, Work};
 use std::ffi::c_void;
 #[path = "executor_core.rs"]
 mod core;
+pub use core::preload::{
+    Control as PreloadControl, Definition as Preload, Event as PreloadEvent, Fact as PreloadFact,
+    Observation as PreloadObservation, Observer as PreloadObserver, Preloads,
+};
 #[path = "executor_pump.rs"]
 pub mod pump;
 /// Independent tests have separate worker budgets; production shares one process bound.
@@ -73,6 +77,17 @@ impl Executor {
             core::Core::start_on(bindings, grants, wake, std::sync::Arc::new(host))
         })
     }
+    #[cfg(test)]
+    pub(crate) fn test_start(
+        asynchronous: bool,
+        bindings: Option<ibex2::host::Bindings>,
+        grants: &str,
+        wake: Option<(WakeFn, *mut c_void)>,
+    ) -> Self {
+        Self::start_with(wake, Launch::here(), |wake| {
+            core::Core::test_start(asynchronous, bindings, grants, wake)
+        })
+    }
     fn start_with(
         wake: Option<(WakeFn, *mut c_void)>,
         launch: Launch,
@@ -98,6 +113,22 @@ impl Executor {
             });
         }
         Self { core }
+    }
+    /// Adopt launch work before dispatching any request (LLP 1162.000 D4).
+    pub fn adopt_preloads(&self, preloads: Preloads) -> Result<(), Preloads> {
+        self.core.adopt_preloads(preloads)
+    }
+    /// Cancel and discard preloads that used a changed secret before returning.
+    pub fn drop_preload_secret(&self, name: &str) {
+        self.core.drop_preload_secret(name);
+    }
+    /// Facts are returned to the host for its journal (LLP 1162.000 D3).
+    pub fn take_preload_journal(&self) -> Vec<PreloadFact> {
+        self.core.take_preload_journal()
+    }
+    /// Take an already complete reply before the boot's first commit, without waiting.
+    pub fn settle_preload(&self, request: &RequestOut) -> Option<(Outcome, CompletionTiming)> {
+        self.core.settle_preload(request)
     }
     /// Where the app's files are, for a request whose body is one of them
     /// (LLP 1108 D6 R2): set before the first request.
@@ -184,6 +215,10 @@ impl Executor {
 /// own methods, behind a trait so that an archive that links no I/O names
 /// none of them, nor the transports and stores they reach.
 pub trait Io {
+    /// Adopt launch requests before dispatch.
+    fn adopt_preloads(&self, preloads: Preloads) -> Result<(), Preloads> {
+        Err(preloads)
+    }
     /// [`Executor::set_app_roots`].
     fn set_app_roots(&self, roots: [std::path::PathBuf; 3]);
     /// [`Executor::ordered_idle`].
@@ -223,6 +258,9 @@ pub trait Io {
 }
 
 impl Io for Executor {
+    fn adopt_preloads(&self, preloads: Preloads) -> Result<(), Preloads> {
+        Executor::adopt_preloads(self, preloads)
+    }
     fn set_app_roots(&self, roots: [std::path::PathBuf; 3]) {
         Executor::set_app_roots(self, roots)
     }

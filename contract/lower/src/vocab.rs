@@ -242,8 +242,13 @@ pub fn tag_note(name: &str) -> Option<&'static str> {
         .map(|(_, note)| *note)
 }
 
-/// The open set of tags: a hyphenated name is a native module.
-pub const MODULE_NOTE: &str = "a hyphenated tag (`map-view`) is a native module, admitted when app.json's `modules` declares it; its other attributes are the module's props";
+/// The open set of tags: app modules and declared package views.
+pub const MODULE_NOTE: &str = concat!(
+    "a hyphenated tag (`map-view`) is a native module, admitted by app.json's `modules` ",
+    "or a direct dependency's exact.json `views`; an app module's other attributes are its props; ",
+    "a package view accepts only its declared props and events besides standard box attributes ",
+    "and the nine common events press, change, hover, focus, blur, key, submit, load and message",
+);
 
 /// The open set of attributes: `data-*`.
 pub const DATA_NOTE: &str = "`data-<word>` is the app's own word on any element, admitted when app.json's `data` declares the word";
@@ -301,6 +306,17 @@ pub fn html_tags() -> Vec<(&'static str, &'static str)> {
 /// `text-decoration`) sets, in the order it lowers them.
 pub fn shorthand_rows(name: &str) -> &'static [StyleId] {
     crate::shorthands::rows(name)
+}
+
+/// An enum row's keywords an author may write: the schema's, less its
+/// `refused` (LLP 1043.000 §3 D1).
+pub fn authored_names(row: StyleId) -> Vec<&'static str> {
+    let refused = row.refused_enum_names();
+    row.enum_names()
+        .iter()
+        .copied()
+        .filter(|n| !refused.contains(n))
+        .collect()
 }
 
 /// A style row's wire codec, by the schema's spelling (`dimension`,
