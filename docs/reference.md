@@ -2765,6 +2765,61 @@ was asked. The iOS simulator's ImageIO writes no gain map, so there an HDR
 photo is saved as SDR and says `hdr: false`. Linux, Windows and Android answer
 `unsupported`.
 
+### Read text in a still image (`@exact/text-detection`)
+
+`textDetectorAvailability(languages=)` answers `availability`, optional `reason`,
+and the matched `languages`. `detectText(image=, languages=)` reads a file admitted
+by `fs.read` and answers `texts`, `width` and `height`. Each text is one line:
+`rawValue`, `boundingBox` (`x`, `y`, `width`, `height`) and `cornerPoints`, clockwise
+from the top left. EXIF orientation is applied first; coordinates and dimensions
+are pixels of the upright image. Lines keep the recognizer's reading order.
+
+| Host | Answer |
+| --- | --- |
+| iOS, iPadOS, macOS, tvOS | Vision; omitted languages use the request's defaults. Named languages match Vision's supported languages. `apple.confidence` is the top candidate's confidence. |
+| Android | Bundled ML Kit Latin recognizer (`text-recognition:16.0.1`); available without a download. Omitted languages return the Latin list; named languages return the matched, deduplicated tags. Other languages or an explicit non-Latin script answer `unavailable`, `unsupported-options`, and `languages: []`; detection fails `NotSupportedError`. `android.script` is `Latn`; each line's `android.recognizedLanguage` is ML Kit's BCP 47 tag, or `und`. Built and JVM-tested; recognition on a device is not yet verified. |
+| Web, Windows, Linux, terminal, and targets without an implementation | Declared default: `unavailable`, `reason: "not-supported"`, `languages: []`; `detectText` fails `NotSupportedError`. |
+
+Availability is fixed for an Apple or Android build; neither uses `downloadable`
+or `downloading`. Unsupported languages fail before the image is read. A missing
+file fails `NotFoundError`; an undecodable file fails `InvalidStateError` with
+message `decode`; a recognizer failure is `OperationError` with its message. No
+text found is a successful empty list. Text on camera frames and non-Latin Android
+recognizers are not implemented (LLP 1133.027). Vision and ML Kit may divide and
+read text differently, particularly handwriting.
+
+ML Kit's [language table](https://developers.google.com/ml-kit/vision/text-recognition/v2/languages)
+distinguishes supported, experimental and mapped languages; all its Latin entries
+are admitted. Its [line result](https://developers.google.com/android/reference/com/google/mlkit/vision/text/Text.Line)
+defines the corner order and the unknown-language tag.
+
+### Read barcodes (`@exact/barcode-detection`)
+
+`getSupportedFormats()` answers `formats` and `tracks` (whether live scanning is
+implemented). `detectBarcodes(image=, formats=)` answers `barcodes`, `width` and
+`height` for an upright still. Each barcode has `rawValue`, `format`, `boundingBox`
+and `cornerPoints` in the same pixel coordinates as text detection. Omitted
+formats use the platform's defaults; an empty list or an unknown requested format
+fails `TypeError`. A valid format unsupported by the host fails `NotSupportedError`.
+
+| Host | Answer |
+| --- | --- |
+| iOS, iPadOS, macOS | Vision, stills and live scanning. |
+| tvOS | Vision on stills; `tracks: false`. |
+| Web | The browser's `BarcodeDetector`, where present; otherwise empty `formats`, `tracks: false`, and detection fails `NotSupportedError`. |
+| Android, Windows, Linux, terminal, and targets without an implementation | Declared default: `formats: []`, `tracks: false`; `detectBarcodes` and `detectedBarcodes` fail `NotSupportedError`. |
+
+`detectedBarcodes(track=, formats=, interval=)` analyses a camera track already
+shown by a viewfinder; it never starts or keeps a camera open. Its answer includes
+the latest `barcodes` and up to 32 distinct codes in `seen`, with first/last seen
+times and frame counts. Hiding the viewfinder idles scanning; stopping the track
+ends it. The default interval is 100 ms, with a minimum of 50 ms.
+
+UPC-A is returned as 12 digits when `upc_a` is requested or formats are omitted;
+when only `ean_13` is requested, it is 13 digits with a leading zero. An image
+with no codes succeeds with an empty list. Missing files, decode failures and
+platform errors use the same error names as text detection (LLP 1133.027).
+
 ### Documents the person chose (`doc:`)
 
 A file or folder the person picks (`showOpenFilePicker`, `showDirectoryPicker`,
