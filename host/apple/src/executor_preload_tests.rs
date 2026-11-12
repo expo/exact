@@ -278,15 +278,23 @@ fn a_network_failure_or_a_held_clock_deadline_sends_the_waiting_read() {
 #[test]
 fn sends_forced_asks_streams_and_independent_requests_do_not_take_a_preload() {
     for asynchronous in [false, true] {
-        let server = Server::new();
-        server.plan("/held", Plan::new(200, &[], b"held"));
-        let set = launch(&server, vec![definition(&server, "/held")]);
-        let (core, woke) = server.core(asynchronous, true);
-        adopt(&core, set);
-        ready(&core, 1);
-        for kind in 0..5 {
+        // Each kind meets its own complete reply: a forced ask drops the one it equals.
+        for kind in 0..6 {
+            let server = Server::new();
+            server.plan("/held", Plan::new(200, &[], b"held"));
+            let mut def = definition(&server, "/held");
+            let mut request = server.request("/held");
+            if kind == 5 {
+                // A file-bodied request is no GET; its preload is the equal POST.
+                def.request.method = "POST".into();
+                request.method = "POST".into();
+            }
+            let set = launch(&server, vec![def]);
+            let (core, woke) = server.core(asynchronous, true);
+            adopt(&core, set);
+            ready(&core, 1);
             server.plan("/held", Plan::new(200, &[], b"sent"));
-            let mut r = job(1, server.request("/held"));
+            let mut r = job(1, request);
             match kind {
                 0 => r.class = RequestClass::Ordered,
                 1 => r.class = RequestClass::Parallel(1),
@@ -296,18 +304,27 @@ fn sends_forced_asks_streams_and_independent_requests_do_not_take_a_preload() {
                         max_response_bytes: 1024,
                     }
                 }
-                _ => {
+                4 => {
                     r.request.stream = true;
                     r.request.http = HttpScheduling::Independent {
                         max_response_bytes: 1024,
                     };
                 }
+                // Its file is missing, so it ends before contact: still not the held reply.
+                _ => r.request = r.request.body_from("app:/data/missing"),
             }
-            core.run(r, None).unwrap();
-            let (_, _, timing) = collect(&core, &woke);
-            assert!(!timing.cached);
+            if core.run(r, None).is_ok() {
+                let (_, outcome, timing) = collect(&core, &woke);
+                assert!(!timing.cached, "kind {kind}");
+                assert!(
+                    !matches!(&outcome, Outcome::Response(r) if r.body == b"held"),
+                    "kind {kind}"
+                );
+            } else {
+                assert_eq!(kind, 5);
+            }
+            assert_eq!(server.count(), if kind == 5 { 1 } else { 2 }, "kind {kind}");
         }
-        assert_eq!(server.count(), 6);
     }
 }
 
