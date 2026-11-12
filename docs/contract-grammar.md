@@ -729,10 +729,11 @@ step          = "tap" STRING [ "hover" | "dblclick" | "contextmenu"
               | "clock" "until" "state" IDENT { "." ( IDENT | NUMBER ) } "==" scalar "within" NUMBER NL
                                                      (* real time, the clock frozen, until it holds *)
               | "resize" NUMBER "x" NUMBER NL        (* the window, mid-test: 800x600 *)
-              | "prefer" IDENT ( IDENT | STRING ) NL (* change a media preference or root-font-size now *)
+              | "prefer" IDENT IDENT NL              (* change a media preference now *)
               | "reload" NL
               | "fail" "fetch" STRING [ "times" NUMBER ] NL (* later fetches whose URL starts with it fail *)
               | "pass" "fetch" STRING NL             (* it stops failing *)
+              | "prefer" IDENT STRING NL             (* quoted media preference or root-font-size *)
               | "request" METHOD STRING [ json ] [ "as" ( IDENT | STRING ) ] [ "expect" NUMBER ] NL
                                                      (* the driver writes through the app's server *)
               | "close" NL                           (* the window's close button *)
