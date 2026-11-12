@@ -415,9 +415,7 @@ impl Control {
     pub fn settle(&self, request: &RequestOut) -> Option<(Outcome, CompletionTiming)> {
         let mut destination = self.destination.state.lock().unwrap();
         match &mut *destination {
-            Destination::Staging(cache) => {
-                settle(cache, request, || reach::admit_cached(&request.request))
-            }
+            Destination::Staging(cache) => settle(cache, request),
             _ => None,
         }
     }
@@ -514,34 +512,15 @@ impl Core {
         &self,
         r: &RequestOut,
     ) -> Option<(Outcome, CompletionTiming)> {
-        if !eligible(&r.request, r.class, r.forced, false) || r.request.timeout_refusal().is_some()
-        {
-            return None;
-        }
-        {
-            let state = self.shared.state.lock().unwrap();
-            let cache = state.cache.as_ref()?;
-            let i = find(cache, &r.request)?;
-            if !matches!(cache.preloads[i].reply, ReplyState::Ready(_))
-                || !can_take(cache, &r.request, i)
-            {
-                return None;
-            }
-        }
-        let checked = reach::admit_cached(&r.request);
         let mut state = self.shared.state.lock().unwrap();
         if state.retired || state.dispatched || state.counts != [0, 0] || state.ordered_barrier {
             return None;
         }
-        settle(state.cache.as_mut()?, r, || checked)
+        settle(state.cache.as_mut()?, r)
     }
 }
 
-fn settle(
-    cache: &mut cache::Cache,
-    r: &RequestOut,
-    checked: impl FnOnce() -> Result<(), HostError>,
-) -> Option<(Outcome, CompletionTiming)> {
+fn settle(cache: &mut cache::Cache, r: &RequestOut) -> Option<(Outcome, CompletionTiming)> {
     if !eligible(&r.request, r.class, r.forced, false) || r.request.timeout_refusal().is_some() {
         return None;
     }
@@ -554,22 +533,19 @@ fn settle(
         return None;
     }
     let (_, _, limit) = reads::reservation(&r.request, true).ok()?;
-    let outcome = match checked() {
-        Err(e) => fetch_failure(e, &AbortController::new()),
-        Ok(()) => match cache::granted(&cache.grants, &r.request) {
-            Err(outcome) => outcome,
-            Ok(()) => {
-                let ReplyState::Ready(ready) = &cache.preloads[i].reply else {
-                    unreachable!()
-                };
-                if response_bytes(&ready.response) + std::mem::size_of::<Completed>() > limit {
-                    return None;
-                }
-                let response = ready.response.clone();
-                taken(cache, i, r.ticket);
-                Outcome::Response(response)
+    let outcome = match cache::granted(&cache.grants, &r.request) {
+        Err(outcome) => outcome,
+        Ok(()) => {
+            let ReplyState::Ready(ready) = &cache.preloads[i].reply else {
+                unreachable!()
+            };
+            if response_bytes(&ready.response) + std::mem::size_of::<Completed>() > limit {
+                return None;
             }
-        },
+            let response = ready.response.clone();
+            taken(cache, i, r.ticket);
+            Outcome::Response(response)
+        }
     };
     let cached = matches!(outcome, Outcome::Response(_));
     Some((
@@ -584,6 +560,7 @@ fn settle(
 
 fn eligible(request: &Request, class: RequestClass, forced: bool, work: bool) -> bool {
     class == RequestClass::Read
+        && request.reach.origin == exact_runner::CallOrigin::App
         && request.is_plain_http()
         && !forced
         && !work
@@ -617,26 +594,15 @@ fn matching(cache: &cache::Cache, request: &Request, equal_body: bool) -> Option
             }
     })
 }
-// Only the app's reach is admitted at every redirect without a gate call
-// under the executor's lock (LLP 1162.000 D1).
 fn can_take(cache: &cache::Cache, request: &Request, i: usize) -> bool {
     match &cache.preloads[i].reply {
-        ReplyState::Ready(ready) => {
-            (ready.visited.len() <= 1 || request.reach.origin == exact_runner::CallOrigin::App)
-                && ready
-                    .visited
-                    .iter()
-                    .all(|url| cache::granted_url(&cache.grants, request, url).is_ok())
-        }
+        ReplyState::Ready(ready) => ready
+            .visited
+            .iter()
+            .all(|url| cache::granted_url(&cache.grants, request, url).is_ok()),
         ReplyState::Pending { .. } => true,
         ReplyState::Gone => false,
     }
-}
-pub(super) fn matches(cache: Option<&cache::Cache>, r: &RequestOut, work: bool) -> bool {
-    eligible(&r.request, r.class, r.forced, work)
-        && cache.is_some_and(|c| {
-            c.preload_starting || find(c, &r.request).is_some_and(|i| can_take(c, &r.request, i))
-        })
 }
 pub(super) fn waiting(state: &State, job: &Job) -> bool {
     eligible(&job.request, job.class, job.forced, job.work.is_some())

@@ -367,7 +367,8 @@ timeoutMs?: integer, when?: "start" | "foreground" }` (LLP 1162.000 D2).
 reference a kept secret as `{secret:NAME}`, except in a URL’s scheme or authority;
 write `{{` for a literal brace.
 The bake checks at most eight entries against fetch and `secret.keep` grants.
-Hosts that support preloads send them at process start.
+Hosts that support preloads send them at process start; the app's own reads take
+a preload's reply, and a read made for a tool is sent.
 
 A one-window Mac app ends when its window closes. An app with work the person
 expects to go on without the window (a server, a sync), as Mail and Messages
