@@ -287,8 +287,9 @@ final class NativeListNavigationIOSTests: XCTestCase {
         route.view.addSubview(firstNative); route.view.addSubview(secondNative)
         defer { firstNative.removeFromSuperview(); secondNative.removeFromSuperview() }
 
-        // UIKit takes no selection for a side edge, and neither does the route
+        // A side edge's selection and nil leave the top and bottom edges as they were: UIKit takes no side selection
         route.setContentScrollView(firstNative, for: .leading)
+        XCTAssertEqual(route.nativeContentScrollEdges, [], "the route records no side edge")
         route.setContentScrollView(nil, for: .leading)
         XCTAssertTrue(route.contentScrollView(for: .top) === automatic)
         XCTAssertTrue(route.contentScrollView(for: .bottom) === automaticBottom)

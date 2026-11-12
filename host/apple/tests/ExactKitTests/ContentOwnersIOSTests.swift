@@ -368,12 +368,13 @@ final class ContentOwnersIOSTests: XCTestCase {
         XCTAssertTrue(route.contentScrollView(for: .top) === secondary, "nil gives the edge back at once")
         pass()
         panesUnderTheBar()
-        XCTAssertTrue(route.contentScrollView(for: .top) === secondary, "and the pass keeps it")
+        XCTAssertTrue(route.contentScrollView(for: .top) === secondary, "the pass keeps the top edge on the pane `navigationScroll` names")
         XCTAssertTrue(route.contentScrollView(for: .bottom) === primary)
         XCTAssertTrue(p.navigation.contentScrollView(of: route) === secondary)
         XCTAssertTrue(p.scrollsToTopTarget() === secondary, "nil gives scroll-to-top back to the authored scroller")
         XCTAssertTrue([primary, secondary].allSatisfy { $0.contentInsetAdjustmentBehavior == .automatic })
-        // `.all` selects the top and bottom edges together, and nil gives both back
+        // `.all` with the pane that holds the bottom edge selects the top edge too, and nil gives both back
+        // (`NativeListNavigationIOSTests` checks that `.all` holds the bottom edge)
         route.setContentScrollView(primary, for: .all)
         XCTAssertTrue(primary.scrollsToTop)
         XCTAssertFalse(secondary.scrollsToTop)

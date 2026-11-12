@@ -2777,13 +2777,15 @@ Set only the native properties the app needs to change. For a fixed header, set
 `route.controller.setContentScrollView(_:for:)`. An explicit native selection
 survives authored layout updates. Passing `nil` makes the edge automatic again, as
 in UIKit, and Exact selects as on a route the app never touched: for the top edge
-the scroller `navigationScroll` names, else the first visible vertical one, when it
-sits under the bar (none when content other than control bars sits above it), and
-for the bottom edge the scroller at the route's bottom.
+the scroller `navigationScroll` names (none when it names no scroller), else the
+first visible vertical one, when it sits under the bar (none when content other than
+control bars sits above it), and for the bottom edge the scroller at the route's
+bottom.
 `contentScrollView(for:)` reports Exact's selections too, so it does not tell an
 automatic edge from a selected one. UIKit takes a selection for the top and bottom
-edges only: it ignores one for a side edge, and `contentScrollView(for:)` raises an
-exception when asked for one. The two edges are independent, and `.all` selects both.
+edges only: it ignores a selection for a side edge, and `contentScrollView(for:)`
+raises an exception when asked for a side edge. The two edges are independent, and
+`.all` selects both.
 For example, a menu action can select the secondary pane after the arrangement
 has mounted:
 
@@ -2797,8 +2799,17 @@ A pane's view controller reports its scroll view only while UIKit insets the pan
 reports none for a pane UIKit hides. A pane `scroll` with an element hatch always has its
 scroller in the hatch's `element.scrollView`.
 
-The route hatch's `contentScrollView` is the actual selected view, including a
-native collection view or an app-owned `UIScrollView`.
+The route hatch's `contentScrollView` is the route's content scroll view when the
+hatch was last called: an app's top-edge selection, an app-owned `UIScrollView`
+included; else, where the route has a `navigationScroll`, the scroll view of the
+element it names, or nil when no element carries the name or it does not scroll;
+else the scroll view of the route's first vertical scroller; else the route's own
+viewport, which only an unpresented route under `interactive-widget="resizes-visual"`
+has; else nil. A native list's scroll view is its collection view. UIKit's
+`contentScrollView(for: .top)` reports Exact's scroller only while it sits under the
+bar. A top-edge selection or nil reaches the hatch when Exact next prepares the
+route, at the next authored update (after a nil, possibly within the call), and the
+hatch is called again then.
 
 The containing navigation controller still owns one shared navigation bar. UIKit
 decides where its large title and each pane's edge effect appear; the panes keep
