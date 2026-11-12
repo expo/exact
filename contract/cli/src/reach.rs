@@ -161,6 +161,19 @@ fn faces(intents: &Value, plan: &mut Plan) -> Result<(), (&'static str, String)>
         if let Some(door) = doors.iter().find(|d| destroys && *d != "apple") {
             return Err(("intents-destroys-door", format!("tool `{name}` destroys, and the {door} door has no confirmation the person answers, so its face may not name it (LLP 1133.023 D10)")));
         }
+        // WebMCP's limits (https://webmachinelearning.github.io/webmcp/);
+        // App Intents takes an empty `IntentDescription` and any name. A
+        // `tool` line's name is already within WebMCP's characters.
+        if doors.iter().any(|d| d == "web") {
+            let description = signature["description"].as_str().unwrap_or_default();
+            if description.trim().is_empty() {
+                return Err(("intents-web-description", format!("tool `{name}`'s face reaches the web door, and its description is blank: write what the tool does between its `tool` line's quotes, which an agent reads to choose it (WebMCP §4.2 requires a description), or leave web out of the face's `doors`")));
+            }
+            let length = name.chars().count();
+            if length > 128 {
+                return Err(("intents-web-name", format!("tool `{name}`'s face reaches the web door, and its name is {length} characters: a WebMCP tool name is at most 128 (WebMCP §3, tool definition), so shorten the `tool` line's name, or leave web out of the face's `doors`")));
+            }
+        }
         let declared = face.get("parameters").and_then(Value::as_object);
         let params = signature["parameters"]
             .as_array()

@@ -30,6 +30,7 @@ build with a `lower-symbol-alias` warning naming the role.
 - A role draws everywhere; `sf/<name>` on Apple only. Else add an icon token to
   `app.tamber`'s `icons`, `icon.rain = icon(sf "cloud.rain", svg "icons/rain.svg")` (a
   one-colour SVG), and write `symbol:icon.rain`.
+  Alias matching sources (`icon.shower = icon.rain`); duplicate declarations fail the build.
 - A symbol-only button needs an `aria-label`. A tab is a symbol over its text. A symbol beside
   text that says the same is decoration: `aria-hidden=true`, so VoiceOver reads it once.
 - `activity` is an ECG trace (heart, workouts). Done or not done is `DoneMark` (`exact:content`).

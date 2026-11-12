@@ -295,7 +295,7 @@ compile complete examples, parse authored tests, and check local links.
 | `resource name = source(args) as shape T` | Root component | Reactive data request |
 | `mutation name as shape T [queue \| parallel]` | Root component | Optional reply slot for explicit sends |
 | `action name(args)` | Component | Event transaction; effects inferred |
-| `task name mount` / `task name when cond [key=expr]` | Root component | One timer/frame schedule, always or while `cond` holds |
+| `task name mount` / `task name when cond [key=expr]` | Root component | One timer/frame schedule or keyed change action, always or while `cond` holds |
 | `view` | Component | UI tree |
 
 Top-level declarations begin in column 1. Indent with spaces. Comments use `//`.
@@ -920,7 +920,7 @@ Choose the mechanism from its lifetime:
 | Writes a person may repeat before the first answers: a rename, a save | `mutation … parallel`: every send asked at once, each reply lands |
 | Run once after a delay, while a condition holds (a toast, a debounce) | `task … when cond` with `after(ms, action)` |
 | Repeat while a condition holds (a game tick, a pulse) | `task … when cond` with `every(ms, action)` |
-| Act when a sheet or route opens (scroll the chosen item into view, load its draft) | In the root, even when the sheet is a child component's view: `task reveal when top(nav).name == "icons" key=top(nav).id` with `after(1, reveal)` |
+| Act when a sheet or route opens (scroll the chosen item into view, load its draft) | In the root, even when the sheet is a child component's view: `task reveal when top(nav).name == "icons" key=top(nav).id` with `change(reveal)` |
 | Pending indicator | `pending(resourceOrMutationName)` |
 | "Loading" for a new question, not for a refresh | `not current(resourceName)`: false while it shows its placeholder, an answer to other call arguments, or a value kept across `when`'s idleness; a refresh of the same arguments leaves it true |
 | Resource request failed without an answer | `failed(resourceOrMutationName)` |
@@ -1509,10 +1509,14 @@ remain unimplemented. The existing native capabilities still advertise
 Google active requests and the Apple/passkey combination. A combined `publicKey` and passive `identity` call still belongs to
 passkeys; this Apple-only path does not implement it (LLP 1133.014 D10).
 
-### Convex live queries (`@exact/convex`)
+### Convex live queries
 
-The `convex` recipe is the code; this is what it leaves out (LLP 1157).
+The `convex` recipe is the code for `@exact/convex`; this is what it leaves
+out (LLP 1157).
 
+- **The deployment's address.** `convex(address, …)` takes its `CONVEX_URL`
+  (`https:`) or the same origin as a socket's (`wss:`), so one build-time
+  setting can name both it and the `net.websocket` grant.
 - **`live.status`.** `connecting`, `open`, `ready` (results have arrived),
   `closed` (the socket ended or never opened: refresh `live`, as the recipe's
   `retry` does) or `failed` (Convex said something this client cannot follow;
@@ -1537,7 +1541,16 @@ The `convex` recipe is the code; this is what it leaves out (LLP 1157).
   refuses it (`message` is Convex's, `data` a `ConvexError`'s payload), when
   the socket is not open (nothing was sent), and when the socket closes before
   the answer. That last one may have run, and nothing is sent again on the
-  next connection: a write that must not repeat carries its own key.
+  next connection: a write that must not repeat carries its own key. When
+  Convex refuses a token it closes the socket. A request sent behind the
+  refused `setAuth` rejects with Convex's words, as `live.authError` has them:
+  it did not run. When a token expires, Convex refuses it at whichever request
+  meets it first, and one sent earlier (an action still running) may have run,
+  so each rejects with "Convex refused the token before it answered (…); the
+  mutation may have run".
+- **An action's reply** arrives as soon as Convex has it, and the queries may
+  show what it wrote a moment later: a mutation's reply waits for them, an
+  action's does not. A view that reads both can show them out of step.
 - **A person's token.** `cx.setAuth(jwt)` in a mutation's source, with a JWT
   the deployment accepts (its `auth.config.ts`); `cx.setAuth(undefined)` signs
   out. In an `async` source it may follow an `await`; in a plain `.then`
@@ -1545,13 +1558,35 @@ The `convex` recipe is the code; this is what it leaves out (LLP 1157).
   source: `async (_a, store) => { const r = await provider.signIn(store);
   cx.setAuth(provider.idToken(store) ?? undefined); return r; }`. When
   `live.authError` says the token expired, a source that awaits
-  `provider.refresh(store)` and calls `setAuth` the same way renews it. The token stays in data code. No answer computed for the person before is given again, but the screen
+  `provider.refresh(store)` and calls `setAuth` the same way renews it. The token stays in data code.
+- **One mutation, one socket send, no `fetch` in the same turn.** `setAuth`
+  sends on the socket, and the runner refuses a mutation that both sends and
+  fetches (`a mutation cannot both send on a socket and fetch`): nothing is
+  sent and its `then` does not run. Fetch first in an `async` source, await
+  it, then call `setAuth`: `async () => { await fetch(signOutUrl, …);
+  cx.setAuth(undefined); return … }`. If a call's frame never left anyway,
+  the module still gives no answer for the wrong person and sends each
+  mutation behind the token again, so Convex runs none as the person before;
+  calling `setAuth` again sends it again.
+- **After a token change** no answer computed for another token is given,
+  across a reconnect too, until Convex delivers it for the new one. The screen
   keeps what it showed until the new answers land: gate a signed-in screen on
   your own session, as with any backend. A refused token is `live.authError`;
   Convex closes the socket, and the next connection is signed out.
+- **Renew a token before it expires.** Convex refuses an expired token only
+  when a request or a query's rerun meets it, not on a quiet socket. Renew it
+  from a Contract task (every 10 minutes for a token that lives an hour) with
+  the same `refresh`-then-`setAuth` source.
 - **Tests** run with no Convex. `server.ts` beside `app.ts` gives
   `@exact/convex/test/server.ts` the app's functions as plain JavaScript over
-  memory, and `test` and `verify` start it (`apps/mosaic/server.ts`). Keep the
+  memory, and `test` and `verify` start it (`apps/mosaic/server.ts`); its
+  `app.json` needs `"server": { "database": false }`, since the stand-in keeps
+  no database. A function's second argument is who asks, `{ identity }`: the
+  `sub` of the JWT the client sent, unchecked, or `null` signed out. Convex's
+  HTTP API answers too (`POST /api/mutation`, `/api/query`, `/api/action`,
+  `Authorization: Bearer <jwt>`), so a test's `request` can write as another
+  client; `http: (request) => Response | undefined` answers the app's other
+  routes (an auth endpoint), with CORS headers added. Keep the
   rules both run in a file with no Convex import (`convex/tiles.ts`). One
   server serves a whole run: a test that counts clears first.
 - **Driving a native host against a real deployment.** The driver seeds a
@@ -1593,7 +1628,10 @@ input with `id="attach"`; `change` receives `Picked[]` with copies under
 `app:/tmp/picked/<id>.<ext>`, `<id>` from the launch and a counter, and `name` is the
 original name. Read the bytes at `path` (grant `fs.read app:/tmp/picked`), and show or
 upload them under `name`. A specific `accept` list remains bounded to image/video
-types and the app's `file_handlers`. On Linux the agent can answer a held
+types and the app's `file_handlers`. For audio, declare `audio/mpeg`, `audio/wav`,
+`audio/mp4` or `audio/ogg` in `file_handlers` and name those exact types in `accept`;
+`audio/*` remains outside the admitted wildcard types. XHTML uses
+`application/xhtml+xml` in the same way. On Linux the agent can answer a held
 picker, but the live picker is unavailable (LLP 1069.002, "Any-type input").
 
 The view forms are element, component use, `if`/`else` (and `else if`),
@@ -1684,6 +1722,20 @@ same forms) is where its `scrollIntoView` aligns a row, as CSS's snapport:
 with `scroll-padding-top` equal to a header's height, the first row's
 `block="start"` is `scrollTop` 0. Any scroll container takes it, not only a
 virtualized list.
+For snapping, put `scroll-snap-type="x mandatory"` or `"y mandatory"` on the
+scroller and `scroll-snap-align="start"`, `"center"` or `"end"` on its areas
+(LLP 1008 §9). The web executes CSS; iOS chooses the nearest area to
+the platform's projected resting offset when a drag ends, including a release
+without a fling. An oversized area stays freely scrollable while it covers the
+viewport. Nested scroll containers own their descendants' snap areas: `hidden`
+is a boundary; `clip` is not. `none` disables
+snapping; `proximity` and `scroll-snap-stop` are not admitted.
+On iOS, a virtualized list also queries at most 64 unmounted row roots near the
+projection, using their measured or estimated sizes; descendants and
+layout-dependent displacement require mounted rows. Android, AppKit, Linux desktop
+and Windows do not execute snapping. No layout-change re-snap or
+one-card-per-fling behavior is implied.
+
 `reorderdrop` belongs only on a vertical `list virtualized=true`
 (each row's handle names it with `reorderFor`); the compiler refuses it on any
 other element, where no host could drag. Lists that share a `reorderGroup`
@@ -1896,8 +1948,8 @@ lists any literal colour, font size or weight an app's `.contract` files still w
 | `input type="date"`, `"time"`, `"datetime-local"` | `UIDatePicker`; with an empty `value` its pill shows your `placeholder` (`placeholder="Add a date"`) or, with none, no words (LLP 1115.000 D13.1). Opening it accepts the current local date or time within `min`/`max`. On macOS, typing, an arrow or Return accepts the field's displayed value; focus alone leaves it empty. The web shows the browser's own empty field. Android shows Material's filled field, the value as the phone writes dates and `placeholder` its floating label, and Material 3's picker, in the control's `accent-color` where it has one (LLP 1115.001.000) |
 | `select` of `option`s | a pop-up button with its menu |
 | `progress value=done max=goal` (a goal, an upload; as wide as what holds it) | `UIProgressView`, tinted by `accent-color` (LLP 1116 D8); never a drawn track and fill |
-| `progress` (no `value`) | `UIActivityIndicatorView`, `.large` from a 37-point box (LLP 1069.001) |
-| `popover="auto" role="menu"` of `button`s, opened by `popovertarget` (a row whose `popovertarget` names another menu: its submenu; one naming any other popover opens it from the menu's own invoker, exact2's menu rule) | `UIMenu`, nested (LLP 1021) |
+| `progress` (no `value`) | `UIActivityIndicatorView`, `.large` from a 37-point box (LLP 1069.001); on Android Material's circular indicator, turning (LLP 1115.001 D9) |
+| `popover="auto" role="menu"` of `button`s, opened by `popovertarget` (a row whose `popovertarget` names another menu: its submenu; one naming any other popover opens it from the menu's own invoker, exact2's menu rule; a `role="group"` box of rows with an `aria-label`: a titled section) | `UIMenu`, nested; a section an inline `UIMenu(title:)` (LLP 1021) |
 | `dialog role="alertdialog" aria-label="Remove book?"` of a `text`, its action(s) and one Cancel; or a `text` and one closing button alone | `UIAlertController(.alert)`: the label its title, the text its message; the one-button alert when it has no action (LLP 1115 D6; recipe [below](#a-confirmation)) |
 | any other `dialog` (a field, Save, Cancel), opened by `showModal(id)` or a button's `command="show-modal"` | a sheet as tall as its content, up to the large detent, its content laid out as written and centred across it (`width="100%" box-sizing="border-box"` fills it); `close(id)`, its `command="close"` button or a swipe down closes it. `closedby="none"` refuses the swipe, `"any"` also takes a tap on the page behind, and a dismissal the person made fires `cancel` (LLP 1115.000 D11.5). A form with a title bar is still a sheet route |
 | `role="tablist"`: each tab a symbol over a label / one text or image | `UITabBar` / `UISegmentedControl`, the tablist at least its native height unless `min-height` says otherwise (LLP 1059) |
@@ -2115,7 +2167,10 @@ body up to 64 MiB whatever its `Content-Type` and its status, as a browser's `<i
 (a 404 that is an image draws; one that is not is `HTTP 404`), and keep an HTTP cache on disk;
 the web is the browser's `<img>` (its cookies and `Referer` rules, no size cap). SVG
 draws on the web only; on Apple it is an `error`. A tinted remote image on the web
-needs CORS headers, or it is an `error` too. A drive sees both after `clock +<ms>
+needs CORS headers, or it is an `error` too. A terminal entry reads a PNG from a path
+beneath its own directory, an absolute path or a `data:` URL, a regular file of at most
+64 MiB; it downloads nothing and has no app directories yet, so an `http(s)` or `app:/`
+source is an `error` there. A drive sees both after `clock +<ms>
 real`; `clock settle` can return just before them.
 
 ### Sound, MIDI and media
@@ -2578,6 +2633,20 @@ A view placed by a Contract library counts too, including through a re-export. T
 still declares the view's package as a direct dependency. A component the app never
 instantiates does not link its views' implementations.
 
+### A package's storage and session
+
+A package's implementation finds the session's directories behind `app:/data`,
+`app:/cache` and `app:/tmp` on its context: Swift `ExactPackageContext.data`, `cache` and
+`temporary`, Kotlin `ExtensionContext.data`, `cache` and `temporary`, the Linux host's
+`Context::data()`, `cache()` and `temporary()`. They are the app's own, and under the
+agent the drive's store, which a named store (`EXACT_AGENT_STORAGE`, `open({storage})`)
+keeps across the drive's launches. The sessions of one app share them, so what a package
+keeps for one session (a local replica) goes under the session's `label`, which is the
+same at every launch: the name the embedder gave the session (`makeSession(label:)`; the
+sample host's `a` and `b`), and in an app `main` (a later Mac window `window-2`,
+`window-3`, in the order they open). `session` is unique only within the process and
+`hostSession` new at each launch; key nothing durable by either.
+
 ### A package's native module, library and web assets
 
 A package fills the data module's one native module (`native.call` in `app.ts`) from the
@@ -2944,11 +3013,14 @@ main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow displa
   presses its row (`native: "sidebar-row"`).
 - On the Mac a route's `header` is the window's title bar and toolbar: its heading the
   window's title (under a `head title`, over the app's name; there is no large title),
-  its buttons toolbar items, a button whose `popovertarget` is a menu a menu item, a
-  tablist of text tabs the centred segments, its `input type="search"` the toolbar's
-  search field, and the `id="back"` control the bar's own Back. A header holding
-  anything else (a picture, a second text, a pressable title, a button drawn as a box)
-  stays in the page as written, whole, and `logs` says what it was. Under the agent
+  the first text after the heading the window's subtitle, its buttons toolbar items, a
+  button whose `popovertarget` is a menu a menu item, a tablist of text tabs the
+  centred segments, its `input type="search"` the toolbar's search field, and the
+  `id="back"` control the bar's own Back, which is the back/forward pair where the
+  navigation root offers Forward (its `navigationHistory`, both when it says nothing).
+  A header holding anything else (a picture, a text before the heading or a second one
+  after the subtitle, a pressable title, a button drawn as a box) stays in the page as
+  written, whole, and `logs` says what it was. Under the agent
   the authored header paints; `--chrome platform` on `macos` shows the bar, `tap` and
   `type` naming a header's button, tab or search input go through it
   (`native: "NSToolbarItem"`), and `state window.toolbar.header` names its title, its
@@ -3003,7 +3075,13 @@ main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow displa
   that scrolls is measured by its scroll extent, so give its rows
   `flex-shrink: 0`. The route does
   not pad `env(safe-area-inset-bottom)`: UIKit adds that band below the detent.
-  iOS alone sizes a sheet (LLP 1075.003 §9.11).
+  iOS sizes a sheet, and so does the web on a window narrower than 900 px: it opens
+  at the same height, its foot on the window's, and stays there (no grabber, no
+  drag between heights), with the bottom safe area below, and a route pushed inside
+  it stays in it at that height. There it is the tallest sheet in a window under 480 px tall
+  (UIKit's compact height) and on a touch screen while a text field in it has the
+  focus, as UIKit raises one over the keyboard; a wider window draws the card. macOS
+  and Linux ignore the detent (LLP 1075.003 §9.11, LLP 1115.000 D4.8).
 - A sheet opens at its first height, the shortest, as UIKit opens one, unless the
   route says `navigationInitialDetent`, one of its `navigationDetent` words:
   `navigationDetent="medium large" navigationInitialDetent="large"` opens tall with a
@@ -3027,7 +3105,7 @@ each field. `head edited=dirty` marks a document with unsaved changes (the dot i
 a Mac window's close button; nothing elsewhere). Before a window closes or the app
 quits, every element with a `beforeunload` handler hears it, DOM's event: an action
 that calls `preventDefault()` keeps the window open — the browser asks "Leave
-site?", a Mac app asks its own question — and `close()` closes the window once
+site?", a Mac or Windows app asks its own question — and `close()` closes the window once
 it is answered (studio diary R17). Any other element's `title` is HTML's tooltip. `scroll document` declares page scrolling. Route `render`/`activate`
 policy belongs to the site's renderer/build pipeline; follow
 [the document fixture](../contract/corpus/document.contract) and
@@ -3096,12 +3174,21 @@ JSON-LD. A page's own title and metas stay its `head` element's.
 - A report-only policy reports to a `report-uri`. `report-to` needs a `Reporting-Endpoints`
   header, which the server does not send, so its reports reach only the console.
 - A static host sends no CSP. A page that wants one there says it in `host.web.head` as
-  `{"meta": {"http-equiv": "Content-Security-Policy", "content": "…"}}`.
+  `{"meta": {"http-equiv": "Content-Security-Policy", "content": "…"}}`, or the host sends
+  it as a header. The runtime and the page module (`modules/web/index.js`) load from the
+  page's origin and inject no inline script, so `script-src 'self'` admits them. The
+  policy must still admit what the render server's does: `'unsafe-inline'` in
+  `style-src` (without it the runtime's style sheets are refused and the app does not
+  start), `data:` and `blob:` in `img-src`, and `'wasm-unsafe-eval'` in `script-src` when
+  the page runs WebAssembly (a Rust data module, Markdown, text flow and motion do). A
+  page rendered at build carries inline scripts, the one that activates it among them:
+  under `script-src 'self'` add each one's hash, which the browser's refusal names
+  (`'sha256-…'`), or the page stays as rendered.
 
 ## Time, motion, graphics, and platform facts
 
-A root task has one `every(ms, action)`, `after(ms, action)`, or
-`every(frame, action)` entry, on the line under it:
+A root task has one `every(ms, action)`, `after(ms, action)`,
+`every(frame, action)`, or keyed `change(action)` entry, on the line under it:
 
 ```text
   task ticker mount
@@ -3114,6 +3201,27 @@ The clock moves in advances, and one advance commits at most 4,096 timer actions
 and `then`s (`TIMER_FIRE_LIMIT`), those that change nothing included; the rest is
 refused, what committed is kept, and the clock stays at the last one's time. A
 fast `every` under a long `clock +N` can reach it: tick slower or move the clock in steps.
+
+Use `change(action)` for work that must follow an input change, such as reading
+layout or issuing a host command:
+
+```text
+  task reveal when visible key=selectedId
+    change(reveal)
+```
+
+`key=` is required. The action runs once after the first committed state with an
+open gate, then once after each changed key or reopened gate. It runs in a separate
+commit after the host has applied the preceding commit, with no elapsed-time wait.
+Pending key changes coalesce: the action reads the latest committed state. Closing
+the gate cancels pending work. A refused action is spent until its key changes or
+its gate reopens; a refused input commit queues nothing. On the agent's clock,
+`clock settle` runs this work without advancing time. A reload starts fresh.
+The compiler rejects an action that can write or refresh its own trigger's inputs,
+including through derives, resource arguments, called actions, mutations or other
+change tasks (`analyze-change-cycle`). Keep pure computed values in `derive`.
+`change` takes no timer options; existing `after` and `every` schedules keep their
+elapsed-time behavior.
 
 A task with `when` (a gated task), such as
 `task hide when toast != "" key=toastUntil` with `after(5000, expire)`, has its
@@ -3132,7 +3240,7 @@ gate is a bool and the key a string, number or bool; neither may read `performan
 toast, a debounce (`when draft != saved key=draft` with `after(800, save)`), a
 round's tick (`when screen == "play"`), a flight's frames
 (`when flying` with `every(frame, step)`) and a sheet's opening
-(`when top(nav).name == "icons" key=top(nav).id` with `after(1, reveal)`) are each
+(`when top(nav).name == "icons" key=top(nav).id` with `change(reveal)`) are each
 one gated task, and each is the root's: a child component declares none
 (`type-child-resource`), so a sheet a component draws has its task in the root.
 
@@ -3194,12 +3302,29 @@ which require optional capabilities. `-exact-spring(…)` (a `transition` timing
 function), `-exact-exit-animation`, `-exact-layout-transition`, and presentation timelines have
 specific documented behavior;
 they do not admit arbitrary frame callbacks or a second app-state graph.
+As in CSS, a `transition` or `animation` value's units, keywords and function
+names read in any ASCII case (`0.3S EASE` is `0.3s ease`), its numbers are CSS's
+(`1.s` and `infs` are no times), and a keyframes name keeps its case: in
+`animation="Spin 1s EASE"` the name is `Spin` and `EASE` is the easing.
 
 Transform springs retain velocity when interrupted. An SVG path's `d` instead
 plays the spring as an easing curve: retargeting starts from the displayed path
 with no inherited velocity, including when toggling back (LLP 1055.000 D15,
 LLP 1062 D3). This is the same on the web and native hosts. Use a transform for
 a rigid path move that must keep its momentum.
+
+To seed a translate spring from an authored pan, write
+`-exact-translate-velocity=` followed by a string such as `"800 -600"`: finite x and y
+velocities in logical CSS pixels per second. In `panrelease(vx, vy)`, clamp or adjust
+each axis, then update this row and the translate target in the same action.
+`"0 0"` starts from rest, including on cancellation; omission or Contract `none`
+(without quotes) preserves an interrupted spring's velocity. For example, bind
+``-exact-translate-velocity=(released ? `${vx} ${vy}` : none)``. Changing only velocity
+never restarts motion. Enabling a translate spring after `transition="none"` can
+start from nonzero velocity even when the endpoint equals the current position.
+The row persists: clear it when a new drag begins or before an unrelated target
+change that should inherit velocity. It has no effect on an easing transition or
+with `transition="none"`.
 
 Computed animation longhands cannot accompany a literal list in `animation` or
 another longhand. For a list that changes with state, compute the complete `animation`
@@ -3266,7 +3391,8 @@ pressed then. See [Keys](contract-grammar.md#keys).
 
 A long-press or right-click menu is a `popover` the node names with
 `contextPopover="<id>"`: its `button` rows (with `popovertarget="<id>"
-popovertargetaction="hide"`) and `hr` separators are the menu, and one row with
+popovertargetaction="hide"`), `hr` separators and `role="group"` sections of rows
+(`contract vocab menu`) are the menu, and one row with
 `contextPreview=true` is the preview, whose `press` is what tapping the preview
 does (open the conversation). iOS presents UIKit's context menu, with the row
 lifting and the preview popping into the screen its press pushes; macOS an
@@ -3468,13 +3594,19 @@ when there is none. On macOS the button takes no room in the page; elsewhere,
 Windows included (its notification-area icon is not built), it is an
 ordinary button. An accessory app's status menu ends with the host's Quit,
 which `-exact-menu-remove="status-quit"` removes. Bare `focus()` brings the
-window forward on macOS, showing it if it was hidden (Windows and Linux log
-it as unsupported); the agent lists the items as
+window forward on macOS and Windows, showing it if it was hidden (Linux logs
+it as unsupported); `hideWindow()` puts it away again with the app still
+running, as the person's close does while a status item is placed or under
+`keepRunning` (macOS and Windows; refused in the journal elsewhere, and where
+the app would end without its window); the agent lists the items as
 `state.statusItems` and `state.dockMenu`.
 
 
 `frame(id)` and `measure("literal-id")` are action-only geometry reads returning
-`Geometry` (`x`, `y`, `width`, `height`, `provisional`, `unavailable`). Handle `unavailable` and `provisional`. `frame` reads the last layout's border box
+`Geometry` (`x`, `y`, `width`, `height`, `provisional`, `unavailable`). Handle `unavailable` and `provisional`.
+The id is an element's `id`, not its `testId`: a literal id no element in the view
+has answers `unavailable` on every host, and the build warns (`lower-geometry-id`).
+`frame` reads the last layout's border box
 where the viewer sees it, as `getBoundingClientRect` does: in the viewport, through
 every `translate`, `rotate` and `scale` on it and above it (the bounding box of a
 turned box), with every scroll offset above it (the page's too) applied, so a drop
@@ -3615,13 +3747,25 @@ across a launch: a root `task restore mount` with `after(1, applySize)` sets the
 stored size again. Do not multiply a scale factor into every size instead.
 
 Platform facts are reserved sources (`exactViewport`, `exactPage`, `exactDelivery`,
-`exactSurface`, `exactTime`); the bake refuses a declared field the source does
+`exactSurface`, `exactCanvasPerformance`, `exactTime`); the bake refuses a declared field the source does
 not have. `exactViewport().displayMode` is a string: the current CSS display
 mode on the web, `fullscreen`, `window-controls-overlay` (the tall title row
 `display_override` asks for) or `standalone` on macOS, `standalone` on other
 native hosts. Declare it on the resource's shape; `state.device.displayMode`
 reports it too. `prefer display-mode fullscreen` substitutes it on Apple;
 browser drivers refuse that override, so test real fullscreen transitions. This reads the window, not a fullscreen navigation route.
+`exactViewport().devicePixelRatio` is `option<number>`: display pixels per
+logical point, updated when the display scale changes. It is `none` before a
+host reports its scale, including a server render and the terminal. It is the
+display's ratio; a game's render scale does not change it.
+`safeAreaTop`, `safeAreaRight`, `safeAreaBottom` and `safeAreaLeft` are numeric
+logical points with the same document-inset meaning as `env(safe-area-inset-*)`.
+`segments` is a list of rectangles with numeric `x`, `y`, `width` and `height`
+fields in the layout viewport's coordinates, ordered by row then column. With
+no fold it contains the whole viewport. Declare the fields your app uses in a
+segment shape and `segments: Segment[]` in its viewport shape. Insets and
+rectangles update when the host's document geometry changes.
+
 `exactViewport().pointer` and `.hover` are CSS's `pointer` (`fine`, `coarse`,
 `none`) and `hover` (`hover`, `none`) for the primary input: the web's media
 queries; `fine` and `hover` on macOS, Linux and Windows, and `coarse` and `none`
@@ -3667,8 +3811,8 @@ choose an in-window message over a system notification), `persisted` and
 `restores` (the back/forward cache: `persisted` is true while the page is put
 away, from a `pagehide` with `persisted` until the `pageshow`; `restores`
 counts those `pageshow` events, so `task t when page.restores > 0
-key=page.restores` runs once for each return, never at launch; a Mac window a
-`keepRunning` close hid is put away, a minimized one only hidden). A reminder that should
+key=page.restores` runs once for each return, never at launch; a Mac or Windows
+window a `keepRunning` close hid is put away, a minimized one only hidden). A reminder that should
 open a route uses `showNotification(title="Done", navigate="/thread/42")`
 (`@exact/notifications`); its click reaches the navigation root as a warm
 `navigate` event or a cold launch location, and without `navigate=` it is
@@ -3679,6 +3823,54 @@ media preferences, page facts,
 and capability state rather than suffixing files by platform. Preference facts
 inform authored policy; the engine does not automatically remove all motion.
 
+`exactCanvasPerformance("world")` is an opt-in, read-only metrics resource for
+that named canvas. Declare only the fields your HUD needs, each as an option:
+
+```contract
+shape Metrics
+  frames: option<number>
+  cpuEncodeMs: option<number>
+  gpuMs: option<number>
+component App
+  resource metrics = exactCanvasPerformance("world") as shape Metrics
+  view
+    canvas surface=world
+```
+
+A canvas without a metrics resource does no reporting work. Snapshots arrive at most
+once per second while the canvas is visible, including while it is idle. Before
+its first snapshot, after disposal, and for unsupported measurements, fields are `none`. Values
+never enter kept answers, world saves, replay or simulation hashes.
+
+Numeric fields are `pixelWidth`, `pixelHeight`, `renderScale`, `devicePixelRatio`,
+`effectivePixelRatio`, `samples`, `draws`, `triangles`, `instances`, `frames`,
+`fps`, `windowMs`, `lateFrames`, `missedFrames`, `longestGapMs`, `maxFps`,
+`cpuTickMs`, `cpuFeedMs`,
+`cpuEncodeMs`, `cpuSubmitMs`, `gpuMs`, and each CPU/GPU duration's `MaxMs`
+variant (`cpuTickMaxMs`, for example). Durations and gaps are milliseconds;
+frame counters cover the sampling window and draw counters describe its latest
+submitted frame. `fps` is the submitted-frame count over the monotonic wall time
+between snapshots (`windowMs`); an idle window reports zero. The first snapshot
+and a window driven by the agent's virtual clock leave FPS unavailable.
+`processMemoryBytes`, `gameHeapBytes`, `textureMemoryBytes` and
+`geometryMemoryBytes` are optional byte counts. `audioState`, `thermalState`
+and `quality` are optional strings; `idle` is an optional boolean. Hosts and
+surfaces report only measurements they actually support. The initial game
+renderer reports render dimensions, scale, samples, draw counts, frame pacing,
+and CPU tick/feed/encode durations; GPU, memory and audio measurements remain
+unavailable. The 16 KiB snapshot limit is separate from the public surface
+record's limit.
+
+A GPU HUD can show its last successful publication while its world loads:
+`resource hud = exactSurface("world") as shape Hud keep`. Only a successful
+live publication is kept; defaults, refused publications and disposal do not
+replace it. The saved value stands until the first live publication. A changed
+surface name or incompatible declared shape discards it. Removing `keep` starts
+from the shape's defaults again. Each kept answer has the data-resource limit
+of 256 KiB, including its identity and shape, and shares the bounded launch
+cache. An app whose device grants forbid kept answers stores none. Other host
+facts, including canvas performance, cannot opt in.
+
 `exactSurface(name)` is the host's channel for read-only facts about where
 the app is running, not only for a GPU surface's published record. The
 terminal host publishes `exactSurface("terminal")` (`mode`, `images`,
@@ -3688,6 +3880,28 @@ P1; `apps/harness/terminal.contract` shows the task). Declare its shape
 (`resource terminal = exactSurface("terminal") as shape Terminal`); on any
 other host it stays unloaded. A new host fact uses this channel before
 anyone proposes a new reserved source (LLP 1101.002 §0 P11).
+
+A GPU canvas's record (`canvas surface=world()`, read as `exactSurface("world")`)
+carries one host fact beside what its module publishes: `presented`, true once a
+complete frame of the canvas's current picture has been handed to the compositor,
+on every host. It is false until then, and again after a restore, a restarted
+world, a lost GPU device or a new target, until the next such frame. It changes
+only at those moments, never per frame. Keep a loader over the canvas until it is
+true; a record that says the world is set up is not proof that a frame has
+drawn. A module cannot publish a field of that name.
+
+```contract
+shape Table
+  presented: bool
+
+component App
+  resource table = exactSurface("world") as shape Table
+  view
+    main width="100%" height="100%"
+      canvas surface=world() width="100%" height="100%" position="relative"
+        if !table.presented
+          text "Setting the table" position="absolute" inset=0 aria-busy=true
+```
 
 The terminal's `colors` is the selected output bit depth: `0` (monochrome),
 `4` (16 ANSI colours), `8` (256 colours), or `24` (RGB). The host reduces
@@ -3790,7 +4004,8 @@ and missed frames for the last 0.5 s and 5 s; pacing; and charts of frame rate a
 frame time, or a table of work time, late frames, maximum frame time and pacing
 changes. A tap on a chart expands it; a tap on the title defines each figure; Share,
 at its top right, asks what to share, Agent Report, Summary or Image, and opens the
-system's share sheet with that one item. The card states no pass or fail of its own;
+system's share sheet with that one item; where the card measures the screen, it offers
+two agent reports, the screen's and Exact's frames'. The card states no pass or fail of its own;
 Details, beside Share, swaps everything below the header for `perf frames health`'s
 three results over the last 5 s with their reasons and the counts behind them, in rows
 that scroll within the card. These are timing proxies; actual presentation and
@@ -3840,6 +4055,11 @@ Open the four-finger menu and choose **Frame Health**, which in a production bak
 collection, reproduce the hitch, then tap Share on the card and choose Agent Report; the share sheet takes
 the JSON text. Exact creates no report file or automatic upload. A person can send
 that text to an agent. The system share destination controls any storage it creates.
+On iOS 18 and later the card measures the screen, and Share offers **Agent Report:
+Screen** (`ui-update`) and **Agent Report: Exact's Frames** (`exact-app-display-link`),
+each a report of its own within 4 KB. The screen's has no frame times; an app drawn by
+GPU surfaces, whose canvases Exact's frame clock ticks, has its frame times and their
+work in Exact's, its GPU execution and presentation unobserved.
 
 For controlled device checks, `scripts/fixtures/frame-health-app` is a minimal fixture:
 one Start/Stop button, one moving canvas tile and 32 static rows. It starts paused;
@@ -3902,7 +4122,9 @@ packets. No report is automatically persisted, queued for retry or sent periodic
 
 A report covers one source. The default selects the source with the most recent
 retained hitch; `report app` or `report scroll` selects explicitly. `source` identifies
-it, and `otherSources` names retained evidence in other sources. Counts and generations
+it, `otherSources` names retained evidence in other sources, and `selection` says how
+to get another: an agent's request, or, for a report the card's Share gave, its other
+agent report. Counts and generations
 belong to their named source. Forwarded apply context does not count an app apply or
 its deadline again as a native-scroll event.
 
@@ -4056,7 +4278,12 @@ maximum, including above 120 Hz; press clocks are per window and update when its
 changes.
 
 `exact.frame-health/2` is a versioned JSON schema. Field explanations stay here to
-leave bytes for evidence. `columns` names each field in a `hitches` row. Export keeps
+leave bytes for evidence. `coreSinceReload` counts every frame since the collector's
+last reset, not only the retained rows: callbacks, frame intervals, missed and late
+frames, and `frameTimeBoundsNs` and `workBoundsNs`, the bounds of the bins holding the
+median, p99 and maximum frame time and work (`perf frames health`'s bins; a null upper
+bound is the open last bin). A field is null where its source does not measure it, as
+the screen's frame times, or where its bins do not hold every frame. `columns` names each field in a `hitches` row. Export keeps
 the newest rows that fit, in chronological order, with `retention.omittedForBudget`;
 it never reduces timing precision to fit. Sequences, captures and generations are
 decimal strings; other numbers are safe JSON integers. `time.clamped` invalidates
@@ -4920,7 +5147,15 @@ and Android follow (LLP 1121 stage 8 B). A look's `color` reaches the node's tex
 as its own `color` does (a descendant that writes its own keeps it), so
 `:hover color="ink"` on a link recolours its words, under a `color-scheme`
 boundary too; the web and Apple (a Mac's pointer, an iPad's) show it, and
-Linux's looks paint the box alone. Native buttons and list rows accept
+Linux's looks paint the box alone. They also take `scale`, which stands in for
+the node's own `scale` while the look holds: like it, it never lays out, and a
+`-exact-press-scale` multiplies onto it. It moves there and back on the node's
+own `transition` for `scale`, as a `:hover` rule's value moves in a browser, on
+every host with a pointer (the web, a Mac's, an iPad's, Linux and Windows); with
+none it snaps, and on the web so does one under a `-exact-spring`. An icon
+button that grows on hover:
+`button scale=1 transition="scale 150ms ease"` with `:hover` `scale = 1.08`.
+Native buttons and list rows accept
 `:active`; their other states remain the platform's. Active properties keep a
 button native, including with `appearance="auto"`. Each written property overrides
 that field; unwritten fields keep the native highlighted state. Clearing a target
@@ -5431,7 +5666,14 @@ presentation to land. The status bar hides and shows at once unless the
 winning declaration has `status-bar-animation="fade"` (when none wins any more,
 the one that went); a style change still fades by its own winner's. On a phone with no notch or Dynamic Island the status bar's 20 pt
 leave the safe area, so the content of a route moves up to the screen's top;
-elsewhere the top inset stays and nothing moves. Other hosts ignore it.
+elsewhere the top inset stays and nothing moves. On Android it hides the
+status and navigation bars (immersive mode): a swipe from the screen's edge
+shows them over the page for a moment, and the safe area loses the bars'
+insets (the display cutout's stay), so content laid out against it moves into
+the space they left. It resolves by the same rule, with Android's modal routes
+covering pages (`host/android/README.md`, Edge to edge), and changes with
+committed state; `status-bar-animation` does not apply there: the system
+animates its own bars. Other hosts ignore it.
 `wakelock="screen"` on any node, bound to state (`wakelock=(playing ? "screen" :
 "none")`), keeps the display awake while that node is displayed; a hidden or
 unmounted one holds nothing (LLP 1125 D11; `state.wakelock` is `{held, by}`).

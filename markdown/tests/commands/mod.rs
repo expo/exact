@@ -117,6 +117,12 @@ fn return_replaces_a_selection_through_an_inline_edge() {
         ("- **bo|ld|**", "- **bo**\n- |"),
         ("- [**bo|ld|**](u)", "- [**bo**](u)\n- |"),
         ("- [do|cs](u) and [wo|rd](v)", "- [do](u)\n- [|rd](v)"),
+        // A selection from the list marker removes it and still splits the link.
+        (
+            "|- [do|cs](https://example.com)",
+            "\n[|cs](https://example.com)",
+        ),
+        ("|- **bo|ld**", "\n**|ld**"),
     ] {
         assert_eq!(run(before, Command::Newline), after, "{before}");
     }
@@ -288,4 +294,18 @@ fn a_footnote_command_numbers_itself_and_opens_its_definition() {
         run("A[^1] claim|.\n\n[^1]: one\n", Command::Footnote),
         "A[^1] claim[^2].\n\n[^1]: one\n\n[^2]: |"
     );
+    // At the end of the source the definition starts a line of its own.
+    for (before, after) in [
+        ("Text\n\n|", "Text\n\n[^1]\n\n[^1]: |"),
+        ("Text\n|", "Text\n[^1]\n\n[^1]: |"),
+        ("Text|", "Text[^1]\n\n[^1]: |"),
+        ("|", "[^1]\n\n[^1]: |"),
+    ] {
+        assert_eq!(run(before, Command::Footnote), after, "{before:?}");
+        let source = after.replace('|', "");
+        let notes = style(&source, None).footnotes;
+        assert_eq!(notes.len(), 1, "{source:?}");
+        assert_eq!(notes[0].references.len(), 1, "{source:?}");
+        assert!(notes[0].definition.is_some(), "{source:?}");
+    }
 }

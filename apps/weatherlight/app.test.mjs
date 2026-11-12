@@ -146,12 +146,45 @@ for (const offline of [false, true]) {
       } else {
         expect((await session.state()).resources.outlook.hours).toHaveLength(24);
         await check('loaded forecast');
+        // Exercise illuminated sky even when WebGPU falls back to the darker solid fill.
+        const sky = [80, 110, 130];
+        for (const scheme of ['light', 'dark']) {
+          await session.prefer({ 'prefers-color-scheme': scheme });
+          const ink = await session.carrier.evaluate(`getComputedStyle(document.querySelector('[data-testid="selected-label"]')).color.match(/[\\d.]+/g).map(Number)`);
+          const alpha = ink[3] ?? 1;
+          const painted = sky.map((channel, i) => ink[i] * alpha + channel * (1 - alpha));
+          expect(ratio(painted, sky)).toBeGreaterThanOrEqual(3);
+        }
         const hour = (await session.state()).resources.outlook.hours[0].id;
         await session.tap(`hour-${hour}`);
         await session.clock('settle');
         expect((await session.state()).slots.selected).toBe(hour);
         await session.tree('back-now');
         await check('selected hour');
+        const hours = (await session.state()).resources.forecast.hours;
+        const scenes = new Set([
+          ...[0, 6, 12, 18].map(hour => hours.find(h => h.hour === hour)),
+          hours.reduce((a, b) => a.cloud < b.cloud ? a : b),
+          hours.reduce((a, b) => a.cloud > b.cloud ? a : b),
+          hours.find(h => h.rain > 0),
+        ]);
+        for (const scene of scenes) {
+          expect(scene).toBeDefined();
+          await session.tap(`hour-${scene.id}`);
+          await session.clock('settle');
+          const { cloud, rain, day, hour } = (await session.state()).resources.outlook;
+          expect({ cloud, rain, day, hour }).toEqual({
+            cloud: scene.cloud, rain: scene.rain, day: scene.day, hour: scene.hour,
+          });
+          for (const elapsed of [0, 15000, 60000]) {
+            if (elapsed) await session.clock(`+${elapsed}`);
+            await check(`hour ${scene.id}, animation +${elapsed}ms`);
+          }
+        }
+        await session.tap('pause-sky');
+        await session.clock('+60000');
+        expect((await session.state()).slots.skyChoice).toBe('pause');
+        await check('paused sky');
       }
       await session.prefer({ 'permission.geolocation': 'denied' });
       await session.clock('settle');

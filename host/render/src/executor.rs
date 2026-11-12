@@ -10,11 +10,9 @@ use std::time::Instant;
 mod core;
 #[path = "../../apple/src/executor_pump.rs"]
 pub mod pump;
-/// A new executor waits for a native-worker slot under test: the crate's own
-/// tests, and the integration binary, whose every test's servers and renders
-/// share one process's bound (`test-wait`, which only the dev-dependency on
-/// this crate turns on). A server refuses (`Busy`) at the bound instead.
-const WAIT_FOR_SLOT: bool = cfg!(any(test, feature = "test-wait"));
+/// Each test thread shares a worker budget among its servers and renders. The
+/// dev-dependency enables this for integration tests; production shares one process bound.
+const ISOLATE_WORKER_BUDGET: bool = cfg!(any(test, feature = "test-budget"));
 
 /// The native core with a condition variable for its wake.
 pub struct Executor {

@@ -23,6 +23,7 @@
 // on the grid and rest threshold the engine settles on natively
 // (`exact_motion::spring`).
 import { unwrapListItem, viewParent } from './navigation.js';
+import { translation } from './motion-glue.js';
 const LAYOUT = '--exact-layout-transition';
 const PAINT = ['backgroundColor', 'backgroundImage', 'backgroundSize', 'backgroundPosition', 'backgroundRepeat', 'backgroundOrigin', 'backgroundClip',
   'borderTop', 'borderRight', 'borderBottom', 'borderLeft', 'borderRadius', 'boxShadow', 'opacity', 'translate', 'rotate', 'scale', 'transform', 'transformOrigin'];
@@ -30,12 +31,14 @@ const CLEAR = { backgroundColor: 'transparent', backgroundImage: 'none', borderT
   borderBottomColor: 'transparent', borderLeftColor: 'transparent', boxShadow: 'none' };
 
 // A 2D matrix of an element's own transforms about its origin, from its
-// computed style: `translate`, `rotate`, `scale`, then `transform`.
-function own(cs, w, h) {
-  const length = (v, of) => v.endsWith('%') ? parseFloat(v) / 100 * of : parseFloat(v);
+// computed style: `translate`, `rotate`, `scale`, then `transform`. Its
+// translate is read as a hold reads it (motion-glue.js `translation`): a
+// length and a percentage compute as one `calc()`, and a percentage is of
+// the element's `transform-box`.
+function own(el, cs) {
   const [ox, oy] = cs.transformOrigin.split(' ').map(parseFloat);
   const m = new DOMMatrix().translateSelf(ox, oy);
-  if (cs.translate !== 'none') { const [x, y = '0px'] = cs.translate.split(' '); m.translateSelf(length(x, w), length(y, h)); }
+  if (cs.translate !== 'none') m.translateSelf(...translation(el, cs.translate, cs));
   if (cs.rotate !== 'none') {
     const parts = cs.rotate.split(' '), angle = parseFloat(parts.pop());
     const axis = parts.length === 3 ? parts.map(Number) : { x: [1, 0, 0], y: [0, 1, 0] }[parts[0]] ?? [0, 0, 1];
@@ -44,6 +47,15 @@ function own(cs, w, h) {
   if (cs.scale !== 'none') { const [sx, sy = sx] = cs.scale.split(' ').map(Number); m.scaleSelf(sx, sy); }
   if (cs.transform !== 'none') m.multiplySelf(new DOMMatrix(cs.transform));
   return m.translateSelf(-ox, -oy);
+}
+
+// `el`'s paint onto its stand-in `box`, a border box with no padding: its translate as `el` resolves it, in px, since a
+// percentage of the stand-in's own box (its moving size, and never `el`'s `transform-box`) would put it elsewhere.
+function paint(box, el, cs) {
+  for (const k of PAINT) box.style[k] = cs[k];
+  if (cs.translate === 'none') return;
+  const [x, y] = translation(el, cs.translate, cs), z = cs.translate.match(/calc\([^)]*\)|\S+/g)?.[2];
+  box.style.translate = `${x}px ${y}px${z ? ` ${z}` : ''}`;
 }
 
 // The linear part (rotation, scale, skew) of a matrix.
@@ -68,7 +80,7 @@ function measure() {
     if (m) return m;
     const cs = getComputedStyle(el), [w, h] = size(cs) ?? [0, 0], parent = el.parentElement;
     const above = parent && parent !== document.documentElement ? of(parent) : null;
-    m = { cs, w, h, own: own(cs, w, h), above: above ? above.above.multiply(linear(above.own)) : new DOMMatrix() };
+    m = { cs, w, h, own: own(el, cs), above: above ? above.above.multiply(linear(above.own)) : new DOMMatrix() };
     // Where its untransformed top-left lands on the page: its bounding rect
     // is the box of its corners through its own and its ancestors' maps.
     const r = el.getBoundingClientRect(), map = m.above.multiply(m.own);
@@ -165,7 +177,7 @@ function createPresence(root) {
       reveal(f);
       f.animation.effect.target = null;
       const cs = getComputedStyle(el);
-      for (const k of PAINT) sf.box.style[k] = cs[k];
+      paint(sf.box, el, cs);
       if (placed) {
         const place = measure(), [x, y] = place(el, viewParent(el)), [ax, ay] = place(sf.stand, viewParent(el));
         sf.box.style.left = `${x - ax}px`; sf.box.style.top = `${y - ay}px`;
@@ -223,7 +235,7 @@ function createPresence(root) {
     el.before(stand);
     const [x, y] = place(el, viewParent(el)), [ax, ay] = place(stand, viewParent(el));
     box.style.cssText = `position:absolute;left:${x - ax}px;top:${y - ay}px;box-sizing:border-box;margin:0`;
-    for (const k of PAINT) box.style[k] = cs[k];
+    paint(box, el, cs);
     stand.append(box);
     return { stand, box, hidden: new Map(), clips: cs.overflowX !== 'visible' || cs.overflowY !== 'visible', clipPath: cs.clipPath, radius: cs.borderRadius };
   }
@@ -402,4 +414,4 @@ function createPresence(root) {
 if (globalThis.exact) globalThis.exact.presence = createPresence;
 // A box's border-box size from its computed style, shared with geometry
 // reads' `measure` (geometry-glue.js, LLP 1051.000 D4).
-export { size };
+export { own, size };

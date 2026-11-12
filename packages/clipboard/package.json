@@ -6,6 +6,7 @@
   "exports": {
     ".": "./exact.json",
     "./apple": "./apple/exact.json",
-    "./web": "./web/exact.json"
+    "./web": "./web/exact.json",
+    "./windows": "./windows/exact.json"
   }
 }

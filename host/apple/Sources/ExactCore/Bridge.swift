@@ -392,6 +392,7 @@ package final class Runtime {
     }
     /// The pointer over the view (`true`) or gone from it.
     package func hover(_ view: UInt32, over: Bool, now: Double) -> Batch { on { read(exact_dispatch(rt, view, over ? 2 : 3, 0, now)) } }
+    package func lookMotion(_ view: UInt32, states: UInt8, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 64, write(String(states)), now)) } }
     package func focus(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 4, 0, now)) } }
     package func blur(_ view: UInt32, now: Double) -> Batch { on { read(exact_dispatch(rt, view, 5, 0, now)) } }
     package func focusEvent(_ view: UInt32, entering: Bool, target: String, related: String?, now: Double) -> Batch {
@@ -600,6 +601,12 @@ package final class Runtime {
             let n = write(name + (json.map { "\0" + $0 } ?? ""))
             return read(exact_surface_record(rt, n))
         }
+    }
+    package func canvasPerformanceRequested(_ name: String) -> Bool {
+        on(busy: false) { exact_canvas_performance_requested(rt, write(name)) != 0 }
+    }
+    package func canvasPerformanceRecord(_ name: String, _ json: String?) -> Batch {
+        on { read(exact_canvas_performance_record(rt, write(name + (json.map { "\0" + $0 } ?? "")))) }
     }
     package func message(_ view: UInt32, _ value: String, now: Double) -> Batch {
         return on {

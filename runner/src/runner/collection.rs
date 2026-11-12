@@ -157,6 +157,7 @@ impl<D: DataSource> Runner<D> {
             now_ms: self.now_ms,
             error: None,
             stopped_on_request: false,
+            needs_apply: false,
         };
         // A row that showed with animations waiting on it is a commit of its
         // own when the report changed nothing else (LLP 1055 D13).
@@ -278,6 +279,7 @@ impl<D: DataSource> Runner<D> {
             now_ms: self.now_ms,
             error: None,
             stopped_on_request: false,
+            needs_apply: false,
         };
         if !offset.is_finite() {
             return Ok(result);

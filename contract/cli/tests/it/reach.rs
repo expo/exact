@@ -238,8 +238,10 @@ fn shortcuts_are_refused_where_the_platform_has_none() {
 
 /// LLP 1133.023 D5, D8, D10: `intents.tools` in `app.json` faces a tool. A
 /// face is stored with the doors it reaches and its digest; one naming no
-/// tool, a parameter of another type, or a door with no confirmation for a
-/// `destroys` tool is refused; and a door is held to its face's digest.
+/// tool, a parameter of another type, a door with no confirmation for a
+/// `destroys` tool, or the web door for a tool with a blank description or a
+/// name over 128 characters is refused; and a door is held to its face's
+/// digest.
 #[test]
 fn a_face_is_checked_against_its_tool_and_holds_its_door() {
     let tools = "  state last = \"\"\n  tool log writes closed \"Log a page.\" = log\n  tool drop destroys \"Drop a book.\" = drop\n  action log(id: string, page: number)\n    last = `${id} ${page}`\n  action drop(id: string)\n    last = id\n  action follow(url: string)";
@@ -296,6 +298,45 @@ fn a_face_is_checked_against_its_tool_and_holds_its_door() {
     let mut missing = good.clone();
     missing["tools"]["nothing"] = json!({ "title": "Nothing" });
     refused(missing, "intents-tool");
+
+    // Through the web door, WebMCP (§3, §4.2) needs a description and a name
+    // of at most 128 characters; a face without that door takes an empty
+    // description.
+    let faced = |name: &str, doors: Option<Json>| {
+        let mut intents = good.clone();
+        let mut log = intents["tools"]["log"].clone();
+        if let Some(doors) = doors {
+            log["doors"] = doors;
+        }
+        intents["tools"] = json!({ name: log, "drop": good["tools"]["drop"] });
+        intents
+    };
+    let with = |name: &str, description: &str| {
+        let line = format!("tool {name} writes closed \"{description}\" = log");
+        let replaced = source.replacen("tool log writes closed \"Log a page.\" = log", &line, 1);
+        std::fs::write(app.0.join("app.contract"), replaced).unwrap();
+    };
+    with("log", "");
+    refused(faced("log", None), "intents-web-description");
+    with("log", "   ");
+    refused(
+        faced("log", Some(json!(["web"]))),
+        "intents-web-description",
+    );
+    with("log", "");
+    write(&faced("log", Some(json!(["apple", "android"]))));
+    compile().unwrap_or_else(|e| panic!("no web door: {e:?}"));
+    let long = format!("l{}", "o".repeat(128));
+    with(&long, "Log a page.");
+    refused(faced(&long, None), "intents-web-name");
+    let longest = &long[1..];
+    with(longest, "Log a page.");
+    write(&faced(longest, None));
+    let plan = compile().unwrap_or_else(|e| panic!("128 characters: {e:?}"));
+    assert_eq!(
+        face(&plan, longest)["doors"],
+        json!(["apple", "android", "web"])
+    );
 
     // The description is part of the signature, so of the digest.
     let moved = source.replace("Log a page.", "Log the page.");

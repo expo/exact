@@ -818,10 +818,36 @@ fn a_test_writes_through_the_apps_server_as_another_person() {
         ("test \"t\"\n  request POST \"/items\" {a: 1}\n", 2),
         ("test \"t\"\n  request POST \"/items\" {\"a\": x}\n", 2),
         ("test \"t\"\n  request POST \"/items\" as\n", 2),
-        ("test \"t\"\n  request POST \"/items\" \"body\"\n", 2),
+        ("test \"t\"\n  request POST \"/items\" - as bob\n", 2),
     ] {
         let e = contract::tests(src).unwrap_err();
         assert_eq!(e.span.line, line, "{src}: {e}");
+    }
+}
+
+/// A body is any JSON value, a scalar as well as an object or a list.
+#[test]
+fn a_request_body_may_be_a_json_scalar() {
+    for (written, body) in [
+        ("\"str\"", "\"str\""),
+        ("5", "5"),
+        ("-5", "-5"),
+        ("1.5", "1.5"),
+        ("true", "true"),
+        ("false", "false"),
+        ("null", "null"),
+    ] {
+        let src = format!("test \"r\"\n  request PATCH \"/x\" {written} as bob expect 409\n");
+        let tests = contract::tests(&src).unwrap_or_else(|e| panic!("{written}: {e}"));
+        assert!(
+            matches!(
+                &tests[0].steps[0],
+                Step::Request { body: Some(b), persona: Some(who), status: Some(409), .. }
+                    if b == body && who == "bob"
+            ),
+            "{written}: {:?}",
+            tests[0].steps[0]
+        );
     }
 }
 
@@ -950,8 +976,8 @@ fn clock_until_state_takes_a_path_a_json_literal_and_a_bound() {
             "a string, a number, true, false or null",
         ),
         ("clock until state g within 10", "=="),
-        (huge.as_str(), "a string, a number"),
-        (positive.as_str(), "a string, a number"),
+        (huge.as_str(), "too large for a number"),
+        (positive.as_str(), "too large for a number"),
     ] {
         let e = contract::tests(&format!("test \"t\"\n  {bad}\n")).unwrap_err();
         assert!(format!("{e:?}").contains(says), "{bad}: {e:?}");

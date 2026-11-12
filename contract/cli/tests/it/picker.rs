@@ -187,3 +187,60 @@ fn literal_show_picker_targets_need_a_file_input_id_not_a_test_id() {
     let dynamic_target = COMPOSE.replace("showPicker(\"attach\")", "showPicker(summary)");
     assert!(contract::compile(&dynamic_target).is_ok());
 }
+
+#[test]
+fn declared_audio_and_xhtml_types_compile_and_accept_agent_picks() {
+    let dir = std::env::temp_dir().join(format!("exact-picker-types-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let result = std::panic::catch_unwind(|| {
+        for (mime, name) in [
+            ("audio/mpeg", "song.mp3"),
+            ("audio/wav", "take.wav"),
+            ("audio/mp4", "voice.m4a"),
+            ("audio/ogg", "clip.ogg"),
+            ("application/xhtml+xml", "page.xhtml"),
+        ] {
+            let manifest = serde_json::json!({
+                "name": "Picker", "app": {"id": "test.picker", "name": "Picker"},
+                "file_handlers": [{"action": "/", "accept": {(mime): []}}]
+            });
+            std::fs::write(dir.join("app.json"), manifest.to_string()).unwrap();
+            std::fs::write(
+                dir.join("app.contract"),
+                COMPOSE.replace("accept=\"image/png\"", &format!("accept=\"{mime}\"")),
+            )
+            .unwrap();
+            let plan = contract::compile_path(&dir.join("app.contract")).unwrap();
+            let mut r = Runner::boot(
+                plan,
+                NoData,
+                Kernel::with_monospace(),
+                Default::default(),
+                "/",
+            )
+            .unwrap();
+            let ticket = r.hold_picker("one").unwrap();
+            r.answer_hold(
+                ticket,
+                &exact_runner::HoldAnswer::Value(format!("/a/{name}")),
+            )
+            .unwrap();
+            assert_eq!(exact_runner::picker_support::mime_for(name), mime);
+        }
+        std::fs::write(
+            dir.join("app.contract"),
+            COMPOSE.replace("image/png", "audio/*"),
+        )
+        .unwrap();
+        assert_eq!(
+            contract::compile_path(&dir.join("app.contract"))
+                .unwrap_err()
+                .id,
+            "bake-picker-accept"
+        );
+    });
+    std::fs::remove_dir_all(dir).unwrap();
+    if let Err(error) = result {
+        std::panic::resume_unwind(error);
+    }
+}

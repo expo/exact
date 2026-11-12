@@ -19,7 +19,6 @@ const INDEPENDENT: usize = build_number(option_env!("EXACT_HTTP_WORKERS"), 6);
 const WORKERS: usize = 1 + INDEPENDENT;
 /// Sixteen cores' workers; includes retired workers until they actually exit.
 const MAX_WORKERS: usize = 16 * WORKERS;
-static LIVE_WORKERS: AtomicUsize = AtomicUsize::new(0);
 const COUNTS: [usize; 2] = [16, 128];
 const ORDERED_READS: usize = 128;
 /// Re-ask markers in the ordered sequence at once (LLP 1041 §8.4, amended
@@ -263,8 +262,8 @@ pub(super) struct Core {
     machine: Option<Arc<asynch::Machine>>,
     preloads: Mutex<Option<preload::Preloads>>,
 }
-/// Makes the host (and its transport) an owner, a scoped grant or a stream
-/// fetches through: the platform's, unless the embedder names another.
+/// Makes the host (and its transport) an owner or a stream fetches
+/// through: the platform's, unless the embedder names another.
 pub(super) type StreamHost = Arc<dyn Fn() -> ibex2::host::Host + Send + Sync>;
 
 /// The ordered owner (the boot's bindings) and the independent ones.
@@ -370,27 +369,12 @@ impl Core {
         } else {
             owners.len()
         };
-        let reserve = || {
-            LIVE_WORKERS
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                    (n + count <= MAX_WORKERS).then_some(n + count)
-                })
-                .is_ok()
-        };
-        let mut reserved = reserve();
-        // Every test in the binary shares the process's bound: a test waits for a slot (`WAIT_FOR_SLOT`: its own
-        // tests, render's and Linux's `test-wait`), polling, 30 s by the clock as a loaded suite's slots sit in
-        // threads that exit late; the product never waits. One that waits it out says so, its core refusing all.
-        if super::WAIT_FOR_SLOT {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-            while !reserved && std::time::Instant::now() < deadline {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-                reserved = reserve();
-            }
-            if !reserved {
-                eprintln!("exact test executor: no {count} worker slots within 30 s: this core refuses every request");
-            }
-        }
+        let budget = worker_budget();
+        let reserved = budget
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n + count <= MAX_WORKERS).then_some(n + count)
+            })
+            .is_ok();
         let machine = lanes.map(|lanes| {
             asynch::Machine::new(shared.clone(), owners.clone(), grants, host.clone(), &lanes)
         });
@@ -405,7 +389,7 @@ impl Core {
             owners
                 .into_iter()
                 .enumerate()
-                .map(|(index, bindings)| (index, bindings, WorkerSlot))
+                .map(|(index, bindings)| (index, bindings, WorkerSlot(budget.clone())))
                 .collect()
         });
         Self {
@@ -689,10 +673,25 @@ impl Drop for Core {
 }
 /// A worker to start: its index, its owner's bindings, its reserved slot.
 type Starter = (usize, Option<ibex2::host::Bindings>, WorkerSlot);
-struct WorkerSlot;
+struct WorkerSlot(Arc<AtomicUsize>);
 impl Drop for WorkerSlot {
     fn drop(&mut self) {
-        LIVE_WORKERS.fetch_sub(1, Ordering::AcqRel);
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn worker_budget() -> Arc<AtomicUsize> {
+    if super::ISOLATE_WORKER_BUDGET {
+        // Cores created by one test share a bound. Slots retain that budget
+        // when their workers outlive the test thread or retire elsewhere.
+        thread_local! {
+            static BUDGET: Arc<AtomicUsize> = Arc::default();
+        }
+        BUDGET.with(Arc::clone)
+    } else {
+        static BUDGET: std::sync::LazyLock<Arc<AtomicUsize>> =
+            std::sync::LazyLock::new(Arc::default);
+        Arc::clone(&BUDGET)
     }
 }
 
@@ -1100,48 +1099,42 @@ fn worker(
                 roots: shared.roots_for(&request),
                 grants: &grants,
             };
-            match scoped_bindings(&grants, request.grants.as_deref(), &host) {
-                Some(Err(message)) => failed(FailureKind::Refused, message),
-                Some(Ok(ref scoped)) => execute(
-                    Ok(scoped),
-                    request,
-                    forced,
-                    work,
-                    &abort,
-                    &files,
-                    overlap && class == RequestClass::Read,
-                    (&shared, ticket, class),
-                ),
-                None => execute(
-                    bindings.as_ref().ok_or(unbound.as_str()),
-                    request,
-                    forced,
-                    work,
-                    &abort,
-                    &files,
-                    overlap && class == RequestClass::Read,
-                    (&shared, ticket, class),
-                ),
-            }
+            // A source's narrower scope runs on this worker's own transport,
+            // so it reuses the connections that transport keeps.
+            let scoped = match scoped_grants(&grants, request.grants.as_deref()) {
+                Some(Err(message)) => return failed(FailureKind::Refused, message),
+                Some(Ok(scope)) => Some(bindings.as_ref().map(|b| b.fetch.with_grants(scope))),
+                None => None,
+            };
+            let fetch = match &scoped {
+                Some(scoped) => scoped.as_ref(),
+                None => bindings.as_ref().map(|b| &b.fetch),
+            };
+            execute(
+                fetch.ok_or(unbound.as_str()),
+                request,
+                forced,
+                work,
+                &abort,
+                &files,
+                overlap && class == RequestClass::Read,
+                (&shared, ticket, class),
+            )
         }))
         .unwrap_or_else(|_| failed(FailureKind::Aborted, "native work panicked"));
         complete(&shared, ticket, outcome);
     }
 }
 
-/// A source's narrower grant scope, as its own bindings; `None` unscoped.
-fn scoped_bindings(
+/// A source's narrower grant scope, checked against the app's; `None` unscoped.
+fn scoped_grants(
     grants: &str,
     scope: Option<&str>,
-    host: &StreamHost,
-) -> Option<Result<ibex2::host::Bindings, String>> {
+) -> Option<Result<ibex2::grant::GrantSet, String>> {
     scope.map(|scope| {
-        exact_data::storage::scope(grants, Some(scope))
-            .and_then(|s| {
-                ibex2::grant::GrantSet::parse(&exact_runner::io_grants(s))
-                    .map_err(|e| e.to_string())
-            })
-            .map(|g| host().endow(g))
+        exact_data::storage::scope(grants, Some(scope)).and_then(|s| {
+            ibex2::grant::GrantSet::parse(&exact_runner::io_grants(s)).map_err(|e| e.to_string())
+        })
     })
 }
 
@@ -1163,7 +1156,7 @@ struct Files<'a> {
 
 #[allow(clippy::too_many_arguments)]
 fn execute(
-    bindings: Result<&ibex2::host::Bindings, &str>,
+    fetch: Result<&ibex2::host::Fetch, &str>,
     mut request: Request,
     forced: bool,
     work: Option<Work>,
@@ -1197,8 +1190,8 @@ fn execute(
     if let Some(work) = work {
         return work();
     }
-    let b = match bindings {
-        Ok(b) => b,
+    let fetch = match fetch {
+        Ok(fetch) => fetch,
         Err(unbound) => return failed(FailureKind::Refused, unbound),
     };
     if let Some(why) = request.timeout_refusal().or(request.long_poll_refusal()) {
@@ -1207,7 +1200,7 @@ fn execute(
     let limit = body_to::limit(&request);
     let within = overlap || reads_within_ceiling(&request);
     let timeout = request.timeout_ms;
-    let fetch = reach::gate_fetch(b.fetch.clone(), request.reach);
+    let fetch = reach::gate_fetch(fetch.clone(), request.reach);
     // The whole exchange, headers and body, ends by the deadline: the
     // platform's idle timeout alone would let a server that trickles bytes
     // hold the ordered lane for as long as it likes. It is armed before a
@@ -1364,6 +1357,9 @@ mod read_tests;
 #[cfg(test)]
 #[path = "executor_idle_tests.rs"]
 mod idle_tests;
+#[cfg(test)]
+#[path = "executor_scope_tests.rs"]
+mod scope_tests;
 #[cfg(test)]
 #[path = "executor_tests.rs"]
 pub(super) mod tests;

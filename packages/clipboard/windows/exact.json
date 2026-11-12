@@ -1,0 +1,13 @@
+{
+  "kind": "implementation",
+  "implements": "@exact/clipboard@^1.0",
+  "platform": "windows",
+  "targets": ["windows"],
+  "options": {},
+  "names": [],
+  "views": [],
+  "hatches": [],
+  "sources": { "rust": ["lib.rs"] },
+  "artifacts": [],
+  "class": "Clipboard"
+}

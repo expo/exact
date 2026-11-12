@@ -1,7 +1,7 @@
 # Contract grammar and vocabulary reference
 
-This is a descriptive reference for the compiler on `main` on 2026-10-02, not a
-proposal for new syntax. The [human guide](contract-for-humans.md) teaches the
+This is a descriptive reference for the compiler on `main`, not a proposal for
+new syntax. The [human guide](contract-for-humans.md) teaches the
 language; the [agent guide](contract-for-agents.md) gives the implementation loop.
 The parser, type checker, and lowering rules are authoritative when this summary
 and implementation disagree.
@@ -97,7 +97,8 @@ word.
 ```ebnf
 file          = { declaration } ;
 declaration   = use | shape | function | style | decoration | atom | keyframes | font
-              | sound | theme | routes | component | members-block | test ;
+              | sound | theme | timeline | color-profile | routes | component
+              | members-block | test ;
 use           = "use" use-name { "," use-name } "from" STRING NL ;
 use-name      = IDENT [ "as" IDENT ] ;
 shape         = "shape" IDENT block(field) ;
@@ -118,8 +119,10 @@ selector      = "from" | "to" | NUMBER "%" ;
 frame-value   = STRING | NUMBER | "-" NUMBER | constant-call ;
 constant-call = IDENT "(" [ arguments ] ")" ;
 theme         = "theme" block(IDENT "=" STRING NL) ;   (* the root file's; LLP 1095 D4 *)
+timeline      = "timeline" IDENT NL ;                 (* a clock timeline `animation-timeline` names *)
+color-profile = "color-profile" "--" IDENT style-line ;  (* CSS's @color-profile: --brand src="…" *)
 font          = "font" STRING ( "=" STRING NL | block(font-face) ) ;
-font-face     = NUMBER [ "italic" ] "=" STRING NL ;
+font-face     = NUMBER [ NUMBER ] [ "italic" ] "=" STRING NL ;  (* a weight, or a variable face's range *)
 sound         = "sound" STRING NL ;
 routes        = "routes" IDENT block(route-row) ;
 route-row     = [ "tab" ] IDENT STRING { attribute } NL [ route-children ]
@@ -155,7 +158,8 @@ and `-exact-tint-color`, and fold into the node's own rows, `:checked` under
 `:disabled`; `:active` takes `background-color`, `color`, `opacity` and
 `-exact-press-scale` and lowers to the press paint (LLP 1061 D7: its `opacity` an
 absolute target), `:hover` and `:focus-visible` take `background-color`,
-`color`, `border-color`, `opacity` and `box-shadow`. Active targets may compute or clear
+`color`, `border-color`, `opacity`, `box-shadow` and `scale` (which stands in for the
+node's and moves on its `transition`). Active targets may compute or clear
 with `none`; hover and focus targets are literals (`lower-state-literal`; a
 token's name is one). Another row is `lower-state-row`;
 native buttons and list rows accept `:active` and keep their other native states.
@@ -294,7 +298,7 @@ provider      = FIELD [ "=" expr ] NL ;
 resource      = "resource" IDENT "=" source-call
                 [ "for" IDENT "in" expr [ "key" "=" expr ] ]
                 [ "with" expr { "," expr } ] [ "when" expr ] "as" "shape" type
-                [ "else" source-call ] [ "transient" ] NL ;
+                [ "else" source-call ] [ "transient" | "keep" ] NL ;
 mutation      = "mutation" IDENT "as" "shape" type [ "queue" | "parallel" ]
                 [ "refreshes" IDENT { "," IDENT } ]
                 [ "then" IDENT ] NL ;
@@ -303,8 +307,11 @@ action-params = action-param { "," action-param } [ "," ] ;
 action-param  = IDENT [ ":" type ] ;
 task          = "task" IDENT ( "mount" | gate ) block(schedule) ;
 gate          = "when" expr [ "key" "=" expr ] | "key" "=" expr ;
-schedule      = "every" "(" ( expr | "frame" ) "," IDENT ")" NL
-              | "after" "(" expr "," IDENT ")" NL ;
+schedule      = "every" "(" "frame" "," IDENT ")" NL
+              | ( "every" | "after" ) "(" expr "," IDENT { "," timer-option } ")" NL
+              | "change" "(" IDENT ")" NL ;
+timer-option  = "wait" "=" ( "frame" | "update" | "scrollend" | "idle" )
+              | ( "max" | "tolerance" ) "=" NUMBER ;  (* max needs wait=scrollend or idle; tolerance excludes wait *)
 sequence      = "sequence" IDENT ( "mount" | gate ) block(play) ;
 play          = "play" "(" expr { "," IDENT "=" expr } ")" NL ;
 statement     = IDENT "=" expr NL
@@ -351,8 +358,13 @@ re-arms it from the commit that changed the key (compared as a `for` key),
 and `key=` alone is `when true key=…`. The gate is a bool (`type-task-gate`), the
 key a string, number or bool (`type-task-key`), and neither reads `performanceNow()`,
 directly or through a derive or a `fn` (`analyze-task-gate-clock`). The named timer action takes no parameters;
-a millisecond interval is a literal whole number of at least 1 (`after(1, …)` is the web's
-`setTimeout(f, 0)`: 0 would be due in the commit that armed it).
+a millisecond interval is a literal whole number of at least 1.
+A `change(action)` schedule requires `key=` and accepts no timer options. It queues
+one action after the first active commit, a changed key or a reopened gate. Pending
+changes coalesce, a closed gate cancels them, and a refused action waits for another
+key change or activation. The host applies each preceding commit before the action
+runs; the virtual clock need not move. Cycles through change actions and their
+trigger inputs are refused (`analyze-change-cycle`).
 
 A `sequence` (LLP 1125 D2) declares what should play, as a value, and the
 runner plays it: the gate is a task's, and its body is exactly one
@@ -625,7 +637,8 @@ refused: wrap them in an element. `children` requires a declared slot.
 ```ebnf
 type          = type-atom { "[" "]" } ;               (* string[] is a list of strings *)
 type-atom     = "number" | "string" | "bool" | "unit" | IDENT | "action"
-              | "option" "<" type ">" ;
+              | "option" "<" type ">"
+              | "enum" "<" STRING { "," STRING } ">" ;
 expr          = ternary ;
 ternary       = binary [ "?" expr ":" expr ] ;
 binary        = unary { binary-op unary } ;
@@ -696,7 +709,7 @@ special typing; it is not a source-language type annotation.
 ## Authored tests
 
 ```ebnf
-test-file     = { launch | test } ;                   (* a top-level launch line: every test's *)
+test-file     = { launch | test | property } ;        (* a top-level launch line: every test's *)
 test          = "test" STRING [ "on" HOST { "," HOST } ] block( { launch } { step } ) ;
 HOST          = "web" | "macos" | "ios" | "tvos" | "linux" | "windows" | "android" ;
 launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
@@ -709,7 +722,9 @@ launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
               | "before" "data" NL                   (* the first step does not wait for data *)
               | "prefer" IDENT IDENT NL              (* CSS media feature and value, before observations *)
               | "fail" "fetch" STRING [ "times" NUMBER ] NL ; (* armed before the first data load *)
-step          = "tap" STRING [ "hover" | "dblclick" | "contextmenu"
+step          = "tap" "midi" STRING ( HEX { HEX } | "clock" NUMBER NUMBER ) NL
+                                                     (* bytes into an input; or clock ticks: bpm, ms *)
+              | "tap" STRING [ "hover" | "dblclick" | "contextmenu"
                   | "pinch" NUMBER [ "at" NUMBER NUMBER ]
                   | "wheel" [ "-" ] NUMBER [ "-" ] NUMBER
                   | "history" [ "-" ] NUMBER
@@ -725,11 +740,14 @@ step          = "tap" STRING [ "hover" | "dblclick" | "contextmenu"
                   | "copy" | "cut" | "paste" STRING ) NL
               | "pick" STRING ( STRING { STRING } | "cancel" ) NL
               | "authorize" [ "cancel" ] NL           (* the held sign-in, against the app's server (oauth recipe) *)
-              | "clock" ( "settle" | "data" | [ "+" ] NUMBER [ "real" ] ) NL
+              | "clock" ( "settle" | "data" | "+" NUMBER [ "real" ] | NUMBER ) NL
+              | "clock" "held" { IDENT } [ NUMBER ( "s" | "ms" ) ] NL
+                                                     (* real time, the clock frozen, until held requests reply *)
               | "clock" "until" "state" IDENT { "." ( IDENT | NUMBER ) } "==" scalar "within" NUMBER NL
                                                      (* real time, the clock frozen, until it holds *)
               | "resize" NUMBER "x" NUMBER NL        (* the window, mid-test: 800x600 *)
               | "prefer" IDENT IDENT NL              (* change a media preference now *)
+              | "prefer" midi-fact { midi-fact } NL  (* each fact at most once *)
               | "reload" NL
               | "fail" "fetch" STRING [ "times" NUMBER ] NL (* later fetches whose URL starts with it fail *)
               | "pass" "fetch" STRING NL             (* it stops failing *)
@@ -748,9 +766,15 @@ step          = "tap" STRING [ "hover" | "dblclick" | "contextmenu"
               | "expect" "text" STRING "==" STRING NL
               | "expect" "state" IDENT { "." ( IDENT | NUMBER ) } "==" test-value NL
               | "expect" "sound" ( "has" | "missing" ) STRING
-                  [ "at" NUMBER ] [ "gain" NUMBER ] [ "ends" NUMBER ] [ "by" IDENT ] NL
+                  [ "at" NUMBER ] [ "gain" NUMBER ] [ "ends" NUMBER ]
+                  [ "playbackRate" NUMBER ] [ "pan" [ "-" ] NUMBER ] [ "by" IDENT ] NL
+              | "expect" "wakelock" ( "held" | "released" ) NL
+              | "expect" "midi" ( "sent" | "missing" ) STRING HEX { HEX } [ "at" NUMBER ] NL
               | "expect" "mediasession" ( IDENT "==" ( STRING | "none" )
                   | ( "has" | "missing" ) STRING ) NL ;
+midi-fact     = "midi.state" ( "prompt" | "granted" | "denied" | "unavailable" )
+              | ( "midi.inputs" | "midi.outputs" ) STRING ;  (* names, comma-separated *)
+HEX           = HEXDIGIT HEXDIGIT ;                  (* one byte, as in 90 3c 64 *)
 test-value    = [ "-" ] NUMBER | STRING | "true" | "false" | "none" | "[" "]" ;
 scalar        = [ "-" ] NUMBER | STRING | "true" | "false" | "null" ;
 METHOD        = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" ;
@@ -1024,8 +1048,8 @@ refused when the element does not own the session or does not offer the action.
 `expect mediasession` reads `state.mediaSession`: `owner` (by testId, or
 `none`), `title`, `artist`, `album`, `artwork` (as authored) or `playbackState`
 `==` a string, or `has`/`missing` an offered action. The test compiler emits steps as JSON;
-the agent driver executes them. The nine-operation interactive API is larger
-than this test-file grammar.
+the agent driver executes them. Its interactive API (`bun exact.mjs agent --help`) is
+larger than this test-file grammar.
 
 ## Standard functions and intrinsics
 
@@ -1238,7 +1262,7 @@ Several tags share a kernel node type with different fixed properties.
 | Boxes / layout | `view`, `box`, `row`, `column`, `scroll`, `list` |
 | Structure | `main`, `header`, `nav`, `section`, `footer`, `article`, `aside`, `dialog`, `hr` |
 | Tables / description lists | `table`, `caption`, `thead`, `tbody`, `tfoot`, `tr`, `th`, `td`; `dl`, `dt`, `dd` |
-| Text and controls | `text`, `h1`–`h6`, `button`, `link`, `input`, `textarea`, `select`, `option`, `progress` |
+| Text and controls | `text`, `h1`–`h6`, `time`, `button`, `link`, `input`, `textarea`, `select`, `option`, `progress` |
 | Media / metadata | `image`, `video`, `audio`, `iframe`, `canvas`, `head` |
 | SVG scene | `svg`, `g`, `path`, `polyline`, `polygon`, `circle`, `ellipse`, `line`, `rect` |
 | SVG definitions | `defs`, `symbol`, `use`, `clipPath`, `marker`, `mask`, `pattern` |
@@ -1266,7 +1290,7 @@ native `foreignObject`.
 `h1`–`h6` and the compile-time attributes `class`, `part` and `-exact-row-look`,
 with each style row's codec, values and default, the renamed spellings and the
 contextual restrictions: `cargo run -q -p contract -- vocab padding` for one
-name, no name for the card (what an app writes, at most 8 KB), `--all` for everything,
+name, no name for the card (what an app writes, at most 12 KB), `--all` for everything,
 `--json` for the same entries as JSON. From an app made by
 `exact new`, run `bun exact.mjs contract vocab`.
 `padding`, `margin`, `inset`, `border-width`, `border-style` and `border-color` take
@@ -1412,12 +1436,20 @@ span list for new text (`@alice` replaced by `@carol`) is still a new record. Sp
 UTF-16 offsets, clamped to `value`; where two overlap the later paints over the earlier.
 Until the app's record for the field's current text arrives, as a person types, the host
 paints the last record's spans moved across the edit as a DOM `Range` is (provisional).
-Nothing is repainted while an input method composes. The web paints with
+On the web and Apple, decoration updates wait until composition ends. The web paints with
 `createValueRange()` and `CSS.highlights` and leaves the `<textarea>` in place; a browser
 without `createValueRange` paints nothing. macOS, iOS and tvOS paint TextKit 2 rendering
 attributes; Linux and Windows paint colour runs with unchanged advances; Android and the
 terminal paint nothing yet. Only the web paints `text-shadow`. `input` and
 `textarea markup="markdown"` refuse `decorations`.
+
+The agent's `tree` keeps the authored `decorations` record. `state.decorations` on the
+web, Apple, Linux and Windows reports each field's `id` and `applied` snapshot: `source`,
+`recordValue`, `provisional` and the resolved `spans` with declared styles. During
+composition the web and Apple keep the last snapshot; Linux and Windows resolve the
+current record against the composing text on the next paint. The web also reports
+`painted`: false when the browser cannot paint OpaqueRange highlights, even though the
+snapshot is resolved.
 
 An action may call `rangeFrame(id, start, end)` for the `Geometry` of a textarea's UTF-16
 range, plain or `markup="markdown"` (source offsets), as DOM's
@@ -1664,11 +1696,11 @@ and each host's lock.
 ## Events
 
 An event binding is an action reference or partially applied action. Captured
-arguments precede the event payload. The table contains all 61 handler names.
+arguments precede the event payload. The table names every handler `contract vocab` lists.
 Numeric multi-argument payload ordering should be copied from the feature's
 working fixture, not inferred from JavaScript's Event interface.
 
-Six events bubble, as in the DOM: `key` and `keyup` from the focus,
+These events bubble, as in the DOM: `key` and `keyup` from the focus,
 `focusin` and `focusout` from the element gaining or losing focus,
 `pointerdown` and `pointerup` from the node pressed, and `wheel` from the node
 under the pointer, each to every ancestor that declares it, innermost first
@@ -1723,7 +1755,7 @@ host.
 | One string | `message`, `error`, `pictureinpictureerror` (why picture in picture failed) |
 | A string, then optionally a `KeyboardEvent` | `keycapture` (capture-phase `keydown`), `key` (bubble-phase `keydown`) and `keyup`: the key's name; an action taking one more parameter also hears the [modifiers, the physical key and whether it repeats](#keys) |
 | Two numbers, then optionally a `ScrollEvent` | `scroll`: left and top; an action taking one more parameter also hears the scroller's extents (below) |
-| Zero or one `IntersectionObserverEntry` | `intersect`: `isIntersecting` (bool) and `intersectionRatio` (number), mount then enter/leave at threshold 0; currently web only |
+| Zero or one `IntersectionObserverEntry` | `intersect`: `isIntersecting` (bool) and `intersectionRatio` (number), mount then enter/leave at threshold 0; the web, AppKit, UIKit and Linux |
 | Two numbers, then optionally a `DOMRectReadOnly` | `resize` given an action: the content box's width and height; an action taking one more parameter also hears its `contentRect` (below). A string `resize` is CSS's property |
 | One boolean | `hover`; `fullscreenchange` (whether the video is now full screen) |
 | One boolean, then optionally an `InputEvent` | `change`, `input` on a checkbox or `switch` |
@@ -1747,9 +1779,12 @@ host.
 | Zero or one `Selection` (the action takes it or leaves it) | `selectionchange`, on a `text` ([text selection](#text-selection)) |
 | Zero or one `InputEvent` | `selectionchange` and `beforeinput`, on a plain text field |
 | Zero or one `MediaSessionActionDetails` (the action takes it or leaves it) | `seekbackward`, `seekforward`, `seekto`, `previoustrack`, `nexttrack`, `stop`, on an `audio` or `video` with `metadata=` ([media session](#media-session)) |
+| Zero or one `ToggleEvent` (the action takes it or leaves it) | `toggle`, on a popover: `oldState` and `newState` |
+| Zero or one `AtomEvent` (the action takes it or leaves it) | `atompress`, on a node with `atoms=` ([inline atoms](#inline-atoms-atom-atoms-atomfaces-atompress)) |
+| Zero or one frame record (the action takes it or leaves it) | on an `iframe`: `currententrychange`, `navigatesuccess` and `navigateerror` (`FrameNavigation`), `capture` (`FrameCapture`), `download` (`FrameDownload`), `newwindow` (`FrameNewWindow`) and `userpromptopened` (`FrameUserPrompt`) |
 | Zero or one `MIDIMessageEvent` (the action takes it or leaves it) | `midimessage`, on an element with `midiinputs=` ([MIDI](#midi-exactmidi-sendmidi-midimessage)) |
 | Zero or one `MouseEvent` (the action takes it or leaves it) | `press`: the modifier keys held, `shiftKey`, `ctrlKey`, `altKey`, `metaKey` (a shift-click, a ⌘-click; all false from a keyboard or assistive activation), and where the pointer was, `clientX`, `clientY`, from the viewport (0, 0 from a keyboard or assistive activation, as Chrome's; a popover's `left`/`top` can open it there, LLP 1021 D2) |
-| None | `beforeunload`, `cancel`, `close`, `scrollend`, `scrolldragstart`, `focus`, `blur`, `submit`, `load`, `dblclick`, `swiperight`, `swipeleft`, `refresh`, `loadedmetadata`, `play`, `playing`, `pause`, `ended`, `waiting`, `seeking`, `seeked`, `ratechange`, `volumechange`, `canplay`, `reachstart`, `reachend` |
+| None | `enterpictureinpicture`, `leavepictureinpicture`, `beforeunload`, `cancel`, `close`, `scrollend`, `scrolldragstart`, `focus`, `blur`, `submit`, `load`, `dblclick`, `swiperight`, `swipeleft`, `refresh`, `loadedmetadata`, `play`, `playing`, `pause`, `ended`, `waiting`, `seeking`, `seeked`, `ratechange`, `volumechange`, `canplay`, `reachstart`, `reachend` |
 
 On text fields and textareas, `input` reports every edit. An `input` handler
 should update raw draft state so live search, validation and button enablement
@@ -2098,14 +2133,23 @@ Every element that declares it hears it; an action that calls `preventDefault()`
 keeps the window open. The browser then asks "Leave site?" itself; a Mac app asks
 its own question, and calls the host command `close()` once it is answered,
 which closes the window without asking again (on the web, `window.close()`, which
-a browser honours only for a window a script opened). iOS and Linux close no
-window. `head edited=…` marks the document as unsaved: on macOS the dot in the
-window's close button, beside the proxy icon of the file the window opened;
+a browser honours only for a window a script opened). Windows asks it as the Mac
+does, before its close button, Alt+F4 or the taskbar's Close window closes the
+window (a window that `keepRunning` hides asks nothing), and its bare `close()`
+closes the window and ends the one-window app without asking again. iOS and
+Linux close no window. `head edited=…` marks the document
+as unsaved: on macOS the dot in the window's close button, beside the proxy icon
+of the file the window opened;
 other hosts show nothing (a declared deviation: the web has no unsaved mark).
 
 HTML's global `title` attribute, on any element but `head` (whose `title` is the
 document's), is advisory text: the browser's tooltip on the web, `toolTip` on
-macOS; touch hosts show none.
+macOS, and the system tooltip control on Windows (including its hover delay and
+dismissal), drawn in the current style by the common controls the executable's
+manifest names. Linux, touch hosts, and a touch or a pen on Windows show none.
+The painted hosts' accessibility (UI Automation on Windows, TalkBack on Android)
+reads it as the element's description where it is not its name, and as its name
+where nothing else names it (an icon-only button), as HTML-AAM has it.
 
 ### Clipboard
 
@@ -2152,12 +2196,23 @@ Clipboard API's `write([new ClipboardItem({"image/png": path, "text/plain":
 text})])`, with an `app:/` path to a PNG (or at most 2 MiB of PNG bytes)
 and `writeText(text)`. The host writes a new PNG of the image's pixels, frame
 0 of an animation; convert another format first with
-`storage.fs.compressImage(…, {type: "image/png"})`. Web, macOS and iOS. The
-app's Contract names the package with a `use` (`use ClipboardItem from
+`storage.fs.compressImage(…, {type: "image/png"})`. Web, macOS and iOS;
+Windows accepts the `app:/` path form and `writeText`, but refuses in-memory
+image bytes with `NotSupportedError`. A path's file is at most 64 MiB and
+its image at most 64,000,000 pixels. Windows offers registered `PNG` first,
+then `CF_DIBV5` with alpha for sRGB or untagged input, and `CF_UNICODETEXT`
+when text is supplied. Other colour information (gamma, primaries or an ICC
+profile) stays in the PNG; those images have no bitmap fallback, so the paste
+recipient must accept PNG. Full-range sRGB cICP `(1, 13, 0, 1)` without
+mDCV or cLLI is normalized to sRGB, replacing lower-priority colour tags,
+and gets a bitmap. Other cICP values, mDCV and cLLI are refused. Without
+cICP, iCCP takes precedence over sRGB and the sRGB tag is removed. See the
+[Windows paste limitations](reference.md#clipboard-images).
+The app's Contract names the package with a `use` (`use ClipboardItem from
 "@exact/clipboard"`), which links it. Under the agent neither this nor
 `copyText` touches the person's clipboard: the write lands on the session's
-own pasteboard (in memory on the web), and `state.extensions.clipboard.implementation`
-shows the last one (`EXACT_DEVICE=real` writes the real one on Apple).
+own pasteboard (in memory on the web and Windows), and `state.extensions.clipboard.implementation`
+shows the last one (`EXACT_DEVICE=real` writes the real one on Apple and Windows).
 
 ### Text selection
 
@@ -2650,12 +2705,20 @@ the virtual clock).
   stays an ordinary button in the window. With
   `host.macos.activationPolicy: "accessory"` the app has no Dock tile and
   opens no window at launch. Bare `focus()` is the window's, as the web's
-  `window.focus()`: on macOS it shows the session's window if hidden, brings
-  it forward and activates the app; Windows and Linux bring no window forward
-  yet and log it as unsupported. `focus(id)` stays an element's.
-  Windows opens a window on every launch and exits when it closes; it has no
-  `keepRunning` setting. The login package stores `hidden`, but Windows does
-  not yet honor it at launch (LLP 1133.025 §14).
+  `window.focus()`: on macOS and Windows it shows the session's window if
+  hidden, brings it forward and activates the app; Linux brings no window
+  forward and logs it as unsupported. `focus(id)` stays an element's.
+  `hideWindow()` puts the session's window away as the person's close does
+  while a status item is placed or under `keepRunning`, and the app keeps
+  running; the next `focus()` shows it.
+  On Windows `host.windows.window.keepRunning: true` makes closing the window
+  hide it, as on the Mac, and a login item registered `hidden` opens no
+  window at that launch. A Windows app is one process: launching it again
+  shows the window it has, and a location on that command line (a
+  jump-list task) opens in it. Windows' notification-area icon is not built
+  (LLP 1133.025 §14), so an app that keeps running there gives the person
+  its own way back (a global shortcut whose action calls `focus()`) and its
+  own way out (a button whose action calls `close()`).
 
   `@exact/global-shortcuts` on Windows accepts `PrintScreen` and modified
   chords such as `Control+PrintScreen`. Bare `PrintScreen` answers
@@ -2751,14 +2814,16 @@ rows and content lifted into a popover; an explicit
 
 ## Host commands
 
-The current command name inventory is:
+The command names are:
 
 `blur`, `copyText`, `deliveryActivate`, `deliveryCheck`, `fastSeek`, `focus`, `format`,
-`load`, `openURL`, `requestFullscreen`, `exitFullscreen`, `requestPictureInPicture`, `exitPictureInPicture`, `removeAllRanges`, `selectText`, `setSelectionRange`, `setRangeText`, `setScheme`, `setLocale`, `setRootFontSize`, `setPageZoom`, `setWindowOpacity`, `showPicker`, `share`, `saveFile`,
-`showOpenFilePicker`, `showDirectoryPicker`, `showSaveFilePicker`, `requestPermission`, `scrollIntoView`, `scrollBy`, `showModal`,
+`load`, `navigate`, `traverseHistory`, `stopLoading`, `captureScreenshot`, `openDevTools`,
+`openURL`, `requestFullscreen`, `exitFullscreen`, `requestPictureInPicture`, `exitPictureInPicture`, `removeAllRanges`, `selectText`, `setSelectionRange`, `setRangeText`, `setScheme`, `setLocale`, `setMode`, `setRootFontSize`, `setPageZoom`, `setWindowOpacity`, `showPicker`, `share`, `saveFile`,
+`showOpenFilePicker`, `showDirectoryPicker`, `showSaveFilePicker`, `requestPermission`, `scrollIntoView`, `scrollBy`, `showModal`, `showPopover`, `hidePopover`, `togglePopover`,
+`hideWindow`,
 `haptic`, `postMessage`, `reload`, `relaunch`, `close`,
-`observe`, `observeAttributes`, `observeError`, `playSound`, `playSounds`, `stopSounds`, `requestMIDIAccess`, `sendMIDI`, `startTrace_EXPERIMENTAL`, `stopTrace_EXPERIMENTAL`
-([pointer](#pointer): a window's `beforeunload`), `preventDefault` ([keys](#keys)) and
+`observe`, `observeAttributes`, `observeError`, `playSound`, `playSounds`, `stopSounds`, `requestMIDIAccess`, `sendMIDI`, `startTrace_EXPERIMENTAL`, `stopTrace_EXPERIMENTAL`,
+`preventDefault` ([keys](#keys); [pointer](#pointer): a window's `beforeunload`) and
 `stopPropagation` ([events](#events)).
 
 These appear only as action statements. They are not ordinary value-returning
@@ -2778,12 +2843,14 @@ argument validation. Use the working implementation when selecting arguments:
 | `setRangeText(id, text[, start, end[, selectionMode]])`: a field's range replacement, one `input`, preserve selection by default; one undo step on macOS, focused iOS fields and the Markdown editor ([form controls](#form-controls-radio-inputevent-setselectionrange)) | [Chrome comparison](../host/web/tests/field-range.test.mjs) |
 | `copyText(text)` | [Messages](../apps/messages/app.contract) |
 | `startTrace_EXPERIMENTAL()`, `stopTrace_EXPERIMENTAL()`: experimental, so named while the trace's fields may still change; a recording of each UI update UIKit makes, observed without asking for one or for a frame rate (iOS and tvOS 18 and later), elsewhere of each display-link callback, from which it estimates the frames the display showed again, from an app's own control and in any build, a production one included; `stopTrace_EXPERIMENTAL()` puts the trace on the clipboard as compact JSON and in a `trace-recording-*.json` file in the app's temporary directory; `stopTrace_EXPERIMENTAL(maxBytes)` copies it cut to that many bytes (its totals and scroll segments as rows, then the frames late the longest first, as many as fit), for a conversation that limits a message (a budget too small for its totals gets a note naming the size that fits them; that note can exceed the requested budget), and still saves the whole trace. On iOS it splits each scroll a person makes of an element's scroller, a route's page or the document into its drag and its glide, with its frame rate and delay relative to the display’s fastest rate; a Mac recording follows no scroller. It lists each late frame with its cause, its scroll offset, its update's phases, the main thread's busy time, its overrun and commit time, batches and host phases; [Frame trace fields](#frame-trace-fields) says what each field means. Apple hosts (tvOS, with no clipboard, only saves the file); the web and Linux refuse it in the journal | [`TraceRecording.swift`](../host/apple/Sources/ExactKit/TraceRecording.swift) |
-| `openURL(url)`: an absolute `http`, `https`, `mailto` or `tel` URL, or one of a scheme app.json's `open_url.schemes` declares (`"open_url": {"schemes": ["vscode", "zed"]}`, an editor's deep link), opened by whatever the system registered for it; the web's JS target, macOS and iOS open declared schemes (a browser asks first) and journal one nothing could open, and under the agent journal them instead (`openURL vscode: …`). `openURL(url, id)` also says whether it opened, as Electron's `shell.openExternal` does: `change` at the element `id` names hears `opened` when the system took the URL, or `failed` when it was refused or nothing could open it (no app registered for its scheme, a host with no browser). The web hears `opened` for any URL it hands the browser, which does not say what opened it. Where the agent's drive journals an open instead, macOS answers whether an app is registered for the URL and the other hosts answer `opened` A link's `href` of a declared scheme opens on macOS and iOS, which hand followed links to `openURL`; the web writes no such `href` (its link policy keeps the four schemes). `file`, `javascript`, `data` and the other schemes that run or read content cannot be declared. Any other scheme is refused in the journal (LLP 1133.000 §2) | No Contract fixture; the hosts' dispatch, such as [`host/web-js/commands.js`](../host/web-js/commands.js), [`OpenURL.swift`](../host/apple/Sources/ExactKit/OpenURL.swift) |
+| `openURL(url)`: an absolute `http`, `https`, `mailto` or `tel` URL, or one of a scheme app.json's `open_url.schemes` declares (`"open_url": {"schemes": ["vscode", "zed"]}`, an editor's deep link), opened by whatever the system registered for it; the web's JS target, macOS and iOS open declared schemes (a browser asks first) and journal one nothing could open, and under the agent journal them instead (`openURL vscode: …`). Under the agent an `http` or `https` URL opens in the driver's browser on the web, in a tab the drive does not control, while macOS and iOS journal it and open nothing, so a test cannot go on in the opened page. `openURL(url, id)` also says whether it opened, as Electron's `shell.openExternal` does: `change` at the element `id` names hears `opened` when the system took the URL, or `failed` when it was refused or nothing could open it (no app registered for its scheme, a host with no browser). The web hears `opened` for any URL it hands the browser, which does not say what opened it. Where the agent's drive journals an open instead, macOS answers whether an app is registered for the URL and the other hosts answer `opened` A link's `href` of a declared scheme opens on macOS and iOS, which hand followed links to `openURL`; the web writes no such `href` (its link policy keeps the four schemes). `file`, `javascript`, `data` and the other schemes that run or read content cannot be declared. Any other scheme is refused in the journal (LLP 1133.000 §2) | No Contract fixture; the hosts' dispatch, such as [`host/web-js/commands.js`](../host/web-js/commands.js), [`OpenURL.swift`](../host/apple/Sources/ExactKit/OpenURL.swift) |
 | `setScheme(scheme)`: the app's scheme, `"light"`, `"dark"` or `"system"` (follow the system's appearance) | [Caltrain](../apps/caltrain/app.contract), [Markdown](../apps/markdown/app.contract) |
 | `setLocale(tag)`: the language the app's strings read, over the host's locale: `t(…)` texts, `lang`, `dir` and `exactTime().resolvedLocale` follow the table `tag` resolves to, by the lookup the host's locale takes (`"de-AT"`, then `"de"`, then the base). `exactTime().locale` and `formatLocale` stay the device's. The choice is kept across launches and applies before the first frame of the next; `setLocale("")` forgets it and follows the host's locale. A literal tag is checked here (`type-set-locale`), a computed one in the log when it runs; an app with no strings tables is refused (`type-strings-missing`) | [strings tests](../contract/cli/tests/it/strings.rs) |
+| `setMode(axis, value)`: sets one of the window's app modes, an axis of the app's design (`app.tamber`) to one of its values, as `setMode("dark-style", "dim")`; a subtree pins its own with `-exact-mode` (LLP 1121 D5) | [Tamber recipe](recipes/tamber.md), [compiler tests](../contract/cli/tests/it/tamber.rs) |
 | `setRootFontSize(px)`, `setRootFontSize("125%")`, `setRootFontSize("medium")`: CSS's `:root { font-size }`, the root font size every `rem` follows, in px above 0, laid out in the action's own commit; `px` lengths stay. It stands over the host's own size (the browser's setting, iOS Dynamic Type, 16 on macOS and Linux), as an author's `html { font-size: 20px }` stands over a browser's font-size setting, and `"medium"` hands the size back to the host. A percentage (CSS's number syntax, above 0) is that share of the host's size and follows it as the host's changes (LLP 1121 D6). A literal of 0 or less is refused here, a computed one in the log when it runs. Not kept across a launch: set it again from a mount task (LLP 1069.000 D3) | [rem tests](../contract/cli/tests/it/rem.rs) |
 | `setPageZoom(factor)`: the window's page zoom, as View ▸ Zoom In sets it and Electron's `webContents.setZoomFactor`: a CSS px is `factor` points, so the viewport, media queries, `px` and `rem` all follow; `setPageZoom(1)` is Actual Size, and a factor is clamped to 0.25–5. For an app whose own ⌘0, ⌘= and ⌘- commands keep their own steps ([The Mac's menu bar](#keys)). The Mac's; iOS, Linux, Windows and the web refuse it in the journal (LLP 1021 §5.3.1) | [`PageZoomMacTests`](../host/apple/tests/ExactKitTests/PageZoomMacTests.swift) |
 | `exitFullscreen()`, `setWindowOpacity(opacity)`: what a quit the app holds does to its window before it quits, as Electron's `setFullScreen(false)` and `setOpacity(0)`. `exitFullscreen()` is the web's `document.exitFullscreen()`: on the Mac the session's window leaves its full-screen space (a video's own full screen is `requestFullscreen(id)`'s); nothing happens when nothing is full screen. `setWindowOpacity` draws the session's window at an opacity from 0 (unseen, still key and still hearing keys) to 1 (`NSWindow.alphaValue`); a literal outside 0–1 is refused here (`type-window-opacity`). The Mac's; the web refuses `setWindowOpacity`, and iOS and Linux refuse both, in the journal. The agent's `state.windows` shows each window's `fullScreen` and `opacity` (LLP 1069.010) | [calls tests](../contract/cli/tests/it/calls.rs), [`WindowCommandsMacTests`](../host/apple/tests/ExactKitTests/WindowCommandsMacTests.swift) |
+| `hideWindow()`: the session's window put away with the app still running, as Electron's `BrowserWindow.hide`, for a menu-bar utility whose window goes once its work is done. On the Mac it is what the person's ⌘W does under `host.macos.window.keepRunning` or while a status item is placed: the window is ordered out, its session kept, `exactPage().visibilityState` reads `hidden` and `persisted` `true`, and the next bare `focus()`, Dock click or status-item press shows it as a restore (`restores`). Where the app would end without its window (neither, or a `navigate-new` app), it is refused in the journal and the window stays; `close()` still closes the window and ends the app. On Windows it is what the close button does under `host.windows.window.keepRunning`, and refused in the journal without it. iOS, Linux, Android and the web refuse it in the journal (LLP 1133.025 D4) | [window command tests](../contract/cli/tests/it/window_commands.rs), [`WindowCommandsMacTests`](../host/apple/tests/ExactKitTests/WindowCommandsMacTests.swift) |
 | `share(title=, text=, url=, files=)`: the system share sheet by the Web Share API's names, at least one of `text`, `url` and `files`, each its own item of the sheet (pass a picture alone to share only it, as a Share Card button does; `contract vocab share`); `url` absolute `http(s)`. `files=` lists `app:/` files, each behind the app's `fs.read` grant (on Apple a regular file of at most 64 MB, reached through no symbolic link), and `"#id"` entries: a PNG of that element as it is drawn now, at the display's scale, named by the share's `title` (else by the id) (iOS and macOS; the web refuses it, `share: refused: a picture of an element is not available on the web`; Android and Linux refuse files). A literal `#id` no element carries is refused here (`lower-share-picture`), a missing one at run time in the journal. Offer it where `exactPage()`'s `canShareFiles` and `canSharePictures` hold (LLP 1125 D12). The outcome is a journal line | [share corpus](../contract/corpus/share.contract), [Metronome](../apps/metronome/app.contract) |
 | `showPicker(id)`, export `saveFile(id, from, suggestedName)`: the host copies the `app:/` file `from` to where the person chooses; `change` at `id` carries the chosen name, `cancel` a dismissal. `saveFile(id, text=…, suggestedName=…)` saves the text itself (UTF-8), no file written first and no grant, so "export what's on screen" is one press | [picker tests](../contract/cli/tests/it/picker.rs), [Fieldnotes](../apps/fieldnotes/app.contract), [Linux's save tests](../host/linux/src/presenter/save_tests.rs) |
 | `showOpenFilePicker(id[, multiple])` | [file-picker corpus](../contract/corpus/file-pickers.contract) |
@@ -2800,7 +2867,8 @@ argument validation. Use the working implementation when selecting arguments:
 | `playSound(src, at=, gain=, group=, playbackRate=, pan=)`: a new voice of a declared sound (a literal `src` must be declared, `type-sound-undeclared`), starting at `at` on the runner's clock (`performanceNow()`'s milliseconds; the past and the default are the commit's time), at a linear `gain` 0–1 (default 1; a literal outside is refused, a computed one clamped), in a `group` that is monophonic by start time, read at `playbackRate` 0.25–4 (default 1; pitch and length move together, so the voice lasts its file's length divided by it) and placed at `pan` −1 to 1 (default 0, centred; Web Audio's equal-power `StereoPannerNode`), each refused as a literal outside its range and clamped when computed, as `gain` is (LLP 1125 D10). `playSounds(hits)`: one voice per item of a list of a shape whose fields are, in order, `src: string`, `at: number`, `gain: number`, `group: string`, then optionally `playbackRate: number` and then `pan: number`. `stopSounds()`, `stopSounds(group=)`: what sounds stops, what waits is cancelled. The runner keeps the voice table (`state sounds`); the web and Apple play it, Linux and Windows keep the record (LLP 1096) | [sound tests](../contract/cli/tests/it/sound.rs), [sounds conformance](../host/web-js/conformance/sounds/app.contract) |
 | `requestMIDIAccess()`, `sendMIDI(output, data, at=)`: ask for the MIDI ports `exactMIDI()` answers; send whole MIDI 1.0 messages to an output by `id` at `at` on the runner's clock. The runner keeps the queue (`state midi`); a host hands each message to its output 50 ms before it is due ([MIDI](#midi-exactmidi-sendmidi-midimessage), LLP 1125 D6, D7) | [MIDI tests](../contract/cli/tests/it/midi.rs), [MIDI conformance](../host/web-js/conformance/midi/app.contract), [Metronome](../apps/metronome/app.contract) |
 
-The web (its JS target) and the Apple hosts carry every command. The
+The web (its JS target) and the Apple hosts carry every command whose row above
+does not say otherwise. The
 headless Linux host has no browser, clipboard, editor or dev menu: its
 `openURL`, `copyText`, `format`, `reload`, `close`, `fastSeek` and `load` are
 journaled as unsupported there (it has no media player), and `haptic` does nothing. Its `selectText` focuses the field

@@ -616,6 +616,7 @@ impl PlanBuilder {
             placeholder_value: self.no_data(),
             each: ArgsRange { start: 0, len: 0 },
             transient: false,
+            keep: false,
             gate: ArgsRange { start: 0, len: 0 },
         });
         ResourcesId(self.plan.resources.len() as u32 - 1)
@@ -817,6 +818,13 @@ impl PlanBuilder {
         self.timer_row(0, action, false, true)
     }
 
+    /// A keyed action queued after a committed change, without a time delay.
+    pub fn change_task(&mut self, action: ActionsId) -> TimersId {
+        let id = self.timer_row(0, action, true, false);
+        self.plan.timers[id.0 as usize].change = true;
+        id
+    }
+
     fn timer_row(
         &mut self,
         interval_ms: u32,
@@ -827,6 +835,7 @@ impl PlanBuilder {
         let always = self.constant(&Value::Bool(true));
         let name = self.str("");
         self.plan.timers.push(TimersRow {
+            change: false,
             interval_ms,
             wait: 0,
             max_ms: 0,
@@ -1087,6 +1096,11 @@ impl PlanBuilder {
     /// 1156.005 D4).
     pub fn set_resource_transient(&mut self, id: ResourcesId) {
         self.plan.resources[id.0 as usize].transient = true;
+    }
+
+    /// Keep only successful live publications of this surface reader.
+    pub fn set_resource_keep(&mut self, id: ResourcesId) {
+        self.plan.resources[id.0 as usize].keep = true;
     }
 
     /// A resource's `when` (LLP 1161.002 D1): the condition under which it is asked.

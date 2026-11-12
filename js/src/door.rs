@@ -135,7 +135,8 @@ pub(crate) unsafe extern "C" fn host_door(
                     (*store).observe_external_read();
                 }
                 match (&mut state.native, state.store) {
-                    (Some(module), Some(_)) => serde_json::from_str(&b)
+                    (Some(module), Some(_)) => exact_js_value::json::parse(b.as_bytes())
+                        .map(serde_json::Value::from)
                         .map_err(|error| error.to_string())
                         .and_then(|request| module.call(&request))
                         .map(|reply| Some(reply.to_string())),

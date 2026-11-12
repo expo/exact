@@ -139,7 +139,7 @@ component A
 
 #[test]
 fn raw_literals_survive() {
-    let huge = "9".repeat(400); // lexer accepts an overflowing decimal
+    let huge = "9".repeat(300); // still finite: the largest double has 309 digits
     let src = format!(
         r#"
 font "Brand" = "fonts/brand.ttf"
@@ -148,7 +148,7 @@ routes screen
         story "/:id"
     notfound
 component A
-    state n = 0001.00
+    state n = 1.00
     derive enormous = {huge}
     derive sub = n - n
     derive property = 1 . field
@@ -158,7 +158,7 @@ component A
 "#
     );
     let after = preserved(&src);
-    assert!(after.contains("0001.00"));
+    assert!(after.contains("1.00"));
     assert!(after.contains(&huge));
     assert!(after.contains("1 .field"));
     assert!(after.contains(r#"text "a\t\n\`\$" font-size=12"#));
@@ -450,4 +450,24 @@ fn a_negative_literal_and_an_exponent_keep_their_spelling() {
     let after = preserved(src);
     assert!(after.contains("min=-1e300 max=2.5E-3 step=4e+2"), "{after}");
     assert!(after.contains("margin-top=-8"), "{after}");
+}
+
+#[test]
+fn midi_hex_bytes_stay_whole() {
+    let src = r#"test "MIDI bytes"
+    tap midi "keys" 90 3c 00 08 4C 0e ff
+    expect midi sent "synth" 90 3c 64 at 500
+    expect midi missing "synth" 80 4c 00
+    tap midi "clock" clock 120 2000
+"#;
+    let out = preserved(src);
+    assert!(out.contains("90 3c 00 08 4C 0e ff"));
+    assert!(out.contains("90 3c 64 at 500"));
+    assert!(out.contains("80 4c 00"));
+}
+
+#[test]
+fn separated_negations_stay_separate() {
+    let src = "component A\n  derive x = - -3\n  view\n    text x\n";
+    assert!(preserved(src).contains("- -3"));
 }

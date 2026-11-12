@@ -68,6 +68,7 @@ pub fn look_rows() -> StyleMask {
         crate::StyleId::BorderColorBottom,
         crate::StyleId::BorderColorLeft,
         crate::StyleId::Opacity,
+        crate::StyleId::Scale,
         crate::StyleId::BoxShadow,
     ] {
         mask.set(id);

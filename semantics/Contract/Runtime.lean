@@ -647,6 +647,7 @@ def waitBeatAfter (deadline interval execution : F64) : F64 :=
 host does not present frames, as in a differential run): it is due at
 `virtualFrame base k`, and each fire moves to the next frame. -/
 structure Timer where
+  change : Bool := false
   action : String
   waitKind : Nat := 0
   nominal : F64 := 0
@@ -1126,7 +1127,7 @@ def startTimers (p : Program) (slots : List (String × Value)) : Result (List Ti
                next := if gated then F64.posInf else virtualFrame 0 1, frame := true, base := 0, k := 1,
                gate := t.gate, key := t.key, armed := !gated }
     let ms ← (← eval fuel { prog := p, slots } false [] t.ms).asNum
-    pure { action := t.action, interval := ms, once := t.kind == .after,
+    pure { action := t.action, interval := ms, once := t.kind == .after || t.kind == .change, change := t.kind == .change,
            waitKind := t.waitKind, maxMs := t.maxMs, nominal := ms,
            next := if gated then F64.posInf else if t.waitKind == 1 then frameAtOrAfter ms else ms, gate := t.gate, key := t.key, armed := !gated }
 
@@ -1287,10 +1288,11 @@ def advance (p : Program) (o : Oracle) (c : Config) (t : F64) : Config × Outcom
       match due c with
       | .none => finish c
       | .some (tm, i) =>
+        if tm.change && n + 1 < timerFireLimit then (c, .ok) else
         let timers := c.timers.set i tm.fired
-        let c := { c with timers, now := tm.next }
+        let c := { c with timers, now := if tm.change && tm.next < c.now then c.now else tm.next }
         match runAction p o c tm.action [] [] with
-        | (c, .ok) => go n c
+        | (c, .ok) => if tm.change then (c, .ok) else go n c
         | (c, out) => (c, out)
   if t < c.now then (c, .ok) else go timerFireLimit c
 

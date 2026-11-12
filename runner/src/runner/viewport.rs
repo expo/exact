@@ -82,12 +82,35 @@ impl<D: DataSource> Runner<D> {
         viewport: Viewport,
         why: &str,
     ) -> Result<Option<CommitReceipt>, RunnerError> {
-        self.replace_fact(
+        let geometry = crate::viewport::Geometry::of(&self.kernel);
+        let changed = self.viewport_geometry != geometry;
+        let previous = std::mem::replace(&mut self.viewport_geometry, geometry);
+        let result = self.replace_fact(
             |r| &mut r.viewport,
             viewport,
             SOURCE,
-            |r, _, readers| r.recommit(readers, why),
-        )
+            |r, _, mut readers| {
+                if changed && readers.is_empty() {
+                    readers = r
+                        .resource_rows()
+                        .enumerate()
+                        .filter_map(|(i, row)| (r.plan.str(row.source) == SOURCE).then_some(i))
+                        .collect();
+                }
+                r.recommit(readers, why)
+            },
+        );
+        if result.is_err() {
+            previous.restore(&mut self.kernel);
+            self.viewport_geometry = previous;
+        }
+        result
+    }
+
+    /// Publish changed document insets or segment rectangles after the host
+    /// updates the kernel environment. Unchanged geometry commits nothing.
+    pub fn refresh_viewport_geometry(&mut self) -> Result<Option<CommitReceipt>, RunnerError> {
+        self.replace_viewport(self.viewport, "viewport geometry")
     }
 
     pub(super) fn viewport_answer(&self, i: usize) -> Result<Value, DataError> {
@@ -112,7 +135,9 @@ impl<D: DataSource> Runner<D> {
             } else if name == "accessibilityTextSize" {
                 Some(Value::Bool(self.accessibility_text_size()))
             } else {
-                self.viewport.field(name)
+                self.viewport_geometry
+                    .field(&self.plan, self.plan.field(f).ty, name, self.viewport)?
+                    .or_else(|| self.viewport.field(name))
             };
             match value {
                 Some(v) => fields.push(v),

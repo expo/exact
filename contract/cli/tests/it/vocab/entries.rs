@@ -84,3 +84,50 @@ fn headings_answer_in_text_json_and_listings() {
         assert_eq!(vocab(&["--json", name]).status.code(), Some(1), "{name}");
     }
 }
+
+/// LLP 1043.000 §3 D1: the keywords `vocab` lists for a row are those the
+/// compiler admits where the attribute is admitted, and the schema's
+/// `refused` ones are named as refused, in text and JSON alike; `buttonStyle`
+/// lists its names in JSON too.
+#[test]
+fn listed_keywords_compile_and_refused_ones_are_named() {
+    let at = |attr: &str, v: &str| {
+        match attr {
+        "wrap-flow" => format!("component A\n  view\n    column position=\"relative\"\n      text \"x\"\n      box position=\"absolute\" wrap-flow=\"{v}\" width=40 height=40\n"),
+        "user-select" => format!("component A\n  view\n    text \"x\" user-select=\"{v}\"\n"),
+        _ => format!("component A\n  action go\n  view\n    button \"Go\" press=go buttonStyle=\"{v}\"\n"),
+    }
+    };
+    for (attr, refused) in [
+        (
+            "wrap-flow",
+            &["start", "end", "minimum", "maximum", "clear"][..],
+        ),
+        ("user-select", &["contain"]),
+    ] {
+        let one: Value = serde_json::from_str(&stdout(&vocab(&["--json", attr]))).unwrap();
+        let row = &one["attribute"]["rows"][0];
+        assert_eq!(row["refused"], serde_json::json!(refused), "{one}");
+        let text = stdout(&vocab(&[attr]));
+        assert!(
+            text.contains(&format!("; refused: {}", refused.join("|"))),
+            "{text}"
+        );
+        for v in row["values"].as_array().unwrap() {
+            let v = v.as_str().unwrap();
+            assert!(!refused.contains(&v), "{one}");
+            contract::compile(&at(attr, v)).unwrap_or_else(|e| panic!("{attr}={v}: {e}"));
+        }
+        for v in refused {
+            let error = contract::compile(&at(attr, v)).unwrap_err();
+            assert!(error.message.contains("Write one of auto, "), "{error}");
+        }
+    }
+    let one: Value = serde_json::from_str(&stdout(&vocab(&["--json", "buttonStyle"]))).unwrap();
+    let names = one["attribute"]["values"].as_array().unwrap();
+    assert_eq!(names.len(), 12, "{one}");
+    for v in names {
+        let v = v.as_str().unwrap();
+        contract::compile(&at("buttonStyle", v)).unwrap_or_else(|e| panic!("{v}: {e}"));
+    }
+}

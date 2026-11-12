@@ -248,6 +248,28 @@ fn gradients_cross_resolved() {
     assert_eq!(fill["st"][1][1], serde_json::json!([244, 63, 94, 255]));
 }
 
+/// LLP 1055.000 D17: an empty gradient draws nothing, but the fill is set,
+/// so it takes hits under `visiblePainted`; `pointer-events` decides the rest.
+#[test]
+fn a_shape_says_which_of_its_paints_take_hits() {
+    let app = "component A\n  view\n    column\n      svg width=100 height=100\n        defs\n          linearGradient id=\"empty\"\n        rect width=100 height=100 fill=\"url(#empty)\"\n        rect width=10 height=10 stroke=\"red\" pointer-events=\"visibleStroke\"\n        rect width=10 height=10 visibility=\"hidden\"\n";
+    let plan = contract::compile(app).unwrap().encode();
+    let (_, batch) = Host::boot(
+        &plan,
+        NoData,
+        Box::new(MonospaceMeasurer::default()),
+        390.0,
+        844.0,
+    )
+    .unwrap();
+    let s = scene(&batch);
+    let els = &s["els"];
+    assert_eq!(els[0]["f"], serde_json::Value::Null, "{s}");
+    assert_eq!(els[0]["hp"], serde_json::json!([1, 0]), "{s}");
+    assert_eq!(els[1]["hp"], serde_json::json!([0, 1]), "{s}");
+    assert_eq!(els[2]["hp"], serde_json::json!([0, 0]), "{s}");
+}
+
 #[test]
 fn a_fixed_svg_reemits_window_geometry_after_resize() {
     let app = r#"component A

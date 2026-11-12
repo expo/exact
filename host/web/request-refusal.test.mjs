@@ -973,7 +973,7 @@ export function answer(name, args, store, storage) {
     const stream = data.answer('stream', [], new Map());
     expect(await stream.stream(() => {}, new AbortController())).toEqual({ v: "error Refused: outside the app's grants (net.websocket)" });
     const { fetch } = await import(pathToFileURL(resolve(dir, 'ts-fetch.js')).href);
-    await expect(fetch('wss://a.example', { exactStream: e => e })).rejects.toThrow('before the answer\'s first await');
+    await expect(fetch('wss://a.example', { exactStream: e => e })).rejects.toThrow("a stream starts in its answer's own turns");
   } finally {
     delete globalThis.location;
     rmSync(dir, { recursive: true, force: true });

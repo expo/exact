@@ -34,7 +34,7 @@ pub const GPU_MODULE_ABI: u32 = 1;
 /// before the store snapshot (LLP 1048.000 D9), two-way sockets (LLP 1016.003),
 /// cache-mode tag 12 (LLP 1162 D4), stream protocol names (LLP 1016.000),
 /// preload-name tag 13 (LLP 1162.000 D1), and prefetch tag 14 (D5).
-pub(crate) const RUST_ABI: u32 = 10;
+pub(crate) const RUST_ABI: u32 = 9;
 /// The data-module runtime a TypeScript bundle may rely on in the binary's
 /// own prelude (`js/src/prelude.js`, compiled into the host): moved when the
 /// prelude learns something a bundle cannot do without and an older prelude
@@ -75,9 +75,9 @@ pub(crate) const RUST_ABI: u32 = 10;
 /// module whose grants admit `sqlite.open` needs 10 ([`typescript_runtime_of`]).
 /// 11: Fetch's `cache` (LLP 1162 D4), which an older prelude ignores.
 /// 12: `exactProtocols`, which an older prelude would ignore (LLP 1016.000).
-/// 13: `exactPreload`, which an older prelude ignores (LLP 1162.000 D1).
-/// 14: `exactPrefetch`, which an older prelude ignores (D5).
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 14;
+/// 13: `exactPreload` and `exactPrefetch`, which an older prelude ignores
+/// (LLP 1162.000 D1, D5).
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 13;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -89,7 +89,7 @@ pub(crate) const TYPESCRIPT_RUNTIME: u32 = 14;
 /// a request body. `structuredClone` names none of them. 10 is read from the
 /// grants, not the bundle.
 const RUNTIME_OPTIONS: [(u32, &str); 27] = [
-    (14, "exactPrefetch"),
+    (13, "exactPrefetch"),
     (13, "exactPreload"),
     (12, "exactProtocols"),
     (11, "cache"),

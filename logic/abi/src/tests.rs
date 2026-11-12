@@ -119,7 +119,7 @@ impl DataSource for Fixture {
     ) -> Result<Answer, DataError> {
         store.observe_external_read();
         match outcome {
-            Outcome::Message(_) | Outcome::Closed { .. } => {
+            Outcome::Message(_) | Outcome::Messages(_) | Outcome::Closed { .. } => {
                 unreachable!("no stream in this fixture")
             }
             Outcome::Response(r) => Ok(Answer::Now(Value::Number(r.status.into()))),
@@ -776,9 +776,9 @@ fn a_locked_name_crosses_the_seam_as_occupancy_alone() {
 
 #[test]
 fn cache_modes_cross_the_rust_module_seam() {
-    assert_eq!(ABI, 10);
+    assert_eq!(ABI, 9);
     let mut old = header(0).into_vec();
-    old[..4].copy_from_slice(&9u32.to_le_bytes());
+    old[..4].copy_from_slice(&8u32.to_le_bytes());
     assert!(matches!(reader(&old), Err(e) if e == "logic ABI version differs"));
     for word in [
         "unspecified",
@@ -940,4 +940,34 @@ fn prefetch_crosses_the_rust_module_seam_beside_cache_and_preload() {
         let bytes = [14, tag];
         assert!(read_result(&mut Reader::new(&bytes)).is_err());
     }
+}
+
+/// A listener (LLP 1133.005) and a byte stream have no encoding at the seam:
+/// each is refused, never sent as a stream to its URL.
+#[test]
+fn a_listener_and_a_byte_stream_are_refused_at_the_module_seam() {
+    let listener = || Request::listen("unix:/tmp/probe.sock", Default::default());
+    let refused = |request: Request| {
+        let mut encoded = Writer::default();
+        encode_result(&mut encoded, Ok(Answer::stream(request)));
+        match read_result(&mut Reader::new(&encoded.into_vec())).unwrap() {
+            Err(DataError::Unavailable(why)) => why,
+            other => panic!("crossed: {other:?}"),
+        }
+    };
+    let listening = "a listener's or a child's socket cannot cross the Rust module seam";
+    assert_eq!(refused(listener()), listening);
+    let unmarked = Request {
+        socket: false,
+        ..listener()
+    };
+    assert_eq!(refused(unmarked), listening);
+    let bytes = Request {
+        bytes: true,
+        ..Request::get("https://example.test/screen.avcc").independent_http(4096)
+    };
+    assert_eq!(
+        refused(bytes),
+        "a byte stream cannot cross the Rust module seam yet"
+    );
 }

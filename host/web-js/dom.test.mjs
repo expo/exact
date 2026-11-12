@@ -111,6 +111,8 @@ test.each([['', false], ['b', false], ['', true], ['b', true]])(
     a.textContent = 'a'; settled(true);
     expect(select.options.map(o => o.hasAttribute('selected'))).toEqual([false, true]);
     expect(b.value).toBe('');
+    P(b, 'value', () => null); settled(true);
+    expect([b.getAttribute('value'), b.value]).toEqual([null, 'c']);
   }),
 );
 

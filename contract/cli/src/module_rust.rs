@@ -106,8 +106,8 @@ fn rust_type(plan: &Plan, ty: TypesId) -> Result<String, String> {
     })
 }
 
-/// What the declaration reader noted of `row`'s WebAuthn dictionaries
-/// (`json<T>`, which the plan holds as strings): `{"options": [...],
+/// What the declaration reader noted of `row`'s values passed whole as
+/// JSON (`json<T>`, which the plan holds as strings): `{"options": [...],
 /// "answers": bool}`, or null.
 fn json_of(plan: &Plan, row: &ModulesRow) -> serde_json::Value {
     let substitute: serde_json::Value =
@@ -115,12 +115,17 @@ fn json_of(plan: &Plan, row: &ModulesRow) -> serde_json::Value {
     substitute["json"].clone()
 }
 
-/// A dictionary passed whole keeps its option: `Option<Value>` for
-/// `option<json<T>>`, which the plan holds as `option<string>`.
-fn whole_type(plan: &Plan, ty: TypesId) -> &'static str {
-    match plan.types[ty.0 as usize].kind {
-        TypeKind::Option => "::core::option::Option<::exact_data::modules::serde_json::Value>",
-        _ => "::exact_data::modules::serde_json::Value",
+/// A value passed whole keeps the options and lists around it:
+/// `Option<Vec<Value>>` for `option<json<T>[]>`, which the plan holds as
+/// `option<string[]>`. What `T` is, the module checks, not the binding.
+fn whole_type(plan: &Plan, ty: TypesId) -> String {
+    let row = &plan.types[ty.0 as usize];
+    match (row.kind, row.elem) {
+        (TypeKind::Option, Some(elem)) => {
+            format!("::core::option::Option<{}>", whole_type(plan, elem))
+        }
+        (TypeKind::List, Some(elem)) => format!("::std::vec::Vec<{}>", whole_type(plan, elem)),
+        _ => "::exact_data::modules::serde_json::Value".into(),
     }
 }
 
@@ -141,7 +146,7 @@ fn record(
     for f in fields(plan, ty) {
         let (key, rust) = (plan.str(f.name), field_name(plan.str(f.name)));
         let rust_ty = match json.iter().any(|j| j == key) {
-            true => whole_type(plan, f.ty).to_owned(),
+            true => whole_type(plan, f.ty),
             false => rust_type(plan, f.ty)?,
         };
         writeln!(out, "        /// `{key}`.\n        pub {rust}: {rust_ty},").unwrap();
@@ -219,7 +224,7 @@ fn call(plan: &Plan, extension: &str, row: &ModulesRow, out: &mut String) -> Res
     let answer = if nothing {
         "()".to_owned()
     } else if json_of(plan, row)["answers"] == true {
-        "::exact_data::modules::serde_json::Value".to_owned()
+        whole_type(plan, ty)
     } else {
         rust_type(plan, ty)?
     };

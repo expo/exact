@@ -239,7 +239,7 @@ test('host.web.head takes script, link and meta entries and refuses the rest by 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('host.windows.window takes its size and refuses keepRunning, which the Windows host does not build', async () => {
+test('host.windows.window takes its size and keepRunning, and refuses a keepRunning that is not a boolean', async () => {
   const { readManifest } = await import('./app.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-manifest-'));
   const read = window => {
@@ -248,7 +248,8 @@ test('host.windows.window takes its size and refuses keepRunning, which the Wind
   };
   try {
     assert.doesNotThrow(() => read({ width: 800, height: 600 }));
-    assert.throws(() => read({ keepRunning: true }), /host\.windows\.window\.keepRunning: not a known key/);
+    assert.doesNotThrow(() => read({ keepRunning: true }));
+    assert.throws(() => read({ keepRunning: 'yes' }), /host\.windows\.window\.keepRunning/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -420,6 +421,7 @@ test('the manifest orientation locks the iPhone, and an unknown one is refused',
 
 test('document handlers and TypeScript source mounts accept their manifest shapes and reject guessed ones', async () => {
   const { readManifest } = await import('./app.mjs');
+  const { documentTypes } = await import('../host/apple/documents.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'manifest-author-shapes-'));
   const base = { name: 'Reader', app: { id: 'dev.exact.reader', name: 'Reader' } };
   const read = extra => { writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ ...base, ...extra })); return readManifest(dir, 'reader'); };
@@ -429,6 +431,14 @@ test('document handlers and TypeScript source mounts accept their manifest shape
     const manifest = read({ file_handlers, typescript: { sources } });
     assert.deepEqual(manifest.file_handlers, file_handlers);
     assert.deepEqual(manifest.typescript.sources, sources);
+    for (const [mime, ext, uti] of [
+      ['audio/mpeg', '.mp3', 'public.mp3'], ['audio/wav', '.wav', 'com.microsoft.waveform-audio'],
+      ['audio/mp4', '.m4a', 'public.mpeg-4-audio'], ['audio/ogg', '.ogg', 'org.xiph.ogg-audio'],
+      ['application/xhtml+xml', '.xhtml', 'public.xhtml'],
+    ]) {
+      const manifest = read({ file_handlers: [{ action: '/', accept: { [mime]: [ext] } }] });
+      assert.deepEqual(documentTypes({ manifest })[0].LSItemContentTypes, [uti]);
+    }
     assert.throws(() => read({ file_handlers: { 'text/markdown': ['.md'] } }), /file_handlers:.*array/);
     assert.throws(() => read({ file_handlers: [{ action: '/', accept: ['text/markdown'] }] }), /file_handlers\[0\].accept:.*object/);
     assert.throws(() => read({ typescript: { sources: ['../generated'] } }), /typescript.sources:.*object/);

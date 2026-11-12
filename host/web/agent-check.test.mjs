@@ -349,6 +349,10 @@ test('judging: WCAG ratios, the floors, a clamp asked for, a reachable cover, th
   const paleAccent = judge(obs([{ ...white, bg: [104, 165, 254], on: 'own', onAccentFill: true }]), null);
   expect(paleAccent.map((f) => [f.kind, f.detail.need])).toEqual([['contrast', 3]]);
   expect(paleAccent[0].hint).toContain('leave the accent unsaid');
+  // White on a fill in a system hue is the platform's pair, as that hue on white is: iOS's badge, the dark scheme's label
+  // on its red (3.4:1), is held to 3:1. The same white on a red of the author's own stays 4.5:1.
+  expect(found([{ ...white, bg: [255, 66, 69], on: 'own' }], { scheme: 'dark' })).toEqual([]);
+  expect(found([{ ...white, bg: [240, 60, 60], on: 'own' }], { scheme: 'dark' })).toEqual(['contrast:1']);
   // Overlap is judged on what is presented of each box: a row its scroller cuts at y = 10 overlaps nothing below.
   const row = { id: 6, x: 0, y: 0, w: 40, h: 20, control: 'press', sized: 'platform' }, tab = { id: 7, x: 0, y: 10, w: 40, h: 20, control: 'press', sized: 'platform' };
   expect(found([row, tab])).toEqual(['overlap:6']);

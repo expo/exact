@@ -31,8 +31,10 @@ final class FrameHealthScreen {
     var willDraw: (() -> Void)?
     /// The app session's workload flags (`FrameHealth.workload`), which each frame records as its update is scheduled
     var workload: (() -> UInt64)?
-    /// A diagnostic recorder consumes numeric boundaries without a card or a frame-rate request
-    var completedUpdate: ((_ scheduled: Double, _ start: Double, _ deadline: Double, _ beforeCommit: Double, _ finished: Double, _ waited: Double) -> Void)?
+    /// A diagnostic recorder consumes numeric boundaries without a card or a frame-rate request; `card` is the seconds of
+    /// the card's own work within the update
+    var completedUpdate: ((_ scheduled: Double, _ start: Double, _ deadline: Double, _ beforeCommit: Double, _ finished: Double,
+                           _ waited: Double, _ card: Double) -> Void)?
     /// Seconds: one refresh at the display's highest rate
     private(set) var refresh = 1.0 / 60
     private(set) var running = false
@@ -178,7 +180,7 @@ final class FrameHealthScreen {
         }
         health.record(arrival: start, target: update.deadline, period: 0, finished: finished,
             flags: health.captureID == 0 ? 0 : health.environmentFlags | update.flags)
-        completedUpdate?(update.start, start, update.deadline, update.beforeCommit, finished, update.waited)
+        completedUpdate?(update.start, start, update.deadline, update.beforeCommit, finished, update.waited, end.card)
         chart?.screenFrame(at: presented, work: finished - start, budget: update.deadline - start)
         newest = max(newest, presented)
     }

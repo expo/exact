@@ -16,6 +16,7 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(exact_js_engine)");
+    println!("cargo:rustc-check-cfg=cfg(exact_js_intl)");
     for name in ["BUN", "EXACT_JS_ENGINE", "EXACT_ROLLDOWN"] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -83,6 +84,13 @@ fn main() {
             .define("_ITERATOR_DEBUG_LEVEL", "0");
     } else if target_os != "linux" {
         shim.flag("-stdlib=libc++");
+    }
+    if matches!(target_os.as_str(), "linux" | "windows")
+        || (target_os == "android"
+            && env::var("DEP_HERMES_LEAN_ANDROID_INTL").as_deref() == Ok("1"))
+    {
+        shim.define("EXACT_JS_INTL", None);
+        println!("cargo:rustc-cfg=exact_js_intl");
     }
     shim.compile("exact_js_shim");
     println!("cargo:rustc-cfg=exact_js_engine");

@@ -284,6 +284,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
+name = "base64ct"
+version = "1.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
+
+[[package]]
 name = "bench-android"
 version = "0.1.0"
 dependencies = [
@@ -938,6 +944,9 @@ dependencies = [
 [[package]]
 name = "contract-syntax"
 version = "0.1.0"
+dependencies = [
+ "exact-motion",
+]
 
 [[package]]
 name = "contract-types"
@@ -1071,6 +1080,7 @@ dependencies = [
  "fiat-crypto",
  "rustc_version",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1274,6 +1284,7 @@ version = "2.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
 dependencies = [
+ "pkcs8",
  "signature",
 ]
 
@@ -1285,8 +1296,10 @@ checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
+ "serde",
  "sha2",
  "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -1348,9 +1361,14 @@ dependencies = [
 name = "exact-apple"
 version = "0.1.0"
 dependencies = [
+ "arcstr",
+ "arrayvec",
  "caltrain",
  "caltrain-data",
  "contract",
+ "crypto-bigint",
+ "ecdsa",
+ "elliptic-curve",
  "exact-color",
  "exact-data",
  "exact-grants",
@@ -1366,9 +1384,27 @@ dependencies = [
  "exact-runner",
  "exact-svg-file",
  "exact-textflow",
+ "foldhash 0.2.0",
+ "group",
  "ibex2",
+ "idna",
+ "litemap",
+ "memchr",
+ "percent-encoding",
+ "potential_utf",
+ "serde_core",
  "serde_json",
+ "slotmap",
+ "stable_deref_trait",
+ "subtle",
+ "tinystr",
+ "triomphe",
  "url",
+ "writeable",
+ "yoke",
+ "zerofrom",
+ "zeroize",
+ "zerotrie",
 ]
 
 [[package]]
@@ -1389,6 +1425,9 @@ version = "0.1.0"
 dependencies = [
  "caltrain",
  "caltrain-data",
+ "curve25519-dalek",
+ "ed25519",
+ "ed25519-dalek",
  "exact-apple",
  "exact-kernel",
  "exact-runner",
@@ -1493,6 +1532,7 @@ dependencies = [
  "exact-gpu-reflect",
  "exact-plan",
  "objc2 0.6.4",
+ "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -1547,6 +1587,7 @@ dependencies = [
 name = "exact-js"
 version = "0.1.0"
 dependencies = [
+ "adler2",
  "caltrain-data",
  "cc",
  "contract",
@@ -1587,6 +1628,13 @@ dependencies = [
  "hermes-lean-sys",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "exact-js-bake-tool"
+version = "0.1.0"
+dependencies = [
+ "exact-js-bake",
 ]
 
 [[package]]
@@ -1777,6 +1825,9 @@ dependencies = [
  "serde_json",
  "sha2",
  "wasmi",
+ "wasmi_collections",
+ "wasmi_core",
+ "wasmi_ir",
  "wasmparser 0.228.0",
  "wat",
 ]
@@ -2061,7 +2112,9 @@ dependencies = [
  "exact-kernel",
  "exact-linux",
  "exact-runner",
+ "png",
  "serde_json",
+ "sha2",
  "softbuffer",
  "tiny-skia",
  "unicode-segmentation",
@@ -3134,6 +3187,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
 dependencies = [
  "cc",
+]
+
+[[package]]
+name = "library-gate-apple"
+version = "0.1.0"
+dependencies = [
+ "contract",
+ "exact-apple",
+ "exact-apple-update",
+ "exact-bake",
+ "exact-logic",
+ "ibex2-sqlite",
+ "library-gate-data",
 ]
 
 [[package]]
@@ -4566,6 +4632,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pkcs8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
+dependencies = [
+ "der",
+ "spki",
+]
+
+[[package]]
 name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4710,6 +4786,9 @@ name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+dependencies = [
+ "getrandom 0.2.17",
+]
 
 [[package]]
 name = "range-alloc"
@@ -5092,6 +5171,19 @@ checksum = "6ce2691df843ecc5d231c0b14ece2acc3efb62c0a398c7e1d875f3983ce020e3"
 dependencies = [
  "core-foundation-sys",
  "libc",
+]
+
+[[package]]
+name = "select-walk-fixture-apple"
+version = "0.1.0"
+dependencies = [
+ "contract",
+ "exact-apple",
+ "exact-apple-update",
+ "exact-bake",
+ "exact-logic",
+ "ibex2-sqlite",
+ "select-walk-fixture-data",
 ]
 
 [[package]]
@@ -5513,6 +5605,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9571ea910ebd84c86af4b3ed27f9dbdc6ad06f17c5f96146b2b671e2976744f"
 dependencies = [
  "bitflags 2.13.1",
+]
+
+[[package]]
+name = "spki"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
+dependencies = [
+ "base64ct",
+ "der",
 ]
 
 [[package]]
@@ -5976,6 +6078,10 @@ name = "triomphe"
 version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b40688ea6389c8171614b25491f71d4a27946e0c7ce2da1c6de27e25abf1a0ae"
+dependencies = [
+ "serde",
+ "stable_deref_trait",
+]
 
 [[package]]
 name = "ttf-parser"

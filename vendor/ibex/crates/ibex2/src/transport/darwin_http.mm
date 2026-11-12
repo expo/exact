@@ -363,7 +363,7 @@ void *ibex2_darwin_http_start(void *session_handle, const char *method,
     }
     if (body_len > 0) request.HTTPBody = [NSData dataWithBytes:body length:body_len];
     if (timeout_seconds > 0) request.timeoutInterval = timeout_seconds;
-    // Low Data Mode refuses a request nobody has asked for yet (Exact patch 36).
+    // Low Data Mode refuses a request nobody has asked for yet (Exact patch 37).
     if (speculative) request.allowsConstrainedNetworkAccess = NO;
     Ibex2Exchange *exchange = [[Ibex2Exchange alloc] initWithLimit:max_body];
     exchange.pool = pool;

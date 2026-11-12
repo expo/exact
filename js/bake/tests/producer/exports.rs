@@ -4,6 +4,28 @@ use exact_kernel::Kernel;
 use exact_runner::{
     exact_canvas::Context2d, Answer, DataSource, DrawRequest, Drawn, Runner, Store, Value,
 };
+use serde_json::Value as Json;
+
+#[test]
+fn a_bake_receipt_records_the_selected_backend_even_when_grants_are_identical() {
+    if !exact_js::ENGINE_LINKED {
+        return;
+    }
+    let f = Fixture::new();
+    let source = SOURCE.replace(
+        "export const grants = '';",
+        "const origin = 'http://127.0.0.1:4400';\nexport const grants = '';",
+    );
+    f.write("app.ts", &source);
+    let first: Json = serde_json::from_str(&f.bake().receipt).unwrap();
+    assert_eq!(first["backendOrigin"], "http://127.0.0.1:4400");
+    std::fs::create_dir(f.0.join(".exact")).unwrap();
+    f.write(".exact/backend-origin", "http://127.0.0.1:4412");
+    let second: Json = serde_json::from_str(&f.bake().receipt).unwrap();
+    assert_eq!(second["backendOrigin"], "http://127.0.0.1:4412");
+    assert_eq!(first["grants"], second["grants"]);
+    assert_eq!(std::fs::read_to_string(f.0.join("app.ts")).unwrap(), source);
+}
 
 const OPTIONAL: &str = r#"
 import type { Draw } from './app.contract.d.ts';

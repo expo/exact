@@ -103,11 +103,34 @@ call `save(work)` with the number of pipelines the renderer has created so far;
 a write happens on a worker thread only when that number has grown. On Android
 (Vulkan) the cache is kept on disk per app build and GPU, so a warm launch
 builds its pipelines from it: the reporter's 90 pipelines took 0.32 s warm and
-5.9 s cold; the log says `GPU module pipeline cache: hit`, `miss` or
+5.9 s cold; the log says `GPU module pipeline cache: loaded`, `miss` or
 `unavailable` when the module loads. On Vulkan elsewhere the cache lives only in
-memory, and on other backends `handle` is `None` (wgpu has a pipeline cache only
-on Vulkan), so the same code runs everywhere. `game/render` is a whole user
+memory. Other backends have no wgpu cache `handle`; Apple uses the Metal archive
+below through the same `PipelineCache` owner. `game/render` is a whole user
 (`pipeline.rs`, `renderer/draw.rs`).
+
+### Metal pipeline archives
+
+Apple GPU modules keep a Metal binary archive in the app's cache directory,
+shared by its surfaces and written after submitted frames. The cache key includes
+the module name/version, app identity, GPU registry identity, OS build and archive
+encoding version. Metal matches shader functions and complete pipeline descriptors;
+a shader or specialization change misses the archive and compiles normally.
+Invalid or incompatible data falls back to an empty archive. Writes use the same
+checksummed envelope and atomic replacement as Vulkan's pipeline cache.
+
+On Apple, the default directory is `~/Library/Caches/exact-gpu-<app hash>`;
+`XDG_CACHE_HOME` replaces its parent for a controlled run. To preseed a matching
+installation, copy its `exact-*.bin` files into the app bundle's resources under
+`exact-pipelines/`, or point `EXACT_GPU_CACHE_SEED` at that directory. The seed is
+read-only and is used when no valid writable cache exists. It must match the cache
+key, including device and OS build; this is not a portable archive for every GPU.
+A fresh installation without a matching seed still compiles its initial pipelines.
+Render and compute pipelines participate; mesh-shader pipelines do not yet.
+
+The backend's `BinaryArchive::counts` reports successful binary lookups and misses.
+The process-isolated Metal test renders and reads pixels after both cold and warm
+loads, and covers a seed, a changed shader, a changed key and corrupt data.
 
 ## A module's own audio output
 

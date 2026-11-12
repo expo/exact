@@ -215,7 +215,7 @@ extension NodeView {
                                width: max(0, box.width - widths[1] - widths[3]),
                                height: max(0, box.height - widths[0] - widths[2]))
             let radii = BorderPaint.contentRadii(cornerSizes(in: box), outer: box, inner: inner)
-            s.clip.path = BorderPaint.roundedRect(inner, BorderPaint.reduced(radii, in: inner), shape: CornerShape(style["corner_shape"]))
+            s.clip.path = BorderPaint.roundedRect(inner, radii, shape: CornerShape(style["corner_shape"]))
         }
         // In the masked layer's own coordinates: a scroll view's are scrolled.
         s.clip.frame = CGRect(origin: target === hostLayer ? .zero : CGPoint(x: -target.frame.minX + target.bounds.minX, y: -target.frame.minY + target.bounds.minY), size: bounds.size)

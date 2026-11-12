@@ -1017,7 +1017,7 @@ export class Recorder {
   set textAlign(v) { const k = ALIGN.indexOf(v); if (k >= 0) this._.state.text.align = k; }
   get textBaseline() { return BASELINE[this._.state.text.baseline]; }
   set textBaseline(v) { const k = BASELINE.indexOf(v); if (k >= 0) this._.state.text.baseline = k; }
-  get direction() { return this._.rtl() ? "rtl" : "ltr"; }
+  get direction() { return DIRECTION[this._.state.text.direction]; }
   set direction(v) { const k = DIRECTION.indexOf(v); if (k >= 0) this._.state.text.direction = k; }
   get fontKerning() { return KERNING[this._.state.text.kerning]; }
   set fontKerning(v) { const k = KERNING.indexOf(v); if (k >= 0) this._.state.text.kerning = k; }

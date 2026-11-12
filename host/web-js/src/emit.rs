@@ -163,6 +163,7 @@ const HOST_FACTS: &[&str] = &[
     "exactTime",
     "exactPage",
     "exactSurface",
+    "exactCanvasPerformance",
     "exactTransport",
     "exactMIDI",
     "exactActivities",

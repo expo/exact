@@ -97,3 +97,48 @@ macro_rules! mode_exports {
         }
     };
 }
+
+impl<D: DataSource> Bridge<D> {
+    /// Whether the loaded plan opts this surface name into performance reporting.
+    pub fn canvas_performance_requested(&self, len: usize) -> u32 {
+        let Ok(name) = std::str::from_utf8(&self.input[..len.min(self.input.len())]) else {
+            return 0;
+        };
+        u32::from(
+            self.host
+                .as_ref()
+                .is_some_and(|h| h.runner().wants_canvas_performance(name)),
+        )
+    }
+
+    /// Publish or clear a named canvas's performance record.
+    pub fn canvas_performance_record(&mut self, len: usize) -> u32 {
+        let Ok(text) = std::str::from_utf8(&self.input[..len.min(self.input.len())]) else {
+            return self.refuse("canvas performance: invalid UTF-8");
+        };
+        let (name, json) = text
+            .split_once('\0')
+            .map_or((text, None), |(name, json)| (name, Some(json)));
+        let out = self.host.as_mut().map_or_else(
+            || exact_runner::agent::error("not booted"),
+            |h| h.canvas_performance_record(name, json),
+        );
+        self.emit(out)
+    }
+}
+
+impl<D: DataSource> Bridge<D> {
+    /// Document safe-area insets and row-major segment rectangles, in CSS pixels.
+    pub fn viewport_geometry(&mut self, len: usize) -> u32 {
+        let Ok((insets, rects)) = serde_json::from_slice::<([f32; 4], Vec<[f32; 4]>)>(
+            &self.input[..len.min(self.input.len())],
+        ) else {
+            return self.refuse("viewport geometry: expected [insets, rectangles]");
+        };
+        let out = self.host.as_mut().map_or_else(
+            || exact_runner::agent::error("viewport geometry: not booted"),
+            |host| host.viewport_geometry(insets, rects),
+        );
+        self.emit(out)
+    }
+}

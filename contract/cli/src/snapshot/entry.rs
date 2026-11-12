@@ -558,6 +558,7 @@ pub(super) fn compile_file(
             placeholder: None,
             each: None,
             transient: false,
+            keep: false,
             gate: None,
             span: at,
         });

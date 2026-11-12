@@ -70,7 +70,10 @@ pub(crate) mod inline {
 }
 
 #[cfg_attr(
-    not(all(feature = "intl", any(target_os = "linux", windows))),
+    not(all(
+        feature = "intl",
+        any(target_os = "linux", ibex2_android_intl, windows)
+    )),
     allow(dead_code)
 )]
 pub(crate) mod intl_number {
@@ -86,7 +89,10 @@ pub(crate) mod intl_number {
 }
 
 #[cfg_attr(
-    not(all(feature = "intl", any(target_os = "linux", windows))),
+    not(all(
+        feature = "intl",
+        any(target_os = "linux", ibex2_android_intl, windows)
+    )),
     allow(dead_code)
 )]
 pub(crate) mod intl_case {
@@ -125,7 +131,10 @@ pub(crate) fn is_intl(op: u32) -> bool {
 }
 
 #[cfg_attr(
-    not(all(feature = "intl", any(target_os = "linux", windows))),
+    not(all(
+        feature = "intl",
+        any(target_os = "linux", ibex2_android_intl, windows)
+    )),
     allow(dead_code)
 )]
 pub(crate) mod intl_datetime {

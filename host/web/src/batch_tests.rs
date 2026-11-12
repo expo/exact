@@ -123,6 +123,7 @@ fn cases() -> Vec<(&'static str, String)> {
                 b.create(
                     7,
                     "a",
+                    false,
                     &[
                         ("href", "/x".into()),
                         ("data-exact-on", "click input".into()),
@@ -134,7 +135,11 @@ fn cases() -> Vec<(&'static str, String)> {
         ),
         (
             "create-bare",
-            one(|b| b.create(4_294_967_295, "div", &[], "", &[])),
+            one(|b| b.create(4_294_967_295, "div", false, &[], "", &[])),
+        ),
+        (
+            "create-svg",
+            one(|b| b.create(5, "feGaussianBlur", true, &[], "", &[])),
         ),
         ("head", one(|b| b.head(&head))),
         ("head-bare", one(|b| b.head(&bare))),
@@ -353,6 +358,10 @@ const GOLDEN: &[(&str, &str)] = &[
         r#"{"ops":[{"op":"create","id":4294967295,"tag":"div","props":{},"css":"","handlers":[]}],"timers":false,"clock":0,"error":null}"#,
     ),
     (
+        "create-svg",
+        r#"{"ops":[{"op":"create","id":5,"tag":"feGaussianBlur","ns":"http://www.w3.org/2000/svg","props":{},"css":"","handlers":[]}],"timers":false,"clock":0,"error":null}"#,
+    ),
+    (
         "head",
         r#"{"ops":[{"op":"head","title":"Home \"Conduit\"","description":null,"image":"/i.png","canonical":null,"robots":"noindex","status":404}],"timers":false,"clock":0,"error":null}"#,
     ),
@@ -519,6 +528,11 @@ fn an_idle_timeout_is_refused_by_name_on_the_wasm_host() {
     assert_eq!(
         crate::batch::request_refusal(&request.idle_timeout(60_000)),
         Some("an idle timeout is unavailable on the web's wasm host")
+    );
+    // A Rust source's two-way socket (LLP 1016.003) is refused, not opened to only listen.
+    assert_eq!(
+        crate::batch::request_refusal(&Request::socket("wss://example.test/feed")),
+        Some("Request::socket is unavailable on the web's wasm host")
     );
 }
 

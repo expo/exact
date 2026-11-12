@@ -108,6 +108,7 @@ impl Em<'_> {
             (StyleId::Rotate, "0"),
             (StyleId::Opacity, "1"),
             (StyleId::Transition, "\"\""),
+            (StyleId::TranslateVelocity, "null"),
         ] {
             values.push(match binding(id as u16, BindingKind::Style) {
                 None => initial.to_string(),

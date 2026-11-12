@@ -120,6 +120,13 @@ public enum ExactDocuments {
         metadata["ExactLaunchMode"] as? String != "navigate-new" && !(hiding && keepsRunning(metadata))
     }
 
+    /// Whether the app's window is put away rather than closed: it is the
+    /// `only` one, and the app keeps running without it (`keepsRunning`), or
+    /// a one-window app's status item is placed (LLP 1133.025 D4).
+    public static func keepsWindow(only: Bool, placesStatusItems: Bool, _ metadata: [String: Any] = ExactEnv.appMetadata) -> Bool {
+        only && (keepsRunning(metadata) || (metadata["ExactLaunchMode"] as? String != "navigate-new" && placesStatusItems))
+    }
+
     /// The person closes `window` (⌘W, File ▸ Close Window, the red button):
     /// the only window of an app that keeps running is hidden rather than
     /// closed, with its session and view as they were, and nothing is asked

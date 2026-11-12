@@ -3,6 +3,7 @@
 // `bun test ./scripts/exact.test.mjs`.
 import { test, spyOn } from 'bun:test';
 import * as childProcess from 'node:child_process';
+import { appVerbs } from './app-cli.mjs';
 import { pathFrom } from './app.mjs';
 import { encodePng } from './png.mjs';
 import assert from 'node:assert/strict';
@@ -700,7 +701,7 @@ test.skipIf(!tools)('an executable whose name ends in parentheses is read as a f
   assertLinkedSdk(executable, '15.0');
   assert.throws(() => assertLinkedSdk(executable, '27.0'), /Demo \(Beta\) records SDK 15\.0, not 27\.0/);
   // A file the tool cannot read says so, not that it records no SDK.
-  assert.throws(() => assertLinkedSdk(resolve(dir, 'Gone (Beta)'), '15.0'), /vtool -show-build failed .*Gone \(Beta\)/);
+  assert.throws(() => assertLinkedSdk(resolve(dir, 'Gone (Beta)'), '15.0'), /cannot read .*Gone \(Beta\)/);
   // dsymutil and strip take the same path as a file.
   const { saved } = stripForDistribution(executable, resolve(dir, 'Demo (Beta).dSYM'));
   assert.ok(existsSync(resolve(dir, 'Demo (Beta).dSYM/Contents/Resources/DWARF/Demo (Beta)')), 'dsymutil wrote the dSYM');
@@ -1126,6 +1127,7 @@ test('docs prints the section on its words first, matching whole words', () => {
     [['push'], 'docs/recipes/navigation-stack.md', /^routes nav$/m],
     [['deploy'], 'docs/recipes/porting-and-release.md', /Name the port when you make it/],
     [['haptics'], 'docs/start-here.md', /haptic\("selection"\)/],
+    [['platform', 'checks'], 'docs/start-here.md', /agent macos --chrome platform "clock data" "screenshot \.exact\/mac\.png window"/],
     [['glass'], 'docs/contract-for-agents.md', /glass/],
     [['detent'], 'docs/contract-for-agents.md', /detent/],
     [['tab', 'bar'], 'docs/recipes/tabs.md', /iOS's bar/],
@@ -1393,6 +1395,16 @@ test('add installs a standard package by pathFrom from an outside app with an ab
   assert.equal(JSON.parse(readFileSync(resolve(app, 'package.json'), 'utf8')).dependencies['@exact/in-app-browser'], spec);
   const frozen = spawnSync(process.execPath, ['install', '--frozen-lockfile'], { cwd: app, encoding: 'utf8' });
   assert.equal(frozen.status, 0, frozen.stdout + frozen.stderr);
+  // Each command add's advice names, on success and on a refusal, is a verb of the app's exact.mjs, spelled as the app
+  // runs it (`bun exact.mjs <verb>`), never as `exact <verb>`, which needs a shim the app does not have.
+  const geolocation = spawnSync(process.execPath, ['exact.mjs', 'add', 'geolocation'], { cwd: app, encoding: 'utf8' });
+  assert.equal(geolocation.status, 0, geolocation.stdout + geolocation.stderr);
+  const refused = spawnSync(process.execPath, ['exact.mjs', 'add', 'no-such-module'], { cwd: app, encoding: 'utf8' });
+  assert.notEqual(refused.status, 0, refused.stdout + refused.stderr);
+  const said = `${geolocation.stdout}${refused.stderr}`, named = [...said.matchAll(/bun exact\.mjs ([a-z-]+)/g)].map((m) => m[1]);
+  assert.deepEqual(said.match(/(?<![\w./-])exact [a-z-]+/g), null);
+  assert.ok(named.includes('add') && named.includes('docs'), said);
+  assert.deepEqual(named.filter((verb) => !(verb in appVerbs('shop', app))), []);
   rmSync(resolve(app, 'exact.mjs'));
   const fromRepo = spawnSync(process.execPath, [resolve(root, 'scripts/exact.mjs'), 'add', '@exact/in-app-browser'], {
     cwd: root, encoding: 'utf8', env: { ...process.env, EXACT_APP_DIR: app },

@@ -57,6 +57,7 @@ struct PressPaint {
     var focusShown = false
     /// The opacity the looks that hold show, if one names it.
     var lookOpacity: Float?
+    var lookMotionStates: UInt8 = 0
     /// The text colour the looks that hold show, if one names it, and the
     /// one the views below were last given (`inkLooks`).
     var lookInk: BatchValue?
@@ -112,6 +113,7 @@ extension NodeView {
     /// show (the node's `disabled`, a state held or let go).
     func relook() {
         HeldState.propsChanged() // a node disabled, or under a disabled one, holds no state
+        refreshLookMotion()
         guard let base = pressPaint.lookBase else { return }
         restyleForPress(pressPainted(looked(base)))
         inkLooks()
@@ -412,9 +414,25 @@ extension NodeView {
         #if os(iOS)
         lookHover(Self.look("hover", in: s) != nil) // a pointer's hover (LookHoverIOS.swift)
         #endif
+        refreshLookMotion()
         let shown = pressPainted(looked(s))
         applyLookOpacity()
         return shown
+    }
+
+    private func refreshLookMotion() {
+        let states: UInt8 = disabled ? 0 : (pressPaint.hovered || holds("hover") ? 1 : 0) | (pressPaint.focusShown || holds("focus-visible") ? 2 : 0)
+        guard states != pressPaint.lookMotionStates else { return }
+        pressPaint.lookMotionStates = states
+        let view = id
+        // A style can be arriving inside a batch. Observe after that batch is applied.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, id == view, let session = presenter?.session else { return }
+            session.whenIdle(bound: true) { [weak self, weak session] in
+                guard let self, id == view, let session else { return }
+                session.applyUnlessEmpty(session.runtime.lookMotion(view, states: pressPaint.lookMotionStates, now: session.now()))
+            }
+        }
     }
 
     private func looked(_ s: NodeStyle) -> NodeStyle {

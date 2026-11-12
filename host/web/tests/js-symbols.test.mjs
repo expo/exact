@@ -353,3 +353,54 @@ test('a symbol under a mode boundary follows its implied row and its binding', a
     try { await browser?.close(); } finally { server.stop(true); }
   }
 }, 30000);
+
+
+test('adoption draws the static icon selected by the client viewport', async () => {
+  const wide = 'M2 2H8V22H2Z', narrow = 'M16 2H22V22H16Z';
+  const server = symbolServer(`<img id="icon" data-symbol-source="symbol:icon|star|0 0 24 24|${wide}|icons/wide.svg" data-symbol-path="${wide}" data-symbol-fill data-symbol-nonzero data-symbol-viewbox="0 0 24 24">`, `
+    import { symbols } from '/symbols.js';
+    import { h, adoptRow, commit } from '/rt.js';
+    symbols({});
+    const root = document.getElementById('exact-root'), original = root.firstElementChild;
+    const path = innerWidth < 600 ? '${narrow}' : '${wide}';
+    commit(() => adoptRow(root, () => h(root, 'img', 0, {
+      id: 'icon', 'data-symbol-source': 'symbol:icon|star|0 0 24 24|' + path + '|icons/client.svg',
+      'data-symbol-fill': '', 'data-symbol-nonzero': '', 'data-symbol-viewbox': '0 0 24 24'
+    }, 0)));
+    globalThis.reused = original === root.firstElementChild;
+    globalThis.ready = true;`);
+  const browser = await suiteBrowser('chromium', { timeout: 10000 });
+  try {
+    const page = await browser.newPage({ viewport: { width: 400, height: 300 } });
+    await symbolReady(page, server.url.href);
+    const result = await page.evaluate(() => {
+      const e = document.getElementById('icon');
+      return [globalThis.reused, e.getAttribute('data-symbol-path'), decodeURIComponent(e.symbolMask)];
+    });
+    expect(result.slice(0, 2)).toEqual([true, narrow]);
+    expect(result[2]).toContain('d="' + narrow + '"');
+  } finally { await browser.close(); server.stop(true); }
+}, 15000);
+
+test('a static icon without a viewBox keeps its nonzero fill rule', async () => {
+  const path = 'M2 2H22V22H2Z M8 8H16V16H8Z';
+  const server = symbolServer('', `
+    import { symbols } from '/symbols.js';
+    import { h, commit } from '/rt.js';
+    symbols({});
+    commit(() => h(document.getElementById('exact-root'), 'img', 0, {
+      id: 'icon', 'data-symbol-source': 'symbol:icon|star||${path}|icons/a.svg',
+      'data-symbol-fill': '', 'data-symbol-nonzero': ''
+    }, 0));
+    globalThis.ready = true;`);
+  const browser = await suiteBrowser('chromium', { timeout: 10000 });
+  try {
+    const page = await browser.newPage();
+    await symbolReady(page, server.url.href);
+    expect(await page.evaluate(() => {
+      const e = document.getElementById('icon');
+      return [e.hasAttribute('data-symbol-nonzero'), e.hasAttribute('data-symbol-evenodd'),
+        decodeURIComponent(e.symbolMask).match(/fill-rule="([a-z]+)"/)[1]];
+    })).toEqual([true, false, 'nonzero']);
+  } finally { await browser.close(); server.stop(true); }
+}, 15000);

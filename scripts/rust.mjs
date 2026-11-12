@@ -7,7 +7,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cargoReproducibilityFlags, developmentBuildEnv, readBuilds, resolveApp, rustPolicy } from './app.mjs';
@@ -36,7 +36,7 @@ export function prepareRustBundle(app, platform, target, env) {
   if (env.EXACT_RUST_BUNDLE) return env.EXACT_RUST_BUNDLE;
   if (!env.EXACT_UPDATE_RECEIPT) return null;
   const recordPath=resolve(env.EXACT_UPDATE_RECEIPT), record=JSON.parse(readFileSync(recordPath));
-  const head=record.envelope, cards=head?.assets?.filter(a=>a.name.startsWith('rust/')) ?? [];
+  const head=record.envelope, cards=record.assets?.assets?.filter(a=>a.name.startsWith('rust/')) ?? [];
   if (!cards.length) return null;
   const mode=rustPolicy(app.manifest,platform,env.EXACT_UPDATE_TRUST==='production'?'prod':'dev');
   const filename=mode==='tiered'?'app.module.bin':mode==='wasm'?'app.module.wasm':target.includes('apple')?'app.module.dylib':target.includes('windows')?'app.module.dll':'app.module.so';
@@ -45,7 +45,7 @@ export function prepareRustBundle(app, platform, target, env) {
   const destination=mkdtempSync(resolve(env.EXACT_BAKE_OUTPUT,`${platform}-${target}-rust-`));
   try {
   for(const card of cards) {
-    if(!/^[0-9a-f]{64}$/.test(card.sha256)||!Number.isSafeInteger(card.bytes)||card.bytes<0||card.bytes>32*1024*1024||card.url!==`../../blobs/${card.sha256}`)throw new Error('invalid Rust companion blob card');
+    if(!/^[0-9a-f]{64}$/.test(card.sha256)||!Number.isSafeInteger(card.bytes)||card.bytes<0||card.bytes>32*1024*1024||card.url!==`./${card.sha256}`)throw new Error('invalid Rust companion blob card');
     let bytes;
     if(dirname(recordPath).endsWith('/releases')) {
       const blob=resolve(dirname(recordPath),'../../../blobs',card.sha256);
@@ -161,36 +161,95 @@ export function rustInputDigest(paths, observations = null) {
   }
   return digest.digest('hex');
 }
-/** Each target's loadable logic artifact, from one Cargo build: Cargo
- * compiles the targets in parallel, where two invocations would take turns
- * on the target directory's lock. */
+export function rustArtifact(loadable, target) {
+  return loadable.findLast(f => f.replaceAll('\\', '/').includes(`/${target}/`));
+}
+// Cargo's flag precedence: encoded, RUSTFLAGS, matching target tables, then
+// build.rustflags. Resolve before adding module flags so a TOML string never
+// has to merge with an array containing a path with spaces.
+function moduleFlags(app, target, env) {
+  const directories = [];
+  for (let at = app.workspace; ; at = dirname(at)) {
+    directories.push(resolve(at, '.cargo'));
+    if (at === dirname(at)) break;
+  }
+  const sources = new Map(), settings = new Map();
+  const add = (key, value) => sources.set(key, Array.isArray(value) && Array.isArray(sources.get(key)) ? [...sources.get(key), ...value] : value);
+  for (const directory of new Set([env.CARGO_HOME ?? resolve(homedir(), '.cargo'), ...directories.reverse()])) {
+    const path = ['config', 'config.toml'].map(name => resolve(directory, name)).find(existsSync);
+    if (!path) continue;
+    const config = Bun.TOML.parse(readFileSync(path, 'utf8'));
+    if (config.build?.rustflags !== undefined) add('build', config.build.rustflags);
+    for (const [key, value] of Object.entries(config.target ?? {})) if (value.rustflags !== undefined) add(key, value.rustflags);
+    for (const [key, value] of Object.entries(config.env ?? {})) {
+      settings.set(key, typeof value === 'string' ? {value} : {...settings.get(key), ...value,
+        value:value.relative ? resolve(dirname(directory), value.value) : value.value});
+    }
+  }
+  const environment = {...env};
+  for (const [key, setting] of settings) if (setting.force || environment[key] === undefined) environment[key] = setting.value;
+  // Its configured value is included below; Cargo must not replace the
+  // augmented value when exporting a forced [env] entry to rustc.
+  const configuration = settings.get('CARGO_ENCODED_RUSTFLAGS')?.force ? ['--config', 'env.CARGO_ENCODED_RUSTFLAGS.force=false'] : [];
+  const selected = flags => ({flags, configuration});
+  if (environment.CARGO_ENCODED_RUSTFLAGS !== undefined) return selected(environment.CARGO_ENCODED_RUSTFLAGS.split('\x1f').filter(Boolean));
+  const split = value => Array.isArray(value) ? value : (value ?? '').trim().split(/\s+/).filter(Boolean);
+  if (environment.RUSTFLAGS !== undefined) return selected(split(environment.RUSTFLAGS));
+  const targetFlags = [...split(sources.get(target)), ...split(env[`CARGO_TARGET_${target.toUpperCase().replaceAll('-','_')}_RUSTFLAGS`])];
+  const selectors = [...sources.keys()].filter(key => key.startsWith('cfg('));
+  if (selectors.length) {
+    const facts = new Set(run(app, 'rustc', ['--print', 'cfg', '--target', target, ...targetFlags], env).trim().split('\n'));
+    for (const selector of selectors) if (matchesCfg(selector, facts)) targetFlags.push(...split(sources.get(selector)));
+  }
+  return selected(targetFlags.length || sources.has(target) ? targetFlags : [...split(sources.get('build')), ...split(env.CARGO_BUILD_RUSTFLAGS)]);
+}
+function matchesCfg(selector, facts) {
+  const tokens = selector.match(/"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z_0-9]*|[(),=]/g) ?? [];
+  let at = 0;
+  const read = () => {
+    const name = tokens[at++];
+    if (tokens[at] === '=') { at++; return facts.has(`${name}=${tokens[at++]}`); }
+    if (tokens[at] !== '(') return facts.has(name);
+    at++;
+    const values = [];
+    while (at < tokens.length && tokens[at] !== ')') {
+      values.push(read());
+      if (tokens[at] === ',') at++;
+    }
+    at++;
+    return name === 'all' ? values.every(Boolean) : name === 'any' ? values.some(Boolean) : name === 'not' ? !values[0] : values[0];
+  };
+  return read();
+}
+/** Each target's loadable logic artifact. Encoded flags preserve argument
+ * boundaries; separate builds keep Apple's link arguments out of Wasm. */
 function compile(app, targets, env, profile) {
   const packageName = rustPackage(app);
   // A module's bytes must not depend on where it was built: a cold deploy's
   // cache is a new directory each time. Code generated under OUT_DIR records
   // its path, and a Mach-O library names itself by its output path.
   const modules = resolve(app.target,'rust-modules');
-  const flags = (env.CARGO_ENCODED_RUSTFLAGS?.split('\x1f') ?? env.RUSTFLAGS?.trim().split(/\s+/) ?? []).filter(Boolean);
-  flags.push(`--remap-path-prefix=${modules}=/rust-modules`);
   const moduleEnv = {...env,CARGO_TARGET_DIR:modules};
   delete moduleEnv.RUSTFLAGS; delete moduleEnv.CARGO_ENCODED_RUSTFLAGS;
-  // Per-target flags, so one build serves every target: the install name is
-  // an Apple link argument the Wasm link does not take.
-  for (const target of targets) {
-    moduleEnv[`CARGO_TARGET_${target.toUpperCase().replaceAll('-','_')}_RUSTFLAGS`] = [...flags, ...(target.includes('apple') ? ['-Clink-arg=-Wl,-install_name,@rpath/app.module.dylib'] : [])].join(' ');
-  }
   // Out-of-tree apps need no custom Cargo profile just to opt in. Keep their
   // ordinary host builds untouched: these defaults apply only to this module.
   if (profile === 'logic-dev' && !/^\s*\[\s*profile\s*\.\s*["']?logic-dev["']?\s*\]/m.test(readFileSync(resolve(app.workspace,'Cargo.toml'),'utf8'))) {
     profile='dev';
     for (const [key,value] of Object.entries({OPT_LEVEL:'1',DEBUG:'0',INCREMENTAL:'true',PANIC:'abort'})) moduleEnv[`CARGO_PROFILE_DEV_${key}`] ??= value;
   }
-  const messages = run(app, 'cargo', ['build', ...cargoReproducibilityFlags(app), '--lib', '-p', packageName, ...targets.flatMap(t => ['--target', t]), '--profile', profile, '--message-format=json'], moduleEnv)
-    .split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const messages = targets.flatMap(target => {
+    const {flags, configuration} = moduleFlags(app, target, env);
+    const targetEnv = {...moduleEnv, CARGO_ENCODED_RUSTFLAGS:[...flags, `--remap-path-prefix=${modules}=/rust-modules`,
+      ...(target.includes('apple') ? ['-Clink-arg=-Wl,-install_name,@rpath/app.module.dylib'] : []),
+    ].join('\x1f')};
+    return run(app, 'cargo', ['build', ...cargoReproducibilityFlags(app), ...configuration, '--lib', '-p', packageName,
+      '--target', target, '--profile', profile, '--message-format=json'], targetEnv)
+      .split('\n').filter(Boolean).map(line => JSON.parse(line));
+  });
   for (const m of messages) if (m.reason === 'compiler-message' && m.message.rendered) process.stderr.write(m.message.rendered);
   const loadable = messages.filter(m => m.reason === 'compiler-artifact' && m.target.crate_types.includes('cdylib') && m.target.src_path).flatMap(m => m.filenames).filter(f => /\.(wasm|dylib|so|dll)$/.test(f));
   return targets.map(target => {
-    const path = loadable.findLast(f => f.includes(`/${target}/`));
+    const path = rustArtifact(loadable, target);
     if (!path) throw new Error(`${packageName}: Cargo emitted no loadable logic artifact for ${target}`);
     return path;
   });
@@ -204,7 +263,7 @@ function rustGrants(compat) {
 }
 export function rustReceipt(app, compat, plan, module, target, executor) {
   const extension = executor === 'tiered' ? 'bin' : executor === 'wasm' ? 'wasm' : target.includes('apple') ? 'dylib' : target.includes('windows') ? 'dll' : 'so';
-  return { version: 1, kind: 'rust', abi: 10, appId: app.id, grants: rustGrants(compat), target, executor,
+  return { version: 1, kind: 'rust', abi: 9, appId: app.id, grants: rustGrants(compat), target, executor,
     source: nativeSource(app), plan: rustCard('app.plan', plan), module: rustCard(`app.module.${extension}`, module) };
 }
 

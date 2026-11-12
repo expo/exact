@@ -8,8 +8,11 @@ export type NavPage = {
   landing?: boolean;
 };
 
+export type NavTab = 'home' | 'learn' | 'reference';
+
 export type NavSection = {
   title: string;
+  tab: NavTab;
   card?: { title: string; description: string };
   pages: NavPage[];
 };
@@ -17,6 +20,7 @@ export type NavSection = {
 export const sections: NavSection[] = [
   {
     title: 'Home',
+    tab: 'home',
     pages: [
       {
         route: 'home',
@@ -29,6 +33,7 @@ export const sections: NavSection[] = [
   },
   {
     title: 'Get started',
+    tab: 'home',
     card: { title: 'Start here', description: 'Build an app with Exact: the idea, the workflow, and the one screen every app starts from.' },
     pages: [
       {
@@ -41,6 +46,7 @@ export const sections: NavSection[] = [
   },
   {
     title: 'Learn',
+    tab: 'learn',
     card: { title: 'Learn', description: 'Contract, the language of an Exact app, from the first component to delivery.' },
     pages: [
       {
@@ -61,6 +67,7 @@ export const sections: NavSection[] = [
   },
   {
     title: 'Recipes',
+    tab: 'home',
     card: { title: 'Recipes', description: 'Short answers to common questions, one page each: forms, lists, timers, sign-in, storage, and more.' },
     pages: [
       {
@@ -445,6 +452,7 @@ export const sections: NavSection[] = [
   },
   {
     title: 'Site',
+    tab: 'home',
     pages: [
       {
         route: 'components',
@@ -457,6 +465,7 @@ export const sections: NavSection[] = [
   },
   {
     title: 'Reference',
+    tab: 'reference',
     pages: [
       {
         route: 'contractGrammar',
@@ -483,6 +492,7 @@ export const sections: NavSection[] = [
   },
   {
     title: 'For AI agents',
+    tab: 'home',
     pages: [
       {
         route: 'agents',
@@ -492,6 +502,12 @@ export const sections: NavSection[] = [
       },
     ],
   },
+];
+
+export const tabs: { id: NavTab; title: string; icon: string }[] = [
+  { id: 'home', title: 'Home', icon: 'symbol:home' },
+  { id: 'learn', title: 'Learn', icon: 'symbol:book' },
+  { id: 'reference', title: 'Reference', icon: 'symbol:document' },
 ];
 
 // The home page's For AI agents rows, in its HTML and its Markdown. Each opens a section of pages/agents.md.

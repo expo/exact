@@ -415,5 +415,57 @@ final class PageEdgesIOSTests: XCTestCase {
         XCTAssertFalse(ControlBars(p).isBar(p.views[1]!))
     }
 
+    /// #223: under `viewport-fit="cover"` a tab's route keeps the tab bar's cover, and its
+    /// last scroller, with nothing under it, is drawn on under the bar and inset by the gap,
+    /// as a hand-built table runs under its tab bar: layout is unchanged, its end rests where
+    /// its box ends, UIKit adds no inset of its own and the bar's edge effect follows it. The
+    /// route's own `env()` padding is reached through too; a caption under the scroller keeps
+    /// it above the bar; content that fits gains no scroll range; a virtualized list is banded.
+    func testUnderACoverRootARoutesLastScrollerRunsUnderTheTabBar() throws {
+        guard UIApplication.shared.connectedScenes.first is UIWindowScene else { throw missing("scene", "the tab bar and the safe area are a scene window's") }
+        guard #available(iOS 26.0, *) else { throw XCTSkip("control bars are iOS 26's, where UIKit draws the edge effect over them") }
+        let (session, _) = try fixture("COVER_TABS")
+        let p = session.presenter, routeNode = try node(session, "route-home")
+        let route = try XCTUnwrap(p.navigation.controllers[routeNode.id])
+        let foot = { routeNode.convert(routeNode.bounds, to: nil).maxY }
+        // Not `node`: its XCTUnwrap records a failure while a variant is on its way.
+        let list = { p.views.values.first { $0.props["testId"] == "list" && $0.window != nil } }
+        until("the scroller runs under the tab bar") { (list()?.pageBand.bottom ?? 0) > 0.5 }
+        guard case .edges(let cover)? = p.navigation.covers[routeNode.id] else { return XCTFail("the route keeps the tab bar's cover") }
+        XCTAssertGreaterThan(cover.bottom, 0.5)
+        var v = try XCTUnwrap(list()), sv = try XCTUnwrap(v.scrollView)
+        let box = v.convert(v.bounds, to: nil)
+        XCTAssertEqual(box.maxY, foot() - cover.bottom, accuracy: 0.5, "laid out above the cover, as before")
+        XCTAssertEqual(v.pageBand, UIEdgeInsets(top: 0, left: 0, bottom: cover.bottom, right: 0))
+        XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, foot(), accuracy: 0.5, "its scroll view reaches the route's foot, under the bar")
+        XCTAssertEqual(sv.adjustedContentInset.bottom, cover.bottom, accuracy: 0.5, "inset by the band alone")
+        XCTAssertTrue(route.contentScrollView(for: .bottom) === sv, "the tab bar's edge effect follows it")
+        sv.contentOffset.y = sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height
+        let end = try node(session, "end")
+        XCTAssertEqual(end.convert(end.bounds, to: nil).maxY, box.maxY, accuracy: 0.5, "at its end the content rests where the box ends, above the bar")
+
+        p.press(try node(session, "use-padded").id)
+        until("the route's env() padding is reached through") { (list()?.pageBand.bottom ?? 0) > cover.bottom + 0.5 }
+        v = try XCTUnwrap(list()); sv = try XCTUnwrap(v.scrollView)
+        XCTAssertEqual(v.pageBand.bottom, foot() - v.convert(v.bounds, to: nil).maxY, accuracy: 0.5)
+        XCTAssertEqual(sv.convert(sv.bounds, to: nil).maxY, foot(), accuracy: 0.5)
+        XCTAssertEqual(sv.adjustedContentInset.bottom, v.pageBand.bottom, accuracy: 0.5, "the padding and the cover, once")
+
+        p.press(try node(session, "use-footer").id)
+        until("a caption under the scroller keeps it above the bar") { list()?.pageBand == .zero }
+        XCTAssertNil(route.bandedBottom)
+
+        p.press(try node(session, "use-short").id)
+        until("content that fits is banded") { (list()?.pageBand.bottom ?? 0) > 0.5 }
+        v = try XCTUnwrap(list()); sv = try XCTUnwrap(v.scrollView)
+        let i = sv.adjustedContentInset
+        XCTAssertLessThanOrEqual(sv.contentSize.height + i.top + i.bottom, sv.bounds.height + 0.5, "and gains no scroll range")
+
+        p.press(try node(session, "use-list").id)
+        until("a virtualized list is banded") {
+            guard let l = list(), l.scrollView != nil, p.collections.entries[l.id] != nil else { return false }
+            return abs(l.pageBand.bottom - cover.bottom) < 0.5
+        }
+    }
 }
 #endif

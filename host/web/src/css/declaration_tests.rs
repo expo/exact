@@ -463,3 +463,22 @@ fn a_hit_slop_is_its_four_custom_properties() {
          --exact-hit-slop-bottom:12px;--exact-hit-slop-left:8px;"
     );
 }
+
+#[test]
+fn scroll_snap_emits_both_axes_and_center() {
+    for axis in ["x", "y"] {
+        assert_eq!(
+            css(
+                &[
+                    (
+                        StyleId::ScrollSnapType,
+                        StyleValue::Text(format!("{axis} mandatory").into())
+                    ),
+                    (StyleId::ScrollSnapAlign, StyleValue::Text("center".into()))
+                ],
+                &[]
+            ),
+            format!("scroll-snap-type:{axis} mandatory;scroll-snap-align:center;")
+        );
+    }
+}

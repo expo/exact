@@ -627,7 +627,7 @@ fn a_ready_source_gets_no_kept_seed_even_when_its_first_answer_is_slow() {
 }
 
 #[test]
-fn runner_owned_facts_never_admit_or_persist_kept_answers() {
+fn runner_owned_facts_forget_stale_kept_answers_and_never_persist_live_values() {
     let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
     let number = b.primitive(TypeKind::Number);
     let time = b.record("Time", &[("epochAtZero", number)]);
@@ -649,8 +649,70 @@ fn runner_owned_facts_never_admit_or_persist_kept_answers() {
         r.resource("answer"),
         Some(&Value::record(vec![Value::Number(1000.)]))
     );
-    assert_eq!(answer_writes(&r), 0);
+    let writes: Vec<_> = r
+        .store
+        .writes()
+        .iter()
+        .filter(|w| w.name == kept::kept_name("answer"))
+        .collect();
+    assert_eq!(writes.len(), 1, "only the stale entry's removal");
+    assert!(writes[0].value.is_none());
+    assert!(r.store.kept(&kept::kept_name("answer")).is_none());
     assert!(r.data.asks.is_empty());
+}
+
+#[test]
+fn only_explicitly_kept_surface_facts_retain_a_launch_snapshot() {
+    for source in exact_plan::RUNNER_OWNED_SOURCES {
+        let mut b = PlanBuilder::new(exact_kernel::SCHEMA_DIGEST, 1);
+        let number = b.primitive(TypeKind::Number);
+        let record = b.record("Record", &[("value", number)]);
+        let name = b.str("world");
+        let mut arg = Asm::new();
+        arg.str(name);
+        let arg = b.code(arg);
+        let row = b.resource("answer", source, &[arg], record, None);
+        b.set_resource_reader(row, true);
+        b.surface("world", &[]);
+        b.node(NodeType::View as u8, None, None, 0, &[], &[], None);
+        let mut plan = b.finish().unwrap();
+        let snapshot = entry(
+            &[Value::str("world")],
+            &Value::record(vec![Value::Number(9.)]),
+        );
+        for keep in [false, true] {
+            plan.resources[0].keep = keep;
+            let allowed = keep && *source == crate::surface_record::SOURCE;
+            assert_eq!(
+                kept::kept_surface(&plan, 0),
+                allowed,
+                "{source}, keep={keep}"
+            );
+            assert_eq!(
+                kept::obsolete(&plan, &snapshot).is_empty(),
+                allowed,
+                "{source}, keep={keep}"
+            );
+            let decoded = Plan::decode(&plan.encode()).unwrap();
+            assert_eq!(
+                kept::kept_surface(&decoded, 0),
+                allowed,
+                "{source}, keep={keep}"
+            );
+        }
+        plan.resources[0].transient = true;
+        assert!(!kept::kept_surface(&plan, 0), "{source}");
+        assert!(!kept::obsolete(&plan, &snapshot).is_empty(), "{source}");
+        let decoded = Plan::decode(&plan.encode()).unwrap();
+        assert!(!kept::kept_surface(&decoded, 0), "{source}");
+        plan.resources[0].transient = false;
+        plan.surfaces = Default::default();
+        assert!(
+            !kept::kept_surface(&plan, 0),
+            "a kept reader needs a declared surface: {source}"
+        );
+        assert!(!kept::obsolete(&plan, &snapshot).is_empty(), "{source}");
+    }
 }
 
 #[test]
@@ -719,6 +781,7 @@ fn the_runner_answers_exactly_the_plan_s_own_sources() {
         crate::viewport::SOURCE,
         crate::page::SOURCE,
         crate::surface_record::SOURCE,
+        crate::canvas_performance::SOURCE,
         crate::time::SOURCE,
         crate::transport::SOURCE,
         crate::midi::SOURCE,

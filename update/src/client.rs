@@ -484,7 +484,7 @@ mod tests {
         serde_json::to_vec(&serde_json::json!({
             "exact": 1, "app": {"id": "com.exact.t"},
             "plan": {"url": "./app.plan", "sha256": sha256_hex(plan), "bytes": plan.len()},
-            "assets": [], "stream": {"channel": "prod", "compatibilityId": "abc", "seq": seq}
+            "stream": {"channel": "prod", "compatibilityId": "abc", "seq": seq}
         }))
         .unwrap()
     }

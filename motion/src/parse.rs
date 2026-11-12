@@ -11,6 +11,7 @@
 //! by name.
 
 use crate::easing::{Easing, LinearStop, StepPosition};
+use crate::word;
 
 use crate::spring::SpringConfig;
 use crate::transition::{
@@ -92,7 +93,7 @@ impl Transitions {
     /// Parse the CSS shorthand.
     pub fn parse(text: &str) -> Result<Transitions, ParseError> {
         let text = text.trim();
-        if text.is_empty() || text == "none" {
+        if text.is_empty() || text.eq_ignore_ascii_case("none") {
             return Ok(Transitions::NONE);
         }
         let mut out = Vec::new();
@@ -123,13 +124,15 @@ impl Transitions {
                         _ => return Err(ParseError::BadShape(format!("`{decl}` has a third time: a transition takes a duration, then a delay"))),
                     }
                     times += 1;
-                } else if time_like(part) {
+                } else if word::time_like(part) {
                     return Err(ParseError::BadTime((*part).to_string()));
-                } else if css_number(part) {
+                } else if word::is_number(part) {
                     // A number is never a property or an easing here: a time
                     // written without its unit.
                     return Err(ParseError::BadTime((*part).to_string()));
-                } else if let Some(named) = TransitionProperty::from_name(part) {
+                } else if let Some(named) =
+                    TransitionProperty::from_name(&part.to_ascii_lowercase())
+                {
                     if property.is_some() {
                         return Err(ParseError::BadShape(format!("`{decl}` names two properties: a transition names one (`all` for every one)")));
                     }
@@ -164,43 +167,8 @@ impl Transitions {
     }
 }
 
-/// Whether `s` is in CSS's number syntax, `[+-]?(\d+|\d*\.\d+)(e[+-]?\d+)?`
-/// (CSS Syntax 3 §4.3.12): Rust reads `inf` and `nan` as numbers too.
-fn css_number(s: &str) -> bool {
-    let digits = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
-    let unsigned = s.strip_prefix(['+', '-']).unwrap_or(s);
-    let (mantissa, exponent) = unsigned.split_once(['e', 'E']).unwrap_or((unsigned, "0"));
-    let exponent = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
-    let number = match mantissa.split_once('.') {
-        Some((int, frac)) => (int.is_empty() || digits(int)) && digits(frac),
-        None => digits(mantissa),
-    };
-    number && digits(exponent)
-}
-
-/// Whether `s` is written as a time, a number then `s` or `ms`, even one
-/// [`time`] refuses (`1.2.3s`): an identifier that ends in `s` is not.
-pub(crate) fn time_like(s: &str) -> bool {
-    let stem = s
-        .strip_suffix("ms")
-        .or_else(|| s.strip_suffix('s'))
-        .unwrap_or_default();
-    let unsigned = stem.strip_prefix(['+', '-']).unwrap_or(stem);
-    let unsigned = unsigned.strip_prefix('.').unwrap_or(unsigned);
-    unsigned.starts_with(|c: char| c.is_ascii_digit())
-}
-
 pub(crate) fn time(s: &str) -> Result<f64, ParseError> {
-    let (num, scale) = if let Some(n) = s.strip_suffix("ms") {
-        (n, 0.001)
-    } else if let Some(n) = s.strip_suffix('s') {
-        (n, 1.0)
-    } else {
-        return Err(ParseError::BadTime(s.to_string()));
-    };
-    exact_num::parse_f64(num)
-        .map(|n| n * scale)
-        .map_err(|_| ParseError::BadTime(s.to_string()))
+    word::time(s).ok_or_else(|| ParseError::BadTime(s.to_string()))
 }
 
 /// The functions an easing may be, each with its kind (LLP 1081 D8): CSS's,
@@ -214,78 +182,81 @@ pub const EASING_FUNCTIONS: &[(&str, &str)] = &[
 ];
 
 pub(crate) fn easing(s: &str) -> Result<TimingFunction, ParseError> {
-    Ok(TimingFunction::Easing(match s {
-        "linear" => Easing::Linear,
-        "ease" => Easing::Ease,
-        "ease-in" => Easing::EaseIn,
-        "ease-out" => Easing::EaseOut,
-        "ease-in-out" => Easing::EaseInOut,
-        "step-start" => Easing::Steps {
-            count: 1,
-            position: StepPosition::JumpStart,
-        },
-        "step-end" => Easing::Steps {
-            count: 1,
-            position: StepPosition::JumpEnd,
-        },
-        _ => {
-            let (name, args) = call(s).ok_or_else(|| ParseError::BadEasing(s.to_string()))?;
-            if !EASING_FUNCTIONS.iter().any(|(n, _)| *n == name) {
-                return Err(ParseError::BadEasing(s.to_string()));
-            }
-            let function = EASING_FUNCTIONS
-                .iter()
-                .find(|(n, _)| *n == name)
-                .map_or("", |(n, _)| *n);
-            let bad = || ParseError::BadArguments {
-                text: s.to_string(),
-                function,
-            };
-            match name {
-                "cubic-bezier" => {
-                    let n = numbers(&args).ok_or_else(bad)?;
-                    if n.len() != 4 {
-                        return Err(bad());
+    Ok(TimingFunction::Easing(
+        match word::keyword(s, &word::EASING_KEYWORDS) {
+            Some("linear") => Easing::Linear,
+            Some("ease") => Easing::Ease,
+            Some("ease-in") => Easing::EaseIn,
+            Some("ease-out") => Easing::EaseOut,
+            Some("ease-in-out") => Easing::EaseInOut,
+            Some("step-start") => Easing::Steps {
+                count: 1,
+                position: StepPosition::JumpStart,
+            },
+            Some(_) => Easing::Steps {
+                count: 1,
+                position: StepPosition::JumpEnd,
+            },
+            None => {
+                let (function, args) =
+                    call(s).ok_or_else(|| ParseError::BadEasing(s.to_string()))?;
+                let bad = || ParseError::BadArguments {
+                    text: s.to_string(),
+                    function,
+                };
+                match function {
+                    "cubic-bezier" => {
+                        let n = numbers(&args).ok_or_else(bad)?;
+                        if n.len() != 4 {
+                            return Err(bad());
+                        }
+                        Easing::CubicBezier {
+                            x1: n[0],
+                            y1: n[1],
+                            x2: n[2],
+                            y2: n[3],
+                        }
                     }
-                    Easing::CubicBezier {
-                        x1: n[0],
-                        y1: n[1],
-                        x2: n[2],
-                        y2: n[3],
+                    "steps" => {
+                        let count = args
+                            .first()
+                            .and_then(|a| a.parse::<u16>().ok())
+                            .ok_or_else(bad)?;
+                        const POSITIONS: [&str; 6] = [
+                            "jump-end",
+                            "end",
+                            "jump-start",
+                            "start",
+                            "jump-none",
+                            "jump-both",
+                        ];
+                        let position = match args.get(1).map(|a| word::keyword(a, &POSITIONS)) {
+                            None | Some(Some("jump-end" | "end")) => StepPosition::JumpEnd,
+                            Some(Some("jump-start" | "start")) => StepPosition::JumpStart,
+                            Some(Some("jump-none")) => StepPosition::JumpNone,
+                            Some(Some(_)) => StepPosition::JumpBoth,
+                            Some(None) => return Err(bad()),
+                        };
+                        Easing::Steps { count, position }
+                    }
+                    "linear" => Easing::PiecewiseLinear(linear_stops(&args).ok_or_else(bad)?),
+                    _ => {
+                        let n = numbers(&args).ok_or_else(bad)?;
+                        let config = match n.len() {
+                            0 => SpringConfig::default(),
+                            3 => SpringConfig {
+                                stiffness: n[0],
+                                damping: n[1],
+                                mass: n[2],
+                            },
+                            _ => return Err(bad()),
+                        };
+                        return Ok(TimingFunction::Spring(config));
                     }
                 }
-                "steps" => {
-                    let count = args
-                        .first()
-                        .and_then(|a| a.trim().parse::<u16>().ok())
-                        .ok_or_else(bad)?;
-                    let position = match args.get(1).map(|a| a.trim()) {
-                        None | Some("jump-end") | Some("end") => StepPosition::JumpEnd,
-                        Some("jump-start") | Some("start") => StepPosition::JumpStart,
-                        Some("jump-none") => StepPosition::JumpNone,
-                        Some("jump-both") => StepPosition::JumpBoth,
-                        Some(_) => return Err(bad()),
-                    };
-                    Easing::Steps { count, position }
-                }
-                "linear" => Easing::PiecewiseLinear(linear_stops(&args).ok_or_else(bad)?),
-                "-exact-spring" => {
-                    let n = numbers(&args).ok_or_else(bad)?;
-                    let config = match n.len() {
-                        0 => SpringConfig::default(),
-                        3 => SpringConfig {
-                            stiffness: n[0],
-                            damping: n[1],
-                            mass: n[2],
-                        },
-                        _ => return Err(bad()),
-                    };
-                    return Ok(TimingFunction::Spring(config));
-                }
-                _ => return Err(ParseError::BadEasing(s.to_string())),
             }
-        }
-    }))
+        },
+    ))
 }
 
 /// `linear()`'s stops, `None` when an argument is not one.
@@ -296,7 +267,7 @@ fn linear_stops(args: &[String]) -> Option<Vec<LinearStop>> {
         if fields.is_empty() || fields.len() > 3 {
             return None;
         }
-        let output = exact_num::parse_f64(fields[0]).ok()?;
+        let output = word::number(fields[0])?;
         if fields.len() == 1 {
             stops.push((None, output));
             continue;
@@ -304,7 +275,7 @@ fn linear_stops(args: &[String]) -> Option<Vec<LinearStop>> {
         for field in &fields[1..] {
             let input = field
                 .strip_suffix('%')
-                .and_then(|value| exact_num::parse_f64(value).ok())
+                .and_then(word::number)
                 .map(|value| value / 100.0)?;
             stops.push((Some(input), output));
         }
@@ -362,13 +333,11 @@ fn linear_stops(args: &[String]) -> Option<Vec<LinearStop>> {
     )
 }
 
-fn call(s: &str) -> Option<(&str, Vec<String>)> {
-    let open = s.find('(')?;
-    if !s.ends_with(')') {
-        return None;
-    }
-    let name = &s[..open];
-    let inner = &s[open + 1..s.len() - 1];
+/// An easing function's call: the function, by its name in any case
+/// ([`word::easing_call`]), and its arguments, each trimmed.
+fn call(s: &str) -> Option<(&'static str, Vec<String>)> {
+    let function = word::easing_call(s)?;
+    let inner = s[function.len() + 1..].strip_suffix(')')?;
     let args = if inner.trim().is_empty() {
         Vec::new()
     } else {
@@ -377,13 +346,11 @@ fn call(s: &str) -> Option<(&str, Vec<String>)> {
             .map(|a| a.trim().to_string())
             .collect()
     };
-    Some((name, args))
+    Some((function, args))
 }
 
 fn numbers(args: &[String]) -> Option<Vec<f64>> {
-    args.iter()
-        .map(|a| exact_num::parse_f64(a.trim()).ok())
-        .collect()
+    args.iter().map(|a| word::number(a)).collect()
 }
 
 /// Split on `sep` outside parentheses.
@@ -611,5 +578,50 @@ mod tests {
             let message = Transitions::parse(text).unwrap_err().to_string();
             assert!(message.contains(says), "{text}: {message}");
         }
+    }
+
+    /// #49: a unit, a keyword, a function's name and a property's name match
+    /// in any ASCII case, as CSS's do (CSS Values 4 §2.1, §6.1); a refusal
+    /// names the word as written.
+    #[test]
+    fn a_transition_reads_in_any_ascii_case() {
+        for text in [
+            "opacity 0.3S EASE",
+            "OPACITY 300MS Ease-In-Out 0.1S",
+            "Opacity 0.3s Cubic-Bezier(0.4, 0, 0.2, 1)",
+            "opacity 0.3s STEPS(4, Jump-Both)",
+            "opacity 0.3s steps(2, START)",
+            "ALL 0.3s Step-Start",
+            "Background-Color 0.3s LINEAR(0, 0.5 50%, 1)",
+            "Scale -EXACT-SPRING(180, 12, 1)",
+            "-Exact-Tint-Color 1s, Border-Color 2E2MS",
+            "NONE",
+            "None",
+        ] {
+            let parsed = Transitions::parse(text);
+            assert!(parsed.is_ok(), "{text}: {parsed:?}");
+            assert_eq!(
+                parsed,
+                Transitions::parse(&text.to_ascii_lowercase()),
+                "{text}"
+            );
+        }
+        for (text, refused) in [
+            (
+                "opacity 0.3S Bounce",
+                ParseError::BadEasing("Bounce".into()),
+            ),
+            ("opacity 0.3", ParseError::BadTime("0.3".into())),
+            ("opacity 1.S", ParseError::BadTime("1.S".into())),
+            ("Width 1S", ParseError::UnknownProperty("Width".into())),
+            // Rust reads `inf` as a number; CSS does not, so no time is infinite.
+            ("opacity INFS", ParseError::BadEasing("INFS".into())),
+        ] {
+            assert_eq!(Transitions::parse(text), Err(refused), "{text}");
+        }
+        assert!(Transitions::parse("opacity 1s STEPS(4, Sideways)")
+            .unwrap_err()
+            .to_string()
+            .starts_with("`STEPS(4, Sideways)`: `steps()` takes"));
     }
 }

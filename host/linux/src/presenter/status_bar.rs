@@ -1,5 +1,6 @@
 //! Android's status bar request (LLP 1105 D7). Resolve in the painted page's
-//! covering scope, using iOS's declaration order and the winner's scheme.
+//! covering scope, using iOS's declaration order and the winner's scheme;
+//! `system-bars-hidden` by the same rule, apart from the style.
 use super::*;
 use std::cell::Cell;
 
@@ -8,6 +9,9 @@ pub(super) struct Choice {
     pub style: &'static str,
     pub source: Option<ViewId>,
     pub light_icons: bool,
+    /// Whether the system bars give way, and the declaration that decided it.
+    pub hidden: bool,
+    pub hidden_source: Option<ViewId>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -69,13 +73,15 @@ impl<D: DataSource> Presenter<D> {
             .resolutions
             .set(self.window.status_bar.resolutions.get() + 1);
         let kernel = self.host.kernel();
-        let default = Choice {
+        let mut choice = Choice {
             style: "default",
             source: None,
             light_icons: self.dark(),
+            hidden: false,
+            hidden_source: None,
         };
-        if !kernel.has_prop(PropId::StatusBarStyle) {
-            return default;
+        if !kernel.has_prop(PropId::StatusBarStyle) && !kernel.has_prop(PropId::SystemBarsHidden) {
+            return choice;
         }
         let ranks: BTreeMap<_, _> = kernel
             .paint_order()
@@ -123,33 +129,46 @@ impl<D: DataSource> Presenter<D> {
             .iter()
             .rposition(|id| covering.contains(id))
             .unwrap_or(0);
-        for &id in order[start..].iter().rev() {
-            let node = kernel.node(id).unwrap();
-            let declaration = node.props.str(PropId::StatusBarStyle);
-            if !matches!(declaration, Some("light-content" | "dark-content" | "auto"))
-                || !self.status_bar_shows(id)
-            {
-                continue;
-            }
-            let (style, light_icons) = match declaration {
+        let scope = &order[start..];
+        let winner = |declares: &dyn Fn(ViewId) -> bool| {
+            scope
+                .iter()
+                .rev()
+                .copied()
+                .find(|&id| declares(id) && self.status_bar_shows(id))
+        };
+        let style = |id| {
+            kernel
+                .node(id)
+                .and_then(|n| n.props.str(PropId::StatusBarStyle))
+        };
+        let hidden = |id| {
+            kernel
+                .node(id)
+                .and_then(|n| n.props.bool(PropId::SystemBarsHidden))
+        };
+        // Invalid bound values are unset, so an earlier valid declaration
+        // can still win, as on iOS.
+        if let Some(id) =
+            winner(&|id| matches!(style(id), Some("light-content" | "dark-content" | "auto")))
+        {
+            (choice.style, choice.light_icons) = match style(id) {
                 Some("light-content") => ("light-content", true),
                 Some("dark-content") => ("dark-content", false),
-                Some("auto") => match self.status_bar_scheme(id) {
+                _ => match self.status_bar_scheme(id) {
                     Some(true) => ("light-content", true),
                     Some(false) => ("dark-content", false),
                     None => ("default", self.dark()),
                 },
-                // Invalid bound values are unset, so an earlier valid
-                // declaration can still win, as on iOS.
-                _ => continue,
             };
-            return Choice {
-                style,
-                source: Some(id),
-                light_icons,
-            };
+            choice.source = Some(id);
         }
-        default
+        // `false` is a declaration too: it shows the bars an ancestor hides.
+        if let Some(id) = winner(&|id| hidden(id).is_some()) {
+            choice.hidden = hidden(id) == Some(true);
+            choice.hidden_source = Some(id);
+        }
+        choice
     }
 
     // The painter carries each node's presented scheme through `normal`.
@@ -202,12 +221,14 @@ impl<D: DataSource> Presenter<D> {
 
     pub(super) fn status_bar_layout(&self, out: &mut String) {
         let bar = self.status_bar();
+        let node = |id: Option<ViewId>| id.map_or_else(|| "null".into(), |id| id.to_string());
         let _ = write!(
             out,
-            ",\"statusBar\":{{\"style\":\"{}\",\"source\":{}}}",
+            ",\"statusBar\":{{\"style\":\"{}\",\"source\":{},\"hidden\":{},\"hiddenSource\":{}}}",
             bar.style,
-            bar.source
-                .map_or_else(|| "null".into(), |id| id.to_string())
+            node(bar.source),
+            bar.hidden,
+            node(bar.hidden_source)
         );
     }
 }

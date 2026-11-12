@@ -3,6 +3,8 @@ use super::*;
 mod cosmetics;
 #[path = "surface_tests/frames.rs"]
 mod frames;
+#[path = "surface_tests/performance.rs"]
+mod performance;
 #[path = "surface_tests/prepare.rs"]
 mod prepare;
 #[path = "surface_tests/quality.rs"]
@@ -502,17 +504,18 @@ fn presentation_trace_is_opt_in_read_once_and_never_advances_the_clock() {
     let reply: Reply =
         exact_game::json::from_str(&s.agent(r#"{"op":"state","trace":"read"}"#).unwrap()).unwrap();
     // 14 timing/position slots, then the drawn world-to-clip matrix and the
-    // canvas's pixel size (18), so the feel probe can project positions to pixels.
-    assert_eq!(reply.trace.stride, 32);
+    // canvas's pixel size (18), then the frame's pointer sample (5).
+    assert_eq!(reply.trace.stride, 37);
     assert!(!reply.trace.overflow);
-    assert_eq!(reply.trace.frames.len(), 96);
-    let rows: Vec<_> = reply.trace.frames.chunks_exact(32).collect();
+    assert_eq!(reply.trace.frames.len(), 111);
+    let rows: Vec<_> = reply.trace.frames.chunks_exact(37).collect();
     // Seekable T = [17, 25, 34] ms, L = 0, step = 1000/60 ms.
     // R = T - step = [1/3, 25/3, 52/3] ms; x = R/step = [.02, .5, 1.04].
     for (row, x) in rows.iter().zip([0.02, 0.5, 1.04]) {
         assert!((row[2] - x).abs() < 1e-6);
         assert_eq!(&row[5..8], &[0., 0., 8.]);
         assert_eq!(&row[30..32], &[64., 64.]);
+        assert_eq!(&row[32..37], &[0.; 5]);
         // Column-major projection, exactly the analyzer's homogeneous divide.
         let m = &row[14..30];
         let clip_w = m[3] + m[15]; // known world point (1,0,0)

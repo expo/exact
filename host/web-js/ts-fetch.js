@@ -158,8 +158,8 @@ function fetchOf(input, options, call, protocols) {
 export const files = { appId: null };
 
 // An answer that keeps coming (LLP 1016.000), with Hermes's words
-// (js/src/prelude.js): the stream is the answer's, so its fetch is made while
-// the answer is asked (`answering`, set by ts-data.js), which opens it. Its
+// (js/src/prelude.js): the stream is the answer's, so its fetch is made in one
+// of the answer's turns (`answering`, set by ts-data.js), which opens it. Its
 // promise never settles: the answer is what `exactStream` maps each event to.
 // `mapper`: a socket's mapper answering a frame, in its call's synchronous part, where it may send on that socket.
 // `mapperCall`: the stream whose mapper call is running, in every turn of that call: ts-stream.js sets it for the
@@ -168,12 +168,15 @@ export const files = { appId: null };
 export const answering = { call: null, untraced: new Set(), sockets: false, mapper: null, mapperCall: null, loose: () => {}, heldReply: () => {}, ordinary: start => ordinary(start), page: null, entropy: null, later: null }; // the hooks: held.js's, set by the page's entry; `ordinary` for ts-data.js; `page`, the runtime's clock, journal, `drive` and `time`, set by ts-data.js
 function stream(input, init, redirect, protocols) {
   const call = answering.call;
-  // Hermes also claims a stream started after an await; this page has no
-  // turn to tie one to, so it says where to start it.
-  if (!call?.turn) return Promise.reject(new Error('fetch() with exactStream outside an answer: on the web a stream starts as its answer is asked, before the answer\'s first await'));
+  // The answer's own turns, as Hermes's: its source, or a later turn of an answer still in flight (its async
+  // function's steps after an `await`, its timer), whose ticket the stream then takes (ts-data.js `late`; LLP
+  // 1016.000, the amendment of 2026-11-12).
+  const later = !!call?.ticket && !call.turn && !!call.flight && answers(call);
+  if (!call?.turn && !later) return Promise.reject(new Error('fetch() with exactStream outside an answer: a stream starts in its answer\'s own turns (its source, its code after an `await` in an async function, its timer), before the answer gives its value or is let go'));
   if (call.stream) return Promise.reject(new Error('an answer streams one request'));
   // Checked and opened by ts-stream.js, which only a streaming module loads.
   call.stream = { input, init, redirect, protocols };
+  if (later) try { call.late(); } catch (e) { call.stream = null; return Promise.reject(e); }
   return new Promise(() => {});
 }
 

@@ -964,7 +964,7 @@ fn fetch_options_need_their_runtime_and_an_ordinary_fetch_does_not() {
         (", { cache: 'no-store' }", 11),
         (", { cache: 'default' }", 11),
         (", { exactPreload: 'feed' }", 13),
-        (", { exactPrefetch: true }", 14),
+        (", { exactPrefetch: true }", 13),
     ] {
         let app = App::new(&format!("fetch-cache-{needs}"));
         app.put("app.ts", &format!("import type {{ Answer }} from './app.contract.d.ts';\nexport const appId = 'test.exact.logic';\nexport const grants = 'net.fetch https://example.test';\nexport const answer: Answer = () => fetch('https://example.test'{options}).then(r => r.text());\n"));

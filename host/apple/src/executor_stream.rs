@@ -2,8 +2,10 @@
 //! 2): a streamed `fetch` whose body is server-sent events, opened by the
 //! worker that owns the transport and read on a thread of its own, so an
 //! open stream holds no I/O worker (LLP 1067 D3). Each event is one
-//! `Outcome::Message` to the ticket; anything that ends the body ends the
-//! stream. The host never reconnects on its own (1069.004 slice 2).
+//! `Outcome::Message` to the ticket, and events the runner has not taken
+//! wait for it together, in order, to arrive as one `Outcome::Messages`;
+//! anything that ends the body ends the stream. The host never reconnects
+//! on its own (1069.004 slice 2).
 //!
 //! A `ws:` or `wss:` URL is a WebSocket instead (1069.004 slice 3), admitted
 //! by `net.websocket`: each text message is one `Message`, and the far
@@ -171,8 +173,8 @@ fn opened(
         Ok((Opened::Socket(socket, limit), _bindings)) if two_way => {
             socket::read(shared, ticket, socket, limit, abort, quiet)
         }
-        Ok((Opened::Socket(socket, _), _bindings)) => {
-            read_socket(shared, ticket, socket, abort, quiet)
+        Ok((Opened::Socket(socket, limit), _bindings)) => {
+            read_socket(shared, ticket, socket, limit, abort, quiet)
         }
         Ok((Opened::LongPoll(request, limit), bindings)) => {
             long_poll::run(shared, ticket, request, forced, &bindings, limit, abort)
@@ -205,6 +207,7 @@ fn read_socket(
     shared: &Shared,
     ticket: u64,
     mut socket: Box<dyn MessageSource>,
+    limit: usize,
     abort: AbortController,
     quiet: Option<Quiet>,
 ) {
@@ -220,8 +223,17 @@ fn read_socket(
                     protocol: socket.protocol().into(),
                     ..Message::default()
                 };
-                if !message(shared, ticket, m) {
-                    return failed(FailureKind::Aborted, "the stream was let go");
+                match message(shared, ticket, m, limit) {
+                    Delivered::Queued => {}
+                    Delivered::Gone => {
+                        return failed(FailureKind::Aborted, "the stream was let go")
+                    }
+                    Delivered::Overflow => {
+                        return failed(
+                            FailureKind::Refused,
+                            "socket receive queue exceeds 4096 messages or 1 MiB",
+                        )
+                    }
                 }
             }
             Ok(Incoming::Binary(_)) => {
@@ -252,29 +264,51 @@ fn read_socket(
     complete(shared, ticket, run);
 }
 
-/// One message of the open stream `ticket`, false once nobody wants more
-/// (forgotten, retired, ended). The newest undelivered message per ticket is
-/// kept and the ones it replaces are counted on it (LLP 1016.000 D4): display
-/// data coalesces, and a log sees the gap and re-asks from its cursor.
-fn message(shared: &Shared, ticket: u64, message: Message) -> bool {
-    deliver(shared, ticket, message, false)
+/// The messages a stream may have waiting for the runner, and the bytes
+/// of their data beyond one message's ceiling (LLP 1016.000 D4).
+const RECEIVE_MESSAGES: usize = 4096;
+const RECEIVE_BYTES: usize = 1 << 20;
+
+/// What became of one message.
+enum Delivered {
+    Queued,
+    /// Nobody wants more: forgotten, retired, ended.
+    Gone,
+    /// The messages waiting are at their bound: the stream ends refused
+    /// after them, never dropping one.
+    Overflow,
+}
+
+/// One message of the open stream `ticket`, queued behind the ones the
+/// runner has not taken: they reach it as one batch, every one in order
+/// (LLP 1016.000 D4). Only an upload's progress is a snapshot: the newest
+/// replaces a waiting one and counts it in `coalesced` (D10). `limit` is
+/// one message's ceiling.
+fn message(shared: &Shared, ticket: u64, message: Message, limit: usize) -> Delivered {
+    deliver(shared, ticket, message, false, limit)
 }
 
 /// A long poll's reply that is no event (LLP 1016.000 D8): a message of the
-/// reserved event `LONG_POLL_REPLY`, which never takes an event's place nor
-/// counts as one dropped, and which an event that follows replaces.
+/// reserved event `LONG_POLL_REPLY`, which never takes an event's place,
+/// and which an event that follows replaces.
 fn reply(shared: &Shared, ticket: u64) -> bool {
     let m = Message {
         event: exact_runner::LONG_POLL_REPLY.into(),
         ..Message::default()
     };
-    deliver(shared, ticket, m, true)
+    !matches!(deliver(shared, ticket, m, true, 0), Delivered::Gone)
 }
 
-fn deliver(shared: &Shared, ticket: u64, mut message: Message, reply: bool) -> bool {
+fn deliver(
+    shared: &Shared,
+    ticket: u64,
+    mut message: Message,
+    reply: bool,
+    limit: usize,
+) -> Delivered {
     let mut state = shared.state.lock().unwrap();
     if state.retired {
-        return false;
+        return Delivered::Gone;
     }
     let Some((lane, elapsed_ms)) = state
         .running
@@ -287,7 +321,7 @@ fn deliver(shared: &Shared, ticket: u64, mut message: Message, reply: bool) -> b
             )
         })
     else {
-        return false;
+        return Delivered::Gone;
     };
     // An upload's start is never folded into another message, nor another
     // into it (LLP 1016.000 D10): it says the upload reached the network.
@@ -307,7 +341,10 @@ fn deliver(shared: &Shared, ticket: u64, mut message: Message, reply: bool) -> b
             done.finished_at = std::time::Instant::now();
             done.reply = false;
         }
-        Some(done) => {
+        Some(done)
+            if message.sent().is_some()
+                && matches!(&done.outcome, Outcome::Message(older) if older.sent().is_some()) =>
+        {
             if let Outcome::Message(older) = &done.outcome {
                 message.coalesced = message
                     .coalesced
@@ -317,6 +354,24 @@ fn deliver(shared: &Shared, ticket: u64, mut message: Message, reply: bool) -> b
             done.outcome = Outcome::Message(message);
             done.elapsed_ms = elapsed_ms;
             done.finished_at = std::time::Instant::now();
+        }
+        Some(done) => {
+            let waiting = done.outcome.messages();
+            let bytes = waiting.iter().map(|m| m.data.len()).sum::<usize>();
+            if waiting.len() >= RECEIVE_MESSAGES
+                || bytes.saturating_add(message.data.len()) > limit.saturating_add(RECEIVE_BYTES)
+            {
+                return Delivered::Overflow;
+            }
+            done.outcome = match std::mem::replace(&mut done.outcome, Outcome::Messages(vec![])) {
+                Outcome::Messages(mut batch) => {
+                    batch.push(message);
+                    Outcome::Messages(batch)
+                }
+                Outcome::Message(older) => Outcome::Messages(vec![older, message]),
+                other => other,
+            };
+            done.elapsed_ms = elapsed_ms;
         }
         None => state.completed[lane].push_back(Completed {
             cached: false,
@@ -336,7 +391,7 @@ fn deliver(shared: &Shared, ticket: u64, mut message: Message, reply: bool) -> b
     if has_ready(&state) {
         wake(&mut state);
     }
-    true
+    Delivered::Queued
 }
 
 /// How a socket's close reads, on every host: `the socket closed (1000)`,
@@ -449,8 +504,17 @@ fn read_events(
                 Ok(n) => match events.push(&chunk[..n]) {
                     Ok(messages) => {
                         for m in messages {
-                            if !message(shared, ticket, m) {
-                                return failed(FailureKind::Aborted, "the stream was let go");
+                            match message(shared, ticket, m, limit) {
+                                Delivered::Queued => {}
+                                Delivered::Gone => {
+                                    return failed(FailureKind::Aborted, "the stream was let go")
+                                }
+                                Delivered::Overflow => {
+                                    return failed(
+                                        FailureKind::Refused,
+                                        "event stream receive queue exceeds 4096 events or 1 MiB",
+                                    )
+                                }
                             }
                         }
                     }

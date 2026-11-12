@@ -162,6 +162,18 @@ class ExtensionContext internal constructor(val application: Context, private va
     /** The session this instance belongs to. Android runs one session a process. */
     val session: String = "1"
 
+    /** The session's label, the same at every launch, which what a package keeps for one session is keyed by: `main`,
+     * the one session a process runs here, as an Apple app's window is. */
+    val label: String = "main"
+
+    /** The session's directories behind `app:/data`, `app:/cache` and `app:/tmp`: the app's own, or under the agent its
+     * drive's store (a named one, `EXACT_AGENT_STORAGE`, kept across the drive's launches). */
+    val data: java.io.File get() = root(0)
+    val cache: java.io.File get() = root(1)
+    val temporary: java.io.File get() = root(2)
+    private fun root(index: Int): java.io.File =
+        java.io.File(try { Native.appRoot(index) } catch (e: UnsatisfiedLinkError) { null } ?: application.cacheDir.path)
+
     /** Who made the call being answered now, `app`, `tool` or `wake`, read at [ExactExtension.later]'s entry: a
      * capture's first lease is refused to a tool's read (LLP 1133.009 D6). */
     var origin = "app"

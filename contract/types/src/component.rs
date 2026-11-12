@@ -10,7 +10,7 @@ mod derives;
 
 use crate::calls::CAPTURE;
 use contract_syntax::inline::calls::shown;
-use contract_syntax::{Component, Expr, Node, Owner, Param, Span, Stmt, TemplatePart};
+use contract_syntax::{Binding, Component, Expr, Node, Owner, Param, Span, Stmt, TemplatePart};
 use std::{collections::BTreeMap, sync::Arc};
 
 #[cfg(test)]
@@ -139,13 +139,13 @@ pub(crate) fn check_component(
         ct.props.push(ty);
     }
     for r in &c.resources {
-        let t = sink.keep(shapes.resolve(&r.shape));
+        let t = sink.keep(shapes.resolve_value(&r.shape, &format!("resource `{}`", r.name)));
         let over = r.each.is_some() && t != Ty::Unknown;
         ct.resources
             .push(if over { Ty::List(Box::new(t)) } else { t });
     }
     for m in &c.mutations {
-        let t = sink.keep(shapes.resolve(&m.shape));
+        let t = sink.keep(shapes.resolve_value(&m.shape, &format!("mutation `{}`", m.name)));
         // A mutation holds `option<T>` of its answer (LLP 1090 D2).
         sink.keep_unit(shapes.bounded(&Ty::Option(Box::new(t.clone())), m.shape.span()));
         ct.mutations.push(t);
@@ -180,7 +180,7 @@ pub(crate) fn check_component(
                 sink.push(e);
                 Ty::Unknown
             } else {
-                sink.keep(infer(&s.expr, &scope, shapes))
+                sink.keep(state_type(s, &scope, shapes))
             };
             // Duplicate declarations were refused above. Each initializer sees
             // only earlier slots, without copying their names and types again.
@@ -193,7 +193,12 @@ pub(crate) fn check_component(
         let mut params = Vec::new();
         for p in &a.params {
             params.push(match &p.ty {
-                Some(t) => sink.keep(shapes.resolve(t)),
+                Some(t) => {
+                    sink.keep(shapes.resolve_value(
+                        t,
+                        &format!("parameter `{}` of action `{}`", p.name, a.name),
+                    ))
+                }
                 None => Ty::Unknown,
             });
         }
@@ -1046,6 +1051,21 @@ fn handed_on<'b>(body: &'b [Stmt], capture: &str) -> Option<(&'b str, Span)> {
 /// arguments may not read (LLP 1048.003 D6).
 fn reads_state(e: &Expr, scope: &Scope) -> Option<(String, Span)> {
     first_free(e, &|_| false, &mut |name| scope.lookup(name).is_some())
+}
+
+/// A state's initializer's type. A declared type (`state n: number = …`,
+/// LLP 1116.015 D2) is checked here, where a refusal can name the state.
+pub(crate) fn state_type(s: &Binding, scope: &Scope, shapes: &Shapes) -> Result<Ty, TypeError> {
+    let Expr::Typed(value, declared, _) = &s.expr else {
+        return infer(&s.expr, scope, shapes);
+    };
+    let declared = shapes.resolve_value(declared, &format!("state `{}`", s.name))?;
+    let t = infer(value, scope, shapes)?;
+    super::fits(&declared, &t, value, scope, shapes).ok_or_else(|| TypeError {
+        id: "type-state-initializer",
+        message: super::enums::initializer_error(&s.name, &declared, value, &t),
+        span: value.span(),
+    })
 }
 
 /// @ref LLP 1088 D4 — a state's initializer runs before any resource

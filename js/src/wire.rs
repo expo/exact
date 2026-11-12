@@ -212,6 +212,10 @@ pub(crate) fn outcome_to_json(outcome: &Outcome) -> Json {
         } => json!({
             "closed": { "code": code, "reason": reason, "wasClean": was_clean }
         }),
+        // The runner hands a mapper a batch's messages one at a time.
+        Outcome::Messages(_) => {
+            json!({"failed":{"kind":"Unsupported","message":"a mapper is given a stream's messages one at a time"}})
+        }
     }
 }
 

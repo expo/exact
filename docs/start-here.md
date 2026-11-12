@@ -48,6 +48,10 @@ bun exact.mjs ios --prebuild  # the first iOS build: ten to fifteen minutes, in 
 `bun <exact2>/scripts/exact.mjs setup` takes a few minutes, a first macOS or iOS build ten to fifteen on a laptop, later builds a minute or two.
 Run each once and let it finish, in the background with a completion notification if your tool has one, rather than polling its log.
 
+On Linux or Windows through WSL, install the [iOS cross tools](../README.md#1-install-the-tools)
+first. `ios` builds a simulator bundle without installing it; `ios --prebuild` does so
+in the background. Running an iOS simulator, including `verify ios` and `agent ios`, needs macOS.
+
 Start from the nearest pattern. The screen `exact new` writes, and its tests in
 `app.test.contract`, are placeholders: replace both. `exact.mjs` runs from any
 directory: a file you name is found where you are, else in the app, and it says
@@ -97,7 +101,7 @@ required tool, device or simulator is unavailable, report that target as unteste
 |iOS|`bun exact.mjs verify ios`|`bun exact.mjs ios --run`|
 |Android|`bun exact.mjs verify android`|`bun exact.mjs android --run`|
 |Windows|`bun exact.mjs verify windows`|`bun exact.mjs windows --run`|
-|macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos "screenshot mac.png"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
+|macOS|`bun exact.mjs test macos`, then `bun exact.mjs agent macos --chrome platform "clock data" "screenshot .exact/mac.png window"` (`check` is the web's and iOS's)|`bun exact.mjs mac --run`|
 |Linux|`bun exact.mjs linux`, then `bun exact.mjs test linux`|The Linux host is headless; inspect it with `bun exact.mjs agent linux tree` after building.|
 
 There is no `verify macos` or `verify linux`. Inspect the launched native app for
@@ -251,7 +255,10 @@ component Groceries
   (`first(xs)`, `round(n)`). What differs: no truthiness; absence is an option (`none`,
   `some(x)`, `match`), not `null`; a value never changes (`xs.concat([x])`, a record copy
   `Shape(old, field=value)`); `==` compares lists and records by value; a stored number is
-  finite (a `NaN` refuses the commit). A presentation order by one key is
+  finite (a `NaN` refuses the commit). Write `n = n - 1` in an action, not `--n`;
+  double negation is `-(-n)` or `- -n`. Numeric literals are decimal without leading
+  zeroes (`0.5` is valid); write `8`, not `010` or `0o10`.
+  A presentation order by one key is
   `sortBy(xs, x => x.name)`, stable (`"desc"` third; a second key is an earlier `sortBy`), not
   `sort`; grouping, joining and a stored or locale order are the data module's, and the view
   names the order it relies on where it reads it (`resource tasks = loadTasksByDueDate()`).

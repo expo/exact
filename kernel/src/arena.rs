@@ -80,6 +80,7 @@ pub struct NodeArena {
     pub(crate) mark_sizes: Vec<((crate::ControlKind, u32), (f32, f32))>,
     /// The kind and font size each standing mark report was made under (`Kernel::mark_withdrawn`).
     pub(crate) mark_reports: IdMap<u32, (crate::ControlKind, u32)>,
+    pub(crate) bar_symbols: Vec<(u32, f32)>,
     /// Slots that are `position: sticky` (LLP 1083 D3).
     pub(crate) sticky_slots: SlotSet,
     /// Slots in HTML's top layer: popovers, unless their author made them
@@ -189,6 +190,7 @@ impl Clone for NodeArena {
             measured_symbols: self.measured_symbols.clone(),
             mark_sizes: self.mark_sizes.clone(),
             mark_reports: self.mark_reports.clone(),
+            bar_symbols: self.bar_symbols.clone(),
             sticky_slots: self.sticky_slots.clone(),
             top_layer_slots: self.top_layer_slots.clone(),
             timelines: self.timelines.clone(),
@@ -279,6 +281,7 @@ impl NodeArena {
         self.measured_symbols.clear();
         self.mark_sizes.clear();
         self.mark_reports.clear();
+        self.bar_symbols.clear();
         self.sticky_slots.clear();
         self.top_layer_slots.clear();
         self.timelines = Default::default();
@@ -393,12 +396,6 @@ impl NodeArena {
     /// Node type of a slot.
     pub fn node_type(&self, slot: u32) -> NodeType {
         self.node_types[slot as usize]
-    }
-    /// Whether a slot is a `<button>` element on the web: a Pressable,
-    /// whatever its ARIA role, unless an `href` makes it an `<a>`.
-    pub(crate) fn is_button(&self, slot: u32) -> bool {
-        self.node_type(slot) == NodeType::Pressable
-            && self.props(slot).str(crate::PropId::Href).is_none()
     }
     /// Parent slot.
     pub fn parent(&self, slot: u32) -> Option<u32> {
@@ -923,6 +920,7 @@ impl NodeArena {
     }
 
     pub(crate) fn free_slot(&mut self, slot: u32) {
+        self.bar_symbols.retain(|(s, _)| *s != slot);
         self.field_content.remove(&slot);
         self.mark_reports.remove(&slot);
         self.exclusion_slots.remove(slot);

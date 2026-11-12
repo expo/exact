@@ -770,9 +770,8 @@ export const byExpiry = (a, b) => b.expires - a.expires;
 export const iosProfile = p => !p.platforms?.length || p.platforms.includes('iOS');
 /** The profiles among `installed` whose App ID is `bundle` itself or its team's wildcard. */
 export const profilesFor = (bundle, installed) => installed.filter((p) => p.appId === `${p.prefix}.*` || p.appId === `${p.prefix}.${bundle}`);
-/** How a profile distributes, from what it carries: a debugger (development), named devices (Ad Hoc), every device
- * (enterprise), or none of those (the App Store). */
-export const METHODS = { development: 'development', adhoc: 'Ad Hoc', enterprise: 'enterprise', appstore: 'App Store' };
+/** How a profile distributes: development, iOS Ad Hoc or enterprise, Mac Developer ID, or the App Store. */
+export const METHODS = { development: 'development', adhoc: 'Ad Hoc', enterprise: 'enterprise', developerid: 'Developer ID', appstore: 'App Store' };
 /** Why `p` cannot sign on `udid`, or null when it can: its expiry, and with a phone named, that phone (an App Store
  * profile names none). `like`, another profile (the app's, when `p` is for its extension), asks for its team, App
  * ID prefix and method too, and that `p` name the phone, or, for an archive, every device `like` names. */
@@ -790,17 +789,21 @@ export function profileMisfit(p, udid, like = null) {
 /** Every `.mobileprovision` or `.provisionprofile` Xcode or a download installed, decoded once per process (a hundred of them is two seconds). */
 let decoded = null;
 export function installedProfiles() {
-  const dirs = ['Library/Developer/Xcode/UserData/Provisioning Profiles', 'Library/MobileDevice/Provisioning Profiles'].map((d) => resolve(homedir(), d)).filter(existsSync);
+  const dirs = [...(process.env.EXACT_PROFILE_DIR ? [resolve(process.env.EXACT_PROFILE_DIR)] : []), ...['Library/Developer/Xcode/UserData/Provisioning Profiles', 'Library/MobileDevice/Provisioning Profiles'].map((d) => resolve(homedir(), d))].filter(existsSync);
   return decoded ??= dirs.flatMap((d) => readdirSync(d).filter((f) => /\.(mobileprovision|provisionprofile)$/.test(f)).map((f) => decodeProfile(resolve(d, f))));
 }
 
-/** The fields of a `.mobileprovision` this script reads (it is a CMS-signed XML plist). */
-export function decodeProfile(path) {
-  const xml = read('security', ['cms', '-D', '-i', path]).stdout ?? '';
+/** The fields of a `.mobileprovision` or `.provisionprofile` this script reads (a CMS-signed XML plist). */
+export function decodeProfile(path, os = process.platform, { read: readProfile = read } = {}) {
+  const result = os === 'linux' ? readProfile('openssl', ['smime', '-verify', '-inform', 'DER', '-in', path, '-noverify'])
+    : readProfile('security', ['cms', '-D', '-i', path]);
+  if (os === 'linux' && result.status !== 0) throw new Error(`host/apple: cannot decode provisioning profile ${path}: ${result.stderr || result.error?.message}`);
+  const xml = result.stdout ?? '';
   const str = (key) => new RegExp(`<key>${key}</key>\\s*<string>([^<]*)</string>`).exec(xml)?.[1];
   const strings = (key) => [...(new RegExp(`<key>${key}</key>\\s*<array>([\\s\\S]*?)</array>`).exec(xml)?.[1] ?? '').matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1]);
   const team = /<key>TeamIdentifier<\/key>\s*<array>\s*<string>([^<]*)<\/string>/.exec(xml)?.[1];
   const devices = strings('ProvisionedDevices');
+  const platforms = strings('Platform'), mac = platforms.length > 0 && platforms.every(p => p === 'OSX');
   const expires = /<key>ExpirationDate<\/key>\s*<date>([^<]*)<\/date>/.exec(xml)?.[1];
   // The keys of its Entitlements whose value is not `false`: what it allows.
   const allowed = /<key>Entitlements<\/key>\s*<dict>([\s\S]*?)<\/dict>/.exec(xml)?.[1] ?? '';
@@ -808,10 +811,16 @@ export function decodeProfile(path) {
   const appId = str('application-identifier') ?? str('com.apple.application-identifier');
   // What an app with widgets or Live Activities needs of it (LLP 1126.001 WP13): the App Groups it grants, the
   // Keychain groups (the team's `<prefix>.*`, usually) and the push environment.
-  const dev = /<key>(?:com.apple.security.)?get-task-allow<\/key>\s*<true\/>/.test(xml), enterprise = /<key>ProvisionsAllDevices<\/key>\s*<true\/>/.test(xml);
-  return { path, name: str('Name'), team, appId, prefix: appId?.split('.')[0], devices, dev, expires: new Date(expires ?? 0), entitlements, platforms: strings('Platform'),
-    method: dev ? 'development' : devices.length ? 'adhoc' : enterprise ? 'enterprise' : 'appstore',
-    groups: strings('com.apple.security.application-groups'), keychain: strings('keychain-access-groups'), aps: str('aps-environment') ?? null };
+  // Mac development profiles name devices; their unrestricted debugger entitlement need not be in the profile.
+  // Developer ID covers all devices, and the App Store names none (Apple TN3125):
+  // https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles
+  const dev = mac ? devices.length > 0 : /<key>(?:com\.apple\.security\.)?get-task-allow<\/key>\s*<true\/>/.test(xml);
+  const allDevices = /<key>ProvisionsAllDevices<\/key>\s*<true\/>/.test(xml);
+  const aps = mac ? str('com.apple.developer.aps-environment') ?? str('aps-environment')
+    : str('aps-environment') ?? str('com.apple.developer.aps-environment');
+  return { path, name: str('Name'), team, appId, prefix: appId?.split('.')[0], devices, dev, expires: new Date(expires ?? 0), entitlements, platforms,
+    method: dev ? 'development' : devices.length ? 'adhoc' : allDevices ? (mac ? 'developerid' : 'enterprise') : 'appstore',
+    groups: strings('com.apple.security.application-groups'), keychain: strings('keychain-access-groups'), aps: aps ?? null };
 }
 
 /** The Apple Development identity (its SHA-1) for a team, from the keychain; EXACT_IDENTITY names one. */

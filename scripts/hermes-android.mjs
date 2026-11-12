@@ -10,7 +10,8 @@
 // HERMES_LEAN_SYS_DIR_aarch64_linux_android in place of the pinned one, for the
 // target only, so the host's own pinned bundle is untouched.
 //
-//   bun scripts/hermes-android.mjs build              IBEX_DIR: an Ibex checkout with the Android target
+//   IBEX_DIR=/path/to/ibex bun scripts/hermes-android.mjs build --intl
+//     requires Ibex's Android Intl builder (API 29, ICU base/English/full tiers)
 //   bun scripts/hermes-android.mjs install <tar.gz>   cache a bundle built elsewhere
 //   bun scripts/hermes-android.mjs path               the installed bundle, or nothing
 import { spawnSync } from 'node:child_process';
@@ -35,7 +36,7 @@ const hasAndroidTarget = (dir) => {
   return existsSync(script) && readFileSync(script, 'utf8').includes('aarch64-linux-android)');
 };
 
-function build() {
+function build(intl = false) {
   const named = process.env.IBEX_DIR;
   if (named && !hasAndroidTarget(named)) throw new Error(`IBEX_DIR ${named} has no scripts/build-hermes-vanilla-release.sh with the aarch64-linux-android target`);
   const candidates = named ? [named] : [resolve(homedir(), 'projects/ibex2-android-hermes'), resolve(homedir(), 'projects/ibex2')];
@@ -47,25 +48,35 @@ function build() {
   try {
     const archive = resolve(work, 'hermes-vanilla-aarch64-linux-android.tar.gz');
     const built = spawnSync('bash', ['scripts/build-hermes-vanilla-release.sh', 'aarch64-linux-android', archive], {
-      cwd: ibex, stdio: 'inherit', env: { ...process.env, IBEX_ANDROID_API: String(ANDROID_MIN_API) },
+      cwd: ibex, stdio: 'inherit', env: { ...process.env, IBEX_ANDROID_API: String(ANDROID_MIN_API), IBEX_ANDROID_INTL: String(intl) },
     });
     if (built.status !== 0) process.exit(built.status ?? 1);
-    console.log(install(archive, work));
+    console.log(install(archive, work, intl));
   } finally {
     rmSync(work, { recursive: true, force: true });
   }
 }
 
 /** Publish a built bundle archive: unpack it as its digest's directory, then point `current` at it. */
-function install(archive, work) {
+function install(archive, work, intl = false) {
   const digest = createHash('sha256').update(readFileSync(archive)).digest('hex');
   const root = resolve(HERMES_ANDROID_CACHE, digest);
+  const staging = resolve(work, 'bundle');
+  mkdirSync(staging);
+  const unpacked = spawnSync('tar', ['-xzf', archive, '-C', staging], { stdio: 'inherit' });
+  if (unpacked.status !== 0) throw new Error('cannot unpack the Android Hermes bundle');
+  // Use the build resolver's schema, layout, digest and compiler-pairing checks
+  // before publishing the candidate or changing the working installation.
+  const checked = spawnSync('cargo', ['run', '--quiet', '--locked', '--manifest-path',
+    resolve(import.meta.dir, '../vendor/ibex/crates/hermes-lean-sys-installer/Cargo.toml'),
+    '--target-dir', resolve(import.meta.dir, '../target'), '--', '--check-dir', staging, 'aarch64-linux-android'],
+  { stdio: ['ignore', 'inherit', 'inherit'] });
+  if (checked.status !== 0) throw new Error('invalid Android Hermes bundle; the installed bundle is unchanged');
+  const receipt = JSON.parse(readFileSync(resolve(staging, 'hermes-input-receipt.json'), 'utf8'));
+  if (intl && !receipt?.build?.flags?.includes('-DHERMES_ENABLE_INTL=true'))
+    throw new Error('the Ibex builder did not produce Intl; apply the Android Intl changes in Ibex');
   // A published digest directory is never replaced: the same digest is the same bundle.
   if (!existsSync(root)) {
-    const staging = resolve(work, 'bundle');
-    mkdirSync(staging);
-    const unpacked = spawnSync('tar', ['-xzf', archive, '-C', staging], { stdio: 'inherit' });
-    if (unpacked.status !== 0) process.exit(unpacked.status ?? 1);
     try { renameSync(staging, root); } catch (error) { if (!existsSync(root)) throw error; }
   }
   // `current` moves by renaming a fresh link over it, so a reader always finds one.
@@ -89,8 +100,8 @@ function installArchive(archive) {
 
 if (import.meta.main) {
   const verb = process.argv[2];
-  if (verb === 'build') build();
+  if (verb === 'build') build(process.argv.includes('--intl'));
   else if (verb === 'install' && process.argv[3]) installArchive(process.argv[3]);
   else if (verb === 'path') console.log(hermesAndroidBundle() ?? '');
-  else { console.error('usage: bun scripts/hermes-android.mjs build | install <archive.tar.gz> | path'); process.exit(2); }
+  else { console.error('usage: bun scripts/hermes-android.mjs build [--intl] | install <archive.tar.gz> | path'); process.exit(2); }
 }

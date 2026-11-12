@@ -34,7 +34,9 @@ impl Animation {
             Direction::AlternateReverse => odd,
         };
         let progress = self.directed_progress(t)?;
-        let track = self.keyframes.track(property, underlying, dark);
+        let track = self
+            .keyframes
+            .track(property, underlying, dark, &self.easing);
         let mut interval = track.len().saturating_sub(2);
         for (i, pair) in track.windows(2).enumerate() {
             if pair[0].0 <= progress && progress < pair[1].0 {
@@ -51,8 +53,7 @@ impl Animation {
                 a.0
             }
         } else {
-            let easing = a.1.unwrap_or(&self.easing);
-            match easing {
+            match a.1 {
                 Easing::Steps { count, position } => {
                     let local = (progress - a.0) / span;
                     let n = *count as f64;

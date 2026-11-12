@@ -281,6 +281,7 @@ impl<D: DataSource> Bridge<D> {
             height,
             preferences: self.preferences,
             fold: self.fold,
+            ..exact_runner::Viewport::default()
         };
         let (checkpoint, launch_facts) = (self.checkpoint.take(), self.launch());
         let booted = exact_runner::time::launching_with(launch_facts, || match checkpoint {
@@ -328,6 +329,7 @@ impl<D: DataSource> Bridge<D> {
             height,
             preferences: self.preferences,
             fold: self.fold,
+            ..exact_runner::Viewport::default()
         };
         let booted = exact_runner::time::launching_with(self.launch(), || {
             Host::boot_linked(
@@ -656,6 +658,7 @@ impl<D: DataSource> Bridge<D> {
             height,
             preferences: self.preferences,
             fold: self.fold,
+            ..exact_runner::Viewport::default()
         };
         let out = self.host.as_mut().map_or_else(
             || exact_runner::agent::error("not booted"),
@@ -1246,6 +1249,23 @@ macro_rules! host {
         #[no_mangle]
         pub extern "C" fn exact_set_display_scale(scale: f64) -> u32 {
             EXACT_BRIDGE.with(|b| b.borrow_mut().set_display_scale(scale))
+        }
+
+        /// The browser's document insets and segment rectangles in the input buffer.
+        #[no_mangle]
+        pub extern "C" fn exact_set_viewport_geometry(len: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().viewport_geometry(len as usize))
+        }
+
+        /// Whether this canvas name is read by a performance resource.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_performance_requested(len: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow().canvas_performance_requested(len as usize))
+        }
+        /// Publish or clear a canvas's performance record.
+        #[no_mangle]
+        pub extern "C" fn exact_canvas_performance_record(len: u32) -> u32 {
+            EXACT_BRIDGE.with(|b| b.borrow_mut().canvas_performance_record(len as usize))
         }
 
         /// The aborts a realm heard between batches.

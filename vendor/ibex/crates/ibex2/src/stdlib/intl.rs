@@ -1,4 +1,4 @@
-//! Rust-owned ECMA-402 NumberFormat semantics for the Linux and Windows Hermes
+//! Rust-owned ECMA-402 NumberFormat semantics for the Linux, Android and Windows Hermes
 //! adapters.
 //!
 //! JavaScript performs only observable `Get`/coercion order and object

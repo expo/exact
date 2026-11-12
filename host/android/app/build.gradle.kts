@@ -222,13 +222,14 @@ android {
         buildFeatures { this.compose = true }
         sourceSets["test"].kotlin.directories.add("src/composeTest/java")
     }
-    // An app's GPU module (-PgpuModule=<file>) is opened by path from the extracted library directory and checked
-    // against the digest its bake recorded, so it is extracted and left unstripped.
-    val gpuModule = providers.gradleProperty("gpuModule").orNull
+    // An app's GPU modules (-PgpuModules=<file>,<file>…: the primary and each named one) are opened by path from the
+    // extracted library directory and checked against the digests their bake recorded, so they are extracted and left
+    // unstripped.
+    val gpuModules = providers.gradleProperty("gpuModules").orNull?.split(',')?.filter { it.isNotEmpty() }.orEmpty()
     packaging {
         jniLibs {
-            useLegacyPackaging = gpuModule != null
-            gpuModule?.let { keepDebugSymbols += "**/$it" }
+            useLegacyPackaging = gpuModules.isNotEmpty()
+            gpuModules.forEach { keepDebugSymbols += "**/$it" }
         }
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }

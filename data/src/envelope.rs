@@ -58,6 +58,17 @@ pub fn encode_optional(
             let why = request.long_poll_refusal().unwrap_or_default();
             body["error"] = error_json(&unavailable(why));
         }
+        // A listener's connections are handles a worker's turn cannot hold,
+        // as a socket's are (LLP 1133.005); the envelope carries no listener.
+        Ok(Some(Answer::Later(request)))
+            if std::iter::once(&request)
+                .chain(&more)
+                .any(|r| r.listen.is_some()) =>
+        {
+            body["error"] = error_json(&unavailable(
+                "exactListen is unavailable in a worker-placed source; place it on main",
+            ));
+        }
         Ok(Some(Answer::Later(request))) => {
             body["request"] = request_json(&request);
             body["more"] = Json::Array(more.iter().map(request_json).collect());
@@ -254,13 +265,6 @@ fn request_from(json: &Json) -> Result<Request, DataError> {
         })
         .transpose()?
         .unwrap_or_default();
-    // A listener's connections are handles a worker's turn cannot hold, as
-    // a socket's are (LLP 1133.005).
-    if !json["listen"].is_null() {
-        return Err(unavailable(
-            "exactListen is unavailable in a worker-placed source; place it on main",
-        ));
-    }
     let request = Request {
         surface: None,
         // The runner stamps who asked when the request goes out.
@@ -578,6 +582,36 @@ mod tests {
             format!("{refused:?}").contains("exactLongPoll"),
             "{refused:?}"
         );
+    }
+
+    #[test]
+    fn a_listener_is_refused_by_name_before_it_crosses() {
+        let listener = || {
+            let request = Request::listen("unix:/tmp/a.sock", Default::default());
+            Request {
+                stream: true,
+                ..request
+            }
+        };
+        let fetch = Request::get("https://x.test/a");
+        for (request, more) in [
+            (listener(), vec![]),
+            (fetch.clone(), vec![fetch.clone(), listener()]),
+        ] {
+            let outcome = encode_optional(
+                Ok(Some(Answer::Later(request))),
+                more,
+                &mut Store::default(),
+                vec![],
+            );
+            let refused = apply(outcome, &mut Store::default(), &mut Vec::new()).unwrap_err();
+            assert_eq!(
+                refused,
+                unavailable(
+                    "exactListen is unavailable in a worker-placed source; place it on main"
+                )
+            );
+        }
     }
 
     #[test]

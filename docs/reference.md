@@ -31,8 +31,10 @@ neither downloads a bundle nor compiles Hermes; a missing install fails with
 the one-time command. `HERMES_LEAN_SYS_DIR` remains a development override.
 The v4 set supports macOS, Linux, Windows, iOS devices and the universal iOS
 Simulator, plus tvOS devices and the arm64 tvOS Simulator. Exact selects
-Ibex's English `intl` tier on Linux and Windows, not `intl-all-locales`; Apple
-keeps Hermes's OS-backed Intl; Android has no `Intl` yet. A Rust-only app needs no engine at run time.
+Ibex's English `intl` data tier on Linux, not `intl-all-locales`; Windows
+uses OS ICU and Apple keeps Hermes's OS-backed Intl. Android's published v5
+bundle builds without Intl. A bundle whose receipt enables Intl and binds the
+English ICU tier selects that tier and Ibex's Intl group. A Rust-only app needs no engine at run time.
 `exact setup` installs the host bundle and, on macOS, the iOS and tvOS Simulator
 bundles, and the iOS device bundle where Xcode's iphoneos SDK is installed.
 `exact setup --check` runs Ibex's own offline resolver validation over that
@@ -110,47 +112,12 @@ chat demo, with model conversations through a local OpenRouter service. It belon
 to the root workspace and does not use Snapback. Run `bun apps/messages/service.ts`
 and `bun host/web/dev.mjs --app messages --port 8767`.
 
-
-A cross-platform application runtime. The Rust kernel computes layout, each platform
-renders natively, and Contract is the authoring model.
-
-Surfaces: web, macOS, iOS, Linux.
-
-Start here:
-
-- **`rules/RULES.md`** — how work happens here. One page. Read it before your first PR.
-- **`rules/DEFERRED.md`** — what v1 deliberately excludes, and why.
-
-The predecessor repo is research, not authority: cite it for how something worked,
-never to block.
-
-## What exists
+## Runtime font families and `aria-disabled`
 
 `font-family` accepts a CSS family-list string from state or data on web,
 macOS, iOS and Linux. A change resolves the new installed or generic family
 and remeasures affected text. Bundled faces are declared at compile time on
 every host; a runtime string does not load a font file.
-
-| Crate | What it is | Spec |
-|---|---|---|
-| `kernel/` (`exact-kernel`) | Typed columnar arena, EXWF wire frames, validate-then-apply transactions, Taffy layout with changed-geometry receipts, EXNODE columnar export, injected text measurement. Builds for `wasm32-unknown-unknown`. | LLP 1001 |
-| `motion/` (`exact-motion`) | CSS `transition` semantics over `translate`/`scale`/`rotate`/`opacity`, one spring, a seekable clock. The web executes it as CSS; everywhere else this crate does. | LLP 1002 (decision), LLP 1003 (spec) |
-| `plan/` (`exact-plan`) | The plan format: tables, bytecode, and the validating decoder, generated from one JSON authority. Depends on nothing. | LLP 1005 |
-| `runner/` (`exact-runner`) | The plan runner: VM, keyed instances, kernel ops, events, timers under a seekable clock, the data seam. | LLP 1005 |
-| `contract/` | The Contract compiler in Rust: `syntax` → `types` → `analyze` → `lower`, the `contract` driver and CLI, and the corpus. | LLP 1004 (decision), LLP 1006 (spec) |
-| `apps/fieldnotes/` | Offline notes: Contract UI, TypeScript sources, SQLite persistence, and JSON file backup/restore. See its [README](../apps/fieldnotes/README.md). | LLP 1027 |
-| `apps/markdown/` | A Markdown reader: the parser and block model both readers share, and the general one-file app. `mdview`. See its [README](../apps/markdown/README.md). | LLP 1033 |
-| `apps/llp/` | The same reader specialised for an LLP corpus: numbered index with sub-documents, search over every document's text, section outline, `LLP 1234` as a link. `llpview`. See its [README](../apps/llp/README.md). | LLP 1033 |
-| `apps/caltrain/` | The v1 app: `app.contract`, its Rust data crate, and its wasm crate; the end-to-end fixture. | — |
-| `apps/exact-live/` | A creative production workspace combining photo zoom, scene ordering, crew chat and a runbook. The [browser preview](https://exact-live.tuft.host/) passes 19 interaction checks; native delivery and connected jobs remain in progress. See its [README](../apps/exact-live/README.md). | LLP 1041 §8 |
-| `gpu/` (`exact-gpu`) | The GPU canvas: a `Surface` trait against wgpu, a per-app module loaded on demand (a dylib on macOS, a second wasm on the web) after the first pixel; the same Rust renders on Metal and on the browser's WebGPU. `apps/caltrain/gpu` is the line map and the aurora. `gpu/reflect` (`exact-gpu-reflect`, naga only) reflects every `.wgsl` in a GPU crate's `build.rs`: bindings, struct layouts, vertex inputs, and entry points generated as Rust, the WGSL as the one declaration authority. | LLP 1009 |
-| `host/apple/` (`exact-apple`) | The Apple host: runner + kernel as a static library with a C ABI, the kernel's layout with CoreText measurement through a callback, `exact-motion` as the executor, typed batches; `macos/` is the AppKit presenter and `ios/` the UIKit one (SwiftPM, sharing `swift/`). `bun host/apple/build.mjs --run`; `bun host/apple/build.mjs --ios --run` on a simulator. | LLP 1008 |
-| `host/linux/` (`exact-linux`) | The Linux host, the first that paints: runner + kernel natively, cosmic-text measuring and painting from one cache, `exact-motion` as the executor, the kernel tree drawn by one walk over a backend — vello on the GPU (the main one), tiny-skia on the CPU (the fallback and the pixel oracle) — onto DRM/KMS dumb buffers with evdev input, or into a buffer with no display (the agent API, screenshots, the smoke; on macOS too). Pure Rust, no system library. `cargo build --profile host-dev -p caltrain-linux` for the one an agent drives (a touched line rebuilds in seconds); `--release` for the one that ships. | LLP 1015 |
-| `host/web/` (`exact-web`) | The web host: runner + kernel in wasm over the real DOM, CSS computed once from the kernel's rows, springs lowered to frames the browser plays, a no-`unsafe` ABI, ~150 lines of glue, a headless-Chrome smoke, the motion parity harness, and the dev loop (`bun host/web/dev.mjs`, edit → present ~20 ms). | LLP 1007 |
-| `vendor/taffy/` | Taffy 0.9.2 plus two Exact patches. | `vendor/taffy/EXACT-PATCHES.md` |
-
-All four surfaces run the app; `QUEUE.md` is the ordered list of what would
-make sense to do next.
 
 Contract carries `aria-disabled` on controls and elements with a role, including
 groups and inline links. It is a boolean accessibility state: focusable elements
@@ -237,9 +204,11 @@ references, with `to` indices into that response's smaller `definitions` array.
 Names are exact and case-sensitive, not patterns; no match returns empty arrays.
 The complete source graph is still checked. `symbols --help` shows the syntax.
 
-`build --json` writes one diagnostics array to stdout: `[]` on success, or a
-stable `id`, `message`, original `file`, `line`, `col`, `end_col`, and `related`
-array per refusal. Compilation returns the first refusal. Action-interface
+`build --json` writes one diagnostics array to stdout: every independent
+diagnostic the compiler can collect, at most 20, each with a stable `id`, a
+`severity`, `message`, original `file`, `line`, `col`, `end_col`, and `related`
+array. An `"error"` refuses the build (exit 1); a `"warning"` builds (exit 0) and
+is printed on a success too, so `[]` means a success with nothing to say. Action-interface
 mismatches link the invocation, declaration and caller binding, each with its
 own source file, including forwarded props and injected actions. Locations use the same byte columns as symbols; zero
 means no source range, and a null file means no file is associated. No prose is
@@ -396,7 +365,7 @@ an equal read for ten seconds from completion, even if its resource is let go.
 The caller's abort cancels it. Sends, streams and file-bodied requests refuse it.
 Eight completed prefetches share the cache's byte bounds with launch preloads;
 a ninth drops the oldest. On the web only the browser's cache may keep it.
-A TypeScript bundle naming it needs runtime 14; the Rust module seam is ABI 10
+A TypeScript bundle naming it needs runtime 13; the Rust module seam is ABI 9
 (LLP 1162.000 D5).
 
 A one-window Mac app ends when its window closes. An app with work the person
@@ -413,11 +382,33 @@ web's back/forward cache: `exactPage().persisted` is `true` from the close (a
 counts the reopens (each a `pageshow` with `persisted`). A minimize, ⌘H, a
 covering window or a locked screen changes neither. So an app that opens
 something new on a reopen, as a Mac app makes a new window there, keys a task
-on the count: `task fresh when page.restores > 0 key=page.restores`. ⌘Q quits as before, and the app's own
+on the count: `task fresh when page.restores > 0 key=page.restores`. The app
+puts its own window away the same way with `hideWindow()`, as a menu-bar
+utility does once its work is done; bare `focus()` or the status item's press
+shows it again, as a restore. Where the app would end without its window (no
+`keepRunning` and no status item placed), `hideWindow()` is refused in the
+journal and the window stays. ⌘Q quits as before, and the app's own
 `close()` still closes the window and ends the app. A `navigate-new` app
 (`launch_handler`) already outlives its last window, and the key changes
 nothing there. The agent's `state.documents.windows[].visible` says whether
 the window is showing.
+
+A Windows app ends when its window closes too, after `beforeunload`, unless
+`"keepRunning": true` is in `host.windows.window`. Its close button, Alt+F4 and the taskbar's
+Close window then hide the window, and the session keeps running, its timers, streams and
+global shortcuts with it; `visibilityState`, `persisted` and `restores` read
+as on the Mac. A Windows app is one process, with `keepRunning` or without:
+launching it again (Start, its taskbar pin, a shortcut) shows the window it
+has, and a launch with a location (a jump-list task) shows it and opens the
+location there. A bare `focus()` shows it too, `hideWindow()` hides it as
+the close button does (refused in the journal without `keepRunning`), and
+the app's own `close()` ends the app. A login item registered `hidden` (`@exact/login-item`) opens
+no window at that launch: the app runs, and shows its window when launched
+again or when it calls `focus()`. The notification-area icon, which would
+be the usual way back and its Exit, is not built yet (LLP 1133.025 §14), so
+an app that keeps running gives the person a way back and a way out of its
+own: a global shortcut whose action calls `focus()`, and a button whose
+action calls `close()`.
 
 A native module whose work must finish before the app exits (a child process
 to stop, a socket to flush) overrides `willQuit(done:)`. On every orderly
@@ -664,7 +655,7 @@ Caltrain and Shelf need no shared secrets. See LLP 1126.001 WP16 and §5 Q5.
 
 The render's props slot is named `snapshot_props`; find it by name, since a
 `path(...)` link also needs a router slot. Its initial value is the preview; reached bindings cannot use that reserved name.
-The bake writes `plans/<kind>.plan` beside `app.plan`. The envelope's `plans`
+The bake writes `plans/<kind>.plan` beside `app.plan`. The asset index's `plans`
 map indexes these authenticated assets in the app's compatibility cohort.
 Kinds, families and gallery labels are binary compatibility inputs; views and preview props
 are plan contents. A running host refuses a snapshot plan at decode, and a
@@ -790,9 +781,12 @@ face's editor.
 The watch extension keeps the accessory families (`accessoryCircular`,
 `accessoryRectangular`, `accessoryInline`, `accessoryCorner`); iOS drops
 `accessoryCorner`. An optional `watchFamilies` on an entry overrides its watchOS
-families; `families` still names its iOS families. An app with `app.ts` has all
-watch entries omitted with a message, including its Rust refreshes, until the
-watch Hermes gate passes (LLP 1126.001 §5 Q3). Rust-only apps' entries
+families; `families` still names its iOS families. An app with `app.ts` builds its
+live watch entry when that plan reaches only Rust, runner-owned or native
+module sources. The watch bake refuses a TypeScript dependency by name until
+the watch Hermes gate passes (LLP 1126.001 §5 Q3); a mixed bake declares its
+Rust ownership through `build_mixed_with`'s source list. Such an app's complications are still omitted
+with a message, including its Rust refreshes. Rust-only apps' complications
 refresh against the watch's own App Group and store. No account transfer is
 performed.
 For `accessoryInline`, emit exactly one `text` or `time` leaf plus at most one
@@ -927,7 +921,11 @@ canonical source directory, manifest id, destination, composition and trust
 policy. The Swift host is compiled once per destination for every app, in
 `<target>/apple-swift/<destination>-<minimum OS>`; each app only links there,
 one at a time, and its executable is copied to its own products before the next
-app links. A development build compiles it file by file and incrementally, and
+app links. Outside production trust, the iOS minimum in that name is 17.0
+unless the app has `launch` modules: the SDK's Rust, C and Swift compile for it
+whatever `host.ios.minimumOS` says, and the app's minimum goes only to its Info.plist, its executable's link
+and its own Swift modules and packages, which Swift checks for availability as
+it compiles. A development build compiles it file by file and incrementally, and
 beside the app's Rust; the host's two Rust modules build in
 `<target>/apple-modules`, and a checkout that has not built one takes it from
 `~/.cache/exact/apple-modules` when another checkout of this machine compiled
@@ -1297,6 +1295,18 @@ the same URL with `bun scripts/agent.mjs macos --url http://127.0.0.1:8765/ tree
 The Go/custom-client sequence
 is in LLP 1030.000 §7.
 
+A native client finds a generation through its envelope, `exact.json`: a
+pointer card of at most 64 KiB that names the plan, and names the asset
+cards' file, `assets.json`, by URL, SHA-256, byte length and card count. The
+asset index holds one card per asset (name, URL, SHA-256, length) and the
+entry plans' `plans` map, at most 4 MiB, about 20,000 cards; its card URLs
+resolve against the index's own URL. The web build prints both sizes against
+their bounds with the asset count (`exact.json 0.6 KiB of 64.0 KiB, assets.json
+101.2 KiB of 4096.0 KiB for 537 assets`); a build, a dev generation or a
+publish whose file would pass its bound is refused with the same numbers.
+Every client checks the index against the envelope's card before it reads a
+card, and a signed head covers the index through its digest.
+
 Agent sessions use `exactTime()` launch facts `seed: 1` (LLP 1069.007), `locale: "en-US"`,
 `timeZone: "UTC"` and `epochAtZero` 2026-01-01T00:00:00Z (LLP 1027.000.000 D3, with the
 zone's `utcOffset` at that instant, answered again when the virtual date crosses a DST change) on every host. Override them at session setup with
@@ -1434,7 +1444,7 @@ The globals beyond the language are the browser's on the web and these on Hermes
 | `setTimeout`, `clearTimeout` | Inside an answer, on the app's clock (below) |
 | `queueMicrotask`, `Promise` | |
 | `scheduler.yield()` | Ends the answer's turn; it goes on in a new one with a budget of its own (below). Outside an answer's turn it resolves at once; for an answer let go it rejects with an `AbortError`. `scheduler.postTask` refuses |
-| `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`, `localeCompare`, `toLocaleString` | Not on Android yet: its Hermes is built without `Intl`, so `Intl` is undefined there and a module that names it at its top level does not load (the drive's `clock data`, and so a test's first step, fails with the module's error). Date formatting needs an explicit timestamp. No `Intl.PluralRules`, `RelativeTimeFormat`, `ListFormat`, `Segmenter` or `DisplayNames` (Apple's engine; Linux's is built `--intl`). `Intl.Locale` is the prelude's on every Hermes host (the engine has none): a tag parsed and canonicalized as Chrome does, its options and getters, and `getWeekInfo()` with Chrome's `{firstDay, weekend}` from CLDR's week data, by the tag's region, its `-u-rg-`, or its language's likely region (two-letter languages and a few others; another reads Monday and a Saturday-Sunday weekend), and `-u-fw-`. It has no `maximize`, `minimize` or other `get…()` list, does not canonicalize aliases (`iw` stays `iw`, `en-840` keeps `840`, and its week is then the default, Monday, where Chrome's is `en-US`'s), a formatter given a `Locale` object rather than its string uses the default locale, and `structuredClone` copies a `Locale` as `{}` where Chrome refuses it. Apple's `ja-JP` long date puts a space before the weekday (`10月6日 火曜日`, Chrome `10月6日火曜日`). Apple's engine has no `notation: "compact"`: the prelude formats its short display as Chrome does for a decimal in en, en-GB, en-IN, de, fr, fr-CA, es, es-MX, it, pt, pt-PT, nl, sv, da, nb, fi, pl, ru, uk, cs, tr, ja, zh, zh-TW, ko, hi, he, id, th and vi (and their regions); `compactDisplay: "long"`, another locale or a compact currency is printed in full and said once in the logs. Apple's engine rounds a tie to even and ignores `roundingMode` (`$0.82` for 0.825 dollars, Chrome `$0.83`); the prelude rounds the number first, as Chrome does: from its shortest digits, by the formatter's `roundingMode` (half away from zero unless it names another), which `resolvedOptions()` then reports; a compact it prints in full rounds so too, to its style's digits (`$0.83` for a compact 0.825 dollars). A `unit` keeps the engine's rounding, since that engine converts it to the locale's unit (`0.622mi` for 1 kilometer). Apple's engine has no `formatToParts` |
+| `Intl.NumberFormat`, `Intl.DateTimeFormat`, `Intl.Collator`, `localeCompare`, `toLocaleString` | Android's published v5 bundle has no Intl. With an Intl-enabled bundle carrying receipt-bound English ICU data, Hermes's ICU backend supplies `Collator` and Ibex supplies `NumberFormat` and `DateTimeFormat`. Date formatting needs an explicit timestamp. No `Intl.PluralRules`, `RelativeTimeFormat`, `ListFormat`, `Segmenter` or `DisplayNames` (Apple's engine; Linux's is built `--intl`). `Intl.Locale` is the prelude's on every Hermes host (the engine has none): a tag parsed and canonicalized as Chrome does, its options and getters, and `getWeekInfo()` with Chrome's `{firstDay, weekend}` from CLDR's week data, by the tag's region, its `-u-rg-`, or its language's likely region (two-letter languages and a few others; another reads Monday and a Saturday-Sunday weekend), and `-u-fw-`. It has no `maximize`, `minimize` or other `get…()` list, does not canonicalize aliases (`iw` stays `iw`, `en-840` keeps `840`, and its week is then the default, Monday, where Chrome's is `en-US`'s), a formatter given a `Locale` object rather than its string uses the default locale, and `structuredClone` copies a `Locale` as `{}` where Chrome refuses it. Apple's `ja-JP` long date puts a space before the weekday (`10月6日 火曜日`, Chrome `10月6日火曜日`). Apple's engine has no `notation: "compact"`: the prelude formats its short display as Chrome does for a decimal in en, en-GB, en-IN, de, fr, fr-CA, es, es-MX, it, pt, pt-PT, nl, sv, da, nb, fi, pl, ru, uk, cs, tr, ja, zh, zh-TW, ko, hi, he, id, th and vi (and their regions); `compactDisplay: "long"`, another locale or a compact currency is printed in full and said once in the logs. Apple's engine rounds a tie to even and ignores `roundingMode` (`$0.82` for 0.825 dollars, Chrome `$0.83`); the prelude rounds the number first, as Chrome does: from its shortest digits, by the formatter's `roundingMode` (half away from zero unless it names another), which `resolvedOptions()` then reports; a compact it prints in full rounds so too, to its style's digits (`$0.83` for a compact 0.825 dollars). A `unit` keeps the engine's rounding, since that engine converts it to the locale's unit (`0.622mi` for 1 kilometer). Apple's engine has no `formatToParts` |
 | `console` | To the runner's logs after each answer and reply, including refused calls; available through the agent's `logs` on native hosts |
 
 A `net.fetch` line names one origin (`https://api.example.com`), every host
@@ -1852,8 +1862,7 @@ socket is asked, and starts again at its opening and at each message;
 protocol pings and pongs do not count, and nothing the app sends does. The
 mapper is then called once more, with `{ type: 'error', kind: 'Timeout',
 message: 'nothing arrived for 60000 ms' }`, after what it had already
-received (each message of a two-way socket; the newest of one the module
-only reads, which coalesces as always), and the stream is over; the app opens it again by refreshing the
+received (each message, in order), and the stream is over; the app opens it again by refreshing the
 resource. The time is real time on every host, under the driver too, so
 `clock +60000` ends no socket: test it with a short timeout against a peer
 that stays silent, and wait with `clock until state …`. Only a WebSocket
@@ -1907,14 +1916,24 @@ error and the resource keeps its last value. A stream let go (new arguments,
 `refresh`) lets go the call still pending, whose `scheduler.yield()` rejects
 with an `AbortError`. A mapper may await promises and `scheduler.yield()`;
 `fetch`, timers and storage are refused in it. At most 4096 messages, or 64 MiB
-of them, wait; one more ends the stream. The web's wasm host maps each message
+of them, wait behind it, however many arrived together; one more ends the
+stream (`the stream's mapper fell behind: …`). The web's wasm host maps each message
 now and refuses a promise. An `http:`/`https:` URL is read as server-sent
 events under `net.fetch`; a `ws:`/`wss:` URL is a WebSocket under
 `net.websocket` alone. Except for TypeScript sources on the web JS target and
-native hosts, described below, and Rust sources on native hosts ("Rust data
-sources", "A two-way socket"), sockets are receive-only. An event is
-`{type, data, lastEventId, coalesced}`; messages that arrive faster than they
-commit coalesce to the newest, counted in `coalesced`. The end is
+native hosts, described below, and Rust sources on the web JS target and
+native hosts ("Rust data sources", "A two-way socket"), sockets are receive-only. An event is
+`{type, data, lastEventId, coalesced}`. Every message reaches the mapper, in
+the order it arrived, as the browser's `EventSource` dispatches every event: a
+mapper that folds deltas (an LLM's tokens) sees them all. Messages that
+arrive together, in one network read or while the runtime is busy, are
+mapped one after another and commit once, as the last one's value, so a view
+updates once for them. At most 4096 of them, or 1 MiB of their data beyond one
+message's ceiling, wait for the runtime; one more ends the stream with
+`Refused` (`event stream receive queue exceeds 4096 events or 1 MiB`; a
+receive-only socket's says `4096 messages`) after the mapper has seen those
+waiting, so nothing is dropped unseen. `coalesced` is 0 for every event: only
+an upload's progress folds (below). The end is
 `{type: 'error', kind, message, status}`: `kind` is `Network` (the far side
 closed: `the socket closed (1000)`), `Refused` (outside the grants), `Aborted`,
 or `Response` with the status and body of a reply that was not an event stream.
@@ -1956,9 +1975,12 @@ is still held. New arguments, `refresh` or the resource leaving the view close
 the stream without further mapper calls;
 `state.pending` lists it until its first mapped value commits, `state.streams`
 while it is open, with `grant`, the grant line that admitted it. The same holds on Hermes, the web's wasm host and the web build (the JS
-target), with one difference: on the web build the stream's `fetch` must be
-made while the answer is asked, before its first `await` (a later one is
-refused, saying so); on Hermes it may follow an `await`.
+target). The stream's `fetch` may follow an `await` in the answer (a token
+fetched first, or the answer's own timer), on every host: it is made in one of
+the answer's own turns, its source, its code after an `await` in an `async`
+function, or its timer, while the answer has not given its value or been let go.
+On the web build one made elsewhere (a plain `.then` callback, module
+initialization) is refused, saying so.
 
 An **upload** that tells its progress (LLP 1016.000 D10) is a stream with
 `exactUploadProgress: true` beside its body, for a percentage the view draws
@@ -1980,8 +2002,8 @@ XMLHttpRequest's upload progress, `{type: 'progress', loaded, total,
 lengthComputable: true}`: `loaded` is the bytes the platform has written
 (URLSession's `didSendBodyData` on Apple, the portable transport's writes on
 Linux, Windows and Android, `xhr.upload` on the web), `total` the body's
-length, and the last has `loaded === total`. They coalesce to the newest, as a
-stream's messages do. The reply is read whole within the ceiling
+length, and the last has `loaded === total`. A newer one replaces one the
+runtime has not taken, counted in its `coalesced`: progress is a snapshot. The reply is read whole within the ceiling
 (`exactIndependentHttp.maxResponseBytes`, 1 MiB unless given) and ends the
 stream as `{type: 'load', status, data}`, whatever its status, as
 XMLHttpRequest's `load`. A failure ends it as any stream's `error` does, of kind
@@ -2073,7 +2095,7 @@ every host take it, and Rust sources with `Request::long_poll(cursor, from)` on
 a stream's request. An older prelude would ignore it and open an event stream,
 so it moves `typescriptRuntime` to 3: a native app with a TypeScript data module
 needs a new binary once more. A Rust source's long poll is a new kind on the
-module seam. The Rust module ABI is 10: prefetches (LLP 1162.000 D5), preload names (LLP 1162.000 D1), long polls,
+module seam. The Rust module ABI is 9: prefetches (LLP 1162.000 D5), preload names (LLP 1162.000 D1), long polls,
 two-way sockets (LLP 1016.003), cache modes (LLP 1162 D4) and admitted secret names
 (LLP 1048.000 D9) require a matching binary.
 
@@ -2204,9 +2226,9 @@ frames in order before ending with a `Refused` error.
 
 Natively `readyState` follows the events the mapper has seen, and
 publication also bounds the transport's buffer at 256 frames; LLP 1016.000
-D7 lists the differences. **Remaining host gap:** the web wasm target, Rust
-sources and worker-placed TypeScript do not provide the send path (on wasm
-the handle never opens). No ambient `WebSocket` constructor is admitted. SSE
+D7 lists the differences. **Remaining host gap:** the web wasm target and
+worker-placed TypeScript do not provide the send path (on wasm the handle never
+opens); a Rust source's `Request::socket` is refused by name in both. No ambient `WebSocket` constructor is admitted. SSE
 remains unchanged.
 
 This first browser implementation targets modest app stores: filesystem
@@ -2234,7 +2256,7 @@ component App
       …
 ```
 
-The app depends on the package (`exact add notifications`, or
+The app depends on the package (`bun exact.mjs add notifications`, or
 `"@exact/notifications": "file:<exact2>/packages/notifications"`) and grants
 `device.notifications purpose.notifications` (a strings key, LLP 1069.008;
 iOS shows its own fixed prompt text): without the grant a post and the
@@ -2312,7 +2334,7 @@ component App
     send subscribed = subscribePush()
 ```
 
-The app depends on the package (`exact add push`) and grants both lines:
+The app depends on the package (`bun exact.mjs add push`) and grants both lines:
 
 ```text
 device.notifications purpose.notifications
@@ -2850,8 +2872,8 @@ or a header over 64 Mi pixels, checked before decoding), `undecodable`, `unfit`
 ran out with nothing written) or `unsupported`. macOS and iOS encode with
 ImageIO (an HDR photo is tone-mapped), the web with a canvas (in the page or the
 module's worker; JPEG, PNG, GIF, WebP and BMP, never HEIF or AVIF, whose size it
-cannot read before decoding);
-Linux, Windows and Android have no image encoder and answer `unsupported`, so
+cannot read before decoding), and Android with `ImageDecoder` and `Bitmap`.
+Linux and Windows have no image encoder and answer `unsupported`, so
 upload the original when it already fits. Under the agent it runs for real with
 `--storage <name>`.
 
@@ -2900,8 +2922,70 @@ and HEIC; the web encodes PNG, and JPEG and WebP where the browser does, and a
 canvas keeps no metadata, colour space but sRGB or gain map, so there the
 record says `colorSpace: 'srgb'`, `hdr: false` and `metadata: 'none'` whatever
 was asked. The iOS simulator's ImageIO writes no gain map, so there an HDR
-photo is saved as SDR and says `hdr: false`. Linux, Windows and Android answer
-`unsupported`.
+photo is saved as SDR and says `hdr: false`. Android encodes JPEG, PNG and
+WebP. It copies source attributes readable by `ExifInterface`, including
+embedded EXIF XMP, and, for JPEG sources and output, IPTC and standard external
+XMP packets. `no-location` keeps only capture tags and IPTC rights. Unsupported
+preservation reports `metadata: 'none'`. This includes
+`keep` requests with external PNG/WebP metadata, extended XMP, qualified XMP
+orientation or dimensions, unsupported Photoshop resources or multi-picture
+JPEGs. Malformed metadata and conversions that cannot carry the retained
+segments also report `none`. Linux and Windows answer `unsupported`.
+
+### Read text in a still image (`@exact/text-detection`)
+
+`textDetectorAvailability(languages=)` answers `availability`, optional `reason`,
+and the matched `languages`. `detectText(image=, languages=)` reads a file admitted
+by `fs.read` and answers `texts`, `width` and `height`. Each text is one line:
+`rawValue`, `boundingBox` (`x`, `y`, `width`, `height`) and `cornerPoints`, clockwise
+from the top left. EXIF orientation is applied first; coordinates and dimensions
+are pixels of the upright image. Lines keep the recognizer's reading order.
+
+| Host | Answer |
+| --- | --- |
+| iOS, iPadOS, macOS, tvOS | Vision; omitted languages use the request's defaults. Named languages match Vision's supported languages. `apple.confidence` is the top candidate's confidence. |
+| Android | Bundled ML Kit Latin recognizer (`text-recognition:16.0.1`); available without a download. Omitted languages return the Latin list; named languages return the matched, deduplicated tags. Other languages or an explicit non-Latin script answer `unavailable`, `unsupported-options`, and `languages: []`; detection fails `NotSupportedError`. `android.script` is `Latn`; each line's `android.recognizedLanguage` is ML Kit's BCP 47 tag, or `und`. Built and JVM-tested; recognition on a device is not yet verified. |
+| Web, Windows, Linux, terminal, and targets without an implementation | Declared default: `unavailable`, `reason: "not-supported"`, `languages: []`; `detectText` fails `NotSupportedError`. |
+
+Availability is fixed for an Apple or Android build; neither uses `downloadable`
+or `downloading`. Unsupported languages fail before the image is read. A missing
+file fails `NotFoundError`; an undecodable file fails `InvalidStateError` with
+message `decode`; a recognizer failure is `OperationError` with its message. No
+text found is a successful empty list. Text on camera frames and non-Latin Android
+recognizers are not implemented (LLP 1133.027). Vision and ML Kit may divide and
+read text differently, particularly handwriting.
+
+ML Kit's [language table](https://developers.google.com/ml-kit/vision/text-recognition/v2/languages)
+distinguishes supported, experimental and mapped languages; all its Latin entries
+are admitted. Its [line result](https://developers.google.com/android/reference/com/google/mlkit/vision/text/Text.Line)
+defines the corner order and the unknown-language tag.
+
+### Read barcodes (`@exact/barcode-detection`)
+
+`getSupportedFormats()` answers `formats` and `tracks` (whether live scanning is
+implemented). `detectBarcodes(image=, formats=)` answers `barcodes`, `width` and
+`height` for an upright still. Each barcode has `rawValue`, `format`, `boundingBox`
+and `cornerPoints` in the same pixel coordinates as text detection. Omitted
+formats use the platform's defaults; an empty list or an unknown requested format
+fails `TypeError`. A valid format unsupported by the host fails `NotSupportedError`.
+
+| Host | Answer |
+| --- | --- |
+| iOS, iPadOS, macOS | Vision, stills and live scanning. |
+| tvOS | Vision on stills; `tracks: false`. |
+| Web | The browser's `BarcodeDetector`, where present; otherwise empty `formats`, `tracks: false`, and detection fails `NotSupportedError`. |
+| Android, Windows, Linux, terminal, and targets without an implementation | Declared default: `formats: []`, `tracks: false`; `detectBarcodes` and `detectedBarcodes` fail `NotSupportedError`. |
+
+`detectedBarcodes(track=, formats=, interval=)` analyses a camera track already
+shown by a viewfinder; it never starts or keeps a camera open. Its answer includes
+the latest `barcodes` and up to 32 distinct codes in `seen`, with first/last seen
+times and frame counts. Hiding the viewfinder idles scanning; stopping the track
+ends it. The default interval is 100 ms, with a minimum of 50 ms.
+
+UPC-A is returned as 12 digits when `upc_a` is requested or formats are omitted;
+when only `ean_13` is requested, it is 13 digits with a leading zero. An image
+with no codes succeeds with an empty list. Missing files, decode failures and
+platform errors use the same error names as text detection (LLP 1133.027).
 
 ### Documents the person chose (`doc:`)
 
@@ -3069,6 +3153,28 @@ The driver: `tap <target> drop <path…>` (files and folders), `tap <target>
 dragenter <path…>` and `tap <target> dragleave`, `type <target> paste --file
 <path…>` and `type <target> paste --image <png>`.
 
+### Clipboard images
+
+Data code writes images with [`@exact/clipboard`](contract-grammar.md#clipboard).
+Windows accepts an `app:/` PNG file, up to 64 MiB and 64,000,000 pixels;
+in-memory PNG bytes and raw pixels are not accepted. It offers sanitized
+PNG, a bitmap for untagged or explicitly sRGB images without an ICC profile,
+and optional Unicode text together.
+
+Full-range sRGB cICP `(1, 13, 0, 1)` without mDCV or cLLI is normalized
+to an sRGB chunk and gets a bitmap. cICP takes precedence over other colour
+chunks; normalization removes those lower-priority tags. Other cICP values,
+mDCV and cLLI are refused.
+
+Images carrying gAMA or cHRM without sRGB, and images carrying iCCP, are
+PNG-only when no cICP overrides them. iCCP takes precedence over sRGB, as
+[PNG third edition specifies](https://www.w3.org/TR/png-3/#color-chunk-precendence).
+No colour conversion is performed. On Windows 11, Paint 11.2609.401.0
+pastes a gAMA image without its gamma interpretation, and Edge 157.0.4341.46's
+ordinary paste editor receives no image from these PNG-only items. Preserving
+the PNG's colour information therefore does not guarantee a correct paste.
+Use untagged or sRGB PNG input when a bitmap fallback is needed.
+
 ### Bake and deliver a TypeScript module
 
 Build an app-local `app.ts` module and bake its Contract through the resulting
@@ -3181,7 +3287,8 @@ drain microtasks without re-entering wasm; stale incarnations cannot fulfill the
 replacement app. 
 
 Linux uses the same installer command at the top of this reference with its
-Rust target triple. Exact selects Ibex's `intl` feature and `INTL` group there:
+Rust target triple. Exact selects Ibex's `intl` feature and `INTL` group on Linux
+and Android (Android requires a rebuilt bundle, as above):
 `en`/`en-US` and complete currency data are present, and unsupported locales
 fall back to `en-US`; it does not select `intl-all-locales`. The verified
 bundle supplies both VM archives, all three ICU data tiers and the matching
@@ -3403,8 +3510,8 @@ plan. Both map scoped names such as `Point__exact` to `PointExact`.
 
 ### A two-way socket
 
-On native hosts a Rust source sends on a WebSocket with TypeScript's rules
-(LLP 1016.003). Answer `Answer::Later(Request::socket(url))` for a `ws:` or
+On native hosts and the web JS target a Rust source sends on a WebSocket with
+TypeScript's rules (LLP 1016.003). Answer `Answer::Later(Request::socket(url))` for a `ws:` or
 `wss:` URL under a `net.websocket` grant. Its `parse` is the mapper: it gets
 an `Outcome::Message` whose `event` is `open`, then one for each frame in
 order (text in `data`, a binary frame in `binary`), then `Outcome::Closed {
@@ -3446,9 +3553,11 @@ stands. A refusal is an `Err` whose text names the DOM exception a
 TypeScript handle would throw: `InvalidStateError` for a socket not open, a
 handle from before the resource was asked again, or a send from a resource's
 answer; `QuotaExceededError` past 256 operations or 1 MiB a call, which
-fails a mapper's frame even when it ignores the error. The web refuses a
-Rust socket request by name, and a worker-placed source's socket only
-listens.
+fails a mapper's frame even when it ignores the error. The web's wasm host
+and a worker-placed source cannot hold the handle, so they refuse
+`Request::socket` by name rather than open a socket that only listens
+(`Request::socket is unavailable on the web's wasm host`, `… in a
+worker-placed source; place it on main`).
 
 ### Where data lives: app storage, not secrets
 

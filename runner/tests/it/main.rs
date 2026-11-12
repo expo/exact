@@ -6,6 +6,7 @@ mod active_route;
 mod app_module;
 mod arguments;
 mod canvas2d;
+mod change_tasks;
 mod children;
 mod each;
 mod failed_readers;

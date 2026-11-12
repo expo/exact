@@ -416,7 +416,7 @@ final class MenuHost: NSObject {
             // next batch's `sync` before it tracked, and nothing would open.
             if ExactEnv.agentMode || !self.isMenuShaped(pop) { self.show(pop, from: source, run: run, contextMenu: true); return }
             // A new presentation only if it has an item: it retires picks of the last.
-            guard pop.container.subviews.contains(where: { ($0 as? NodeView).map { $0.isButton && $0.props["contextPreview"] != "true" } ?? false }) else { return }
+            guard pop.menuRowsThroughSections.contains(where: \.isButton) else { return }
             self.presentations[pop.id, default: 0] += 1
             self.revalidate()
             let menu = self.contextMenu(of: pop, on: source)
@@ -526,7 +526,7 @@ final class MenuHost: NSObject {
         return true
     }
     func rejectActiveMenuProperties(in pop: NodeView) {
-        for case let row as NodeView in pop.container.subviews where row.isButton && row.props["popover"] == nil && row.props["contextPreview"] != "true" {
+        for row in pop.menuRowsThroughSections where row.isButton {
             row.rejectNativeActiveProperties(on: "NSMenuItem")
         }
     }
@@ -758,8 +758,12 @@ final class MenuHost: NSObject {
         if let source { menuOpener = MenuOpener(pop, opener: source) }
         let menu = items(of: pop, path: [], from: source, presentation: presentation(of: pop), once: Picked(), bubbled: bubbled)
         // The popover's `aria-label` titles the menu ("Open location in"). A
-        // submenu has none: the item that opens it names it.
-        if let heading = pop.props["accessibilityLabel"], !heading.isEmpty { menu.insertItem(.sectionHeader(title: heading), at: 0) }
+        // submenu has none: the item that opens it names it. A section that
+        // opens the menu is headed by its own title, as on iOS, where UIKit
+        // draws no header over another.
+        if let heading = pop.props["accessibilityLabel"], !heading.isEmpty, menu.items.first?.isSectionHeader != true {
+            menu.insertItem(.sectionHeader(title: heading), at: 0)
+        }
         return menu
     }
     // MARK: A window toolbar's menu item (LLP 1115.002 D2)
@@ -830,18 +834,19 @@ final class MenuHost: NSObject {
     }
     /// The menu of `pop`, reached through `path`'s openers (each row that
     /// opened the next popover): an item per button row, a separator per
-    /// `hr`, and a submenu per row that opens a menu-shaped popover.
+    /// `hr`, a submenu per row that opens a menu-shaped popover, and a
+    /// `role="group"` row's items set apart by separators, under a section
+    /// header of its `aria-label` (the HIG's label for a run of items).
     private func items(of pop: NodeView, path: [Step], from source: NodeView?, presentation: Int, once: Picked, bubbled: Bool) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let popovers = path.compactMap(\.parent) + [pop]
-        for case let row as NodeView in pop.container.subviews {
-            if row.props["contextPreview"] == "true" { continue } // a context menu's preview (§5.1)
-            if row.props["popover"] != nil { continue } // a submenu authored inside its parent
-            if row.props["semanticTag"] == "hr" { menu.addItem(.separator()); continue }
-            guard row.isButton else { continue }
+        func separate() { if let last = menu.items.last, !last.isSeparatorItem { menu.addItem(.separator()) } }
+        func add(_ row: NodeView) {
+            if row.props["semanticTag"] == "hr" { menu.addItem(.separator()); return }
+            guard row.isButton else { return }
             // Escape and outside clicks cancel NSMenu; a hide-only row adds no action.
-            if !row.handlers.contains("press"), presenter?.buttonPressListener(above: row) == nil, closes(row, pop) { continue }
+            if !row.handlers.contains("press"), presenter?.buttonPressListener(above: row) == nil, closes(row, pop) { return }
             if let sub = submenu(of: row, path: popovers) {
                 let item = menuItem(of: row, action: nil)
                 menuOpener.pops.append(Weak(pop: sub)) // a row chosen in it opens from the same opener
@@ -849,7 +854,7 @@ final class MenuHost: NSObject {
                 item.isEnabled = !row.disabled && !row.inert && shown(row, in: popovers + [sub])
                 item.image = image(of: row)
                 menu.addItem(item)
-                continue
+                return
             }
             let item = menuItem(of: row, action: #selector(pick(_:)))
             item.target = self
@@ -860,6 +865,24 @@ final class MenuHost: NSObject {
             item.isEnabled = !row.disabled && !row.inert && shown(row, in: popovers)
             item.image = image(of: row)
             menu.addItem(item)
+        }
+        // A context menu's preview (§5.1) and a submenu authored inside its
+        // parent are no rows (`menuRows`).
+        var sectionEnded = false
+        for row in pop.menuRows {
+            if row.isMenuSection {
+                let start = menu.numberOfItems
+                separate()
+                if let title = row.menuSectionTitle { menu.addItem(.sectionHeader(title: title)) }
+                let header = menu.numberOfItems
+                for inner in row.menuRows { add(inner) }
+                // A section with no item shows nothing, not even its header.
+                if menu.numberOfItems == header { while menu.numberOfItems > start { menu.removeItem(at: start) } } else { sectionEnded = true }
+                continue
+            }
+            if sectionEnded, row.props["semanticTag"] != "hr" { separate() }
+            sectionEnded = false
+            add(row)
         }
         return menu
     }

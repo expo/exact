@@ -178,9 +178,9 @@ impl<D: DataSource + Default> CanvasHost<D> {
     /// What the reader draws around the page, when that is not what it was
     /// last given: where the page is in the window (x, y, width, height, in
     /// pixels), the colour behind it and in the edges it keeps out of
-    /// (ARGB), and two bits: bit 0 is the dark scheme (light navigation
-    /// icons); bit 1 requests light status bar icons (LLP 1105 D7).
-    /// `None` while nothing changed.
+    /// (ARGB), and three bits: bit 0 is the dark scheme (light navigation
+    /// icons); bit 1 requests light status bar icons; bit 2 hides the
+    /// system bars (LLP 1105 D7). `None` while nothing changed.
     pub fn chrome(&mut self) -> Option<[i32; 6]> {
         let now = pack_chrome(self.p.chrome(), self.scale);
         if self.shell.chrome == Some(now) {
@@ -191,7 +191,8 @@ impl<D: DataSource + Default> CanvasHost<D> {
     }
 }
 
-/// The JNI array keeps six words; the bars have independent appearance bits.
+/// The JNI array keeps six words; the bars have independent appearance bits
+/// and a bit of their own for hiding.
 fn pack_chrome(c: Chrome, scale: f32) -> [i32; 6] {
     let px = |v: f32| (v * scale).round() as i32;
     let [r, g, b, a] = c.background;
@@ -201,7 +202,9 @@ fn pack_chrome(c: Chrome, scale: f32) -> [i32; 6] {
         px(c.frame[2]),
         px(c.frame[3]),
         i32::from_be_bytes([a, r, g, b]),
-        i32::from(c.dark) | (i32::from(c.status_light_icons) << 1),
+        i32::from(c.dark)
+            | (i32::from(c.status_light_icons) << 1)
+            | (i32::from(c.bars_hidden) << 2),
     ]
 }
 
@@ -211,17 +214,20 @@ mod tests {
 
     #[test]
     fn chrome_keeps_geometry_and_argb_and_packs_independent_bar_bits() {
-        for (dark, status_light_icons, flags) in [
-            (false, false, 0),
-            (true, false, 1),
-            (false, true, 2),
-            (true, true, 3),
+        for (dark, status_light_icons, bars_hidden, flags) in [
+            (false, false, false, 0),
+            (true, false, false, 1),
+            (false, true, false, 2),
+            (true, true, false, 3),
+            (false, false, true, 4),
+            (true, true, true, 7),
         ] {
             let chrome = Chrome {
                 frame: [1.25, 2.5, 100., 200.],
                 background: [0x12, 0x34, 0x56, 0xff],
                 dark,
                 status_light_icons,
+                bars_hidden,
             };
             assert_eq!(
                 pack_chrome(chrome, 2.),

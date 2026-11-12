@@ -38,7 +38,7 @@ pub use atoms::{Atom, AtomFace, AtomForm, AtomKind, AtomRole, Atoms};
 pub use edit::{edit, Command, Edit};
 pub use pieces::{pieces, pieces_with, spoken, AtomPiece, Piece, Role};
 pub use segment::{
-    embed, excerpt, plain, plain_range, plain_with, segments, video, Embed, Provider, Segment,
+    embed, plain, plain_range, plain_with, segments, video, Embed, Provider, Segment,
 };
 pub use selection::{selection, Selection};
 pub use style::{

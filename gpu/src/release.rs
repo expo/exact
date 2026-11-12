@@ -35,8 +35,11 @@ impl Instance {
     /// Drop the canvas's presentation target, drawables first; an
     /// acquisition thread still running is returned for [`Module::reap`].
     /// Its configuration stays, for a device found again (`Module::set_gpu`).
+    /// What the compositor was shown goes with the target: `presented` is
+    /// false until a frame on the next one is.
     pub(crate) fn release(&mut self) -> Option<Retired> {
         self.held = None;
+        self.presented.reset();
         #[cfg(not(target_arch = "wasm32"))]
         let retired = {
             self.scratch = None;

@@ -293,7 +293,13 @@ pub fn run<D: DataSource>(
         let bytes = std::fs::read(&path).expect("plan bytes");
         exact_plan::Plan::decode(&bytes).expect("a plan")
     };
-    run_plan(args, data, plan, mode)
+    let dir = std::path::Path::new(&path)
+        .parent()
+        .map(|d| match d.as_os_str().is_empty() {
+            true => std::path::PathBuf::from("."),
+            false => d.to_path_buf(),
+        });
+    run_plan(args, data, plan, mode, dir)
 }
 
 /// Run an app whose terminal entry was compiled at build time. The bytes
@@ -312,14 +318,16 @@ pub fn run_embedded<D: DataSource>(
             return ExitCode::FAILURE;
         }
     };
-    run_plan(args, data, plan, mode)
+    run_plan(args, data, plan, mode, None)
 }
 
+/// `assets`: the directory a relative `image` source is read beneath.
 fn run_plan<D: DataSource>(
     mut args: Vec<String>,
     data: D,
     plan: exact_plan::Plan,
     mut mode: Mode,
+    assets: Option<std::path::PathBuf>,
 ) -> ExitCode {
     let mut size = None;
     if let Some(i) = args.iter().position(|a| a == "--size") {
@@ -371,7 +379,7 @@ fn run_plan<D: DataSource>(
     let (cols, rows) = size
         .or_else(|| interactive.then(crate::term::size).flatten())
         .unwrap_or((80, 24));
-    let mut host = match Host::boot_with_clock(plan, data, mode, cols, rows, interactive) {
+    let mut host = match Host::boot_with_clock(plan, data, mode, cols, rows, interactive, assets) {
         Ok(h) => h,
         Err(e) => {
             eprintln!("boot: {e}");
@@ -399,6 +407,9 @@ fn run_plan<D: DataSource>(
     let start = Instant::now();
     host.live_from(start);
     let pump = |host: &mut Host<D>, vt: &mut crate::vt::Vt| {
+        // Local files decode in a moment; the screen a verb reads has
+        // its pictures in, as the Linux host's headless boot waits.
+        host.wait_images(std::time::Duration::from_millis(500));
         if woken.swap(false, Ordering::SeqCst) {
             host.announced();
         }

@@ -303,6 +303,26 @@ final class NavigationCollapseIOSTests: XCTestCase {
         XCTAssertEqual(bar.frame.height, expanded, accuracy: 0.5)
     }
 
+    func testAnAuthoredVerticalSnapWinsOverTheLargeTitleRest() throws {
+        let session = try booted("EXACT_LARGE_TITLE_PLAN", label: "large-title-snap", beforeItsWindow: true)
+        let home = try node(session, "home-scroll"), sv = try XCTUnwrap(home.scroll)
+        let top = try node(session, "home-top")
+        let open = sv.contentOffset.y
+        home.style["scroll_snap_type"] = .string("y mandatory")
+        top.style["scroll_snap_align"] = .string("start")
+        top.frame.origin.y = 30
+        let want = CGPoint(x: 0, y: open + 30)
+        var finger = want
+        home.scrollViewWillEndDragging(sv, withVelocity: .zero, targetContentOffset: &finger)
+        XCTAssertEqual(finger.y, want.y, accuracy: 0.5)
+        Agent.scroll(from: sv, dx: 0, dy: 30)
+        XCTAssertEqual(sv.contentOffset.y, finger.y, accuracy: 0.5, "the agent keeps the authored rest inside the title band")
+        top.style["scroll_snap_align"] = nil
+        Agent.scroll(from: sv, dx: 0, dy: -1_000)
+        Agent.scroll(from: sv, dx: 0, dy: 30)
+        XCTAssertGreaterThan(sv.contentOffset.y, finger.y + 1, "without an area the title still settles closed")
+    }
+
     /// The agent's drag past the top under a collapsed large title opens it,
     /// as a finger's pull does, and rests at the top once the bounce settles.
     func testAnAgentDragPastTheTopOpensACollapsedLargeTitle() throws {

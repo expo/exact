@@ -128,6 +128,7 @@ pub mod top;
 mod transform;
 mod transform_geometry;
 mod typing;
+mod unload;
 mod window;
 #[cfg(windows)]
 mod word;
@@ -228,6 +229,9 @@ pub struct Presenter<D: DataSource> {
     window_focus: Option<exact_kernel::NodeKey>,
     clipboard: Option<Box<dyn clipboard::Clipboard>>,
     url_opener: Option<links::UrlOpener>,
+    window_closer: Option<Box<dyn Fn()>>,
+    window_focuser: Option<Box<dyn Fn()>>,
+    window_hider: Option<Box<dyn Fn()>>,
     /// The desktop portal's answers to document pickers (`portal.rs`).
     portal: crate::portal::Inbox,
     /// The modifier keys held, each side a bit (Shift, Control, Alt, Meta,
@@ -538,6 +542,9 @@ impl<D: DataSource> Presenter<D> {
             window_focus: None,
             clipboard: None,
             url_opener: None,
+            window_closer: None,
+            window_focuser: None,
+            window_hider: None,
             portal: Default::default(),
             held: 0,
             shortcut_keys: Default::default(),

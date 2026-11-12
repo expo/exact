@@ -29,7 +29,10 @@ pub fn rules(at: &str, looks: &[(u8, String)]) -> String {
     let mut out = String::new();
     for (state, css) in looks {
         let mut rows: String = (css.split_terminator(';'))
-            .map(|row| format!("{row}!important;"))
+            .map(|row| match row.strip_prefix("scale:") {
+                Some(scale) => format!("--exact-scale:{scale}!important;scale:calc(var(--exact-scale,1) * var(--exact-press-factor,1))!important;"),
+                None => format!("{row}!important;"),
+            })
             .collect();
         // A hover look is the whole hover, as `:active` is the whole press: it
         // replaces the neutral look's unsaid wash on this node, and a bar

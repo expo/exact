@@ -824,6 +824,18 @@ fn symbols_answer_to_apple_names_and_aliases_and_the_plan_carries_the_role() {
         ("house.fill", "home-fill"),
         ("star.fill", "star-fill"),
         ("sign-out", "sign-out"),
+        // expo/exact#224: a role means what both platforms' symbols of its name mean.
+        ("shopping-bag", "bag"),
+        ("local_mall", "bag"),
+        ("bag.fill", "bag-fill"),
+        ("call", "phone"),
+        ("local-phone", "phone"),
+        ("phone", "phone"),
+        ("iphone", "smartphone"),
+        ("phone_android", "smartphone"),
+        ("doc.plaintext", "article"),
+        ("article", "article"),
+        ("radio", "radio"),
     ] {
         let (plan, warnings) = contract::compile_warned(&format!(
             "component App\n  view\n    image \"symbol:{written}\"\n"

@@ -1,7 +1,8 @@
 //! @ref LLP 1121 D10 (stage 6 F) — icon tokens at build. Each icon's SVG is
 //! read ([`crate::icon_svg`]) and each target the app ships is checked to
-//! have a source (`tamber-icon-missing`); a literal `symbol:icon.reply` is
-//! written as the source form every host reads,
+//! have a source (`tamber-icon-missing`). Independent declarations with
+//! identical sources are refused (`tamber-icon-duplicate`). A literal
+//! `symbol:icon.reply` is written as the source form every host reads,
 //! `symbol:icon|<sf>|<view_box>|<path>|<svg>`, and the plan's `icons` table
 //! keeps what a computed source may name. `symbol:sf/<name>` names the role
 //! whose Apple name it is, else the icon whose `sf` it is.
@@ -293,8 +294,8 @@ fn targets(root: Option<&Path>) -> Vec<Target> {
 
 /// Read each icon's SVG (under its `home`) and check each target the app
 /// ships (read by [`clear`]) has a source; `span` places a refusal at the
-/// icon's line. `exported`: whether an icon is kept for code outside the
-/// views (D7).
+/// icon's line. Independent declarations must have distinct sources.
+/// `exported`: whether an icon is kept for code outside the views (D7).
 pub(crate) fn declare<'a>(
     icons: &[tamber::Icon],
     home: &dyn Fn(&tamber::Icon) -> Home<'a>,
@@ -303,6 +304,7 @@ pub(crate) fn declare<'a>(
 ) -> Vec<LowerError> {
     let targets = ICONS.with(|i| i.borrow().1.clone());
     let (mut out, mut errors) = (Vec::new(), Vec::new());
+    let mut sources = std::collections::HashMap::new();
     for icon in icons {
         let at = span(icon.line, icon.col);
         let refuse = |id: &'static str, message: String| LowerError {
@@ -318,6 +320,32 @@ pub(crate) fn declare<'a>(
                 continue;
             }
         };
+        let template = svg.as_ref().filter(|s| s.not_template.is_none());
+        let resolved = Resolved {
+            name: icon.name.clone(),
+            sf: icon.sf.clone().unwrap_or_default(),
+            view_box: svg.as_ref().map(|s| s.view_box.clone()).unwrap_or_default(),
+            path: template
+                .map(|s| match s.even_odd {
+                    true => format!("{}{}", exact_kernel::Icon::EVEN_ODD, s.path),
+                    false => s.path.clone(),
+                })
+                .unwrap_or_default(),
+            svg: icon.svg.clone().unwrap_or_default(),
+        };
+        // Aliases share their source declaration's line. Material names are annotations.
+        if icon.line == icon.written {
+            let first = sources.entry(resolved.form()).or_insert(icon);
+            if first.written != icon.written {
+                errors.push(refuse(
+                    "tamber-icon-duplicate",
+                    format!(
+                        "`{}` and `{}` have identical icon sources: alias one to the other (`{} = {}`)",
+                        first.name, icon.name, icon.name, first.name
+                    ),
+                ));
+            }
+        }
         for target in targets.iter().map(|t| t.name.as_str()) {
             if drawn(target, icon, svg.as_ref()).is_some() {
                 continue;
@@ -374,19 +402,7 @@ pub(crate) fn declare<'a>(
                 ),
             });
         }
-        let template = svg.as_ref().filter(|s| s.not_template.is_none());
-        out.push(Resolved {
-            name: icon.name.clone(),
-            sf: icon.sf.clone().unwrap_or_default(),
-            view_box: svg.as_ref().map(|s| s.view_box.clone()).unwrap_or_default(),
-            path: template
-                .map(|s| match s.even_odd {
-                    true => format!("{}{}", exact_kernel::Icon::EVEN_ODD, s.path),
-                    false => s.path.clone(),
-                })
-                .unwrap_or_default(),
-            svg: icon.svg.clone().unwrap_or_default(),
-        });
+        out.push(resolved);
     }
     // One whose SVG was refused is out of the table; its uses say no more.
     mark_refused(

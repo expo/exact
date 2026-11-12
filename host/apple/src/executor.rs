@@ -12,8 +12,8 @@ pub use core::preload::{
 };
 #[path = "executor_pump.rs"]
 pub mod pump;
-/// A new executor waits for a native-worker slot only under test (the core's `reserve`).
-const WAIT_FOR_SLOT: bool = cfg!(test);
+/// Independent tests have separate worker budgets; production shares one process bound.
+const ISOLATE_WORKER_BUDGET: bool = cfg!(test);
 
 /// Schedule a pump on the presenter's thread. Must enqueue asynchronously;
 /// called under the retirement guard, never synchronously reenter Exact.

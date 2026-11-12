@@ -86,7 +86,7 @@ impl Dates {
             "date" => (Some(day(value)?), None),
             "time" => (None, Some(time(value)?)),
             _ => {
-                let (d, t) = value.split_once('T')?;
+                let (d, t) = value.split_once(['T', ' '])?;
                 (Some(day(d)?), Some(time(t)?))
             }
         };
@@ -253,6 +253,10 @@ mod tests {
         assert_eq!(us.show("time", "13:05:09").as_deref(), Some("1:05:09 PM"));
         assert_eq!(
             us.show("datetime-local", "2026-10-23T12:01").as_deref(),
+            Some("Oct 23, 2026, 12:01 PM")
+        );
+        assert_eq!(
+            us.show("datetime-local", "2026-10-23 12:01").as_deref(),
             Some("Oct 23, 2026, 12:01 PM")
         );
         // de on a 24-hour clock, with a quoted literal.

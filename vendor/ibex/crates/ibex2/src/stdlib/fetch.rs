@@ -262,7 +262,7 @@ pub struct Request {
     pub response_body: Option<crate::stdlib::fetch_async::ResponseBody>,
     /// Made ahead of its caller's asking: the platform's client refuses it
     /// where the person has asked for less data (URLSession's
-    /// `allowsConstrainedNetworkAccess`; Exact patch 36).
+    /// `allowsConstrainedNetworkAccess`; Exact patch 37).
     pub speculative: bool,
 }
 

@@ -4,21 +4,30 @@
 //! change announces the watches it covers. The runner then asks again the
 //! answers that watch them (LLP 1016.002). Watching the folder, not the
 //! file, sees an atomic replace (a new inode moved onto the name). The
-//! host built for macOS (headless) has no inotify: there a watch is
-//! accepted and never announces.
+//! folders are worked out again only when the topics change or a watched
+//! folder gains, loses or moves a folder, not at every commit. The host
+//! built for macOS (headless) has no inotify: there a watch is accepted and
+//! never announces.
 
 use exact_data::documents::{self, Watched};
-use std::collections::{BTreeSet, HashMap};
+#[cfg(target_os = "linux")]
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The most folders one session watches beneath recursive watches; past it
 /// the deepest go unwatched.
+#[cfg(target_os = "linux")]
 const MAX_FOLDERS: usize = 4096;
 
 pub(crate) struct DocWatch {
     owner: u64,
     shared: Arc<Shared>,
+    /// What the folders were last worked out from: the topics, the grants
+    /// and the recent-files store's folder.
+    last: Option<(Vec<String>, String, Option<PathBuf>)>,
     #[cfg(target_os = "linux")]
     inotify: Option<inotify::Inotify>,
 }
@@ -29,6 +38,11 @@ struct Shared {
     owner: u64,
     watches: Mutex<Vec<Watched>>,
     folders: Mutex<HashMap<i32, PathBuf>>,
+    /// Set by the inotify thread when a watched folder gained, lost or moved
+    /// a folder, or the kernel removed a watch: the folders a recursive
+    /// watch covers, or a folder watched again, are worked out at the next
+    /// follow.
+    stale: AtomicBool,
     native: exact_runner::Native,
 }
 
@@ -92,16 +106,29 @@ impl DocWatch {
                 owner,
                 watches: Mutex::new(Vec::new()),
                 folders: Mutex::new(HashMap::new()),
+                stale: AtomicBool::new(false),
                 native,
             }),
+            last: None,
             #[cfg(target_os = "linux")]
             inotify: None,
         }
     }
 
     /// Keep the watches among `topics` that `grants` let the app read
-    /// (`fs.read doc:/`).
-    fn follow(&mut self, topics: &[String], grants: &str) {
+    /// (`fs.read doc:/`), and say whether it worked them out: it does not
+    /// when the topics, the grants, the store's folder and the watched
+    /// folders are as they were at the last call.
+    fn follow(&mut self, topics: &[String], grants: &str) -> bool {
+        let store = crate::kept::watched_folder();
+        let stale = self.shared.stale.swap(false, Ordering::Relaxed);
+        let same = |(t, g, s): &(Vec<String>, String, Option<PathBuf>)| {
+            t == topics && g == grants && *s == store
+        };
+        if !stale && self.last.as_ref().is_some_and(same) {
+            return false;
+        }
+        self.last = Some((topics.to_vec(), grants.to_owned(), store.clone()));
         let grants = exact_grants::GrantSet::parse(&exact_runner::io_grants(grants)).ok();
         let now: Vec<Watched> = topics
             .iter()
@@ -114,13 +141,22 @@ impl DocWatch {
                 })
             })
             .collect();
-        let mut folders = BTreeSet::new();
-        // The recent-files store's folder, where the app keeps documents.
-        folders.extend(crate::kept::watched_folder());
-        for w in &now {
-            folders.insert(w.folder.clone());
-            if w.recursive && w.real.is_dir() {
-                beneath(&w.real, &mut folders);
+        #[cfg(target_os = "linux")]
+        {
+            let mut folders = BTreeSet::new();
+            // The recent-files store's folder, where the app keeps documents.
+            folders.extend(store);
+            for w in &now {
+                folders.insert(w.folder.clone());
+                if w.recursive && w.real.is_dir() {
+                    beneath(&w.real, &mut folders);
+                }
+            }
+            if self.inotify.is_none() && !folders.is_empty() {
+                self.inotify = inotify::Inotify::start(self.shared.clone());
+            }
+            if let Some(inotify) = &self.inotify {
+                inotify.watch_exactly(&folders, &self.shared);
             }
         }
         *self
@@ -128,20 +164,7 @@ impl DocWatch {
             .watches
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = now;
-        #[cfg(target_os = "linux")]
-        {
-            if folders.is_empty() && self.inotify.is_none() {
-                return;
-            }
-            if self.inotify.is_none() {
-                self.inotify = inotify::Inotify::start(self.shared.clone());
-            }
-            if let Some(inotify) = &self.inotify {
-                inotify.watch_exactly(&folders, &self.shared);
-            }
-        }
-        #[cfg(not(target_os = "linux"))]
-        let _ = folders;
+        true
     }
 
     /// The watched topics.
@@ -158,6 +181,7 @@ impl DocWatch {
 }
 
 /// Every folder beneath `root`, breadth first, until the bound.
+#[cfg(target_os = "linux")]
 fn beneath(root: &Path, folders: &mut BTreeSet<PathBuf>) {
     let mut queue = std::collections::VecDeque::from([root.to_path_buf()]);
     while let Some(folder) = queue.pop_front() {
@@ -182,6 +206,7 @@ mod inotify {
     use super::Shared;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
 
     pub(super) struct Inotify {
@@ -287,7 +312,7 @@ mod inotify {
             }
             let mut changed = Vec::new();
             {
-                let folders = shared.folders.lock().unwrap_or_else(|e| e.into_inner());
+                let mut folders = shared.folders.lock().unwrap_or_else(|e| e.into_inner());
                 let header = std::mem::size_of::<libc::inotify_event>();
                 let mut at = 0usize;
                 while at + header <= read as usize {
@@ -303,6 +328,21 @@ mod inotify {
                             folder.join(std::ffi::OsStr::from_bytes(name))
                         });
                     }
+                    // The kernel removed the watch: its folder was deleted or its
+                    // filesystem unmounted (inotify(7), IN_IGNORED). Forgotten, a
+                    // folder made again at the path is watched anew.
+                    if event.mask & libc::IN_IGNORED != 0 {
+                        folders.remove(&event.wd);
+                    }
+                    // What a recursive watch covers changed, or a folder lost
+                    // its watch: the next follow works the folders out again.
+                    const FOLDERS: u32 =
+                        libc::IN_CREATE | libc::IN_DELETE | libc::IN_MOVED_FROM | libc::IN_MOVED_TO;
+                    if event.mask & libc::IN_IGNORED != 0
+                        || event.mask & libc::IN_ISDIR != 0 && event.mask & FOLDERS != 0
+                    {
+                        shared.stale.store(true, Ordering::Relaxed);
+                    }
                     at += header + event.len as usize;
                 }
             }
@@ -310,6 +350,39 @@ mod inotify {
                 shared.changed(&path);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod follow_tests {
+    use super::DocWatch;
+    use exact_data::documents;
+    use std::sync::atomic::Ordering;
+
+    /// A follow with the last one's topics and grants works nothing out, so
+    /// a commit that changes no watch pays nothing; new grants, new topics
+    /// or a changed folder are worked out.
+    #[test]
+    fn an_unchanged_watch_is_not_worked_out_again() {
+        let root = std::env::temp_dir().join(format!("exact-linux-follow-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("notes/sub")).unwrap();
+        let folder = documents::mint(&root.join("notes"), 7304).unwrap();
+        let topics = [documents::watch_topic(&folder, true)];
+        let mut watch = DocWatch::announcing(7304, exact_runner::Native::default());
+        assert!(watch.follow(&topics, "fs.read doc:/"));
+        assert!(!watch.follow(&topics, "fs.read doc:/"));
+        assert!(
+            watch.follow(&topics, "fs.read app:/data"),
+            "the grants changed"
+        );
+        assert!(watch.follow(&[], "fs.read app:/data"), "the topics changed");
+        assert!(!watch.follow(&[], "fs.read app:/data"));
+        watch.shared.stale.store(true, Ordering::Relaxed);
+        assert!(watch.follow(&[], "fs.read app:/data"), "a folder changed");
+        assert!(!watch.follow(&[], "fs.read app:/data"));
+        drop(watch);
+        documents::forget(7304);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 
@@ -377,6 +450,61 @@ mod tests {
         assert!(watch.watched().is_empty());
         drop(watch);
         documents::forget(7301);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A subfolder of a recursive watch removed and made again between two
+    /// follows is watched again at the second (inotify(7): the kernel drops
+    /// a deleted folder's watch and says so with IN_IGNORED).
+    #[test]
+    fn a_folder_removed_and_made_again_is_watched_again() {
+        let root = std::env::temp_dir().join(format!("exact-linux-remade-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("notes/sub")).unwrap();
+        let folder = documents::mint(&root.join("notes"), 7303).unwrap();
+        let topics = [documents::watch_topic(&folder, true)];
+        let mut watch = DocWatch::announcing(7303, exact_runner::Native::default());
+        watch.follow(&topics, "fs.read doc:/");
+        let sub = root.join("notes/sub");
+        let watched = |watch: &DocWatch| {
+            let folders = watch.shared.folders.lock().unwrap();
+            folders.iter().find(|(_, f)| **f == sub).map(|(wd, _)| *wd)
+        };
+        let before = watched(&watch).expect("the subfolder is watched");
+        std::fs::remove_dir(&sub).unwrap();
+        std::fs::create_dir(&sub).unwrap();
+        let start = Instant::now();
+        while watched(&watch) == Some(before) && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(watched(&watch), None, "the dead watch is forgotten");
+        watch.follow(&topics, "fs.read doc:/");
+        assert!(watched(&watch).is_some(), "the new subfolder is watched");
+        drop(watch);
+        documents::forget(7303);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// A folder made beneath a recursive watch is watched at the next
+    /// follow, though the topics are unchanged.
+    #[test]
+    fn a_folder_made_beneath_a_recursive_watch_is_watched() {
+        let root = std::env::temp_dir().join(format!("exact-linux-made-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("notes")).unwrap();
+        let folder = documents::mint(&root.join("notes"), 7305).unwrap();
+        let topics = [documents::watch_topic(&folder, true)];
+        let mut watch = DocWatch::announcing(7305, exact_runner::Native::default());
+        assert!(watch.follow(&topics, "fs.read doc:/"));
+        let made = root.join("notes/made");
+        std::fs::create_dir(&made).unwrap();
+        let start = Instant::now();
+        while !watch.follow(&topics, "fs.read doc:/") && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let folders = watch.shared.folders.lock().unwrap();
+        assert!(folders.values().any(|f| *f == made), "{folders:?}");
+        drop(folders);
+        drop(watch);
+        documents::forget(7305);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

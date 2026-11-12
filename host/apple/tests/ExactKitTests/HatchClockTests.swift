@@ -8,6 +8,19 @@ import UIKit
 @testable import ExactKit
 
 final class HatchClockTests: XCTestCase {
+    func testCoalescedAftersDoNotDriveSeeksOrSettlement() {
+        let clock = HatchClock()
+        clock.after(1, ms: 100, coalescing: true)
+        XCTAssertNil(clock.nextAfter)
+        XCTAssertNil(clock.nextInstant)
+        clock.after(2, ms: 200)
+        XCTAssertEqual(clock.nextAfter, 200)
+        XCTAssertEqual(clock.nextInstant, 200)
+        clock.after(2, ms: -1)
+        XCTAssertNil(clock.nextAfter)
+        XCTAssertNil(clock.nextInstant)
+    }
+
     func testAfterFiresWhileTracking() {
         XCTAssertTrue(Thread.isMainThread)
         #if os(macOS)

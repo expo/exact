@@ -1,7 +1,10 @@
 // The library gate's design (LLP 1139 §5 E): the packages' own tokens, as
-// they ship; only the page's ground and its top mark are the app's.
+// they ship, with an alias for their shared icon and the page's own colours.
 tamber librarygate
 
 theme
   gate.ground = #ffffff  scheme=fixed
   gate.mark = #ff00ff  scheme=fixed
+
+icons
+  actions.repost = cards.repost

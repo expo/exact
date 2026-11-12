@@ -427,8 +427,9 @@ impl Images {
                 view.refusal = None;
                 view.displayed_source.clear();
                 self.bitmaps.remove(id);
-                // The one row, read where it is set: no style copied a pass.
-                let size = node.computed_row(exact_kernel::StyleId::FontSize, |s| s.font_size);
+                let size = node.bar_symbol_size().unwrap_or_else(|| {
+                    node.computed_row(exact_kernel::StyleId::FontSize, |s| s.font_size)
+                });
                 if view.source != source || view.symbol_size != Some(size) {
                     reports.push((*id, (size > 0.).then_some((size, size))));
                     view.source = source.to_owned();

@@ -720,7 +720,7 @@ fn a_request_runs_on_the_executor_and_its_reply_commits() {
                 Outcome::Failed { message, .. } => message.clone(),
                 Outcome::Storage(_) => panic!("HTTP request received a storage result"),
                 Outcome::Surface(_) => panic!("HTTP request received a surface result"),
-                Outcome::Message(_) | Outcome::Closed { .. } => {
+                Outcome::Message(_) | Outcome::Messages(_) | Outcome::Closed { .. } => {
                     panic!("HTTP request received a stream message")
                 }
             };

@@ -23,6 +23,15 @@ extension ExactSession {
         replySubmissions.append((CACurrentMediaTime() - began) * 1000)
     }
 
+    #if DEBUG
+    /// Tests: a reply the owner answered as cancelled, published as `pumpReplies` publishes one.
+    func publishCancelledReplyForTests() {
+        repliesInFlight += 1
+        replySubmissions.append(0)
+        publish(.cancelledReply, Batch(ops: [], timers: false, motion: false, clock: nil, error: nil), generation)
+    }
+    #endif
+
     func retireReply() -> Double {
         repliesInFlight -= 1
         return replySubmissions.removeFirst()

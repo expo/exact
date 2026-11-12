@@ -18,6 +18,7 @@
 //   for it 15 minutes on; on iOS, while a `sync` tag waits out its backoff,
 //   a refresh request and a processing one for it too. The simulator
 //   refuses every submit (`BGTaskSchedulerErrorDomain` code 1).
+// - Outside the agent, `unregisterPeriodicSync` cancels the tag's wake request.
 // - With `--long`, on the Mac: the periodic tag's scheduler fires within
 //   30 minutes, its wake raising `periodicsync`, whose handler's request
 //   lands.
@@ -118,6 +119,23 @@ import Foundation
         wait { tags != nil }
         precondition(tags?.isEmpty == true, "completed sync was not retired")
         print("PASS overlapping platform wakes await one sync and retire it")
+
+        // Outside the agent the module asks the host's store, which keeps a
+        // request across launches until it falls due.
+        defaults.removeObject(forKey: "exact.background")
+        var held: Set<String> = []
+        let wakes = ExactWakes { key, request in if request == nil { held.remove(key) } else { held.insert(key) } }
+        let outside = BackgroundModule(context: ExactPackageContext(agent: false, session: "test", changed: { _ in }, log: { print($0) },
+                                                                    now: { 0 }, wakes: wakes))
+        var periodic = false
+        outside.later("registerPeriodicSync", ["tag": "digest", "minInterval": 900_000.0], preferred: nil) { _ in periodic = true }
+        wait { periodic }
+        precondition(held.contains("periodicsync digest"), "a periodic tag asked no wake: \(held)")
+        var withdrawn = false
+        outside.later("unregisterPeriodicSync", ["tag": "digest"], preferred: nil) { _ in withdrawn = true }
+        wait { withdrawn }
+        precondition(!held.contains("periodicsync digest"), "an unregistered periodic tag still holds a wake: \(held)")
+        print("PASS an unregistered periodic tag leaves no wake request")
     }
 }
 `);

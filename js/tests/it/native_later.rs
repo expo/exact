@@ -150,3 +150,61 @@ fn an_answer_resumes_in_its_own_turn_after_other_storage() {
     assert!(done.iter().any(|text| text == "live answer"));
     assert_eq!(s.get("session"), Some("live answer"));
 }
+
+/// Numbers that a reader rounding other than correctly misreads, as the
+/// overlay's test has them (`overlay.rs`), and the range's ends.
+const NUMBERS: &[f64] = &[
+    985.6906946328695,
+    212.91890726713459,
+    479.60756426982596,
+    -985.6906946328695,
+    f64::MAX,
+    f64::MIN_POSITIVE,
+    f64::from_bits(1),
+];
+
+/// A number the module passes to `native.call` or `native.later` arrives
+/// with the bits JavaScript held.
+#[test]
+fn native_calls_receive_the_modules_numbers_exactly() {
+    fn bits(request: &serde_json::Value) -> serde_json::Value {
+        let n = request["n"].as_f64().expect("a number");
+        serde_json::json!({"text": format!("{:016x}", n.to_bits())})
+    }
+    struct Native;
+    impl exact_js::NativeModule for Native {
+        fn configure_storage(&mut self, _: exact_js::NativeStorage) -> Result<(), String> {
+            Ok(())
+        }
+        fn call(&mut self, request: &serde_json::Value) -> Result<serde_json::Value, String> {
+            Ok(bits(request))
+        }
+        fn later(&mut self) -> Option<exact_js::LaterHandler> {
+            Some(std::sync::Arc::new(|request, reply| {
+                reply.send(Ok(bits(&request)))
+            }))
+        }
+    }
+    let root = Root::new();
+    let mut m = root.module().with_native(|_| Box::new(Native));
+    let mut s = Store::new(GRANTS, Vec::<(String, Vec<u8>)>::new());
+    m.activate().unwrap();
+    let native = m.native().expect("a module offers its native handle");
+    for &n in NUMBERS {
+        let expected = format!("{:016x}", n.to_bits());
+        let call = super::storage::call(&mut m, &mut s, "native-number", &format!("{n:e}"));
+        assert_eq!(call, expected, "native.call of {n:e}");
+        let a = args("later-number", &format!("{n:e}"));
+        let Answer::Later(request) = m.answer(&mut s, "work", &a).unwrap() else {
+            panic!("a long native call answers later")
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        native.handler().expect("filled at activation")(
+            request.body.clone(),
+            exact_runner::Reply::new(move |outcome| tx.send(outcome).unwrap()),
+        );
+        let answer = m.parse(&mut s, "work", &a, rx.recv().unwrap()).unwrap();
+        let later = finish(&mut m, &mut s, &a, answer);
+        assert_eq!(later, expected, "native.later of {n:e}");
+    }
+}

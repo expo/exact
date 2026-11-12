@@ -6,6 +6,7 @@ use crate::{ButtonFaceStyle, ButtonImagePlacement, ControlKind, PressFace};
 pub(crate) struct ButtonInputs {
     env: crate::Env,
     neutral_tab_root: Option<f32>,
+    neutral_bar_symbol: Option<(f32, f32)>,
     neutral_role_floor: bool,
     segment: Option<crate::SegmentPlace>,
     /// A list row's inset (LLP 1138), which the face's padding takes.
@@ -30,6 +31,7 @@ impl ButtonInputs {
     pub(crate) fn matches(&self, arena: &NodeArena, slot: u32) -> bool {
         if self.env != *arena.env()
             || self.neutral_tab_root != arena.neutral_tab_root(slot)
+            || self.neutral_bar_symbol != arena.neutral_bar_symbol(slot)
             || self.neutral_role_floor != arena.neutral_role_floor(slot)
             || self.segment != arena.segment_place(slot)
             || self.row_inset != crate::rows::row_inset(arena, slot)
@@ -75,8 +77,22 @@ fn mask(rows: &[StyleId]) -> StyleMask {
 }
 
 impl NodeArena {
+    /// Whether a slot is a `<button>` element on the web: a Pressable,
+    /// whatever its ARIA role, unless an `href` makes it an `<a>`.
+    pub(crate) fn is_button(&self, slot: u32) -> bool {
+        self.node_type(slot) == NodeType::Pressable
+            && self.props(slot).str(crate::PropId::Href).is_none()
+    }
+
     pub(crate) fn is_native_button(&self, slot: u32) -> bool {
         ControlKind::of(self.node_type(slot), self.props(slot)) == Some(ControlKind::Button)
+    }
+
+    fn neutral_bar_symbol(&self, slot: u32) -> Option<(f32, f32)> {
+        self.children(slot)
+            .iter()
+            .find_map(|&child| self.bar_symbol_size(child))
+            .map(|size| (self.root_font_size(), size))
     }
 
     pub(crate) fn neutral_tab_root(&self, slot: u32) -> Option<f32> {
@@ -200,6 +216,7 @@ impl NodeArena {
         ButtonInputs {
             env: self.env.clone(),
             neutral_tab_root: self.neutral_tab_root(slot),
+            neutral_bar_symbol: self.neutral_bar_symbol(slot),
             neutral_role_floor: self.neutral_role_floor(slot),
             segment: self.segment_place(slot),
             row_inset: crate::rows::row_inset(self, slot),
@@ -350,6 +367,7 @@ impl NodeArena {
         };
         Some(ButtonFaceStyle {
             root_font_size: self.root_font_size(),
+            neutral_bar_symbol: self.neutral_bar_symbol(slot),
             neutral_tab_root,
             neutral_role_floor: self.neutral_role_floor(slot),
             title,

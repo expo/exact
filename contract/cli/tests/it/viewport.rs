@@ -250,3 +250,204 @@ component App
         assert!(contract::bake(contract::compile(wrong).unwrap(), NoData).is_err(), "{wrong}");
     }
 }
+
+#[test]
+fn display_ratio_is_optional_host_data_and_updates_without_display_lengths() {
+    let plan = contract::bake(contract::compile(
+        "shape Viewport\n  devicePixelRatio: option<number>\ncomponent App\n  resource viewport = exactViewport() as shape Viewport\n  view\n    text \"Display\"\n",
+    ).unwrap(), NoData).unwrap();
+    let mut r = Runner::boot(
+        plan.clone(),
+        NoData,
+        Kernel::with_monospace(),
+        Viewport::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(
+        r.resource("viewport"),
+        Some(&Value::record(vec![Value::NONE]))
+    );
+    for scale in [1.0, 2.0, 1.5] {
+        assert!(r.set_display_scale(scale).unwrap().is_some());
+        assert_eq!(
+            r.resource("viewport"),
+            Some(&Value::record(vec![Value::some(Value::Number(scale))]))
+        );
+        assert!(r.set_display_scale(scale).unwrap().is_none());
+    }
+    for scale in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert!(r.set_display_scale(scale).is_err());
+        assert_eq!(r.viewport().device_pixel_ratio, Some(1.5));
+    }
+    assert!(r.take_store_writes().is_empty());
+    let carried = r.carry();
+    let fresh = Runner::boot_carrying(
+        plan.clone(),
+        NoData,
+        Kernel::with_monospace(),
+        &carried,
+        Viewport::default(),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(
+        fresh.resource("viewport"),
+        Some(&Value::record(vec![Value::NONE]))
+    );
+    let mut kernel = Kernel::with_monospace();
+    kernel.set_display_scale(1.0).unwrap();
+    let primed = Runner::boot(plan, NoData, kernel, Viewport::default(), "/").unwrap();
+    assert_eq!(
+        primed.resource("viewport"),
+        Some(&Value::record(vec![Value::some(Value::Number(1.0))]))
+    );
+}
+
+#[test]
+fn numeric_safe_area_and_segments_follow_document_environment() {
+    let plan = contract::bake(
+        contract::compile(
+            r#"shape Segment
+  height: number
+  x: number
+  width: number
+  y: number
+shape Viewport
+  safeAreaTop: number
+  safeAreaRight: number
+  safeAreaBottom: number
+  safeAreaLeft: number
+  segments: Segment[]
+component App
+  resource viewport = exactViewport() as shape Viewport
+  view
+    text `${viewport.safeAreaTop}`
+"#,
+        )
+        .unwrap(),
+        NoData,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        NoData,
+        Kernel::with_monospace(),
+        Viewport::sized(900., 600.),
+        "/",
+    )
+    .unwrap();
+    assert_eq!(
+        state(&r)["resources"]["viewport"]["segments"],
+        serde_json::json!([{ "x": 0, "y": 0, "width": 900, "height": 600 }])
+    );
+    r.kernel_mut()
+        .set_env(exact_kernel::Env::new(24., 1., 34., 2.))
+        .unwrap();
+    assert!(r.refresh_viewport_geometry().unwrap().is_some());
+    assert!(r.refresh_viewport_geometry().unwrap().is_none());
+    let v = &state(&r)["resources"]["viewport"];
+    assert_eq!(
+        [
+            v["safeAreaTop"].as_f64(),
+            v["safeAreaRight"].as_f64(),
+            v["safeAreaBottom"].as_f64(),
+            v["safeAreaLeft"].as_f64()
+        ],
+        [Some(24.), Some(1.), Some(34.), Some(2.)]
+    );
+    let fold = exact_runner::Fold {
+        posture: exact_runner::Posture::Folded,
+        cols: 2,
+        rows: 1,
+    };
+    for gap in [20., 40.] {
+        r.kernel_mut()
+            .set_segments(
+                2,
+                1,
+                vec![
+                    exact_kernel::Rect::new(0., 0., 450. - gap / 2., 600.),
+                    exact_kernel::Rect::new(450. + gap / 2., 0., 450. - gap / 2., 600.),
+                ],
+            )
+            .unwrap();
+        assert!(r.set_fold(fold).unwrap().is_some());
+        assert_eq!(
+            state(&r)["resources"]["viewport"]["segments"][1]["x"],
+            450. + gap / 2.
+        );
+        assert!(r.set_fold(fold).unwrap().is_none());
+    }
+    r.kernel_mut().set_segments(1, 1, vec![]).unwrap();
+    r.set_fold(exact_runner::Fold::FLAT).unwrap();
+    r.set_viewport(600., 900.).unwrap();
+    assert_eq!(
+        state(&r)["resources"]["viewport"]["segments"],
+        serde_json::json!([{ "x": 0, "y": 0, "width": 600, "height": 900 }])
+    );
+    assert!(r.take_store_writes().is_empty());
+}
+
+#[test]
+fn refused_numeric_geometry_restores_the_previous_environment() {
+    let plan = contract::compile(
+        r#"shape Viewport
+  safeAreaTop: number
+component App
+  resource viewport = exactViewport() as shape Viewport
+  derive quotient = 1 / (24 - viewport.safeAreaTop)
+  view
+    text `${quotient}`
+"#,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        NoData,
+        Kernel::with_monospace(),
+        Viewport::default(),
+        "/",
+    )
+    .unwrap();
+    r.kernel_mut()
+        .set_env(exact_kernel::Env::new(24., 0., 0., 0.))
+        .unwrap();
+    assert!(r.refresh_viewport_geometry().is_err());
+    assert_eq!(r.kernel().env().top, 0.);
+    assert_eq!(state(&r)["resources"]["viewport"]["safeAreaTop"], 0.);
+    r.kernel_mut()
+        .set_env(exact_kernel::Env::new(12., 0., 0., 0.))
+        .unwrap();
+    assert!(r.refresh_viewport_geometry().unwrap().is_some());
+    assert_eq!(state(&r)["resources"]["viewport"]["safeAreaTop"], 12.);
+}
+
+#[test]
+fn refused_first_display_scale_keeps_the_absence_of_a_report() {
+    let plan = contract::compile(
+        r#"shape Viewport
+  devicePixelRatio: option<number>
+component App
+  resource viewport = exactViewport() as shape Viewport
+  derive ratio = match viewport.devicePixelRatio { case some(n) => n, case none => 1 }
+  derive quotient = 1 / (2 - ratio)
+  view
+    text `${quotient}`
+"#,
+    )
+    .unwrap();
+    let mut r = Runner::boot(
+        plan,
+        NoData,
+        Kernel::with_monospace(),
+        Viewport::default(),
+        "/",
+    )
+    .unwrap();
+    assert!(r.set_display_scale(2.0).is_err());
+    assert_eq!(r.viewport().device_pixel_ratio, None);
+    assert_eq!(r.kernel().reported_display_scale(), None);
+    assert!(r.set_display_scale(1.5).unwrap().is_some());
+    assert_eq!(r.viewport().device_pixel_ratio, Some(1.5));
+}

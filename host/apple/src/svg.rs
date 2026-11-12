@@ -893,6 +893,12 @@ fn shape_json(
             None => paint_json(local(paint.as_ref()).as_ref(), s),
         }
     }
+    // @ref LLP 1055.000 D17 — which paints take hits, as `pointer-events`
+    // reads them: a set fill that draws nothing (an empty gradient) still
+    // does, so the presenter cannot tell from the paints above.
+    if let Some((fill, stroke)) = shape.hit_paints() {
+        let _ = write!(s, ",\"hp\":[{},{}]", fill as u8, stroke as u8);
+    }
     if shape.order != [0, 1, 2] {
         let _ = write!(
             s,

@@ -4,7 +4,7 @@
     "1080": "0x1e5dd38f9b0ce70a"
   },
   "saves": {
-    "continuation": "8333dedf37746f16fb0ad821b17cbfcd1f92d945679262377eeeadcebf004681"
+    "continuation": "0c9fbbcfe3ee7ab1e1167706a4853eb66b823c0490010fe296ce6457898e0363"
   },
   "hosts": [
     "linux",
@@ -18,10 +18,10 @@
   "profiles": [
     "gpu-dev"
   ],
-  "inputs": "944806a82be68999e6f2c26507c9fed4eae458b68075d56ff89468b9c8c2443b",
-  "sourceInputs": "a3c73d562c8ebd5f367bd088e0ffcfdbd1409b5c1661dc508cf1404ab8c79469",
+  "inputs": "9df8dfb34074e94f35075a42a0128ad06eae3882674fbdab789ff8c9a305ce94",
+  "sourceInputs": "6f6a911aef9be8d7f7a77beb1a297ed9344e8f8fc79a21c78b556d72ba486614",
   "game": "rivals",
   "generated": "bun game/prove.mjs rivals --repin --hosts 'linux,web'",
-  "at": "3cdbce64d6bf01f788c8e350bd0a07255e0872f8",
-  "reason": "EXSIM v8 (player: u8, pads) over EXGAME v6: continuation bytes change; tick hashes unchanged"
+  "at": "c8ad75897c85f8b3e278415a47e37d2fb0011e5f",
+  "reason": "Publication journals now use the JSON delivered to the app (a46ab292); simulation tick hashes are unchanged"
 }

@@ -166,9 +166,9 @@ export function wire(api: string, ownerOf: (id: string) => string | null = () =>
   }
 
   // (The server checks every scope; the tool's own reading of it only words and greys.)
-  /** The changes' long poll (tamber/1.17's GET, `exactLongPoll`): its stream, made at once with the token in hand
-   * (the web build takes a stream's fetch only before an answer's first await), each event mapped with that token's
-   * handle; null when no token is in hand, or this client was revoked: the caller reads once instead, which asks.
+  /** The changes' long poll (tamber/1.17's GET, `exactLongPoll`): its stream, made at once with the token in hand,
+   * each event mapped with that token's handle; null when no token is in hand, or this client was revoked: the caller
+   * reads once instead, which asks.
    * Its replies may be as large as a read's (a held import's diffs): `LONG_POLL_MAX`, not a stream's 1 MiB. */
   function longPoll<T>(query: string, map: (event: StreamEvent, used: string) => T): Promise<T> | null {
     if (!token || (paired && (gone || token !== pairedToken))) return null;

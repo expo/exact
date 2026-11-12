@@ -13,7 +13,7 @@ import {filesystem, filesystemRead} from './filesystem.mjs';
 // root whose cohort's binary has prelude runtime 4 and whose baked module
 // needs `runtime` (its receipt's). Bun's native subprocess import bypasses
 // module mocks; explicit bindings also isolate deployment tests.
-function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4, grants=''}={}) {
+function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4, grants='', watch=fs.watch}={}) {
   const root=fs.mkdtempSync(resolve(tmpdir(),'exact-push-profile-'));
   const app={id:'fixture',name:'fixture',dir:root,target:root,manifest:{app:{origin:root},deploy:{signing:{keys:{test:'public'}}}}};
   const compat={id:'a'.repeat(32),target:'fixture',inputs:{app:'fixture',platform:'linux',store:{L:'A'},rustMode:'native',grantCeiling:grants,keys:{test:'public'},typescriptRuntime:cohortRuntime}};
@@ -27,7 +27,7 @@ function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4
     expect(env?.EXACT_UPDATE_TRUST,`${name} production trust`).toBe('production');
   };
   const bindings={
-    ...Object.fromEntries(['existsSync','readFileSync','writeFileSync','mkdtempSync','rmSync','watch'].map(name=>[name,fs[name]])),
+    ...Object.fromEntries(['existsSync','readFileSync','writeFileSync','mkdtempSync','rmSync'].map(name=>[name,fs[name]])), watch,
     filesystem, filesystemRead,
     channelOf,validateChannel,resolve,relative,homedir,ROOT:fileURLToPath(new URL('..',import.meta.url)),
     process:{env:{EXACT_GAME_PROOF_PROFILE:'gpu-dev',EXACT_UPDATE_TRUST:'development'}},
@@ -36,7 +36,7 @@ function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4
     cohortReceipt:()=>cohort,classifyArtifacts:classify,
     openOrigin:mock(spec=>({writable:true,list:async path=>{destinations.push({origin:spec,path});return []},describe:()=>spec})),
     channelOrigin,sha256:()=> 'digest',blobPath:x=>x,streamPath:()=> 'stream',
-    defaultRelease:()=> 'r-fixture',inspectHead(){throw Error('unexpected head')},
+    defaultRelease:()=> 'r-fixture',admitHead(){throw Error('unexpected head')},
     requireReleasePins(){}, // the release pins' gate (game/inputs.mjs), not what this seals
     async publishStream({build,row}){
       expect(build.trust).toBe('production');calls.push('publish');published.push(build);rows.push(row);
@@ -158,6 +158,25 @@ export const answer: Answer = (source, args, store, storage) => sources[source](
     expect(calls).not.toContain('publish');
   } finally {fs.rmSync(root,{recursive:true,force:true})}
 }, 120000);
+
+test('push --watch publishes after a save to what a push reads, and not to what a tool writes', async () => {
+  let listener;
+  const { root, rows, pusher } = harness(undefined, 4, { watch: (dir, options, saved) => { listener = saved; } });
+  const settle = () => new Promise(ok => setTimeout(ok, 200));
+  try {
+    pusher({ _: [root], keys: root, watch: true });
+    while (!listener) await settle();
+    const pushes = async (file) => { const before = rows.length; listener('change', file); await settle(); return rows.length - before; };
+    // The design, and an asset or a deck's file of any type (`carriedAssets`)
+    for (const file of ['app.contract', 'app.tamber', 'assets/logo.png', 'assets/Inter.ttf', 'assets/chime.wav', 'assets/clip.mov', 'deck/deck.js']) {
+      expect([file, await pushes(file)]).toEqual([file, 1]);
+    }
+    // What the app's own state, a build or the Finder writes
+    for (const file of ['.exact/sent.json', '.exact/shells/Cargo.toml', 'target/debug/x.rs', 'assets/.DS_Store', 'notes.txt']) {
+      expect([file, await pushes(file)]).toEqual([file, 0]);
+    }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
 
 test('push refuses incomplete values and reserved channels before publishing', () => {
   const source = fs.readFileSync(new URL('./push.mjs', import.meta.url), 'utf8');

@@ -15,8 +15,8 @@
 //!   "app": { "id": "com.exact.caltrain", "name": "Caltrain" },
 //!   "plan": { "url": "./app.plan", "sha256": "<hex>", "bytes": 12580,
 //!             "formatVersion": 4, "kernelSchema": "<u64 hex>" },
-//!   "assets": [ { "name": "mark.png", "url": "./assets/mark.png",
-//!                 "sha256": "<hex>", "bytes": 4211 } ],
+//!   "assets": { "url": "./assets.json", "sha256": "<hex>", "bytes": 1530,
+//!               "count": 8 },
 //!   "stream": { "app": "com.exact.caltrain", "channel": "release",
 //!               "compatibilityId": "<hex>", "seq": 41 },
 //!   "release": "2026-09-03T18:04:11Z-7f1c",
@@ -29,6 +29,17 @@
 //! always belongs to a cohort's stream, which is what makes a head unreplayable
 //! onto another channel (LLP 1030 D3a). `sunset` and `signature` are optional;
 //! every other member of an unknown name is ignored.
+//!
+//! The asset cards live in a separate file, the **asset index**, which the
+//! envelope names by digest as it names the plan, so the envelope stays a
+//! small pointer card whatever the asset count. The index is
+//! `{"assets":[{"name":…,"url":…,"sha256":…,"bytes":…}],"plans":{…}}`, at
+//! most [`MAX_ASSET_INDEX_BYTES`](crate::MAX_ASSET_INDEX_BYTES), with the
+//! optional `plans` of LLP 1126 D2. Its card URLs resolve against the index's
+//! own URL, as a stylesheet's do, so the index is the same bytes wherever a
+//! generation is served from. `count` is the number of cards, so a refusal can
+//! name it before the index is fetched. A bundle with no assets omits `assets`.
+//! The signature covers the index's digest, and so every asset card.
 
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
@@ -186,8 +197,18 @@ pub struct Signature {
     pub bytes: [u8; 64],
 }
 
+/// The envelope's card for its asset index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetIndex {
+    /// The index file; its `name` is `assets.json`.
+    pub card: FileCard,
+    /// How many asset cards the index holds.
+    pub count: u64,
+}
+
 /// A parsed envelope: the head of a stream, or the `exact.json` of an entry in
-/// the store.
+/// the store. Its asset roster is known once [`Envelope::read_index`] has
+/// read the index it names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Envelope {
     /// The bytes as they arrived — what the entry stores for later signature
@@ -203,15 +224,19 @@ pub struct Envelope {
     pub app_name: Option<String>,
     /// The plan card. Its `name` is `app.plan`.
     pub plan: FileCard,
-    /// Snapshot entry kinds indexed into the authenticated asset roster (LLP 1126 D2).
+    /// Snapshot entry kinds indexed into the authenticated asset roster (LLP
+    /// 1126 D2), as the asset index lists them: empty until it is read.
     pub plans: std::collections::BTreeMap<String, FileCard>,
     /// The format version the plan header carries, when stated (LLP 1023 D2).
     pub format_version: Option<u64>,
     /// The kernel schema digest, when stated: a client may refuse before
     /// downloading, though the compatibility id already covers it.
     pub kernel_schema: Option<String>,
-    /// Every asset, by name and digest (LLP 1026 D11).
-    pub assets: Vec<FileCard>,
+    /// The asset index, when the bundle has assets.
+    pub index: Option<AssetIndex>,
+    /// Every asset, by name and digest (LLP 1026 D11): `None` until the
+    /// index is read.
+    assets: Option<Vec<FileCard>>,
     /// The stream (LLP 1030 D3a).
     pub stream: StreamCard,
     /// The release id: one deploy across every stream it touched.
@@ -227,10 +252,13 @@ impl Envelope {
     ///
     /// Refuses: a body over [`MAX_ENVELOPE_BYTES`], anything that is not UTF-8
     /// JSON, an `exact` major this crate does not know, a missing or malformed
-    /// `app.id`, `plan`, or `stream`, an asset name that is not a safe relative
-    /// path, and a non-integer number anywhere (the canonical-bytes rule).
+    /// `app.id`, `plan`, or `stream`, an asset index over
+    /// [`MAX_ASSET_INDEX_BYTES`], and a non-integer number anywhere (the
+    /// canonical-bytes rule). The index itself is read by
+    /// [`Envelope::read_index`].
     ///
     /// [`MAX_ENVELOPE_BYTES`]: crate::MAX_ENVELOPE_BYTES
+    /// [`MAX_ASSET_INDEX_BYTES`]: crate::MAX_ASSET_INDEX_BYTES
     pub fn parse(raw: &[u8]) -> Result<Envelope, String> {
         if raw.len() > crate::MAX_ENVELOPE_BYTES {
             return Err(format!(
@@ -301,45 +329,27 @@ impl Envelope {
                 .and_then(|v| v.as_u64())
                 .ok_or_else(|| "the stream names no seq".to_string())?,
         };
-        let mut assets = Vec::new();
-        if let Some(list) = root.get("assets") {
-            let list = list
-                .as_array()
-                .ok_or_else(|| "the envelope's assets are not a list".to_string())?;
-            for item in list {
-                let object = item
+        let index = match root.get("assets") {
+            None => None,
+            Some(value) => {
+                let object = value
                     .as_object()
-                    .ok_or_else(|| "an asset is not an object".to_string())?;
-                let name = object
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| "an asset has no name".to_string())?;
-                assets.push(file_card(name, object)?);
-            }
-            check_asset_names(assets.iter().map(|a| a.name.as_str()))?;
-        }
-        let mut plans = std::collections::BTreeMap::new();
-        if let Some(value) = root.get("plans") {
-            let map = value
-                .as_object()
-                .ok_or("the envelope's plans must be a map")?;
-            for (kind, value) in map {
-                if !entry_identifier(kind) {
-                    return Err(format!("invalid snapshot entry kind {kind:?}"));
-                }
-                let name = format!("plans/{kind}.plan");
-                let card = file_card(
-                    &name,
-                    value.as_object().ok_or("an entry plan must be a card")?,
-                )?;
-                if !assets.iter().any(|a| a == &card) {
+                    .ok_or("the envelope's assets are not an index card")?;
+                let card = file_card("assets.json", object)?;
+                let count = object
+                    .get("count")
+                    .and_then(|v| v.as_u64())
+                    .ok_or("assets.json has no card count")?;
+                if card.bytes > crate::MAX_ASSET_INDEX_BYTES as u64 {
                     return Err(format!(
-                        "entry plan {kind} must match its authenticated asset card {name}"
+                        "the asset index is {} bytes for {count} assets; the most is {}",
+                        card.bytes,
+                        crate::MAX_ASSET_INDEX_BYTES
                     ));
                 }
-                plans.insert(kind.clone(), card);
+                Some(AssetIndex { card, count })
             }
-        }
+        };
         let sunset = match root.get("sunset") {
             None => None,
             Some(v) => {
@@ -390,13 +400,14 @@ impl Envelope {
             app_id,
             app_name: app.get("name").and_then(|v| v.as_str()).map(str::to_string),
             plan,
-            plans,
+            plans: std::collections::BTreeMap::new(),
             format_version: plan_object.get("formatVersion").and_then(|v| v.as_u64()),
             kernel_schema: plan_object
                 .get("kernelSchema")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
-            assets,
+            assets: index.is_none().then(Vec::new),
+            index,
             stream,
             release: root
                 .get("release")
@@ -405,6 +416,98 @@ impl Envelope {
             sunset,
             signature,
         })
+    }
+
+    /// Every asset, by name and digest, once the index is read; refused while
+    /// it is not, so no reader takes an unread roster for an empty one.
+    pub fn assets(&self) -> Result<&[FileCard], String> {
+        self.assets
+            .as_deref()
+            .ok_or_else(|| "the envelope's asset index has not been read".into())
+    }
+
+    /// The URL the asset cards resolve against: the index's, itself resolved
+    /// against the envelope's URL `head_url`.
+    pub fn asset_base(&self, head_url: &str) -> Result<String, String> {
+        match &self.index {
+            Some(index) => resolve_url(head_url, &index.card.url),
+            None => Ok(head_url.to_string()),
+        }
+    }
+
+    /// Read the asset index this envelope names, as fetched or as stored:
+    /// refused unless it is the card's exact bytes and holds `count` cards
+    /// with portable, distinct names, and an entry plan's card only as it
+    /// holds that plan's asset card.
+    pub fn read_index(&mut self, raw: &[u8]) -> Result<(), String> {
+        let index = self
+            .index
+            .as_ref()
+            .ok_or("the envelope names no asset index")?;
+        if raw.len() as u64 != index.card.bytes {
+            return Err(format!(
+                "the asset index is {} bytes; the envelope declared {}",
+                raw.len(),
+                index.card.bytes
+            ));
+        }
+        let digest = sha256_hex(raw);
+        if digest != index.card.sha256 {
+            return Err(format!(
+                "the asset index hashes to {digest}; the envelope declared {}",
+                index.card.sha256
+            ));
+        }
+        let value: serde_json::Value =
+            serde_json::from_slice(raw).map_err(|e| format!("the asset index is not JSON: {e}"))?;
+        let list = value
+            .get("assets")
+            .and_then(|v| v.as_array())
+            .ok_or("the asset index holds no list of assets")?;
+        if list.len() as u64 != index.count {
+            return Err(format!(
+                "the asset index holds {} assets; the envelope declared {}",
+                list.len(),
+                index.count
+            ));
+        }
+        let mut assets = Vec::with_capacity(list.len());
+        for item in list {
+            let object = item
+                .as_object()
+                .ok_or_else(|| "an asset is not an object".to_string())?;
+            let name = object
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "an asset has no name".to_string())?;
+            assets.push(file_card(name, object)?);
+        }
+        check_asset_names(assets.iter().map(|a| a.name.as_str()))?;
+        let mut plans = std::collections::BTreeMap::new();
+        if let Some(value) = value.get("plans") {
+            let map = value
+                .as_object()
+                .ok_or("the asset index's plans must be a map")?;
+            for (kind, value) in map {
+                if !entry_identifier(kind) {
+                    return Err(format!("invalid snapshot entry kind {kind:?}"));
+                }
+                let name = format!("plans/{kind}.plan");
+                let card = file_card(
+                    &name,
+                    value.as_object().ok_or("an entry plan must be a card")?,
+                )?;
+                if !assets.iter().any(|a| a == &card) {
+                    return Err(format!(
+                        "entry plan {kind} must match its authenticated asset card {name}"
+                    ));
+                }
+                plans.insert(kind.clone(), card);
+            }
+        }
+        self.assets = Some(assets);
+        self.plans = plans;
+        Ok(())
     }
 
     /// Verify the head against the binary's embedded keys (LLP 1026 D11).
@@ -814,19 +917,33 @@ mod url_tests {
 
 #[cfg(test)]
 mod entry_tests {
-    use super::Envelope;
-    use serde_json::json;
+    use super::{sha256_hex, Envelope};
+    use serde_json::{json, Value};
+
+    /// An envelope naming `index` (as JSON) by digest, and the index's bytes.
+    fn named(index: &Value) -> (Value, Vec<u8>) {
+        let raw = index.to_string().into_bytes();
+        let count = index["assets"].as_array().map_or(0, Vec::len);
+        let envelope = json!({"exact":1,"app":{"id":"test.app"},
+            "plan":{"url":"./app.plan","sha256":"b".repeat(64),"bytes":256},
+            "stream":{"channel":"prod","compatibilityId":"c".repeat(32),"seq":1},
+            "assets":{"url":"./assets.json","sha256":sha256_hex(&raw),"bytes":raw.len(),"count":count}});
+        (envelope, raw)
+    }
+
+    fn read(index: &Value) -> Result<Envelope, String> {
+        let (envelope, raw) = named(index);
+        let mut envelope = Envelope::parse(envelope.to_string().as_bytes())?;
+        envelope.read_index(&raw)?;
+        Ok(envelope)
+    }
 
     #[test]
     fn snapshot_index_requires_the_same_authenticated_asset_card() {
         let card = json!({"name":"plans/trains.plan","url":"./plans/trains.plan","sha256":"a".repeat(64),"bytes":128});
-        let base = json!({"exact":1,"app":{"id":"test.app"},
-            "plan":{"url":"./app.plan","sha256":"b".repeat(64),"bytes":256},
-            "stream":{"channel":"prod","compatibilityId":"c".repeat(32),"seq":1},
-            "assets":[card.clone()],"plans":{"trains":card}});
-        let parse = |v: &serde_json::Value| Envelope::parse(v.to_string().as_bytes());
-        let envelope = parse(&base).unwrap();
-        assert_eq!(envelope.plans["trains"], envelope.assets[0]);
+        let base = json!({"assets":[card.clone()],"plans":{"trains":card}});
+        let envelope = read(&base).unwrap();
+        assert_eq!(envelope.plans["trains"], envelope.assets().unwrap()[0]);
         for (key, value) in [
             ("sha256", json!("d".repeat(64))),
             ("bytes", json!(129)),
@@ -834,19 +951,71 @@ mod entry_tests {
         ] {
             let mut bad = base.clone();
             bad["plans"]["trains"][key] = value;
-            assert!(parse(&bad)
-                .unwrap_err()
-                .contains("authenticated asset card"));
+            assert!(read(&bad).unwrap_err().contains("authenticated asset card"));
         }
-        let mut absent = base.clone();
-        absent["assets"] = json!([]);
-        assert!(parse(&absent).is_err());
         let mut bad = base.clone();
         bad["plans"] = json!({"../trains":base["plans"]["trains"].clone()});
-        assert!(parse(&bad).is_err());
+        assert!(read(&bad).is_err());
         let mut ordinary = base;
         ordinary.as_object_mut().unwrap().remove("plans");
-        ordinary["assets"] = json!([]);
-        assert!(parse(&ordinary).unwrap().plans.is_empty());
+        assert!(read(&ordinary).unwrap().plans.is_empty());
+    }
+
+    #[test]
+    fn the_roster_is_the_named_index_or_none() {
+        let asset = |n: usize| json!({"name":format!("assets/t{n}.png"),"url":format!("./assets/t{n}.png"),"sha256":"a".repeat(64),"bytes":n});
+        let index = json!({"assets":(0..600).map(asset).collect::<Vec<_>>()});
+        let (head, raw) = named(&index);
+        let text = head.to_string();
+        assert!(
+            text.len() < 1024,
+            "the envelope does not grow with the assets"
+        );
+        let mut envelope = Envelope::parse(text.as_bytes()).unwrap();
+        assert!(envelope.assets().unwrap_err().contains("has not been read"));
+        let mut other = raw.clone();
+        other[10] ^= 1;
+        assert!(envelope.read_index(&other).unwrap_err().contains("hashes"));
+        assert!(envelope
+            .read_index(&raw[1..])
+            .unwrap_err()
+            .contains("bytes"));
+        envelope.read_index(&raw).unwrap();
+        assert_eq!(envelope.assets().unwrap().len(), 600);
+        assert_eq!(
+            envelope
+                .asset_base("https://o.example/.exact/prod/c/exact.json")
+                .unwrap(),
+            "https://o.example/.exact/prod/c/assets.json"
+        );
+
+        // A count the index does not hold, and an index over its bound.
+        let mut miscounted = head.clone();
+        miscounted["assets"]["count"] = json!(599);
+        let mut envelope = Envelope::parse(miscounted.to_string().as_bytes()).unwrap();
+        assert!(envelope
+            .read_index(&raw)
+            .unwrap_err()
+            .contains("declared 599"));
+        let mut huge = head.clone();
+        huge["assets"]["bytes"] = json!(crate::MAX_ASSET_INDEX_BYTES + 1);
+        let refused = Envelope::parse(huge.to_string().as_bytes()).unwrap_err();
+        assert!(
+            refused.contains("for 600 assets") && refused.contains("the most is 4194304"),
+            "{refused}"
+        );
+        // The old form, a list of cards in the envelope, is refused.
+        let mut listed = head;
+        listed["assets"] = index["assets"].clone();
+        assert!(Envelope::parse(listed.to_string().as_bytes()).is_err());
+        // No assets: no index, and an empty roster.
+        let none = json!({"exact":1,"app":{"id":"test.app"},
+            "plan":{"url":"./app.plan","sha256":"b".repeat(64),"bytes":256},
+            "stream":{"channel":"prod","compatibilityId":"c".repeat(32),"seq":1}});
+        assert!(Envelope::parse(none.to_string().as_bytes())
+            .unwrap()
+            .assets()
+            .unwrap()
+            .is_empty());
     }
 }

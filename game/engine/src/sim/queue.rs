@@ -13,6 +13,7 @@ impl<G: Game> Sim<G> {
         self.invalidate();
         // A posted message waits for the next tick, paused or not.
         if G::paused(&self.args) && !matches!(event, InputEvent::Message { .. }) {
+            self.pointer_samples.clear();
             // The pause's flush leaves device events stamped after the last
             // frame queued; they arrived first, so they apply first.
             let queued = std::mem::take(&mut self.queue);
@@ -28,6 +29,7 @@ impl<G: Game> Sim<G> {
         }
         let host_us = micros(event.at_ms());
         let e = Queued {
+            host_sample: true,
             host_us,
             world_us: self
                 .last_us
@@ -190,6 +192,7 @@ impl<G: Game> Sim<G> {
         held.append(&mut self.queue);
         self.queue = held;
         self.input.clear_edges();
+        self.pointer_samples.clear();
     }
     /// Apply one event at world microsecond `at_us`, journaling a pad's
     /// connection; `paused` keeps no edges.

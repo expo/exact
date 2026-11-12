@@ -202,6 +202,8 @@ impl<G: Game> Sim<G> {
         next.origin = s.origin;
         next.rebase_queue = true;
         next.restored = true;
+        // Its save holds what `Game::first_frame` wrote, if it ran.
+        next.unframed = false;
         next.world.presentation_generation = self
             .world
             .presentation_generation

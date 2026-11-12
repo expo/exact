@@ -327,6 +327,20 @@ impl<'a> Layout<'a> {
                 {
                     self.attached.insert(next.span);
                 }
+                // The MIDI parser joins touching tokens into one hex byte (`3c`).
+                if matches!(
+                    step,
+                    crate::Step::Midi {
+                        step: crate::MidiStep::Tap { .. } | crate::MidiStep::Expect { .. },
+                        ..
+                    }
+                ) && t.span.line == next.span.line
+                    && t.span.end_col == next.span.col
+                    && matches!(t.kind, TokenKind::Number(_) | TokenKind::Ident(_))
+                    && matches!(next.kind, TokenKind::Number(_) | TokenKind::Ident(_))
+                {
+                    self.attached.insert(next.span);
+                }
             }
         }
         for component in file.components.iter().chain(&file.members) {
@@ -591,7 +605,7 @@ impl<'a> Layout<'a> {
                 || (a == "<" && self.type_angles.contains(&previous.span))
                 || matches!(b, ")" | "]" | ",")
                 || matches!(a, "(" | "[")
-                || self.prefixes.contains(&previous.span)
+                || (self.prefixes.contains(&previous.span) && !(a == "-" && b == "-"))
                 || a == "."
                 || (b == "." && !matches!(previous.kind, TokenKind::Number(_)))
                 || (b == "("

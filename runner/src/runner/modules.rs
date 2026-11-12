@@ -749,19 +749,15 @@ impl<D: DataSource> Runner<D> {
                     .unwrap_or_else(|| json!({ "error": "NotSupportedError" })),
             );
         }
-        // A send that answers another source's value, raising it when it
-        // matches `raise.when` (D10): held under the raise's ticket.
+        if let Some(decision) = self.decide_raise(row, send) {
+            return decision;
+        }
+        // A send that answers another source's value without raising it.
         if let Some(answers) = sub["answers"].as_str().and_then(|a| self.sibling(row, a)) {
             let Decision::Now(value) = self.decide(&answers, false, &json!({})) else {
                 return Decision::Now(json!({ "error": "NotSupportedError" }));
             };
-            let when = sub["raise"]["when"].as_object();
-            let matches = when.is_some_and(|w| w.iter().all(|(k, v)| value.get(k) == Some(v)));
-            return if matches {
-                Decision::Hold(Waits::Raise)
-            } else {
-                Decision::Now(value)
-            };
+            return Decision::Now(value);
         }
         let from = sub["from"].as_str().and_then(|f| self.sibling(row, f));
         if let Some(value) = from.as_ref().and_then(|f| self.preferred(f)) {

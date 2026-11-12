@@ -266,7 +266,7 @@ test('dev edits clear only their own errors while unrelated failures stay visibl
     plan=Uint8Array.of(++seq);
     const card={bytes:plan.length,sha256:hash(plan)};
     const dev={epoch:'a'.repeat(32),seq,generation:hash(JSON.stringify({assets:[],plan:card}))};
-    envelope={exact:1,app:{id:'fixture'},dev,assets:[],plan:{...card,url:'/app.plan'}};
+    envelope={exact:1,app:{id:'fixture'},dev,plan:{...card,url:'/app.plan'}};
     // The page fetches and hashes the generation before the host takes it, and crypto.subtle's digests
     // resolve on no fixed turn: wait for the host's reload, then the turns in which the page commits it.
     const reload=new Promise(resolve=>{reloaded=resolve;});

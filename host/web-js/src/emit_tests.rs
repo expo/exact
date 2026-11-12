@@ -87,6 +87,28 @@ fn an_app_file_iframe_keeps_its_source_for_the_file_loader() {
     assert!(!js.contains("about:blank"), "{js}");
 }
 
+/// LLP 1055 D4: the SVG namespace follows the node type, so a module's custom
+/// element named `felt-…` is HTML and the glue attaches its factory.
+#[test]
+fn only_an_svg_node_is_created_in_the_svg_namespace() {
+    let plan = contract::compile(
+        "component App\n  view\n    column\n      felt-haptics enabled=true\n      svg viewBox=\"0 0 10 10\"\n        defs\n          filter id=\"soft\"\n            feGaussianBlur stdDeviation=2\n",
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    let maker = |tag: &str| {
+        let at = js
+            .find(&format!(",\"{tag}\","))
+            .unwrap_or_else(|| panic!("no {tag}: {js}"));
+        let open = js[..at].rfind('=').unwrap();
+        js[open + 1..at].split('(').next().unwrap().to_string()
+    };
+    assert_eq!(maker("felt-haptics"), "h", "{js}");
+    for tag in ["svg", "filter", "feGaussianBlur"] {
+        assert_eq!(maker(tag), "hs", "{tag}: {js}");
+    }
+}
+
 struct Answers;
 impl DataSource for Answers {
     fn query(&mut self, source: &str, _: &[Value]) -> Result<Value, DataError> {
@@ -732,7 +754,7 @@ fn virtual_surface_finite_defaults_run_unpublished_omitted_and_nested() {
         r#"
 const src = await Bun.file(process.argv[1]).text();
 const data = {{}}, Resources = [], commit = f => {{ f(); return true; }}, R = () => {{}}, Refusal = Error;
-const surfaces = new Function('data','Resources','commit','R','Refusal',src.replace(/^import .*;$/gm,'').replace(/^export /gm,'') + ';return surfaces;')(data,Resources,commit,R,Refusal);
+const surfaces = new Function('data','Resources','commit','R','Refusal','Kept','say',src.replace(/^import .*;$/gm,'').replace(/^export /gm,'') + ';return surfaces;')(data,Resources,commit,R,Refusal,k=>'exact.'+k+'.',()=>{{}});
 surfaces({{hud:['world',{descriptor}]}});
 const read = () => data.reserved.exactSurface(null, [], 'hud');
 const expected = ['a|b', ['a|b', null, []]];
@@ -1303,5 +1325,19 @@ fn presence_bindings_link_only_where_an_exit_or_layout_transition_is_bound() {
             !js.contains("presenceUse") && !js.contains("usePresenceBindings"),
             "{js}"
         );
+    }
+}
+
+#[test]
+fn scroll_snap_emits_both_axes_and_center() {
+    for axis in ["x", "y"] {
+        let source = format!("component App\n  view\n    scroll height=100 width=300 scroll-snap-type=\"{axis} mandatory\"\n      view scroll-snap-align=\"center\"\n");
+        let out = crate::emit::emit(&contract::compile(&source).unwrap(), false, false).unwrap();
+        let all = format!("{}{}", out.js, out.css);
+        assert!(
+            all.contains(&format!("scroll-snap-type:{axis} mandatory")),
+            "{all}"
+        );
+        assert!(all.contains("scroll-snap-align:center"), "{all}");
     }
 }

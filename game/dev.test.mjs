@@ -1,5 +1,5 @@
 import {test, expect} from 'bun:test';
-import {mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, statSync, readdirSync} from 'node:fs';
 import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
 import {buildingServer, devPort} from './dev.mjs';
@@ -49,6 +49,35 @@ async function shutdownUntil(predicate, description, timeout = 5000) {
     if (Date.now() >= deadline) throw new Error(description);
     await Bun.sleep(50);
   }
+}
+
+async function statusLockHolder(app) {
+  const gate = resolve(app, `release-${crypto.randomUUID()}`);
+  const child = Bun.spawn([process.execPath, '-e', `
+    const fs = require('node:fs'), write = fs.writeFileSync;
+    const {resolve} = require('node:path');
+    const temp = resolve(${JSON.stringify(app)}, '.exact', 'status.' + process.pid + '.tmp');
+    let held = false;
+    fs.writeFileSync = (path, ...args) => {
+      const result = write(path, ...args);
+      if (!held && path === temp) {
+        held = true; console.log('locked');
+        const deadline = Date.now() + 10000;
+        while (!fs.existsSync(${JSON.stringify(gate)})) {
+          if (Date.now() >= deadline) throw new Error('status holder timed out');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
+      }
+      return result;
+    };
+    require('node:module').syncBuiltinESMExports();
+    const {startStatus} = await import(${JSON.stringify(resolve(import.meta.dir, 'status.mjs'))});
+    startStatus(${JSON.stringify(app)}, 'prove');
+  `], {stdout:'pipe', stderr:'pipe'});
+  const error = new Response(child.stderr).text();
+  const {done} = await child.stdout.getReader().read();
+  if (done) throw new Error(await error);
+  return {child, error, release:() => writeFileSync(gate, '')};
 }
 
 const shutdownCases = [
@@ -170,20 +199,190 @@ test('HTTP answers during a wedged build; readiness belongs to the current invoc
 });
 
 
-test('dead lock owners recover and readiness ignores a previous exited invocation', async () => {
+test('dead owners and interrupted releases recover; readiness ignores a previous exited invocation', async () => {
   mkdirSync(resolve(import.meta.dir, '../target'), {recursive:true});
   const app = mkdtempSync(resolve(import.meta.dir, '../target/status-recovery-'));
   const lock = resolve(app,'.exact/status.lock');
-  const child = Bun.spawn([process.execPath,'-e', `const fs=require('node:fs');fs.mkdirSync(${JSON.stringify(lock)},{recursive:true});fs.writeFileSync(${JSON.stringify(resolve(lock,'owner'))},String(process.pid));console.log('locked');setInterval(()=>{},1000);`], {stdout:'pipe'});
-  const reader = child.stdout.getReader(); await reader.read(); child.kill('SIGKILL'); await child.exited;
+  const holder = await statusLockHolder(app);
+  holder.child.kill('SIGKILL'); await holder.child.exited; await holder.error;
   expect(existsSync(lock)).toBe(true);
-  const prior = startStatus(app,'web'); prior.set({state:'exited'});
+  const prior = startStatus(app,'web');
+  expect(existsSync(lock)).toBe(false);
+  mkdirSync(lock);
+  prior.set({state:'exited'});
   expect(existsSync(lock)).toBe(false);
   const waiting = waitReady(app,{timeout:2});
   const {port} = await devPort([], {start:29401});
   const server = await buildingServer({app,host:'127.0.0.1',port,origins:[{origin:`http://127.0.0.1:${port}`}],gate:{check:()=>({allowed:true})}});
   try { server.serve((req,res)=>res.end('game')); expect((await waiting).invocation).toBe(server.status.get().invocation); }
   finally { server.server.closeAllConnections(); server.server.close(); }
+});
+
+for (const code of ['EPERM', 'EACCES']) {
+  test(`${code} on a status-lock rename recovers dead owners and waits for live owners`, async () => {
+    mkdirSync(resolve(import.meta.dir, '../target'), {recursive:true});
+    const app = mkdtempSync(resolve(import.meta.dir, '../target/status-rename-'));
+    const dead = Bun.spawn([process.execPath, '-e', ''], {stdout:'ignore', stderr:'ignore'});
+    await dead.exited;
+    const fixture = async (app, module, code, deadPid, scenario) => {
+      const fs = require('node:fs'), assert = require('node:assert/strict');
+      const {resolve} = require('node:path');
+      const rename = fs.renameSync, entries = fs.readdirSync, now = Date.now;
+      const dir = resolve(app, scenario), lock = resolve(dir, '.exact/status.lock');
+      const owner = (scenario === 'dead' ? deadPid : process.pid) + '-acquisition';
+      const failure = Object.assign(new Error('rename denied'), {code});
+      let attempts = 0, observations = 0, expired = false;
+      fs.mkdirSync(resolve(dir, '.exact'), {recursive:true});
+      if (['dead', 'empty', 'live'].includes(scenario)) {
+        fs.mkdirSync(lock);
+        if (scenario !== 'empty') fs.writeFileSync(resolve(lock, owner), '');
+      }
+      fs.renameSync = (from, to, ...args) => {
+        if (to === lock) {
+          attempts++;
+          if (scenario === 'denied') { expired = true; throw failure; }
+          if (scenario === 'disappeared' && attempts === 1) throw failure;
+          if (scenario === 'live' && attempts === 2) {
+            assert.equal(observations, 1);
+            assert.deepEqual(entries(lock), [owner]);
+            assert.equal(fs.existsSync(resolve(dir, '.exact/status.json')), false);
+            fs.unlinkSync(resolve(lock, owner));
+            fs.rmdirSync(lock);
+          }
+          if (fs.existsSync(lock)) throw failure;
+        }
+        return rename(from, to, ...args);
+      };
+      fs.readdirSync = (path, ...args) => {
+        const value = entries(path, ...args);
+        if (path === lock) observations++;
+        return value;
+      };
+      Date.now = () => now() + (expired ? 3000 : 0);
+      require('node:module').syncBuiltinESMExports();
+      const {startStatus} = await import(module);
+      let error;
+      try { startStatus(dir, 'prove'); } catch (caught) { error = caught; }
+      if (scenario === 'denied') assert.equal(error, failure);
+      else {
+        assert.equal(error, undefined, scenario);
+        assert.equal(attempts, 2, scenario);
+        assert.equal(observations, scenario === 'disappeared' ? 0 : 1, scenario);
+        assert.equal(JSON.parse(fs.readFileSync(resolve(dir, '.exact/status.json')))[0].verb, 'prove');
+      }
+      assert.equal(fs.existsSync(lock), false);
+      assert.deepEqual(entries(resolve(dir, '.exact')), scenario === 'denied' ? [] : ['status.json']);
+      process.removeAllListeners('exit');
+    };
+    try {
+      for (const scenario of ['dead', 'empty', 'live', 'disappeared', 'denied']) {
+        const child = Bun.spawn([process.execPath, '-e', `await (${fixture.toString()})(${JSON.stringify(app)}, ${JSON.stringify(resolve(import.meta.dir, 'status.mjs'))}, ${JSON.stringify(code)}, ${dead.pid}, ${JSON.stringify(scenario)});`], {stdout:'pipe', stderr:'pipe'});
+        const [result, error] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+        expect(result, error).toBe(0);
+      }
+    } finally { rmSync(app, {recursive:true, force:true}); }
+  });
+}
+
+test('recovery cannot combine observations from different lock generations', async () => {
+  mkdirSync(resolve(import.meta.dir, '../target'), {recursive:true});
+  const app = mkdtempSync(resolve(import.meta.dir, '../target/status-generations-'));
+  const lock = resolve(app, '.exact/status.lock'), holders = [];
+  let observer;
+  try {
+    holders.push(await statusLockHolder(app));
+    const fixture = `
+      const fs = require('node:fs'), stat = fs.statSync, entries = fs.readdirSync;
+      const pause = name => {
+        fs.writeFileSync(app + '/' + name, '');
+        const deadline = Date.now() + 5000;
+        while (!fs.existsSync(app + '/' + name + '-continue')) {
+          if (Date.now() >= deadline) throw new Error(name + ' barrier timed out');
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
+        }
+      };
+      let observed = false, checked = false, expired = false;
+      const observe = value => { if (!observed) { observed = true; pause('observed'); } return value; };
+      fs.statSync = (path, ...args) => { const value = stat(path, ...args); return path === lock ? observe(value) : value; };
+      fs.readdirSync = (path, ...args) => { const value = entries(path, ...args); return path === lock ? observe(value) : value; };
+      const kill = process.kill, now = Date.now;
+      process.kill = (pid, signal) => {
+        if (signal === 0 && !checked) { checked = true; pause('checked'); expired = true; }
+        return kill(pid, signal);
+      };
+      Date.now = () => now() + (expired ? 5000 : 0);
+      require('node:module').syncBuiltinESMExports();
+      const {startStatus} = await import(module);
+      let acquired = false;
+      try { startStatus(app, 'web'); acquired = true; } catch (error) {
+        if (!['EEXIST', 'ENOTEMPTY', 'EPERM', 'EACCES'].includes(error.code)) throw error;
+      }
+      fs.writeFileSync(app + '/result', JSON.stringify({observed, checked, acquired}));
+    `;
+    observer = Bun.spawn([process.execPath, '-e', `const app=${JSON.stringify(app)}, lock=${JSON.stringify(lock)}, module=${JSON.stringify(resolve(import.meta.dir, 'status.mjs'))}; ${fixture}`], {stdout:'pipe', stderr:'pipe'});
+    await shutdownUntil(() => existsSync(resolve(app, 'observed')), 'observer did not read the first generation');
+    holders[0].child.kill('SIGKILL'); await holders[0].child.exited;
+    holders.push(await statusLockHolder(app));
+    writeFileSync(resolve(app, 'observed-continue'), '');
+    await shutdownUntil(() => existsSync(resolve(app, 'checked')), 'observer did not check an owner');
+    holders[1].child.kill('SIGKILL'); await holders[1].child.exited;
+    holders.push(await statusLockHolder(app));
+    const inode = statSync(lock).ino, owner = readdirSync(lock);
+    writeFileSync(resolve(app, 'checked-continue'), '');
+    const [code, error] = await Promise.all([observer.exited, new Response(observer.stderr).text()]);
+    expect(code, error).toBe(0);
+    expect(JSON.parse(readFileSync(resolve(app, 'result'), 'utf8'))).toEqual({observed:true, checked:true, acquired:false});
+    expect(statSync(lock).ino).toBe(inode);
+    expect(readdirSync(lock)).toEqual(owner);
+  } finally {
+    if (observer?.exitCode === null) { observer.kill('SIGKILL'); await observer.exited; }
+    for (const holder of holders) {
+      holder.release();
+      await holder.child.exited;
+      await holder.error;
+    }
+    rmSync(app, {recursive:true, force:true});
+  }
+}, 15000);
+
+test('a predecessor cannot release another acquisition by the same process', async () => {
+  mkdirSync(resolve(import.meta.dir, '../target'), {recursive:true});
+  const app = mkdtempSync(resolve(import.meta.dir, '../target/status-release-'));
+  const fixture = async (app, module) => {
+    const fs = require('node:fs'), {resolve, sep} = require('node:path');
+    const lock = resolve(app, '.exact/status.lock'), temp = resolve(app, '.exact', 'status.' + process.pid + '.tmp');
+    const write = fs.writeFileSync, remove = fs.rmSync, unlink = fs.unlinkSync, rmdir = fs.rmdirSync;
+    let stage = 'predecessor', successor;
+    fs.writeFileSync = (path, ...args) => {
+      if (stage === 'predecessor' && path === temp) {
+        fs.renameSync(lock, resolve(app, 'predecessor'));
+        stage = 'successor';
+        startStatus(app, 'prove');
+        stage = 'releasing-predecessor';
+      } else if (stage === 'successor' && path === temp) {
+        successor = fs.readdirSync(lock);
+        stage = 'holding-successor';
+      }
+      return write(path, ...args);
+    };
+    const holding = path => stage === 'holding-successor' && (path === lock || path.startsWith(lock + sep));
+    fs.rmSync = (path, ...args) => { if (!holding(path)) return remove(path, ...args); };
+    fs.unlinkSync = (path, ...args) => { if (!holding(path)) return unlink(path, ...args); };
+    fs.rmdirSync = (path, ...args) => { if (!holding(path)) return rmdir(path, ...args); };
+    require('node:module').syncBuiltinESMExports();
+    const {startStatus} = await import(module);
+    startStatus(app, 'web');
+    console.log(JSON.stringify({successor, remaining:fs.existsSync(lock) ? fs.readdirSync(lock) : []}));
+    process.removeAllListeners('exit');
+  };
+  try {
+    const child = Bun.spawn([process.execPath, '-e', `await (${fixture.toString()})(${JSON.stringify(app)}, ${JSON.stringify(resolve(import.meta.dir, 'status.mjs'))});`], {stdout:'pipe', stderr:'pipe'});
+    const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(code, error).toBe(0);
+    const result = JSON.parse(output);
+    expect(result.successor.length).toBeGreaterThan(0);
+    expect(result.remaining).toEqual(result.successor);
+  } finally { rmSync(app, {recursive:true, force:true}); }
 });
 
 test.skipIf(!process.env.EXACT_DEV_READINESS_APP)('Contract syntax failure and repair change web --ready through the real producer', async () => {
@@ -213,11 +412,11 @@ test('simultaneous dead-lock recovery preserves every invocation and completed p
   mkdirSync(resolve(import.meta.dir, '../target'), {recursive:true});
   const app = mkdtempSync(resolve(import.meta.dir,'../target/status-contenders-'));
   const lock = resolve(app,'.exact/status.lock');
-  const owner = Bun.spawn([process.execPath,'-e',`require('node:fs').mkdirSync(${JSON.stringify(lock)},{recursive:true});require('node:fs').writeFileSync(${JSON.stringify(resolve(lock,'owner'))},String(process.pid));console.log('ready');setInterval(()=>{},1000)`],{stdout:'pipe'});
-  await owner.stdout.getReader().read(); owner.kill('SIGKILL'); await owner.exited;
+  const holder = await statusLockHolder(app), owner = readdirSync(lock)[0];
+  holder.child.kill('SIGKILL'); await holder.child.exited; await holder.error;
   const gate = resolve(app,'go'), module = resolve(import.meta.dir,'status.mjs');
-  const children = Array.from({length:8},()=>Bun.spawn([process.execPath,'-e',`const fs=require('node:fs'), read=fs.readFileSync;
-    fs.readFileSync=(path,...args)=>{const value=read(path,...args);if(path===${JSON.stringify(resolve(lock,'owner'))} && value===${JSON.stringify(String(owner.pid))}) { fs.writeFileSync(${JSON.stringify(app)}+'/seen-'+process.pid,''); const deadline=Date.now()+5000;while(fs.readdirSync(${JSON.stringify(app)}).filter(n=>n.startsWith('seen-')).length<8){if(Date.now()>deadline)throw new Error('lock barrier timed out');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5);} } return value;};
+  const children = Array.from({length:8},()=>Bun.spawn([process.execPath,'-e',`const fs=require('node:fs'), read=fs.readdirSync;
+    fs.readdirSync=(path,...args)=>{const value=read(path,...args);if(path===${JSON.stringify(lock)} && value.includes(${JSON.stringify(owner)})) { fs.writeFileSync(${JSON.stringify(app)}+'/seen-'+process.pid,''); const deadline=Date.now()+5000;while(fs.readdirSync(${JSON.stringify(app)}).filter(n=>n.startsWith('seen-')).length<8){if(Date.now()>deadline)throw new Error('lock barrier timed out');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5);} } return value;};
     require('node:module').syncBuiltinESMExports();const {startStatus}=await import(${JSON.stringify(module)});while(!fs.existsSync(${JSON.stringify(gate)})) await Bun.sleep(5); startStatus(${JSON.stringify(app)},'prove');`],{stdout:'pipe',stderr:'pipe'}));
   writeFileSync(gate,'go');
   for (const child of children) { const [code,err] = await Promise.all([child.exited,new Response(child.stderr).text()]); expect(code,err).toBe(0); }

@@ -156,6 +156,7 @@ impl<D: DataSource> Runner<D> {
                 // A spent reply's turn read the store: its failure stands, and so does the read.
                 if let Some(i) = self.module_work.reply_reader.take() {
                     self.resources[i].store_reader = true;
+                    self.resources[i].contents_reader = true;
                 }
                 self.uploads = c.uploads;
                 self.failed_mut = c.failed_mut;
@@ -807,7 +808,14 @@ impl<D: DataSource> Runner<D> {
 
     /// Ask resource `r` again, forced, at the next settlement that can.
     pub(super) fn force_refresh(&mut self, r: usize) {
-        self.launch.retain(|i| *i != r);
+        // A refresh ends the launch's exemption for every resource and every
+        // wait, not only `r`: a list's members and whatever the refresh's cause
+        // also changed are then asked fresh. The cost is a fetch a preload
+        // could have answered, never an old answer (LLP 1162.000 D1).
+        self.launch.clear();
+        for p in &mut self.pending {
+            p.launch = false;
+        }
         if !self.refresh_next.contains(&r) {
             self.refresh_next.push(r);
         }

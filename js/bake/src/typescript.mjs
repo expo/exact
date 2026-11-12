@@ -28,16 +28,16 @@ function httpOrigin(value, label) {
 }
 
 /** Explicit backend, saved development selection, then the checkout's declared fixture default. */
-export function backendOriginSelection(app, env=process.env) {
+export function backendOriginSelection(app, env=process.env, parse) {
   const file=resolve(app,'.exact/backend-origin');
   const value=env.EXACT_BACKEND_ORIGIN ?? (existsSync(file) ? readFileSync(file,'utf8').trim() : null);
-  if (value===null) return fixtureBackendSelection(app,env);
+  if (value===null) return fixtureBackendSelection(app,env,parse);
   return { origin: httpOrigin(value,'EXACT_BACKEND_ORIGIN'), source: env.EXACT_BACKEND_ORIGIN != null ? 'EXACT_BACKEND_ORIGIN' : '.exact/backend-origin' };
 }
 export const backendOrigin = (app, env=process.env) => backendOriginSelection(app, env)?.origin ?? null;
 
 /** A declared fixture gets a stable development port from its app directory, shared by builds and drives. */
-export function fixtureBackendSelection(app, env=process.env) {
+export function fixtureBackendSelection(app, env=process.env, parse) {
   if (!developmentTrust(env)) return null;
   let manifest, code;
   try { manifest=JSON.parse(readFileSync(resolve(app,'app.json'),'utf8')); code=readFileSync(resolve(app,'app.ts'),'utf8'); } catch { return null; }
@@ -45,7 +45,7 @@ export function fixtureBackendSelection(app, env=process.env) {
   if (!Array.isArray(argv) || !/(^|\/)bun$/.test(argv[0])) return null;
   const entry=argv.findIndex((a,i)=>i>0 && !a.startsWith('-'));
   if (entry<0 || !/(^|[/\\])fixtures?[/\\]/.test(argv[entry])) return null;
-  const literal=/\bconst\s+origin\s*=\s*['"`](https?:\/\/[^'"`]+)['"`]/.exec(code)?.[1];
+  const literal=literalBackendOrigin(code,parse ?? createRequire(import.meta.url)('rolldown/utils').parseSync);
   if (!literal || !loopback(literal)) return null;
   const args=argv.slice(entry+1), at=args.indexOf('--port'), given=at<0 ? env.PORT : args[at+1];
   // Rust canonicalizes Windows paths with a namespace prefix; server drives must hash the same spelling.
@@ -74,14 +74,25 @@ export const boundWords = ms => (ms >= 60_000 ? `${ms / 60_000} min` : `${ms / 1
 /** Explain when an app-local selection takes precedence over the authored origin. */
 export function backendOriginWarning(code, selection, parse) {
   if (selection?.source !== '.exact/backend-origin') return null;
+  const literal=literalBackendOrigin(code,parse);
+  if (!literal || literal===selection.origin) return null;
+  return `.exact/backend-origin selects ${selection.origin}, overriding the app.ts origin literal ${JSON.stringify(literal)}. Edit or remove .exact/backend-origin to use the changed literal; EXACT_BACKEND_ORIGIN overrides both.`;
+}
+
+/** The top-level const origin the backend selection can replace, canonicalized as an http(s) origin. */
+export function literalBackendOrigin(code, parse) {
   const parsed=parse('app.ts',code);
   if (parsed.errors.length) return null;
-  const declarations=parsed.program.body.flatMap(s=>(s.type==='ExportNamedDeclaration' ? s.declaration : s)?.declarations ?? []);
-  const init=declarations.find(d=>d.id.type==='Identifier' && d.id.name==='origin')?.init;
+  const declarations=parsed.program.body.map(s=>s.type==='ExportNamedDeclaration' ? s.declaration : s)
+    .filter(s=>s?.kind==='const').flatMap(s=>s.declarations);
+  const init=bare(declarations.find(d=>d.id.type==='Identifier' && d.id.name==='origin')?.init);
   const literal=init?.type==='Literal' && typeof init.value==='string' ? init.value
     : init?.type==='TemplateLiteral' && !init.expressions.length ? init.quasis[0].value.cooked : null;
-  if (!literal || literal.replace(/\/+$/,'')===selection.origin) return null;
-  return `.exact/backend-origin selects ${selection.origin}, overriding the app.ts origin literal ${JSON.stringify(literal)}. Edit or remove .exact/backend-origin to use the changed literal; EXACT_BACKEND_ORIGIN overrides both.`;
+  if (!literal) return null;
+  try {
+    const url=new URL(literal);
+    return ['http:','https:'].includes(url.protocol) && !url.username && !url.password ? url.origin : null;
+  } catch { return null; }
 }
 /** The socket origin at an http(s) origin's host: ws for http, wss for https. */
 const socketOrigin = (origin) => origin.replace(/^http/, 'ws');
@@ -184,7 +195,7 @@ export function injectBackendOrigin(code, origin, parse, env=process.env) {
   const keyed=grants.filter(d=>bare(d.init)?.type==='ObjectExpression');
   if (origin===null && !keyed.length) return code;
   const targets=declarations.filter(d=>d.id.type==='Identifier' && d.id.name==='origin');
-  const init=targets[0]?.init;
+  const init=bare(targets[0]?.init);
   const literal=init?.type==='Literal' && typeof init.value==='string' ? init.value
     : init?.type==='TemplateLiteral' && !init.expressions.length ? init.quasis[0].value.cooked : null;
   if (targets.length!==1 || !literal || !/^https?:\/\//.test(literal))
@@ -874,12 +885,12 @@ export function configure(stage, incremental=false, parse) {
   if (existsSync(modulePath)) {
     const before=readFileSync(modulePath,'utf8'), original=resolve(stage,'__exact_backend_source.json');
     const authored=existsSync(original) ? JSON.parse(readFileSync(original,'utf8')) : before;
-    const selection=backendOriginSelection(app), warning=backendOriginWarning(authored,selection,parse);
-    writeFileSync(resolve(stage,'__exact_backend_warning.json'), JSON.stringify(warning));
+    const selection=backendOriginSelection(app,process.env,parse), warning=backendOriginWarning(authored,selection,parse);
     // `import.meta.env` first: a `const origin` it sets is a literal the backend selection may then override.
     const settings=inlineSettings(authored,app,parse);
     writeFileSync(resolve(stage,'__exact_env.json'), JSON.stringify(settings.record));
     const after=developmentGrants(injectBackendOrigin(settings.code,selection?.origin ?? null,parse),parse);
+    writeFileSync(resolve(stage,'__exact_backend.json'), JSON.stringify({origin:literalBackendOrigin(after,parse),warning}));
     if (before!==after) writeFileSync(modulePath,after);
     // Every producer refuses alike what the web build cannot read without running it.
     if (parse) staticFacts(after,parse);
