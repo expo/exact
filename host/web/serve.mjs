@@ -908,6 +908,7 @@ export async function serveBuildTree(dist, req, res, { pinned = null, pages = nu
     const page = await servedFile(dist, target.pathname, 'text/html', { pinned });
     if (page.route === '/shell.html' && ['request', 'cached'].includes(page.render)) r = page;
   }
+  if (markdown && r.status === 404) { const missing = await servedFile(dist, '/404.md', req.headers.accept, { pinned }); if (missing.status === 200 && missing.route === '/404.md') r = { ...missing, status: 404 }; }
   if (r.status === 410) { res.writeHead(410, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }); res.end(`build generation ${r.id} is no longer kept here: load the page again\n`); return; }
   if (pages && [200, 404].includes(r.status) && r.route === '/shell.html' && ['request', 'cached'].includes(r.render) && ['GET', 'HEAD'].includes(req.method)) {
     let page = null;

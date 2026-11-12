@@ -663,6 +663,11 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
       expect([path, accept, r.status, r.headers.get('content-type').split(';')[0], r.headers.get('vary')]).toEqual([path, accept, 200, type, 'Accept']);
       if (body) expect(await r.text()).toBe(body);
     }
+    writeFileSync(resolve(out, '404.md'), '# Not found\n');
+    for (const [accept, type, body] of [['text/markdown', 'text/markdown', '# Not found\n'], ['text/markdown, text/html;q=0.9', 'text/markdown', '# Not found\n'], ['text/html, text/markdown;q=0.5', 'text/html', page('404.html')]]) {
+      const r = await fetch(url('/no/such/route'), { headers: { accept } });
+      expect([accept, r.status, r.headers.get('content-type').split(';')[0], r.headers.get('vary'), (await r.text()).replace(/<base href="[^"]*">/, '<base href="/">')]).toEqual([accept, 404, type, 'Accept', body]);
+    }
     // A page sent before the build is replaced still loads its build's files: the build replaced is kept beside the
     // output by its generation (`dist.gen`), as target/web-dist's is.
     const generation = async () => /<base href="\/\.exact\/gen\/([0-9a-f]{32})\/">/.exec(await (await fetch(url('/'), { headers: html })).text())?.[1];
