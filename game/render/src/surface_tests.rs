@@ -7,8 +7,12 @@ mod frames;
 mod prepare;
 #[path = "surface_tests/quality.rs"]
 mod quality;
+#[path = "surface_tests/scalars.rs"]
+mod scalars;
 #[path = "surface_tests/trace.rs"]
 mod trace;
+#[path = "surface_tests/uv.rs"]
+mod uv;
 use exact_game::{Camera, Input, Mesh, Transform, Vec3};
 use exact_gpu::{fixture, Gpu};
 
@@ -797,6 +801,14 @@ fn peer_assets_finish_gpu_work_before_loaded_and_restore_keeps_the_loading_windo
         );
     }
     fixture::render(&gpu, &mut original, &frame(0.)).unwrap();
+    // Count the first frame's pipelines after its background work has finished.
+    original
+        .render
+        .as_ref()
+        .unwrap()
+        .0
+        .pipelines
+        .wait_specializations();
     let work = original.render.as_ref().unwrap().0.asset_work();
     assert!(
         work.0 > 0 && work.0 < 44,

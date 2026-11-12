@@ -1,6 +1,7 @@
 # Browser SQLite does not save the rows a failing `OR FAIL` statement kept
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** An `execute` that throws after changing rows outside a transaction (SQLite's FAIL conflict resolution) now saves the database file before its error reaches the app.
 **Systems:** host/web/storage-worker.js
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from GPT-6 Astra's whole-project review (2026-11-10)

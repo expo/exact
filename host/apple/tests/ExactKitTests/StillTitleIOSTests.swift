@@ -98,9 +98,7 @@ final class StillTitleIOSTests: XCTestCase {
         try tap("fail")
         XCTAssertNotNil(find("rooms-error"), "the reason shows")
         XCTAssertNil(route.contentScrollView(for: .top), "the list no longer follows the header, so nothing collapses the title")
-        // An app's nil gives the edge back to Exact's selection, which names no scroller here
-        route.setContentScrollView(nil, for: .top)
-        XCTAssertNil(route.contentScrollView(for: .top))
+        // A selection the app gives back with nil returns the edge to Exact's, which names no scroller here
         route.setContentScrollView(list, for: .top)
         route.setContentScrollView(nil, for: .top)
         XCTAssertNil(route.contentScrollView(for: .top), "a selection given back with nil leaves the title still")

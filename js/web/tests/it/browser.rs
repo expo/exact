@@ -922,6 +922,16 @@ try {
     if((await copied.query('SELECT value FROM t')).rows[0][0]!==42n)throw new Error('copied database contents');
     const prepared=await copied.prepare('SELECT value FROM t');await copied.close();
     await refused(prepared.query());
+    // OR FAIL keeps, and outside a transaction commits, the rows the statement
+    // changed before its error (https://www.sqlite.org/lang_conflict.html).
+    const failing=await sql.open('app:/data/fail.db');
+    await failing.execute('CREATE TABLE t (x INTEGER UNIQUE)');
+    await failing.execute('INSERT INTO t VALUES (1)');
+    await refused(failing.execute('INSERT OR FAIL INTO t VALUES (2),(1)'));
+    await failing.close();
+    const reopened=await sql.open('app:/data/fail.db');
+    const kept=(await reopened.query('SELECT x FROM t ORDER BY x')).rows.map(r=>r[0]).join();await reopened.close();
+    if(kept!=='1,2')throw new Error(`rows a failing OR FAIL statement kept were not saved: ${kept}`);
     const reloadApp='test.browser.sqlite-overlap';
     let current=createSqlite(reloadApp,fsSet);
     const coldStart=performance.now();

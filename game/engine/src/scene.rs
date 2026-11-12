@@ -639,6 +639,17 @@ pub struct MaterialOverride {
     /// Replaces the material's base colour factor (linear RGBA; textures and
     /// vertex colours still multiply it), zero channels included. `None` keeps it.
     pub color: Option<[f32; 4]>,
+    /// Replaces the material's roughness factor before its texture channel.
+    /// Scalars are clamped to [0, 1]; non-finite values and `None` keep the
+    /// material's factor. Custom materials ignore them.
+    pub roughness: Option<f32>,
+    /// Replaces the metallic factor before its texture channel.
+    pub metallic: Option<f32>,
+    /// Replaces the clear-coat factor; zero removes the coat. Enabling a coat
+    /// on an uncoated material selects a layered renderer variant.
+    pub clearcoat: Option<f32>,
+    /// Replaces the clear-coat roughness factor.
+    pub clearcoat_roughness: Option<f32>,
     /// Linear emission added wherever the material draws.
     pub emissive: [f32; 3],
     /// Replaces the material's textures on this instance: one model per shape,
@@ -656,6 +667,11 @@ pub struct MaterialOverride {
     /// patches the instance in place; its first appearance rebatches once.
     /// `None` draws as before.
     pub uv_offset: Option<[f32; 2]>,
+    /// The offset at the previous world tick, interpolated to `uv_offset` at
+    /// each rendered frame. `None` keeps the current offset at every frame.
+    /// Use unwrapped coordinates across repeats (for example 0.9 to 1.1,
+    /// not 0.9 to 0.1). Ignored without `uv_offset` or by a custom material.
+    pub uv_offset_previous: Option<[f32; 2]>,
 }
 /// Texture names replacing a model material's own, by slot; `None` keeps the
 /// material's. A slot the material samples no texture in stays untextured,

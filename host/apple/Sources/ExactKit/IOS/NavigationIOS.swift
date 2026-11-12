@@ -354,7 +354,8 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
     /// An app's selection; Exact's own goes through `projectContentScrollView`.
     override func setContentScrollView(_ scrollView: UIScrollView?, for edge: NSDirectionalRectEdge) {
         if let scrollView {
-            nativeContentScrollEdges.formUnion(edge)
+            // UIKit takes a selection for the top and bottom edges only and ignores the others
+            nativeContentScrollEdges.formUnion(edge.intersection([.top, .bottom]))
             select(scrollView, for: edge)
         } else {
             // An app's nil makes the edges it selected automatic again, and the navigation host
@@ -364,7 +365,7 @@ final class RouteController: UIViewController, UIScrollViewDelegate {
             guard !released.isEmpty else { return }
             nativeContentScrollEdges.subtract(released)
             select(nil, for: released)
-            if !released.intersection([.top, .bottom]).isEmpty { host?.selectScrollEdges(of: self) }
+            host?.selectScrollEdges(of: self)
         }
         #if os(iOS)
         if edge.contains(.top) { host?.presenter.syncScrollsToTop() }
@@ -418,6 +419,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     }
     var primaryRoutes: [RouteController] { primaryStacks.flatMap(\.stackRoutes).compactMap { $0 as? RouteController } }
     private(set) var presentedNavigations: [UINavigationController] = []
+    func isPresented(_ nav: UINavigationController?) -> Bool { presentedNavigations.contains { $0 === nav } }
     /// The theme's title ink each bar was last given (`titleInk`), held no
     /// longer than its bar.
     let titleInks = NSMapTable<UINavigationBar, UIColor>.weakToStrongObjects()
@@ -1013,8 +1015,7 @@ final class NavigationHost: NSObject, UINavigationControllerDelegate, UIGestureR
     /// Retire only the named owner; a late completion cannot remove its
     /// successor or the retained owner beneath it.
     func retireNavigation(_ controller: UIViewController, preserving: Bool) {
-        guard let nav = controller as? UINavigationController,
-              presentedNavigations.contains(where: { $0 === nav }) else { return }
+        guard let nav = controller as? UINavigationController, isPresented(nav) else { return }
         presentedNavigations.removeAll { $0 === nav }
         // A presentation gone (UIKit's own dismissal included): the next
         // batch syncs, whatever it holds, so a route still declared returns.

@@ -108,16 +108,69 @@ function fixture() {
   return { dir, dist: join(app, 'target/web-dist') };
 }
 
+function serveFixture(dist, opener = open) {
+  const types = { '.js': 'text/javascript', '.html': 'text/html', '.wasm': 'application/wasm', '.json': 'application/json', '.css': 'text/css' };
+  const missing = [];
+  const server = Bun.serve({ port: 0, async fetch(req) {
+    const url = new URL(req.url), asked = url.pathname;
+    const file = Bun.file(join(dist, asked === '/' ? 'index.html' : asked.slice(1)));
+    const response = (await file.exists())
+      ? new Response(file, { headers: { 'content-type': types[extname(asked)] ?? 'text/html' } })
+      // Bun otherwise adds this header when sending, after the diagnostic reads it.
+      : new Response('not found', { status: 404, headers: { 'content-type': 'text/plain;charset=utf-8' } });
+    if (response.status === 404) missing.push(
+      `${req.method} ${asked}${url.search} -> ${response.status}\n` +
+      `  file: ${file.name}\n  content-type: ${response.headers.get('content-type')}\n` +
+      `  referer: ${req.headers.get('referer') ?? '(none)'}`,
+    );
+    return response;
+  } });
+  return {
+    server,
+    async open() {
+      try {
+        return await opener({ host: 'web', url: `http://127.0.0.1:${server.port}/`, webDist: dist });
+      } catch (error) {
+        throw new Error(`${error.message}\nStatic server at ${server.url} (${dist}):\n` +
+          (missing.join('\n') || 'no missing resources'), { cause: error });
+      }
+    },
+  };
+}
+
+test('a failed seam fixture boot names missing static resources', async () => {
+  const dist = mkdtempSync(join(tmpdir(), 'exact-module-seam-missing-'));
+  const cause = new Error('fixture page could not boot');
+  const served = serveFixture(dist, async ({ host, url, webDist }) => {
+    expect(host).toBe('web');
+    expect(webDist).toBe(dist);
+    const response = await fetch(new URL('/missing-seam.js?probe=1', url), { headers: { referer: url } });
+    expect(response.status).toBe(404);
+    expect(response.headers.get('content-type')).toBe('text/plain;charset=utf-8');
+    expect(await response.text()).toBe('not found');
+    throw cause;
+  });
+  try {
+    const failure = await served.open().then(() => null, error => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toContain(cause.message);
+    expect(failure.message).toContain('GET /missing-seam.js?probe=1 -> 404');
+    expect(failure.message).toContain(join(dist, 'missing-seam.js'));
+    expect(failure.message).toContain('content-type: text/plain;charset=utf-8');
+    expect(failure.message).toContain(`referer: http://127.0.0.1:${served.server.port}/`);
+    expect(failure.cause).toBe(cause);
+  } finally {
+    served.server.stop(true);
+    rmSync(dist, { recursive: true, force: true });
+  }
+});
+
 test('an implementation that is its own substitute answers under the agent, behind admission and its ticket', async () => {
   const { dir, dist } = fixture();
-  const types = { '.js': 'text/javascript', '.html': 'text/html', '.wasm': 'application/wasm', '.json': 'application/json', '.css': 'text/css' };
-  const server = Bun.serve({ port: 0, async fetch(req) {
-    const asked = new URL(req.url).pathname, file = Bun.file(join(dist, asked === '/' ? 'index.html' : asked.slice(1)));
-    return (await file.exists()) ? new Response(file, { headers: { 'content-type': types[extname(asked)] ?? 'text/html' } }) : new Response('not found', { status: 404 });
-  } });
+  const served = serveFixture(dist);
   let s;
   try {
-    s = await open({ host: 'web', url: `http://127.0.0.1:${server.port}/`, webDist: dist });
+    s = await served.open();
     const seen = () => s.carrier.evaluate('globalThis.__sensor ?? null');
     const texts = async () => {
       const { nodes } = await s.tree(), byId = new Map(nodes.map(n => [n.id, n]));
@@ -169,7 +222,7 @@ test('an implementation that is its own substitute answers under the agent, behi
     expect((await texts()).opened).toBe('t3');
   } finally {
     await s?.close?.();
-    server.stop(true);
+    served.server.stop(true);
     rmSync(dir, { recursive: true, force: true });
   }
 }, 600_000);

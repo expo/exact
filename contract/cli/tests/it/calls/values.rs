@@ -63,6 +63,23 @@ fn value_props_and_injects_preserve_calls_in_declarations_fills_and_actions() {
 }
 
 #[test]
+fn lean_enum_prop_literals_emit_as_strings() {
+    let src = r#"component App
+  view
+    Child(value="column")
+component Child
+  props
+    value: enum<"column", "row">
+  view
+    text value
+"#;
+    let string = src.replace("enum<\"column\", \"row\">", "string");
+    for emit in [contract::lean::lean, contract::lean::lean_plain] {
+        assert_eq!(emit(src, "app").unwrap(), emit(&string, "app").unwrap());
+    }
+}
+
+#[test]
 fn lean_components_preserve_child_device_resources() {
     let src = include_str!("../../../../../semantics/corpus/components/device-facts.contract");
     let emitted = contract::lean::lean_components(src, "facts").unwrap();

@@ -76,6 +76,7 @@ fn step_json(step: &Step, s: &mut String) {
                 TapForm::Hover => s.push_str("\"hover\""),
                 TapForm::Dblclick => s.push_str("\"dblclick\""),
                 TapForm::Contextmenu => s.push_str("\"contextmenu\""),
+                TapForm::History(delta) => s.push_str(&format!("\"history\",\"history\":{delta}")),
                 TapForm::Into(key) => {
                     s.push_str("\"into\",\"key\":");
                     q(key, s);

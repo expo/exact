@@ -44,4 +44,4 @@ const API = BUILT.trim() || 'http://127.0.0.1:8080';
 Values come from the environment, `.env.local`, then `.env` beside `app.json`.
 A missing value needs a literal `??` default. Declare every name read, and read
 every name declared. A setting is public on every host: never a secret
-([rest-backend](rest-backend.md)).
+([a REST server](rest-backend.md)).

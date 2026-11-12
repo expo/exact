@@ -118,6 +118,12 @@ async function waitForBoot(page, why = 'the page never booted') {
   return Number(await page.locator('#exact-root').getAttribute('data-boot-ms'));
 }
 
+/** Keep Back and Forward entries when a reload changes launch parameters (LLP 1038 D7). */
+export async function reloadPlaywrightPage(page, destination) {
+  await page.evaluate(url => history.replaceState(history.state, '', url), destination);
+  await page.reload({ waitUntil: 'commit' });
+}
+
 // A key by its `key` name or its code, on every target (as scripts/agent.mjs `cdpKey`).
 const keyName = (code) => {
   if (code.length === 1) return code;
@@ -354,7 +360,11 @@ export async function openPlaywrightWeb({ browser: name, plan, world, size, url:
         heldKeys.clear();
         await page.evaluate(async (keep) => { sessionStorage.clear(); if (keep) return; localStorage.clear(); await Promise.all((await indexedDB.databases?.() ?? []).map(x => x.name && new Promise(ok => { const r = indexedDB.deleteDatabase(x.name); r.onsuccess = r.onerror = r.onblocked = ok; }))); }, keep);
         if (!keep) await context.clearCookies();
-        hostLines.length = 0; await page.goto(withEpoch(withFaults(keep ? page.url() : address.href, failFetch), epoch), { waitUntil: 'commit' }); this.boot = await waitForBoot(page, neverBooted('the reused page never booted'));
+        const destination = withEpoch(withFaults(keep ? page.url() : address.href, failFetch), epoch);
+        hostLines.length = 0;
+        if (keep) await reloadPlaywrightPage(page, destination);
+        else await page.goto(destination, { waitUntil: 'commit' });
+        this.boot = await waitForBoot(page, neverBooted('the reused page never booted'));
       },
       ask,
       async reveal(id) { const r = await ask({ op: 'reveal', id }); if (r.scrolled) await frame(); return r; },

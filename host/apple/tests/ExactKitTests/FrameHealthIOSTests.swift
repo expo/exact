@@ -64,7 +64,7 @@ final class FrameHealthIOSTests: XCTestCase {
         let cardFrame = overlay.card.convert(overlay.card.bounds, to: cardWindow)
         let beside = CGPoint(x: cardWindow.bounds.midX, y: cardFrame.midY < cardWindow.bounds.midY ? cardWindow.bounds.maxY - 4 : 4)
         XCTAssertNil(cardWindow.hitTest(beside, with: nil), "and touches beside it pass to the app's window")
-        XCTAssertTrue(cardWindow.bounds.inset(by: cardWindow.safeAreaInsets).contains(cardFrame), "the card rests inside the safe area")
+        XCTAssertEqual(cardFrame.origin, CGPoint(x: 8, y: 8), "the card rests 8 points from the window's edges, past its safe area")
         // The app's appearance, which overrides the system's on the app's window, reaches the card's window
         let style = window.overrideUserInterfaceStyle
         for scheme in [UIUserInterfaceStyle.dark, .light] {
@@ -260,10 +260,10 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertEqual(elements.first?.accessibilityLabel, "Close frame health", "Close comes first, in its corner")
         let title = try XCTUnwrap(elements.first { $0.accessibilityLabel == "Frame health" })
         XCTAssertTrue(title.accessibilityTraits.contains(.button), "the title opens the definitions")
-        // The card rests in a corner, 8 points inside the safe area; moving it down takes it to the bottom one,
-        // where it stays
+        // The card rests in a corner, 8 points from the window's edges, past its safe area; moving it down
+        // takes it to the bottom one, where it stays
         let action = try XCTUnwrap(title.accessibilityCustomActions?.first { $0.name == "Move down" })
-        let bottom = overlay.bounds.maxY - overlay.safeAreaInsets.bottom - 8
+        let bottom = overlay.bounds.maxY - 8
         XCTAssertTrue(action.actionHandler?(action) == true)
         XCTAssertEqual(overlay.card.frame.maxY, bottom, accuracy: 0.5)
         overlay.setVisible(false)
@@ -722,7 +722,7 @@ final class FrameHealthIOSTests: XCTestCase {
         overlay.frame = window.bounds
         overlay.setVisible(true)
         overlay.layoutIfNeeded()
-        let area = overlay.bounds.inset(by: overlay.safeAreaInsets).insetBy(dx: 8, dy: 8)
+        let area = overlay.bounds.insetBy(dx: 8, dy: 8)
         let right = area.maxX - overlay.card.frame.width
         let bottom = area.maxY - overlay.card.frame.height
         let x = area.minX + (right - area.minX) * 0.37, y = area.minY + (bottom - area.minY) * 0.61
@@ -743,7 +743,7 @@ final class FrameHealthIOSTests: XCTestCase {
         overlay.frame.size.width += 100
         overlay.setNeedsLayout()
         overlay.layoutIfNeeded()
-        let wider = overlay.bounds.inset(by: overlay.safeAreaInsets).insetBy(dx: 8, dy: 8)
+        let wider = overlay.bounds.insetBy(dx: 8, dy: 8)
         XCTAssertEqual(overlay.card.frame.minX, wider.minX + (wider.width - overlay.card.frame.width) * 0.37, accuracy: 0.001)
         XCTAssertEqual(overlay.card.frame.maxY, wider.maxY, accuracy: 0.001)
         let before = overlay.card.frame.minX
@@ -764,8 +764,8 @@ final class FrameHealthIOSTests: XCTestCase {
         overlay.frame = window.bounds
         overlay.setVisible(true)
         overlay.layoutIfNeeded()
-        let corner = CGPoint(x: overlay.safeAreaInsets.left + 8, y: overlay.safeAreaInsets.top + 8)
-        XCTAssertEqual(overlay.card.frame.origin, corner, "a new card rests in the top-left corner of the safe area")
+        let corner = CGPoint(x: 8, y: 8)
+        XCTAssertEqual(overlay.card.frame.origin, corner, "a new card rests in the top-left corner, past the safe area")
         // Held and dragged, the card asks for the display's highest rates
         overlay.card.grabbed?()
         if #available(iOS 18.0, *) { XCTAssertTrue(overlay.movesFast) }
@@ -779,8 +779,8 @@ final class FrameHealthIOSTests: XCTestCase {
         while overlay.movesFast, Date() < limit { RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.05)) }
         XCTAssertFalse(overlay.movesFast, "and no longer once the spring settles")
         if #available(iOS 26.0, *) {
-            // The card's corners are concentric with the screen's (54 points on an iPhone 18 Pro) as far as the safe
-            // area lets it near them, and never under the minimum
+            // The card's corners are concentric with the window's, never under 12 points: in a rounded screen corner
+            // the top-left grows with the screen's rounding, and a square one, as the folded iPhone Duo's, leaves 12
             XCTAssertEqual(overlay.card.cornerConfiguration, .corners(radius: .containerConcentric(minimum: 12)))
             overlay.card.layoutIfNeeded()
             XCTAssertEqual(overlay.card.effectiveRadius(corner: .bottomRight), 12, accuracy: 0.5)

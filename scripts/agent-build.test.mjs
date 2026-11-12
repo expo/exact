@@ -802,7 +802,26 @@ test.skipIf(process.platform === 'win32')('Gradle keeps its given environment wi
 });
 
 // The receipt fixture retains the pinned Android bundle's API and Intl flags; cargo records the build's environment.
-for (const [form, dependencies, api] of [
+test('the local Hermes builder targets Android 10 even when its caller requests a newer API', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-hermes-api-'));
+  try {
+    mkdirSync(resolve(dir, 'scripts'));
+    writeFileSync(resolve(dir, 'scripts/build-hermes-vanilla-release.sh'), `#!/bin/sh
+# aarch64-linux-android)
+printf '%s' "$IBEX_ANDROID_API" > api
+exit 17
+`);
+    const built = spawnSync(process.execPath, ['scripts/hermes-android.mjs', 'build'], {
+      encoding: 'utf8', env: { ...process.env, IBEX_DIR: dir, IBEX_ANDROID_API: '30',
+        EXACT_HERMES_ANDROID_CACHE: resolve(dir, 'cache') },
+    });
+    expect(built.status).toBe(17);
+    expect(readFileSync(resolve(dir, 'api'), 'utf8')).toBe('29');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+for (const [form, dependencies, api, bundleApi = 30] of [
+  ['API-29 Hermes', '[dependencies.exact-js]\npath = "../js"', 29, 29],
   ['inline', '[dependencies]\nexact-js = { path = "../js" }', 30],
   ['table', '[dependencies.exact-js]\npath = "../js"', 30],
   ['quoted key', '[dependencies]\n"exact-js" = { path = "../js" }', 30],
@@ -827,7 +846,7 @@ for (const [form, dependencies, api] of [
     for (const sub of [tools, bundle, bin, resolve(dir, 'linux')]) mkdirSync(sub, { recursive: true });
     for (const level of [29, 30]) writeFileSync(resolve(bin, `aarch64-linux-android${level}-clang`), '');
     expect(hermesApi(bundle)).toBeNull();
-    writeFileSync(resolve(bundle, 'hermes-input-receipt.json'), JSON.stringify({ build: { flags: ['-DHERMES_ENABLE_INTL=false', '-DANDROID_PLATFORM=android-30'] } }));
+    writeFileSync(resolve(bundle, 'hermes-input-receipt.json'), JSON.stringify({ build: { flags: ['-DHERMES_ENABLE_INTL=false', `-DANDROID_PLATFORM=android-${bundleApi}`] } }));
     writeFileSync(resolve(dir, 'app.contract'), 'app "Fixture"\n');
     writeFileSync(resolve(dir, 'Cargo.toml'), `[workspace]\nresolver = "2"\nmembers = ["linux", "js", "bridge", "shared", "other", "macros"]\n[workspace.dependencies]\nengine = { package = "exact-js", path = "js" }\n[patch.crates-io]\n${patchLines(dir).join('\n')}\n`);
     writeFileSync(resolve(dir, 'rust-toolchain.toml'), `[toolchain]\nchannel = "${PINNED_RUST}"\n`);

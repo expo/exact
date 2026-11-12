@@ -1439,6 +1439,52 @@ describe('what the library asks of the host', () => {
   });
 });
 
+test('the access-token getter reads the store synchronously before and after shared refresh', async () => {
+  const browser = browserStorage(), native = marking();
+  try {
+    for (const [host, store, send] of [['memory', memory(), fetch], ['native', native, native.send], ['web', browser.realm(), fetch]] as const) {
+      await control({ action: 'reset' });
+      let bearer = '';
+      const p = oauth({ ...configFor('auth0'), fetch: (url, init) => {
+        if (url.endsWith('/api/me')) bearer = new Headers(init.headers).get('Authorization') ?? '';
+        return send(url, init);
+      } });
+      expect(p.accessToken(store), host).toBeNull();
+      expect((await p.signIn(store)).ok, host).toBe(true);
+      const kept = JSON.parse(store.get('auth0.session')!), token = p.accessToken(store);
+      expect(token, host).toBe(kept.accessToken);
+      expect(token, host).not.toBe(kept.refreshToken);
+      expect(token, host).not.toBe(p.idToken(store));
+      expect((await p.fetch(store, `${origin}/p/auth0/api/me`)).status, host).toBe(200);
+      expect(bearer, host).toBe(`Bearer ${token}`);
+      await control({ action: 'expire-access', profile: 'auth0' });
+      expect(p.accessToken(store), host).toBe(token);
+      expect((await counts('auth0')).refresh ?? 0, host).toBe(0);
+      await control({ action: 'hold-token', profile: 'auth0' });
+      const first = p.refresh(store);
+      await control({ action: 'await', held: 1 });
+      const second = p.refresh(store), request = p.fetch(store, `${origin}/p/auth0/api/me`);
+      await control({ action: 'await', profile: 'auth0', least: { api: 2 } });
+      expect(p.accessToken(store), host).toBe(token);
+      await control({ action: 'release-token' });
+      const [a, b, response] = await Promise.all([first, second, request]);
+      expect([a.ok, b.ok, response.status], host).toEqual([true, true, 200]);
+      const renewed = p.accessToken(store);
+      expect(renewed, host).not.toBe(token);
+      expect(bearer, host).toBe(`Bearer ${renewed}`);
+      expect((await counts('auth0')).refresh, host).toBe(1);
+      await control({ action: 'fail-token', profile: 'auth0', status: 503 });
+      expect(await p.refresh(store), host).toMatchObject({ ok: false, retryable: true, status: 503 });
+      expect(p.accessToken(store), host).toBe(renewed);
+      // A failed refresh must also leave the session readable by the next lease.
+      expect((await p.refresh(store)).ok, host).toBe(true);
+      expect(p.accessToken(store), host).not.toBe(renewed);
+      expect((await p.signOut(store)).ok, host).toBe(true);
+      expect(p.accessToken(store), host).toBeNull();
+    }
+  } finally { await control({ action: 'release-token' }); browser.restore(); }
+});
+
 // What `index.d.ts` declares is what `index.ts` implements, as the type checker sees the two (`types.ts`).
 test('the declared API is the one implemented', () => {
   const checked = Bun.spawnSync([`${import.meta.dir}/../../../node_modules/.bin/tsc`, '--noEmit', '--strict', '--allowImportingTsExtensions', '--module', 'preserve', 'test/types.ts'], { cwd: `${import.meta.dir}/..` });

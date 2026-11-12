@@ -38,7 +38,7 @@ for (const [key, value] of Object.entries({ CFBundleExecutable: 'XCTRunner', CFB
 const frameworks = resolve(runner, 'Frameworks');
 mkdirSync(frameworks, { recursive: true });
 for (const f of ['XCTest.framework', 'XCUIAutomation.framework', 'Testing.framework', '_Testing_Foundation.framework']) cpSync(`${platform}/Library/Frameworks/${f}`, resolve(frameworks, f), { recursive: true });
-for (const f of ['XCTestCore.framework', 'XCUnit.framework', 'XCTAutomationSupport.framework', 'XCTestSupport.framework']) cpSync(`${platform}/Library/PrivateFrameworks/${f}`, resolve(frameworks, f), { recursive: true });
+for (const f of ['XCTestCore.framework', 'XCTAutomationSupport.framework', 'XCTestSupport.framework']) cpSync(`${platform}/Library/PrivateFrameworks/${f}`, resolve(frameworks, f), { recursive: true });
 for (const f of ['libXCTestSwiftSupport.dylib', 'lib_TestingInterop.dylib']) cpSync(`${platform}/usr/lib/${f}`, resolve(frameworks, f));
 run('xcrun', ['--sdk', 'iphonesimulator', 'swiftc', '-parse-as-library', '-module-name', name, '-target', 'arm64-apple-ios17.0-simulator', '-sdk', sdk,
   '-F', `${platform}/Library/Frameworks`, '-I', `${platform}/usr/lib`, '-L', `${platform}/usr/lib`, '-framework', 'XCTest', '-framework', 'XCUIAutomation',

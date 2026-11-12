@@ -712,6 +712,7 @@ launch        = "size" NUMBER "x" NUMBER NL          (* written 1200x800 *)
 step          = "tap" STRING [ "hover" | "dblclick" | "contextmenu"
                   | "pinch" NUMBER [ "at" NUMBER NUMBER ]
                   | "wheel" [ "-" ] NUMBER [ "-" ] NUMBER
+                  | "history" [ "-" ] NUMBER
                   | "into" STRING
                   | "modifiers" STRING | "mediasession" STRING [ NUMBER ] ] NL
               | "tap" STRING "drag" ( "to" STRING [ "at" NUMBER NUMBER ]
@@ -940,6 +941,10 @@ dx dy`) at the node's middle, in points (CSS pixels on the web): a positive `dy`
 scrolls on toward the content's end, so its offset grows, and a negative one back
 toward its start; a positive `dx` scrolls right. It lands at once, with no
 momentum, so a Mac's scroll can be tested where a drag selects text instead.
+`tap "root" history <delta>` traverses browser history on the navigation root:
+a nonzero 32-bit integer, negative for Back and positive for Forward. It uses
+the browser's `history.go`, including entries kept across `reload`; other hosts
+report unsupported. Scope these tests with `on web`.
 `tap "id" dblclick` and `contextmenu` are the driver's forms of the same names
 (no Linux carrier double-clicks). `tap "list" into "key"` brings a virtualized
 list's row into view by its key, so a row outside the rendered window can be
@@ -948,8 +953,10 @@ value, as Playwright's `fill`; `append` adds the text after the value the tree
 shows (a prefilled reply). `type "id" key "Name"` presses the key;
 `down` and `up` are the two halves, and `for <ms>` holds it that long on the
 virtual clock (`down` or `up` together with `for` is refused). `reload` restarts the app on the store it had: the
-web page loads again in the same profile, a native app relaunches on the same
-scratch store. Its state starts over and `performanceNow()` is 0 again, at the date the test had
+web page reloads its current history entry in the same profile, keeping Back
+and Forward entries; each separate test starts with an isolated history.
+A native app relaunches on the same scratch store. Its state starts over and
+`performanceNow()` is 0 again, at the date the test had
 reached (`epoch` plus its `clock` steps); what the app
 stored is what it reads, so persistence is testable. `close` presses the
 window's close button as ⌘W or the red button does (the driver's `close`): its

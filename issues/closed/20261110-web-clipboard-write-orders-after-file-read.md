@@ -1,6 +1,7 @@
 # On the web, a clipboard image write reading an app file is ordered after the read, so an older copy can overwrite a newer one
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A web clipboard write takes its place and becomes the write in flight before it reads its app file, so a later write, `cancel` or `destroy` during the read supersedes it.
 **Systems:** packages/clipboard/web/index.js
 **Severity:** P3
 **Author:** Claude (Opus 5.5), from GPT-6 Astra's whole-project review (2026-11-10)

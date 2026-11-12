@@ -37,8 +37,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameS
 import { createConnection } from 'node:net';
 import { homedir, userInfo } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
-import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, injectedProfiles, linuxBuild, resolveApp, wholeProgram } from './app.mjs';
-import { hermesAndroidBundle } from './hermes-android.mjs';
+import { HOST_DEV, PINNED_RUST, bakeWatchEnv, buildBake, claimLive, hermesBundle, cargoEnvironment, copyShaders, injectedProfiles, linuxBuild, mavenProblems, resolveApp, wholeProgram } from './app.mjs';
+import { ANDROID_MIN_API, hermesAndroidBundle } from './hermes-android.mjs';
 import { ANDROID_PAGE_SIZE, androidCargo } from './cargo-check.mjs';
 import { guardFlags, reportBuilt } from './help.mjs';
 import { androidImplementations, packageConfig } from '../js/bake/src/typescript.mjs';
@@ -51,7 +51,7 @@ import { copyStaticTreeIfPresent } from '../host/web/serve.mjs';
 
 export const ANDROID_TARGET = 'aarch64-linux-android';
 /** The oldest Android the binary runs on (the NDK's clang wrapper names it). */
-const API = 29;
+const API = ANDROID_MIN_API;
 /** What a drive runs: the app's Linux host built for the phone, or with `--reader` (EXACT_ANDROID_READER) its APK. */
 export const androidBinary = (app, bin) => process.env.EXACT_ANDROID_READER ? readerApk(app)
   : resolve(app.target, ANDROID_TARGET, HOST_DEV, bin ?? app.crate('linux'));
@@ -774,7 +774,7 @@ export function buildApk(app, env, profile, writeLocks = false) {
   }
   const extensions = JSON.parse(readFileSync(resolve(out, 'artifacts.json'), 'utf8')).extensions;
   const bound = androidImplementations(app.dir, extensions);
-  const maven = [...new Set(bound.flatMap(b => b.maven ?? []))].sort();
+  const maven = mavenCoordinates(app, bound);
   if (!writeLocks && !mavenLocksPresent(app, maven)) return null;
   let config;
   try { config = packageConfig(app.dir, 'android', { extensions, release: profile === 'release' }); } catch (error) { console.error(`${app.name}: ${error.message}`); return null; }
@@ -838,13 +838,34 @@ export function androidLockCommand(app) {
   return `in ${quote(root)}: bun scripts/agent-android.mjs build ${quote(app.name)} --apk --write-locks${named ? '' : `, with EXACT_APP_DIR set to ${quote(app.dir)}`}`;
 }
 
+/** App Kotlin and bound packages share one locked graph (LLP 1133.008 D8 item 5). */
+export function mavenCoordinates(app, bound) {
+  const declarations = [
+    { source: `${resolve(app.dir, 'app.json')} host.android.maven`, values: app.manifest?.host?.android?.maven },
+    ...bound.map(b => ({ source: `${b.mavenSource} maven`, values: b.maven })),
+  ];
+  const versions = new Map();
+  for (const { source, values } of declarations) {
+    const problems = mavenProblems(values, source);
+    if (problems.length) throw new Error(problems.join('\n'));
+    for (const coordinate of values ?? []) {
+      const artifact = coordinate.split(':').slice(0, 2).join(':'), previous = versions.get(artifact);
+      if (previous && previous.coordinate !== coordinate) {
+        throw new Error(`Maven version conflict: ${previous.source} names ${previous.coordinate}; ${source} names ${coordinate}. Use one version of ${artifact}.`);
+      }
+      versions.set(artifact, { coordinate, source });
+    }
+  }
+  return [...versions.values()].map(v => v.coordinate).sort();
+}
+
 function mavenLocksPresent(app, maven) {
   if (!maven.length || ['gradle.lockfile', 'gradle-verification.xml'].every(file => existsSync(resolve(app.dir, file)))) return true;
-  console.error(`${app.name}: its modules name Maven libraries (${maven.join(', ')}); before compiling, write gradle.lockfile and gradle-verification.xml by running ${androidLockCommand(app)}, and keep them with the app`);
+  console.error(`${app.name}: its modules or own Kotlin name Maven libraries (${maven.join(', ')}); before compiling, write gradle.lockfile and gradle-verification.xml by running ${androidLockCommand(app)}, and keep them with the app`);
   return false;
 }
 
-/** The Maven libraries the bound modules name (LLP 1133.008 D8 item 5), as Gradle arguments: one graph with the
+/** The Maven libraries the app and bound modules name (LLP 1133.008 D8 item 5), as Gradle arguments: one graph with the
  * reader's own AndroidX, locked to the app's `gradle.lockfile` and verified against its `gradle-verification.xml`,
  * both beside its other locks. The verification file is Gradle's, which it reads only from the reader's `gradle/`:
  * it is put there for this build (`done` takes it away). `writeLocks` writes both from the graph as it resolves

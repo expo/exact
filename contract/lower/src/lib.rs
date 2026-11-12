@@ -105,6 +105,7 @@ pub use native::{is_module_tag, module_tags};
 pub use native_typed::{DeclaredView, DeclaredViews, EVENT_MARKER};
 pub use sites::{ButtonSite, Declared, NodeSite, Origin, Sites, Written};
 pub use states::PRESS_OPACITY_TO;
+pub use swipe_rows::expand_row_deletes;
 pub use theme::vocab as tamber_vocab;
 
 /// The base scale's names (LLP 1121 stage 11, the lead's ruling 2).

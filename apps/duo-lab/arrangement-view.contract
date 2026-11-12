@@ -48,7 +48,7 @@ component ArrangementView
   action contentScroll(value: string)
     settings = ArrangementSettings(settings, contentScroll=value)
   view
-    column navigationKey=routeKey testId=`${prefix}-screen` data-title-display=settings.titleDisplay data-bar-minimization=settings.barMinimization data-safe-area-adjustment=settings.safeAreaAdjustment data-content-scroll=(settings.contentScroll == "automatic" ? "" : `${key}-${settings.contentScroll}`) position="absolute" inset=0 display="flex" flex-direction="column"
+    column navigationKey=routeKey testId=`${prefix}-screen` data-title-display=settings.titleDisplay data-bar-minimization=settings.barMinimization data-safe-area-adjustment=settings.safeAreaAdjustment data-content-scroll=(settings.contentScroll == "automatic" ? "" : `${key}-${settings.contentScroll}`) position="absolute" inset=0
       header display="flex" align-items="center" gap=8 padding="8px 16px"
         text title role="heading" aria-level=2 flex=1 testId=`${prefix}-title`
         if native
@@ -70,24 +70,24 @@ component ArrangementView
           Submenu(label="Bar Minimization", menu=`${key}-bar-minimization`, name=`${prefix}-bar-minimization`)
           Submenu(label="Safe Area Adjustment", menu=`${key}-safe-area`, name=`${prefix}-safe-area`)
         column id=`${key}-content-scroll` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Content Scroll View"
-          Choice(menu=`${key}-options`, group=`${prefix}-scroll`, label="Automatic", value="automatic", chosen=settings.contentScroll, choose=contentScroll)
-          Choice(menu=`${key}-options`, group=`${prefix}-scroll`, label="Primary", value="primary", chosen=settings.contentScroll, choose=contentScroll)
-          Choice(menu=`${key}-options`, group=`${prefix}-scroll`, label="Secondary", value="secondary", chosen=settings.contentScroll, choose=contentScroll)
+          Choice(menu=`${key}-options`, group=`${prefix}-content-scroll`, label="Automatic", value="automatic", chosen=settings.contentScroll, choose=contentScroll)
+          Choice(menu=`${key}-options`, group=`${prefix}-content-scroll`, label="Primary", value="primary", chosen=settings.contentScroll, choose=contentScroll)
+          Choice(menu=`${key}-options`, group=`${prefix}-content-scroll`, label="Secondary", value="secondary", chosen=settings.contentScroll, choose=contentScroll)
         column id=`${key}-title-display` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Title Display"
-          Choice(menu=`${key}-options`, group=`${prefix}-title`, label="Automatic", value="automatic", chosen=settings.titleDisplay, choose=titleDisplay)
-          Choice(menu=`${key}-options`, group=`${prefix}-title`, label="Inline", value="inline", chosen=settings.titleDisplay, choose=titleDisplay)
-          Choice(menu=`${key}-options`, group=`${prefix}-title`, label="Large", value="large", chosen=settings.titleDisplay, choose=titleDisplay)
+          Choice(menu=`${key}-options`, group=`${prefix}-title-display`, label="Automatic", value="automatic", chosen=settings.titleDisplay, choose=titleDisplay)
+          Choice(menu=`${key}-options`, group=`${prefix}-title-display`, label="Inline", value="inline", chosen=settings.titleDisplay, choose=titleDisplay)
+          Choice(menu=`${key}-options`, group=`${prefix}-title-display`, label="Large", value="large", chosen=settings.titleDisplay, choose=titleDisplay)
         column id=`${key}-bar-minimization` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Bar Minimization"
-          Choice(menu=`${key}-options`, group=`${prefix}-minimize`, label="Automatic", value="automatic", chosen=settings.barMinimization, choose=barMinimization)
-          Choice(menu=`${key}-options`, group=`${prefix}-minimize`, label="Never", value="never", chosen=settings.barMinimization, choose=barMinimization)
-          Choice(menu=`${key}-options`, group=`${prefix}-minimize`, label="On Scroll Down", value="on-scroll-down", chosen=settings.barMinimization, choose=barMinimization)
-          Choice(menu=`${key}-options`, group=`${prefix}-minimize`, label="On Scroll Up", value="on-scroll-up", chosen=settings.barMinimization, choose=barMinimization)
+          Choice(menu=`${key}-options`, group=`${prefix}-bar-minimization`, label="Automatic", value="automatic", chosen=settings.barMinimization, choose=barMinimization)
+          Choice(menu=`${key}-options`, group=`${prefix}-bar-minimization`, label="Never", value="never", chosen=settings.barMinimization, choose=barMinimization)
+          Choice(menu=`${key}-options`, group=`${prefix}-bar-minimization`, label="On Scroll Down", value="on-scroll-down", chosen=settings.barMinimization, choose=barMinimization)
+          Choice(menu=`${key}-options`, group=`${prefix}-bar-minimization`, label="On Scroll Up", value="on-scroll-up", chosen=settings.barMinimization, choose=barMinimization)
         column id=`${key}-safe-area` popover="auto" role="menu" position="absolute" position-area="right span-bottom" aria-label="Safe Area Adjustment"
           Choice(menu=`${key}-options`, group=`${prefix}-safe-area`, label="Automatic", value="automatic", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
           Choice(menu=`${key}-options`, group=`${prefix}-safe-area`, label="Enabled", value="enabled", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
           Choice(menu=`${key}-options`, group=`${prefix}-safe-area`, label="Disabled", value="disabled", chosen=settings.safeAreaAdjustment, choose=safeAreaAdjustment)
       // UIKit lays out the two panes where it supports arrangements; elsewhere CSS puts them side by side or stacked
-      column hatch="arranged-panes" data-pane-layout=(native ? settings.layout : "css") testId=`${prefix}-container` flex=1 min-height=0 display="flex" flex-direction=paneDirection(viewport)
+      column hatch="arranged-panes" data-pane-layout=(native ? settings.layout : "css") testId=`${prefix}-container` flex=1 min-height=0 flex-direction=paneDirection(viewport)
         ArrangementPane(id=`${key}-primary`, name=`${prefix}-primary`, label="Primary", ground="pane.primary", stripe="pane.primary.stripe", band="pane.primary.band")
         ArrangementPane(id=`${key}-secondary`, name=`${prefix}-secondary`, label="Secondary", ground="pane.secondary", stripe="pane.secondary.stripe", band="pane.secondary.band")
 

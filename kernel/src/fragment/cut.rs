@@ -398,7 +398,8 @@ pub(crate) fn container(
     let l = tree.layout(node);
     let (p, b) = (l.padding, l.border);
     let (x0, y0) = (p.left + b.left, p.top + b.top);
-    let inset_v = p.top + p.bottom + b.top + b.bottom;
+    // The block axis outside the content box: padding, borders and a bottom gutter
+    let inset_v = p.top + p.bottom + b.top + b.bottom + l.scrollbar_size.height;
     let u = (l.size.width - p.left - p.right - b.left - b.right - l.scrollbar_size.width).max(0.0);
     let (n, w) = m.columns(u);
     let n = n as usize;
@@ -424,8 +425,8 @@ pub(crate) fn container(
     // patch 30): only layout knows whether a percentage had a definite basis
     let (min_outer, max_outer) = tree.multicol_bounds(node);
     let definite = s.height != Dimension::Auto;
-    let max = max_outer.map(|v| (v - inset_v - l.scrollbar_size.height).max(0.0));
-    let content = (l.size.height - inset_v - l.scrollbar_size.height).max(0.0);
+    let max = max_outer.map(|v| (v - inset_v).max(0.0));
+    let content = (l.size.height - inset_v).max(0.0);
     let (h, walk, used) = match (definite, max, s.column_fill) {
         (true, _, ColumnFill::Auto) => {
             // As tall as the content while it fits one column, as Chrome
@@ -481,7 +482,7 @@ pub(crate) fn container(
     };
     let height = match used {
         Some(columns) => {
-            let mut outer = columns + inset_v + l.scrollbar_size.height;
+            let mut outer = columns + inset_v;
             if let Some(v) = max_outer {
                 outer = outer.min(v);
             }
@@ -492,7 +493,7 @@ pub(crate) fn container(
         }
         None => l.size.height,
     };
-    let free = height - inset_v - l.scrollbar_size.height - h;
+    let free = height - inset_v - h;
     let align = align(arena.effective_style(slot).align_content, free);
     let pitch = match (definite, s.column_fill) {
         (true, ColumnFill::Auto) => content,

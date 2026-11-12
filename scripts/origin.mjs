@@ -99,6 +99,19 @@ export function webRequestURL(target) {
 const FILE_EXTENSIONS = new Set(['.html', '.htm', '.css', '.js', '.mjs', '.json', '.wasm', '.plan', '.map', '.txt', '.xml', '.pdf', '.zip',
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.svg', '.ico', '.mp4', '.webm', '.vtt', '.wav', '.mp3', '.m4a', '.aac', '.ogg', '.oga',
   '.ttf', '.otf', '.woff', '.woff2', '.wgsl', '.hbc', '.model', '.tex']);
+
+/** Whether a request's `Accept` names text/markdown at a quality above zero and no lower than text/html's,
+ * which is that of the most specific range matching it (RFC 9110 §12.5.1): text/html, then text/*, then *\/*. */
+export function prefersMarkdown(accept = '') {
+  const ranges = String(accept ?? '').toLowerCase().split(',').map((range) => {
+    const [type, ...params] = range.split(';').map((part) => part.trim()), q = params.find((param) => param.startsWith('q='));
+    return [type, q ? Number(q.slice(2)) || 0 : 1];
+  });
+  const quality = (...types) => ranges.find(([type]) => type === types.find((t) => ranges.some(([r]) => r === t)))?.[1] ?? 0;
+  const markdown = quality('text/markdown');
+  return markdown > 0 && markdown >= quality('text/html', 'text/*', '*/*');
+}
+
 /** Whether a request's `Accept` takes HTML (RFC 9110: the media type, any
  * case, at a quality above zero), as a browser's navigation does. With
  * `wildcard`, a range taking any type or any text type, or no header at

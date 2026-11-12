@@ -116,6 +116,10 @@ enum FrameHealthCardFace {
     /// A 0.4-second spring response with a damping ratio of 0.8 and unit mass
     static let spring = (stiffness: pow(2 * CGFloat.pi / 0.4, 2), damping: 2 * 0.8 * (2 * CGFloat.pi / 0.4))
 
+    /// The area along whose edges the card rests: 8 points inside its window, ignoring safe-area insets (LLP 1079.000
+    /// §7.2). On iOS the overlay also keeps it above the keyboard.
+    static func restingArea(in bounds: CGRect) -> CGRect { bounds.insetBy(dx: 8, dy: 8) }
+
     /// Store fractions of the card's available travel to preserve its position along an edge when the window
     /// or card resizes.
     struct Position {

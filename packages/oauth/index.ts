@@ -51,7 +51,7 @@ export interface OAuthConfig {
   scopes: string[];
   /** The `secret.keep` name the session is kept under. */
   key: string;
-  /** The origins that receive the access token, such as `https://api.example.com`. */
+  /** The origins `fetch` and `json` may send the access token to, such as `https://api.example.com`. */
   apis: string[];
   /** Only for a provider whose app client types demand one; a secret in an app is not confidential (RFC 8252 §8.5). */
   clientSecret?: string;
@@ -167,7 +167,13 @@ export interface OAuthProvider {
    *  `null` while signed out or with none. It is read at once, so a source can hand it on in its own turn. It is the
    *  person's credential: keep it in data code, and never answer it to Contract, where an answer is kept and shown. */
   idToken(store: OAuthStore): string | null;
-  /** Refreshes the session now, for a service that said the ID token had expired: data code reads no clock to see
+  /** The access token the store holds now, or `null` while signed out. Synchronous: no refresh and no clock.
+   *  For a socket's first message after open or an SDK; send it only to the API it was issued for, never in a URL.
+   *  Unlike `fetch`, this cannot check the destination against `apis`. Keep this credential in data code;
+   *  never answer it to Contract, where an answer is kept and shown. When the service reports expiry, await
+   *  `refresh(store)` and ask again on success; do not hold a copy across a refresh or sign-out. */
+  accessToken(store: OAuthStore): string | null;
+  /** Refreshes the session now, for a service that said the access or ID token had expired: data code reads no clock to see
    *  it. A provider need not issue an ID token on a refresh (OIDC Core §12.2): the kept one then stands. */
   refresh(store: OAuthStore): Promise<OAuthResult>;
 }
@@ -634,6 +640,8 @@ export function oauth(config: OAuthConfig): OAuthProvider {
     return kept?.accessToken && kept.idToken ? kept.idToken : null;
   };
 
+  const accessToken = (store: OAuthStore): string | null => read(store)?.accessToken || null;
+
   const refreshNow = async (store: OAuthStore): Promise<OAuthResult> => {
     const kept = read(store);
     try {
@@ -646,7 +654,7 @@ export function oauth(config: OAuthConfig): OAuthProvider {
     }
   };
 
-  return { session, signIn, signOut, fetch: authorizedFetch, json, claims: idClaims, idToken, refresh: refreshNow };
+  return { session, signIn, signOut, fetch: authorizedFetch, json, claims: idClaims, idToken, accessToken, refresh: refreshNow };
 }
 
 // --- the callback (RFC 6749 §4.1.2, RFC 9207 §2.4) -------------------------

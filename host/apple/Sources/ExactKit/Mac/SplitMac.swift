@@ -27,6 +27,8 @@
 // hand-built split's detail has no Back, and its row is the list's selected
 // row. A route pushed from inside the detail is above it, and the window's
 // Back leads from that (BackMac.swift, at the bar's leading end).
+// A detail no row owns takes the list's first current press (`aria-current`
+// other than empty or `false`), read again as the list changes.
 //
 // **The selected row looks selected.** A table's is AppKit's selection. A
 // painted list's row is drawn as an inset table draws its selected row
@@ -129,7 +131,7 @@ final class SplitHost {
         /// Where in the stack the pane begins: the topmost route at or
         /// under the one shown that is a row's detail, else the first.
         let base: Int
-        /// The press of the row whose detail that is, where it is known.
+        /// The owning row's press, else the list's current press for a detail no row owns.
         let row: UInt32?
     }
     private(set) var shown: Shown?
@@ -274,6 +276,20 @@ final class SplitHost {
         return answer
     }
 
+    /// The same outer press owners the split rule walks, in authored order.
+    /// Table cells hold their rows apart from the list's native children.
+    private func currentRow(in list: NodeView) -> UInt32? {
+        let children = presenter.tables.feeds[list.id].map { $0.children ?? $0.rows.map(\.node) }
+            ?? list.container.subviews.compactMap { $0 as? NodeView }
+        for row in children where presenter.views[row.id] === row && row.style["display"]?.string != "none"
+            && row.props["popover"] == nil && row.props["navigationSplit"] != "placeholder" {
+            if row.handlers.contains("press") || row.props["href"]?.isEmpty == false {
+                if let current = row.props["accessibilityCurrent"], !["", "false"].contains(current) { return row.id }
+            } else if let current = currentRow(in: row) { return current }
+        }
+        return nil
+    }
+
     /// Each batch, inside the navigation's pass, which gates the routes by
     /// the answer: what the selected stack of the first root shows.
     /// `routes` is that stack and `selected` the route its root shows.
@@ -298,14 +314,16 @@ final class SplitHost {
             rowOf[detail.id] = (rule.rows[detail.id] ?? pressing, rule.locations[detail.id])
         }
         // One that has moved since (`replace` keeps a route's id) to where no row's press or link took it
-        // keeps its place in the pane and has no row (LLP 1127 D3).
+        // keeps its place in the pane and loses its row association (LLP 1127 D3).
         for (route, entry) in rowOf where entry.row != nil {
             if let at = entry.at, let now = rule.locations[route], now != at { rowOf[route] = (nil, now) }
         }
         seen.formUnion(pane.map(\.id))
         let base = top >= 1 ? stride(from: top, through: 1, by: -1).first { rowOf[routes[$0].id] != nil } ?? 1 : 1
+        let owner = top >= 1 ? rowOf[routes[base].id] : nil
+        let current = detail != nil && owner?.row == nil ? rule.list.flatMap { presenter.views[$0] }.flatMap { currentRow(in: $0) } : nil
         shown = Shown(root: root, list: list, table: rule.list, width: rule.width.map { CGFloat($0) }, routes: pane, detail: detail,
-                      base: base, row: top >= 1 ? rowOf[routes[base].id]?.row : nil)
+                      base: base, row: owner?.row ?? current)
         if !wanted {
             wanted = true
             presenter.afterBatch { [weak self] in self?.onWanted?() }
@@ -559,8 +577,7 @@ final class SplitHost {
         for route in shown { presenter.blocks.resize(route, .size(size), placement: controller.map { placement(of: route, in: $0.detailPane) } ?? nil) }
     }
 
-    /// The list's selected row is the row whose detail the pane shows; when
-    /// the detail goes, or is no row's, no row is.
+    /// Show the detail's owning or current row; no detail or no such row clears it.
     private func select(_ shown: Shown) {
         guard let table = shown.table, let feed = presenter.tables.feeds[table] else { return }
         if shown.detail == nil {

@@ -343,6 +343,11 @@ impl<'a> Layout<'a> {
             {
                 self.ty(ty);
             }
+            for state in &component.states {
+                if let crate::Expr::Typed(_, ty, _) = &state.expr {
+                    self.ty(ty);
+                }
+            }
             for resource in &component.resources {
                 self.ty(&resource.shape);
                 if let Some(each) = &resource.each {

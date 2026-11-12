@@ -1140,7 +1140,7 @@ export function androidImplementations(app, extensions) {
   return moduleInterfaces(app).filter(i=>extensions[i.name.split('/').at(-1)] === i.name).flatMap(i=>{
     const impl=implementationFor(app,i,'android'), dirs=impl?.json.platform==='android' && impl.json.sources?.kotlin;
     if (!impl || !dirs?.length || !impl.json.class) return [];
-    return [{extension:i.name.split('/').at(-1),className:impl.json.class,dirs:dirs.map(d=>resolve(impl.dir,d)),views:packageViewTags(i,impl),maven:Array.isArray(impl.json.maven) ? impl.json.maven : [],manifest:impl.json.manifest ?? null,start:i.declaration?.start==='load'}];
+    return [{extension:i.name.split('/').at(-1),className:impl.json.class,dirs:dirs.map(d=>resolve(impl.dir,d)),views:packageViewTags(i,impl),mavenSource:resolve(impl.dir,'exact.json'),maven:impl.json.maven === undefined ? [] : impl.json.maven,manifest:impl.json.manifest ?? null,start:i.declaration?.start==='load'}];
   });
 }
 
@@ -1186,7 +1186,7 @@ export function webImplementations(app, extensions) {
  * 1133.011 D10), and of each type they name, copied from the TypeScript
  * compiler's own `lib.dom.d.ts`, which the data module's libraries leave
  * out: the binding is in the stage, so the check reads them there. A name
- * the library lacks is an opaque object. */
+ * the library lacks is an opaque JSON value, narrowed by the caller. */
 function domDeclarations(app, names) {
   let text='';
   // The compiler above the app, else exact2's own (an app outside the repo installs none).
@@ -1203,7 +1203,7 @@ function domDeclarations(app, names) {
     const n=queue.shift();
     if (found.has(n)) continue;
     const decl=declared(n);
-    found.set(n, decl ? 'export '+decl : `export type ${n} = Record<string, unknown>;`);
+    found.set(n, decl ? 'export '+decl : `export type ${n} = unknown;`);
     if (decl) for (const [ref] of decl.slice(decl.indexOf(n)+n.length).matchAll(/\b[A-Z][A-Za-z0-9]*\b/g)) if (!found.has(ref) && declared(ref)) queue.push(ref);
   }
   return [...found.values()];

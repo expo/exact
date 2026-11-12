@@ -158,7 +158,20 @@ pub(super) fn collect(core: &Core, woke: &Receiver<()>, count: usize) -> Vec<(u6
         outcomes.extend(core.drain().into_iter().map(|(t, o, _)| (t, o)));
         if outcomes.len() < count {
             woke.recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    let pending = {
+                        let state = core.shared.state.lock().unwrap();
+                        (
+                            state.jobs.each_ref().map(VecDeque::len),
+                            state.running.len(),
+                            state.completed.each_ref().map(VecDeque::len),
+                        )
+                    };
+                    panic!(
+                        "{error}: {}/{count} outcomes; (queued, running, completed): {pending:?}",
+                        outcomes.len()
+                    );
+                });
         }
     }
     outcomes

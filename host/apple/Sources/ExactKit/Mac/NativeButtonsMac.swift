@@ -16,6 +16,23 @@ import AppKit
 /// its node's, offered where the node offers it (X84): a `contextPopover`.
 final class NativeButtonCellMac: NSButtonCell {
     private var owner: NodeView? { (controlView as? NativeButtonMac)?.owner }
+    var imagePadding: NSEdgeInsets?
+    var borderlessImage: Bool { !isBordered && imagePosition == .imageOnly && image != nil }
+    override func imageRect(forBounds rect: NSRect) -> NSRect {
+        guard borderlessImage, let p = imagePadding else { return super.imageRect(forBounds: rect) }
+        let content = NSRect(x: rect.minX + p.left, y: rect.minY + (controlView?.isFlipped == false ? p.bottom : p.top),
+            width: max(0, rect.width - p.left - p.right), height: max(0, rect.height - p.top - p.bottom))
+        return super.imageRect(forBounds: content)
+    }
+    // AppKit's borderless push cell supplies empty focus bounds and, for
+    // some symbols, no mask. Let AppKit ring the image's alpha instead.
+    override func focusRingMaskBounds(forFrame cellFrame: NSRect, in controlView: NSView) -> NSRect {
+        borderlessImage ? imageRect(forBounds: cellFrame) : super.focusRingMaskBounds(forFrame: cellFrame, in: controlView)
+    }
+    override func drawFocusRingMask(withFrame cellFrame: NSRect, in controlView: NSView) {
+        guard borderlessImage, let image else { super.drawFocusRingMask(withFrame: cellFrame, in: controlView); return }
+        drawImage(image, withFrame: imageRect(forBounds: cellFrame), in: controlView)
+    }
     /// AppKit's highlight while the mouse holds it, and a held press's beside it (HeldState.swift).
     override var isHighlighted: Bool {
         get { super.isHighlighted || owner?.holds("active") == true }
@@ -62,7 +79,11 @@ final class NativeButtonCellMac: NSButtonCell {
 final class NativeButtonMac: NSButton {
     override class var cellClass: AnyClass? { get { NativeButtonCellMac.self } set {} }
     weak var owner: NodeView?
-    override var focusRingMaskBounds: NSRect { uncovered(super.focusRingMaskBounds) }
+    override var focusRingMaskBounds: NSRect {
+        // NSButton bypasses its cell's focus bounds for borderless images.
+        guard let cell = cell as? NativeButtonCellMac, cell.borderlessImage else { return uncovered(super.focusRingMaskBounds) }
+        return uncovered(cell.focusRingMaskBounds(forFrame: bounds, in: self))
+    }
     override func accessibilityAttributeValue(_ attribute: NSAccessibility.Attribute) -> Any? {
         if attribute.rawValue == "AXEnabled", owner?.ariaUnavailable == true { return false }
         return super.accessibilityAttributeValue(attribute)

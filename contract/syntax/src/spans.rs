@@ -232,8 +232,12 @@ impl VisitSpans for Expr {
                 parts.visit_spans(visit);
                 visit(span);
             }
+            Self::Typed(inner, ty, span) => {
+                inner.visit_spans(visit);
+                ty.visit_spans(visit);
+                visit(span);
+            }
             Self::NamedArg(_, inner, span)
-            | Self::Typed(inner, _, span)
             | Self::Some(inner, span)
             | Self::Member(inner, _, span)
             | Self::Unary(_, inner, span) => {

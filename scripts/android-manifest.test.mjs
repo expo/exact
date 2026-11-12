@@ -187,3 +187,43 @@ test("payments' callbacks service is exported only to Play services' binder, wit
   refuses({ services: [{ name: 'exact.payments.S', permission: 'com.google.android.gms.permission.BIND_PAYMENTS_CALLBACK_SERVICE', actions: ['android.intent.action.MAIN'] }] }, 'does not bind');
   refuses({ metadata: [{ name: 'com.google.android.geo.API_KEY', value: 'k' }] }, 'API_KEY');
 });
+
+test('app and package Maven coordinates share validation and refuse conflicting versions by owner', async () => {
+  const { mavenCoordinates } = await import('./agent-android.mjs');
+  const dir = resolve(tmpdir(), 'maps');
+  const app = maven => ({ name: 'maps', dir, manifest: { host: { android: { maven } } } });
+  const bound = [{ extension: 'camera', mavenSource: '/packages/camera/android/exact.json', maven: ['g:camera:1', 'g:shared:2'] }];
+  assert.deepEqual(mavenCoordinates(app(undefined), []), []);
+  assert.deepEqual(mavenCoordinates(app(['g:own:1']), []), ['g:own:1']);
+  assert.deepEqual(mavenCoordinates(app(['g:own:1', 'g:shared:2', 'g:own:1']), bound), ['g:camera:1', 'g:own:1', 'g:shared:2']);
+  assert.deepEqual(mavenCoordinates({ dir, manifest: {} }, bound), ['g:camera:1', 'g:shared:2']);
+  assert.throws(() => mavenCoordinates(app(['g:shared:3']), bound), error => {
+    for (const text of ['g:shared:2', 'g:shared:3', resolve(dir, 'app.json'), '/packages/camera/android/exact.json']) assert.ok(error.message.includes(text), error.message);
+    return true;
+  });
+  assert.throws(() => mavenCoordinates(app(['g:own:1', 'g:own:2']), []), /g:own:1.*g:own:2/);
+  assert.throws(() => mavenCoordinates(app([]), [...bound, { extension: 'other', mavenSource: '/packages/other/android/exact.json', maven: ['g:shared:3'] }]), /camera.*other/);
+  for (const maven of [null, 'g:a:1', [12], ['g:a'], ['g:a:+'], ['g:a:1.+'], ['g:a:[1,2)'], ['g:a:latest.release'],
+    ['g:a:LATEST'], ['g:a:RELEASE'], ['g:a:1-SNAPSHOT'], ['g:a:1:classifier'], ['g:a:1@aar'], ['https://repo/g:a:1'], ['g:a:1\n']]) {
+    assert.throws(() => mavenCoordinates(app(maven), []), /app.json.*maven/, JSON.stringify(maven));
+    assert.throws(() => mavenCoordinates(app([]), [{ ...bound[0], maven }]), /camera.*maven/, JSON.stringify(maven));
+  }
+});
+
+test('the Android package reader preserves Maven declarations and names their source', async () => {
+  const { mavenCoordinates } = await import('./agent-android.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-package-maven-'));
+  try {
+    const pkg = resolve(dir, 'node_modules/@fixture/swatch');
+    cpSync(resolve(import.meta.dir, '../packages/fixtures/swatch'), pkg, { recursive: true });
+    const path = resolve(pkg, 'android/exact.json'), declaration = JSON.parse(readFileSync(path, 'utf8'));
+    const app = { dir, manifest: { host: { android: { maven: ['g:shared:2'] } } } };
+    for (const maven of [['g:shared:2'], ['g:shared:3'], 'g:shared:2', null]) {
+      writeFileSync(path, JSON.stringify({ ...declaration, maven }));
+      const bound = androidImplementations(dir, { swatch: '@fixture/swatch' });
+      assert.equal(bound[0].mavenSource, path);
+      if (Array.isArray(maven) && maven[0] === 'g:shared:2') assert.deepEqual(mavenCoordinates(app, bound), maven);
+      else assert.throws(() => mavenCoordinates(app, bound), error => error.message.includes(path));
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

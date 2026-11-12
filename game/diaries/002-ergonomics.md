@@ -1116,7 +1116,7 @@ contains spaces; that is a lead to test, not an established cause. No app assert
 or web proof ran. Three integration attempts are closed; investigate the receipt
 matcher with a small fixture before another whole-app attempt. All launched
 command sessions have terminated.
-Evidence: `/Users/ccheever/projects/.exact-game-verification/current-layout/` and
+Evidence: `/Users/<user>/projects/.exact-game-verification/current-layout/` and
 `../resolve-probe/`.
 
 

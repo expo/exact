@@ -3286,7 +3286,7 @@ but excluded from qualification.
 `42d5066572`, G4m's release carrier and linked boot-only probe, 800×768 points
 at 2×. Ten retained Metal launches alternate with ten wgpu controls, reversing
 order per pair; ten more Metal launches delete only the actual `cache_path`:
-`/Users/ccheever/.cache/exact/pipelines-ink-metal-v2-4294969116-a1314db7919a63d7.bin`.
+`/Users/<user>/.cache/exact/pipelines-ink-metal-v2-4294969116-a1314db7919a63d7.bin`.
 This carrier uses `~/.cache/exact`, not `~/Library/Caches`. Each miss retains the
 archive's before/after bytes and hash and proves absence at launch. No driver
 cache is cleared. Every before/after quiet observation passes with no compiler
@@ -3436,7 +3436,7 @@ not ten-launch first-screen distributions. Successful warm launches report
 thermal state nominal or fair; the timeout results lack thermal readings.
 
 `miss-final/` contains ten launches after deleting the carrier's actual archive:
-`/Users/ccheever/.cache/exact/pipelines-ink-metal-v2-4294969014-2ebb7bafb839b987.bin`.
+`/Users/<user>/.cache/exact/pipelines-ink-metal-v2-4294969014-2ebb7bafb839b987.bin`.
 `cache_path` uses this location on this machine, rather than `Library/Caches`.
 Each record proves absence at launch, retains the populated archive and its
 hash, and checks the path against the carrier log. The Metal driver cache is
@@ -3813,10 +3813,10 @@ stderr remain in `workspace.log`, `workspace-retry-2.log` and
 `workspace-retry-3-jobs-2.log`. One representative error, verbatim:
 
 ```text
-error: failed to run custom build command for `weatherlight-apple v0.1.0 (/Users/ccheever/projects/exact2-wt-1149-s0b/apps/weatherlight/apple)`
+error: failed to run custom build command for `weatherlight-apple v0.1.0 (/Users/<user>/projects/exact2-wt-1149-s0b/apps/weatherlight/apple)`
 
 Caused by:
-  process didn't exit successfully: `/Users/ccheever/projects/exact2-wt-1149-s0b/target/debug/build/weatherlight-apple-d1217ea3dbb61207/build-script-build` (signal: 11, SIGSEGV: invalid memory reference)
+  process didn't exit successfully: `/Users/<user>/projects/exact2-wt-1149-s0b/target/debug/build/weatherlight-apple-d1217ea3dbb61207/build-script-build` (signal: 11, SIGSEGV: invalid memory reference)
 ```
 
 The required-Metal ink suite and gated transition pass again after the rebase;
@@ -4001,10 +4001,10 @@ them. From `~/projects/exact2-measure` on the silver Mac, the retained driver
 runs ten interleaved pairs; the miss driver runs ten archive misses:
 
 ```sh
-sudo -n /bin/launchctl asuser "$(id -u)" /usr/bin/sudo -u ccheever \
+sudo -n /bin/launchctl asuser "$(id -u)" /usr/bin/sudo -u <user> \
   /usr/bin/env PATH="$PATH" /usr/bin/caffeinate -u -d -i \
   python3 target/g0/s0b4-fixed/run-boot.py retained target/g0/s0b4-fixed/retained-rerun
-sudo -n /bin/launchctl asuser "$(id -u)" /usr/bin/sudo -u ccheever \
+sudo -n /bin/launchctl asuser "$(id -u)" /usr/bin/sudo -u <user> \
   /usr/bin/env PATH="$PATH" /usr/bin/caffeinate -u -d -i \
   python3 target/g0/s0b4-fixed/run-boot.py miss target/g0/s0b4-fixed/miss-rerun
 ```
@@ -5070,7 +5070,7 @@ lockfile regeneration remain owed before landing.
 The single NucBox SSH check on 2026-10-30 returns exit 255:
 
 ```text
-ssh: connect to host 100.103.120.64 port 22: Operation timed out
+ssh: connect to host <host> port 22: Operation timed out
 ```
 
 `nucbox-ssh.json` retains its command and UTC timestamps; `nucbox-ssh.log`
@@ -5788,7 +5788,7 @@ under `target/win-default/` here and in the branch's NucBox mirror,
 
 Runtime source `a28244e3e5` includes the default change and the Windows
 package-source path repair, rebased onto `41e76a432a`. The NucBox mirror is
-`C:\Users\Charlie Cheever\projects\exact2-1149-win-default`; it uses its
+`C:\Users\<user>\projects\exact2-1149-win-default`; it uses its
 own `target/`, Bun 1.4.2 and Rust 1.97.0. Shelf and Excord both build there.
 Excord's first packaging attempt refused Rust's canonical `\\?\` package
 source path; normalizing it to Cargo's spelling fixes the source receipt.
@@ -6293,14 +6293,14 @@ The retained command receipts contain both environments, with
 `EXACT_PAINTER` absent. The compiler confirms the dependency source:
 
 ```text
-   Compiling accesskit_windows v0.35.2 (C:\Users\Charlie Cheever\projects\exact2-1149-win-default\vendor\accesskit-windows)
+   Compiling accesskit_windows v0.35.2 (C:\Users\<user>\projects\exact2-1149-win-default\vendor\accesskit-windows)
 ```
 
 The successful builds and repeated launch assertions report:
 
 ```text
-Windows: C:\Users\Charlie Cheever\projects\exact2-1149-win-default\target\win-qual\game2\game-cpu-round-2\Qual Game.exe
-Windows: C:\Users\Charlie Cheever\projects\exact2-1149-win-default\target\win-qual\game2\game-ink-round-2\Qual Game.exe
+Windows: C:\Users\<user>\projects\exact2-1149-win-default\target\win-qual\game2\game-cpu-round-2\Qual Game.exe
+Windows: C:\Users\<user>\projects\exact2-1149-win-default\target\win-qual\game2\game-ink-round-2\Qual Game.exe
 exact-windows: first-screen painter cpu adapter None
 ASSERT first-frame painter cpu; world first-screen; 120 frames; exit 0; EXACT_PAINTER absent
 exact-windows: first-screen painter ink adapter Some("AMD Radeon(TM) 8060S Graphics (direct D3D11)")

@@ -869,7 +869,7 @@ fn s_val(value: &str, span: Span) -> Expr {
 /// carries as a custom row.
 /// A grouped list's row: the sheet's rows, without the look of an element
 /// that yields it to the row (`row_look`).
-fn row(node: &Node, separated: bool, swiped: bool) -> Node {
+pub(crate) fn row(node: &Node, separated: bool, swiped: bool) -> Node {
     match crate::row_look::yielded(node) {
         Some(own) => styled(&own, separated, swiped),
         None => styled(node, separated, swiped),

@@ -27,9 +27,14 @@ impl BodySource for Made {
             return Err(HostError::Failed("interrupted body".into()));
         }
         let n = out.len().min(7919).min(self.size - self.at);
-        for (i, b) in out[..n].iter_mut().enumerate() {
-            *b = byte(self.at + i);
-        }
+        // The pattern repeats every 128 KiB; bulk copies keep large scripted
+        // replies from spending their completion wait generating bytes in debug.
+        static PATTERN: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        let pattern = PATTERN.get_or_init(|| (0..(1 << 17)).map(byte).collect());
+        let at = self.at % pattern.len();
+        let first = n.min(pattern.len() - at);
+        out[..first].copy_from_slice(&pattern[at..at + first]);
+        out[first..n].copy_from_slice(&pattern[..n - first]);
         self.at += n;
         Ok(n)
     }
@@ -495,12 +500,12 @@ fn a_reply_is_read_into_one_buffer_within_its_ceiling() {
             panic!("{:?}", outcomes[at])
         };
         assert_eq!((r.body.len(), r.body.capacity()), (size, size));
-        assert!(r
-            .body
-            .iter()
-            .enumerate()
-            .step_by(4093)
-            .all(|(i, b)| *b == byte(i)));
+        let mut sampled = (0..size).step_by(4093).chain(
+            [size - 1, (1 << 17) - 1, 1 << 17, (1 << 17) + 1]
+                .into_iter()
+                .filter(|i| *i < size),
+        );
+        assert!(sampled.all(|i| r.body[i] == byte(i)));
     }
     assert!(
         matches!(&outcomes[2].1, Outcome::Failed { kind: FailureKind::Refused, message }

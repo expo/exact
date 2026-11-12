@@ -70,7 +70,7 @@ extension NavigationHost {
             // the document's insets (`env()`) are not the sheet's: its route is
             // covered for its own safe area whatever the document's fit (LLP
             // 1123 D2; its own clearance and credit are stage 2's)
-            let presented = nav.map { nav in presentedNavigations.contains { $0 === nav } } ?? false
+            let presented = isPresented(nav)
             let covered = wantsWholeView && presenter.viewportFit == "cover"
             let whole = presented || (wantsWholeView && !covered)
             let shows = nav.map(barShows) ?? !ExactEnv.authoredChrome

@@ -1462,7 +1462,7 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     crate::kernel::apply_projection(arena, slot, &mut s);
     // @ref LLP 1075.003 §3.5 — what a native container covers of the box.
     crate::kernel::apply_cover(arena, slot, &mut s);
-    // A grouped list's card and cell margins, as the platform's list has them.
+    // A grouped list's cell margins, as the platform's list has them.
     crate::grouped::apply_margins(arena, slot, &mut s);
     crate::rows::apply_margins(arena, slot, &mut s);
     crate::segmented::apply(arena, slot, &mut s);
@@ -1470,6 +1470,7 @@ pub fn taffy_style(arena: &NodeArena, slot: u32) -> taffy::style::Style {
     if direction == Direction::Rtl {
         sides::mirror_unsaid(arena.style(slot), &mut s);
     }
+    crate::grouped::apply_card_margins(arena, slot, &mut s);
     // After the mirror: a table's sides are what they cancel, physically.
     table::apply(arena, slot, &mut s);
     // @ref LLP 1115.002 D8.2 — the containing block a host gave the subtree.

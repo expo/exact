@@ -1,0 +1,40 @@
+# The last row begins at 6368; end thresholds are 5088, 5728 and 6048.
+# Row zero ends at 32; start thresholds are 992, 352 and 32.
+# At each threshold there is no overlap; one pixel inside fires once.
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+
+# Remove lists with their ends disarmed; replacements at 6080 fire again.
+tap toggle
+tap toggle
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance
+tap advance

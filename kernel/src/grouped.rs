@@ -568,23 +568,29 @@ fn inset_inside(arena: &NodeArena, scroll: u32) -> bool {
             == crate::style::Dimension::Points(sheet("-exact-grouped-swipe-margin"))
 }
 
-/// The platform's margins in a box's engine style: a group spans its card,
-/// and a row's unsaid inset at each end moves by what the platform's cell
-/// margin has over the sheet's stand-in, on the box the sheet wrote it on: a
-/// row's left and right paddings (after a leading symbol too), the row
-/// spanning its card; a `delete=` row's content's, its swipe spanning the
-/// card. A native button row is the platform's control: its left margin
-/// and its widest (the card less its insets) move, and it keeps its own
-/// padding. An end the author wrote stays the author's.
-pub(crate) fn apply_margins(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
-    use taffy::style::{LengthPercentage as Lp, LengthPercentageAuto as Lpa};
-    use taffy::util::MaybeResolve;
+/// The host's physical card insets, applied after unsaid sheet sides mirror.
+pub(crate) fn apply_card_margins(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
+    use taffy::style::LengthPercentageAuto as Lpa;
     if !arena.has_grouped_margins() {
         return;
     }
     if let Some(m) = group_margins(arena, slot) {
         s.margin.left = Lpa::length(m.card[0]);
         s.margin.right = Lpa::length(m.card[1]);
+    }
+}
+
+/// The platform's cell margins in a box's engine style: a row's unsaid inset
+/// at each end moves by what the cell margin has over the sheet's stand-in,
+/// on the box the sheet wrote it on: a row's left and right paddings (after a
+/// leading symbol too), the row spanning its card; a `delete=` row's content's,
+/// its swipe spanning the card. A native button row is the platform's control:
+/// its left margin and its widest (the card less its insets) move, and it keeps
+/// its own padding. An end the author wrote stays the author's.
+pub(crate) fn apply_margins(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
+    use taffy::style::{LengthPercentage as Lp, LengthPercentageAuto as Lpa};
+    use taffy::util::MaybeResolve;
+    if !arena.has_grouped_margins() || group_margins(arena, slot).is_some() {
         return;
     }
     let Some(parent) = arena.parent(slot) else {

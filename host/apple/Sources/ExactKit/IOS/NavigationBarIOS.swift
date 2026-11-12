@@ -533,7 +533,7 @@ extension NavigationHost {
             projectBack(routes, in: nav)
         }
         followTablist(routes, in: stack)
-        let presented = nav.map { nav in presentedNavigations.contains { $0 === nav } } ?? false
+        let presented = isPresented(nav)
         // Count UIKit's list before a tab's root under More: More pushes the root over it, with a Back to it
         let front = nav?.stackFront.count ?? 0
         for (index, c) in routes.enumerated() {
@@ -608,7 +608,7 @@ extension NavigationHost {
         }
     }
 
-    /// The header shape and the bar a route shows in its stack (`prepareRoutes`, `selectScrollEdges`).
+    /// The header shape and the bar a route shows in its stack
     private func barShape(of c: RouteController, in nav: UINavigationController?) -> (HeaderShape?, NavigationRules.Bar) {
         guard nav.map(barShows) ?? false else { return (nil, .hidden) }
         return (HeaderShape.bar(of: c.node, back: container?.props["navigationBack"], backIsUIKits: c.pushed), bar(of: c.node, pushed: c.pushed))
@@ -623,7 +623,7 @@ extension NavigationHost {
         let nav = stack as? UINavigationController
         let (shape, bar) = barShape(of: c, in: nav)
         collapse(c, shape: shape, shows: bar != .hidden, scroller: contentScroller(of: c))
-        reachBottom(c, presented: nav.map { nav in presentedNavigations.contains { $0 === nav } } ?? false)
+        reachBottom(c, presented: isPresented(nav))
         coversChanged()
     }
 

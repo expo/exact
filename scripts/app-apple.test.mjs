@@ -846,6 +846,22 @@ test('an App Clip is its parent\'s app under a second identity: NSAppClip, the p
   const origin = { ...app, origin: 'https://exact.test', manifest: { host: { ios: { associatedDomains: true, appClip: {} } } } };
   assert.match(flat(entitlements({ ...origin, id: clip.id, clipParent: app.id }, 'TEAM', true)), /<array><string>appclips:exact.test<\/string><\/array>/);
   assert.doesNotMatch(entitlements({ ...origin, widgetTV: true }, 'TEAM', true), /appclips:/);
+  // The origin's association file names the clip under `appclips`, beside the app's `applinks` (LLP 1030).
+  const { appleAssociation } = await import('../host/web/association.mjs');
+  const team = (a) => ({ ...a, manifest: { host: { ios: { ...a.manifest.host.ios, team: 'TEAM' } } } });
+  assert.deepEqual(appleAssociation(team(origin)), {
+    applinks: { details: [{ appIDs: ['TEAM.com.exact.test'], components: [{ '/': '*' }] }] },
+    appclips: { apps: ['TEAM.com.exact.test.Clip'] },
+  });
+  assert.deepEqual(Object.keys(appleAssociation({ ...team(base), origin: 'https://exact.test' }, { webcredentials: true })), ['applinks', 'webcredentials']);
+  assert.equal(appleAssociation(origin), null, 'no team, no file');
+  // It claims the app only where the entitlements claim this origin's host as applinks:.
+  const listed = (associatedDomains) => team({ ...origin, manifest: { host: { ios: { associatedDomains, appClip: {} } } } });
+  assert.equal(appleAssociation(listed(['applinks:other.example'])), null);
+  assert.equal(appleAssociation(listed([])), null);
+  assert.deepEqual(Object.keys(appleAssociation(listed(['applinks:exact.test?mode=developer']))), ['applinks', 'appclips']);
+  assert.deepEqual([['applinks:*.exact.test'], ['applinks:*.test'], ['applinks:*.xexact.test']].map((l) => !!appleAssociation(listed(l))), [true, true, false]);
+  assert.equal(appleAssociation({ ...team(origin), origin: undefined }), null, 'no origin, no host to claim');
   // With widgets, the clip shares the parent's App Group and Keychain group, and takes no push environment.
   const entries = { ...app, manifest: { ...app.manifest, live_activities: [{ kind: 'departure', push: true }] } };
   const grouped = flat(entitlements({ ...entries, id: clip.id, clipParent: app.id }, 'TEAM', true, null, { prefix: 'PREFIX' }));

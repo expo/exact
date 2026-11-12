@@ -138,16 +138,55 @@ android {
         val attr = { v: String -> v.replace("&", "&amp;").replace("<", "&lt;").replace("\"", "&quot;") }
         // A string resource's own escapes: a backslash, an apostrophe, and `@` or `?` leading.
         val text = { v: String -> attr(v).replace("\\", "\\\\").replace("'", "\\'").replace(Regex("^([@?])"), "\\\\$1") }
+        // The kernel's symbol vocabulary and Material shapes (LLP 1116.007 D3.1, LLP 1115.001 D14), including every
+        // role for computed dynamic/pinned items. The lookup also keeps static and runtime resolution the same.
+        val schema = JsonSlurper().parse(rootDir.resolve("../../kernel/tables/schema.json")) as Map<*, *>
+        val symbols = (schema["symbols"] as List<*>).map { it as List<*> }
+        val glyphs = (schema["symbolGlyphs"] as List<*>).map { it as List<*> }.filter { it[1] == "material" }
+        val symbolKey = { name: String -> if (name.startsWith("sf/")) name else name.replace('.', '-').replace('_', '-') }
+        val symbolNames = linkedMapOf<String, String>()
+        symbols.forEach { symbolNames[it[0] as String] = it[0] as String }
+        symbols.forEach { row ->
+            val role = row[0] as String
+            val apple = row[1] as String
+            if (apple.isNotEmpty()) {
+                symbolNames.putIfAbsent(symbolKey(apple), role)
+                symbolNames.putIfAbsent("sf/$apple", role)
+            }
+        }
+        (schema["symbolAliases"] as List<*>).forEach {
+            val row = it as List<*>
+            symbolNames[row[0] as String] = row[1] as String
+        }
+        val iconName = { role: String -> "exact_shortcut_symbol_${role.replace('-', '_')}" }
+        res.deleteRecursively()
+        res.resolve("drawable").mkdirs()
+        symbols.forEach { row ->
+            val role = row[0] as String
+            val glyph = glyphs.firstOrNull { it[0] == role }
+            val path = (glyph?.get(2) ?: row[2]) as String
+            val filled = (glyph?.get(3) as Boolean?) ?: role.endsWith("-fill")
+            val paint = if (filled) "android:fillColor=\"#FF000000\" android:fillType=\"evenOdd\"" else
+                "android:fillColor=\"#00000000\" android:strokeColor=\"#FF000000\" android:strokeWidth=\"2\" " +
+                    "android:strokeLineCap=\"round\" android:strokeLineJoin=\"round\""
+            res.resolve("drawable/${iconName(role)}.xml").writeText(
+                "<vector xmlns:android=\"http://schemas.android.com/apk/res/android\" android:width=\"24dp\" android:height=\"24dp\" " +
+                    "android:viewportWidth=\"24\" android:viewportHeight=\"24\">\n" +
+                    path.split(';').joinToString("") { "    <path android:pathData=\"${attr(it)}\" $paint />\n" } + "</vector>\n")
+        }
         val strings = StringBuilder()
         val shortcuts = StringBuilder()
         items.forEachIndexed { i, item ->
             val name = item["name"] as String
+            val symbol = (item["apple"] as Map<*, *>?)?.get("symbol") as String?
+            val icon = symbol?.let { symbolNames[symbolKey(it)] }?.let { "@drawable/${iconName(it)}" }
             val disabled = (item["android"] as Map<*, *>?)?.get("disabledMessage") as String?
             strings.append("    <string name=\"exact_shortcut_${i}_short\">${text((item["short_name"] as String?) ?: name)}</string>\n")
             strings.append("    <string name=\"exact_shortcut_${i}_long\">${text(name)}</string>\n")
             disabled?.let { strings.append("    <string name=\"exact_shortcut_${i}_disabled\">${text(it)}</string>\n") }
             shortcuts.append("    <shortcut android:shortcutId=\"manifest-$i\" android:enabled=\"true\"\n" +
                 "        android:shortcutShortLabel=\"@string/exact_shortcut_${i}_short\" android:shortcutLongLabel=\"@string/exact_shortcut_${i}_long\"" +
+                (icon?.let { "\n        android:icon=\"$it\"" } ?: "") +
                 (disabled?.let { "\n        android:shortcutDisabledMessage=\"@string/exact_shortcut_${i}_disabled\"" } ?: "") + ">\n" +
                 "        <intent android:action=\"android.intent.action.VIEW\" android:targetPackage=\"$pkg\"\n" +
                 "            android:targetClass=\"dev.exact.app.MainActivity\" android:data=\"${attr(item["url"] as String)}\" />\n" +
@@ -157,14 +196,20 @@ android {
         res.resolve("values").mkdirs()
         res.resolve("xml/exact_shortcuts.xml").writeText("<shortcuts xmlns:android=\"http://schemas.android.com/apk/res/android\">\n$shortcuts</shortcuts>\n")
         res.resolve("values/exact_shortcuts.xml").writeText("<resources>\n$strings</resources>\n")
+        res.resolve("xml/exact_shortcut_symbols.xml").writeText("<symbols>\n" + symbolNames.entries.joinToString("") {
+            "    <symbol name=\"${attr(it.key)}\" drawable=\"@drawable/${iconName(it.value)}\" />\n"
+        } + "</symbols>\n")
         sourceSets["main"].res.directories.add(res.path)
     }
     // The token names `bun exact.mjs tamber gen kotlin` wrote (LLP 1121 D12; never committed).
     appDir.resolve(".exact/tamber/TamberTokens.kt").takeIf { it.isFile }?.let { sourceSets["main"].kotlin.directories.add(it.parent) }
+    if (app == "shelf") sourceSets["test"].kotlin.directories.addAll(listOf(
+        "../../../packages/quick-actions/android", "../../../packages/quick-actions/test/android",
+    ))
+    testOptions { unitTests { isIncludeAndroidResources = true } }
     if (compose) {
         buildFeatures { this.compose = true }
         sourceSets["test"].kotlin.directories.add("src/composeTest/java")
-        testOptions { unitTests { isIncludeAndroidResources = true } }
     }
     // An app's GPU module (-PgpuModule=<file>) is opened by path from the extracted library directory and checked
     // against the digest its bake recorded, so it is extracted and left unstripped.
@@ -177,7 +222,7 @@ android {
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
-// The Maven libraries the bound modules' implementations name (`-Pmaven`, LLP 1133.008 D8 item 5), resolved with the
+// The Maven libraries the app and bound implementations name (`-Pmaven`, LLP 1133.008 D8 item 5), resolved with the
 // reader's own AndroidX in this one graph. The graph is locked to the app's lock file (`-PmavenLock`, beside its other
 // locks) and verified against its checksums (`agent-android.mjs` puts the app's verification file in place and passes
 // `--dependency-verification=strict`); `--write-locks` there writes both. An app with none resolves as before.
@@ -192,11 +237,11 @@ if (maven.isNotEmpty()) {
 dependencies {
     maven.forEach { implementation(it) }
     implementation(project(":canvas"))
+    testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
     if (compose) {
         implementation(platform(libs.compose.bom))
         implementation(libs.compose.material3)
         implementation("androidx.core:core:1.16.0")
-        testImplementation(libs.junit)
-        testImplementation(libs.robolectric)
     }
 }

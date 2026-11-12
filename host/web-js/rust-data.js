@@ -67,7 +67,10 @@ function reader(b) {
   return r;
 }
 
-export async function install(data, sources, load = p => fetchHostAsset(p).then(r => r.arrayBuffer())) {
+export async function install(data, sources, load = p => fetchHostAsset(p).then(r => {
+  if (!r.ok) throw new Error(`${p.slice(2)} answered HTTP ${r.status}`);
+  return r.arrayBuffer();
+}, e => { throw new Error(`${p.slice(2)} could not be fetched: ${e?.message ?? e}`); })) {
   const [wasm, plan] = await Promise.all([load('./rust/wasm/app.module.wasm'), load('./app.bind.plan')]);
   // Bytes, or a module a renderer compiled once for every render.
   const made = await WebAssembly.instantiate(wasm, {}), instance = made.instance ?? made;

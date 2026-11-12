@@ -52,7 +52,7 @@ component App
     button mode press=go
 ```
 
-The existing `target/debug/contract build <fixture> --json` exits 1 with `type-assign`: `mode` is `enum<"on", "off">`, cannot assign `string`. The retained fixture is `/Users/ccheever/.cache/exact-review/exact-release-20261102/contract-probes/enum-state-match.contract`.
+The existing `target/debug/contract build <fixture> --json` exits 1 with `type-assign`: `mode` is `enum<"on", "off">`, cannot assign `string`. The retained fixture is `/Users/<user>/.cache/exact-review/exact-release-20261102/contract-probes/enum-state-match.contract`.
 
 Check each match arm in its lexical scope before admitting the assignment, preserving the declared enum type. Verify that this program compiles, a match arm returning `"sideways"` is rejected, and a bound `some` value with an unconstrained string type still cannot enter the enum. The resolution and verification above continue to describe the cases already fixed.
 

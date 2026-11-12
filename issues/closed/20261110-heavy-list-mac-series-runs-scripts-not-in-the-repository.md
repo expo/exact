@@ -1,6 +1,7 @@
 # The heavy list's Mac series is documented as scripts under one machine's `target/`, reached by a private address
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** "The measurement Mac" now says which of the series' scripts are tracked and that the wrappers which built and sequenced the arms stayed in that Mac's ignored `target/g0/`, describes what each mode does in place of the `ssh` command, and neither file names the login or a tailnet address any more (git history keeps the old text, which was not rewritten).
 **Systems:** bench/heavy-list/README.md, bench/heavy-list/gpui/RESULTS.md
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review

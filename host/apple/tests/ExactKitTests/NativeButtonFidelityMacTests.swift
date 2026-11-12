@@ -218,6 +218,84 @@ final class NativeButtonFidelityMacTests: XCTestCase {
             }
         }
     }
+    func testBorderlessImageFittingHasAPlatformSizedTarget() throws {
+        _ = NSApplication.shared
+        let cache = ButtonMeasureCache(), appearance = NSAppearance(named: .aqua)!
+        for symbol in ["plus", "xmark"] {
+            for size in ["mini", "small", "medium", "large"] {
+                var face = ButtonFace(); face.symbol = symbol; face.macos = "borderless"
+                face.rows.button["control_size"] = .string(size)
+                let hand = NSButton(image: try XCTUnwrap(NSImage(systemSymbolName: symbol, accessibilityDescription: nil)), target: nil, action: nil)
+                hand.bezelStyle = .push
+                hand.controlSize = size == "mini" ? .mini : size == "small" ? .small : size == "large" ? .large : .regular
+                hand.font = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: hand.controlSize))
+                hand.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: hand.font!.pointSize, weight: .regular)
+                let target = hand.fittingSize.height
+                let glyph = configured(face).fittingSize
+                for kind in [UInt8(1), 2] {
+                    let answer = cache.measure(face, widthKind: kind, width: 0, appearance: appearance, scale: 1)
+                    XCTAssertEqual(answer.width, Float(max(target, glyph.width)), symbol + size)
+                    XCTAssertEqual(answer.height, Float(max(target, glyph.height)), symbol + size)
+                }
+                face.rows.button["padding_left"] = .number(0)
+                let partial = cache.measure(face, widthKind: 2, width: 0, appearance: appearance, scale: 2)
+                let halfInset = max(0, target - glyph.width) / 2
+                XCTAssertEqual(partial.width, Float(ceil((glyph.width + halfInset) * 2) / 2), "an unauthored side keeps its platform inset")
+                XCTAssertEqual(partial.height, Float(max(target, glyph.height)))
+            }
+        }
+    }
+    func testBorderlessImageTargetsHonorAuthoredDimensionsAndPadding() throws {
+        let win = makeWindow(), session = ExactApp.shared.makeSession(label: "borderless-targets")
+        defer { session.destroy() }
+        win.contentView = session.presenter.viewport
+        let source = root.appendingPathComponent("target/1104-b3/borderless.contract")
+        try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        component Borderless
+          view
+            column align-items="start" gap=8
+              button buttonStyle="borderless" testId="plus" aria-label="Add"
+                image "symbol:sf/plus"
+              button buttonStyle="plain" testId="close" aria-label="Close"
+                image "symbol:sf/xmark"
+              button buttonStyle="borderless" testId="fixed" aria-label="Fixed" width=17 height=16
+                image "symbol:sf/plus"
+              button buttonStyle="borderless" testId="padded" aria-label="Padded" padding-top=2 padding-right=11 padding-bottom=5 padding-left=3
+                image "symbol:sf/xmark"
+              button buttonStyle="borderless" testId="zero" aria-label="Zero" padding=0
+                image "symbol:sf/plus"
+              button buttonStyle="borderless" testId="wide" aria-label="Wide" width=40 padding-left=3 padding-right=11
+                image "symbol:sf/plus"
+
+        """.write(to: source, atomically: true, encoding: .utf8)
+        XCTAssertNil(session.boot(plan: try compile(source), size: win.contentLayoutRect.size).error)
+        for name in ["plus", "close", "fixed", "padded", "zero", "wide"] {
+            let native = try button(session, name), node = try XCTUnwrap(native.owner)
+            let face = try XCTUnwrap(native.written?.face), hand = configured(face)
+            let glyph = hand.fittingSize
+            hand.isBordered = true
+            let target = hand.fittingSize.height
+            let expected: NSSize
+            switch name {
+            case "fixed": expected = NSSize(width: 17, height: 16)
+            case "padded": expected = NSSize(width: glyph.width + 14, height: glyph.height + 7)
+            case "zero": expected = glyph
+            case "wide": expected = NSSize(width: 40, height: max(target, glyph.height))
+            default: expected = NSSize(width: max(target, glyph.width), height: max(target, glyph.height))
+            }
+            XCTAssertEqual(node.bounds.size, expected, name)
+            for point in [NSPoint(x: 1, y: 1), NSPoint(x: expected.width - 1, y: expected.height - 1)] {
+                XCTAssertTrue(native.hitTest(node.convert(point, to: native.superview)) === native, name)
+            }
+            let cell = try XCTUnwrap(native.cell as? NSButtonCell)
+            let inset = name == "padded" ? NSRect(x: 3, y: 2, width: native.bounds.width - 14, height: native.bounds.height - 7)
+                : name == "wide" ? NSRect(x: 3, y: 0, width: 26, height: native.bounds.height) : native.bounds
+            let reference = try XCTUnwrap(hand.cell as? NSButtonCell)
+            hand.isBordered = false
+            XCTAssertEqual(cell.imageRect(forBounds: native.bounds), reference.imageRect(forBounds: inset), name)
+        }
+    }
     func testCacheKeysIncludeFaceRowsStyleSizeWidthAppearanceAndScale() throws {
         let cache = ButtonMeasureCache(), aqua = NSAppearance(named: .aqua)!
         cache.configure(aqua, scale: 1)

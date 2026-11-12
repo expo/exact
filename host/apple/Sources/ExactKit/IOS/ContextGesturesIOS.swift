@@ -80,6 +80,9 @@ extension NodeView {
         if let run = inlineRun(at: point, where: { $0.props["href"].map(Self.hasLinkMenu) == true }), let href = run.props["href"] { return (href, run) }
         return props["href"].flatMap { Self.hasLinkMenu($0) ? ($0, nil) : nil }
     }
+
+    #endif
+
     /// Whether a link to `href` gets the host's own menu: a web link, `http` or
     /// `https`, or one with no scheme, which resolves in the app. A `mailto:`,
     /// `tel:` or `javascript:` link, or an app's own scheme, gets none.
@@ -88,8 +91,6 @@ extension NodeView {
         guard let scheme = URL(string: href)?.scheme?.lowercased() else { return true }
         return scheme == "http" || scheme == "https"
     }
-
-    #endif
 
     func deliverContext(at point: CGPoint, inline inlineID: UInt32? = nil) {
         guard let presenter else { return }

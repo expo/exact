@@ -305,8 +305,21 @@ async function dispatch(owner, { appId, op, args }) {
     if (sql === undefined) fail('statement is closed');
   }
   const query = op === 'query' || op === 'statementQuery';
-  const result = run(sqlite, session, sql, values, query);
-  if (!query) await persist(sqlite, databases, id, session);
+  if (query) return run(sqlite, session, sql, values, true);
+  const c = sqlite.capi, before = c.sqlite3_total_changes(session.db.pointer);
+  let result;
+  try { result = run(sqlite, session, sql, values, false); }
+  catch (error) {
+    // A statement that fails under the FAIL conflict resolution keeps the
+    // rows it changed before the error, and outside a transaction they are
+    // committed (https://www.sqlite.org/lang_conflict.html), so the file
+    // must hold them too. A persist that fails closes the connection.
+    if (c.sqlite3_get_autocommit(session.db.pointer) && c.sqlite3_total_changes(session.db.pointer) !== before) {
+      await persist(sqlite, databases, id, session).catch(() => {});
+    }
+    throw error;
+  }
+  await persist(sqlite, databases, id, session);
   return result;
 }
 

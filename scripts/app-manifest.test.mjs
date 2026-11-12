@@ -634,3 +634,21 @@ test('`userInterfaceStyle` takes Expo\'s three values, refusing others by name, 
     assert.throws(() => read('Dark'), /userInterfaceStyle: "Dark" is not one of "automatic", "light", "dark"/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('host.android.maven accepts only pinned group:artifact:version coordinates', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'manifest-maven-'));
+  const read = maven => {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Maps', app: { id: 'dev.exact.maps', name: 'Maps' }, host: { android: { maven } } }));
+    return readManifest(dir, 'maps');
+  };
+  try {
+    for (const maven of [[], ['org.maplibre.gl:android-sdk:12.0.0', 'androidx.camera:camera-core:1.6.0-alpha01']]) {
+      assert.deepEqual(read(maven).host.android.maven, maven);
+    }
+    for (const bad of [null, 'g:a:1', [12], ['g:a'], ['g:a:'], ['g:a:+'], ['g:a:1.+'], ['g:a:[1,2)'],
+      ['g:a:latest.release'], ['g:a:LATEST'], ['g:a:RELEASE'], ['g:a:1-SNAPSHOT'], ['g:a:1:classifier'], ['g:a:1@aar'], ['https://repo/g:a:1'], ['g:a:1\n']]) {
+      assert.throws(() => read(bad), /maven/, JSON.stringify(bad));
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

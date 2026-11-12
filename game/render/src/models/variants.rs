@@ -1,20 +1,21 @@
-//! Per-instance texture replacement (`MaterialOverride::textures`): a model
-//! material drawn with other textures is a renderer material of its own, one
-//! per (material, texture set), so instances with the same set still batch.
+//! Material variants share a texture set and an optional layered family.
+//! Scalar values stay in instance looks, so animating them creates no variants.
 use super::{material_bind, MaterialId};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Each variant by its base material's slot and the texture names it binds.
-pub(crate) type Variants = BTreeMap<(usize, [Option<String>; 5]), MaterialId>;
+/// Base material, texture names, and whether the variant enables a coat.
+pub(crate) type Variants = BTreeMap<(usize, [Option<String>; 5], bool), MaterialId>;
 
 impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
     /// `base` with `replace`'s names in the slots it samples a texture in, or
     /// `None` while one of those textures cannot draw. A material a game's
-    /// `CustomMaterial` shades keeps its own.
-    pub(crate) fn textured_variant(
+    /// `CustomMaterial` shades keeps its own. `layered` admits a coat on a
+    /// material whose authored factors did not need that pipeline family.
+    pub(crate) fn override_variant(
         &mut self,
         base: MaterialId,
         replace: &[Option<String>; 5],
+        layered: bool,
     ) -> Option<MaterialId> {
         let material = self.models.materials.get(base.0)?;
         material.bind.as_ref()?;
@@ -35,14 +36,18 @@ impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
                 name.clone_from(replacement);
             }
         }
-        if names == material.names {
+        let layered = layered && !material.layered && !material.data.unlit;
+        if names == material.names && !layered {
             return Some(base);
         }
-        let key = (base.0, names);
+        let key = (base.0, names, layered);
         if let Some(&id) = self.models.variants.get(&key) {
             return Some(id);
         }
-        let data = material.data.clone();
+        let mut data = material.data.clone();
+        if layered {
+            data.clearcoat = 1.;
+        }
         let slot = self
             .models
             .materials
@@ -77,7 +82,7 @@ pub(super) fn retain(
     records: &[crate::DrawInstance],
 ) {
     let drawn: BTreeSet<_> = records.iter().map(|r| r.material.0).collect();
-    variants.retain(|(base, names), id| {
+    variants.retain(|(base, names, _), id| {
         live.contains(base)
             && drawn.contains(&id.0)
             && names

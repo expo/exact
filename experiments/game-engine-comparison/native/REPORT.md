@@ -1,6 +1,6 @@
 # Native engine lane evidence, 2026-09-17
 
-Host: ccheever@100.84.186.119, expose-builder-nothing, Linux x86_64, Python3.12.3. Everything installed in /tmp/exact-engine-comparison-20260917/native. No global installs, no clone, no repository edits. Zero human interventions; zero visual/pixel inspections. Pygame's SDL dummy surface was drawn and a PNG emitted, but not visually checked. No shipping/export or real keyboard/controller injection verified.
+Host: a Linux x86_64 machine of the team's build fleet, Python3.12.3. Everything installed in /tmp/exact-engine-comparison-20260917/native. No global installs, no clone, no repository edits. Zero human interventions; zero visual/pixel inspections. Pygame's SDL dummy surface was drawn and a PNG emitted, but not visually checked. No shipping/export or real keyboard/controller injection verified.
 
 Versions: Godot4.7.2.stable.official.ed1daf0bf, LOVE11.5, Pygame2.6.1, Defold1.13.1. versions.json includes engine binary SHA256. The three engine sources were baseline-hashed before H1 was disclosed to implementation; baseline-sha256.txt and *-baseline/ retained (hashing was after disclosure receipt, before edits).
 

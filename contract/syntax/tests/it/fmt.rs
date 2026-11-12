@@ -279,6 +279,37 @@ test "é test"
 }
 
 #[test]
+fn typed_states_keep_their_types_in_components_and_members() {
+    use contract_syntax::{parse, Span, VisitSpans};
+    for (header, view) in [
+        ("component App", "  view\n    text \"ready\"\n"),
+        ("members App", ""),
+    ] {
+        for (ty, value) in [
+            ("number", "0"),
+            ("option<string>", "none"),
+            ("option<option<string>>", "none"),
+            ("option<number[]>", "none"),
+            ("option<option<number[]>[]>", "none"),
+            ("option<string>[]", "[]"),
+            ("option<enum<\"a\", \"b\">[]>", "none"),
+        ] {
+            let src = format!("{header}\n  state picked:{ty} = {value}\n{view}");
+            let after = preserved(&src);
+            assert_eq!(
+                after,
+                format!("{header}\n  state picked: {ty} = {value}\n{view}")
+            );
+            let mut before = parse(&src).unwrap();
+            let mut formatted = parse(&after).unwrap();
+            before.visit_spans(&mut |span| *span = Span::default());
+            formatted.visit_spans(&mut |span| *span = Span::default());
+            assert_eq!(before, formatted);
+        }
+    }
+}
+
+#[test]
 fn nested_list_types_keep_their_brackets_tight() {
     for ty in [
         "number[]",

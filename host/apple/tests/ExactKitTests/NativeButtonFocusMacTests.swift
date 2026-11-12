@@ -40,6 +40,60 @@ final class NativeButtonFocusMacTests: XCTestCase {
         if !p.routeKey(event, focused: true, in: window) { window.sendEvent(event) }
     }
 
+    func testBorderlessImageButtonsTabToAnImageShapedFocusRing() throws {
+        let p = try fixture()
+        let previous = KeyboardNavigation.agent
+        KeyboardNavigation.agent = true
+        defer { KeyboardNavigation.agent = previous }
+        for symbol in ["plus", "xmark"] {
+            p.buttonFace = { _ in
+                var face = ButtonFace(); face.symbol = symbol; face.macos = "borderless"
+                return face
+            }
+            p.controls.facesChanged()
+            p.controls.sync()
+            p.flushKeyViewLoop()
+            let first = try XCTUnwrap(p.controls.controls[2] as? NativeButtonMac)
+            let cell = try XCTUnwrap(first.cell as? NSButtonCell)
+            XCTAssertTrue(window.makeFirstResponder(try XCTUnwrap(p.views[3])))
+            deliver(p, try key("\t", 48, flags: .shift))
+            XCTAssertTrue(window.firstResponder === first)
+            XCTAssertEqual(first.focusRingType, .default)
+            let imageRect = cell.imageRect(forBounds: first.bounds)
+            XCTAssertFalse(imageRect.isEmpty)
+            XCTAssertEqual(first.focusRingMaskBounds, imageRect, symbol)
+
+            let hand = NSButton(image: try XCTUnwrap(NSImage(systemSymbolName: symbol, accessibilityDescription: nil)), target: nil, action: nil)
+            hand.isBordered = false
+            hand.font = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .regular))
+            hand.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: hand.font!.pointSize, weight: .regular)
+            hand.frame = first.frame
+            let expected = try ringPixels(hand) {
+                let cell = try XCTUnwrap(hand.cell as? NSButtonCell)
+                cell.drawImage(try XCTUnwrap(hand.image), withFrame: cell.imageRect(forBounds: hand.bounds), in: hand)
+            }
+            let actual = try ringPixels(first) { first.drawFocusRingMask() }
+            XCTAssertEqual(actual, expected, symbol)
+        }
+    }
+
+    private func ringPixels(_ button: NSButton, draw: () throws -> Void) throws -> Data {
+        let width = Int(ceil(button.bounds.width)) + 16, height = Int(ceil(button.bounds.height)) + 16
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        try bytes.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            NSGraphicsContext.saveGraphicsState()
+            defer { NSGraphicsContext.restoreGraphicsState() }
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+            context.translateBy(x: 8, y: 8)
+            NSFocusRingPlacement.only.set()
+            try draw()
+        }
+        XCTAssertTrue(stride(from: 3, to: bytes.count, by: 4).contains { bytes[$0] > 0 }, "the ring must contain visible pixels")
+        return Data(bytes)
+    }
+
     /// LLP 1115.000 D7.2: Tab honours the Mac's Keyboard Navigation setting,
     /// read from AppKit where no drive or test says (this overrides only the
     /// process's AppKit query; it never changes the person's preferences).

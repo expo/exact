@@ -568,9 +568,17 @@ writeFileSync(resolve(gen, 'main.js'), [
     // Rust data: loaded after first pixel, asked synchronously once ready;
     // a plan with a resource that has no compiled value waits for it.
     // Counted in flight, so `clock settle` waits for the source to be ready.
-    "const load = () => import('./rust-data.js').then(m => m.install(data, sources)).finally(() => inflight.n--);",
+    // One that did not load (its chunk, its fetch, its binding) is said once in the journal, as LLP 1027.007 §5 has
+    // a failed load reported once. Once the app has started, with what the module owns not ready (its compiled
+    // value or placeholder shown), each such source fails when asked, as one whose call failed (LLP 1071 §7): the
+    // resource keeps what it shows and `failed` is true. A mixed app starts anyway, its TypeScript module answering;
+    // what that module throws may be a source the Rust module owns, so its error names the failed load too.
+    "let unloaded = null;",
+    "const load = () => import('./rust-data.js').then(m => m.install(data, sources)).catch(e => { unloaded = `the Rust module did not load: ${e?.message ?? e}`; journal.push(`t=${clock.now} ${unloaded}`); }).finally(() => inflight.n--);",
+    "const also = e => { if (!(e instanceof Error)) return new Error(`${e}; ${unloaded}`); if (!e.message.endsWith(unloaded)) e.message += `; ${unloaded}`; return e; };",
+    "const fail = () => { if (!unloaded) return; const ts = data.ts; data.answer = ts ? (...a) => { try { return ts(...a); } catch (e) { throw also(e); } } : () => { throw new Error(unloaded); }; for (const f of data.q.splice(0)) f(); };",
     "inflight.n++;",
-    `if (wait || ${mixed}) load().then(() => go(start)); else go(() => { start(); requestAnimationFrame(() => setTimeout(load)); });`,
+    `if (wait || ${mixed}) load().then(() => go(() => { start(); fail(); })); else go(() => { start(); requestAnimationFrame(() => setTimeout(() => load().then(fail))); });`,
   ] : ['go(start);']),
   // After the first render, which a font wait may defer (`containers()` reads the runtime's `globalThis.exact`).
   ...(containerHatches ? ["go(() => requestAnimationFrame(() => requestAnimationFrame(() => import('./hatches.js').then(m => m.containers()))));"] : []),

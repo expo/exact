@@ -6,8 +6,40 @@ import XCTest
 /// next timer is armed for its deadline. A batch with ops, an error, a
 /// control's viewless contents (`controls`, LLP 1069.011 §9), new motion,
 /// moved page facts, a wake lock or word on work the app must finish still applies. The flag crosses the wire
-/// as `"controls":true`.
+/// as `"controls":true`. A published batch that shows nothing new is not outstanding work either.
 final class IdleTickTests: XCTestCase {
+    /// A published batch (a reply's, a frame's tick's) that shows nothing new
+    /// does not hold settled or TTI (LLP 1132 D5); one that changes a view or
+    /// asks for a canvas image holds them until it lands. A slice in flight
+    /// holds them as `fill`, whatever its batch.
+    func testAPublishedBatchIsOutstandingOnlyWhenItShowsSomethingNew() throws {
+        let session = ExactApp.shared.makeSession(label: "published-not-loading")
+        defer { session.destroy() }
+        func reply(_ batch: Batch) {
+            session.repliesInFlight += 1; session.replySubmissions.append(0)
+            session.publish(.reply, batch, session.generation)
+        }
+        session.publishTickForTests(wireBatch([]))
+        reply(wireBatch([]))
+        // Work the app must finish is a hold, and an error is only logged: neither is loading
+        var finished = wireBatch([])
+        finished.mustFinish = false
+        reply(finished)
+        reply(Batch(ops: [], timers: false, motion: false, clock: nil, error: "boom"))
+        XCTAssertEqual(session.hostOutstanding, [])
+        reply(wireBatch([["op": "props", "id": 1, "set": ["testId": "x"]]]))
+        XCTAssertEqual(session.hostOutstanding, ["published"])
+        waitFor("the batches land") { session.hostOutstanding.isEmpty && !session.ownerInFlight }
+        var image = wireBatch([])
+        image.canvasImages = ["missing-canvas-image.png"]
+        session.publishTickForTests(image)
+        XCTAssertEqual(session.hostOutstanding, ["published"])
+        waitFor("the tick lands") { session.hostOutstanding.isEmpty && !session.ownerInFlight }
+        session.publishFillForTests(1, wireBatch([]), generation: session.generation)
+        XCTAssertEqual(session.hostOutstanding, ["fill"])
+        waitFor("the slice lands") { session.hostOutstanding.isEmpty }
+    }
+
     func testATickThatChangesNothingOnlyMovesTheClock() throws {
         let session = ExactApp.shared.makeSession(label: "idle-tick")
         defer { session.destroy() }

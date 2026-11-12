@@ -1,6 +1,7 @@
 # A Rust module that fails to load leaves a JS-target page blank, or without its data, and only the console says so
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A Rust module that does not load is said once in the journal with the response's status or the failed fetch, a mixed app starts anyway, and each resource whose source the module owns fails naming the load.
 **Systems:** host/web-js/build.mjs, host/web-js/rust-data.js
 **Severity:** P3
 **Author:** Claude (Fable 5.2), from the 2026-11-10 project review
