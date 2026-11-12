@@ -156,7 +156,8 @@ name or key a host would refuse or ignore at run time: a
 swipe row's `swipeTrailing` naming a button outside its `scroll` (`lower-swipe-wiring`),
 a navigation root's `navigationKey` that never meets its routes' (`lower-navigation-key`),
 a `navigationSplit` off the root route (`lower-navigation-split`), an `image` source
-that is a bare word, neither a symbol nor a file (`lower-image-source`), and a literal `RoundButton`
+that is a bare word, neither a symbol nor a file (`lower-image-source`), an `image`, `video` or `audio`
+file outside `assets/`, which the app would ship without (`lower-asset-path`), and a literal `RoundButton`
 label of more than the 7 characters its circle holds (`lower-round-button-label`); each names its repair, and fixing it is part of the edit.
 
 Formatting is explicit. `fmt --stdout` previews, `fmt --check` checks, and plain
@@ -4831,7 +4832,7 @@ overflows below showing, with square corners.
 
 `filter` on a box or an `image` takes CSS's functions in order (`blur`,
 `brightness`, `contrast`, `drop-shadow`, `grayscale`, `hue-rotate`, `invert`,
-`opacity`, `saturate`, `sepia`): `image "logo.png" filter="brightness(0.6)"`
+`opacity`, `saturate`, `sepia`): `image "assets/logo.png" filter="brightness(0.6)"`
 dims a logo. The element and its content are drawn, then filtered (Filter
 Effects 1 §12); the web, macOS and iOS draw it, and Linux draws it unfiltered
 for now (SVG Gallery's `fx-box-filter` and `fx-image-filter`). `url(#id)`

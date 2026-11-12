@@ -7,7 +7,6 @@
 
 use crate::LowerError;
 use contract_syntax::{Expr, Node, Span};
-use std::path::{Component, Path};
 
 /// The folders the build bundles into the app.
 const BUNDLED: &[&str] = &["assets", "deck"];
@@ -96,10 +95,7 @@ fn refusal(what: &str, source: &str, span: Span) -> Option<LowerError> {
     if !is_outside(source) {
         return None;
     }
-    let name = Path::new(source)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(source);
+    let name = source.rsplit(['/', '\\']).next().unwrap_or(source);
     Some(LowerError {
         id: "lower-asset-path",
         message: format!(
@@ -111,29 +107,26 @@ fn refusal(what: &str, source: &str, span: Span) -> Option<LowerError> {
 
 /// A relative file path (it has a folder or an extension) that leaves the
 /// app or starts outside [`BUNDLED`]. A scheme (`https:`, `symbol:`,
-/// `data:`, a package's), a host path (`/…`) and a bare word are not.
+/// `data:`, a package's), a host path (`/…`) and a bare word are not. Folders
+/// are `/`-separated on every host, as for fonts and sounds
+/// (`exact_plan::is_portable_asset_path`), so a backslash is outside.
 fn is_outside(source: &str) -> bool {
     let scheme = source.split_once(':').is_some_and(|(s, _)| {
         s.starts_with(|c: char| c.is_ascii_alphabetic())
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
     });
-    if source.is_empty() || scheme || source.starts_with('/') || !source.contains(['/', '.']) {
+    if source.is_empty() || scheme || source.starts_with('/') || !source.contains(['/', '.', '\\'])
+    {
         return false;
     }
-    let path = Path::new(source);
-    if path
-        .components()
-        .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
-    {
+    if source.contains('\\') || source.split('/').any(|s| s == "..") {
         return true;
     }
-    let first = path.components().find_map(|c| match c {
-        Component::Normal(first) => first.to_str(),
-        _ => None,
-    });
+    let mut folders = source.split('/').filter(|s| !s.is_empty() && *s != ".");
+    let first = folders.next();
     // `assets/` itself, with no file under it, names nothing either.
-    !(first.is_some_and(|f| BUNDLED.contains(&f)) && path.components().count() > 1)
+    !(first.is_some_and(|f| BUNDLED.contains(&f)) && folders.next().is_some())
 }
 
 #[cfg(test)]
@@ -151,6 +144,8 @@ mod tests {
             "../logo.png",
             "src/assets/logo.png",
             "public/clip.mp4",
+            "assets\\logo.png",
+            "assets/..",
         ] {
             assert!(is_outside(outside), "{outside} ships");
         }
