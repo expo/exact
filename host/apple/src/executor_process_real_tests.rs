@@ -44,6 +44,7 @@ fn core_in(grants: &str, dir: std::path::PathBuf) -> (Core, Receiver<()>, std::p
 
 fn request(ticket: u64, body: serde_json::Value, stream: bool) -> RequestOut {
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "server".into(),
         request: Request::process(body.to_string().into_bytes(), stream, 1 << 20),

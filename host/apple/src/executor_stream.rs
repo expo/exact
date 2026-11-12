@@ -579,3 +579,7 @@ mod upload;
 #[cfg(test)]
 #[path = "executor_stream_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "executor_stream_timeout_tests.rs"]
+mod timeout_tests;

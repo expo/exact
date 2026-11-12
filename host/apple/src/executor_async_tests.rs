@@ -151,6 +151,7 @@ fn core_with_upload_copy(
 
 fn job(ticket: u64, request: Request) -> RequestOut {
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "test".into(),
         request,

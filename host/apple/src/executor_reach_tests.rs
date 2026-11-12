@@ -115,6 +115,7 @@ fn one(url: &str, reach: Reach) -> (Outcome, Vec<String>) {
     }
     request.reach = reach;
     let out = RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket: 1,
         target: "test".into(),
         request,

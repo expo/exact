@@ -952,6 +952,13 @@ impl<D: DataSource> Runner<D> {
             .extend(refusal.is_none().then_some(RequestOut {
                 ticket,
                 target: name,
+                class: match target {
+                    Target::Resource(_) if request.is_plain_http() => RequestClass::Read,
+                    Target::Sent(m, _) if request.is_plain_http() => {
+                        RequestClass::Parallel(m as u32)
+                    }
+                    _ => RequestClass::Ordered,
+                },
                 request,
                 forced,
             }));

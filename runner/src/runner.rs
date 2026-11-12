@@ -139,7 +139,7 @@ pub use split::{press_writes_router, StackSplit};
 pub use uploads::{UploadEnd, UploadMark};
 
 use crate::instance::{Ids, InstanceError, InstanceStep, SurfaceUpdate, Tree, Update};
-use crate::request::{Answer, Dispatch, Outcome, Request, RequestOut};
+use crate::request::{Answer, Dispatch, Outcome, Request, RequestClass, RequestOut};
 use crate::store::{Store, StoreWrite};
 use crate::vm::{self, Env, Frame, RowSlots};
 use exact_kernel::{CommitReceipt, Kernel, ViewId};

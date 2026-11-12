@@ -143,6 +143,7 @@ fn setup_with_grants(grants: &str) -> (Core, Arc<Fixture>, Receiver<()>) {
 }
 fn job(ticket: u64, request: Request) -> RequestOut {
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "test".into(),
         request,

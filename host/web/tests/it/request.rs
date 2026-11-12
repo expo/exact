@@ -184,6 +184,7 @@ fn storage_batch_preserves_text_and_scope_and_refuses_invalid_utf8() {
         request.grants = Some(String::new());
         let mut batch = exact_web::batch::Batch::default();
         batch.request(&RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket: 1,
             target: "backup".into(),
             request,
@@ -212,6 +213,7 @@ fn surface_batch_and_outcomes_keep_their_typed_kind() {
     ] {
         let mut batch = exact_web::batch::Batch::default();
         batch.request(&RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket: 7,
             target: "save".into(),
             request,
@@ -246,6 +248,7 @@ fn surface_batch_and_outcomes_keep_their_typed_kind() {
     mixed.storage = Some(b"{}".to_vec());
     let mut batch = exact_web::batch::Batch::default();
     batch.request(&RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket: 8,
         target: "save".into(),
         request: mixed,

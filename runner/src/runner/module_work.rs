@@ -245,6 +245,7 @@ impl<D: DataSource> Runner<D> {
                         request.reach = r.reach_of(authority.origin);
                         r.module_work.tickets.insert(next, (token, authority));
                         r.requests.push(RequestOut {
+                            class: crate::RequestClass::Ordered,
                             ticket: next,
                             target: NAME.into(),
                             request,

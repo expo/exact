@@ -398,6 +398,24 @@ impl Request {
             || self.continuation.is_some()
     }
 
+    /// Eligible for read or parallel-send overlap (LLP 1162 D1).
+    pub fn is_plain_http(&self) -> bool {
+        self.http == HttpScheduling::Ordered
+            && self.storage.is_none()
+            && self.continuation.is_none()
+            && self.surface.is_none()
+            && !self.stream
+            && !self.socket
+            && self.listen.is_none()
+            && !self.is_process()
+            && self.long_poll.is_none()
+            && !self.upload_progress
+            && !self.is_native()
+            && !self.is_auth()
+            && self.body_from.is_none()
+            && self.body_to.is_none()
+    }
+
     /// A `GET`.
     pub fn get(url: &str) -> Request {
         Request {
@@ -1236,6 +1254,18 @@ impl Dispatch {
     }
 }
 
+/// What the executor may overlap (LLP 1162 D1). The runner sets it when it hands a request out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RequestClass {
+    /// Starts when everything before it in the ordered sequence has ended.
+    #[default]
+    Ordered,
+    /// A plain HTTP request a resource's answer made: it does not wait for the reads before it.
+    Read,
+    /// A send of `plan.mutations[m]`, a `parallel` mutation: it does not wait for that mutation's other sends.
+    Parallel(u32),
+}
+
 /// A request the host is to run: its ticket, the resource or mutation it
 /// answers, and the request. Taken by [`Runner::take_requests`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1246,6 +1276,8 @@ pub struct RequestOut {
     pub target: String,
     /// What to run.
     pub request: Request,
+    /// What the executor may overlap (LLP 1162 D1).
+    pub class: RequestClass,
     /// The app forced it (`refresh`): the executor bypasses its cache.
     pub forced: bool,
 }

@@ -13,6 +13,7 @@ fn one(op: impl FnOnce(&mut Batch)) -> String {
 
 fn request(ticket: u64, request: Request, forced: bool) -> RequestOut {
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "feed \"home\"".into(),
         request,

@@ -91,6 +91,7 @@ impl<D: DataSource> Runner<D> {
         let behind = self.mapper_turns.by_stream.entry(stream).or_default();
         behind.out = Some((ticket, held));
         self.requests.push(RequestOut {
+            class: crate::RequestClass::Ordered,
             ticket,
             target: name,
             request,

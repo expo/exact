@@ -139,6 +139,7 @@ fn socket(ticket: u64) -> RequestOut {
         unreachable!()
     };
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "feed".into(),
         request,

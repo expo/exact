@@ -230,6 +230,7 @@ fn stream(ticket: u64, path: &str, ceiling: u32) -> RequestOut {
         unreachable!()
     };
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "progress".into(),
         request,
@@ -253,6 +254,7 @@ fn upload_within(ticket: u64, path: &str, size: usize, ceiling: u32) -> RequestO
         unreachable!()
     };
     RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "upload".into(),
         request,
@@ -330,6 +332,7 @@ fn three_messages_then_a_close_and_the_worker_stays_free() {
     for ticket in [2, 3] {
         core.run_owned(
             RequestOut {
+                class: exact_runner::RequestClass::Ordered,
                 ticket,
                 target: "read".into(),
                 request: Request::get("https://example.test/read").independent_http(4096),
@@ -448,6 +451,7 @@ fn a_stream_opens_while_every_independent_worker_holds_a_reply() {
     for ticket in 1..=INDEPENDENT as u64 {
         core.run_owned(
             RequestOut {
+                class: exact_runner::RequestClass::Ordered,
                 ticket,
                 target: "held".into(),
                 request: Request::get("https://example.test/hold").independent_http(4096),
@@ -482,6 +486,7 @@ fn streams_have_their_own_bound_beside_a_full_independent_lane() {
         let request = Request::get("https://example.test/read").independent_http(4096);
         core.run_owned(
             RequestOut {
+                class: exact_runner::RequestClass::Ordered,
                 ticket,
                 target: "read".into(),
                 request,
@@ -492,6 +497,7 @@ fn streams_have_their_own_bound_beside_a_full_independent_lane() {
         .unwrap();
     }
     let read = |ticket| RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket,
         target: "read".into(),
         request: Request::get("https://example.test/read").independent_http(4096),
@@ -1265,6 +1271,7 @@ fn thirty_uploads_waiting_leave_an_independent_fetch_its_room() {
     let _going: Vec<Feed> = (0..3).map(|at| feed(&script, at)).collect();
     assert_eq!(core.shared.uploads.waiting().0, 27);
     let fetch = RequestOut {
+        class: exact_runner::RequestClass::Ordered,
         ticket: 100,
         target: "data".into(),
         request: Request::get("https://example.test/data").independent_http(1 << 20),
@@ -1334,6 +1341,7 @@ fn an_upload_waiting_for_its_lanes_room_starts_when_a_request_let_go_frees_it() 
     let (core, script, _woke) = setup();
     for ticket in 1..=3 {
         let image = RequestOut {
+            class: exact_runner::RequestClass::Ordered,
             ticket,
             target: "image".into(),
             request: Request::get("https://example.test/hold").independent_http(22 << 20),
@@ -1393,26 +1401,6 @@ fn an_upload_the_grants_refuse_never_starts() {
         "{end:?}"
     );
     assert!(core.let_go_started(|_| false).is_empty());
-}
-
-#[test]
-fn a_reply_that_lands_as_the_deadline_passes_stands() {
-    use super::timed_out;
-    let reply = Outcome::Response(exact_runner::Response {
-        status: 201,
-        headers: Vec::new(),
-        body: Vec::new(),
-    });
-    assert!(matches!(timed_out(reply, true, 50), Outcome::Response(r) if r.status == 201));
-    let aborted = Outcome::Failed {
-        kind: FailureKind::Aborted,
-        message: "native request aborted".into(),
-    };
-    assert!(matches!(
-        timed_out(aborted.clone(), true, 50),
-        Outcome::Failed { kind: FailureKind::Timeout, message } if message == "the request timed out after 50 ms"
-    ));
-    assert_eq!(timed_out(aborted.clone(), false, 50), aborted);
 }
 
 /// URLSession end to end (local patch 23): a 16 MiB body from an app file
