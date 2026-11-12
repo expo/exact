@@ -32,7 +32,7 @@
 //! browser's event loop has it (LLP 1027.003.000 §13, option 1; hn-reader
 //! F7): an answer that awaits a promise another answer started (a fetch
 //! memoized across answers, a queue behind another's storage) waits while
-//! the module has work outstanding and is asked again after each delivery;
+//! the module has work outstanding and is asked again when its chain moves (LLP 1162 D3);
 //! one that waits with nothing outstanding is refused as pending on nothing.
 //! A worker-placed source runs one turn to its end, so it still refuses one.
 //! `store` is `{get, set, forget}` over the runner's [`Store`]: reads
@@ -42,8 +42,8 @@
 //! formatting without an explicit timestamp refuse, including at module
 //! initialization and after await. Explicit-value Date construction and UTC
 //! arithmetic remain available. An answer's own `setTimeout` (and
-//! `AbortSignal.timeout`) is due on the runner's clock: the runner keeps the
-//! answer's continuation back until then, and the timer runs in that turn;
+//! `AbortSignal.timeout`) is due on the runner's clock. Its continuation
+//! wakes when due or when another turn changes its wait (LLP 1162 D3);
 //! the other timers refuse (LLP 1027.000 D1). `scheduler.yield()`
 //! ends an answer's turn: the host asks it again at once, and it goes on in
 //! a new turn with a budget of its own (LLP 1141.001 D10).
@@ -186,9 +186,8 @@ struct Parked {
     last: bool,
 }
 
-/// The ticket of an answer that awaits another answer's work (a fetch it
-/// shares, a queue behind another's storage): it waits while the module has
-/// work outstanding, and is asked again when its chain moves (LLP 1162 D3).
+/// An answer awaiting module work or a live-clock timer: a turn that changes
+/// its wait can wake it before its deadline (LLP 1162 D3).
 const WAITING: u64 = u64::MAX - 1;
 
 /// The ticket of an answer that awaited `scheduler.yield()` (LLP 1141.001
@@ -196,17 +195,15 @@ const WAITING: u64 = u64::MAX - 1;
 /// resolve in that new turn, which has a budget of its own.
 const YIELDED: u64 = u64::MAX - 2;
 
-/// The ticket of an answer that awaits only its own timers (`setTimeout`,
-/// LLP 1027.000 D1): the runner keeps its continuation back until the
-/// earliest is due (`Request::due_ms`), and the timer runs in that turn.
+/// A timer at bake, on a worker, or already due (`Request::due_ms`). Future
+/// timers on main use `WAITING` so another turn can change their wait (LLP 1162 D3).
 const TIMER: u64 = u64::MAX - 3;
 
 /// The prefix of a handler's name as the runner asks for it (LLP 1133.016 D9).
 const TOOL: &str = "tool:";
 
-/// The continuation of a wait on `ticket`: one for the answer's own timer is
-/// kept back until the runner's clock reaches `due`; one for other answers'
-/// work and a timer is released then, if nothing came first.
+/// Bake and worker timers stay with the runner until due. A live-clock wait
+/// reaches the host now so another turn can wake it early (LLP 1162 D3).
 fn timer_due(request: Request, ticket: u64, due: Option<u64>) -> Request {
     match due {
         Some(ms) if ticket == TIMER => request.due(ms),
@@ -943,8 +940,7 @@ impl Module {
                 engine
                     .drain()
                     .map_err(|e| DataError::Unavailable(format!("`{source}` threw: {e}")))?;
-                let text = engine
-                    .call("__exact_settle", [&call.to_string(), "", ""])
+                let text = Module::settle_reply(engine, &call.to_string(), "")
                     .map_err(|e| DataError::Unavailable(format!("`{source}` threw: {e}")))?;
                 reply = Module::decode_reply(sig, engine, source, &text)?;
             }

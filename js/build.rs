@@ -196,6 +196,7 @@ fn main() {
         "pure",
         "spin",
         "shared-load",
+        "liveness",
         "overlay",
         "overlay-none",
         "overlay-some",

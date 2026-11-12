@@ -64,7 +64,9 @@ pub fn settle<D: DataSource>(
     executor: &Executor,
     deadline: Instant,
 ) -> Result<Settled, RunnerError> {
-    settle_with_clock(runner, executor, deadline, Instant::now)
+    settle_with_clock(runner, executor, deadline, Instant::now, || {
+        executor.drain().pop()
+    })
 }
 
 fn settle_with_clock<D: DataSource>(
@@ -72,6 +74,7 @@ fn settle_with_clock<D: DataSource>(
     executor: &Executor,
     deadline: Instant,
     clock: impl Fn() -> Instant,
+    mut next: impl FnMut() -> Option<super::pump::Completion>,
 ) -> Result<Settled, RunnerError> {
     let mut held = Held::default();
     loop {
@@ -79,33 +82,20 @@ fn settle_with_clock<D: DataSource>(
         if settle_aborts(runner, executor)? {
             continue;
         }
-        // Check before taking the next reply: an open stream may always have
-        // one waiting.
-        if runner
-            .pending()
-            .iter()
-            // A re-ask's wait is the runner's, never the executor's: no timer
-            // fires here, and the checkpoint lists it for the client to ask.
-            // A stream that has answered is open, not in flight: the page
-            // shows its message, and the checkpoint lists it for the client
-            // to subscribe again. A mutation's stream ends with the render.
-            .all(|(_, t)| {
-                held.refused.contains(t)
-                    || held.busy.contains(t)
-                    || runner.is_reask_wait(*t)
-                    || runner.is_open_stream(*t)
-            })
-        {
-            return Ok(if held.busy.is_empty() {
-                Settled::Complete
-            } else {
-                Settled::Busy
-            });
+        if let Some(settled) = completion(runner, &held) {
+            return Ok(settled);
         }
         executor.begin_pump();
         let mut pump = super::pump::Pump::new(&clock);
         let mut taken = false;
-        while let Some((ticket, outcome, timing)) = pump.take(|| executor.drain().pop()) {
+        loop {
+            // An open stream's first value can complete the render (LLP 1162 D3).
+            if let Some(settled) = completion(runner, &held) {
+                return Ok(settled);
+            }
+            let Some((ticket, outcome, timing)) = pump.take(&mut next) else {
+                break;
+            };
             taken = true;
             if matches!(
                 outcome,
@@ -118,18 +108,40 @@ fn settle_with_clock<D: DataSource>(
             } else {
                 runner.fulfill_measured(ticket, outcome, timing)?;
             }
-            if Instant::now() >= deadline {
+            if clock() >= deadline {
                 return Ok(Settled::Deadline);
             }
         }
         if taken {
             continue;
         }
-        if Instant::now() >= deadline {
+        if clock() >= deadline {
             return Ok(Settled::Deadline);
         }
         executor.wait(deadline);
     }
+}
+
+fn completion<D: DataSource>(runner: &Runner<D>, held: &Held) -> Option<Settled> {
+    runner
+        .pending()
+        .iter()
+        // A re-ask's wait is the runner's, never the executor's: no timer
+        // fires here, and the checkpoint lists it for the client to ask.
+        // A stream that has answered is open, not in flight: the page
+        // shows its message, and the checkpoint lists it for the client
+        // to subscribe again. A mutation's stream ends with the render.
+        .all(|(_, t)| {
+            held.refused.contains(t)
+                || held.busy.contains(t)
+                || runner.is_reask_wait(*t)
+                || runner.is_open_stream(*t)
+        })
+        .then_some(if held.busy.is_empty() {
+            Settled::Complete
+        } else {
+            Settled::Busy
+        })
 }
 
 #[cfg(test)]

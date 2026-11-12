@@ -385,6 +385,8 @@
       return arm("setTimeout()", callback, Math.max(Number(delay) | 0, 0), Array.prototype.slice.call(arguments, 2)); // `long`, as WebIDL converts it
     });
     fixed("clearTimeout", function clearTimeout(id) {
+      var timer = armed.get(id);
+      if (timer) timer.call.ran = true; // Its parked deadline must be read again (LLP 1162 D3).
       armed.delete(id);
       reports = reports.filter(function (r) { return r.id !== id; });
     });
@@ -447,10 +449,12 @@
       left: function (signal) { var s = deadline(signal); return s && !signal.aborted ? Math.max(1, s.due - time()) : undefined; },
       expire: function (signal) { var s = deadline(signal); if (s && !signal.aborted) { armed.delete(s.id); s.abort(); } },
       checkpoint: function () {
+        var ran = reports.length > 0;
         while (reports.length) {
           var report = reports.shift();
           try { report.run(); } catch (e) { /* the tracker's own; nothing to tell */ }
         }
+        return ran;
       },
     };
   }

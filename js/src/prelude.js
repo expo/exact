@@ -1003,6 +1003,8 @@
   var captureString = global.__exact_capture_string, gcEpoch = global.__exact_gc_epoch || function () { return 0; };
   delete global.__exact_capture_string; delete global.__exact_gc_epoch;
   var heldLocks = new Set();
+  // Undrained synchronous app callbacks can queue any waiter's reactions (LLP 1162 D3).
+  function readyAll() { calls.forEach(function (c) { c.ran = true; }); }
   function cleanUp() { freeLocks(); var waiting = false; calls.forEach(function (c) { if (!c.stream && !c.letGo) waiting = true; }); if (gcOwed && !waiting) { gcOwed = false; gcEpoch(true); } }
   function ok(value, held) {
     var reply = { tag: 0, value: value === undefined ? null : value };
@@ -1149,6 +1151,8 @@
       // The page's realm keeps its background-delivery rule (LLP 1097 D7).
       return JSON.stringify({ tag: 1, call: call.id, ticket: 0, waiting: true });
     }
+    // A later turn can clear even a timer that parked alone: keep its owner releasable (LLP 1162 D3).
+    if (moduleWide && moving && due !== undefined && later && host(21, "", "") !== undefined) return JSON.stringify({ tag: 1, call: call.id, ticket: 0, waiting: true, timer: due });
     if (due !== undefined) return JSON.stringify({ tag: 1, call: call.id, ticket: 0, timer: due });
     call.replied = true;
     calls.delete(call.id); cleanUp();
@@ -1261,6 +1265,7 @@
   // Text is measured and image handles are answered where the draw runs
   // (LLP 1056 D8, D9): the page's functions on the web, else the host door.
   global.__exact_draw = function (request, measure, image) {
+    readyAll();
     initializing = false;
     if (!global.exact.drawCanvas) throw new Error("the module exports no draw");
     return global.exact.drawCanvas(request, {
@@ -1269,6 +1274,7 @@
     });
   };
   global.__exact_retire = function (retired) {
+    readyAll();
     if (global.exact.retireCanvases) global.exact.retireCanvases(retired);
     return "";
   };
@@ -1374,14 +1380,15 @@
       return JSON.stringify({ tag: 3, call: mine.id });
     } catch (e) { if (mine !== call) { endYields(mine); mine.replied = true; } return fail(e); }
     // A synchronous mapper has no drain: its queued reactions still need a waiter's turn (LLP 1162 D3).
-    finally { if (mine !== call && mine.replied) calls.forEach(function (c) { c.ran = true; }); mine.sync = false; currentCall = null; mapping = null; inMapper = false; if (turn) handSocketOps(turn); }
+    finally { if (mine !== call && mine.replied) readyAll(); mine.sync = false; currentCall = null; mapping = null; inMapper = false; if (turn) handSocketOps(turn); }
   };
   // The module's storage, after a call or a delivery (LLP 1097 D5, D8):
   // whether the operation in flight is the background's (`head`), the
   // operations queued behind it and in flight, an answer's or the
   // background's, and what landed and failed.
   global.__exact_background = function () {
-    timers.checkpoint();
+    // Reporting can read an app's error getters after the last drain (LLP 1162 D3).
+    if (timers.checkpoint()) readyAll();
     currentCall = null;
     return JSON.stringify({ head: headOwner() === background, queued: queue.length, inFlight: head ? 1 : 0,
       writes: storageCounts.writes, done: storageCounts.done, failed: storageCounts.failed, last: storageCounts.last });
@@ -1402,6 +1409,7 @@
     try { return global.exact.overlay === undefined ? "" : "1"; } catch (e) { return "1"; }
   };
   global.__exact_overlay = function (source, argsJson, payloadJson) {
+    readyAll();
     initializing = false;
     // A realm whose answer spans tasks (the web's) has one current between them: put it back after. Both reads of
     // `exact.overlay` run guarded, so a getter's store call is refused as the overlay's is.

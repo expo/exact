@@ -49,12 +49,30 @@ impl Module {
             let text = engine.call("__exact_ready", [&ids, "", ""]).ok()?;
             serde_json::from_str::<HashSet<u64>>(&text).ok()
         });
+        self.readied(ready.as_ref());
+    }
+
+    fn readied(&mut self, ready: Option<&HashSet<u64>>) {
         for (_, p) in &mut self.parked {
             if p.ticket == WAITING {
                 // A failed readiness query must not strand an answer (LLP 1162 D3).
-                p.ready = ready.as_ref().is_none_or(|ids| ids.contains(&p.call));
+                p.ready = ready.is_none_or(|ids| ids.contains(&p.call));
             }
         }
+    }
+
+    pub(crate) fn release_ready(&mut self, now: f64) -> Vec<(u64, Dispatch)> {
+        let mut released = self.host.secrets.release();
+        for token in std::mem::take(&mut self.waiters) {
+            match self.wake(token, now) {
+                Some(work) => released.push((token, work)),
+                None if self.parked.iter().any(|(_, p)| p.call == token) => {
+                    self.waiters.push(token)
+                }
+                None => {}
+            }
+        }
+        released
     }
 
     /// With nothing outstanding, a last settle refuses an answer still pending on nothing.
@@ -243,3 +261,7 @@ impl Module {
         self.refresh_background();
     }
 }
+
+#[cfg(all(test, exact_js_engine))]
+#[path = "turns_tests.rs"]
+mod tests;

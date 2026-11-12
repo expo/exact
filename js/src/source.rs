@@ -186,18 +186,7 @@ impl DataSource for Module {
 
     fn release(&mut self, store: &Store) -> Vec<(u64, Dispatch)> {
         self.refresh_waiting();
-        // Waiting answers whose wait may be over are asked again.
-        let mut released = self.host.secrets.release();
-        for token in std::mem::take(&mut self.waiters) {
-            match self.wake(token, store.clock_ms()) {
-                Some(work) => released.push((token, work)),
-                None if self.parked.iter().any(|(_, p)| p.call == token) => {
-                    self.waiters.push(token)
-                }
-                None => {}
-            }
-        }
-        released
+        self.release_ready(store.clock_ms())
     }
 
     fn continuation(&mut self, token: u64) -> Option<Box<dyn FnOnce() -> Outcome + Send>> {
