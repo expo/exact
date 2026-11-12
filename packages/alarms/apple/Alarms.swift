@@ -37,6 +37,7 @@ public final class AlarmsModule: ExactPackage {
 
     /// AlarmKit draws an alarm's countdown with the host's extension, which a build without alarms
     /// (`--extensions` leaving them out) does not package: the module is then unavailable, and refuses.
+    /// The build sets the key; an app embedding ExactKit that draws the countdown in its own extension sets it itself.
     private static let packaged = Bundle.main.object(forInfoDictionaryKey: "ExactAlarmCountdown") as? Bool == true
 
     public func later(_ name: String, _ args: [String: Any], preferred: Any?, reply: @escaping ([String: Any]) -> Void) {
