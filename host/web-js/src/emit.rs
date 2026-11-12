@@ -187,8 +187,13 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         None => style::project(plan, &sites, &mut warnings)?,
     };
     let paint = crate::paint::needed(plan, &parts);
-    // A look's colour needs rules for the boundaries below only where one is.
-    let boundaries = (parts.iter().flatten()).any(|p| p.props.contains_key("data-x-b"));
+    // A look's colour needs rules for the boundaries below only where one
+    // takes a colour (`data-x-b` without its colour bit; an accent-only part
+    // sets every bit).
+    let boundaries = (parts.iter().flatten()).any(|p| {
+        (p.props.get("data-x-b"))
+            .is_some_and(|own| own.parse::<u32>().is_ok_and(|own| own & 1 == 0))
+    });
     let mut parts = parts;
     if !paint {
         for p in parts.iter_mut().flatten() {

@@ -308,10 +308,15 @@ extension NodeView {
         pressPaint.down || pressPaint.releaseHeld ? Self.pressOverlay(style)["text_color"] : nil
     }
 
-    /// Views a batch mounted below take the colour this view, or the nearest
-    /// above, lends now, as the views already there do.
-    func inkMounted() {
-        if lent != nil { inkAgain() } else if !wrote("text_color") { liveLender()?.inkAgain() }
+    /// The views a batch placed take the colour a node above lends now (a
+    /// look's or a press's), as the views already there do: each lender inks
+    /// its subtree again, once.
+    static func inkPlaced(_ views: some Sequence<NodeView>) {
+        var lenders = Set<ObjectIdentifier>()
+        for view in views where !view.wrote("text_color") {
+            guard let lender = view.liveLender(), lenders.insert(ObjectIdentifier(lender)).inserted else { continue }
+            lender.inkAgain()
+        }
     }
 
     /// A style that removed this press's colour can expose an ancestor's

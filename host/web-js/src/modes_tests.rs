@@ -509,10 +509,11 @@ fn the_design_readers_structure_moves_for_what_the_plan_keeps() {
 /// @ref LLP 1121 D8 (stage 8 B): a node's `:hover` and `:focus-visible`
 /// looks are the sheet's rules for its set, with a varying token as its
 /// property; the node names its set; `:active` is the node's press paint, an
-/// absolute opacity included; a node without looks has neither.
+/// absolute opacity included; a node without looks has neither; with no
+/// boundary on the page, a look's colour adds no rule for one.
 #[test]
 fn state_looks_are_sheet_rules_for_the_nodes_set() {
-    let part = ":active\n          background-color = \"surface.card\"\n          opacity = 0.6\n          -exact-press-scale = 0.95\n        :hover\n          border-color = \"brand\"\n        :focus-visible\n          background-color = \"surface.card\"\n";
+    let part = ":active\n          background-color = \"surface.card\"\n          opacity = 0.6\n          -exact-press-scale = 0.95\n        :hover\n          border-color = \"brand\"\n        :focus-visible\n          background-color = \"surface.card\"\n          color = \"brand\"\n";
     let view = format!("component App\n  state n = 0\n  action go\n    n = n + 1\n  view\n    column\n      column testId=\"card\" press=go background-color=\"#ffffff\"\n        {part}        text \"c\"\n      column testId=\"same\" press=go\n        {part}        text \"d\"\n      column testId=\"plain\" press=go\n        text \"p\"\n      column testId=\"cleared\" press=go opacity=0.5\n        :hover\n          opacity = \"unset\"\n        text \"u\"\n");
     let out = emitted("looks", DESIGN, &view);
     assert_eq!(
@@ -556,6 +557,11 @@ fn state_looks_are_sheet_rules_for_the_nodes_set() {
     assert!(
         out.css.contains("opacity:unset!important"),
         "an explicit clear, as a static row's: {}",
+        out.css
+    );
+    assert!(
+        !out.css.contains("data-x-lc"),
+        "a page with no boundary carries no rule for one: {}",
         out.css
     );
 }

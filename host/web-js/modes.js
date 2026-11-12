@@ -6,10 +6,11 @@
 // (`data-x-pin`) over the tuple around it, and writes on the boundary every
 // inherited colour row it does not set, from the text of the nearest
 // ancestor's row when that row read a token, as the runner's implied rows
-// are (`instance/theme.rs`); a boundary that writes the colour again names
-// the state looks whose colour would reach it (`data-x-lc`), so it takes
-// theirs while one holds. It runs after each commit, a pin's change and
-// `setMode`. Like the runner's, the window's modes do not persist (§9 Q5).
+// are (`instance/theme.rs`); a boundary that does not set its own colour
+// names the state looks whose colour reaches it (`data-x-lc`), so it takes
+// theirs, resolved in its own modes, while one holds. It runs after each
+// commit, a pin's change and `setMode`. Like the runner's, the window's modes
+// do not persist (§9 Q5).
 import { After, PropHooks, inflight, say } from "./rt.js";
 
 // The rows by bit (`modes.rs` `CHANNELS`).

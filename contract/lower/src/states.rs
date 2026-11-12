@@ -167,13 +167,15 @@ pub(crate) fn refusal(state: &str, row: &Attr, values: bool) -> Option<LowerErro
     // so `inherit` and `currentcolor` say nothing there; `:active` refuses
     // them too.
     let look = host && state != "active";
-    if let (true, "color", Expr::Str(value, span)) = (look, row.name.as_str(), &row.value) {
-        if ["inherit", "currentcolor"].contains(&value.trim().to_ascii_lowercase().as_str()) {
-            return Some(LowerError {
-                id: "lower-attr-value",
-                message: format!("`:{state} color=\"{value}\"`: a look's colour stands in for the node's own, so it names a colour or a token's name; write the value"),
-                span: *span,
-            });
+    if look && row.name == "color" {
+        if let Expr::Str(value, span) = &row.value {
+            if ["inherit", "currentcolor"].contains(&value.trim().to_ascii_lowercase().as_str()) {
+                return Some(LowerError {
+                    id: "lower-attr-value",
+                    message: format!("`:{state} color=\"{value}\"`: a look's colour stands in for the node's own, so it names a colour or a token's name; write the value"),
+                    span: *span,
+                });
+            }
         }
     }
     if values && look && !matches!(row.value, Expr::Str(..) | Expr::Number(..) | Expr::Bool(..)) {

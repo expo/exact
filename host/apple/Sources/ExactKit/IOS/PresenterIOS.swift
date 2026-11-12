@@ -940,7 +940,6 @@ package final class Presenter {
                 if flats.isFlat(id) { if flats.adopt(id, op.ids) { return }; flats.promote(id) }
                 guard let parent = views[id] else { return }
                 placeChildren(parent, op.ids)
-                parent.inkMounted()
             case .surface:
                 if let v = views[id] { session?.canvases.surface(view: v, name: op.payload["name"] as? String ?? "", values: op.payload["values"] ?? []) }
             case .canvas2d: if let v = views[id] { canvas2d.apply(id, op.payload, layer: v.layer) }
@@ -1095,6 +1094,7 @@ package final class Presenter {
         })
         let ariaProps = batch.ops.filter { $0.op == .props && ($0.props["accessibilityDisabled"] != nil || $0.clear.contains("accessibilityDisabled")) }.map(\.id)
         let disabledRoots = Set(ariaProps).union(ariaMoved)
+        NodeView.inkPlaced(placedAnew[anewFrom...].compactMap { views[$0] })
         placedAnew.removeSubrange(anewFrom...)
         // What a node's name, state and focus read: not its box (an autofocus waiting for one is indexed).
         let named = touchedAndAbove(batch.ops.compactMap { [.create, .props, .style, .children, .paragraph, .flow].contains($0.op) ? $0.id : nil })
