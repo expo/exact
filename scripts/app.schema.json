@@ -991,6 +991,14 @@
               "description": "Tags the web build writes into the <head> of every document: the shell, each pre-rendered page and the 404 page. Each entry is one tag, {\"script\": {...}}, {\"link\": {...}} or {\"meta\": {...}}, whose value is its attributes (a string, or true for a bare one such as async); a script's `text` is its content. For what a site says once to the browser (an analytics script, a preconnect, site-wide JSON-LD); a page's own title and metas are the Contract `head` element's. The same on every page and web only.",
               "type": "array",
               "items": { "$ref": "#/$defs/webHeadEntry" }
+            },
+            "csp": {
+              "description": "The app's part of the Content-Security-Policy the render server sends with each page; a static host and `exact serve` send none. Exact's policy already admits each inline script in `head` by its hash and each script `src` by its origin. Each key is a directive in lower case. A list adds its sources after Exact's for that directive (for a directive Exact does not write, after what CSP falls back to: `'self'` from `default-src`). A string replaces Exact's value, and in it the word `exact` stands for Exact's sources. false sends no policy. Beside Exact's hashes the browser ignores `'unsafe-inline'`, and `'strict-dynamic'` makes it ignore `'self'`, so Exact's app.js stops loading: either keyword goes in a string without `exact`. For example {\"script-src\": [\"https://www.googletagmanager.com\"], \"connect-src\": [\"https://*.google-analytics.com\"]}.",
+              "anyOf": [{ "const": false }, { "$ref": "#/$defs/webCsp" }]
+            },
+            "cspReportOnly": {
+              "description": "A policy sent as Content-Security-Policy-Report-Only by the render server, to try one before it is enforced: the same shape as `csp`, over a copy of Exact's policy. Absent or false, none is sent.",
+              "anyOf": [{ "const": false }, { "$ref": "#/$defs/webCsp" }]
             }
           }
         }
@@ -1360,6 +1368,11 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "webCsp": {
+      "description": "Directives by name in lower case, each a list of sources to add to Exact's, or a string that replaces Exact's value (the word `exact` standing for Exact's sources).",
+      "type": "object",
+      "additionalProperties": { "anyOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] }
+    },
     "webHeadEntry": {
       "oneOf": [
         { "type": "object", "required": ["script"], "additionalProperties": false, "properties": { "script": { "type": "object", "properties": { "text": { "type": ["string", "object", "array"], "description": "The script's content; an object or list is written as JSON (application/ld+json, importmap, speculationrules). In JSON, `<!--`, and `</script` before whitespace, `/` or `>`, are written as `\\u003C…`, which JSON reads alike. A string is written as it is, and one holding either is refused: write `\\x3C!--` or '<' + '!--' inside a string, or a space after `<` in code." } }, "additionalProperties": { "$ref": "#/$defs/webHeadAttribute" } } } },

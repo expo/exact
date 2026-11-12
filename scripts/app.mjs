@@ -608,7 +608,7 @@ export function readManifest(dir, name) {
     // LLP 1046.008 amendment (2026-10-04): the GPU hooks crate was renamed.
     : /^game\.presentation: /.test(p)
       ? 'game.presentation is now game.render: rename the key, move presentation/ to render/, name the crate <name>-render and rename its "type" to "hooks" (LLP 1046.008, amendment of 2026-10-04)'
-      : p).filter((p) => !/^host\.web\.head(\[|: )/.test(p)).concat(webHeadProblems(parsed));
+      : p).filter((p) => !/^host\.web\.(head(\[|: )|csp|cspReportOnly)/.test(p)).concat(webHeadProblems(parsed), webCspProblems(parsed));
   if (!problems.length) problems.push(...installProblems(parsed), ...gpuModuleProblems(parsed), ...documentTypeProblems(parsed), ...shareTargetProblems(parsed), ...protocolHandlerProblems(parsed), ...appleIconProblems(parsed, dir));
   if (problems.length) throw new Error(`${path} does not conform to scripts/app.schema.json:\n  ${problems.join('\n  ')}`);
   nativeResourceMappings(parsed); nativeResourceMappings(parsed, 'ios');
@@ -616,7 +616,7 @@ export function readManifest(dir, name) {
 }
 
 import { DOCUMENT_UTIS } from './document-utis.mjs';
-import { webHeadProblems } from './web-head.mjs';
+import { webCspProblems, webHeadProblems } from './web-head.mjs';
 export { DOCUMENT_UTIS };
 ;
 

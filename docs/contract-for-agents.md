@@ -2982,8 +2982,36 @@ JSON-LD. A page's own title and metas stay its `head` element's.
   browser history. A page that loads no runtime (an `interaction` page with no handlers)
   follows a link as a new document, which runs them again.
 - The dev loop and `serve` send them too, so a tag there reports local visits. `serve` and a
-  static host send no Content-Security-Policy. The Rust render server (`<app>-render
-  --serve`) admits only Exact's own scripts, so these do not run there.
+  static host send no Content-Security-Policy, so the scripts run as on any page. The Rust
+  render server (`<app>-render --serve`) sends one. It admits each inline script here by its
+  hash and each script `src` by its origin; a JSON-LD block needs neither.
+- What those scripts load or contact in turn is the app's to allow there, in
+  `host.web.csp`. A list adds sources to Exact's for that directive. A string replaces
+  Exact's value, and the word `exact` in it stands for Exact's sources. `false` sends no
+  policy. `host.web.cspReportOnly` takes the same shape and is sent as
+  `Content-Security-Policy-Report-Only`. Google's tag, for example, loads its script and
+  sends its hits from other origins:
+
+  ```json
+  "host": { "web": { "csp": {
+    "script-src": ["https://www.googletagmanager.com"],
+    "connect-src": ["https://*.google-analytics.com", "https://*.analytics.google.com", "https://*.googletagmanager.com"]
+  } } }
+  ```
+
+  A directive Exact does not write starts from the one CSP falls back to (`'self'`, through
+  `default-src`), so a list never refuses what the page could load before. Directive names
+  are lower case. The build refuses a `,`, a `;`, a line break, or a list item with a space
+  in it, since each would end a source, a directive or the policy; the browser reads the rest.
+- Two keywords do not add. Exact's `script-src` holds hashes, and beside a hash the browser
+  ignores `'unsafe-inline'`; `'strict-dynamic'` makes it ignore `'self'` and every host
+  source, so Exact's own `app.js` stops loading. Either goes in a string without `exact`
+  (`"script-src": "'self' 'unsafe-inline' https://www.googletagmanager.com"`), which also
+  admits Exact's inline scripts.
+- A report-only policy reports to a `report-uri`. `report-to` needs a `Reporting-Endpoints`
+  header, which the server does not send, so its reports reach only the console.
+- A static host sends no CSP. A page that wants one there says it in `host.web.head` as
+  `{"meta": {"http-equiv": "Content-Security-Policy", "content": "…"}}`.
 
 ## Time, motion, graphics, and platform facts
 

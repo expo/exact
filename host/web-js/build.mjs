@@ -1,7 +1,7 @@
 import { asyncContext, bundleOptions, developmentLocalNetwork, lowered, packageConfig, webImplementations } from '../../js/bake/src/typescript.mjs';
 import { writeCrawlerFiles } from '../web/crawl.mjs';
 import { bakeWatchEnv, hatchWords, injectedProfiles, moduleDirectory, resolveApp, webAppManifest } from '../../scripts/app.mjs';
-import { webHead } from '../../scripts/web-head.mjs';
+import { webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { fileIdentity, resourceIdentities } from '../apple/assets.mjs';
 import { launchModules } from '../../scripts/launch-modules.mjs';
 // The web build's JS target: `bun host/web-js/build.mjs <app> [--plan <baked app.plan>] [--out <dir>]`.
@@ -872,6 +872,9 @@ const preloads = fonts + (args.includes('--inline') ? '' : statics.map(f => `<li
 // the whole sheet before its first render (main.js), from style.css.
 writeFileSync(resolve(out, 'style.css'), base + css);
 writeFileSync(resolve(gen, 'page-style.json'), JSON.stringify(analyze(base + css)));
+// The app's part of the render server's CSP (LLP 1048.000 D11), which it reads at start.
+const cspFile = webCspFile(manifest);
+if (cspFile) writeFileSync(resolve(gen, 'csp.json'), cspFile);
 // app.json's `host.web.head` goes after the sheet, where no search for the shell's places (its sheet, preloads and
 // title) can find a tag in an entry's text; every page composed over the shell keeps it (LLP 1048.000 D3).
 writeFileSync(resolve(out, 'index.html'), `<!doctype html>

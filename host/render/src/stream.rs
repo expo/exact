@@ -108,7 +108,8 @@ pub(crate) struct Flush<'a> {
 impl<'a> Flush<'a> {
     /// Send a 200's headers — `cache` its `Cache-Control`, compressed as
     /// `accepts` allows (brotli at the quality a page is compressed at as
-    /// it is sent, else gzip) — and `head`, flushed through the encoder.
+    /// it is sent, else gzip), `csp` its CSP header lines — and `head`,
+    /// flushed through the encoder.
     pub(crate) fn open(
         out: &'a mut TcpStream,
         head: &str,
@@ -127,9 +128,7 @@ impl<'a> Flush<'a> {
             headers.push_str(encoding.name());
             headers.push_str("\r\n");
         }
-        headers.push_str("Content-Security-Policy: ");
         headers.push_str(csp);
-        headers.push_str("\r\n");
         headers.push_str(page);
         headers.push_str("X-Content-Type-Options: nosniff\r\nReferrer-Policy: strict-origin-when-cross-origin\r\nTransfer-Encoding: chunked\r\n");
         headers.push_str(if keep {

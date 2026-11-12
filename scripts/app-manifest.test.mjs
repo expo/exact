@@ -330,9 +330,36 @@ test("host.web.head writes a script's text as it is, refuses one HTML would read
     assert.equal(problems.length, 1, code);
     assert.match(problems[0], new RegExp(`^host\\.web\\.head\\[0\\]\\.script\\.text: holds "${seen}", .*write it so the parser cannot see it`), code);
   }
+  // An attribute's `>` is escaped too, so a reader that ends the start tag at a `>` reads the whole tag.
+  assert.equal(webHead({ host: { web: { head: [{ script: { 'data-x': 'a>b"<&', text: 'x()' } }] } } }), '<script data-x="a&gt;b&quot;&lt;&amp;">x()</script>\n');
   // A JSON text reads `\u003C` as `<`.
   const json = webHead(head({ name: '</script><!--<script>' }, 'application/ld+json'));
   assert.equal(JSON.parse(json.slice(json.indexOf('>') + 1, json.lastIndexOf('</script>'))).name, '</script><!--<script>');
+});
+
+// LLP 1048.000 D11: the app's part of the render server's CSP. The build refuses only what would not be one directive
+// of one policy (CSP3 §2.3); the browser reads the rest.
+test('host.web.csp takes lists to add and strings to replace, and refuses what would end a directive or a policy', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const { webCspFile } = await import('./web-head.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-manifest-'));
+  const read = (web) => { writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Csp', app: { id: 'test.csp', name: 'Csp' }, host: { web } })); return readManifest(dir, 'fixture'); };
+  try {
+    const web = { csp: { 'script-src': ['https://tags.example'], 'img-src': "exact https://img.example", 'upgrade-insecure-requests': '' }, cspReportOnly: false };
+    assert.equal(webCspFile(read(web)), JSON.stringify(web) + '\n');
+    assert.equal(webCspFile(read({ csp: false })), '{"csp":false}\n');
+    assert.equal(webCspFile(read({})), null);
+    const refused = [
+      [{ csp: { 'Script-Src': ['a.example'] } }, /host\.web\.csp: "Script-Src" is not a directive name in lower case/],
+      [{ csp: { 'img-src': ['a.example b.example'] } }, /host\.web\.csp\.img-src\[0\]: "a\.example b\.example" is not one source/],
+      [{ csp: { 'img-src': "'self'; script-src *" } }, /host\.web\.csp\.img-src: .* holds a comma, a semicolon/],
+      [{ cspReportOnly: { 'img-src': 'a.example, b.example' } }, /host\.web\.cspReportOnly\.img-src: .* holds a comma/],
+      [{ csp: { 'img-src': 'a.example\nX-Injected: 1' } }, /host\.web\.csp\.img-src: .* a line break/],
+      [{ csp: true }, /host\.web\.csp: expected false or an object of directives/],
+      [{ csp: { 'img-src': 1 } }, /host\.web\.csp\.img-src: expected a list of sources to add, or a string/],
+    ];
+    for (const [web, says] of refused) assert.throws(() => read(web), says, JSON.stringify(web));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('readManifest names the game.presentation rename instead of an unknown key', async () => {
