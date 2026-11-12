@@ -28,6 +28,7 @@ fn main() {
         "engine_receipt.rs",
         "src/shim.cc",
         "src/console.js",
+        "src/launch.js",
         "src/pure.js",
         "src/standard.js",
         "src/streams.js",
@@ -147,6 +148,7 @@ fn main() {
     // through prelude.js, in this order (host/web-js/glue.mjs `MODULE_PRELUDE`).
     let prelude = [
         "src/pure.js",
+        "src/launch.js",
         "src/standard.js",
         "src/streams.js",
         "src/binary.js",
