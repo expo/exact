@@ -29,9 +29,7 @@ component App
 
 - **`assets/` and `deck/`** ship except `.DS_Store` files. Contract paths start at the app
   (no leading slash): `image "assets/logo.png"`, a `sound` and `playSound`, a `font` block's
-  `400 = "assets/Inter-Regular.ttf"` (then `font-family="Inter"`). Nothing else ships: an
-  `image`, `video` or `audio` that names a file outside them (`image "public/logo.png"`) is
-  refused when the app compiles (`lower-asset-path`).
+  `400 = "assets/Inter-Regular.ttf"` (then `font-family="Inter"`).
 - **`modules/apple/*.swift`** (or `*.xcframework`) is the app's native module;
   `modules/web/index.js` answers on the web ([native module](native-module.md)). `modules`
   lists the hyphenated tags of native views ([native views](native-views.md)): a tag the
