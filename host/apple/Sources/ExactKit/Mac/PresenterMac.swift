@@ -1177,7 +1177,9 @@ package final class Presenter {
                     child.removeFromSuperview()
                 }
                 let mounted = want.filter { !dialogs.owns($0) && !menus.owns($0) && !blocks.owns($0) && !tables.owns($0, in: id) && !isFlying($0) }
+                var added = false
                 for child in mounted where child.superview !== container {
+                    added = true
                     reparented.insert(child.id)
                     child.rejoinUnderHold()
                     child.prepareToMount()
@@ -1185,6 +1187,7 @@ package final class Presenter {
                     regrid(child)
                 }
                 orderChildren(want, in: container)
+                if added { parent.inkMounted() }
             case .surface:
                 if let v = views[id] { session?.canvases.surface(view: v, name: op.payload["name"] as? String ?? "", values: op.payload["values"] ?? []) }
             case .canvas2d: if let v = views[id] { canvas2d.apply(id, op.payload, layer: v.layer) }

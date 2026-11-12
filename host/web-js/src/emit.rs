@@ -187,6 +187,8 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         None => style::project(plan, &sites, &mut warnings)?,
     };
     let paint = crate::paint::needed(plan, &parts);
+    // A look's colour needs rules for the boundaries below only where one is.
+    let boundaries = (parts.iter().flatten()).any(|p| p.props.contains_key("data-x-b"));
     let mut parts = parts;
     if !paint {
         for p in parts.iter_mut().flatten() {
@@ -783,7 +785,7 @@ pub fn emit(plan: &Plan, site_attrs: bool, dev_reload: bool) -> Result<Output, S
         let at = format!("[data-exact-looks=\"{}\"]", i + 1);
         css.push_str(&exact_web::host::template::look_rules(&at, looks));
         // A boundary below that its colour reaches says so (modes.js `data-x-lc`).
-        if modes.is_some() {
+        if boundaries {
             let below = format!("[data-x-lc~=\"{}\"]", i + 1);
             css.push_str(&exact_web::host::template::look_colour_below(
                 &at, looks, &below,

@@ -940,6 +940,7 @@ package final class Presenter {
                 if flats.isFlat(id) { if flats.adopt(id, op.ids) { return }; flats.promote(id) }
                 guard let parent = views[id] else { return }
                 placeChildren(parent, op.ids)
+                parent.inkMounted()
             case .surface:
                 if let v = views[id] { session?.canvases.surface(view: v, name: op.payload["name"] as? String ?? "", values: op.payload["values"] ?? []) }
             case .canvas2d: if let v = views[id] { canvas2d.apply(id, op.payload, layer: v.layer) }

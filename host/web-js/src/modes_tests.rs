@@ -560,36 +560,25 @@ fn state_looks_are_sheet_rules_for_the_nodes_set() {
     );
 }
 
-/// A look's `color` is its rule's (CSS's `a:hover { color }`), a varying
-/// token as its property, so the link's text inherits it as the browser
-/// does and follows the scheme; the base keeps its own.
+/// A look's `color` is its own rule's (CSS's `a:hover { color }`), a varying
+/// token as its property, while the base keeps its own. It is also a rule for
+/// the boundaries below that its colour reaches (`modes.js` marks them
+/// `data-x-lc`), which write the colour around them again: the look's token,
+/// so it resolves in the boundary's modes, the focus's after the hover's. A
+/// look with no `color` has none.
 #[test]
-fn a_looks_color_is_its_rules_with_the_token() {
-    let view = "component App\n  view\n    link href=\"/a\" color=\"surface.card\"\n      :hover\n        color = \"text.primary\"\n      text \"a\"\n";
-    let out = emitted("look-color", DESIGN, view);
-    let hover = out
-        .css
-        .find("[data-exact-looks=\"1\"]:hover")
-        .expect("a hover rule");
-    let rule = &out.css[hover..];
-    let rule = &rule[..rule.find('}').unwrap()];
-    assert!(
-        rule.contains("color:var(--x-text-primary") && rule.contains("!important"),
-        "{rule}"
-    );
-    assert!(out.js.contains("color:var(--x-surface-card"), "{}", out.js);
-}
-
-/// A look's `color` is also a rule for the boundaries below that its colour
-/// reaches (`modes.js` marks them `data-x-lc`), which write the colour around
-/// them again: the look's token, so it resolves in the boundary's modes,
-/// the focus's after the hover's. A look with no `color` has none.
-#[test]
-fn a_looks_color_reaches_a_boundary_below() {
+fn a_looks_color_is_its_rule_and_reaches_a_boundary_below() {
     let view = "component App\n  view\n    column\n      link href=\"/a\" color=\"surface.card\"\n        :hover\n          color = \"text.primary\"\n        :focus-visible\n          color = \"#123456\"\n        column -exact-mode=\"dark-style=dim\"\n          text \"a\"\n      link href=\"/b\"\n        :hover\n          background-color = \"surface.card\"\n        text \"b\"\n";
-    let css = emitted("look-color-below", DESIGN, view).css;
+    let out = emitted("look-color-below", DESIGN, view);
+    let css = out.css;
     let below = |at: &str| css.find(at).unwrap_or_else(|| panic!("{at} in {css}"));
     let on = ":not(:disabled,[disabled]:not([disabled=\"false\"]))";
+    let own = &css[below(&format!("[data-exact-looks=\"1\"]:hover{on}{{"))..];
+    assert!(
+        own[..own.find('}').unwrap()].contains("color:var(--x-text-primary)!important"),
+        "{own}"
+    );
+    assert!(out.js.contains("color:var(--x-surface-card"), "{}", out.js);
     let hover = below(&format!(
         "[data-exact-looks=\"1\"]:hover{on} [data-x-lc~=\"1\"]{{color:var(--x-text-primary)!important;}}"
     ));

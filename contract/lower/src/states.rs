@@ -36,7 +36,7 @@ const RUNNER_ROWS: [&str; 6] = [
 
 /// The rows `:hover` and `:focus-visible` take. Their `color` reaches the
 /// subtree as the node's own does (a descendant that writes its own keeps
-/// it); the web and Apple show it, and Linux's looks paint the box only.
+/// it); the web and Apple show it, and Linux's looks paint the box alone.
 const HOST_ROWS: [&str; 6] = [
     "scale",
     "background-color",
@@ -163,11 +163,20 @@ pub(crate) fn refusal(state: &str, row: &Attr, values: bool) -> Option<LowerErro
             span: row.span,
         });
     }
-    if values
-        && host
-        && state != "active"
-        && !matches!(row.value, Expr::Str(..) | Expr::Number(..) | Expr::Bool(..))
-    {
+    // A look's colour stands in for the node's own, which its subtree takes,
+    // so `inherit` and `currentcolor` say nothing there; `:active` refuses
+    // them too.
+    let look = host && state != "active";
+    if let (true, "color", Expr::Str(value, span)) = (look, row.name.as_str(), &row.value) {
+        if ["inherit", "currentcolor"].contains(&value.trim().to_ascii_lowercase().as_str()) {
+            return Some(LowerError {
+                id: "lower-attr-value",
+                message: format!("`:{state} color=\"{value}\"`: a look's colour stands in for the node's own, so it names a colour or a token's name; write the value"),
+                span: *span,
+            });
+        }
+    }
+    if values && look && !matches!(row.value, Expr::Str(..) | Expr::Number(..) | Expr::Bool(..)) {
         return Some(LowerError {
             id: "lower-state-literal",
             message: format!("`{}` in `:{state}` is computed: the host applies its state on its own, with no round trip to the runner, so its rows are literals (a token's name is one)", row.name),
