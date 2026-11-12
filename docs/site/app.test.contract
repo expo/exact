@@ -61,8 +61,10 @@ test "a page reached with a trailing slash lands on the page"
 
 test "a moved page lands on its new path"
   at "/learn/contract-for-humans/contents"
+  expect state page.slug == "contractForHumans"
   expect tree has "nav-learnContractForHumansRunAnApp"
   expect tree missing "moved-to"
+  expect tree missing "not-found"
 
 test "a page has its section, a rule under the header, previous and next, and the date"
   size 1440x900

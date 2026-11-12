@@ -197,7 +197,7 @@ component App
   state voted = ""
   state active = ""
   state visible: string[] = []
-  derive from = searchParam(top(nav), "from")
+  derive from = page.movedFrom.includes(searchParam(top(nav), "from")) ? searchParam(top(nav), "from") : ""
   derive slashless = top(nav).name == "notfound" and top(nav).url.length > 1 and top(nav).url.endsWith("/") ? top(nav).url.slice(0, top(nav).url.length - 1) : ""
   derive destination = moved.go != "" ? moved.go : slashless
   action follow(url: string)
@@ -307,7 +307,7 @@ component App
             image "symbol:icon.exactmark" aria-hidden=true width="1.625rem" height="1rem" color="var(--color-text-default)"
             text "Exact Docs" font-size="var(--text-base)" font-weight=600 color="var(--color-text-default)"
         row gap=8 align-items="center"
-          button press=openSearch appearance="none" aria-label="Search the docs" padding=6 border-radius="var(--radius-lg)" testId="search-bar"
+          button press=openSearch appearance="none" aria-keyshortcuts="Meta+K Control+K" aria-label="Search the docs" padding=6 border-radius="var(--radius-lg)" testId="search-bar"
             image "symbol:search" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
           button press=toggleMenu appearance="none" aria-expanded=menu aria-controls="site-menu" padding="6px 12px" border="1px solid var(--color-border-secondary)" border-radius="var(--radius-lg)" testId="menu"
             row gap=6 align-items="center"
@@ -334,7 +334,7 @@ component App
       column width=(sidebar ? "0px" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease" flex-shrink=0 overflow="hidden" inert=(not wide or sidebar) padding-top=12 align-items="center" testId=(sidebar ? "sidebar-rail" : "sidebar-rail-shown") position="absolute" top=0 bottom=0 left=0
         button press=toggleSidebar appearance="none" aria-label="Show the sidebar" title="Show the sidebar" padding=6 border-radius="var(--radius-lg)" testId="sidebar-show"
           image "symbol:icon.panelopen" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
-        button press=openSearch appearance="none" aria-label="Search the docs" title="Search" padding=6 margin-top=8 border-radius="var(--radius-lg)" testId="search-rail"
+        button press=openSearch appearance="none" aria-keyshortcuts="Meta+K Control+K" aria-label="Search the docs" title="Search" padding=6 margin-top=8 border-radius="var(--radius-lg)" testId="search-rail"
           image "symbol:search" aria-hidden=true font-size="var(--text-base)" color="var(--color-icon-default)"
       if menu
         scroll id="site-menu" flex=1 min-width=0 background-color="var(--color-background-screen)" testId="site-menu" position="absolute" top="clamp(0px, (960px - 100vw) * 1000, 57px)" left=0 right=0 bottom=0

@@ -65,6 +65,8 @@ shape TocItem
 
 shape Page
   slug: string
+  path: string
+  movedFrom: string[]
   section: string
   title: string
   description: string

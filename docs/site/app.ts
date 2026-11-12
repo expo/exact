@@ -63,6 +63,8 @@ const groupedByPage = (hits: SearchHit[]): SearchHit[] =>
 const none = { title: '', href: '' };
 const missing: Page = {
   slug: 'notfound',
+  path: '',
+  movedFrom: [],
   section: '',
   title: 'Page Not Found',
   description: 'No page of the Exact docs is at this address.',
@@ -92,7 +94,7 @@ function resolve(url: string): Result<'resolveMoved'> {
   if (!url) return { to: '', go: '', suggestions: [] };
   const path = url.split(/[?#]/)[0].replace(/^\/+/, '/').replace(/\/index\.html$/, '/').replace(/\.(html|md)$/, '');
   const clean = path.length > 1 ? path.replace(/\/+$/, '') : path;
-  const go = (to: string) => ({ to, go: `${to}?from=${encodeURIComponent(path)}`, suggestions: [] });
+  const go = (to: string) => ({ to, go: `${to}?from=${encodeURIComponent(clean)}`, suggestions: [] });
   if (moved.redirects[clean]) return go(moved.redirects[clean]);
   if (clean !== url && moved.pages.some(p => p.path === clean)) return { to: clean, go: clean, suggestions: [] };
   const asked = new Set(words(clean));

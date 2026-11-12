@@ -74,7 +74,7 @@ component Rail
           column gap=8 border-left="1px solid var(--color-border-secondary)" padding-left=12
             text "On this page" class=Label
             for i in page.toc key=i.id
-              link href=i.href margin-left=-13 padding-left=12 border-left=(i.href == `#${active}` ? "1px solid var(--color-text-default)" : "1px solid transparent") testId=(i.href == `#${active}` ? "toc-active" : `toc-${i.id}`)
+              link href=`${page.path}${i.href}` margin-left=-13 padding-left=12 border-left=(i.href == `#${active}` ? "1px solid var(--color-text-default)" : "1px solid transparent") testId=(i.href == `#${active}` ? "toc-active" : `toc-${i.id}`)
                 row
                   text i.title font-size="var(--text-sm)" color=(i.href == `#${active}` ? "var(--color-text-default)" : "var(--color-text-secondary)")
         column gap=10 testId="ai-actions"
