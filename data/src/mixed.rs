@@ -556,6 +556,11 @@ impl<J: DataSource, R: DataSource> exact_runner::DataSourceWrapper for Mixed<J, 
         self.rust.set_document_owner(owner);
     }
 
+    fn render_web(&mut self) {
+        self.javascript.render_web();
+        self.rust.render_web();
+    }
+
     fn take_logs(&mut self) -> Vec<String> {
         Mixed::take_logs(self)
     }

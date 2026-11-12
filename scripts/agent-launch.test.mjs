@@ -1267,6 +1267,7 @@ test("another host's crate or Android's Gradle files are no input of the Apple, 
 test('a native build is stale when a setting its module inlined has another value now', async () => {
   const {receiptChanges}=await import('./agent-launch.mjs');
   const {resolveApp}=await import('./app.mjs');
+  const {simulatorChildEnv}=await import('../host/apple/devices.mjs');
   const dir=mkdtempSync(resolve(tmpdir(),'exact-settings-native-')), name='EXACT_TEST_SETTING', before=process.env.EXACT_APP_DIR;
   try {
     writeFileSync(resolve(dir,'app.json'),JSON.stringify({name:'Native',app:{id:'com.exact.native',name:'Native'},env:[name]}));
@@ -1288,6 +1289,20 @@ test('a native build is stale when a setting its module inlined has another valu
     } finally { delete process.env[name]; }
     // Unset now, and in no file: the build's value is gone too.
     expect(receiptChanges(receipt,app)).toEqual([`import.meta.env.${name}`]);
+    // LLP 1153.002 D2: a Mac or Windows drive starts the app with this environment, so a marked name it sets (empty too) is the launch's; an iOS drive's never reaches the app.
+    for (const [platform,stale] of [['macos',[]],['windows',[]],['ios',[`import.meta.env.${name}`]]]) for (const given of ['http://launch.example','']) {
+      writeFileSync(receipt,JSON.stringify({target:'aarch64-apple-darwin',started:builtTime.toISOString(),build:{compat:{inputs:{platform}},binary:{inputs:[],missing:[],directories:[]},settings:{dir,env:{[name]:{value:'http://a.example',source:'environment',launch:true}}}}})); utimesSync(receipt,builtTime,builtTime); process.env[name]=given;
+      try { expect(receiptChanges(receipt,app)).toEqual(stale); } finally { delete process.env[name]; }
+      // A drive that starts the app with its own environment (`open({ env })`) is judged by it: unset here, set there.
+      expect([receiptChanges(receipt,app,{launch:{[name]:given}}),receiptChanges(receipt,app,{launch:{}})]).toEqual([[],[`import.meta.env.${name}`]]);
+      // A simulator gives the app the driver's `SIMCTL_CHILD_` variables, without the prefix (agent.mjs `openIOS`).
+      expect(receiptChanges(receipt,app,{launch:simulatorChildEnv({[`SIMCTL_CHILD_${name}`]:given,[name]:'http://ignored.example'})})).toEqual([]);
+      // Unsaid, as the check before a drive asks (agent-build.mjs `buildFirst`): a Mac or Windows app's launch is this
+      // environment, an iOS app's this environment's `SIMCTL_CHILD_` variables. The build's value came from the
+      // environment alone, with no default and no `.env`, and is unset here.
+      process.env[platform==='ios' ? `SIMCTL_CHILD_${name}` : name]=given;
+      try { expect(receiptChanges(receipt,app)).toEqual([]); } finally { delete process.env[`SIMCTL_CHILD_${name}`]; delete process.env[name]; }
+    }
   } finally {
     if (before===undefined) delete process.env.EXACT_APP_DIR; else process.env.EXACT_APP_DIR=before;
     rmSync(dir,{recursive:true,force:true});
@@ -1350,6 +1365,19 @@ test('a Linux or Android build is stale when a setting the executable holds has 
       // A build that finished records what it linked.
       recordBuiltSettings(bin,app); recordBuiltSettings(apk,app,out);
       expect(changes()).toEqual([[],[]]);
+      // A setting a launch may give (LLP 1153.002 D2): where a launch gives it (a Linux executable) the environment's
+      // value, empty or not, is the launch's and no change; where the build's value runs (Android) it is one. Unset,
+      // the build's own value counts again.
+      writeFileSync(resolve(out,'app.module.json'),JSON.stringify({env:{[name]:{value:'http://b.example',source:'environment',launch:true}}}));
+      recordBuiltSettings(bin,app); recordBuiltSettings(apk,app,out);
+      for (const given of ['http://launch.example','']) {
+        process.env[name]=given;
+        expect([bakedSettingChanges(bin,app,{launch:process.env}),bakedSettingChanges(apk,app)]).toEqual([[],[key]]);
+      }
+      delete process.env[name];
+      expect(bakedSettingChanges(bin,app,{launch:process.env})).toEqual([key]);
+      // Unset here, and given in the environment the drive starts the executable with (`open({ env })`).
+      expect(bakedSettingChanges(bin,app,{launch:{...process.env,[name]:'http://launch.example'}})).toEqual([]);
     } finally { delete process.env[name]; }
     // An app that declares no setting has none to compare.
     expect(bakedSettingChanges(bin,{dir,manifest:{}})).toEqual([]);

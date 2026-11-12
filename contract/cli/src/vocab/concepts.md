@@ -1544,8 +1544,33 @@ component App
 
 More: apps/svg-gallery/app.contract (each element and attribute, drawn alike on every host but `foreignObject`)
 
+## env: a setting app.ts reads, from the build or from a launch (import.meta.env)
+names: import.meta.env, process.env, .env, .env.local, dotenv, environment variable, launchEnvironment, SIMCTL_CHILD, API_BASE_URL
+
+`env()` in a length is CSS's: the concept `safe-area`. A setting is a name in app.json's `env`
+read in a top-level `const` of app.ts: `const API = import.meta.env.API_BASE_URL ??
+'http://127.0.0.1:8080'`. Its value is the build's, inlined into the module: the environment,
+then `.env.local`, then `.env` beside app.json, then the default. Every value is public.
+
+`{ "name": "API_BASE_URL", "launch": true }` in `env` lets a launch replace it (a test, a
+benchmark, a debugger): the same read takes a non-empty value from the launched process's
+environment on Apple, Linux and Windows, and the build's on Android and the web. It is fixed
+for the launch.
+
+- iOS simulator: `SIMCTL_CHILD_API_BASE_URL=http://127.0.0.1:9000 xcrun simctl launch <udid> <bundle-id>`
+- XCUITest: `app.launchEnvironment["API_BASE_URL"] = "…"` before `app.launch()`
+- A phone: `xcrun devicectl device process launch --environment-variables '{"API_BASE_URL": "…"}' --device <id> <bundle-id>`
+- macOS, Linux, Windows: the process's environment (`API_BASE_URL=… ./app`)
+- Grants are fixed at build, so a grant over a marked name is refused: grant what a launch may
+  name (`net.fetch https:`, `net.fetch http:`, or each origin). A `fetch` to its origin outside
+  them is refused naming the setting.
+- A native module is not the way to read one: this read holds the value before the module's
+  first request.
+
+More: docs/reference.md ("A setting a launch gives")
+
 ## safe-area: the notch, the status bar and the home indicator
-names: env, env(), safe-area-inset, safe-area-inset-top, safe-area-inset-bottom, safe-area-inset-left, safe-area-inset-right, SafeAreaView, useSafeAreaInsets, react-native-safe-area-context, safeAreaInsets, notch, home indicator, home-indicator, --exact-safe-area-inset-top, --exact-safe-area-inset-bottom, --exact-safe-area-inset-left, --exact-safe-area-inset-right, bar height, navigation bar height, headerHeight, useHeaderHeight, -exact-safe-area, ignoresSafeArea, contentInsetAdjustmentBehavior
+names: env(), safe-area-inset, safe-area-inset-top, safe-area-inset-bottom, safe-area-inset-left, safe-area-inset-right, SafeAreaView, useSafeAreaInsets, react-native-safe-area-context, safeAreaInsets, notch, home indicator, home-indicator, --exact-safe-area-inset-top, --exact-safe-area-inset-bottom, --exact-safe-area-inset-left, --exact-safe-area-inset-right, bar height, navigation bar height, headerHeight, useHeaderHeight, -exact-safe-area, ignoresSafeArea, contentInsetAdjustmentBehavior
 
 Inside a route, leave it unsaid: the host keeps the route's content clear of the status bar
 and its bars (UIKit's inset on the route's scroller, else the route's padding), and a

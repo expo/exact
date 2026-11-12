@@ -46,14 +46,15 @@ const shown = file => relative(process.cwd(), file).startsWith('..') ? file : re
  * `sample` is the sample host's.
  * `checked` is the digest of a receipt whose inputs this drive's own check
  * (`buildFirst`, run first by an app's exact.mjs) has just hashed: the same
- * receipt's are not hashed twice (LLP 1012.001.000 D1: once a drive). */
-export function nativeBuild(host, app, { sample = false, checked = null } = {}) {
+ * receipt's are not hashed twice (LLP 1012.001.000 D1: once a drive). `launch` is the environment the drive starts
+ * the app with (`pendingBuildInputs`). */
+export function nativeBuild(host, app, { sample = false, checked = null, launch } = {}) {
   const ios = host === 'ios';
   const built = ios ? appleArtifacts(app, { destination: 'ios-simulator', host: sample }).bundle : appleRunBinary(app, sample);
   if (!existsSync(built)) return { built, missing: true, changed: [] };
   const receipt = receiptPath(host, app, { sample });
   const backendOrigin = receipt ? JSON.parse(readFileSync(receipt, 'utf8')).build?.backendOrigin : null;
-  const changed = receiptChanges(receipt, app, { hashed: !!checked && !!receipt && checked === digestOf(receipt) });
+  const changed = receiptChanges(receipt, app, { hashed: !!checked && !!receipt && checked === digestOf(receipt), launch });
   if (!ios && !sample && receipt) {
     const bundled = resolve(appleArtifacts(app).bundle, 'Contents/Resources/receipt.json');
     try {

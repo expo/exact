@@ -286,6 +286,9 @@ pub(crate) unsafe extern "C" fn host_door(
                 .into(),
         ),
         24..=26 => state.secrets.door(op, &a, &b, state.store.map(|s| &mut *s)),
+        // A setting a launch may give (LLP 1153.002 D2): the launch's value
+        // for the name `a`, which the bundle's launch module asks for.
+        27 => Ok(super::launch::value(state, &a)),
         other => Err(format!("__exact_host: no op {other}")),
     };
     *out = std::ptr::null_mut();
