@@ -609,6 +609,7 @@ package final class NodeView: NSView, NSTextViewDelegate, NSTextFieldDelegate {
             blur.blendingMode = sheetGround ? .behindWindow : .withinWindow
             blur.state = .followsWindowActiveState
         }
+        if #available(macOS 26.0, *), let glass = materialView as? NSGlassEffectView { glass.tintColor = glassTint.flatMap { NSColor(cgColor: $0) } }
         syncMaterialVisibility()
         applyMaterialRadius()
     }

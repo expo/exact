@@ -288,6 +288,189 @@ final class FaceSymbolIOSTests: XCTestCase {
         try measure("segment", segments, expected: FaceSymbol.defaultPoints)
     }
 
+    /// LLP 1011 §4: the font configures a symbol's natural size; its content box and
+    /// object-fit place that image, both on the page and inside an authored button.
+    @MainActor func testASymbolsBoxAndObjectFitSizeItsGlyph() throws {
+        guard let scene else { throw missing("scene", "symbol sizing needs a window's pixels") }
+        let w = sceneWindow(scene), host = try XCTUnwrap(w.rootViewController?.view)
+        let p = Presenter()
+        defer { p.reset() }
+        p.viewport.frame = host.bounds
+        host.addSubview(p.viewport)
+        let cases: [(String, Double, Double, Double, String?)] = [
+            ("tall", 32, 72, 20, nil), ("square", 72, 72, 20, nil),
+            ("wide", 72, 32, 20, nil), ("large-font", 72, 72, 40, nil),
+            ("contain", 72, 32, 20, "contain"), ("cover", 72, 32, 20, "cover"),
+            ("none", 72, 72, 20, "none"), ("none-large-font", 72, 72, 40, "none"),
+            ("scale-down", 72, 72, 20, "scale-down"), ("scale-down-small", 12, 12, 20, "scale-down"),
+        ]
+        var ops: [[String: Any]] = []
+        var regions: [CGRect] = [], ids: [UInt32] = [], roots: [Int] = []
+        for custom in [false, true] {
+            for (index, item) in cases.enumerated() {
+                let (_, width, height, points, fit) = item
+                let id = UInt32(10 + index + (custom ? 100 : 0)), owner = id + 1000
+                let origin = CGPoint(x: 10 + Double(index % 4) * 95, y: 100 + Double(index / 4) * 90 + (custom ? 280 : 0))
+                let frame = CGRect(origin: origin, size: CGSize(width: width, height: height))
+                var style: [String: Any] = ["font_size": points, "text_color": [0, 0, 0, 255]]
+                if let fit { style["object_fit"] = fit }
+                ops += [["op": "create", "id": id, "kind": "image", "props": ["imageSource": "symbol:sf/square.fill", "symbolName": "square.fill"], "style": style],
+                        ["op": "frame", "id": id, "x": custom ? 0 : origin.x, "y": custom ? 0 : origin.y, "w": width, "h": height]]
+                if custom {
+                    ops += [["op": "create", "id": owner, "kind": "control", "props": ["type": "button"], "handlers": ["press"], "style": ["appearance": "none"]],
+                            ["op": "frame", "id": owner, "x": origin.x, "y": origin.y, "w": 80, "h": 80],
+                            ["op": "children", "id": owner, "ids": [id]]]
+                }
+                roots.append(Int(custom ? owner : id))
+                ids.append(id); regions.append(frame)
+            }
+        }
+        p.apply(wireBatch(ops + [["op": "roots", "ids": roots]]))
+        w.layoutIfNeeded()
+        for (id, region) in zip(ids, regions) {
+            let node = try XCTUnwrap(p.views[id]), leaf = try XCTUnwrap(node.symbolView)
+            node.layoutSymbol()
+            XCTAssertEqual(node.bounds.size, region.size)
+            XCTAssertEqual(leaf.frame, node.contentBox())
+        }
+        let boxes = try inked(w, in: regions)
+        for (offset, context) in [(0, "page"), (cases.count, "authored button")] {
+            func box(_ index: Int) -> CGRect { boxes[offset + index] }
+            for (index, item) in cases.enumerated() {
+                XCTAssertFalse(box(index).isNull, "\(context) \(item.0) draws ink")
+                print("MEASURE ios \(context) \(item.0): box \(regions[offset + index].size), ink \(box(index).size)")
+            }
+            XCTAssertGreaterThan(box(1).width, box(0).width + 20, "\(context): width scales the glyph inside a tall box")
+            XCTAssertGreaterThan(box(1).height, box(2).height + 20, context)
+            XCTAssertEqual(box(1).width, box(3).width, accuracy: 1, "\(context): a fixed box fits either font size")
+            XCTAssertEqual(box(2).width, box(4).width, accuracy: 1, "\(context): fill keeps the aspect, as contain does")
+            XCTAssertEqual(box(2).height, box(4).height, accuracy: 1, context)
+            XCTAssertGreaterThan(box(5).width, box(4).width + 20, "\(context): cover fills the wide box")
+            XCTAssertGreaterThan(box(7).width, box(6).width + 10, "\(context): none keeps the font's natural size")
+            XCTAssertEqual(box(6).width, box(8).width, accuracy: 1, "\(context): scale-down keeps a smaller natural image")
+            XCTAssertEqual(box(6).height, box(8).height, accuracy: 1, context)
+            XCTAssertLessThanOrEqual(box(9).width, 12, "\(context): scale-down fits a smaller box")
+            XCTAssertLessThan(box(9).width, box(8).width, context)
+        }
+        let small = try XCTUnwrap(p.views[ids[1]]?.image), large = try XCTUnwrap(p.views[ids[3]]?.image)
+        XCTAssertGreaterThan(large.size.width, small.size.width, "font-size changes natural geometry even in a fixed box")
+    }
+
+    /// LLP 1069.011.001 D14: a native button uses its symbol's font configuration.
+    @MainActor func testANativeButtonsFrameDoesNotSizeItsGlyph() throws {
+        guard let scene else { throw missing("scene", "symbol sizing needs a window's pixels") }
+        let w = sceneWindow(scene), host = try XCTUnwrap(w.rootViewController?.view)
+        let p = Presenter()
+        defer { p.reset() }
+        p.viewport.frame = host.bounds
+        host.addSubview(p.viewport)
+        p.buttonFace = { id in
+            var f = ButtonFace(); f.symbol = "square.fill"; f.ios = "plain"
+            f.rows.symbol = ["font_size": .number(id == 4 ? 40 : 20), "tint_color": .array([.number(0), .number(0), .number(0), .number(255)])]
+            return f
+        }
+        var ops: [[String: Any]] = []
+        let sizes = [CGSize(width: 100, height: 64), CGSize(width: 180, height: 64), CGSize(width: 100, height: 110), CGSize(width: 100, height: 64)]
+        let regions = sizes.enumerated().map { CGRect(origin: CGPoint(x: 20, y: 100 + $0.offset * 125), size: $0.element) }
+        for (index, frame) in regions.enumerated() {
+            ops += [["op": "create", "id": index + 1, "kind": "control", "props": ["type": "button"], "handlers": ["press"], "style": ["appearance": "auto"]],
+                    ["op": "frame", "id": index + 1, "x": frame.minX, "y": frame.minY, "w": frame.width, "h": frame.height]]
+        }
+        p.apply(wireBatch(ops + [["op": "roots", "ids": [1, 2, 3, 4]]]))
+        w.layoutIfNeeded()
+        for (index, size) in sizes.enumerated() {
+            let node = try XCTUnwrap(p.views[UInt32(index + 1)])
+            let button = try XCTUnwrap(p.controls.controls[node.id] as? NativeButtonIOS)
+            button.layoutIfNeeded()
+            XCTAssertEqual(node.bounds.size, size)
+            XCTAssertEqual(button.bounds.size, size)
+            XCTAssertNotNil(button.imageView?.image)
+        }
+        let boxes = try inked(w, in: regions)
+        for (index, box) in boxes.enumerated() {
+            XCTAssertFalse(box.isNull)
+            print("MEASURE ios native button \(index): box \(sizes[index]), ink \(box.size)")
+        }
+        for index in [1, 2] {
+            XCTAssertEqual(boxes[index].width, boxes[0].width, accuracy: 1, "a button's width or height does not scale its symbol")
+            XCTAssertEqual(boxes[index].height, boxes[0].height, accuracy: 1)
+        }
+        XCTAssertGreaterThan(boxes[3].width, boxes[0].width + 10, "the symbol's font-size sizes its glyph")
+    }
+
+    /// LLP 1116.019 D1: without a title or an image font, UIKit sizes the symbol.
+    @MainActor func testANativeButtonsSymbolSizeDependsOnWhetherItHasATitle() throws {
+        guard let scene else { throw missing("scene", "symbol sizing needs a window's pixels") }
+        let w = sceneWindow(scene), host = try XCTUnwrap(w.rootViewController?.view)
+        let cases: [(String, String?, Double?, Double?)] = [
+            ("symbol-only default", nil, nil, nil), ("symbol-only button font", nil, 40, nil),
+            ("titled 20", "Go", 20, nil), ("titled 40", "Go", 40, nil),
+            ("image font 20", nil, 40, 20), ("image font 40", nil, 20, 40),
+        ]
+        var regions: [CGRect] = []
+        for (index, item) in cases.enumerated() {
+            let (_, title, buttonPoints, imagePoints) = item
+            var f = ButtonFace(); f.symbol = "square.fill"; f.ios = "plain"; f.title = title
+            if let buttonPoints {
+                f.rows.button["font_size"] = .number(buttonPoints)
+                f.rows.title["font_size"] = .number(buttonPoints)
+            }
+            if let imagePoints { f.rows.symbol["font_size"] = .number(imagePoints) }
+            let button = NativeButtonIOS(configuration: ControlHost.configuration(f).0)
+            button.frame = CGRect(x: 20 + (index % 2) * 190, y: 100 + (index / 2) * 100, width: 170, height: 80)
+            host.addSubview(button)
+            ButtonConfigurationIOS.apply(f, to: button, traits: button.traitCollection, accent: .black)
+            button.layoutIfNeeded()
+            let image = try XCTUnwrap(button.imageView)
+            XCTAssertNotNil(image.image)
+            regions.append(image.convert(image.bounds, to: w))
+            if title == nil, imagePoints == nil {
+                XCTAssertNil(button.configuration?.preferredSymbolConfigurationForImage)
+            }
+        }
+        let boxes = try inked(w, in: regions)
+        for (index, box) in boxes.enumerated() {
+            XCTAssertFalse(box.isNull, cases[index].0)
+            print("MEASURE ios native \(cases[index].0): image box \(regions[index].size), ink \(box.size)")
+        }
+        XCTAssertEqual(boxes[1].width, boxes[0].width, accuracy: 1, "without a title, the button's font-size leaves UIKit's symbol size")
+        XCTAssertEqual(boxes[1].height, boxes[0].height, accuracy: 1)
+        XCTAssertGreaterThan(boxes[3].width, boxes[2].width + 10, "a titled button's symbol follows its title font")
+        XCTAssertGreaterThan(boxes[5].width, boxes[4].width + 10, "the image's own font-size sizes a symbol-only button's glyph")
+    }
+
+    @MainActor func testDefaultFitKeepsAnEllipsisAspectInTallAndWideBoxes() throws {
+        guard let scene else { throw missing("scene", "symbol sizing needs a window's pixels") }
+        let w = sceneWindow(scene), host = try XCTUnwrap(w.rootViewController?.view)
+        let p = Presenter()
+        defer { p.reset() }
+        p.viewport.frame = host.bounds
+        host.addSubview(p.viewport)
+        let sizes = [CGSize(width: 32, height: 72), CGSize(width: 32, height: 72),
+                     CGSize(width: 40, height: 12), CGSize(width: 40, height: 12)]
+        var ops: [[String: Any]] = [], regions: [CGRect] = []
+        for (index, size) in sizes.enumerated() {
+            let frame = CGRect(origin: CGPoint(x: 20 + index * 90, y: 100), size: size)
+            var style: [String: Any] = ["font_size": 20, "text_color": [0, 0, 0, 255]]
+            if index % 2 == 1 { style["object_fit"] = "contain" }
+            ops += [["op": "create", "id": index + 1, "kind": "image", "props": ["imageSource": "symbol:ellipsis", "symbolName": "ellipsis"], "style": style],
+                    ["op": "frame", "id": index + 1, "x": frame.minX, "y": frame.minY, "w": size.width, "h": size.height]]
+            regions.append(frame)
+        }
+        p.apply(wireBatch(ops + [["op": "roots", "ids": [1, 2, 3, 4]]]))
+        w.layoutIfNeeded()
+        let boxes = try inked(w, in: regions)
+        for (index, box) in boxes.enumerated() {
+            XCTAssertFalse(box.isNull)
+            print("MEASURE ios ellipsis \(index): box \(sizes[index]), ink \(box.size)")
+            XCTAssertGreaterThan(box.width, box.height * 4, "the dots keep the ellipsis's aspect")
+        }
+        for index in [0, 2] {
+            XCTAssertEqual(boxes[index].width, boxes[index + 1].width, accuracy: 1, "default fill fits as contain does")
+            XCTAssertEqual(boxes[index].height, boxes[index + 1].height, accuracy: 1)
+        }
+    }
+
     // MARK: - A button's pixels
 
     /// The colour at the middle of the button's image as drawn in `w`.

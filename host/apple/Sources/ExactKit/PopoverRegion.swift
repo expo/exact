@@ -33,7 +33,7 @@ extension Presenter {
             guard let session = self.session else { return PositionArea.Measured(size: laid, margins: margins) }
             let stamp = session.runtime.layoutStamp()
             return self.regionMeasures.measured(id, region, batch: session.appliedBatches, stamp: stamp) {
-                session.runtime.measureBlock(id, in: .region(region))
+                session.runtime.measureBlock(id, in: .region(region))?.box
             } ?? PositionArea.Measured(size: laid, margins: margins)
         }
         tellRegion(id, .region(at.region.size), told: &told)

@@ -581,6 +581,24 @@ fn a_native_button_marks_bound_size_and_padding() {
     }
 }
 
+/// A bare button's bound inline padding is copied where a checked menu's mark
+/// column adds to it (sides.rs); no other node's is, as the wasm host's
+/// button_css.rs `face` copies only a bare button's.
+#[test]
+fn only_a_bare_buttons_bound_padding_is_copied_for_the_menu_mark() {
+    let copied = |source: &str| {
+        let plan = contract::compile(source).unwrap();
+        let js = crate::emit::emit(&plan, false, false).unwrap().js;
+        ["--exact-padding-left", "--exact-padding-right"]
+            .map(|name| js.contains(&format!("\"{name}\"")))
+    };
+    let app = |node: &str| {
+        format!("component App\n  state n = 0\n  view\n    {node} padding-left=(n + 4) padding-right=n\n      text \"Go\"\n")
+    };
+    assert_eq!(copied(&app("button appearance=\"none\"")), [true, true]);
+    assert_eq!(copied(&app("column")), [false, false]);
+}
+
 #[test]
 fn a_capsule_control_takes_no_curve() {
     // Written, the capsule's round corner is in the node's CSS beside its radius.

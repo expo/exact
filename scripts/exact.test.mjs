@@ -116,7 +116,12 @@ test.skipIf(!tools)('widget packaging preserves parent platform and device capab
         if (command === 'plutil') return { stdout: JSON.stringify(readPlist(args.at(-1))) };
         assert.equal(command, 'xcrun');
         assert.equal(args[2], 'swiftc');
-        cpSync(library, args[args.indexOf('-o') + 1]);
+        const output = args[args.indexOf('-o') + 1];
+        cpSync(library, output);
+        if (args.includes('-g')) {
+          const symbols = spawnSync('dsymutil', [output, '-o', `${output}.dSYM`], { encoding: 'utf8' });
+          assert.equal(symbols.status, 0, symbols.stderr);
+        }
         return { stdout: '' };
       }, sign(extension) { signed = extension; } });
     assert.equal(signed, resolve(bundle, 'PlugIns/ExactWidgets.appex'));

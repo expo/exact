@@ -1,5 +1,64 @@
 use super::*;
 
+#[test]
+fn a_module_store_obeys_the_hosts_scope_in_answers_and_parses() {
+    struct Scoped;
+    impl DataSource for Scoped {
+        fn grants(&self) -> &str {
+            "secret.keep token"
+        }
+        fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+            unreachable!()
+        }
+        fn answer(&mut self, store: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+            let set = store.set("token", "private");
+            let seen = store.get("token").unwrap_or("empty").to_string();
+            let forget = store.forget("token");
+            Ok(Answer::Now(Value::record(vec![
+                Value::Bool(set.is_err()),
+                Value::str(&seen),
+                Value::Bool(forget.is_err()),
+                Value::str(store.get("token").unwrap_or("empty")),
+            ])))
+        }
+        fn parse(
+            &mut self,
+            store: &mut Store,
+            source: &str,
+            args: &[Value],
+            _: Outcome,
+        ) -> Result<Answer, DataError> {
+            self.answer(store, source, args)
+        }
+    }
+    let mut module = Session::new(Scoped);
+    for granted in [false, true, false] {
+        let mut store = Store::new(
+            if granted {
+                "secret.keep token"
+            } else {
+                "secret.keep other"
+            },
+            [],
+        );
+        for outcome in [None, Some(Outcome::Storage(vec![]))] {
+            module
+                .dispatch(&call_request(&store, "scope", &[], outcome.as_ref()).unwrap())
+                .unwrap();
+            assert_eq!(
+                call_reply(module.output(), &mut store).unwrap(),
+                Answer::Now(Value::record(vec![
+                    Value::Bool(!granted),
+                    Value::str(if granted { "private" } else { "empty" }),
+                    Value::Bool(!granted),
+                    Value::str("empty"),
+                ]))
+            );
+            assert_eq!(store.take_writes().len(), if granted { 2 } else { 0 });
+        }
+    }
+}
+
 struct Fixture(u32);
 impl DataSource for Fixture {
     fn app_id(&self) -> &str {
@@ -603,7 +662,7 @@ w.u8(6); w.u32(2); api.encode(w, 'a|b', 's'); api.encode(w, value, '{s?s[s}');
 if (process.argv[2] === 'true') {
   api.encode(w, value, '{s?s[s}'); w.u32(1); w.u64(7); w.str('save'); w.str('save');
   w.u8(6); w.u32(1); api.encode(w, 'a|b', 's'); w.u8(1); api.encode(w, value, '{s?s[s}'); w.u8(1);
-} else w.u32(0);
+} else { w.u32(0); w.u32(0); }
 process.stdout.write(w.done());
 "#;
         let out = std::process::Command::new("bun")

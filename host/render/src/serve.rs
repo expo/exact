@@ -101,6 +101,7 @@ struct Shared {
     serve: Serve,
     plan: Plan,
     shell: String,
+    /// A page's CSP header lines, none when the app sends none (D11).
     csp: String,
     /// The header lines a page adds beside its CSP: its `Permissions-Policy`
     /// (LLP 1069.008 D6), and the client hints it asks for and varies by
@@ -170,7 +171,8 @@ impl Server {
             .find_map(|name| std::fs::read_to_string(serve.dist.join(name)).ok())
             .ok_or_else(|| std::io::Error::other("the dist has no shell"))?;
         let listener = TcpListener::bind(("127.0.0.1", serve.port))?;
-        let csp = csp(grants, &serve.dist);
+        let csp = csp::headers(grants, &serve.dist, &shell, serve.origin.as_deref())
+            .map_err(std::io::Error::other)?;
         let permissions = exact_runner::device::permissions_policy(grants);
         let reads = crate::viewport::Reads::of(&plan);
         let mut page_headers = reads.headers();
@@ -431,7 +433,8 @@ impl Response {
         self
     }
 
-    /// `page_headers`: the header lines a page carries beside its CSP.
+    /// `csp`: a page's CSP header lines (`csp::headers`); `page_headers`: the
+    /// others it carries.
     fn write(
         &self,
         stream: &mut impl Write,
@@ -443,7 +446,7 @@ impl Response {
         let connection = if keep { "keep-alive" } else { "close" };
         // Header values can contain app data; refuse the entire response before
         // writing anything, including on the 304 path.
-        if self.headers.iter().any(|(_, value)| invalid_header(value)) || invalid_header(csp) {
+        if self.headers.iter().any(|(_, value)| invalid_header(value)) {
             Response::text(500, "invalid response header\n").write(stream, head, "", "", keep);
             return;
         }
@@ -493,7 +496,7 @@ impl Response {
         // worker made from it, and a module worker evaluates the module text
         // it verified against the receipt (LLP 1027.002 D2).
         if page {
-            let _ = write!(out, "Content-Security-Policy: {csp}\r\n");
+            out.push_str(csp);
             // A page's own code never reaches a device the app was not
             // granted: the same promise the CSP makes for `connect-src`.
             out.push_str(page_headers);
@@ -1480,6 +1483,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[path = "csp.rs"]
 mod csp;
+#[cfg(test)]
 use csp::csp;
 
 #[cfg(test)]

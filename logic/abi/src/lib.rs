@@ -14,7 +14,7 @@ use exact_runner::{
 pub mod draw;
 
 /// Seam version, independent of the plan format version.
-pub const ABI: u32 = 5;
+pub const ABI: u32 = 6;
 /// Maximum request or response bytes, enforced on both sides.
 pub const MAX_MESSAGE: usize = exact_runner::MAX_HOST_WORK_BYTES;
 
@@ -119,6 +119,10 @@ pub fn call_request(
     let mut w = header(if outcome.is_some() { 4 } else { 3 });
     w.string(source);
     Value::list(args.to_vec()).encode(&mut w);
+    w.u32(store.granted().len() as u32);
+    for name in store.granted() {
+        w.string(name);
+    }
     let snapshot = store.call_snapshot(store.granted());
     store_pairs(&mut w, &snapshot);
     if let Some(outcome) = outcome {
@@ -836,6 +840,15 @@ impl<D: DataSource> Session<D> {
                 let Value::List(args) = Value::decode(&mut r).map_err(error)? else {
                     return Err("arguments must be a list".into());
                 };
+                let count = r.count().map_err(error)?;
+                let scope = (0..count)
+                    .map(|_| {
+                        r.string()
+                            .map(|name| format!("secret.keep {name}"))
+                            .map_err(error)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .join("\n");
                 let mut store = Store::module_mirror(self.data.grants(), read_store_pairs(&mut r)?);
                 let outcome = if op == 4 {
                     Some(read_outcome(&mut r)?)
@@ -844,11 +857,13 @@ impl<D: DataSource> Session<D> {
                 };
                 read_socket_turn(&mut r, &mut store)?;
                 end(&r)?;
-                let result = if let Some(outcome) = outcome {
-                    self.data.parse(&mut store, &source, &args, outcome)
-                } else {
-                    self.data.answer(&mut store, &source, &args)
-                };
+                let result = store.with_grants(&scope, |store| {
+                    if let Some(outcome) = outcome {
+                        self.data.parse(store, &source, &args, outcome)
+                    } else {
+                        self.data.answer(store, &source, &args)
+                    }
+                });
                 // An answer that read a locked presence name with `get` fails,
                 // as it does in process (LLP 1133.010 D5).
                 let result = match store.take_locked_read() {

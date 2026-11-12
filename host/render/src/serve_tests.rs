@@ -63,6 +63,215 @@ fn the_boot_swap_script_is_admitted_by_its_hash() {
     assert!(policy.contains(&admitted), "{policy}");
 }
 
+/// A shell as the web build writes it: the sheet, then `host.web.head`'s
+/// entries, then the root.
+const SHELL: &str = "<!doctype html>\n<title>t</title>\n<style>.a{}</style>\n\
+<script>gtag('js')</script>\n\
+<script type=\"application/ld+json\">{\"@type\":\"Person\"}</script>\n\
+<script async src=\"https://cdn.test/lib/x.js?id=1\"></script>\n\
+<script src=\"/own.js\"></script>\n\
+<div id=\"exact-root\"></div>\n<script type=\"module\" src=\"./app.js\"></script>\n";
+
+/// A dist holding `.gen/csp.json` as `json`, removed when dropped.
+struct Dist(std::path::PathBuf);
+impl Dist {
+    fn with(json: Option<&str>) -> Dist {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "exact-render-csp-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(dir.join(".gen")).unwrap();
+        if let Some(json) = json {
+            std::fs::write(dir.join(".gen/csp.json"), json).unwrap();
+        }
+        Dist(dir)
+    }
+    fn headers(&self) -> Result<String, String> {
+        csp::headers("", &self.0, SHELL, Some("https://site.test"))
+    }
+}
+impl Drop for Dist {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn directive<'h>(headers: &'h str, header: &str, name: &str) -> Option<&'h str> {
+    let line = headers
+        .lines()
+        .find_map(|line| line.strip_prefix(header)?.strip_prefix(": "))?;
+    line.split("; ")
+        .find_map(|d| d.strip_prefix(name)?.strip_prefix(' '))
+}
+
+#[test]
+fn the_apps_head_scripts_are_admitted_and_its_data_blocks_are_not() {
+    // @ref LLP 1048.000 D3 — the app's head scripts run as on a static host.
+    let headers = Dist::with(None).headers().unwrap();
+    let scripts = directive(&headers, "Content-Security-Policy", "script-src").unwrap();
+    use sha2::{Digest, Sha256};
+    let hash = |text: &str| {
+        format!(
+            "'sha256-{}'",
+            exact_data::envelope::base64(&Sha256::digest(text.as_bytes()))
+        )
+    };
+    assert!(scripts.contains(&hash("gtag('js')")), "{scripts}");
+    assert!(
+        !scripts.contains(&hash("{\"@type\":\"Person\"}")),
+        "{scripts}"
+    );
+    assert!(scripts.ends_with(" https://cdn.test"), "{scripts}");
+    assert!(!headers.contains("Report-Only"), "{headers}");
+}
+
+#[test]
+fn a_list_adds_a_string_replaces_and_exact_stands_for_exacts_sources() {
+    // @ref LLP 1048.000 D11 — host.web.csp, the app's part of the policy.
+    let headers = Dist::with(Some(
+        r#"{"csp": {"connect-src": ["https://analytics.test"], "manifest-src": ["https://m.test"],
+            "script-src-elem": ["https://more.test"], "img-src": "'self'", "style-src": "exact https://fonts.test",
+            "report-uri": ["https://reports.test/csp"]}}"#,
+    ))
+    .headers()
+    .unwrap();
+    let get = |name| directive(&headers, "Content-Security-Policy", name).unwrap();
+    assert_eq!(get("connect-src"), "'self' https://analytics.test");
+    // Not written by Exact: what it fell back to comes first.
+    assert_eq!(get("manifest-src"), "'self' https://m.test");
+    assert!(
+        get("script-src-elem").starts_with("'self' 'wasm-unsafe-eval' 'sha256-"),
+        "{headers}"
+    );
+    assert!(
+        get("script-src-elem").ends_with(" https://cdn.test https://more.test"),
+        "{headers}"
+    );
+    assert_eq!(get("img-src"), "'self'");
+    assert_eq!(
+        get("style-src"),
+        "'self' 'unsafe-inline' https://fonts.test"
+    );
+    // No fallback: written as the app gives it.
+    assert_eq!(get("report-uri"), "https://reports.test/csp");
+}
+
+#[test]
+fn false_sends_no_policy_and_report_only_starts_from_exacts() {
+    let headers = Dist::with(Some(
+        r#"{"csp": false, "cspReportOnly": {"img-src": ["https://x.test"]}}"#,
+    ))
+    .headers()
+    .unwrap();
+    assert!(!headers.contains("Content-Security-Policy:"), "{headers}");
+    let img = directive(&headers, "Content-Security-Policy-Report-Only", "img-src").unwrap();
+    assert_eq!(img, "'self' data: blob: https: https://x.test");
+    assert!(directive(
+        &headers,
+        "Content-Security-Policy-Report-Only",
+        "script-src"
+    )
+    .is_some());
+}
+
+#[test]
+fn a_value_that_would_end_the_directive_or_the_policy_is_refused() {
+    for json in [
+        r#"{"csp": {"img-src": ["a.test, b.test"]}}"#,
+        r#"{"csp": {"img-src": "'self'; script-src *"}}"#,
+        r#"{"csp": {"Img-Src": ["a.test"]}}"#,
+        r#"{"csp": {"img-src": [1]}}"#,
+    ] {
+        assert!(Dist::with(Some(json)).headers().is_err(), "{json}");
+    }
+}
+
+fn sha(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!(
+        "'sha256-{}'",
+        exact_data::envelope::base64(&Sha256::digest(text.as_bytes()))
+    )
+}
+
+#[test]
+fn a_script_src_is_its_origin_and_an_inline_script_is_hashed_as_the_browser_reads_it() {
+    let shell = "<style>.a{}</style>\n\
+        <script src=\"//cdn.test:8443/a.js\"></script>\n\
+        <script src=\"https://site.test/b.js\"></script>\n\
+        <script type=\"module\">m()</script>\n\
+        <script type=\"text/javascript; charset=utf-8\">d()</script>\n\
+        <script data-x=\"a>b\">x()</script>\n\
+        <script>one();\r\ntwo();\rthree();</script>\n\
+        <div id=\"exact-root\"></div>";
+    let dist = Dist::with(None);
+    let scripts = |origin| {
+        let headers = csp::headers("", &dist.0, shell, origin).unwrap();
+        directive(&headers, "Content-Security-Policy", "script-src")
+            .unwrap()
+            .to_string()
+    };
+    let at_site = scripts(Some("https://site.test"));
+    // Protocol-relative: no scheme, so it matches the page's.
+    assert!(at_site.contains(" cdn.test:8443 "), "{at_site}");
+    assert!(!at_site.contains("site.test"), "{at_site}");
+    assert!(at_site.contains(&sha("m()")), "{at_site}");
+    // Not a JavaScript MIME type essence: a data block.
+    assert!(!at_site.contains(&sha("d()")), "{at_site}");
+    assert!(at_site.contains(&sha("x()")), "{at_site}");
+    assert!(
+        at_site.contains(&sha("one();\ntwo();\nthree();")),
+        "{at_site}"
+    );
+    // With no --origin, another origin's script is still that origin's.
+    assert!(scripts(None).contains(" https://site.test"));
+}
+
+#[test]
+fn the_web_shells_head_entries_are_found_between_its_sheet_and_its_root() {
+    // host/web/build.mjs writes `host.web.head` just before the root.
+    let shell = include_str!("../../web/index.html").replace(
+        "<div id=\"exact-root\"></div>",
+        "<script>gtag()</script>\n<div id=\"exact-root\"></div>",
+    );
+    let found = crate::page::head_scripts(&shell);
+    assert_eq!(
+        found.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(),
+        ["gtag()"]
+    );
+}
+
+#[test]
+fn a_string_that_says_exact_keeps_exacts_sources_and_the_head_scripts() {
+    let headers = Dist::with(Some(r#"{"csp": {"script-src": "exact 'unsafe-eval'"}}"#))
+        .headers()
+        .unwrap();
+    let scripts = directive(&headers, "Content-Security-Policy", "script-src").unwrap();
+    assert!(
+        scripts.starts_with("'self' 'wasm-unsafe-eval' 'sha256-"),
+        "{scripts}"
+    );
+    assert!(scripts.contains(&sha("gtag('js')")), "{scripts}");
+    assert!(
+        scripts.ends_with(" https://cdn.test 'unsafe-eval'"),
+        "{scripts}"
+    );
+}
+
+#[test]
+fn a_policy_file_that_is_not_an_object_or_cannot_be_read_fails_the_start() {
+    assert!(Dist::with(Some("[]")).headers().is_err());
+    assert!(Dist::with(Some("{\"csp\": {\"img-src\": \"caf\u{e9}\"}}"))
+        .headers()
+        .is_err());
+    let dist = Dist::with(None);
+    std::fs::create_dir(dist.0.join(".gen/csp.json")).unwrap();
+    assert!(dist.headers().is_err());
+}
+
 #[test]
 fn the_cache_budget_counts_each_page_s_variants() {
     let page = |body: usize| {
@@ -109,7 +318,13 @@ fn invalid_response_headers_fail_before_any_bytes_are_written() {
             let (mut server, _) = listener.accept().unwrap();
             Response::text(status, "original")
                 .header("X-Robots-Tag", value)
-                .write(&mut server, false, "default-src 'self'", "", false);
+                .write(
+                    &mut server,
+                    false,
+                    "Content-Security-Policy: default-src 'self'\r\n",
+                    "",
+                    false,
+                );
             server.shutdown(std::net::Shutdown::Write).unwrap();
             let mut received = String::new();
             client.read_to_string(&mut received).unwrap();
@@ -136,7 +351,13 @@ fn a_page_carries_the_permissions_policy_its_grants_derive() {
         let mut page = Response::text(200, "<p>");
         page.headers[0].1 = content_type.into();
         let lines = format!("Permissions-Policy: {policy}\r\n");
-        page.write(&mut server, false, "default-src 'self'", &lines, false);
+        page.write(
+            &mut server,
+            false,
+            "Content-Security-Policy: default-src 'self'\r\n",
+            &lines,
+            false,
+        );
         server.shutdown(std::net::Shutdown::Write).unwrap();
         let mut received = String::new();
         client.read_to_string(&mut received).unwrap();

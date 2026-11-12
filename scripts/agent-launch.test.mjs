@@ -2,7 +2,7 @@
 // defaults and overrides are host/web/agent.test.mjs's "launch setup" test.
 import { test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, resolve } from 'node:path';
 import { PINNED_RUST } from './app.mjs';
@@ -1201,11 +1201,15 @@ test('a native build is stale when a setting its module inlined has another valu
   try {
     writeFileSync(resolve(dir,'app.json'),JSON.stringify({name:'Native',app:{id:'com.exact.native',name:'Native'},env:[name]}));
     writeFileSync(resolve(dir,'app.contract'),'component App\n  view\n    text "x"\n');
+    // Separate file mtimes from the receipt's millisecond precision; only the setting changes.
+    const inputTime=new Date('2026-01-01T00:00:00Z'), builtTime=new Date('2026-01-01T00:01:00Z');
+    for (const file of ['app.json','app.contract']) utimesSync(resolve(dir,file),inputTime,inputTime);
     const app=resolveApp(dir), receipt=resolve(dir,'target/receipt.json');
     mkdirSync(dirname(receipt),{recursive:true});
     // As completeBuild records a Mac build whose bake inlined the setting from the environment.
-    writeFileSync(receipt,JSON.stringify({target:'aarch64-apple-darwin',started:new Date().toISOString(),
+    writeFileSync(receipt,JSON.stringify({target:'aarch64-apple-darwin',started:builtTime.toISOString(),
       build:{binary:{inputs:[],missing:[],directories:[]},settings:{dir,env:{[name]:{value:'http://a.example',source:'environment'}}}}}));
+    utimesSync(receipt,builtTime,builtTime);
     process.env[name]='http://a.example';
     try {
       expect(receiptChanges(receipt,app)).toEqual([]);

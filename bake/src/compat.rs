@@ -33,8 +33,12 @@ pub const GPU_MODULE_ABI: u32 = 1;
 /// The separately linked Rust data-source request/outcome wire ABI. 4: a
 /// long poll's result tag 10 (LLP 1016.000 D8; theme2's Q-RUSTABI ruling: the
 /// plan can't say which Rust sources poll, so every Rust app's id moves once,
-/// and an older binary is never offered a module that may send one).
-pub(crate) const RUST_ABI: u32 = 5;
+/// and an older binary is never offered a module that may send one). 5: a
+/// call's socket turn in and its staged socket operations back, a two-way
+/// socket's request, close and binary frame (LLP 1016.003). 6: each answer
+/// and parse carries the host's admitted secret names before its store
+/// snapshot, which a JavaScript render sends empty (LLP 1048.000 D9).
+pub(crate) const RUST_ABI: u32 = 6;
 /// The data-module runtime a TypeScript bundle may rely on in the binary's
 /// own prelude (`js/src/prelude.js`, compiled into the host): moved when the
 /// prelude learns something a bundle cannot do without and an older prelude

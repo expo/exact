@@ -345,6 +345,8 @@ final class ContextMenuHost: NSObject, UIContextMenuInteractionDelegate, UIEditM
             guard let self, let owner else { return nil }
             return self.menu(owner)
         })
+        // The trigger's order: an inline run's own, as its menu is.
+        configuration.preferredMenuElementOrder = MenuHost.order(run == nil ? source.props["menuOrder"] : run?.props["menuOrder"])
         owner.configuration = configuration
         return configuration
     }

@@ -789,10 +789,18 @@ UIKit would load at launch (LLP 1047.001.001). A device App Clip copies its pare
 executable and carries the same link; a simulator links the same target with the Clip’s
 own embedded entitlements. An IPA writes `<name>.dSYM`
 beside its archive; `exact release` copies the build's matching dSYM beside its release.
-Production iOS and tvOS bundles ship a small receipt and stripped frameworks, whether
+Production iOS and tvOS bundles ship a small receipt and strip Swift frameworks, whether
 archived or not. The whole receipt stays beside `<name>.app` or `<name>.ipa` as
 `<name>.receipt.json`; framework dSYMs are in `<name>.dSYMs/<Framework>.framework.dSYM`.
-GPU frameworks keep the bytes the bake authenticated and also get dSYMs.
+Rust module and package frameworks keep their linker output because Xcode's strip
+can make them unloadable. GPU frameworks keep the bytes the bake authenticated.
+All keep matching dSYMs outside the bundle.
+Production widget and share extension executables are stripped before signing; their
+source dSYMs are kept in `<name>.dSYMs/<Extension>.appex.dSYM`, outside the app.
+Watch builds keep the watch executable's, complication extension's and runtime
+framework's dSYMs in `<name>.dSYMs/Watch/`. Mac builds keep module library and
+framework dSYMs outside the app too, including the bare products' shared runtime
+at `<namespace>/ExactCore.framework.dSYM`.
 A production build links its Rust
 with fat LTO and, when its plan is fixed, leaves out the loaded modules the
 plan cannot reach (LLP 1036.000 §5–§10). `--bundle` prints the stable Mac bundle at
@@ -1180,7 +1188,8 @@ running read counts its ceiling, and one that does not fit waits for the reads
 before it, so keep the ceiling near the largest reply you expect. An open
 stream (`exactStream`) counts twice its ceiling on the same budget for as long
 as it is open, and a read whose ceiling does not fit beside the open streams is
-refused when it is made. A download written to a file (`exactBodyTo`) counts
+refused when it is made or while it waits if a later stream takes its room.
+A download written to a file (`exactBodyTo`) counts
 only the 1 MiB it can hold, whatever its ceiling. A browser has no lanes and schedules every fetch itself, so
 there only the ceiling applies. On every host a reply larger than
 `maxResponseBytes` fails as `refused`. The ceiling is 1 byte to 64 MiB (1 GiB

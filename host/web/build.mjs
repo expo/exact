@@ -36,7 +36,7 @@ import { compilerWarnings, webInputDigests } from '../../scripts/agent-launch.mj
 import { webBuildFailure } from '../../scripts/app-cli.mjs';
 import { builtSettings } from '../../js/bake/src/__exact_env.mjs';
 import { authClientMetadata, checkModuleRoster, gpuModules, markWorlds, rustPolicy, webGpuArtifacts, webHostFiles, worldSurfaces } from '../../scripts/app.mjs';
-import { webHead } from '../../scripts/web-head.mjs';
+import { webCspFile, webHead } from '../../scripts/web-head.mjs';
 import { buildRust, rustFiles, rustCards, rustPackage } from '../../scripts/rust.mjs';
 import { webAppManifest, webDist, copyShaders, bakeOutput, bakeWatchEnv, buildBake, contractLast, readBake, verifyBakeFiles, developmentBuildEnv, resolveApp } from '../../scripts/app.mjs';
 import { buildEditor, buildFlow } from '../web-js/module.mjs';
@@ -135,11 +135,11 @@ if (target !== '--wasm' && !game && !bakeOnly) {
     // A site to host holds the site, not the build's intermediates (`.gen`, the app's captured sources among them;
     // the receipt's file cards name no dot path), but for what `serve` renders a `render=request` or `cached` route's
     // page with, when it has such a route: the server bundle (LLP 1153 D3.4) and the analyzed sheet a page selects
-    // its rules from (LLP 1048.007 D4).
+    // its rules from (LLP 1048.007 D4); and, for a render server, the app's part of its CSP (LLP 1048.000 D11).
     if (outDir) {
       const routes = JSON.parse(readFileSync(resolve(stage, 'routes.json'), 'utf8')).routes;
-      const kept = routes.some((r) => r.render === 'request' || r.render === 'cached')
-        ? ['server.js', 'page-style.json'].filter((name) => existsSync(resolve(stage, '.gen', name))).map((name) => [name, readFileSync(resolve(stage, '.gen', name))]) : [];
+      const kept = [...routes.some((r) => r.render === 'request' || r.render === 'cached') ? ['server.js', 'page-style.json'] : [], 'csp.json']
+        .filter((name) => existsSync(resolve(stage, '.gen', name))).map((name) => [name, readFileSync(resolve(stage, '.gen', name))]);
       rmSync(resolve(stage, '.gen'), { recursive: true, force: true });
       if (kept.length) mkdirSync(resolve(stage, '.gen'));
       for (const [name, bytes] of kept) writeFileSync(resolve(stage, '.gen', name), bytes);
@@ -428,6 +428,12 @@ writeFileSync(resolve(stage, 'index.html'), readFileSync(resolve(stage, 'index.h
     '<script type="module" src="./glue.js"></script>',
     `<link rel="alternate" type="application/vnd.exact.envelope+json" href="./exact.json">\n<link rel="manifest" href="./manifest.json">\n${webManifest.theme_color ? `<meta name="theme-color" content="${escapeHtml(webManifest.theme_color)}">\n` : ''}${pageNative ? '<meta name="exact-native" content="./modules/index.js">\n' : ''}<script type="module" src="./glue.js"></script>`,
   ));
+// The app's part of the render server's CSP (LLP 1048.000 D11), which it reads at start.
+const cspFile = webCspFile(app.manifest);
+if (cspFile) {
+  mkdirSync(resolve(stage, '.gen'), { recursive: true });
+  writeFileSync(resolve(stage, '.gen', 'csp.json'), cspFile);
+}
 // app.wasm's URL names its build (LLP 1047.000 §9): `./app.wasm?v=` and
 // the first 16 hex digits of its SHA-256, in the shell's preload, which the
 // capture script and the glue fetch (and a document's checkpoint, when it

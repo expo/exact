@@ -311,12 +311,19 @@ extension NavigationHost {
     var headerRoute: (root: NodeView, route: NodeView, pushed: Bool)? {
         // A stack that splits: one of its two routes owns the window.
         if let routes = splitHeaderRoutes { return (routes.root, routes.owner, routes.owner !== split.shown?.list) }
+        return windowRoute
+    }
+
+    /// The route under any modal or fullscreen segments: the window's
+    /// toolbar still belongs to it while a cover is selected. A split's
+    /// base detail is not pushed.
+    var windowRoute: (root: NodeView, route: NodeView, pushed: Bool)? {
         guard let selection, let root = presenter.views[selection.root], selection.stack.indices.contains(selection.at) else { return nil }
         let stack = selection.stack[...selection.at].compactMap { presenter.views[$0] }
         guard stack.count == selection.at + 1,
               let base = NavigationRules.segments(presentations: stack.map { $0.props["navigationPresentation"] }).first,
               let route = stack[base].last else { return nil }
-        return (root, route, base.count > 1)
+        return (root, route, base.count - 1 > split.base)
     }
 
     /// @ref LLP 1115.002 D4, §5 Q10 — the two headers of a window that shows

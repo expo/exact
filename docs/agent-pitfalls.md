@@ -147,12 +147,6 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   raster image only, and a native button's face symbol. Write
   `image "symbol:forward-chevron" color="-exact-tertiary-label"`. The build warns
   (`lower-symbol-tint`).
-- **A sized `symbol:` image is stretched.** An ellipsis became three tall bars.
-  Cause: `object-fit` defaults to `fill`, as for `<img>`. Fix: don't size a symbol;
-  it follows its text (in a button, tab or bar item, its title's font; give it a
-  `font-size` if it must differ; a native button refuses its symbol's `width` and
-  `height`). A symbol you do size by its box needs `object-fit="contain"`. (Signal
-  Clone, 2026-10-02.)
 - **`color-scheme="light dark"` is refused.** Contract accepts only `light` or
   `dark` to fix a subtree's scheme. Leave it unsaid to follow the surrounding
   scheme; put `color-scheme="dark"` on a media viewer itself, not its shared

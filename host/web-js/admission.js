@@ -212,6 +212,7 @@ export function createSecretFacade(store, admitted, keys) {
     return `secret ${name} is not granted${parse ? ': ' + parse : ''}`;
   };
   const allowed = name => {
+    if (globalThis.__exactRender) throw new Error("a render's store is empty and refuses writes"); // LLP 1048.000 D9
     if (!admitsSecret(admitted, name)) throw Object.assign(new Error(refused(name)), { refuse: true });
   };
   const seen = {
@@ -220,9 +221,9 @@ export function createSecretFacade(store, admitted, keys) {
       effect('store.get()');
       if (String(name).startsWith('exact.kept.')) return null;
       seen.read = true;
-      return admitsSecret(admitted, name) && !mustLock(admitted, name) ? store.get(name) ?? null : null;
+      return !globalThis.__exactRender && admitsSecret(admitted, name) && !mustLock(admitted, name) ? store.get(name) ?? null : null;
     },
-    exclusive(name, work) {
+    async exclusive(name, work) {
       effect('store.exclusive()'); allowed(name);
       if (mustLock(admitted, name)) return Promise.reject(unsupported(name));
       const context = globalThis.__exact_async_context, owner = context?.current();
@@ -238,7 +239,13 @@ export function createSecretFacade(store, admitted, keys) {
     unprotect() { return overlaying.on ? Promise.reject(inOverlay('store.unprotect()')) : Promise.resolve(); },
     set(name, value) { effect('store.set()'); allowed(name); if (mustLock(admitted, name)) throw unsupported(name); store.set(name, String(value)); },
     forget(name) { effect('store.forget()'); allowed(name); store.set(name, null); },
-    keepKey(name, pair) { if (overlaying.on) return Promise.reject(inOverlay('store.keepKey()')); allowed(name); const handle = 'exact.key:' + crypto.randomUUID(); store.set(name, handle); return keys().then(service => service.put(handle, pair)); },
+    async keepKey(name, pair) {
+      if (overlaying.on) throw inOverlay('store.keepKey()');
+      allowed(name);
+      const handle = 'exact.key:' + crypto.randomUUID();
+      store.set(name, handle);
+      return keys().then(service => service.put(handle, pair));
+    },
     key(name) { if (overlaying.on) return Promise.reject(inOverlay('store.key()')); const handle = seen.get(name); return handle == null ? Promise.resolve(null) : keys().then(service => service.get(handle) ?? null); },
   };
   return seen;

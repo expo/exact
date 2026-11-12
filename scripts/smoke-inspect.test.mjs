@@ -1,6 +1,26 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import { formControlsSmoke } from './smoke-inspect.mjs';
+import { formControlsSmoke, isDeckURL } from './smoke-inspect.mjs';
+
+test('the deck smoke resolves frame URLs within the document base', () => {
+  assert.equal(isDeckURL('/deck/index.html', null), true);
+  assert.equal(isDeckURL('./deck/index.html', null), false);
+  const origin = 'https://exact.invalid';
+  for (const path of ['/', `/.exact/gen/${'a'.repeat(32)}/`,
+    `/caltrain/.exact/gen/${'b'.repeat(32)}/`, `/.exact/root/web/releases/${'c'.repeat(64)}/`]) {
+    const base = origin + path, deck = new URL('deck/index.html', base);
+    for (const source of ['./deck/index.html', 'deck/index.html', deck.href, deck.pathname]) {
+      assert.equal(isDeckURL(source, base), true, `${source} at ${base}`);
+    }
+    assert.equal(isDeckURL('/deck/index.html', base), path === '/', base);
+    assert.equal(isDeckURL('../deck/index.html', base), path === '/', base);
+    for (const source of [undefined, null, '', 'http://[', './other/index.html',
+      './deck/index.html?other', './deck/index.html#other', '//other.invalid/deck/index.html',
+      `https://other.invalid${deck.pathname}`, `${origin}/.exact/gen/${'d'.repeat(32)}/deck/index.html`]) {
+      assert.equal(isDeckURL(source, base), false, `${source} at ${base}`);
+    }
+  }
+});
 
 test('the form-control smoke waits for a chooser that presents after the tap returns', async () => {
   const failures = [], pictures = [];

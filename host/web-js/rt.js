@@ -382,14 +382,16 @@ const DEVELOPMENT_STORE = null; // a development build's app directory, as stora
 export const Kept = kind => `exact.${kind}.${DEVELOPMENT_STORE ? `@${DEVELOPMENT_STORE}/` : ''}`;
 export const Store = {
   map: new Map(), writes: [], pending: new Map(), dirty: false,
-  get(k) { return this.map.get(k); },
+  get(k) { return globalThis.__exactRender ? undefined : this.map.get(k); },
   exclusive(k, work) { return import("./storage-environment.js").then(m => m.exclusiveSecret(this, Kept("secret"), k, work)); },
-  // Keeping what is already kept is no write, as the runner's `Store::set`.
-  set(k, v) { if (v != null && this.map.get(k) === v) return; if (v == null) this.map.delete(k); else this.map.set(k, v); this.writes.push([k, v]); if (Writes) this.dirty = true; Rev++; if (!Writes && !LateStore) { LateStore = true; queueMicrotask(() => { LateStore = false; Store.persist(); lateReaders(); recommit(lateIdle, "a store write outside a commit"); }); } }, // kept now, whatever that commit's settlement does; the commit asks the store's readers again
+  // Outside a render, keeping what is already kept is no write, as the runner's `Store::set`.
+  set(k, v) { if (globalThis.__exactRender) throw new Error("a render's store is empty and refuses writes"); // LLP 1048.000 D9
+    if (v != null && this.map.get(k) === v) return; if (v == null) this.map.delete(k); else this.map.set(k, v); this.writes.push([k, v]); if (Writes) this.dirty = true; Rev++; if (!Writes && !LateStore) { LateStore = true; queueMicrotask(() => { LateStore = false; Store.persist(); lateReaders(); recommit(lateIdle, "a store write outside a commit"); }); }
+  }, // kept now, whatever that commit's settlement does; the commit asks the store's readers again
   save() { return [new Map(this.map), this.writes.length]; },
   restore([m, n]) { this.map = m; this.writes.length = n; this.dirty = false; },
   persist() { const p = Kept("secret"), jobs = []; for (const [k, v] of this.writes.splice(0)) this.pending.set(k, { v, warned: false }); for (const [k, entry] of this.pending) { const live = () => this.pending.get(k) === entry, failed = e => { if (!live()) return; if (!Object.hasOwn(entry, "before")) this.pending.delete(k); if (!entry.warned) { entry.warned = true; say(`store ${k} failed: ${e}`); } }, write = () => { try { const before = localStorage.getItem(p + k); if (Object.hasOwn(entry, "before") && entry.before !== before) { this.pending.delete(k); return; } entry.before = before; entry.v == null ? localStorage.removeItem(p + k) : localStorage.setItem(p + k, entry.v); this.pending.delete(k); } catch (e) { failed(e); } }; if (Object.hasOwn(entry, "before") && !this.leased?.has(k)) { entry.retry ??= import("./storage-environment.js").then(m => m.retrySecretWrite(p + k, live, write)).catch(failed).finally(() => { delete entry.retry; }); jobs.push(entry.retry); } else write(); } return Promise.all(jobs); },
-  load() { const p = Kept("secret"); try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(p)) this.map.set(k.slice(p.length), localStorage.getItem(k)); } } catch {} },
+  load() { if (globalThis.__exactRender) return; const p = Kept("secret"); try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith(p)) this.map.set(k.slice(p.length), localStorage.getItem(k)); } } catch {} },
 };
 /** Resource instances, including list members; list aggregates have no entry. */
 export const Resources = [];
@@ -503,6 +505,7 @@ export function res(name, source, args, initial, initialArgs, type, ph, carried 
       if (data.threwRead?.()) r.store = true;
       if (e instanceof Refusal && !(reconciling && e instanceof Failed)) throw e;
       if (e.refuse && !reconciling) throw new Failed(`resource ${name}: ${e.message}`);
+      if (globalThis.__exactRender) hold();
       return fails(a, String(e?.message ?? e), failureCode(e), failureReason(e)); // its newest ask failed: an older one in flight is let go
     }
     if (ans && ans.store) r.store = true;

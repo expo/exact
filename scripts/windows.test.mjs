@@ -5,9 +5,9 @@ import {spawn, spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
 import {createServer, get} from 'node:http';
-import {existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {parse, relative, resolve} from 'node:path';
+import {dirname, parse, relative, resolve} from 'node:path';
 import {PassThrough} from 'node:stream';
 import {closeFilesystemReader, filesystem, filesystemErrorCode} from './filesystem.mjs';
 import {Cdp, captureCdpRequest, cdpFailureContext, copyCdpFailureContext, chromium, closeWindowsBrowser, retainCleanupError, packagedBuildChanges, removeBrowserProfile} from './agent-launch.mjs';
@@ -802,19 +802,70 @@ test('setup selects supported pinned Binaryen archives on Windows and Unix', () 
   expect(binaryenVersion('wasm-opt version 132 (version_132)')).toBe('version 132');
 });
 
-test('SDK CLI entrypoint executes with spaces in its real file path', () => {
+test('SDK CLI entrypoint executes', () => {
   const result=spawnSync(process.execPath,[resolve(import.meta.dir,'exact.mjs'),'--help'],{encoding:'utf8'});
   expect(result.status).toBe(0);
   expect(result.stdout).toContain('exact setup [--check]');
 });
 
-test('caps command really runs from a checkout path containing spaces', () => {
+test('caps command reports the checkout budgets', () => {
   const root=resolve(import.meta.dir,'..');
   const result=spawnSync(process.execPath,[resolve(import.meta.dir,'caps.mjs')],{cwd:root,encoding:'utf8',env:{...process.env,EXACT_CAPS_WASM:'0'}}); // the wasm32 check is wasm-check.test's
   expect(result.stdout).toContain('caps — budgets declared');
   const kept=process.env.EXACT_CAPS_WASM; process.env.EXACT_CAPS_WASM='0';
   try { expect(result.status).toBe(runCaps(root).problems.length ? 1 : 0); } finally { if (kept===undefined) delete process.env.EXACT_CAPS_WASM; else process.env.EXACT_CAPS_WASM=kept; }
 });
+
+test('a checkout with spaces builds a web app and drives its authored interaction', () => {
+  const root=resolve(import.meta.dir,'..');
+  mkdirSync(resolve(root,'target'),{recursive:true});
+  const checkout=realpathSync(mkdtempSync(resolve(root,'target/checkout with spaces ')));
+  try {
+    // Copy sources, rather than link the checkout: import.meta.url must contain the spaces too.
+    const files=spawnSync('git',['ls-files','-z'],{cwd:root,encoding:'utf8',maxBuffer:64*1024*1024});
+    expect(files.status,files.stderr).toBe(0);
+    for(const file of files.stdout.split('\0').filter(Boolean)) {
+      const destination=resolve(checkout,file);
+      mkdirSync(dirname(destination),{recursive:true});
+      cpSync(resolve(root,file),destination,{verbatimSymlinks:true});
+    }
+    symlinkSync(resolve(root,'node_modules'),resolve(checkout,'node_modules'),process.platform==='win32'?'junction':'dir');
+    const app=resolve(checkout,'apps/space-path'), target=resolve(checkout,'target');
+    mkdirSync(app,{recursive:true});
+    writeFileSync(resolve(app,'app.json'),JSON.stringify({
+      name:'Space Path',app:{id:'test.exact.space-path',name:'Space Path'},host:{web:{}},rust:false,
+    }));
+    writeFileSync(resolve(app,'app.contract'),`component App
+  state draft = ""
+  state saved = ""
+  action edit(value: string)
+    draft = value
+  action save
+    saved = draft
+  view
+    column
+      input testId="draft" value=draft input=edit
+      button "Save" testId="save" press=save
+      text saved testId="saved"
+`);
+    const env={...process.env,CARGO_TARGET_DIR:target,CARGO_NET_OFFLINE:'true',EXACT_APP_DIR:app,
+      EXACT_WEB_DIST:resolve(target,'web-dist'),EXACT_WEB_COMPILER:undefined,EXACT_FEEDBACK:'0'};
+    const run=(script,args,timeout)=>{
+      const result=spawnSync(process.execPath,[resolve(checkout,script),...args],{
+        cwd:checkout,env,encoding:'utf8',timeout,maxBuffer:8*1024*1024,
+      });
+      expect(result.status,`${script}: ${result.error ?? ''}\n${result.stderr}\n${result.stdout}`).toBe(0);
+      return result.stdout;
+    };
+    run('host/web/build.mjs',['space-path'],180000);
+    const replies=run('scripts/agent.mjs',['web','--app','space-path','--json',
+      'state','type draft Saved from a spaced checkout','tap save','clock settle','state','tree'],60000)
+      .trim().split('\n').map(line=>JSON.parse(line));
+    expect(replies[0].slots).toMatchObject({draft:'',saved:''});
+    expect(replies[4].slots).toMatchObject({draft:'Saved from a spaced checkout',saved:'Saved from a spaced checkout'});
+    expect(replies[5].nodes.find(node=>node.props.testId==='saved')?.props.text).toBe('Saved from a spaced checkout');
+  } finally { rmSync(checkout,{recursive:true,force:true}); }
+},300000);
 
 test('filesystem errors distinguish Windows access denial from Unix IO failure', () => {
   expect(filesystemErrorCode(5,'win32')).toBe('EACCES');

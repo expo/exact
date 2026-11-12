@@ -914,8 +914,11 @@ impl<S: Source> Walk<'_, '_, S> {
         if self.sites.contains(&id) {
             attrs.push(("data-exact-site".into(), None));
         }
-        if element == "img" && (self.lazy)(id) {
-            attrs.push(("loading".into(), Some("lazy".into())));
+        if element == "img" {
+            attrs.push(("decoding".into(), Some("async".into())));
+            if (self.lazy)(id) {
+                attrs.push(("loading".into(), Some("lazy".into())));
+            }
         }
         // `attach`: the view id, and a tab stop for an element that hears
         // focus, blur or keys and is not one already.

@@ -1805,6 +1805,18 @@
       "name": "svgRelativeFontWeight",
       "kind": "str",
       "_comment": "An SVG file's bolder/lighter declaration, kept beside its numeric font_weight row so the scene can resolve it again under use inheritance (SVG 2 §5.6)."
+    },
+    {
+      "id": 302,
+      "name": "menuOrder",
+      "kind": "str",
+      "_comment": "@ref LLP 1115 §2 (what the author writes wins): on a menu's trigger (a `popovertarget` button, a bar button that opens a menu, a node with `contextPopover`), the order its rows show in: `fixed` (as written, wherever the menu opens), `priority` (the first row nearest the finger) or `automatic` (the default: the platform's; UIKit's shows a menu that opens upward last row first). iOS and tvOS set it as `preferredMenuElementOrder`; the other hosts always show the rows as written and ignore it."
+    },
+    {
+      "id": 303,
+      "name": "glassInteractive",
+      "kind": "bool",
+      "_comment": "On a box with `backgroundMaterial` glass or glass-clear: whether its glass reacts to a touch (`UIGlassEffect.isInteractive`). Unset, it does when the box has a `press` and is not disabled. Only iOS and tvOS 26 have interactive glass; other hosts ignore it."
     }
   ],
   "_enums": "Wire discriminant is the 0-based index. An unknown discriminant is a typed decode rejection, never a fallback.",
@@ -4663,6 +4675,14 @@
       "text": true,
       "layout": true,
       "_comment": "CSS Fonts 4 §6.12 `font-feature-settings`: `normal` or up to sixteen `\"tag\" [<integer> | on | off]` OpenType features of the chosen face, applied after `font-variant-numeric` and `font-variant-ligatures` and winning for the same feature (§7.2). A tag the face lacks does nothing. The web writes it; Apple sets it through Core Text's feature settings, and Linux, Windows and Android through Parley's HarfRust, in text and text fields alike, where `font-variant-ligatures` reaches (that row's comment names where it does not). Widgets and the watch refuse it; a terminal admits it and draws as before. Inherited, as in CSS; it changes advances, so it measures."
+    },
+    {
+      "bit": 234,
+      "field": "glass_tint",
+      "rare": true,
+      "codec": "color",
+      "default": 0,
+      "_comment": "Not CSS: `-exact-glass-tint`, the colour that tints the glass of a box whose `backgroundMaterial` is glass or glass-clear, resolved in the box's colour scheme: `UIGlassEffect.tintColor` on iOS and tvOS 26, `NSGlassEffectView.tintColor` on macOS 26, and on the web and Linux the material's background colour in place of the table's tint. An unset mask (the default, 0, is never read) is untinted glass. Not inherited."
     }
   ],
   "_transitions": "The `transition` row is CSS `transition` (LLP 1002): count u8 (≤8), then per declaration property u8 (0 all, then 1 + `Property`: 1 translate, 2 scale, 3 rotate, 4 opacity, 5 height, 6 stroke-dashoffset, 7 r, 8 color, 9 background-color, 10 fill, 11 stroke, 12 cx, 13 cy, 14 x, 15 y, 16 rx, 17 ry, 18 border-top-color, 19 border-right-color, 20 border-bottom-color, 21 border-left-color, 22 -exact-tint-color, 23 box-shadow — LLP 1062; 24, box-shadow's colour alone, is refused; 25 font-weight, 26 font-stretch, 27 font-variation-settings — LLP 1019 §13 D10; 28 is CSS's `border-color` shorthand; 29 is a path's `d`, LLP 1055.000 D15), duration f32 s, delay f32 s, easing u8 (0 linear, 1 ease, 2 ease-in, 3 ease-out, 4 ease-in-out, 5 cubic-bezier + 4×f32, 6 steps + u16 count + u8 position, 7 spring + f32 stiffness/damping/mass, 8 linear() + u8 count + count×(f32 input, f32 output)). Its Rust type lives in exact-motion; the kernel owns the bytes.",

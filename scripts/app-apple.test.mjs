@@ -110,10 +110,11 @@ test.skipIf(process.platform === 'win32')('Apple builder startup honors --optimi
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test.skipIf(!packagingTools)('production iOS bundles ship stripped frameworks and a small receipt with or without an archive', async () => {
+test.skipIf(!packagingTools)('production iOS bundles preserve Rust frameworks, strip Swift frameworks and keep dSYMs with or without an archive', async () => {
   useXcode();
   const { createHash } = await import('node:crypto');
-  const { assembleIOS, stripForDistribution, stripProductionExecutable } = await import('../host/apple/bundle.mjs');
+  const { assembleIOS } = await import('../host/apple/bundle.mjs');
+  const { stripProductionExecutable } = await import('../host/apple/link.mjs');
   const { shippedReceipt, copyAppleGpuProducts } = await import('../host/apple/build.mjs');
   const { wrapFramework, codeDigest, plistFile } = await import('../host/apple/assets.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-ios-package-'));
@@ -132,6 +133,10 @@ test.skipIf(!packagingTools)('production iOS bundles ship stripped frameworks an
     writeFileSync(icon, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+afo0AAAAASUVORK5CYII=', 'base64'));
     run('sips', ['-z', '1024', '1024', icon]);
     const app = { dir, id: 'com.exact.fixture', name: 'Fixture', manifest: {} };
+    const libraries = resolve(dir, 'libraries'); mkdirSync(libraries);
+    copyFileSync(dylib, resolve(libraries, 'library.dylib'));
+    wrapFramework(libraries, 'library.dylib', 'FixtureLibrary', app);
+    const library = { placed: resolve(libraries, 'FixtureLibrary.framework'), link: 'FixtureLibrary' };
     const plan = Buffer.from('fixture'), compat = { embedded: { plan: { sha256: createHash('sha256').update(plan).digest('hex'), bytes: plan.length }, assets: [] } };
     const pairs = [['libweb.dylib', 'ExactWeb'], ['libmodules.dylib', 'ExactModules'], ['libsvg.dylib', 'ExactSvg'], ['libcanvas.dylib', 'ExactCanvasGpu'], ['libservice.dylib', 'ExactService']];
     const build = { trust: 'production', linkedPlan: '/private/plan', binary: { sha256: 'binary', inputs: [{ path: '/private/source' }], metadata: {} }, products: [{ path: '/private/product' }], graph: { artifacts: [] } };
@@ -154,7 +159,7 @@ test.skipIf(!packagingTools)('production iOS bundles ship stripped frameworks an
       const clipBin = resolve(binDir, 'clip', 'Clip');
       mkdirSync(resolve(binDir, 'clip'));
       copyFileSync(bin, clipBin);
-      const result = assembleIOS({ app, paths: { bundle, executable: 'ExactClip', capture }, binDir, bin, device,
+      const result = assembleIOS({ app, library, paths: { bundle, executable: 'ExactClip', capture }, binDir, bin, device,
         clipBin, production, distribution: archived, ipa, bakedCompat: compat, bakedPlan: plan, buildReceipt: build,
         libDir: capture, gpuArtifacts: [gpu], looseArms: [[true, dylib, ...pairs[0]]],
         modulesBuilt: dylib, modulesLoadName: pairs[1][0], hasSvg: true, svgBuilt: dylib, svgLoadName: pairs[2][0],
@@ -162,7 +167,7 @@ test.skipIf(!packagingTools)('production iOS bundles ship stripped frameworks an
         args: [], unsigned: true, sha1: '-', linkRoot: binDir, sdkName: 'iphoneos' }, {
         runApple: run, infoPlist: () => plistFile({ CFBundleIdentifier: app.id, CFBundleExecutable: 'ExactClip', CFBundlePackageType: 'APPL' }),
         copyAppleStaticTrees() {}, writeUsageStrings() {}, assertAppleIdentity() {}, distributionKeys: () => ({}),
-        receipt: () => whole, shippedReceipt, copyAppleGpuProducts, entitlements: () => plistFile({}), appClip: () => ({ id: app.id + '.Clip', name: 'Clip', executable: 'Clip' }), stripForDistribution,
+        receipt: () => whole, shippedReceipt, copyAppleGpuProducts, entitlements: () => plistFile({}), appClip: () => ({ id: app.id + '.Clip', name: 'Clip', executable: 'Clip' }),
       });
       const clipBytes = readFileSync(resolve(bundle, 'AppClips/Clip.app/Clip'));
       assert.equal(codeDigest(clipBytes), codeDigest(readFileSync(device ? bin : clipBin)), 'the clip uses its platform executable, including when the parent is named ExactClip');
@@ -178,14 +183,18 @@ test.skipIf(!packagingTools)('production iOS bundles ship stripped frameworks an
       if (production) {
         const sidecar = resolve(binDir, ipa ? 'Archive.receipt.json' : 'ExactClip.receipt.json');
         assert.equal(readFileSync(sidecar, 'utf8'), whole);
-        assert.equal(result.frameworkSymbols.count, pairs.length + 1);
-        for (const [loose, name] of pairs) {
+        assert.equal(result.frameworkSymbols.count, pairs.length + 2);
+        for (const [loose, name] of [...pairs, [null, 'FixtureLibrary']]) {
           const binary = resolve(bundle, 'Frameworks', `${name}.framework`, name);
-          assert.equal(existsSync(resolve(bundle, 'Frameworks', loose)), false);
-          assert.doesNotMatch(run('nm', ['-a', binary]).stdout, / _local_value$/m, `${name} is stripped`);
+          if (loose) assert.equal(existsSync(resolve(bundle, 'Frameworks', loose)), false);
+          const preserved = ['ExactSvg', 'ExactCanvasGpu', 'FixtureLibrary'].includes(name), names = run('nm', ['-a', binary]).stdout;
+          assert.match(names, / T _answer$/m);
+          assert.equal(/ _local_value$/m.test(names), preserved, `${name} symbol policy`);
           const symbols = resolve(result.frameworkSymbols.dir, `${name}.framework.dSYM`);
           assert.equal(/UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', symbols]).stdout)?.[1], /UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', binary]).stdout)?.[1]);
         }
+        const packageBinary = resolve(bundle, 'Frameworks/FixtureLibrary.framework/FixtureLibrary');
+        assert.equal(codeDigest(readFileSync(packageBinary)), codeDigest(readFileSync(resolve(library.placed, library.link))), 'the package library keeps its linker output');
         assert.equal(codeDigest(readFileSync(resolve(bundle, 'Frameworks/ExactGpu.framework/ExactGpu'))), codeDigest(readFileSync(gpuSource)), 'the baked GPU digest is preserved');
         assert.ok(existsSync(resolve(result.frameworkSymbols.dir, 'ExactGpu.framework.dSYM')));
       } else {
@@ -1284,18 +1293,24 @@ test('Mac versioned runtime publication serves both bare products (LLP 1126.001 
   const run = (command, args) => { const r = spawnSync(command, args, { encoding: 'utf8' }); assert.equal(r.status, 0, r.stderr); return r.stdout; };
   try {
     const frameworks = resolve(dir, 'built'), namespace = resolve(dir, 'products'); mkdirSync(frameworks);
-    writeFileSync(resolve(dir, 'core.c'), 'int exact_value(void) { return 42; }');
+    writeFileSync(resolve(dir, 'core.c'), 'static int local_value = 42; int exact_value(void) { return local_value; }');
     writeFileSync(resolve(dir, 'app.c'), 'extern int exact_value(void); int main(void) { return exact_value() == 42 ? 0 : 1; }');
     run('xcrun', ['clang', '-dynamiclib', resolve(dir, 'core.c'), '-o', resolve(frameworks, 'libcore.dylib')]);
     wrapFramework(frameworks, 'libcore.dylib', 'ExactCore', { id: 'com.exact.test', manifest: {} }, 'MacOSX');
-    publishMacFramework(resolve(frameworks, 'ExactCore.framework'), namespace, '-');
-    for (const product of ['standalone', 'host']) {
-      const path = resolve(namespace, product, 'Fixture'); mkdirSync(resolve(namespace, product));
-      run('xcrun', ['clang', resolve(dir, 'app.c'), '-F', frameworks, '-framework', 'ExactCore', '-Wl,-rpath,@executable_path/../Frameworks', '-o', path]);
-      assert.match(run('otool', ['-L', path]), /ExactCore.framework\/Versions\/A\/ExactCore/);
-      run(path, []);
+    for (const production of [false, true]) {
+      publishMacFramework(resolve(frameworks, 'ExactCore.framework'), namespace, '-', production);
+      for (const product of ['standalone', 'host']) {
+        const path = resolve(namespace, product, 'Fixture'); mkdirSync(resolve(namespace, product), { recursive: true });
+        run('xcrun', ['clang', resolve(dir, 'app.c'), '-F', frameworks, '-framework', 'ExactCore', '-Wl,-rpath,@executable_path/../Frameworks', '-o', path]);
+        assert.match(run('otool', ['-L', path]), /ExactCore.framework\/Versions\/A\/ExactCore/);
+        run(path, []);
+      }
+      const binary = resolve(namespace, 'Frameworks/ExactCore.framework/ExactCore'), dsym = resolve(namespace, 'ExactCore.framework.dSYM');
+      assert.equal(/ _local_value$/m.test(run('nm', ['-a', binary])), !production);
+      assert.equal(existsSync(dsym), production);
+      if (production) assert.equal(run('dwarfdump', ['--uuid', dsym]).split(' ')[1], run('dwarfdump', ['--uuid', binary]).split(' ')[1]);
+      run('codesign', ['--verify', '--strict', resolve(namespace, 'Frameworks/ExactCore.framework')]);
     }
-    run('codesign', ['--verify', '--strict', resolve(namespace, 'Frameworks/ExactCore.framework')]);
     assert.equal(realpathSync(resolve(namespace, 'Frameworks/ExactCore.framework/ExactCore')), realpathSync(resolve(namespace, 'Frameworks/ExactCore.framework/Versions/A/ExactCore')));
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

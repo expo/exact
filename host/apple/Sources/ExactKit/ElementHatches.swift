@@ -191,7 +191,7 @@ final class ElementHatches {
         // counts the rest, so a fling does not flood the journal.
         let quiet = entry.inList && (calls[word]?[event.name] ?? 0) > 1
         // A development build notices a recognizer the call added and did not declare (§3.4).
-        let had = HatchDiagnostics.measuring && event != .ended ? Set((entry.node.gestureRecognizers ?? []).map(ObjectIdentifier.init)) : nil
+        let had = HatchDiagnostics.measuring && event != .ended ? regions.recognizers(under: entry.node) : nil
         let reusable = presenter.session?.natives.elementHatch(entry.node, event: event.rawValue, platform: Self.platform(of: entry.node, presenter), quiet: quiet) ?? false
         if let had { regions.undeclared(under: entry.node, by: "element \(word)") { had.contains(ObjectIdentifier($0)) } }
         // A frame's arm says what the call changed of what it owns (LLP 1020.002 §9).

@@ -1,5 +1,6 @@
 //! Letting requests go: the runner's forgotten ones (safe reads cancelled,
-//! the rest let run) and an app's aborted ones (cancelled whatever their method).
+//! the rest let run), an app's aborted ones (cancelled whatever their method),
+//! and queued requests that can no longer start.
 use super::*;
 
 /// Dropping a queued request also retires its timer. Only independent HTTP
@@ -34,25 +35,17 @@ impl QueuedDeadline {
                 else {
                     return;
                 };
-                let job = state.jobs[lane].remove(index).unwrap();
-                state.book.sized.remove(&ticket);
-                state.completed[lane].push_back(Completed {
-                    finished_at: std::time::Instant::now(),
-                    ticket,
-                    elapsed_ms: ms.into(),
-                    outcome: failed(
+                settle_queued(
+                    &shared,
+                    &mut state,
+                    lane,
+                    index,
+                    ms.into(),
+                    failed(
                         FailureKind::Timeout,
                         format!("the request timed out after {ms} ms"),
                     ),
-                    bytes: job.charge,
-                    message: false,
-                    stream: false,
-                    light: false,
-                    again: false,
-                    reply: false,
-                });
-                rouse(&shared, &state);
-                wake(&mut state);
+                );
             })
             .map_err(|_| ())?;
         Ok(Self { at, _done: done })
@@ -66,6 +59,58 @@ impl QueuedDeadline {
         request.timeout_ms = Some(left.as_nanos().div_ceil(1_000_000).min(u32::MAX as u128) as u32);
         true
     }
+}
+
+/// A stream admitted after a read was queued may have taken the room it needs.
+/// Refuse the read unsent, keeping its ticket and waiting charge until drained.
+pub(super) fn refuse_crowded(
+    shared: &Shared,
+    state: &mut State,
+    lane: usize,
+    index: usize,
+) -> bool {
+    let Some(job) = state.jobs[lane].get(index) else {
+        return false;
+    };
+    let Err(why) = stream_room(state, lane, job.limit) else {
+        return false;
+    };
+    settle_queued(
+        shared,
+        state,
+        lane,
+        index,
+        0,
+        failed(FailureKind::Refused, why),
+    );
+    true
+}
+
+fn settle_queued(
+    shared: &Shared,
+    state: &mut State,
+    lane: usize,
+    index: usize,
+    elapsed_ms: u64,
+    outcome: Outcome,
+) {
+    let job = state.jobs[lane].remove(index).expect("queued job");
+    state.book.sized.remove(&job.ticket);
+    discard(shared, state, job.work);
+    state.completed[lane].push_back(Completed {
+        finished_at: std::time::Instant::now(),
+        ticket: job.ticket,
+        elapsed_ms,
+        outcome,
+        bytes: job.charge,
+        message: false,
+        stream: false,
+        light: false,
+        again: false,
+        reply: false,
+    });
+    rouse(shared, state);
+    wake(state);
 }
 
 impl Core {

@@ -295,6 +295,11 @@ component NativeFixture
   state query = ""
   action setQuery(text: string)
     query = text
+  state submittedQuery = ""
+  state querySubmissions = 0
+  action submitQuery
+    submittedQuery = query
+    querySubmissions = querySubmissions + 1
   state segment = "all"
   action chooseSegment(name: string)
     segment = name
@@ -417,7 +422,7 @@ component NativeFixture
                       button popovertarget="bar-menu" aria-label="More" testId="menu-item" padding=6 background-color="#e5e7eb"
                         image "symbol:sf/ellipsis.circle" width=20 height=20
                       // A search field in the header: the item's search controller.
-                      input type="search" value=query input=setQuery placeholder="Search the fixture" testId="header-search" width=80
+                      input type="search" value=query input=setQuery submit=submitQuery placeholder="Search the fixture" testId="header-search" width=80
                       // A text tablist in the header: the item's segmented title view.
                       row role="tablist" testId="header-segments"
                         // The projected segmented control owns the chrome; its

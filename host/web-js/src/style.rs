@@ -1334,6 +1334,7 @@ pub(crate) fn css_property(id: StyleId) -> String {
         StyleId::TintColor => return "--exact-tint".into(),
         // @ref LLP 1104 D3 — css.rs's `spell_property`.
         StyleId::PlaceholderColor => return "--exact-placeholder-color".into(),
+        StyleId::GlassTint => return "--exact-glass-tint".into(),
         StyleId::PositionType => return "position".into(),
         StyleId::BackdropFilter => return "backdrop-filter".into(),
         StyleId::SvgMask => return "mask".into(),

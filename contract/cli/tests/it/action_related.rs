@@ -1,6 +1,61 @@
 //! Action interface diagnostics keep both authored sides, including imports.
 
-use std::{path::PathBuf, process::Command};
+use std::{io::Write, path::PathBuf, process::Command};
+
+#[test]
+fn action_arguments_cannot_grow_untyped_parameters_through_a_call_chain() {
+    use std::{
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+
+    for argument in ["a{i}", "alias", "[a{i}]", "some(a{i})"] {
+        let mut source = String::from("component App\n");
+        for i in 0..28 {
+            source.push_str(&format!("  action a{i}(p, q)\n"));
+            if i == 27 {
+                source.push_str("    let unused = p\n");
+                continue;
+            }
+            if argument == "alias" {
+                source.push_str(&format!("    let alias = a{i}\n"));
+            }
+            let arg = argument.replace("{i}", &i.to_string());
+            source.push_str(&format!("    a{}({arg}, {arg})\n", i + 1));
+        }
+        source.push_str("  view\n    text \"ok\"\n");
+        // Each call used to copy its caller's action type into both of the
+        // next action's unknown parameters, doubling its size at every step.
+        let mut child = Command::new(env!("CARGO_BIN_EXE_contract"))
+            .args(["build", "action-parameter.contract", "--stdin", "--json"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(source.as_bytes())
+            .unwrap();
+        let started = Instant::now();
+        while child.try_wait().unwrap().is_none() {
+            if started.elapsed() > Duration::from_secs(5) {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("action parameter inference did not terminate: {argument}");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let output = child.wait_with_output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{argument}: {output:?}");
+        let errors: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(errors[0]["id"], "type-call-action-arg", "{errors}");
+        assert_eq!(errors[0]["line"], if argument == "alias" { 4 } else { 3 });
+        assert!(errors[0]["message"].as_str().unwrap().contains("a1"));
+    }
+}
 
 fn root(binding: &str, children: &str) -> String {
     format!("component App\n  state n = 0\n  action zero\n    n = 0\n  action one(x: number)\n    n = x\n  action two(x: number, y: number)\n    n = x + y\n  view\n    {binding}\n{children}")

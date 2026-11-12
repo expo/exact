@@ -1,6 +1,6 @@
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import {existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
+import {copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -8,6 +8,221 @@ import { assertActivityRefusals } from './activities.mjs';
 import { resolveApp } from '../../scripts/app.mjs';
 import { appleComposition, assertCapabilityFrameworks, loadedDylibs } from './link.mjs';
 import { systemFrameworks } from './compose.mjs';
+
+test.skipIf(process.platform !== 'darwin')('production share extensions keep source dSYMs outside their signed bundles', async () => {
+  const { packageShareExtension } = await import('./extensions.mjs');
+  const { plistFile } = await import('./assets.mjs');
+  const { useXcode } = await import('./devices.mjs');
+  useXcode();
+  const dir = mkdtempSync(join(tmpdir(), 'exact-share-symbols-'));
+  const run = (command, args) => {
+    const r = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 32 << 20 });
+    assert.equal(r.status, 0, `${command}: ${r.stderr}`);
+    return r;
+  };
+  const uuid = path => /UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', path]).stdout)?.[1];
+  try {
+    for (const platform of ['ios', 'macos']) for (const production of [false, true]) {
+      const directory = join(dir, `${platform}-${production}`), bundle = join(directory, 'Fixture.app');
+      const contents = platform === 'macos' ? join(bundle, 'Contents') : bundle;
+      mkdirSync(contents, { recursive: true });
+      writeFileSync(join(contents, 'Info.plist'), plistFile({ CFBundleVersion: '1', CFBundleShortVersionString: '1.0',
+        MinimumOSVersion: '17.0', LSMinimumSystemVersion: '14.0', UIDeviceFamily: [1, 2], CFBundleSupportedPlatforms: ['iPhoneSimulator'] }));
+      const sdk = run('xcrun', ['--sdk', platform === 'macos' ? 'macosx' : 'iphonesimulator', '--show-sdk-path']).stdout.trim();
+      const arch = process.arch === 'x64' ? 'x86_64' : process.arch;
+      const triple = platform === 'macos' ? `${arch}-apple-macosx14.0` : 'arm64-apple-ios17.0-simulator';
+      const symbols = join(directory, 'Fixture.dSYMs');
+      const app = { id: 'test.symbols', displayName: 'Fixture', manifest: { share_target: { action: '/share', params: { text: 'text' } } } };
+      const extension = packageShareExtension({ app,
+        bundle, directory, sdk, triple, platform, production, symbols, group: 'group.test.symbols', entitlements: plistFile({}), runApple: run,
+        sign(path) { run('codesign', ['--force', '--sign', '-', '--timestamp=none', path]); } });
+      const binary = join(extension, platform === 'macos' ? 'Contents/MacOS/ExactShare' : 'ExactShare');
+      const names = run('nm', ['-a', binary]).stdout;
+      assert.ok(!existsSync(`${binary}.dSYM`));
+      assert.match(names, /U _NSExtensionMain$/m);
+      assert.match(names, /_OBJC_CLASS_\$_ExactShareViewController$/m);
+      if (production) {
+        assert.doesNotMatch(names, /^[0-9a-f]+ [a-z] /m, 'local symbols are stripped');
+        const dsym = join(symbols, 'ExactShare.appex.dSYM');
+        assert.ok(uuid(binary));
+        assert.equal(uuid(dsym), uuid(binary));
+        assert.match(run('dwarfdump', ['--debug-info', dsym]).stdout, /ShareInbox.swift/);
+      } else {
+        assert.match(names, /^[0-9a-f]+ [a-z] /m);
+        assert.ok(!existsSync(symbols));
+      }
+      run('codesign', ['--verify', '--strict', extension]);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test.skipIf(process.platform !== 'darwin')('widget and watch packaging strips production copies before signing and keeps matching dSYMs', async () => {
+  const { packageWidgets, packageAlarmExtension } = await import('./widgets.mjs');
+  const { packageWatch } = await import('./watch.mjs');
+  const { plistFile, wrapFramework } = await import('./assets.mjs');
+  const { useXcode } = await import('./devices.mjs');
+  useXcode();
+  const dir = mkdtempSync(join(tmpdir(), 'exact-widget-symbols-'));
+  const run = (command, args) => {
+    const r = spawnSync(command, args, { encoding: 'utf8' });
+    assert.equal(r.status, 0, `${command}: ${r.stderr}`);
+    return r;
+  };
+  const uuid = path => /UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', path]).stdout)?.[1];
+  try {
+    const source = join(dir, 'fixture.c');
+    writeFileSync(source, 'static int local_value = 42; int answer(void) { return local_value; } int main(void) { return answer() != 42; }');
+    for (const [platform, sdkName, triple] of [['ios', 'iphonesimulator', 'arm64-apple-ios17.0-simulator'],
+      ['watchos', 'watchsimulator', 'arm64-apple-watchos10.0-simulator'], ['macos', 'macosx', 'arm64-apple-macosx14.0']]) {
+      const sdk = run('xcrun', ['--sdk', sdkName, '--show-sdk-path']).stdout.trim();
+      for (const production of [false, true]) {
+        const directory = join(dir, `${platform}-${production}`), bundle = join(directory, 'Fixture.app');
+        const contents = platform === 'macos' ? join(bundle, 'Contents') : bundle;
+        const resources = platform === 'macos' ? join(contents, 'Resources') : contents;
+        const frameworks = join(contents, 'Frameworks'), symbols = join(directory, 'Fixture.dSYMs');
+        mkdirSync(join(resources, 'plans'), { recursive: true });
+        mkdirSync(frameworks, { recursive: true });
+        const app = { dir, id: 'test.symbols', displayName: 'Fixture', manifest: {} };
+        const info = plistFile({ CFBundleIdentifier: app.id, CFBundleExecutable: 'ExactWatch', CFBundleVersion: '1', CFBundleShortVersionString: '1.0',
+          MinimumOSVersion: '10.0', LSMinimumSystemVersion: '14.0', UIDeviceFamily: [1, 2], CFBundleSupportedPlatforms: ['iPhoneSimulator'], ExactWidgetGeneration: 'fixture' });
+        writeFileSync(join(contents, 'Info.plist'), info);
+        const object = join(directory, 'fixture.o'), original = join(directory, 'Original');
+        run('xcrun', ['--sdk', sdkName, 'clang', '-g', '-target', triple, '-c', source, '-o', object]);
+        run('xcrun', ['--sdk', sdkName, 'clang', '-target', triple, object, '-o', original]);
+        run('xcrun', ['--sdk', sdkName, 'clang', '-target', triple, '-dynamiclib', object, '-o', join(frameworks, 'libcore.dylib')]);
+        wrapFramework(frameworks, 'libcore.dylib', 'ExactCore', app, platform === 'macos' ? 'MacOSX' : 'WatchSimulator');
+        const core = join(frameworks, 'ExactCore.framework'), entries = [{ kind: 'fixture', families: ['accessoryInline'] }];
+        const runApple = (command, args) => {
+          if (!args.includes('swiftc')) return run(command, args);
+          // The fixture replaces the runtime link; the packager still owns symbols and signing.
+          const output = args[args.indexOf('-o') + 1];
+          if (args.includes('-emit-library')) copyFileSync(join(core, 'ExactCore'), output);
+          else {
+            assert.equal(args.includes('-g'), production);
+            assert.ok(args.includes('_main'), 'WidgetKit keeps its @main entry');
+            copyFileSync(original, output);
+            if (production) run('dsymutil', [output, '-o', `${output}.dSYM`]);
+          }
+          return { stdout: '' };
+        };
+        const sign = path => run('codesign', ['--force', '--sign', '-', '--timestamp=none', path]);
+        const widgets = { app, bundle, shared: { framework: core }, directory, sdk, triple, device: false,
+          entitlements: plistFile({}), sign, runApple, production, symbols, platform, entries };
+        packageWidgets(widgets);
+        const extension = join(contents, 'PlugIns/ExactWidgets.appex');
+        const binary = join(extension, platform === 'macos' ? 'Contents/MacOS/ExactWidgets' : 'ExactWidgets');
+        const check = (binary, dsym, required) => {
+          const names = run('nm', ['-a', binary]).stdout;
+          assert.match(names, new RegExp(` T _${required}$`, 'm'));
+          assert.equal(/ _local_value$/m.test(names), !production);
+          assert.equal(existsSync(dsym), production);
+          if (production) { assert.ok(uuid(binary)); assert.equal(uuid(dsym), uuid(binary)); }
+          assert.ok(!existsSync(`${binary}.dSYM`));
+        };
+        check(binary, join(symbols, 'ExactWidgets.appex.dSYM'), 'main');
+        run('codesign', ['--verify', '--strict', extension]);
+        if (platform === 'ios') {
+          packageAlarmExtension({ ...widgets, alarm: 'FixtureAlarm' });
+          check(binary, join(symbols, 'ExactWidgets.appex.dSYM'), 'main');
+          run('codesign', ['--verify', '--strict', extension]);
+        }
+        if (platform === 'watchos') {
+          copyFileSync(original, join(directory, 'ExactWatch'));
+          packageWatch({ ...widgets, bin: directory, parent: directory, entries: [], sign: path => { if (path !== directory) sign(path); } });
+          check(join(bundle, 'ExactWatch'), join(symbols, 'ExactWatch.app.dSYM'), 'main');
+          check(join(core, 'ExactCore'), join(symbols, 'ExactCore.framework.dSYM'), 'answer');
+          run('codesign', ['--verify', '--deep', '--strict', bundle]);
+        }
+        assert.match(run('nm', ['-a', original]).stdout, / _local_value$/m, 'the cached link stays unstripped');
+      }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
+
+test.skipIf(process.platform !== 'darwin')('production Mac bundles keep Rust images loadable and preserve their dSYMs before signing', async () => {
+  const { assembleMac } = await import('./bundle.mjs');
+  const { codeDigest, plistFile, wrapFramework } = await import('./assets.mjs');
+  const { placeAppleArtifact } = await import('./build.mjs');
+  const { useXcode } = await import('./devices.mjs');
+  const { createHash } = await import('node:crypto');
+  useXcode();
+  const dir = mkdtempSync(join(tmpdir(), 'exact-mac-symbols-'));
+  const run = (command, args) => {
+    const r = spawnSync(command, args, { encoding: 'utf8' });
+    assert.equal(r.status, 0, `${command}: ${r.stderr}`);
+    return r;
+  };
+  const uuid = path => /UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', path]).stdout)?.[1];
+  try {
+    const source = join(dir, 'fixture.c'), object = join(dir, 'fixture.o'), dylib = join(dir, 'fixture.dylib');
+    writeFileSync(source, 'static int local_value = 42; int answer(void) { return local_value; } int main(void) { return answer() != 42; }');
+    run('clang', ['-g', '-c', source, '-o', object]);
+    run('clang', ['-dynamiclib', object, '-o', dylib]);
+    const rustSource = join(dir, 'fixture.rs'), rustDylib = join(dir, 'rust.dylib');
+    writeFileSync(rustSource, '#[no_mangle] pub extern "C" fn answer() -> i32 { 42 }');
+    run('env', ['MACOSX_DEPLOYMENT_TARGET=14.0', 'rustc', '--crate-type', 'cdylib', '-g', '-C', 'strip=none', rustSource, '-o', rustDylib]);
+    const loader = join(dir, 'loader.c');
+    writeFileSync(loader, `#include <dlfcn.h>
+#include <stdio.h>
+extern int answer(void);
+int main(int argc, char **argv) {
+  if (answer() != 42) return 1;
+  for (int i = 1; i < argc; i++) {
+    void *image = dlopen(argv[i], RTLD_NOW);
+    if (!image) { fprintf(stderr, "%s\\n", dlerror()); return 2; }
+    int (*value)(void) = dlsym(image, "answer");
+    if (!value || value() != 42) return 3;
+    dlclose(image);
+  }
+  return 0;
+}`);
+    const app = { dir, id: 'test.symbols', displayName: 'Fixture', manifest: {} };
+    const libraries = join(dir, 'libraries'); mkdirSync(libraries);
+    copyFileSync(rustDylib, join(libraries, 'libfixture.dylib'));
+    wrapFramework(libraries, 'libfixture.dylib', 'FixtureLibrary', app, 'MacOSX');
+    const library = { placed: join(libraries, 'FixtureLibrary.framework'), link: 'FixtureLibrary' };
+    const libraryBytes = readFileSync(join(library.placed, library.link)), rustBytes = readFileSync(rustDylib);
+    const plan = Buffer.from('fixture'), compat = { embedded: { plan: { sha256: createHash('sha256').update(plan).digest('hex'), bytes: plan.length }, assets: [] } };
+    for (const production of [false, true]) {
+      const binDir = join(dir, String(production)), bundle = join(binDir, 'Fixture.app');
+      mkdirSync(binDir);
+      const bin = join(binDir, 'Fixture');
+      run('clang', [loader, '-F', libraries, '-framework', library.link, '-Wl,-rpath,@executable_path/../Frameworks', '-o', bin]);
+      const modules = 'libmodules.dylib', web = 'libweb.dylib', service = 'libservice.dylib';
+      const rustModules = ['libsvg.dylib', 'libcanvas.dylib', 'libexact_listen.dylib'];
+      copyFileSync(dylib, join(binDir, web));
+      assembleMac({ app, paths: { executable: 'Fixture', capture: binDir }, binDir, bin, libDir: dir, library,
+        serviceDylibs: [{ built: dylib, load: service }], hasWeb: true, webLoadName: web, args: ['--bundle'],
+        loadName: 'libgpu.dylib', hasGpu: false, moduleDylibs: [], looseArms: [[true, dylib, web, 'ExactWeb'], [true, rustDylib, rustModules[2], null]],
+        hasSvg: true, svgBuilt: rustDylib, svgLoadName: rustModules[0],
+        modulesLoadName: modules, modulesBuilt: dylib, canvasGpuBuilt: rustDylib, canvasGpuLoadName: rustModules[1], linkRoot: binDir,
+        bakedCompat: compat, bakedPlan: plan, buildReceipt: { binary: { metadata: {} } }, production, products: ['Fixture'], cleanup: [],
+      }, { runApple: run, appleArtifacts: () => ({ bundle }), placeAppleArtifact,
+        macInfoPlist: () => plistFile({ CFBundleExecutable: 'Fixture', CFBundleIdentifier: app.id, CFBundlePackageType: 'APPL' }),
+        copyAppleStaticTrees() {}, writeUsageStrings() {}, receipt: () => '{}', assertAppleIdentity() {},
+      });
+      const symbols = join(binDir, 'Fixture.dSYMs');
+      const rustImages = [join(bundle, 'Contents/Frameworks/FixtureLibrary.framework/FixtureLibrary'),
+        ...rustModules.map(name => join(bundle, 'Contents/MacOS', name))];
+      run(join(bundle, 'Contents/MacOS/Fixture'), rustImages.slice(1));
+      for (const [binary, name] of [[join(bundle, 'Contents/Frameworks/FixtureLibrary.framework/FixtureLibrary'), 'FixtureLibrary.framework'],
+        ...[modules, web, service, ...rustModules].map(name => [join(bundle, 'Contents/MacOS', name), name])]) {
+        const names = run('nm', ['-a', binary]).stdout;
+        assert.match(names, / T _answer$/m);
+        if (rustImages.includes(binary)) {
+          const original = name === 'FixtureLibrary.framework' ? join(library.placed, library.link) : rustDylib;
+          assert.equal(codeDigest(readFileSync(binary)), codeDigest(readFileSync(original)), 'Rust images keep their linker output');
+        } else assert.equal(/ _local_value$/m.test(names), !production);
+        const dsym = join(symbols, `${name}.dSYM`);
+        assert.equal(existsSync(dsym), production);
+        if (production) { assert.ok(uuid(binary)); assert.equal(uuid(dsym), uuid(binary)); }
+      }
+      run('codesign', ['--verify', '--deep', '--strict', bundle]);
+    }
+    assert.deepEqual(readFileSync(join(library.placed, library.link)), libraryBytes, 'the cached framework stays intact');
+    assert.deepEqual(readFileSync(rustDylib), rustBytes, 'the cached Rust module stays intact');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);
 
 test('package frameworks retain category-only dependencies and weak-link APIs newer than the deployment target', () => {
   const packages = [

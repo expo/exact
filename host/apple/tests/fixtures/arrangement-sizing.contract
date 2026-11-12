@@ -1,0 +1,23 @@
+component ArrangementSizing
+  state long = false
+  state rows = [0]
+  state margin = 0
+  action changeText
+    long = !long
+  action addRow
+    rows = rows.concat([rows.length])
+  action changeMargin
+    margin = margin + 10
+  view
+    column testId="arrangement" width="100%" height="100%" font-family="system-ui" font-size=16 line-height="20px"
+      column testId="primary" padding=10 margin=margin
+        text (long ? "A longer paragraph that wraps across several lines when the pane has little room. Changing the text also changes the height when the pane spans the whole window." : "Short") testId="message"
+        for r in rows key=r
+          box height=20
+      column testId="secondary"
+        button press=changeText testId="change-text"
+          text "Change text"
+        button press=addRow testId="add-row"
+          text "Add row"
+        button press=changeMargin testId="change-margin"
+          text "Change margin"

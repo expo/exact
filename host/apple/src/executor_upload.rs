@@ -248,6 +248,9 @@ pub(in super::super) fn start(shared: &Arc<Shared>) {
             budget.queue.clear();
             budget.waiting_bodies = 0;
         }
+        if !starting.is_empty() {
+            super::super::rouse(shared, state);
+        }
     }
     for ticket in gone {
         complete(

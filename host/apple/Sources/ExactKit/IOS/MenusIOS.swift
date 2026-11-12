@@ -237,6 +237,7 @@ final class MenuHost {
             if button.superview !== v { v.addSubview(button); button.setPaintForeground() }
             (button as? InvokerButton)?.invoker = v
             button.frame = v.bounds
+            button.preferredMenuElementOrder = Self.order(v.props["menuOrder"])
             button.accessibilityLabel = v.props["accessibilityLabel"] ?? title(of: v)
             button.accessibilityIdentifier = v.props["testId"] ?? v.props["id"]
             button.isEnabled = !v.disabled
@@ -376,6 +377,16 @@ final class MenuHost {
         (overlays[node.id] as? InvokerButton).map { $0.isHighlighted && $0.pressing === node } ?? false
     }
     func live(_ node: NodeView) -> Bool { presenter?.views[node.id] === node }
+    /// The order a menu shows its rows in for its trigger's `menuOrder`
+    /// `word`; unsaid, UIKit's `.automatic`, which shows a menu that opens
+    /// upward last row first (LLP 1115 §2: unsaid, the platform's).
+    static func order(_ word: String?) -> UIContextMenuConfiguration.ElementOrder {
+        switch word {
+        case "fixed": .fixed
+        case "priority": .priority
+        default: .automatic
+        }
+    }
     /// `inBar`: the node is a bar item's button, which the page hides while
     /// the bar shows it: that hiding, and only that, does not count.
     /// A pull-down's rows, read as UIKit opens it: the invoker's press applies

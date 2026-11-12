@@ -51,34 +51,46 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
   for (const name of ['http-body.js', 'grant-admission.js', 'faults.js', 'navigation.js', 'address-space.js']) writeFileSync(resolve(dir, name), hostFixtureFile(resolve(ROOT, 'host/web', name)));
   writeFileSync(resolve(dir, 'admission-data.js'), `import {createGrantSet} from './admission.js';export const rustGrantSet=createGrantSet(${JSON.stringify(set)}),tsGrantSet=createGrantSet(${JSON.stringify(normalized(''))});\n`);
   const memory = new WebAssembly.Memory({ initial: 1 }), out = 32768;
-  let output = new Uint8Array(), read = false, fails = false, unknown = false, socket = false;
+  let output = new Uint8Array(), read = false, fails = false, unknown = false, socket = false, writes = false;
+  const scopes = [];
   const response = fill => {
     const bytes = [], u8 = value => bytes.push(value), u32 = value => bytes.push(value & 255, value >>> 8 & 255, value >>> 16 & 255, value >>> 24 & 255);
     const string = value => { const encoded = new TextEncoder().encode(value); u32(encoded.length); bytes.push(...encoded); };
-    u32(5); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
+    u32(6); fill({ u8, u32, string }); output = Uint8Array.from(bytes); new Uint8Array(memory.buffer, out, output.length).set(output);
   };
   const exports = {
-    memory, exact_logic_abi: () => 5, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
+    memory, exact_logic_abi: () => 6, exact_logic_create: () => 1, exact_logic_alloc: () => 0, exact_logic_dealloc() {},
     exact_logic_output: () => out, exact_logic_output_len: () => output.length,
     exact_logic_call(_session, pointer) {
       const code = new Uint8Array(memory.buffer)[pointer + 4];
       if (code === 0) response(w => { w.u8(0); w.string('test.rust'); w.string('secret.keep k'); });
       else if (code === 1 || code === 2) response(w => { w.u8(0); w.u8(0); w.u8(3); });
-      // A call's reply: whether it read the store, no writes, then a source it lacks (tag 2), a failure (tag 3) or a
-      // request (tag 1).
-      else if (code === 3 || code === 4) response(w => {
-        w.u8(2); w.u8(read ? 1 : 0); w.u32(0); w.u32(0); w.u8(0); w.string('');
-        if (socket) { w.u8(11); w.u32(1 << 20); w.u8(0); w.string(''); w.string('GET'); w.string('wss://api.example/book'); w.u32(0); w.u32(0); } else if (unknown) { w.u8(2); w.string('reader'); } else if (fails) { w.u8(3); w.string('nothing kept'); } else { w.u8(1); w.u8(0); w.string(''); w.string('GET'); w.string('https://api.example/me'); w.u32(0); w.u32(0); }
-      });
+      // A call's reply: whether it read the store, writes, no socket operations, then a source it lacks (tag 2), a
+      // failure (tag 3) or a request (tag 1).
+      else if (code === 3 || code === 4) {
+        const view = new DataView(memory.buffer); let at = pointer + 5;
+        const u32 = () => { const n = view.getUint32(at, true); at += 4; return n; };
+        const string = () => { const n = u32(), s = new TextDecoder().decode(new Uint8Array(memory.buffer, at, n)); at += n; return s; };
+        string(); at += 5; // source and empty arguments
+        const names = Array.from({ length: u32() }, string), pairs = Array.from({ length: u32() }, () => [string(), string()]);
+        scopes.push({ names, pairs });
+        response(w => {
+          w.u8(2); w.u8(read ? 1 : 0); w.u32(writes ? 1 : 0);
+          if (writes) { w.string('k'); w.u8(1); w.string('private'); }
+          w.u32(0); w.u8(0); w.string('');
+          if (socket) { w.u8(11); w.u32(1 << 20); w.u8(0); w.string(''); w.string('GET'); w.string('wss://api.example/book'); w.u32(0); w.u32(0); } else if (unknown) { w.u8(2); w.string('reader'); } else if (fails) { w.u8(3); w.string('nothing kept'); } else { w.u8(1); w.u8(0); w.string(''); w.string('GET'); w.string('https://api.example/me'); w.u32(0); w.u32(0); }
+        });
+      }
       else throw new Error(`unexpected logic call ${code}`);
       return 0;
     },
   };
   const instantiate = WebAssembly.instantiate;
+  const render = Object.getOwnPropertyDescriptor(globalThis, '__exactRender');
   WebAssembly.instantiate = async () => ({ instance: { exports } });
   try {
     const module = await import(`${pathToFileURL(resolve(dir, 'rust-data.js')).href}?readers=${Date.now()}`);
-    const data = { q: [] }, store = { map: new Map(), set() {} }, failed = { failed: 3, message: 'refused' };
+    const kept = [], data = { q: [] }, store = { map: new Map(), set(...write) { kept.push(write); } }, failed = { failed: 3, message: 'refused' };
     await module.install(data, { reader: '' }, async () => new ArrayBuffer(0));
     [read, fails] = [true, false];
     expect(data.answer('reader', [], store).store).toBe(true);
@@ -107,7 +119,24 @@ test("a Rust source's store read reaches rt.js whether its call answers or fails
     [read, fails, unknown] = [false, true, false];
     expect(() => mixed.answer('reader', [], store)).toThrow('nothing kept');
     expect(mixed.threwRead()).toBe(false);
+    // Even a module that returns writes cannot replace its result with a render store error.
+    globalThis.__exactRender = true;
+    store.map.set('k', 'hidden'); writes = true;
+    for (const failsNow of [false, true]) {
+      fails = failsNow;
+      for (const call of [() => data.answer('reader', [], store), () => data.parse('reader', [], failed, store)]) {
+        if (fails) expect(call).toThrow('nothing kept'); else expect(call().req.method).toBe('GET');
+        expect(scopes.at(-1)).toEqual({ names: [], pairs: [] });
+      }
+    }
+    expect(kept).toEqual([]);
+    expect([...store.map]).toEqual([['k', 'hidden']]);
+    globalThis.__exactRender = false; fails = false;
+    data.answer('reader', [], store);
+    expect(scopes.at(-1)).toEqual({ names: ['k'], pairs: [['k', 'hidden']] });
+    expect(kept).toEqual([['k', 'private']]);
   } finally {
+    if (render) Object.defineProperty(globalThis, '__exactRender', render); else delete globalThis.__exactRender;
     WebAssembly.instantiate = instantiate;
     rmSync(dir, { recursive: true, force: true });
   }

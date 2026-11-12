@@ -82,14 +82,8 @@ impl Core {
         let one_shot = r.request.is_process() && !r.request.stream;
         let admitted = (|| {
             let (lane, charge, limit) = checked?;
-            let streams: usize = state
-                .running
-                .iter()
-                .filter(|run| run.lane == lane && run.stream)
-                .map(|run| run.charge)
-                .sum();
-            if lane == 1 && !r.request.stream && limit > BYTES[lane].saturating_sub(streams) {
-                return Err("native response ceiling exceeds the lane budget held by open streams");
+            if !r.request.stream {
+                stream_room(&state, lane, limit)?;
             }
             // A stream starts at once, so it is charged its ceiling now.
             let (full, charge) = if r.request.stream {
@@ -198,6 +192,7 @@ impl Core {
                 generation: 0,
                 claim: asynch::Claim::None,
             });
+            rouse(&self.shared, &state);
             drop(state);
             let (shared, grants) = (self.shared.clone(), self.grants.clone());
             let (ticket, request, forced) = (r.ticket, r.request, r.forced);

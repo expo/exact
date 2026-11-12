@@ -474,6 +474,9 @@ impl Machine {
         }
         let mut index = 0;
         while index < state.jobs[lane].len() {
+            if super::forget::refuse_crowded(&self.shared, state, lane, index) {
+                continue;
+            }
             let job = &state.jobs[lane][index];
             let kind = Kind::of(job);
             if lane == 0 && (index > 0 || state.book.blocking) {

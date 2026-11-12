@@ -249,8 +249,8 @@ fn six_reads_at_the_unsaid_ceiling_overlap_and_the_seventh_waits() {
         for run in &state.running {
             assert!(run.charge >= MAX_BODY && run.charge < MAX_BODY + MAX_REQUEST);
         }
-        assert!(reads::next_job(&mut state, 0).is_none());
-        assert!(reads::next_job(&mut state, 1).is_none());
+        assert!(reads::next_job(&core.shared, &mut state, 0).is_none());
+        assert!(reads::next_job(&core.shared, &mut state, 1).is_none());
     }
     server.reply(1, b"one");
     server.seen(&[7]);
@@ -624,8 +624,8 @@ fn post_reads_overlap_but_a_parallel_send_waits_for_them() {
     assert_queued(&core, 3);
     {
         let mut state = core.shared.state.lock().unwrap();
-        assert!(reads::next_job(&mut state, 0).is_none());
-        assert!(reads::next_job(&mut state, 1).is_none());
+        assert!(reads::next_job(&core.shared, &mut state, 0).is_none());
+        assert!(reads::next_job(&core.shared, &mut state, 1).is_none());
     }
     server.reply(1, b"post");
     completed(&core, 1);
@@ -813,7 +813,7 @@ fn reads_and_parallel_sends_wait_for_a_handoff_to_be_made_but_not_completed() {
             let mut state = core.shared.state.lock().unwrap();
             assert!(state.jobs[0].iter().any(|j| j.ticket == 2));
             assert!(state.jobs[0].iter().any(|j| j.ticket == 3));
-            assert!(reads::next_job(&mut state, 1).is_none());
+            assert!(reads::next_job(&core.shared, &mut state, 1).is_none());
         }
         release.send(()).unwrap();
         let reply = replies.recv_timeout(HANG).unwrap();
@@ -959,8 +959,8 @@ fn three_parallel_sends_leave_shared_workers_for_three_independent_reads() {
     {
         let mut state = core.shared.state.lock().unwrap();
         assert_eq!(state.running.len(), 6);
-        assert!(reads::next_job(&mut state, 0).is_none());
-        assert!(reads::next_job(&mut state, 1).is_none());
+        assert!(reads::next_job(&core.shared, &mut state, 0).is_none());
+        assert!(reads::next_job(&core.shared, &mut state, 1).is_none());
     }
     server.reply(3, b"third");
     server.seen(&[4]);

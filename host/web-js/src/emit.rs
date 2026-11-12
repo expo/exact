@@ -1222,11 +1222,14 @@ impl Em<'_> {
             if b.kind == BindingKind::Prop && b.id == PropId::FocusGuide as u16 {
                 continue;
             }
-            // Nor have the system bars (LLP 1105 D7).
+            // Nor have the system bars (LLP 1105 D7), interactive glass or
+            // a menu's order.
             if b.kind == BindingKind::Prop
                 && (b.id == PropId::StatusBarStyle as u16
                     || b.id == PropId::StatusBarAnimation as u16
-                    || b.id == PropId::SystemBarsHidden as u16)
+                    || b.id == PropId::SystemBarsHidden as u16
+                    || b.id == PropId::GlassInteractive as u16
+                    || b.id == PropId::MenuOrder as u16)
             {
                 continue;
             }

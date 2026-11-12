@@ -1,5 +1,17 @@
 # Vendored Ibex split crates — Exact integration ledger
 
+## Portable event-stream timeouts
+
+`transport/rustls_http.rs` removes implicit read deadlines after a successful
+`text/event-stream` response identifies an event stream without an explicit
+request timeout. Connection and header limits and explicit timeouts still apply.
+Cancellation interrupts blocked reads; ordinary requests keep their limits.
+Classification uses the headers returned to callers, including the last
+`Content-Type` when it is repeated. `transport/rustls_timeout_tests.rs` probes
+both default deadlines and expired deadlines, explicit-timeout policy and
+agent reuse. `transport/stream_tests.rs` exercises later events, explicit
+timeout expiry, cancellation and release against loopback peers.
+
 ## Windows WebSocket readiness
 
 `crates/ibex2/src/transport/websocket.rs` subscribes to writable readiness only

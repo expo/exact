@@ -979,6 +979,86 @@ fn unescape(value: &str) -> std::borrow::Cow<'_, str> {
         .into()
 }
 
+/// One script element among `host.web.head`'s entries (LLP 1048.000 D3):
+/// its `src` and `type` attributes, read, and its text as the shell holds it.
+pub(crate) struct HeadScript {
+    pub src: Option<String>,
+    pub kind: Option<String>,
+    pub text: String,
+}
+
+/// The shell's `host.web.head` scripts: those between the end of its sheet,
+/// after which the entries are the app's, and its root. Each start tag is as
+/// `scripts/web-head.mjs` writes it: a bare attribute, or a value in double
+/// quotes with `"`, `<`, `>` and `&` escaped.
+pub(crate) fn head_scripts(shell: &str) -> Vec<HeadScript> {
+    let seen = blanked(shell);
+    let Some(from) = seen
+        .find("<style>")
+        .and_then(|at| seen[at..].find("</style>").map(|end| at + end))
+    else {
+        return Vec::new();
+    };
+    let to = seen[from..]
+        .find("<div id=\"exact-root\"")
+        .map_or(seen.len(), |at| at + from);
+    let mut scripts = Vec::new();
+    let mut at = from;
+    while let Some(open) = seen[at..to].find("<script").map(|found| found + at) {
+        let Some(close) = tag_end(&seen[open..to]).map(|found| found + open) else {
+            break;
+        };
+        let Some(end) = seen[close..to].find("</script").map(|found| found + close) else {
+            break;
+        };
+        let (mut src, mut kind) = (None, None);
+        let mut rest = &shell[open + "<script".len()..close];
+        while let Some(start) = rest.find(|c: char| !c.is_ascii_whitespace()) {
+            rest = &rest[start..];
+            let stop = rest
+                .find(|c: char| c == '=' || c.is_ascii_whitespace())
+                .unwrap_or(rest.len());
+            let name = rest[..stop].to_ascii_lowercase();
+            rest = &rest[stop..];
+            let value = rest.strip_prefix("=\"").and_then(|value| {
+                let q = value.find('"')?;
+                rest = &value[q + 1..];
+                Some(unescape(&value[..q]).into_owned())
+            });
+            match name.as_str() {
+                "src" => src = value,
+                "type" => kind = value,
+                _ => {}
+            }
+        }
+        scripts.push(HeadScript {
+            src,
+            kind,
+            text: shell[close + 1..end].to_string(),
+        });
+        at = end;
+    }
+    scripts
+}
+
+/// Where a start tag ends: its first `>` outside a quoted attribute value.
+fn tag_end(tag: &str) -> Option<usize> {
+    let mut quote = None;
+    tag.bytes().position(|b| match quote {
+        Some(q) => {
+            if b == q {
+                quote = None;
+            }
+            false
+        }
+        None if b == b'"' || b == b'\'' => {
+            quote = Some(b);
+            false
+        }
+        None => b == b'>',
+    })
+}
+
 /// A `modulepreload` in the JavaScript shell's head (`host/web-js/build.mjs`).
 const MODULE_PRELOAD: &str = "<link rel=\"modulepreload\" href=\"";
 

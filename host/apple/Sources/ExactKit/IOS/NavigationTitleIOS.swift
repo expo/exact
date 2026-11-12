@@ -19,6 +19,10 @@ import UIKit
 /// the first text is its subtitle.
 struct HeaderTitle: Equatable {
     let id: UInt32, testId: String?
+    let heading: NodeView
+    /// The projected font for equality; the view resolves unsaid metrics
+    /// again in its own traits when Dynamic Type changes.
+    let font: UIFont?
     let avatar: BadgeFace?
     let subtitle: String
     /// The nodes the title shows besides the heading: the avatar's box and
@@ -149,6 +153,8 @@ struct HeaderTitle: Equatable {
         guard tap != nil || avatar != nil || !subtitle.isEmpty || !titleGlyphs.isEmpty else { return nil }
         id = group.id
         testId = group.props["testId"]
+        self.heading = heading
+        font = heading.authoredTitleFont(over: .preferredFont(forTextStyle: .headline, compatibleWith: heading.traitCollection))
         self.avatar = avatar
         self.subtitle = subtitle
         self.placed = placed
@@ -170,8 +176,11 @@ struct HeaderTitle: Equatable {
     }
 
     /// Everything the title is drawn from.
-    var source: String { "\(id):\(avatar?.source ?? ""):\(subtitle):\(spoken):\(rtl):\(glyphs.map { "\($0.symbol ?? "")/\($0.text)" }.joined(separator: "\u{1F}")):\(tap ?? 0):\(accessibilityDisabled):\(titleGlyphs.map(\.source).joined(separator: "\u{1F}"))" }
-    static func == (a: HeaderTitle, b: HeaderTitle) -> Bool { a.source == b.source }
+    var source: String {
+        let typography = font.map { "\($0.fontName)/\($0.pointSize)/\(TextEngine.controlWeight($0))" } ?? ""
+        return "\(id):\(avatar?.source ?? ""):\(subtitle):\(spoken):\(rtl):\(glyphs.map { "\($0.symbol ?? "")/\($0.text)" }.joined(separator: "\u{1F}")):\(tap ?? 0):\(accessibilityDisabled):\(titleGlyphs.map(\.source).joined(separator: "\u{1F}")):\(typography)"
+    }
+    static func == (a: HeaderTitle, b: HeaderTitle) -> Bool { a.source == b.source && a.font == b.font }
 
     static func holdsHeading(_ node: NodeView) -> Bool {
         node.container.subviews.contains { child in
@@ -222,8 +231,9 @@ extension HeaderShape {
     }
 }
 
-/// A title drawn from the heading's group: the avatar, the heading over
-/// its subtitle in the bar's own type, a tap pressing the group.
+/// A title drawn from the heading's group: the avatar, the heading in its
+/// authored font or the bar's headline over a footnote subtitle, a tap
+/// pressing the group.
 final class HeaderTitleView: UIControl {
     private weak var host: NavigationHost?
     private var tap: UInt32?
@@ -272,12 +282,11 @@ final class HeaderTitleView: UIControl {
             stack.centerXAnchor.constraint(equalTo: centerXAnchor), stack.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
         addTarget(self, action: #selector(pressed), for: .touchUpInside)
-        // The subtitle's symbols are sized from its font: rebuild them when
-        // the text size changes (their colour is the run's, already dynamic).
+        // Symbols are sized from their line's font: rebuild them and resolve
+        // the heading's unsaid metrics when the text size changes.
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: HeaderTitleView, _: UITraitCollection) in
             guard let (group, text) = view.shown else { return }
             view.shown = nil
-            view.title.font = .preferredFont(forTextStyle: .headline, compatibleWith: view.traitCollection)
             view.subtitle.font = .preferredFont(forTextStyle: .footnote, compatibleWith: view.traitCollection)
             view.update(group, title: text)
         }
@@ -365,6 +374,8 @@ final class HeaderTitleView: UIControl {
         avatar.isHidden = group.avatar == nil
         avatarWidth.constant = group.avatar?.size ?? 0
         avatarHeight.constant = group.avatar?.size ?? 0
+        let base = UIFont.preferredFont(forTextStyle: .headline, compatibleWith: traitCollection)
+        title.font = group.heading.authoredTitleFont(over: base) ?? base
         title.attributedText = group.titleGlyphs.isEmpty ? nil : Self.titleLine(group, text: text, font: title.font, colour: title.textColor)
         if group.titleGlyphs.isEmpty { title.text = text }
         subtitle.attributedText = Self.line(group, font: subtitle.font, colour: subtitle.textColor)

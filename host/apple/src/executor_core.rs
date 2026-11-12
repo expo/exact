@@ -227,8 +227,9 @@ impl Shared {
 /// native work. Those trusted-source costs are count/worker bounded only.
 /// On both lanes a waiting job is charged its request buffers, a running one
 /// its response ceiling, and a completed one what it retains; a worker waits
-/// for bytes rather than refusing (LLP 1041 §8.4, LLP 1054.000 R3). The ordered
-/// queue also bounds waiting request buffers, leaving room to start its head.
+/// for bytes unless open streams leave no room for its ceiling
+/// (LLP 1041 §8.4, LLP 1054.000 R3). The ordered queue also bounds waiting
+/// request buffers, leaving room to start its head.
 pub(super) struct Core {
     shared: Arc<Shared>,
     disabled: bool,
@@ -724,6 +725,20 @@ fn read(request: &Request, work: bool) -> bool {
         && !request.is_auth()
 }
 
+fn stream_room(state: &State, lane: usize, limit: usize) -> Result<(), &'static str> {
+    let streams: usize = state
+        .running
+        .iter()
+        .filter(|run| run.lane == lane && run.stream)
+        .map(|run| run.charge)
+        .sum();
+    if lane == 1 && limit > BYTES[lane].saturating_sub(streams) {
+        Err("native response ceiling exceeds the lane budget held by open streams")
+    } else {
+        Ok(())
+    }
+}
+
 fn has_ready(state: &State) -> bool {
     !state.completed[1].is_empty()
         || state
@@ -950,7 +965,7 @@ fn worker(
                     state = shared.state.lock().unwrap();
                     continue;
                 }
-                if let Some(next) = reads::next_job(&mut state, lane) {
+                if let Some(next) = reads::next_job(&shared, &mut state, lane) {
                     break next;
                 }
                 state = shared.ready.wait(state).unwrap();

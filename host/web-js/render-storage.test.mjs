@@ -23,6 +23,220 @@ async function build(dir) {
   return dist;
 }
 
+test.each(['TypeScript', 'Rust'])('a JavaScript render refuses %s store writes and deletions on every request', async language => {
+  const dir = scratch();
+  const api = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('public') });
+  try {
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  read "/" render=request
+  write "/write" render=request
+  forget "/forget" render=request
+  caughtWrite "/caught-write" render=request
+  caughtForget "/caught-forget" render=request
+  later "/later" render=request
+  parseWrite "/parse-write" render=request
+  parseForget "/parse-forget" render=request
+  ownError "/own-error" render=request
+  badArguments "/bad-arguments" render=request
+  unknownSource "/unknown-source" render=request
+  exclusive "/exclusive" render=request
+  keepKey "/keep-key" render=request
+
+component App
+  resource reader = reader() as shape string
+  resource writer = writer(top(nav).name) as shape string else empty()
+  view
+    main
+      text reader testId="reader"
+      text writer testId="writer"
+      text (failed(writer) ? "failed" : "answered") testId="state"
+`);
+    if (language === 'TypeScript') writeFileSync(resolve(dir, 'app.ts'), `export const grants = 'secret.keep token';
+let reads = 0;
+export function answer(name: string, [route]: string[], store: any): any {
+  if (name === 'reader') return (store.get('token') ?? 'empty') + ':' + ++reads;
+  const write = () => route === 'forget' || route === 'caughtForget' ? store.forget('token') : store.set('token', 'private');
+  if (route === 'read') return store.get('token') ?? 'empty';
+  if (route === 'exclusive') return store.exclusive('token', () => 'work ran').catch(() => 'refused:' + (store.get('token') ?? 'empty'));
+  if (route === 'keepKey') return store.keepKey('token', {}).catch(() => 'refused:' + (store.get('token') ?? 'empty'));
+  if (route === 'later') return Promise.resolve().then(write);
+  if (route === 'ownError') { try { write(); } catch {} throw new Error('source failure'); }
+  if (route.startsWith('parse')) return Promise.resolve().then(() => {
+    try { route === 'parseForget' ? store.forget('token') : store.set('token', 'private'); }
+    catch { return 'refused:' + (store.get('token') ?? 'empty'); }
+    return 'written';
+  });
+  if (route.startsWith('caught')) {
+    try { write(); } catch { return 'refused:' + (store.get('token') ?? 'empty'); }
+  } else write();
+  return 'written';
+}
+`);
+    else {
+      mkdirSync(resolve(dir, 'data/src'), { recursive: true });
+      mkdirSync(resolve(dir, 'web'));
+      writeFileSync(resolve(dir, 'web/build.rs'), 'fn main() { contract::bake(plan, render_store_data::Reader::default()); }\n');
+      writeFileSync(resolve(dir, 'data/Cargo.toml'), `[package]
+name = "render-store-data"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+exact-runner = { path = "${root}/runner" }
+[workspace]
+`);
+      writeFileSync(resolve(dir, 'data/src/lib.rs'), `use exact_runner::{Answer, DataError, DataSource, Outcome, Request, Store, Value};
+
+fn write(store: &mut Store, route: &str) -> Result<Answer, DataError> {
+    let result = if route == "forget" || route.ends_with("Forget") {
+        store.forget("token")
+    } else { store.set("token", "private") };
+    if route == "ownError" { return Err(DataError::Unavailable("source failure".into())); }
+    if route.starts_with("caught") || route.starts_with("parse") {
+        return Ok(Answer::Now(Value::str(&format!("{}:{}",
+            if result.is_err() { "refused" } else { "written" }, store.get("token").unwrap_or("empty")))));
+    }
+    result?;
+    Ok(Answer::Now(Value::str("written")))
+}
+
+#[derive(Default)]
+pub struct Reader { reads: u32 }
+impl DataSource for Reader {
+    fn grants(&self) -> &str { "secret.keep token\nnet.fetch ${api.url.origin}" }
+    fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> { Ok(Value::str("baked")) }
+    fn answer(&mut self, store: &mut Store, source: &str, args: &[Value]) -> Result<Answer, DataError> {
+        if source == "reader" {
+            self.reads += 1;
+            return Ok(Answer::Now(Value::str(&format!("{}:{}", store.get("token").unwrap_or("empty"), self.reads))));
+        }
+        let route = args[0].as_str().unwrap();
+        if route == "badArguments" { return Err(DataError::BadArguments("bad arguments".into())); }
+        if route == "unknownSource" { return Err(DataError::UnknownSource("missing source".into())); }
+        match route {
+            "read" => return Ok(Answer::Now(Value::str(store.get("token").unwrap_or("empty")))),
+            "parseWrite" | "parseForget" => return Ok(Answer::Later(Request::get("${api.url.origin}"))),
+            _ => (),
+        }
+        write(store, route)
+    }
+    fn parse(&mut self, store: &mut Store, _: &str, args: &[Value], _: Outcome) -> Result<Answer, DataError> {
+        write(store, args[0].as_str().unwrap())
+    }
+}
+`);
+    }
+    const dist = await build(dir);
+    const { renderer } = await import('./render.mjs');
+    const paths = ['/own-error', '/caught-write', '/caught-forget', '/parse-write', '/parse-forget', '/', '/write', '/', '/forget', '/write', '/'];
+    if (language === 'TypeScript') paths.push('/later', '/', '/exclusive', '/keep-key');
+    else paths.push('/bad-arguments', '/unknown-source');
+    for (const ahead of [false, true]) {
+      const render = renderer(dist); render.ahead = ahead;
+      for (const path of paths) {
+        if (language === 'Rust' && ['/own-error', '/write', '/forget', '/bad-arguments', '/unknown-source'].includes(path)) {
+          const message = { '/own-error': 'source failure', '/bad-arguments': 'bad arguments', '/unknown-source': 'missing source' }[path] ?? 'secret token is not granted';
+          await expect(render(path)).rejects.toThrow(new RegExp('boot refused.*' + message));
+          continue;
+        }
+        const reply = await render(path);
+        const text = id => new RegExp(`data-testid="${id}"[^>]*>([^<]*)<`).exec(reply.html)[1];
+        const failed = path !== '/' && !path.startsWith('/caught') && !path.startsWith('/parse') && !['/exclusive', '/keep-key'].includes(path);
+        expect({ path, status: reply.status, settled: reply.settled, reader: text('reader'), writer: text('writer'), state: text('state'),
+          failed: reply.failed.map(f => f.split(':')[0]) }).toEqual({ path, status: 200, settled: true, reader: 'empty:1',
+          writer: failed ? '' : path === '/' ? 'empty' : 'refused:empty', state: failed ? 'failed' : 'answered', failed: failed ? ['writer'] : [] });
+        if (failed) expect(reply.failed[0]).toContain(path === '/own-error' ? 'source failure' : language === 'TypeScript'
+          ? "a render's store is empty and refuses writes" : 'secret token is not granted');
+      }
+      render.ahead = false;
+    }
+    if (language === 'Rust') {
+      const path = resolve(dir, 'app.contract');
+      writeFileSync(path, readFileSync(path, 'utf8').replace(' else empty()', ''));
+      const bare = renderer(await build(dir)); bare.ahead = false;
+      await expect(bare('/own-error')).rejects.toThrow(/boot refused.*source failure/);
+    }
+  } finally {
+    api.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120000);
+
+test('a render contains detached store refusals within their request', async () => {
+  const dir = scratch();
+  try {
+    writeFileSync(resolve(dir, 'app.contract'), `routes nav
+  read "/" render=request
+  write "/write" render=request
+  forget "/forget" render=request
+  promiseWrite "/promise-write" render=request
+  promiseForget "/promise-forget" render=request
+  promiseAsync "/promise-async" render=request
+  hostPromise "/host-promise" render=request
+  caught "/caught" render=request
+
+component App
+  resource value = value(top(nav).name) as shape string
+  view
+    main
+      text value testId="value"
+`);
+    writeFileSync(resolve(dir, 'app.ts'), `export const grants = 'secret.keep token';
+export function answer(_: string, [route]: string[], store: any): string {
+  if (route === 'write') queueMicrotask(() => store.set('token', 'private'));
+  if (route === 'forget') queueMicrotask(async () => store.forget('token'));
+  if (route === 'promiseWrite') void Promise.resolve().then(() => store.set('token', 'private'));
+  if (route === 'promiseForget') void Promise.resolve().then(() => store.forget('token'));
+  if (route === 'promiseAsync') void (async () => { await Promise.resolve(); store.set('token', 'private'); })();
+  if (route === 'hostPromise') void new Response('body').text().then(() => store.set('token', 'private'));
+  if (route === 'caught') void Promise.resolve().then(() => store.set('token', 'private')).catch(() => {});
+  return store.get('token') ?? 'empty';
+}
+`);
+    const dist = await build(dir);
+    const child = Bun.spawn([process.execPath, '--eval', `
+      import { renderer } from './host/web-js/render.mjs';
+      const seen = [];
+      for (const ahead of [false, true]) {
+        const render = renderer(process.argv[1]); render.ahead = ahead;
+        const page = async path => {
+          const reply = await render(path);
+          return { path, status: reply.status, settled: reply.settled, failed: reply.failed,
+            text: /data-testid="value"[^>]*>([^<]*)</.exec(reply.html)[1] };
+        };
+        const paths = ['/write', '/', '/forget', '/', '/promise-write', '/', '/promise-forget', '/',
+          '/promise-async', '/', '/host-promise', '/', '/caught'];
+        for (const path of paths) seen.push(await page(path));
+        seen.push(...await Promise.all(['/promise-write', '/', '/promise-forget', '/caught'].map(page)));
+        render.ahead = false;
+      }
+      process.stdout.write(JSON.stringify(seen));
+    `, dist], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+    const [status, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(status, stderr).toBe(0);
+    const seen = JSON.parse(stdout);
+    expect(seen).toHaveLength(34);
+    for (const reply of seen) {
+      expect([reply.status, reply.settled, reply.text]).toEqual([200, true, 'empty']);
+      if (!['/', '/caught'].includes(reply.path)) {
+        expect(reply.failed).toHaveLength(1);
+        expect(reply.failed[0]).toContain("a render's store is empty and refuses writes");
+      } else expect(reply.failed).toEqual([]);
+    }
+    // Containing a render's failures must preserve the host's fatal handling of an unrelated rejection.
+    const unrelated = Bun.spawn([process.execPath, '--eval', `
+      import { renderer } from './host/web-js/render.mjs';
+      const render = renderer(process.argv[1]); render.ahead = false;
+      await render('/');
+      Promise.reject(new Error('outside a render'));
+    `, dist], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+    const [unrelatedStatus, unrelatedError] = await Promise.all([unrelated.exited, new Response(unrelated.stderr).text()]);
+    expect(unrelatedStatus).toBe(1);
+    expect(unrelatedError).toContain('outside a render');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120000);
+
 // A page rendered on the server has no storage (LLP 1048.000 D9): a source that reads a file there is refused before
 // any storage code runs, and its resource keeps its placeholder, pending, not failed and not in the checkpoint's
 // answers; the render does not wait for it. The reader's page, once it adopts the document, asks it again.
@@ -173,19 +387,18 @@ test('a resource asked again during a render and refused its storage is asked ag
   home "/" render=request
 
 component App
-  resource reader = reader() as shape string
-  resource writer = writer() as shape string
+  resource writer = writer() as shape number else empty()
+  resource reader = reader(writer) as shape string
   view
     main
       text reader testId="reader"
-      text writer
+      text writer.toString()
 `);
-    // The reader reads the store, so the writer's write asks it again; its second answer reads a file.
-    writeFileSync(resolve(dir, 'app.ts'), `export const grants = 'secret.keep k\\nfs.read app:/data/reader';
+    // The writer answers after the reader's first answer, changing its arguments; its second answer reads a file.
+    writeFileSync(resolve(dir, 'app.ts'), `export const grants = 'fs.read app:/data/reader';
 let readerCalls = 0;
-export const answer = async (name: string, _args: unknown[], store: any, storage: any): Promise<any> => {
-  if (name === 'writer') { await Promise.resolve(); store.set('k', 'written'); return 'wrote'; }
-  store.get('k');
+export const answer = async (name: string, _args: unknown[], _store: unknown, storage: any): Promise<any> => {
+  if (name === 'writer') { await Promise.resolve(); await Promise.resolve(); return 1; }
   if (++readerCalls === 1) return 'first';
   try { return new TextDecoder().decode(await storage.fs.readFile('app:/data/reader')); } catch { return 'asked on the device'; }
 };
@@ -196,7 +409,7 @@ export const answer = async (name: string, _args: unknown[], store: any, storage
     const reply = await render('/', 10000);
     const checkpoint = JSON.parse(/<script type="application\/vnd.exact.checkpoint"[^>]*>([^<]*)<\/script>/.exec(reply.html)[1]);
     expect({ status: reply.status, settled: reply.settled, refused: reply.refused, pending: checkpoint.pending, answered: checkpoint.answers.map(a => a[0]) })
-      .toEqual({ status: 200, settled: true, refused: [['reader', 'storage.fs.readFile()']], pending: ['reader'], answered: ['reader', 'writer'] });
+      .toEqual({ status: 200, settled: true, refused: [['reader', 'storage.fs.readFile()']], pending: ['reader'], answered: ['writer', 'reader'] });
     site = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
       const path = new URL(request.url).pathname;
       if (path === '/') return new Response(reply.html, { headers: { 'content-type': 'text/html' } });

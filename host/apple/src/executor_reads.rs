@@ -37,12 +37,18 @@ pub(super) fn reservation(
     })
 }
 
-pub(super) fn next_job(state: &mut State, worker: usize) -> Option<(Job, AbortController)> {
+pub(super) fn next_job(
+    shared: &Shared,
+    state: &mut State,
+    worker: usize,
+) -> Option<(Job, AbortController)> {
     if worker == 1 {
+        while forget::refuse_crowded(shared, state, 1, 0) {}
         if let Some(next) = take_job(state, 1) {
             return Some(next);
         }
     }
+    while forget::refuse_crowded(shared, state, 0, 0) {}
     let job = state.jobs[0].front()?;
     let class = if job.overlap {
         job.class
