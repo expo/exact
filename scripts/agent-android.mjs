@@ -513,8 +513,9 @@ async function relay([serial, id, vars, encodedLease]) {
     const extras = Object.entries(launch).flatMap(([k, v]) => ['--es', `x_${k.slice('EXACT_'.length).toLowerCase()}`, quote(v)]);
     sh('shell', 'am', 'force-stop', id);
     sh('logcat', '-c');
-    // `lower=0`: the engine samples every animation, so none plays on the reader's own clock.
-    const started = sh('shell', ['am', 'start', '-W', '-n', `${id}/dev.exact.app.MainActivity`, '--es', 'agent', name, '--es', 'lower', '0', ...extras, intent].join(' '));
+    // `--activity-clear-task`: a force-stop leaves the app's task, and a permission dialog the last drive raised
+    // stays up over the next launch. `lower=0`: the engine samples every animation, so none plays on the reader's own clock.
+    const started = sh('shell', ['am', 'start', '-W', '--activity-clear-task', '-n', `${id}/dev.exact.app.MainActivity`, '--es', 'agent', name, '--es', 'lower', '0', ...extras, intent].join(' '));
     if (started.status !== 0 || /Error/.test(started.stdout + started.stderr)) throw new Error(`am start ${id}: ${(started.stderr || started.stdout).trim()}`);
     port = Number(sh('forward', 'tcp:0', `localabstract:${name}`).stdout.trim());
     if (!port) throw new Error('adb forward gave no port');
