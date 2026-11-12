@@ -125,16 +125,19 @@ test('the wasm host writes a 2xx body to the app file and reads anything else', 
       const kept = async () => new TextDecoder().decode(await store.readFile('app:/data/kept'));
       const big = said(await get('/big', 'app:/data/big'));
       const written = await check(store, 'app:/data/big');
+      // Shown as its path names it, as a writeFile's bytes are, not as the reply's content-type
+      const shownAs = (await store.blob('app:/data/big', 'application/pdf')).blob.type;
       const missing = said(await get('/missing', 'app:/data/kept'));
       const refusals = [];
       for (const [path, more] of [['app:/tmp/x', {}], ['app:/data/none/x', {}]]) refusals.push(said(await get('/never', path, more)));
       const over = said(await get('/big', 'app:/data/kept', { nativeHttp: 'independent', maxResponseBytes: 1 << 20 }));
       const stalled = said(await get('/stall', 'app:/data/kept', { timeoutMs: 300 }));
       const bare = said(await request({ method: 'GET', url: origin + '/never', headers: [], body: '', bodyTo: 'app:/data/x' }, { ...host, bodyTarget: undefined }));
-      return { big, written, missing, refusals, over, stalled, bare, kept: await kept(), names: (await store.readdir('app:/data')).sort() };
+      return { big, written, shownAs, missing, refusals, over, stalled, bare, kept: await kept(), names: (await store.readdir('app:/data')).sort() };
     }, { grants, origin: site.origin });
     expect(out.big).toEqual({ kind: 0, status: 200, headers: `:exact-body-to: ${BIG}`, body: '' });
     expect(out.written).toEqual({ size: BIG, same: true });
+    expect(out.shownAs).toBe('application/pdf');
     expect(out.missing).toMatchObject({ kind: 0, status: 404, body: 'no such thing' });
     expect(out.refusals[0]).toMatchObject({ kind: 2, body: expect.stringContaining('exactBodyTo app:/tmp/x: denied: fs.write app:/tmp/x') });
     expect(out.refusals[1]).toMatchObject({ kind: 2, body: expect.stringContaining('exactBodyTo app:/data/none/x: no such file or directory') });

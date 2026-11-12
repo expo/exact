@@ -18,7 +18,7 @@ Reproduced on Apple M5 Max / macOS 26.6.2 with Exact2 `766ec3d` and the current
 external app working tree, after rebuilding through `node exact.mjs macos`:
 
 ```js
-// From Exact2 with EXACT_APP_DIR=/Users/ccheever/projects/weird-castle.
+// From Exact2 with EXACT_APP_DIR=/Users/<user>/projects/weird-castle.
 import { open } from './scripts/agent.mjs';
 const s = await open({ host: 'macos' });
 try {

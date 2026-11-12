@@ -108,5 +108,5 @@ notification before the wake byte arrived. The original locked-run refusal,
 the first Windows socket-type compile error, the review-triggered corrections,
 the Weatherlight warning-gate failure, all successful command logs, PID cards,
 response receipt, and hashes are retained under
-`C:/Users/Charlie Cheever/targets/exact2-consumer-release-windows/logs/native-followup`
+`C:/Users/<user>/targets/exact2-consumer-release-windows/logs/native-followup`
 and the run ledger. No async scheduler mode was enabled.

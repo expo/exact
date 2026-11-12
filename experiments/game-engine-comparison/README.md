@@ -15,8 +15,8 @@ copy a lane to a scratch directory first.
 ## Browser lanes
 
 The original machines still have their isolated installations at
-`/tmp/exact-engine-comparison-20260917/browser3d` on `expose-builder-pixel`
-and `.../browser2d` on `expose-builder-pixel-a`. Dependencies are pinned
+`/tmp/exact-engine-comparison-20260917/browser3d` on one Linux machine of the
+team's build fleet and `.../browser2d` on another. Dependencies are pinned
 in each `bun.lock`; fleet Bun was 1.3.14. In a scratch copy:
 
 ```sh
@@ -55,7 +55,7 @@ clock and rendering paths.
 
 ## Native lane
 
-The original `expose-builder-nothing` scratch directory is
+The original scratch directory, on a third build-fleet machine, is
 `/tmp/exact-engine-comparison-20260917/native`. Binaries and package
 downloads remain there; they are not committed. `versions.json` records
 versions and binary hashes. Run from that provisioned directory:

@@ -47,7 +47,7 @@ import { closeSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdte
 import { evictArms, keepRoster, keptRoster, rosterRoutes, snapshotSources } from './arms.mjs';
 import { HOST_MACOS, freeSpace, ROOM_GB } from '../../scripts/filesystem.mjs';
 import { documentTypes, exportedTypes, importedTypes, openingLinks, webPageTypes, browserEntitlements } from './documents.mjs';
-import { appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, appleCargoClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
+import { appClip, associatedDomains as claimedDomains, appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, appleCargoClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
 import { copyStaticTreeIfPresent, listAssets } from '../web/serve.mjs';
 import { startSweep } from '../../scripts/sweep.mjs';
 import { appleBuildRefusal, guardFlags, reportBuilt } from '../../scripts/help.mjs';
@@ -55,7 +55,7 @@ import { appleImplementations } from '../../js/bake/src/typescript.mjs';
 import { composedModule, moduleSeam, systemFrameworks } from './compose.mjs';
 import { associatedDomains, entitlementValue, grantEntitlements, macPresence, macPasskeys, macProfileRows, merchantEntitlement, signInEntitlement } from './presence.mjs';
 import { writeDataKeys } from './data-keys.mjs';
-import { backgroundKeys, declaredOrigin, interfaceStyle, localNetworking, modulePlist, nfcKeys, startLocation, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
+import { backgroundKeys, declaredOrigin, interfaceStyle, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
 import { compileFixtures, iosTestRuns, macTests, onlyClasses } from './xctest.mjs';
 import { APPLE_STATIC_TREES, appIcon, appleRefusals, buildInfo, iosAssets, appleAssets, appleAssetCatalogInventory, copyNativeResources, signingOrder, helperEntitlements, plistFile, wrapFramework, signedGpuProduct, assertArchiveFrameworks } from './assets.mjs';
 import { auditLaunchParts, launchModules, launchServices, serviceArgs, writeLaunchParts } from './launch-parts.mjs';
@@ -66,8 +66,8 @@ import { keptCrates } from './crates.mjs';
 import { appleCargo } from '../../scripts/cargo-check.mjs';
 import { linkedPlanArgs, placeLinkedPlan } from '../../scripts/linked-plan.mjs';
 import { stripForDistribution, stripProductionExecutable, appleComposition, appleProduction, appleLaunchFrameworks, appleLaunchLinkArgs, assertCapabilityFrameworks, assertLinkedSdk, linksByPlan } from './link.mjs';
-export { appIcon, iosAssets, documentTypes, exportedTypes, importedTypes, stripForDistribution, stripProductionExecutable };
-import { IPAD_ORIENTATIONS, orientationKeys, allows, chooseSimulator, deviceLaunchArgs, developmentLaunchEnvironment, identity, installedBuild, macIdentity, phone, replacedNote, profile, showSimulator, simulator, simulators, useXcode } from './devices.mjs';
+export { appIcon, appleEmbedOnly, iosAssets, documentTypes, exportedTypes, importedTypes, stripForDistribution, stripProductionExecutable };
+import { IPAD_ORIENTATIONS, orientationKeys, allows, chooseSimulator, deviceLaunchArgs, developmentLaunchEnvironment, identity, installedBuild, macIdentity, phone, replacedNote, profile, showSimulator, simulator, simulators, useXcode, appleEmbedOnly, appleSdkName, compilesSwiftHost, xcodeRefusal } from './devices.mjs';
 import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const run = (cmd, args, opts = {}) => {
@@ -331,15 +331,7 @@ export function developmentLinks(app, page, access) {
  * which HealthKit splits the identifier by (LLP 1069.008.000 D3). */
 export const SIMULATOR_PREFIX = 'SIMULATORX';
 
-/** The App Clip `host.ios.appClip` declares, or null: its bundle id (`<app id>.Clip`, as Xcode names one), its
- * name (the app's) and the executable's name. An App Clip is an app (LLP 1126 D12): the clip bundle runs the whole
- * app under this second identity, using the same executable target. */
-export const appClip = (app) => {
-  const clip = app.manifest.host?.ios?.appClip;
-  if (!clip) return null;
-  const id = clip.id ?? `${app.id}.Clip`, name = clip.name ?? app.displayName;
-  return { id, name, executable: appleExecutableName({ id, displayName: name ?? '' }) };
-};
+export { appClip };
 
 /** Device identity comes from the profile. Simulators need an app identity too: Keychain's default access group
  * is the application-identifier. A simulator's is `SIMULATORX.<id>`, with the bare id it had before kept as a
@@ -353,7 +345,7 @@ export const entitlements = (app, team = null, debuggable = true, reach = null, 
     ...(team ? { 'com.apple.developer.team-identifier': team } : {}),
     ...(simulator && !team ? { 'keychain-access-groups': [prefixed, app.id] } : {}),
     'get-task-allow': debuggable,
-    ...Object.fromEntries(browserEntitlements(app, distributed).map(key => [key, true])),
+    ...Object.fromEntries([...browserEntitlements(app, distributed), ...memoryEntitlements(app)].map(key => [key, true])),
   };
   // The clip (`clipParent`, the app's id) is its parent's App Clip: the parent's entitlements, the App Group and
   // Keychain group of the parent's included (how a clip shares data with its app), under the clip's own
@@ -369,7 +361,7 @@ export const entitlements = (app, team = null, debuggable = true, reach = null, 
   }
   if (app.manifest.share_target && simulator && !app.widgetTV && !app.widgetHost && !app.clipParent) dict['com.apple.security.application-groups'] ??= [widgetGroup(app)]; // the share inbox (LLP 1133.024 D4)
   // @ref LLP 1038 D8 — explicit applinks entries, or the declared origin.
-  const domains = Array.isArray(ios.associatedDomains) ? ios.associatedDomains : ios.associatedDomains && app.origin ? [`applinks:${new URL(app.origin).host}`] : [];
+  const domains = claimedDomains(app);
   // @ref LLP 1069.006 D2 — a claimed https auth callback needs `webcredentials:` (the bake's derivation from the `auth.callback` grants, LLP 1069.008).
   const linked = [...domains, ...associatedDomains(reach?.auth, debuggable)];
   // An App Clip is invoked from its `appclips:` domains, which its parent's entitlements list too (Apple,
@@ -469,7 +461,7 @@ export const infoPlist = (app, device = false, { executable = appleExecutableNam
   Object.assign(dict, updateActivation(app));
   Object.assign(dict, usageKeys(reach));
   Object.assign(dict, icon);
-  Object.assign(dict, distribution, orientationKeys(app.manifest.orientation), interfaceStyle(app));
+  Object.assign(dict, distribution, orientationKeys(app.manifest.orientation), interfaceStyle(app), tv || clip ? {} : storeKeys(app, 'ios'));
   return plistFile(withPackageKeys(dict, reach));
 };
 
@@ -555,7 +547,7 @@ export const macInfoPlist = (app, { development = null, icon = {}, reach = null,
   // absence, `auto` and an explicit `navigate-existing` are one plist.
   ExactLaunchMode: launchMode(app),
   ...startLocation(app), ...declaredOrigin(app),
-  ...updateActivation(app), ...interfaceStyle(app, true),
+  ...updateActivation(app), ...interfaceStyle(app, true), ...storeKeys(app, 'macos'),
   ...openingLinks(app, 'macos', development, distributed), ...shortcutKeys(app, 'macos'),
   ...(app.manifest.host?.macos?.oneTimeCodeAutofill === 'marked' ? { NSAutoFillRequiresTextContentTypeForOneTimeCodeOnMac: true } : {}),
 }, reach));
@@ -579,10 +571,6 @@ export const shippedReceipt = (text) => {
   return JSON.stringify({ ...whole, build: { ...build, binary: { sha256: build.binary?.sha256 },
     products: (build.products ?? []).map((product) => ({ ...product, path: basename(product.path) })) } }, null, 2) + '\n';
 };
-
-export function appleEmbedOnly(args) {
-  return args.includes('--embed') && !args.includes('--archive') && !args.includes('--run') && !args.includes('--host');
-}
 
 export function copyAppleGpuProducts(capture, destination, artifacts, archive = false) {
   for (const m of artifacts) {
@@ -626,6 +614,8 @@ async function main(args, lockHeld = false) {
   // so the bake refuses a production build without its receipt; packaging refuses a missing icon (assets.mjs).
   const store = `deploy.store.${ios ? 'ios' : 'macos'}`, streamed = app.manifest.deploy?.store?.[ios ? 'ios' : 'macos'] !== '0';
   const refused = [...(distribution && streamed && !process.env.EXACT_UPDATE_RECEIPT && process.env.EXACT_UPDATE_GENESIS !== '1' ? [`${app.name}: what is distributed bakes production trust, and with an update store (${store} is not "0") it belongs to a stream: set EXACT_UPDATE_RECEIPT to its authenticated publisher receipt (scripts/deploy.mjs), or EXACT_UPDATE_GENESIS=1 to start a new stream`] : []), ...appleRefusals(app, tv ? 'tvos' : ios ? 'ios' : 'macos', { archive: !!ipa })];
+  const sdkName = appleSdkName(tv ? 'tvos' : ios ? 'ios' : 'macos', device); // the SDK this build compiles with
+  if (process.platform === 'darwin' && compilesSwiftHost(args)) refused.push(...[xcodeRefusal(sdkName)].filter(Boolean));
   if (refused.length) { console.error(refused.join('\n')); process.exitCode = 1; return; }
   if (ios && !device && !ipa && !args.includes('--no-install') && !args.includes('--prebuild')) chooseSimulator(args.includes('--sim') ? args[args.indexOf('--sim') + 1] : undefined, { tv, app: app.id, dir: app.dir, hint: '--sim <udid|name> (or EXACT_SIM)' }); // refused before anything compiles, not after (LLP 1156.000 D5)
   if (!existsSync(resolve(app.target, 'apple-swift'))) { const room = freeSpace(app.dir, [app.target, resolve(process.env.HOME ?? '', '.cache/exact')]); if (room && room.gb < ROOM_GB) console.warn(`host/apple: a first build here; ${room.text}`); } // a cold build (LLP 1156.000 D3)
@@ -653,7 +643,7 @@ async function main(args, lockHeld = false) {
   let sha1 = unsigned ? '-' : device ? (() => {
     ph = ipa ? null : phone(args.includes('--phone') ? args[args.indexOf('--phone') + 1] : undefined, { tv });
     // Refuse missing widget groups or browser approval before building; final signing checks again.
-    const required = browserEntitlements({ ...app, widgetTV: tv }, distribution);
+    const required = [...browserEntitlements({ ...app, widgetTV: tv }, distribution), ...memoryEntitlements({ ...app, widgetTV: tv })];
     prof = widgets ? entryProfiles({ app, udid: ph?.udid, phoneName: ph?.name, required }).app : profile(ph?.udid, app.id, required, { phoneName: ph?.name });
     return identity(prof.team);
   })() : ios ? '-' : (distribution ? process.env.EXACT_DEVELOPER_ID : null) ?? macIdentity();
@@ -680,7 +670,7 @@ async function main(args, lockHeld = false) {
   const t0 = Date.now();
   const target = ios ? (tv ? tvTarget : device ? 'aarch64-apple-ios' : iosTarget) : bakeTarget('macos');
   const library = prepareLibrary(app.dir, target); // a package's prebuilt framework (LLP 1154 D3), fetched and checked before Cargo
-  const sdkName = ios ? (tv ? (device ? 'appletvos' : 'appletvsimulator') : device ? 'iphoneos' : 'iphonesimulator') : 'macosx', stampSdk = { sdk: sdkName, sdkVersion: designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : null }; // stampSdk: the SDK the link records
+  const stampSdk = { sdk: sdkName, sdkVersion: designCompatible(app, ios ? 'ios' : 'macos') ? COMPATIBLE_SDK[ios ? 'ios' : 'macos'] : null }; // stampSdk: the SDK the link records
   const destination = ios ? (tv ? (device ? 'tvos' : 'tvos-simulator') : device ? 'ios' : 'ios-simulator') : 'macos';
   const sdk = read('xcrun', ['--sdk', sdkName, '--show-sdk-path']).stdout.trim();
   const targets = deploymentTargets(app);
@@ -1477,7 +1467,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(new URL(import
   const args = guardFlags(['--ios', '--device', '--tvos', '--watchos'].some((flag) => process.argv.includes(flag)) ? 'ios' : 'mac', process.argv.slice(2));
   if (args.includes('--phone') && !args.includes('--device')) throw new Error('--phone needs --device; for a simulator use --sim <udid|name> (or EXACT_SIM)');
   useXcode(); if (args.includes('--release')) process.env.EXACT_UPDATE_TRUST = 'production';
-  (args.includes('--test') ? test(args) : main(args)).catch((error) => { console.error(error.rebuild ? `${error.message}: ${rebuildArgs(args)}` : error.message); process.exitCode = 1; });
+  const oldXcode = process.platform === 'darwin' && args.includes('--test') && xcodeRefusal(args.includes('--ios') ? 'iphonesimulator' : 'macosx');
+  if (oldXcode) { console.error(oldXcode); process.exitCode = 1; } else (args.includes('--test') ? test(args) : main(args)).catch((error) => { console.error(error.rebuild ? `${error.message}: ${rebuildArgs(args)}` : error.message); process.exitCode = 1; });
 }
 
 /** This build's command, to run it again: an `exact new` app's `exact.mjs` verb (EXACT_APP_DIR, which that

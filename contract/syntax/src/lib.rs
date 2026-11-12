@@ -156,6 +156,10 @@ pub const HOST_COMMANDS: &[&str] = &[
     "setSelectionRange",
     "setRangeText",
     "setScheme",
+    // `setLocale("de")`: the language the app's strings read, over the
+    // host's locale and kept across launches; `setLocale("")` hands it
+    // back. The runner's own.
+    "setLocale",
     // @ref LLP 1069.000 D3 — `:root { font-size }`: `setRootFontSize(px)`
     // sets the root size `rem` follows, over the host's; `"medium"` hands it
     // back. The runner's own; the web also sets it on the document.

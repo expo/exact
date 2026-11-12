@@ -88,5 +88,5 @@ vendored dependency when those changes land is separate maintenance.
 The earlier experiments remain recoverable on `exact/20261002-aspect-ratio`
 through `267074ad`; the submitted branch is
 `exact/20261002-aspect-ratio-submission`. Both belong to the isolated worktree
-`/Users/ccheever/projects/taffy-exact-upstream-20261002`; the original upstream
+`/Users/<user>/projects/taffy-exact-upstream-20261002`; the original upstream
 checkout's unrelated unpublished work was preserved.

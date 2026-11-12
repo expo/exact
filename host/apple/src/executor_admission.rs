@@ -26,7 +26,7 @@ impl Core {
             work
         };
         let ordered = r.request.is_ordered();
-        let overlap = self.machine.is_none() && reads::overlaps(&r, work.is_some());
+        let overlap = reads::overlaps(&r, work.is_some());
         let mut state = self.shared.state.lock().unwrap();
         state.dispatched = true;
         let use_preload = preload::matches(state.cache.as_ref(), &r, work.is_some());
@@ -36,6 +36,7 @@ impl Core {
             .request
             .long_poll_refusal()
             .or(r.request.timeout_refusal())
+            .or(r.request.protocols_refusal())
             .or(r.request.body_from_refusal())
             .or(r.request.body_to_refusal())
             .or(r.request.upload_progress_refusal())
@@ -160,7 +161,15 @@ impl Core {
             match r
                 .request
                 .timeout_ms
-                .map(|ms| forget::QueuedDeadline::arm(&self.shared, lane, r.ticket, ms))
+                .map(|ms| match &self.machine {
+                    Some(machine) => Ok(forget::QueuedDeadline::on_machine(
+                        machine.timer.clone(),
+                        lane,
+                        r.ticket,
+                        ms,
+                    )),
+                    None => forget::QueuedDeadline::arm(&self.shared, lane, r.ticket, ms),
+                })
                 .transpose()
             {
                 Ok(deadline) => deadline,
@@ -190,6 +199,7 @@ impl Core {
                 started: std::time::Instant::now(),
                 ticket: r.ticket,
                 lane,
+                transport_lane: lane,
                 charge: if waits || one_shot { 0 } else { charge },
                 limit,
                 abort: Some(abort.clone()),

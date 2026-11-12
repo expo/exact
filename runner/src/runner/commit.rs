@@ -527,6 +527,8 @@ impl<D: DataSource> Runner<D> {
                 source: self.input_source,
             });
         }
+        // The app's chosen language, before the settlement reads its tables.
+        self.take_set_locale(first_command);
         // An assignment to a mutation's slot tentatively makes it not
         // pending. The pending map is changed only after settlement stands:
         // a refused assignment did not change what reply the view wants.

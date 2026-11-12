@@ -36,7 +36,13 @@ keeps Hermes's OS-backed Intl; Android has no `Intl` yet. A Rust-only app needs 
 `exact setup` installs the host bundle and, on macOS, the iOS and tvOS Simulator
 bundles, and the iOS device bundle where Xcode's iphoneos SDK is installed.
 `exact setup --check` runs Ibex's own offline resolver validation over that
-same set.
+same set. On a CI worker, `bun <exact2>/scripts/exact.mjs setup --check
+--platform ios --device` checks the archive's prerequisites; `--platform
+android` checks the APK/AAB prerequisites, including JDK 17+ and the NDK's
+actual compiler paths. A scoped check fails when any of its rows is missing
+and does not check unrelated web tools. `--platform` is check-only; install
+commands are in the platform's CI recipe. The general check still reports
+optional tools separately (LLP 1086 D6).
 
 ### Windows painter
 
@@ -482,6 +488,60 @@ Widget entries are top-level `app.json` `widgets` rows. For example:
 Optional `title` and `description` strings supply the widget gallery's labels;
 each defaults to the humanised `kind` when omitted.
 
+On iOS and macOS, an optional `configuration` lets the person choose in Edit Widget
+(LLP 1126; LLP 1133.023). The
+entry becomes WidgetKit's
+[`AppIntentConfiguration`](https://developer.apple.com/documentation/widgetkit/appintentconfiguration),
+its [`WidgetConfigurationIntent`](https://developer.apple.com/documentation/appintents/widgetconfigurationintent)
+generated with one enum parameter per row, and the build extracts the extension's
+App Intents metadata, through which the sheet shows them:
+
+```json
+"configuration": {"title":"Next trains","description":"Choose how many departures.",
+  "parameters":[{"name":"rows","type":"enum","title":"Rows","default":"automatic",
+    "values":[{"value":"automatic","title":"Automatic"},{"value":"one","title":"1"},{"value":"three","title":"3"}]}]}
+```
+
+On watchOS, the complication picker offers
+[`recommendations`](https://developer.apple.com/documentation/widgetkit/appintentrecommendation)
+instead of a parameter form. Exact generates one per combination of declared
+values, with the default combination first and parameter/value titles as labels.
+Repeated value titles include their identifiers. If complete labels still collide,
+each label also includes the choices' UTF-8 hex identifiers to distinguish them. A widget
+with watch families may declare at most 64 combinations (the product of its
+parameter value counts); the bake refuses more and asks for fewer values or
+parameters. This Exact bound keeps the watch picker and generated bundle small.
+
+`title` and `description` (defaulting to the title) are the intent's; the sheet itself
+is headed by the widget's own `title` and `description`, as on iOS 27. Each
+parameter's `name` is a lowerCamelCase field name, its `title` the row's label and
+its `type: "enum"` a fixed list, and its `values` the menu, in order: `value` is what the render reads, `title` what the
+menu shows. `default` is one of the values, the first when omitted; it is the choice
+before the person makes one, and the gallery's. A component reads the chosen values
+as it reads the family's size, through the reserved inject `snapshot_configuration`:
+
+```
+shape Rows
+  rows: enum<"automatic", "one", "three">
+
+component NextTrains
+  inject
+    snapshot_viewport: Viewport
+    snapshot_configuration: Rows
+```
+
+The shape has one field per parameter, typed `string` or an `enum` of exactly its
+values; every injecting component names one shape. A configuration that no component
+reads, or an inject without one, fails the bake with an edit. The refresh does not see
+the configuration: one timeline serves every configuration and family, and each render
+reads its own. The configuration, labels included, is generated Swift and so a binary
+compatibility input; Live Activities have none. Keep kind, parameter and value
+identifiers stable across updates; changing a title does not change a choice.
+A removed or renamed parameter is ignored, and a missing or removed value uses
+that parameter's current default. Other valid choices are retained. Reordering
+entries, parameters or values does not reassign a saved choice. Data-backed
+options and fetching different data for each placement are not supported.
+
 `component` and the `props` shape are declared or imported by `app.contract`;
 every component prop must match a field of that shape. `preview` supplies all
 fields, with their declared types. `refresh` names a data-source function taking
@@ -726,7 +786,8 @@ again when the family's size changes; the preference fields are a still page's.
 Choose a layout by them as `docs/recipes/responsive-columns.md` does for a page
 (a Lock Screen row is under 100 pt tall; a medium widget is over 250 wide), so
 one entry serves every family it declares. The app's own plan is untouched: an
-unused component's inject is not demanded by the app's view. A `performanceNow()` call is refused everywhere, including
+unused component's inject is not demanded by the app's view. A configured widget's
+second fact is its configuration, the `snapshot_configuration` inject above. A `performanceNow()` call is refused everywhere, including
 inside `time` and `progress`; pass instants from refresh for platform time
 presentation. A variable's name imposes no restriction. A class is a style name
 or `class=(condition ? A : B)`. Only literal font families reached through the
@@ -791,6 +852,44 @@ and paths that are not `.icon` directories fail by name. The project and its
 layers compile in the same `actool` pass as the app's catalogs; changing them
 requires a new native build. `icons` still supplies the web and the native
 raster fallback when the platform has no `icon` selection.
+
+### Store category, Game Mode and memory
+
+`categories` in `app.json` is the W3C manifest's member, which the web manifest
+carries: what the app is, for a store or catalog to file it under. A value is
+one of the W3C's standardized categories or one of Apple's, written without
+`public.app-category.` (`developer-tools`, `graphics-design`, `reference`,
+`video`, and the game genres from `action-games` to `word-games`); the build
+refuses any other. The iOS and macOS bundles' `LSApplicationCategoryType` is
+the first that Apple has a category for: `fitness` and `health` are
+`healthcare-fitness`, `photo` is `photography`, `social` is
+`social-networking`, and `books`, `food`, `government`, `kids`, `magazines`,
+`navigation`, `personalization`, `politics`, `security` and `shopping` have
+none. App Store Connect requires a category of a Mac upload. A game the game
+shell builds (`game`) with no category of Apple's is `games`.
+
+```json
+{ "categories": ["dice-games", "games"], "host": { "ios": { "increasedMemoryLimit": true } } }
+```
+
+An app whose Apple category is `games` or a genre is a game, and Game Mode
+(priority on the CPU and GPU, lower Bluetooth latency for controllers and
+AirPods, less background work) is offered to it: the bundles carry
+`LSSupportsGameMode` (iOS 18.6, macOS 26), and the iOS bundle also
+`GCSupportsGameMode`, which iOS 18.0 to 18.5 read, when `host.ios.minimumOS`
+is below 18.6. `host.ios.gameMode` and `host.macos.gameMode` set it per
+platform: `false` keeps a game too light to need it out of Game Mode, and
+`true` offers it to an app that is not a game. tvOS and an App Clip carry
+neither key.
+
+`host.ios.increasedMemoryLimit: true` signs the app with
+`com.apple.developer.kernel.increased-memory-limit`: on the iPhone and iPad
+models that allow it, the app may use more memory than the default limit. The
+app must still work without it (`os_proc_available_memory` says what it has).
+Increased Memory Limit is a capability of the App ID, so a device build takes
+only a profile that grants it and otherwise is refused
+(`memory-device-profile`); a simulator build signs it as is. Extensions, the
+App Clip and tvOS never take it.
 
 Apple products live under the resolved app's target directory, scoped by
 canonical source directory, manifest id, destination, composition and trust
@@ -901,6 +1000,174 @@ receipt, and signed GPU frameworks (primary and named modules). Copy those
 frameworks intact into the embedding app's `Frameworks/`; their binaries must
 retain the baked digests.
 
+### Native CI preparation
+
+The [EAS iOS](recipes/eas-ios.md) and [EAS Android](recipes/eas-android.md)
+recipes use the ordinary native builders (LLP 1030.003 D6, D8). Exact does
+not manage an EAS account, credentials, build counters or store submissions.
+These examples describe a single-target app; extensions need their own
+matching profiles, as described in the widget signing sections.
+
+Keep Exact's `app.json`. Add a separate `app.config.js` for EAS, returning
+only Expo's configuration rather than merging Exact's manifest:
+
+```js
+module.exports = {
+  name: 'My app', slug: 'my-app', version: process.env.EXACT_VERSION || '1.0.0',
+  ios: { bundleIdentifier: 'com.example.myapp' },
+  android: { package: 'com.example.myapp' },
+  extra: { eas: { projectId: 'YOUR-EAS-PROJECT-ID' } },
+};
+```
+
+Match both identifiers to Exact's app id. Link the EAS project and install
+`expo-modules-autolinking` as a development dependency for EAS's config
+resolver (`bun add --dev expo-modules-autolinking`; commit the lockfile).
+Exact does not need Expo or React Native at run time. Pin EAS CLI in the app's
+dev dependencies too (`bun add --dev --exact eas-cli`). This `eas.json` uses file secrets for signing; set
+`EXACT_REF` to the immutable Exact commit used by the app:
+
+```json
+{
+  "cli": { "appVersionSource": "remote" },
+  "build": {
+    "exact": {
+      "environment": "production",
+      "distribution": "store",
+      "withoutCredentials": true,
+      "autoIncrement": true,
+      "bun": "1.4.2",
+      "env": { "EXACT_REF": "FULL-EXACT-COMMIT", "EXACT_VERSION": "1.0.0" },
+      "ios": { "config": "eas-ios.yml", "image": "macos-tahoe-26.6-xcode-27.2" },
+      "android": { "config": "eas-android.yml", "image": "ubuntu-26.04-jdk-17-ndk-r27b-sdk-58" }
+    }
+  }
+}
+```
+
+Image names above are the reporter's working choices; choose an available
+image with Xcode 27.1+ for iOS, or JDK 17+ and Android command-line tools for
+Android. Bun must satisfy Exact's `package.json` engines range. Initialize
+EAS's remote build counters above any number already uploaded; do not assume
+the first remote build increments an existing store number. Resolve the
+build config before reading `eas.job.version.buildNumber` or `versionCode`.
+See [EAS custom builds](https://docs.expo.dev/custom-builds/schema/) and
+[build configuration](https://docs.expo.dev/build/eas-json/).
+
+Save the following as `.ci/prepare-native.sh` in the app repository. The
+recipes run it with `ios` or `android`. It installs only that platform's
+Rust targets and Hermes bundles, with no simulator. Bun, git, curl and
+unzip come from the selected image. For a clean local worker, install Bun
+1.4.2 first and omit the final two EAS `set-env` calls.
+
+```sh
+#!/bin/sh
+set -eu
+export EXACT="$PWD/../exact"
+git clone https://github.com/expo/exact.git "$EXACT"
+git -C "$EXACT" checkout --detach "$EXACT_REF"
+bun install --frozen-lockfile --cwd "$EXACT"
+if ! command -v rustup >/dev/null; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/exact-rustup.sh
+  sh /tmp/exact-rustup.sh -y --profile minimal --default-toolchain none --no-modify-path
+fi
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+pin=$(bun -e 'console.log(Bun.TOML.parse(await Bun.file(process.env.EXACT + "/rust-toolchain.toml").text()).toolchain.channel)')
+case "$1" in
+  ios) triple=aarch64-apple-ios ;;
+  android) triple=aarch64-linux-android ;;
+  *) exit 2 ;;
+esac
+rustup toolchain install "$pin" --profile minimal --target "$triple"
+cargo +"$pin" run --locked --manifest-path "$EXACT/vendor/ibex/crates/hermes-lean-sys-installer/Cargo.toml" -- --target "$triple"
+set-env EXACT "$EXACT"
+set-env PATH "$PATH"
+```
+
+The installer also installs the host Hermes bundle used to bake TypeScript.
+If the launcher or Cargo manifests still name a developer's checkout, run
+`EXACT=../exact bun exact.mjs update` locally and commit its changes before
+submitting the job. An app's `host.ios` and `host.android` entries must be
+present; `exact new --with ios,android` creates both. Native shells are
+generated by the build. A native-view dependency must supply a roster that
+can be read without a simulator; see [the CI archive path](#build-an-ios-app-on-a-ci-machine).
+
+Cache Cargo's registry and git downloads, `$CARGO_HOME/hermes-lean-sys`,
+Gradle's `GRADLE_USER_HOME` (default `~/.gradle`), and `~/.cache/exact` when
+useful. Restore app and Exact `target/` only under keys that distinguish
+OS/architecture, toolchain, lockfiles and build mode. A cache hit does not
+promise reuse: fresh checkout mtimes can invalidate Cargo fingerprints,
+and production Apple builds do not use the development module cache.
+`CARGO_LOG=cargo::core::compiler::fingerprint=info` explains rebuilds. Do not
+rewrite source mtimes to force reuse. A clean build must work without these
+caches. Do not cache signing keys or provisioning profiles.
+
+### Import an iOS signing identity on a CI worker
+
+For the iOS recipe, save this as `.ci/sign-ios.sh`. Source it in the build
+step so the exported identity reaches Exact. In the EAS production
+environment, create secret file variables `CI_IOS_P12` and `EXACT_PROFILE`,
+and a secret string `CI_IOS_P12_PASSWORD`. The files are a distribution
+certificate with its private key and a matching App Store provisioning
+profile. EAS supplies file variables as paths; see its
+[file-variable documentation](https://docs.expo.dev/eas/environment-variables/faq/).
+Use only on an ephemeral worker: this selects a temporary keychain for the
+step. Do not turn on shell tracing around credentials.
+
+```sh
+set -eu
+CI_SIGN_DIR=$(mktemp -d)
+CI_KEYCHAIN="$CI_SIGN_DIR/build.keychain-db"
+CI_KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
+trap 'security delete-keychain "$CI_KEYCHAIN"; rm -rf "$CI_SIGN_DIR"' EXIT
+security create-keychain -p "$CI_KEYCHAIN_PASSWORD" "$CI_KEYCHAIN"
+security set-keychain-settings -lut 21600 "$CI_KEYCHAIN"
+security unlock-keychain -p "$CI_KEYCHAIN_PASSWORD" "$CI_KEYCHAIN"
+security import "$CI_IOS_P12" -k "$CI_KEYCHAIN" -P "$CI_IOS_P12_PASSWORD" -T /usr/bin/codesign
+security set-key-partition-list -S apple-tool:,apple: -s -k "$CI_KEYCHAIN_PASSWORD" "$CI_KEYCHAIN"
+security list-keychains -d user -s "$CI_KEYCHAIN"
+EXACT_IDENTITY=$(security find-identity -v -p codesigning "$CI_KEYCHAIN" | awk '/[0-9A-F]{40}/ {print $2}')
+test "$(printf '%s\n' "$EXACT_IDENTITY" | wc -l | tr -d ' ')" = 1
+test -n "$EXACT_IDENTITY"
+export EXACT_IDENTITY
+```
+
+If EAS already manages the credentials, download them through `eas
+credentials` for these secret files, or adapt the step to decode
+`eas.job.secrets.buildCredentials`: iOS uses the chosen target's
+`distributionCertificate.dataBase64` (base64), its `password`, and
+`provisioningProfileBase64`; Android uses `keystore.dataBase64`,
+`keystorePassword`, `keyAlias` and `keyPassword`. When using EAS-managed
+job credentials, remove `withoutCredentials`. Select the intended iOS
+target explicitly when there are several. Do not use
+`eas/configure_ios_credentials`: it expects an Xcode project. Exact signs
+the app directly with `EXACT_IDENTITY` and `EXACT_PROFILE`.
+
+### Build Android artifacts without a device
+
+From the app's directory, `bun exact.mjs android --release --no-install --json`
+builds an APK without querying adb. `bun exact.mjs android --bundle --json`
+builds a production App Bundle (`.aab`) without installing. Both report the
+artifact's absolute path. An outside app's outputs are
+`target/android/app/outputs/apk/release/app-release.apk` and
+`target/android/app/outputs/bundle/release/app-release.aab`.
+
+`EXACT_BUILD_NUMBER` sets Android's `versionCode` (1 by default, an integer
+from 1 through 2100000000); `EXACT_VERSION` sets `versionName` (0.1.0 by
+default). Set all four of `EXACT_KEYSTORE` (a file path),
+`EXACT_KEYSTORE_PASSWORD`, `EXACT_KEY_ALIAS` and `EXACT_KEY_PASSWORD` to sign
+with your upload key. Partial credentials fail before compiling. A bundle
+requires them; an APK without them uses Android's debug key and cannot be
+submitted to Play. Passwords are passed through the environment, never as
+Gradle command arguments (LLP 1030.003 D6, D8).
+
+`--release` selects optimization. For an APK you will distribute, also set
+`EXACT_UPDATE_TRUST=production`; `--bundle` sets it itself. Production trust
+requires your update stream's signing keys and receipt (or
+`EXACT_UPDATE_GENESIS=1` for a new stream). Android uses the Linux bake:
+set `deploy.store.linux` to `"0"` for a binary without Exact updates;
+`deploy.store.android` does not disable the bake's update checks.
+
 ### Build an iOS app on a CI machine
 
 A Mac runner needs no phone. An app with native view tags has its build read
@@ -924,7 +1191,7 @@ With `--json`, `ios`, `mac`, `web-build`, `linux`, `android` and `windows`
 print one JSON object on stdout, its last and only line, however they end, and
 send the build's own output to stderr. The object names the artifact's
 absolute `path` (the `.app`, the `.ipa` of `--archive`, `--embed`'s directory,
-`target/web-dist` or `--out`'s directory, the executable, the APK), its
+`target/web-dist` or `--out`'s directory, the executable, the APK or AAB), its
 `target` (`ios-simulator`, `ios`, `tvos-simulator`, `tvos`, `macos`, `web`,
 `linux`, `windows` or `android`) and its `trust` (`development` or
 `production`: what the build baked; the JS target's `web-build` is
@@ -957,15 +1224,16 @@ team's, or run a project in Xcode with that bundle id and team on that phone wit
 Automatically manage signing enabled, then retry.
 `EXACT_IDENTITY` and `EXACT_PROFILE` in place of `--unsigned` sign the `.ipa`
 on the runner. The runner needs Xcode 27.1 or later selected (`DEVELOPER_DIR`,
-or `xcode-select -s`), rustup and Bun 1.4.2; then `bun <exact2>/scripts/exact.mjs setup` installs the
+or `xcode-select -s`); the build checks its destination’s SDK before compiling.
+It also needs rustup and Bun 1.4.2; then `bun <exact2>/scripts/exact.mjs setup` installs the
 pinned Rust with its iOS targets and the Hermes bundles, and `setup --check`
 names what is still missing. An archive needs a square icon of at least
 1024 px in `icons` (or `host.ios.icon`), which the build checks before it
 compiles. An archive, and a simulator build with `--release` (the build that
 ships), bake production trust: with an update store (`deploy.store.ios` not
 `"0"`) each needs `EXACT_UPDATE_RECEIPT` or `EXACT_UPDATE_GENESIS=1`. A cold
-build takes tens of minutes, most of it Rust and the Swift host. Keeping the
-app's `target/` and `~/.cache/exact` between runs makes the next one minutes.
+build compiles Rust and the Swift host. Cache reuse depends on the source,
+toolchain, paths and build mode; see [native CI preparation](#native-ci-preparation).
 Export compliance is the developer's answer, so a production iOS or tvOS build
 (`--release`, `--archive`, `--distribution`) writes `ITSAppUsesNonExemptEncryption`
 into Info.plist only when `EXACT_NON_EXEMPT_ENCRYPTION` is `true` or `false` in its
@@ -1231,12 +1499,18 @@ an independent reply settles as it arrives. Leave writes, and any read whose
 parse depends on an earlier reply, in the queue. Storage steps and native
 continuations cannot opt out of it.
 
-On Hermes each turn of an answer has 100 ms of wall clock: its call, or its
+On Hermes each turn of an answer has 100 ms of its own time: its call, or its
 resumption after a `fetch`, storage step or yield it awaited, until it awaits
-the next. A turn over it is refused as `Unavailable` (`` `walk` took 401.8 ms,
-over the 100 ms budget for one turn; … ``), and the message names the repair:
-`await scheduler.yield()` every few thousand items of a long loop
+the next. Its own time is the calling thread's CPU clock where the platform keeps
+one, so a turn that waits on a blocked host call spends little of it; a turn may
+still take at most ten budgets (1 s) of wall clock. A turn over either is refused
+as an overrun (`Overrun`: `` `work` took 904.5 ms of its own (CPU) time (2283.7 ms
+of wall), over the 100 ms budget for one turn; … ``), and the message names the
+repair: `await scheduler.yield()` every few thousand items of a long loop
 ([the guide](contract-for-agents.md#data-requests-and-side-effects) shows one).
+A resource so refused keeps its last value and reads as pending, and is asked
+again at 250 ms, then at 1 s; a third overrun in a row fails it as any refusal
+does. A mutation's or a stream message's overrun is not asked again.
 The host asks a yielded answer again at once, in its place among the source's
 requests, with no work and no clock, so an agent's `clock settle` runs it to its
 end without moving the clock. The browser keeps no such budget and
@@ -1613,6 +1887,25 @@ commit coalesce to the newest, counted in `coalesced`. The end is
 `{type: 'error', kind, message, status}`: `kind` is `Network` (the far side
 closed: `the socket closed (1000)`), `Refused` (outside the grants), `Aborted`,
 or `Response` with the status and body of a reply that was not an event stream.
+
+For authentication, use the runnable [single-use ticket recipe](recipes/socket-ticket.md):
+an authorized HTTPS request obtains a ticket, and a second source opens its WSS
+stream. Each reconnect obtains another ticket.
+
+A socket can offer protocol names in preference order with
+`exactProtocols: ["events.v2", "events.v1"]` beside `exactStream` (LLP 1016.000).
+Rust calls `Request::get(url).protocols(["events.v2", "events.v1"])`, handles
+its `Result<Request, String>`, then passes the request to `Answer::stream`. Each name must be a
+nonempty [RFC 7230 token](https://www.rfc-editor.org/rfc/rfc7230#section-3.2.6),
+and duplicate names are refused by name before opening. Names are case-sensitive.
+The mapper's `event.protocol` (Rust `Message::protocol`) reports the selection
+on `open` and each message; receive-only hosts report it on each message.
+An omitted or empty list preserves an ordinary socket with an empty selection.
+If protocols were offered, a missing selection fails the connection, as does an
+unoffered selection, following the
+[WebSocket opening handshake](https://websockets.spec.whatwg.org/#opening-handshake).
+Do not put access tokens in protocol names: their alphabets differ, and the server
+echoes the selected protocol.
 
 A TypeScript source's `http:`/`https:` stream whose 2xx body is not
 `text/event-stream` is a **byte stream** (LLP 1016.000, the amendment of
@@ -3610,6 +3903,13 @@ mode presentation are stand-ins; archive fidelity needs the real extension.
 | `bun scripts/agent.mjs ios widget next-trains --family systemMedium --mode accented --scheme dark --size xxxl tree "screenshot target/widget.png" state` | Snapshot tree, the entry alone, and its props |
 | `bun scripts/agent.mjs macos widget next-trains tree state` | First declared family, full colour, light, large text |
 | `bun scripts/agent.mjs ios widget next-trains --epoch 2026-08-28T09:05:00Z "clock +600000" tree state` | Refresh and render at the app’s advanced clock |
+
+| `bun scripts/agent.mjs ios widget next-trains --configuration '{"rows":"one"}' "screenshot target/one.png" state` | A configured widget's render with that choice; `state` reports the `configuration` |
+
+A configured widget's cells render its defaults, then each other value of each
+parameter (the rest at their defaults) in full colour, light and dark;
+`--configuration <json>` names parameters and values over the defaults, and a name or
+value the configuration does not declare is refused with the ones it does.
 
 An immediate refresh answer supplies its first timeline entry. Pending, empty
 or unavailable data keeps the preview; `state` reports which. The gallery's

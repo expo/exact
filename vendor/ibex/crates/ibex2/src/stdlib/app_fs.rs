@@ -116,6 +116,12 @@ mod implementation {
         pub fn write_all(&mut self, _bytes: &[u8]) -> Result<(), HostError> {
             Err(unsupported())
         }
+        pub fn publish_if(
+            self,
+            _admit: impl FnOnce() -> Result<(), HostError>,
+        ) -> Result<(), HostError> {
+            Err(unsupported())
+        }
         pub fn publish(self) -> Result<(), HostError> {
             Err(unsupported())
         }

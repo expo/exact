@@ -208,6 +208,12 @@
       "description": "What the app does, in a sentence: the web manifest's `description`, which an install prompt or a store listing can show.",
       "type": "string"
     },
+    "categories": {
+      "description": "The W3C manifest's categories, which the web manifest carries: what the app is, for a store or catalog to file it under. Each is a W3C standardized category or one of Apple's, written without public.app-category.: developer-tools, graphics-design, reference, video and the game genres (dice-games, puzzle-games, ...). The Apple bundles' LSApplicationCategoryType (iOS and macOS) is the first that Apple has: fitness and health are healthcare-fitness, photo photography, social social-networking, and books, food, government, kids, magazines, navigation, personalization, politics, security and shopping have none. Absent: a game the game shell builds (game) is filed under games, any other app under none. An Apple category of games or a game genre turns Game Mode on (host.ios.gameMode, host.macos.gameMode).",
+      "type": "array",
+      "minItems": 1,
+      "items": { "enum": ["books", "business", "education", "entertainment", "finance", "fitness", "food", "games", "government", "health", "kids", "lifestyle", "magazines", "medical", "music", "navigation", "news", "personalization", "photo", "politics", "productivity", "security", "shopping", "social", "sports", "travel", "utilities", "weather", "developer-tools", "graphics-design", "reference", "video", "action-games", "adventure-games", "arcade-games", "board-games", "card-games", "casino-games", "dice-games", "educational-games", "family-games", "kids-games", "music-games", "puzzle-games", "racing-games", "role-playing-games", "simulation-games", "sports-games", "strategy-games", "trivia-games", "word-games"] }
+    },
     "privacy_policy": {
       "description": "The app's privacy policy, an https: URL: the one its App Store and Google Play listings name (LLP 1133.026 D4). HealthKit requires one, and Health Connect's permission screen links to it, so an app granting device.health-read without it is refused for Android (grant-privacy-policy) and warned for iOS.",
       "type": "string",
@@ -447,7 +453,47 @@
             },
             "description": "Optional watchOS families; defaults to the accessory families in families."
           },
-          "preview": { "type": "object" }
+          "preview": { "type": "object" },
+          "configuration": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "parameters"],
+            "description": "The person's choices in the Edit Widget sheet: WidgetKit's AppIntentConfiguration, its intent one parameter per row. A component reads the chosen values through `inject` with `snapshot_configuration: <shape>`, the shape one field per parameter (`string`, or an enum of exactly its values), at render as it reads the family's size; the refresh does not see them. Generated Swift, so a change needs a new binary.",
+            "properties": {
+              "title": { "type": "string", "description": "The intent's title (the Edit Widget sheet is headed by the widget's own title and description)." },
+              "description": { "type": "string", "description": "The intent's description; defaults to the title." },
+              "parameters": {
+                "type": "array",
+                "minItems": 1,
+                "description": "The sheet's rows, in order.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name", "title", "type", "values"],
+                  "properties": {
+                    "name": { "type": "string", "pattern": "^[a-z][A-Za-z0-9]*$", "description": "The configuration shape's field that carries the chosen value." },
+                    "title": { "type": "string", "description": "The row's label." },
+                    "type": { "type": "string", "enum": ["enum"], "description": "A fixed list of choices; data-backed options are not supported." },
+                    "values": {
+                      "type": "array",
+                      "minItems": 1,
+                      "description": "The choices, in the menu's order.",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["value", "title"],
+                        "properties": {
+                          "value": { "type": "string", "description": "What the render reads." },
+                          "title": { "type": "string", "description": "What the menu shows." }
+                        }
+                      }
+                    },
+                    "default": { "type": "string", "description": "One of the values: before the person chooses, and in previews. Defaults to the first." }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -709,6 +755,14 @@
                 }
               }
             },
+            "gameMode": {
+              "type": "boolean",
+              "description": "Whether iOS may turn Game Mode on while the app runs: priority on the CPU and GPU, lower Bluetooth latency for controllers and AirPods, and less background work (LSSupportsGameMode, iOS 18.6; GCSupportsGameMode for iOS 18.0 to 18.5, written when minimumOS is below 18.6). Absent: true for a game (an Apple category of games or a game genre in categories, or a game the game shell builds), else no key. false keeps Game Mode off for a game too light to need it."
+            },
+            "increasedMemoryLimit": {
+              "type": "boolean",
+              "description": "Sign com.apple.developer.kernel.increased-memory-limit: on the iPhone and iPad models that allow it, the app may use more memory than the default limit (iOS 15). The app must still work without it; os_proc_available_memory says what it has. A device build needs a profile whose App ID has Increased Memory Limit enabled, and is refused without one. Extensions, App Clips and tvOS never take it. Absent or false: the default limit."
+            },
             "webBrowser": {
               "type": "boolean",
               "description": "Opt in to Apple's managed default-browser role for the iOS app. Requires http and https in protocol_handlers and Apple's approval of com.apple.developer.web-browser in its provisioning profile. Extensions, App Clips and tvOS never inherit this role. distribution_only on the pair also limits the entitlement to distributed builds. Absent or false: no browser entitlement and no HTTP/HTTPS registration on iOS."
@@ -881,6 +935,10 @@
             "optimize": {
               "enum": ["speed", "size"],
               "description": "What a production build optimizes the Rust archive and ExactKit for (LLP 1047.001 D9): \"speed\" (opt-level 3, Swift -O) or \"size\" (opt-level z, Swift -Osize -internalize-at-link; on 2026-10-06 a one-text app's 9.8 MB was 6.2). Absent: speed for a Mac app, size for an embed (`build.mjs --embed`); a game keeps speed. Games refuse size because their generated Cargo workspace has no size profile. `build.mjs --optimize` overrides it."
+            },
+            "gameMode": {
+              "type": "boolean",
+              "description": "Whether macOS may turn Game Mode on while the app runs: priority on the CPU and GPU, lower Bluetooth latency for controllers and AirPods, and less background work (LSSupportsGameMode, macOS 26). Absent: true for a game (an Apple category of games or a game genre in categories, or a game the game shell builds), else no key. false keeps Game Mode off for a game too light to need it."
             },
             "oneTimeCodeAutofill": {
               "enum": ["marked"],

@@ -40,6 +40,7 @@ pub(crate) fn request_refusal(request: &exact_runner::Request) -> Option<&'stati
     }
     (request.ceiling_refusal())
         .or(request.timeout_refusal())
+        .or(request.protocols_refusal())
         .or(request.body_from_refusal())
         .or(request.body_to_refusal())
         .or(request.long_poll_refusal())
@@ -570,6 +571,10 @@ impl Batch {
     /// — a request the runner handed the host to run (LLP 1016 D2); the
     /// reply comes back through `exact_fulfill`.
     pub fn request(&mut self, r: &exact_runner::RequestOut) {
+        if let Err(message) = r.request.check_protocols() {
+            self.refuse(r.ticket, &message);
+            return;
+        }
         if let Some(message) = request_refusal(&r.request) {
             self.refuse(r.ticket, message);
             return;
@@ -654,6 +659,17 @@ impl Batch {
         }
         if let Some(ms) = r.request.timeout_ms {
             push_text!(&mut s, ",\"timeoutMs\":{}", ms);
+        }
+        if !r.request.protocols.is_empty() {
+            s.push_str(",\"protocols\":");
+            string_list(
+                &r.request
+                    .protocols
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                &mut s,
+            );
         }
         // `exactHeld` (LLP 1016.000 D9): the page lists it, and no clock waits on it.
         if r.request.is_held() {

@@ -804,7 +804,8 @@ impl Module {
     }
 
     /// The per-turn budget in milliseconds (its own time, `turn.rs`); a turn
-    /// over it is `Unavailable` and the resource keeps its last value.
+    /// over it is `DataError::Overrun`, and a resource keeps its last value
+    /// while the runner asks it again (`runner/src/runner/overrun.rs`).
     pub fn set_budget_ms(&mut self, ms: f64) {
         self.budget_ms = ms;
     }

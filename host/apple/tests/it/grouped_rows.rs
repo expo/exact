@@ -7,12 +7,17 @@ use exact_kernel::{GroupedMargins, MonospaceMeasurer};
 #[test]
 fn horizontal_padding_and_native_card_margins_each_reduce_the_row_once() {
     for direction in ["ltr", "rtl"] {
-        for style in ["plain", "inset-grouped"] {
+        for (style, padding_rem) in [
+            ("plain", 0.0),
+            ("plain", 4.5),
+            ("inset-grouped", 0.0),
+            ("inset-grouped", 4.5),
+        ] {
             let src = format!(
                 r#"component Form
   view
     column width=402 height=600 direction="{direction}"
-      list testId="list" appearance="auto" listStyle="{style}" flex=1 padding-left="4.5rem"
+      list testId="list" appearance="auto" listStyle="{style}" flex=1 padding-left="{padding_rem}rem"
         section
           row testId="row"
             view width=24 height=24
@@ -32,7 +37,7 @@ fn horizontal_padding_and_native_card_margins_each_reduce_the_row_once() {
             let row = view(&host, "row");
             for root_font in [230.0 / 13.5, 20.0] {
                 host.set_root_font_size(root_font);
-                let padding = (root_font * 4.5) as f32;
+                let padding = (root_font * padding_rem) as f32;
                 if style == "plain" {
                     let frame = host.runner().kernel().node(row).unwrap().frame;
                     assert!(
@@ -40,14 +45,7 @@ fn horizontal_padding_and_native_card_margins_each_reduce_the_row_once() {
                         "{style}, {direction}, padding {padding}: {frame:?}"
                     );
                 }
-                // Unequal card margins are LTR's alone: under RTL the kernel
-                // swaps them, padding or none (QUEUE.md).
-                let uneven = if direction == "ltr" {
-                    [20.0, 16.0]
-                } else {
-                    [16.0, 16.0]
-                };
-                for card in [[0.0, 0.0], uneven, [0.0, 0.0]] {
+                for card in [[0.0, 0.0], [20.0, 16.0], [16.0, 20.0], [0.0, 0.0]] {
                     let batch = host.set_claims(
                         &[],
                         &[],
@@ -69,6 +67,10 @@ fn horizontal_padding_and_native_card_margins_each_reduce_the_row_once() {
                         "{style}, {direction}, padding {padding}, card {card:?}: {frame:?}"
                     );
                     assert!((frame.x - padding - card[0]).abs() < 0.01, "{note}");
+                    assert!(
+                        (402.0 - frame.x - frame.width - card[1]).abs() < 0.01,
+                        "{note}"
+                    );
                     assert!(
                         (frame.width - (402.0 - padding - card[0] - card[1])).abs() < 0.01,
                         "{note}"

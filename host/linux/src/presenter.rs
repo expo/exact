@@ -1260,13 +1260,13 @@ impl<D: DataSource> Presenter<D> {
         self.scroll_end = Default::default();
         self.give_clock();
         self.modules_replaced();
-        // A new kernel may have the same epoch.
-        self.brush.paint_epoch = None;
+        self.brush.replaced();
         // A new runner reuses view ids and node keys: an unbound control's
         // own state, a choice or typed text (LLP 1069.001 D4), an edit to
-        // commit, a caret, an open menu, a hover, a held pointer or a GPU
-        // surface is not its tree's, as Apple's reset and the web's rebuilt
-        // page have it.
+        // commit, a caret, an open menu, a hover, a held pointer, a picker's
+        // answer or a GPU surface is not its tree's, as Apple's reset and
+        // the web's rebuilt page have it.
+        self.picks_replaced();
         self.chosen.clear();
         self.controls.clear();
         self.edited = None;

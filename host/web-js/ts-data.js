@@ -16,6 +16,7 @@ import { tsGrantSet } from './admission-data.js';
 import { sourceTypes } from './names.js';
 import { checkpoint, clock, commit, drive, inflight, journal, Origin, painted, R, Resources, time } from './rt.js';
 import { failureCode, failureReason, Shaped } from './shape.js';
+// What uploads a resource asks (uploads.js); with ts-fetch-refused.js no source can upload, and the build links none.
 import { ledger, requestKey } from './uploads.js';
 useFetch(sourceFetch);
 // The app's id is app.json's, which the build writes here; app.ts need not export one.

@@ -1,7 +1,7 @@
 //! LLP 1035.005.000 D7: RealWorld redirects after sign-in, publish and delete
 //! from its mutations' `then` actions (LLP 1016.001), not from a polling
-//! tick; the signed-out guard stays on the tick. Driven offline: every source
-//! answers later, and the test lands the replies.
+//! tick, and its signed-out guard is a task `me`'s answer arms. Driven
+//! offline: every source answers later, and the test lands the replies.
 use exact_kernel::Kernel;
 use exact_runner::{
     agent, Answer, DataError, DataSource, Outcome, Request, Response, Runner, Store, Value,
@@ -141,29 +141,44 @@ fn publish_opens_the_article_and_delete_goes_home() {
     assert_eq!(current(&r).0, "home");
 }
 
-#[test]
-fn the_signed_out_guard_stays_on_the_tick() {
-    // Your Feed, signed out: once `me` answers, the tick replaces the visit
-    // with the global feed, then pushes sign-in.
-    let mut r = boot("/?feed=following");
-    r.advance(100.0).unwrap();
-    assert_eq!(current(&r).1, "/?feed=following", "waits for `me`");
-    reply(&mut r, "me");
-    r.advance(200.0).unwrap();
-    assert_eq!(current(&r).0, "home");
-    r.advance(300.0).unwrap();
-    assert_eq!(current(&r).0, "login");
+/// Run every timer due now, as the host does once a frame.
+fn settle(r: &mut Runner<Api>) {
+    while let Some(due) = r.timer_due_ms().filter(|&due| due <= r.now_ms() + 1.0) {
+        r.advance(due).unwrap();
+    }
 }
 
 #[test]
-fn the_signed_out_guard_keeps_a_push_when_following_is_revisited_between_ticks() {
+fn the_signed_out_guard_waits_for_me_and_needs_no_tick() {
+    // Your Feed, signed out: nothing until `me` answers; then the visit gives
+    // up its query, and sign-in is pushed after it.
+    let mut r = boot("/?feed=following");
+    assert_eq!(r.timer_due_ms(), None, "no polling tick");
+    r.advance(1000.0).unwrap();
+    assert_eq!(current(&r).1, "/?feed=following", "waits for `me`");
+    reply(&mut r, "me");
+    settle(&mut r);
+    assert_eq!(current(&r).0, "login");
+    r.act("back", vec![]).unwrap();
+    assert_eq!(current(&r).1, "/");
+    // Settings and the editor need a reader too: sign-in takes their place.
+    for at in ["/settings", "/editor", "/editor/my-post"] {
+        let mut r = boot(at);
+        reply(&mut r, "me");
+        settle(&mut r);
+        assert_eq!(current(&r).0, "login", "{at}");
+    }
+}
+
+#[test]
+fn the_signed_out_guard_keeps_a_push_when_following_is_revisited_before_it_lands() {
     let mut r = boot("/?feed=following");
     reply(&mut r, "me");
-    r.advance(100.0).unwrap();
+    r.advance(r.timer_due_ms().unwrap()).unwrap();
     assert_eq!(current(&r).1, "/");
     r.act("followLink", vec![Value::str("/?feed=following")])
         .unwrap();
-    r.advance(200.0).unwrap();
+    settle(&mut r);
     assert_eq!(current(&r).0, "login");
     r.act("back", vec![]).unwrap();
     assert_eq!(current(&r).1, "/?feed=following");

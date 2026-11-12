@@ -107,6 +107,7 @@ routes nav
   recipeSnapbackAuth "/recipes/snapback-auth" render=build activate=idle
   recipeSnapbackTests "/recipes/snapback-tests" render=build activate=idle
   recipeSnapback "/recipes/snapback" render=build activate=idle
+  recipeSocketTicket "/recipes/socket-ticket" render=build activate=idle
   recipeSymbols "/recipes/symbols" render=build activate=idle
   recipeTabs "/recipes/tabs" render=build activate=idle
   recipeTamber "/recipes/tamber" render=build activate=idle

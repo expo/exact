@@ -14,12 +14,9 @@
 //! one's late events.
 use super::{
     body, bounded_outcome, failed, fetch_failure, fetch_request, handoff, retained,
-    scoped_bindings, Completed, Job, Running, Shared, State, StreamHost, BYTES, MAX_BODY,
-    MAX_HEADERS,
+    scoped_bindings, Completed, Job, Running, Shared, State, StreamHost, BYTES, MAX_HEADERS,
 };
-use exact_runner::{
-    FailureKind, HttpScheduling, Outcome, Reply, Request, Response, Work as OwnedWork,
-};
+use exact_runner::{FailureKind, Outcome, Reply, Request, Response, Work as OwnedWork};
 use ibex2::boundary::HostError;
 use ibex2::stdlib::abort::{AbortController, AbortRegistration};
 use ibex2::stdlib::fetch_async::{
@@ -32,16 +29,38 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[path = "executor_timer.rs"]
-mod timer;
+pub(super) mod timer;
+#[cfg(test)]
+use super::MAX_BODY;
 use timer::Timer;
+#[path = "executor_async_body_to.rs"]
+mod body_to;
+pub(super) use body_to::release_count;
 #[path = "executor_async_file.rs"]
 mod file;
+#[path = "executor_async_http.rs"]
+mod http;
 #[cfg(test)]
 pub(super) use file::ReaderPhase;
+#[cfg(test)]
+#[path = "executor_async_cache_tests.rs"]
+mod cache_tests;
+#[cfg(test)]
+#[path = "executor_async_read_tests.rs"]
+mod read_tests;
+#[cfg(test)]
+#[path = "executor_redirect_tests.rs"]
+mod redirect_tests;
+#[cfg(test)]
+#[path = "executor_async_retire_tests.rs"]
+mod retire_tests;
+#[path = "executor_async_retire.rs"]
+mod retirement;
 #[path = "executor_workers.rs"]
 mod workers;
+pub(super) use retirement::external_end;
 
-/// Resumed independent HTTP exchanges at once, the session's per-host
+/// Resumed HTTP exchanges on the shared transport, the session's per-host
 /// connection limit too (LLP 1120 D2, D5): HTTP/2 multiplexes them.
 pub(super) const IN_FLIGHT: usize = super::build_number(option_env!("EXACT_HTTP_IN_FLIGHT"), 32);
 /// HTTP/1.1 exchanges the core resumes per origin per lane until one there
@@ -65,6 +84,8 @@ pub(super) enum Claim {
     None,
     /// Its own outcome: a fetch's, a closure's, a handoff's, a refusal.
     Answered,
+    /// A file rename has begun; its result wins over a later cancellation.
+    Publishing,
     /// Its deadline.
     Timeout,
     /// A forget that cancelled a safe read.
@@ -87,7 +108,8 @@ fn claim(state: &mut State, run: Run, claim: Claim) -> bool {
 pub(super) struct Book {
     /// The portable blocking adapter retains one additional upload copy.
     pub(super) portable: [bool; 2],
-    /// Live independent HTTP exchanges, and places held for ones about to
+    pub(super) retiring: bool,
+    /// Live HTTP exchanges on the shared transport, and places held for ones about to
     /// start: the in-flight cap's count.
     in_flight: usize,
     /// Live HTTP/1.1 exchanges per origin, per lane, with places held.
@@ -96,13 +118,16 @@ pub(super) struct Book {
     pub(super) multiplexed: [HashSet<String>; 2],
     /// The ordered lane's one blocking job is in flight.
     blocking: bool,
-    /// Exchanges waiting for the starter: a redirect's next hop, an
-    /// upload's first, each with its origin when it is known now.
+    /// File replies retain their lane place through publish or cleanup (LLP 1162 D1).
+    downloads: HashSet<Run>,
+    /// Admission places retained until physical cleanup ends.
+    held_counts: HashSet<Run>,
+    /// Each ended hop's places wait for the destination's physical release.
+    download_ends: HashMap<Run, Vec<(usize, String, bool)>>,
+    /// Redirects and uploads waiting for admission at their destination origin.
     hops: [VecDeque<Hop>; 2],
-    /// Places held for a run's next hop, from the starter's choice until
-    /// its transport starts it: the in-flight one, and the origin's when
-    /// known.
-    reserved: HashMap<Run, Option<String>>,
+    /// Places held from selection until transport preparation consumes them.
+    reserved: HashMap<Run, (usize, String)>,
     /// Upload bytes charged per run, released once the lent buffer has
     /// gone and the run has physically ended (D5).
     uploads: HashMap<Run, Charged>,
@@ -117,11 +142,12 @@ pub(super) struct Book {
     sizing: [Option<Run>; 2],
     /// A sizing reader waiting for the finisher's decision.
     deciders: HashMap<Run, mpsc::Sender<Decision>>,
+    readers: HashSet<Run>,
     /// The last run's generation.
     generation: u64,
     /// Work let go under the lock (an exchange whose run settled, with an
     /// upload's bytes): destroyed by the disposer, never under the lock.
-    trash: Vec<Box<dyn Send>>,
+    pub(super) trash: Vec<Box<dyn Send>>,
 }
 
 impl Book {
@@ -164,7 +190,7 @@ impl Book {
 /// An exchange for the starter to start.
 struct Hop {
     run: Run,
-    origin: Option<String>,
+    origin: String,
     start: Start,
 }
 
@@ -202,7 +228,6 @@ struct FileJob {
     limit: usize,
     abort: AbortController,
     retiring: AbortRegistration,
-    transport: Arc<dyn AsyncTransport>,
     fetch: ibex2::host::Fetch,
 }
 
@@ -225,19 +250,20 @@ type Lane = (Arc<dyn AsyncTransport>, ibex2::host::Fetch);
 enum Event {
     /// A run's outcome: a fetch's, a closure's, a handoff's, the timer's.
     Outcome(Run, Done),
-    /// Something physical of a run ended: a hop (with the origin it
-    /// counted, and whether it sent the upload), a reader, a start.
-    Ended(Run, Option<String>, bool),
+    /// A hop's end names its own transport lane and origin: a later hop may
+    /// have changed routes (LLP 1162 D1). Readers and starts have no origin.
+    Ended(Run, Option<(usize, String)>, bool, bool),
+    ReaderEnded(Run),
     /// A charged upload buffer's last release, including queued disposal.
     Released(Run),
     /// An origin's protocol, from a hop's metrics.
-    Protocol(String, String),
+    Protocol(usize, String, String),
     /// A sizing reader's answer.
     Sized(Run, Result<u64, Outcome>),
     /// A reader's file, or why not (`None`: it grew past its charge).
     Read(Run, Result<Vec<u8>, Option<Outcome>>),
     /// A redirect's next hop.
-    Hop(Run, Box<dyn FnOnce() + Send>),
+    Hop(Run, String, Box<dyn FnOnce() + Send>),
 }
 
 enum Done {
@@ -254,17 +280,20 @@ enum Done {
 pub(super) struct Machine {
     shared: Arc<Shared>,
     worker_budget: Arc<workers::Budget>,
-    transports: [Option<Lane>; 2],
+    transports: Mutex<[Option<Lane>; 2]>,
     /// Why a request is refused on a lane with no transport.
     unbound: String,
     finishers: [Mutex<Option<mpsc::Sender<Event>>>; 2],
-    timer: Timer,
+    threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    pub(super) timer: Arc<Timer>,
     grants: String,
     host: StreamHost,
     /// Retired: a starter starts nothing more.
     retired: AtomicBool,
     #[cfg(test)]
     pub(super) reader_hook: Mutex<Option<file::ReaderHook>>,
+    #[cfg(test)]
+    pub(super) body_to_hook: Mutex<Option<body_to::Hook>>,
 }
 
 /// How a lane's transport is made from its owner's bindings.
@@ -304,16 +333,19 @@ impl Machine {
         let transports = [transport(0, ordered), transport(1, independent)];
         Arc::new(Machine {
             shared,
-            transports,
+            transports: Mutex::new(transports),
             worker_budget,
             unbound,
             finishers: [Mutex::new(None), Mutex::new(None)],
-            timer: Timer::default(),
+            threads: Mutex::new(Vec::new()),
+            timer: Arc::new(Timer::default()),
             grants: grants.to_string(),
             host,
             retired: AtomicBool::new(false),
             #[cfg(test)]
             reader_hook: Mutex::new(None),
+            #[cfg(test)]
+            body_to_hook: Mutex::new(None),
         })
     }
 
@@ -325,14 +357,18 @@ impl Machine {
         let mut ok = true;
         let mut spawn = |name: String, body: Box<dyn FnOnce() + Send>| {
             let slot = slots.next();
-            ok &= workers::spawn(
+            let disposer = name == "exact-dispose";
+            match workers::spawn(
                 name,
                 Box::new(move || {
                     let _slot = slot;
                     body()
                 }),
-            )
-            .is_ok();
+            ) {
+                Ok(thread) if !disposer => self.threads.lock().unwrap().push(thread),
+                Ok(_) => {}
+                Err(_) => ok = false,
+            }
         };
         for lane in 0..2 {
             let (send, receive) = mpsc::channel();
@@ -354,24 +390,13 @@ impl Machine {
         spawn("exact-dispose".into(), Box::new(move || m.disposer()));
         if ok {
             *self.worker_budget.0.lock().unwrap() = slots.collect();
+        } else {
+            for f in &self.finishers {
+                f.lock().unwrap().take();
+            }
+            self.threads.lock().unwrap().clear();
         }
         ok
-    }
-
-    /// Retirement: nothing more starts, the finishers' channels close, the
-    /// timer stops, and readers waiting for a decision are let go.
-    pub(super) fn retire(&self) {
-        self.stop(&mut self.shared.state.lock().unwrap());
-    }
-
-    /// `retire`, with the state lock held.
-    pub(super) fn stop(&self, state: &mut State) {
-        self.retired.store(true, Ordering::Release);
-        for f in &self.finishers {
-            f.lock().unwrap().take();
-        }
-        self.timer.stop();
-        state.book.deciders.clear();
     }
 
     /// `run`'s own outcome, claimed now and published by the finisher.
@@ -443,9 +468,6 @@ impl Machine {
         // Waiting exchanges first: their requests already run.
         let mut at = 0;
         while at < state.book.hops[lane].len() {
-            if lane == 1 && state.book.in_flight >= IN_FLIGHT {
-                break;
-            }
             let run = state.book.hops[lane][at].run;
             if !state
                 .running
@@ -457,19 +479,31 @@ impl Machine {
                 state.book.trash.push(Box::new(hop.start));
                 continue;
             }
+            let r = find(&mut state.running, run).expect("open");
+            let previous_lane = r.transport_lane;
+            let overlap = r.overlap;
             let hop = &state.book.hops[lane][at];
-            if hop
-                .origin
-                .as_deref()
-                .is_some_and(|o| at_limit(state, lane, o))
+            // LLP 1162 D1: every shared hop can fall back when held independent
+            // exchanges occupy its adapter. An ordered route keeps its slot.
+            let transport_lane = if lane == 0 && overlap && previous_lane == 1 {
+                shared_route(state, &hop.origin)
+            } else {
+                previous_lane
+            };
+            if (transport_lane == 0 && previous_lane != 0 && state.book.blocking)
+                || (transport_lane == 1 && state.book.in_flight >= IN_FLIGHT)
+                || at_limit(state, transport_lane, &hop.origin)
             {
                 at += 1;
                 continue;
             }
             let hop = state.book.hops[lane].remove(at).expect("index");
-            hold(&mut state.book, lane, hop.run, hop.origin);
+            hold(&mut state.book, transport_lane, hop.run, hop.origin);
             // The start holds its run until it has run (`starter`).
-            find(&mut state.running, hop.run).expect("open").live += 1;
+            let r = find(&mut state.running, hop.run).expect("open");
+            r.transport_lane = transport_lane;
+            r.live += 1;
+            state.book.blocking |= lane == 0 && transport_lane == 0;
             starts.push((hop.run, hop.start));
         }
         let mut index = 0;
@@ -486,12 +520,11 @@ impl Machine {
                 index += 1;
                 continue;
             }
+            // Only a read passes one that waits for a launch reply (LLP 1162.000 D1).
             if lane == 0
                 && ((index > 0 && job.class != exact_runner::RequestClass::Read)
-                    || state.book.blocking)
+                    || !super::reads::can_start(state, job))
             {
-                // One blocking job; a handoff only while none runs; nothing
-                // passes the head.
                 break;
             }
             let exchange = kind == Kind::Http && job.request.body_from.is_none();
@@ -502,14 +535,22 @@ impl Machine {
             {
                 break;
             }
-            if exchange && lane == 1 && state.book.in_flight >= IN_FLIGHT {
+            let transport_lane = if lane == 0 && job.overlap {
+                shared_route(state, &origin(&job.request.url))
+            } else {
+                lane
+            };
+            if transport_lane == 0 && state.book.blocking {
+                break;
+            }
+            if exchange && transport_lane == 1 && state.book.in_flight >= IN_FLIGHT {
                 break;
             }
             // A head short of bytes waits and is not passed over.
             if !fits(state, lane, job, kind) {
                 break;
             }
-            if exchange && at_limit(state, lane, &origin(&job.request.url)) {
+            if exchange && at_limit(state, transport_lane, &origin(&job.request.url)) {
                 // The independent lane passes over a head at its origin's
                 // HTTP/1.1 limit; the ordered one waits for it (D3).
                 if lane == 0 {
@@ -518,11 +559,8 @@ impl Machine {
                 index += 1;
                 continue;
             }
-            let start = self.take(state, lane, index, kind);
+            let start = self.take(state, lane, transport_lane, index, kind);
             starts.push(start);
-            if lane == 0 && kind != Kind::Handoff {
-                break;
-            }
             // From the head again: a head passed over may no longer fit.
             index = 0;
         }
@@ -531,7 +569,14 @@ impl Machine {
 
     /// Move job `index`, which fits, into `running`, charged, and say how
     /// it starts.
-    fn take(&self, state: &mut State, lane: usize, index: usize, kind: Kind) -> (Run, Start) {
+    fn take(
+        &self,
+        state: &mut State,
+        lane: usize,
+        transport_lane: usize,
+        index: usize,
+        kind: Kind,
+    ) -> (Run, Start) {
         let job = state.jobs[lane].remove(index).expect("index");
         let mut job = job;
         let (more, upload) = charge(&state.book, lane, &job, kind);
@@ -539,6 +584,9 @@ impl Machine {
         state.bytes[lane] += more + upload;
         state.book.generation += 1;
         let run = (job.ticket, state.book.generation);
+        if job.request.body_to.is_some() {
+            state.book.downloads.insert(run);
+        }
         let sized = state.book.sized.remove(&job.ticket).is_some();
         if kind == Kind::Http && job.request.body_from.is_some() && !sized {
             state.book.sizing[lane] = Some(run);
@@ -547,15 +595,21 @@ impl Machine {
             state.book.uploads.insert(run, Charged::new(lane, upload));
         }
         if kind == Kind::Http && job.request.body_from.is_none() {
-            hold(&mut state.book, lane, run, Some(origin(&job.request.url)));
+            hold(
+                &mut state.book,
+                transport_lane,
+                run,
+                origin(&job.request.url),
+            );
         }
-        let blocking = lane == 0 && kind != Kind::Handoff;
-        state.book.blocking |= blocking;
+        let blocking = lane == 0;
+        state.book.blocking |= blocking && transport_lane == 0;
         let abort = AbortController::new();
         state.running.push(Running {
             started: Instant::now(),
             ticket: job.ticket,
             lane,
+            transport_lane,
             charge: job.charge,
             limit: job.limit,
             // Only an exchange is cancelled by a forget (a safe read's).
@@ -566,7 +620,7 @@ impl Machine {
             stream: false,
             waiting: false,
             read: lane == 0 && super::reads::safe_read(&job.request, job.work.is_some(), job.class),
-            overlap: false,
+            overlap: job.overlap,
             class: job.class,
             terminal: false,
             // The start holds its run until it has run (`starter`).
@@ -644,6 +698,12 @@ impl Machine {
                 // The call is physical work until it returns, even when its
                 // reply comes inside it: the start's hold covers it.
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hand(reply)));
+                let mut state = self.shared.state.lock().unwrap();
+                if let Some(r) = find(&mut state.running, run).filter(|r| r.blocking) {
+                    r.blocking = false;
+                    state.book.blocking = false;
+                }
+                self.shared.ready.notify_all();
             }
             Kind::Closure => {
                 // Run here (a driver fault's, a continuation, storage): the
@@ -671,133 +731,6 @@ impl Machine {
         }
     }
 
-    /// An HTTP job: its file sized or read, or its fetch started on the
-    /// lane's transport.
-    #[allow(clippy::too_many_arguments)]
-    fn http(
-        self: &Arc<Self>,
-        lane: usize,
-        run: Run,
-        request: Request,
-        forced: bool,
-        sized: bool,
-        abort: AbortController,
-        retiring: AbortRegistration,
-        scoped: Option<ibex2::host::Fetch>,
-    ) {
-        let refuse = |outcome| self.answer(lane, run, outcome);
-        if abort.signal().aborted() {
-            return refuse(failed(FailureKind::Aborted, "native request aborted"));
-        }
-        if let Some(why) = request.timeout_refusal().or(request.long_poll_refusal()) {
-            return refuse(failed(FailureKind::Refused, why));
-        }
-        // Writing a body to a file is the workers' (`executor_body_to.rs`) until this core has it.
-        if request.body_to.is_some() {
-            let why = "exactBodyTo: not on the asynchronous executor (EXACT_HTTP_ASYNC) yet";
-            return refuse(failed(FailureKind::Unsupported, why));
-        }
-        let Some((transport, fetch)) = &self.transports[lane] else {
-            return refuse(failed(FailureKind::Refused, self.unbound.clone()));
-        };
-        let fetch =
-            super::reach::gate_fetch(scoped.unwrap_or_else(|| fetch.clone()), request.reach);
-        let transport = transport.clone();
-        let limit = match request.http {
-            HttpScheduling::Ordered => MAX_BODY,
-            HttpScheduling::Independent { max_response_bytes } => max_response_bytes as usize,
-        };
-        if request.body_from.is_some() {
-            let file = FileJob {
-                request,
-                forced,
-                limit,
-                abort,
-                retiring,
-                transport,
-                fetch,
-            };
-            return self.file(lane, run, file, sized);
-        }
-        // The deadline arms when the task is resumed (D3), in `Tracked`.
-        let deadline = request.timeout_ms.map(|ms| (ms, abort.clone()));
-        self.fetch(
-            lane, run, request, None, forced, abort, retiring, limit, transport, fetch, deadline,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn fetch(
-        self: &Arc<Self>,
-        lane: usize,
-        run: Run,
-        request: Request,
-        upload: Option<Arc<Upload>>,
-        forced: bool,
-        abort: AbortController,
-        retiring: AbortRegistration,
-        limit: usize,
-        transport: Arc<dyn AsyncTransport>,
-        fetch: ibex2::host::Fetch,
-        deadline: Option<(u32, AbortController)>,
-    ) {
-        let timeout = request.timeout_ms;
-        let mut req = fetch_request(request, forced);
-        super::cache::observe(&self.shared, &mut req);
-        req.max_body = Some(limit);
-        // The platform's idle timeout follows the deadline a second later,
-        // as on the workers.
-        req.timeout = timeout.map(|ms| Duration::from_millis(u64::from(ms) + 1_000));
-        let tracked = Arc::new(Tracked {
-            inner: transport,
-            machine: self.clone(),
-            lane,
-            run,
-            deadline: Mutex::new(deadline),
-        });
-        let retry = super::cache::retry_request(&self.shared, run.0, &req).map(|request| {
-            let (fetch, tracked, upload, signal) = (
-                fetch.clone(),
-                tracked.clone(),
-                upload.clone(),
-                abort.signal(),
-            );
-            Box::new(move |events: Arc<Events>| {
-                fetch.start_async(
-                    tracked,
-                    request,
-                    upload,
-                    signal,
-                    HeaderCaps {
-                        bytes: MAX_HEADERS,
-                        entries: 1024,
-                    },
-                    events,
-                );
-            }) as Retry
-        });
-        let events = Arc::new_cyclic(|this| Events {
-            machine: self.clone(),
-            lane,
-            run,
-            limit,
-            this: this.clone(),
-            retry: Mutex::new(retry),
-            _retiring: Mutex::new(Some(retiring)),
-        });
-        fetch.start_async(
-            tracked,
-            req,
-            upload,
-            abort.signal(),
-            HeaderCaps {
-                bytes: MAX_HEADERS,
-                entries: 1024,
-            },
-            events,
-        );
-    }
-
     // ---- the finisher ----
 
     fn finisher(self: Arc<Self>, lane: usize, events: mpsc::Receiver<Event>) {
@@ -805,16 +738,17 @@ impl Machine {
             let after = {
                 let mut state = self.shared.state.lock().unwrap();
                 if state.retired {
-                    return;
+                    self.apply_retired(&mut state, lane, event)
+                } else {
+                    self.apply(&mut state, lane, event)
                 }
-                self.apply(&mut state, lane, event)
             };
             if let Some(after) = after {
                 after(&self);
             }
             // What it settled or ended may have freed the independent lane
             // room an upload waits for (LLP 1016.000 D10).
-            if lane == 1 {
+            if lane == 1 && !self.retired.load(Ordering::Acquire) {
                 super::stream::start_uploads(&self.shared);
             }
             #[cfg(test)]
@@ -861,18 +795,34 @@ impl Machine {
                 };
                 Some(self.settled(state, run, outcome))
             }
-            Event::Ended(run, origin, sent) => {
-                if let Some(origin) = origin {
-                    unreserve(&mut state.book, lane, Some(&origin));
-                }
-                if let Some(u) = state.book.uploads.get_mut(&run).filter(|_| sent) {
-                    u.hops -= 1;
+            Event::Ended(run, origin, sent, final_hop) => {
+                if let Some((transport_lane, origin)) = origin {
+                    let deferred = state.book.downloads.contains(&run)
+                        && (final_hop
+                            || find(&mut state.running, run)
+                                .is_some_and(|r| r.claim != Claim::None));
+                    if deferred {
+                        state.book.download_ends.entry(run).or_default().push((
+                            transport_lane,
+                            origin,
+                            sent,
+                        ));
+                    } else {
+                        unreserve(&mut state.book, transport_lane, &origin);
+                        if let Some(u) = state.book.uploads.get_mut(&run).filter(|_| sent) {
+                            u.hops -= 1;
+                        }
+                    }
                 }
                 if let Some(r) = find(&mut state.running, run) {
                     r.live -= 1;
                 }
                 physical(state, run);
                 None
+            }
+            Event::ReaderEnded(run) => {
+                state.book.readers.remove(&run);
+                self.apply(state, lane, Event::Ended(run, None, false, false))
             }
             Event::Released(run) => {
                 if let Some(u) = state.book.uploads.get_mut(&run) {
@@ -881,17 +831,17 @@ impl Machine {
                 release_upload(state, run);
                 None
             }
-            Event::Protocol(origin, protocol) => {
+            Event::Protocol(transport_lane, origin, protocol) => {
                 if matches!(protocol.as_str(), "h2" | "h3") {
-                    state.book.multiplexed[lane].insert(origin);
+                    state.book.multiplexed[transport_lane].insert(origin);
                 } else {
-                    state.book.multiplexed[lane].remove(&origin);
+                    state.book.multiplexed[transport_lane].remove(&origin);
                 }
                 None
             }
             Event::Sized(run, size) => self.sized(state, lane, run, size),
             Event::Read(run, read) => self.read(state, lane, run, read),
-            Event::Hop(run, start) => {
+            Event::Hop(run, url, start) => {
                 let open = find(&mut state.running, run)
                     .is_some_and(|r| !r.terminal && r.claim == Claim::None);
                 if !open {
@@ -900,7 +850,7 @@ impl Machine {
                 }
                 state.book.hops[lane].push_back(Hop {
                     run,
-                    origin: None,
+                    origin: origin(&url),
                     start: Box::new(move |_| start()),
                 });
                 None
@@ -940,7 +890,20 @@ impl Machine {
             // outcome settles the run, whatever is already queued.
             let claimed = {
                 let mut state = self.shared.state.lock().unwrap();
-                claim(&mut state, entry.run, Claim::Timeout)
+                if entry.run.1 == 0 {
+                    if !state.retired {
+                        super::forget::expire_queued(
+                            &self.shared,
+                            &mut state,
+                            entry.lane,
+                            entry.run.0,
+                            entry.ms,
+                        );
+                    }
+                    false
+                } else {
+                    claim(&mut state, entry.run, Claim::Timeout)
+                }
             };
             if !claimed {
                 continue;
@@ -950,33 +913,6 @@ impl Machine {
                 Event::Outcome(entry.run, Done::Timeout(entry.ms)),
             );
             entry.abort.abort();
-        }
-    }
-
-    fn disposer(self: Arc<Self>) {
-        let mut state = self.shared.state.lock().unwrap();
-        loop {
-            if state.retired {
-                let discarded = std::mem::take(&mut state.discard);
-                let abandoned = std::mem::take(&mut state.jobs);
-                let fenced = std::mem::take(&mut state.fenced);
-                let hops = std::mem::take(&mut state.book.hops);
-                let files = std::mem::take(&mut state.book.files);
-                let trash = std::mem::take(&mut state.book.trash);
-                state.book.deciders.clear();
-                drop(state);
-                drop((discarded, abandoned, fenced, hops, files, trash));
-                return;
-            }
-            if !state.discard.is_empty() || !state.book.trash.is_empty() {
-                let discarded = std::mem::take(&mut state.discard);
-                let trash = std::mem::take(&mut state.book.trash);
-                drop(state);
-                drop((discarded, trash));
-                state = self.shared.state.lock().unwrap();
-                continue;
-            }
-            state = self.shared.ready.wait(state).unwrap();
         }
     }
 }
@@ -1076,26 +1012,31 @@ fn fits(state: &State, lane: usize, job: &Job, kind: Kind) -> bool {
     more + upload <= BYTES[lane].saturating_sub(state.bytes[lane])
 }
 
-/// Hold `run`'s next exchange's places: the in-flight one, and its
-/// origin's when known (a redirect's is known when it starts).
-fn hold(book: &mut Book, lane: usize, run: Run, origin: Option<String>) {
-    if let Some(origin) = &origin {
-        *book.origins[lane].entry(origin.clone()).or_default() += 1;
-    }
+/// The same shared admission for a read's first hop and its redirects (LLP 1162 D1).
+fn shared_route(state: &State, origin: &str) -> usize {
+    let capacity = if state.book.portable[1] {
+        IN_FLIGHT.min(super::INDEPENDENT)
+    } else {
+        IN_FLIGHT
+    };
+    usize::from(state.book.in_flight < capacity && !at_limit(state, 1, origin))
+}
+
+/// Hold the exchange's shared and origin places before its start can run.
+fn hold(book: &mut Book, lane: usize, run: Run, origin: String) {
+    *book.origins[lane].entry(origin.clone()).or_default() += 1;
     if lane == 1 {
         book.in_flight += 1;
     }
-    book.reserved.insert(run, origin);
+    book.reserved.insert(run, (lane, origin));
 }
 
-/// Give back one exchange's in-flight place and its origin's, if counted.
-fn unreserve(book: &mut Book, lane: usize, origin: Option<&str>) {
-    if let Some(origin) = origin {
-        if let Some(n) = book.origins[lane].get_mut(origin) {
-            *n -= 1;
-            if *n == 0 {
-                book.origins[lane].remove(origin);
-            }
+/// Give back one exchange's shared and origin places on its actual transport.
+fn unreserve(book: &mut Book, lane: usize, origin: &str) {
+    if let Some(n) = book.origins[lane].get_mut(origin) {
+        *n -= 1;
+        if *n == 0 {
+            book.origins[lane].remove(origin);
         }
     }
     if lane == 1 {
@@ -1173,16 +1114,23 @@ fn settle(state: &mut State, run: Run, outcome: Outcome) {
         .duration_since(r.started)
         .as_millis()
         .min(u128::from(u64::MAX)) as u64;
-    if r.blocking {
+    let slot = r.blocking && r.transport_lane == 0 && !state.book.downloads.contains(&run);
+    if !state.book.downloads.contains(&run) {
         r.blocking = false;
+    }
+    if slot {
         state.book.blocking = false;
     }
     let outcome = bounded_outcome(outcome, limit);
     super::cache::invalidate(state, invalidates.as_ref(), &outcome);
     if forgotten {
         state.book.trash.push(Box::new(outcome));
-        state.counts[lane] -= 1;
-        find(&mut state.running, run).expect("found").drained = true;
+        if release_count(
+            &mut state.book,
+            find(&mut state.running, run).expect("found"),
+        ) {
+            state.counts[lane] -= 1;
+        }
     } else {
         state.light += usize::from(read);
         state.completed[lane].push_back(Completed {
@@ -1202,7 +1150,11 @@ fn settle(state: &mut State, run: Run, outcome: Outcome) {
     }
     physical(state, run);
     super::cache::serve_ready(state);
-    if super::has_ready(state) || (lane == 0 && state.counts[0] == 0) {
+    if super::has_ready(state)
+        || (lane == 0 && state.counts[0] == 0)
+        || (read && !state.ordered_barrier && !state.fenced.is_empty())
+        || (forgotten && lane == 0 && !state.fenced.is_empty())
+    {
         super::wake(state);
     }
 }
@@ -1223,13 +1175,33 @@ fn physical(state: &mut State, run: Run) {
         return;
     }
     let r = state.running.swap_remove(at);
+    state.book.downloads.remove(&run);
+    if r.blocking && r.transport_lane == 0 {
+        state.book.blocking = false;
+    }
     let lane = r.lane;
+    if state.book.held_counts.remove(&run) {
+        state.counts[lane] -= 1;
+        if super::has_ready(state)
+            || (lane == 0 && (state.counts[0] == 0 || !state.fenced.is_empty()))
+        {
+            super::wake(state);
+        }
+    }
+    if let Some(ends) = state.book.download_ends.remove(&run) {
+        for (transport_lane, origin, sent) in ends {
+            unreserve(&mut state.book, transport_lane, &origin);
+            if let Some(u) = state.book.uploads.get_mut(&run).filter(|_| sent) {
+                u.hops -= 1;
+            }
+        }
+    }
     if state.book.sizing[lane] == Some(run) {
         state.book.sizing[lane] = None;
     }
     // An exchange chosen that never started gives back its places.
-    if let Some(origin) = state.book.reserved.remove(&run) {
-        unreserve(&mut state.book, lane, origin.as_deref());
+    if let Some((transport_lane, origin)) = state.book.reserved.remove(&run) {
+        unreserve(&mut state.book, transport_lane, &origin);
     }
     let (gone, kept): (VecDeque<Hop>, VecDeque<Hop>) = std::mem::take(&mut state.book.hops[lane])
         .into_iter()
@@ -1284,101 +1256,25 @@ fn release_upload(state: &mut State, run: Run) {
     }
 }
 
-/// The lane's transport, counting each hop it starts: the in-flight cap,
-/// the per-origin limit, the run's live count (D3, D5). Its first hop arms
-/// the deadline, when the task is resumed.
-struct Tracked {
-    inner: Arc<dyn AsyncTransport>,
-    machine: Arc<Machine>,
-    lane: usize,
-    run: Run,
-    deadline: Mutex<Option<(u32, AbortController)>>,
-}
-
-#[path = "executor_metrics.rs"]
-mod metrics_log;
-#[path = "executor_async_transport.rs"]
-mod tracked_transport;
-
-type Retry = Box<dyn FnOnce(Arc<Events>) + Send>;
-
-/// A fetch's events, to its lane's finisher.
-struct Events {
-    machine: Arc<Machine>,
-    lane: usize,
-    run: Run,
-    /// The response ceiling, which names an over-limit failure.
-    limit: usize,
-    this: std::sync::Weak<Events>,
-    retry: Mutex<Option<Retry>>,
-    /// Retirement's abort registration, held for the fetch's life.
-    _retiring: Mutex<Option<AbortRegistration>>,
-}
-
-impl FetchEvents for Events {
-    fn outcome(&self, result: Result<Collected, HostError>) {
-        let (retry, accepted) = {
-            let state = &mut self.machine.shared.state.lock().unwrap();
-            let open = find(&mut state.running, self.run)
-                .is_some_and(|r| !r.terminal && r.claim == Claim::None);
-            let retry = open
-                && result
-                    .as_ref()
-                    .is_ok_and(|r| super::cache::retry(state, self.run.0, r.status, r.redirected));
-            (retry, !retry && claim(state, self.run, Claim::Answered))
-        };
-        if retry {
-            let retry = self
-                .retry
-                .lock()
-                .unwrap()
-                .take()
-                .expect("a cache conditional");
-            let events = self.this.upgrade().expect("live fetch events");
-            self.next_hop(Box::new(move || retry(events)));
-        } else if accepted {
-            self.machine.post(
-                self.lane,
-                Event::Outcome(self.run, Done::Fetch(result, self.limit)),
-            );
-        }
-    }
-    fn metrics(&self, url: &str, metrics: HopMetrics) {
-        metrics_log::note(
-            "lane",
-            url,
-            metrics.protocol.as_deref(),
-            metrics.reused,
-            metrics.local.as_deref(),
-            metrics.remote.as_deref(),
-            metrics.queued_ms,
-        );
-        if let Some(protocol) = metrics.protocol {
-            self.machine
-                .post(self.lane, Event::Protocol(origin(url), protocol));
-        }
-    }
-    fn next_hop(&self, start: Box<dyn FnOnce() + Send>) {
-        self.machine.post(self.lane, Event::Hop(self.run, start));
-    }
-}
-
 fn body_refused(message: String) -> Outcome {
     failed(FailureKind::Refused, message)
 }
 
 /// A drained outcome whose job still runs physically: its bytes go with it.
-pub(super) fn drained(state: &mut State, ticket: u64) {
-    if let Some(run) = state.running.iter_mut().find(|r| r.ticket == ticket) {
-        run.drained = true;
-    }
+pub(super) fn drained(state: &mut State, ticket: u64) -> bool {
+    state
+        .running
+        .iter_mut()
+        .find(|r| r.ticket == ticket)
+        .is_none_or(|run| release_count(&mut state.book, run))
 }
 
 /// Posts a reader's end when it leaves, however it leaves.
 struct Ended(Arc<Machine>, usize, Run);
 impl Drop for Ended {
     fn drop(&mut self) {
-        self.0.post(self.1, Event::Ended(self.2, None, false));
+        self.0
+            .post(self.1, Event::Ended(self.2, None, false, false));
     }
 }
 

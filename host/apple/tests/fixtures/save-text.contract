@@ -1,0 +1,10 @@
+// SaveTextTests: a save of text, whose answer goes to a hidden input.
+component App
+  state notes = "the exported notes"
+  action exportNotes
+    saveFile("export-file", text=notes, suggestedName="notes.txt")
+  view
+    column
+      button press=exportNotes testId="export"
+        text "Export"
+      input id="export-file" testId="export-file" display="none"

@@ -439,6 +439,29 @@ test('a long poll waits out Retry-After, shows retrying, and a drop ends the wai
   s.server.stop(true);
 });
 
+test('a long poll sets its cursor where it is, or appends it, and keeps every other parameter as written', async () => {
+  // As the native hosts' `with_query_value` does (host/apple/src/executor_longpoll.rs): the value is
+  // %XX outside the unreserved set, and no other pair is re-serialised as a form.
+  const cases = [
+    ['?wait=25&path=/a/b&tags=x,y&q=hello%20world&flag', 'a b', '?wait=25&path=/a/b&tags=x,y&q=hello%20world&flag&since=a%20b'],
+    ['?since=0&wait=25&since=1', "7!'()*", '?since=7%21%27%28%29%2A&wait=25'],
+    ['?%73ince=0&wait=25', '-_.~', '?since=-_.~&wait=25'],
+    // Empty fields stay, and a name that begins with U+FEFF is not the cursor's.
+    ['?&wait=25&&flag&since=0&', '1', '?&wait=25&&flag&since=1&'],
+    ['?%EF%BB%BFsince=0&since=0', '1', '?%EF%BB%BFsince=0&since=1'],
+    ['?%EF%BB%BFsince=0&since=0', '1', '?%EF%BB%BFsince=1&since=0', '\uFEFFsince'],
+    ['?wait=25&', '1', '?wait=25&&since=1'],
+  ];
+  for (const [query, next, expected, cursor = 'since'] of cases) {
+    const s = standIn([{ body: JSON.stringify({ seq: next }) }]);
+    const controller = new AbortController(), sent = [];
+    const done = longPoll(s, controller, sent, { cursor }, { url: `${s.origin}/changes${query}`, maxResponseBytes: 256 });
+    await until(() => s.held.length === 1);
+    assert.deepEqual(s.asked, [query, expected]);
+    controller.abort(); await done; s.server.stop(true);
+  }
+});
+
 test('what is not a poll reply ends a long poll, and only a bodiless GET is one', async () => {
   const cases = [
     [{ status: 404, body: 'gone', headers: {} }, (e) => e.kind === 0 && e.status === 404],

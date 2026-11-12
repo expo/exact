@@ -265,6 +265,59 @@ fn a_cells_delete_is_its_swipe() {
 }
 
 #[test]
+fn an_embedded_rows_lock_belongs_only_to_its_delete_button() {
+    use contract_syntax::{Attr, Expr, Node};
+
+    fn attrs_for<'a>(nodes: &'a [Node], id: &str) -> Option<&'a [Attr]> {
+        nodes.iter().find_map(|node| match node {
+            Node::Element {
+                attrs, children, ..
+            } => {
+                if attrs
+                    .iter()
+                    .any(|a| a.name == "testId" && matches!(&a.value, Expr::Str(v, _) if v == id))
+                {
+                    Some(attrs.as_slice())
+                } else {
+                    attrs_for(children, id)
+                }
+            }
+            _ => None,
+        })
+    }
+
+    for list in ["list", "list appearance=\"auto\"\n  section"] {
+        let row = "button press=open(\"1\") delete=remove(\"1\") disabled=true testId=\"locked\"\n  text \"Locked\"";
+        let indent = if list.contains("section") {
+            "    "
+        } else {
+            "  "
+        };
+        let row = row
+            .lines()
+            .map(|line| format!("{indent}{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let source = app(&format!("{list}\n{row}"));
+        let file = contract_syntax::parse(&source).unwrap();
+        let expanded = contract_syntax::expand(&file).unwrap();
+        let view = contract_lower::expand_row_deletes(&expanded.root.view, &file.styles);
+        let content = attrs_for(&view, "locked").unwrap();
+        assert!(content.iter().all(|a| a.name != "disabled"));
+        let delete = attrs_for(&view, "locked-delete").unwrap();
+        assert!(delete
+            .iter()
+            .any(|a| a.name == "disabled" && matches!(a.value, Expr::Bool(true, _))));
+        assert!(delete
+            .iter()
+            .any(|a| a.name == "destructive" && matches!(a.value, Expr::Bool(true, _))));
+        assert!(delete.iter().any(|a| {
+            a.name == "aria-label" && matches!(&a.value, Expr::Str(v, _) if v == "Delete")
+        }));
+    }
+}
+
+#[test]
 fn a_delete_no_list_row_holds_is_named() {
     let warned = |list: &str| -> Vec<String> {
         let (plan, warnings) = contract::compile_warned(&app(list));
@@ -285,6 +338,26 @@ fn a_delete_no_list_row_holds_is_named() {
     assert!(stray[0].contains("no row of a `list`"), "{}", stray[0]);
     // A section's header is no row.
     assert_eq!(warned("list appearance=\"auto\" flex=1\n  section\n    header delete=remove(\"1\")\n      text \"Notes\"\n    row\n      text \"One\"").len(), 1);
+    // A list used as a grouped row takes that row's layout before its own admission.
+    let grouped = |attrs: &str| {
+        format!("list appearance=\"auto\"\n  section\n    list {attrs}\n      row delete=remove(\"1\") testId=\"inner\"\n        text \"Inner\"")
+    };
+    assert_eq!(warned(&grouped("")).len(), 1);
+    assert!(warned(&grouped("display=\"block\"")).is_empty());
+}
+
+#[test]
+fn enum_arguments_keep_delete_admission_and_warnings_in_agreement() {
+    let source = include_str!("../../../../semantics/corpus/views/delete-row-components.contract");
+    let (plan, warnings) = contract::compile_warned(source);
+    plan.unwrap_or_else(|e| panic!("{e}"));
+    let warned: Vec<_> = warnings
+        .iter()
+        .filter(|w| w.id == "lower-delete-row")
+        .map(|w| source.lines().nth(w.span.line as usize - 1).unwrap())
+        .collect();
+    assert_eq!(warned.len(), 1, "{warned:?}");
+    assert!(warned[0].contains("testId=\"enum-cell\""), "{warned:?}");
 }
 
 /// The element lint, which runs beside an earlier refusal, takes `delete=`

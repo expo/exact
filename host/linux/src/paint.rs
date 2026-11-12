@@ -529,8 +529,10 @@ pub struct Painter {
     region_picture: Option<Rc<region::Picture>>,
     region_frame: Option<region::Published>,
     damage: damage::Retained,
-    /// `backgroundMaterial` names the schema lacks, and those not yet logged.
-    materials: (std::collections::BTreeSet<String>, Vec<String>),
+    /// `backgroundMaterial` names the schema lacks.
+    materials: std::collections::BTreeSet<String>,
+    notes: Vec<String>,
+    svg_warned: std::collections::BTreeSet<exact_kernel::NodeKey>,
     decoration_warning: bool,
     /// The node a 3D island paints flat, its own transform being the warp's (LLP 1077 D8).
     pub(crate) flatten: Option<ViewId>,
@@ -593,18 +595,23 @@ impl Painter {
         let Some(name) = node.props.str(PropId::BackgroundMaterial) else {
             return false;
         };
-        if exact_kernel::generated::material(name).is_none() && self.materials.0.insert(name.into())
-        {
-            self.materials.1.push(format!(
+        if exact_kernel::generated::material(name).is_none() && self.materials.insert(name.into()) {
+            self.notes.push(format!(
                 "backgroundMaterial `{name}` is not a material; drawing ultra-thin"
             ));
         }
         true
     }
 
-    /// The lines [`Painter::material_note`] noted since the last call.
+    /// Host warnings noted since the last call.
     pub fn take_notes(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.materials.1)
+        std::mem::take(&mut self.notes)
+    }
+
+    pub(crate) fn replaced(&mut self) {
+        // A fresh kernel can reuse both epochs and node keys.
+        self.paint_epoch = None;
+        self.svg_warned.clear();
     }
 
     /// A painter over a backend.
@@ -631,6 +638,8 @@ impl Painter {
             region_frame: None,
             damage: Default::default(),
             materials: Default::default(),
+            notes: Vec::new(),
+            svg_warned: Default::default(),
             decoration_warning: false,
             placements: BTreeMap::new(),
             canvases: BTreeMap::new(),
@@ -851,6 +860,8 @@ impl Painter {
         self.damage.next.clear();
         self.damage.unsupported = false;
         if self.paint_epoch != Some(scene.kernel.epoch()) {
+            self.svg_warned
+                .retain(|key| scene.kernel.node_by_key(*key).is_some());
             self.refresh_ranks(scene.kernel);
             self.paint_epoch = Some(scene.kernel.epoch());
             #[cfg(test)]

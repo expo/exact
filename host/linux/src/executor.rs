@@ -198,6 +198,12 @@ fn listen_module() -> core::stream::listen::Module {
 
 #[cfg(test)]
 mod wire_tests {
+    #[test]
+    #[ignore = "async lane: real WebSocket handshake"]
+    fn socket_protocols_on_portable_transport() {
+        super::core::stream::protocol_tests::protocols(super::portable_host);
+    }
+
     /// The Linux host's own transport (rustls): an app's abort closes a held
     /// write's connection, and the server sees it end (shared with Apple's
     /// platform transport, `executor_tests.rs`).

@@ -106,52 +106,88 @@ impl Values {
     }
 }
 
-/// One CSS colour as a half; legacy sRGB as `color(srgb …)`.
+/// One CSS colour as a half: a legacy one as written, which an
+/// interpolation reads (`hsl()` in `hsl`, its `none`s missing).
 fn half(text: &str) -> Option<Wide> {
     match exact_color::parse(text)? {
-        exact_color::Parsed::Wide(w) => Some(w),
-        exact_color::Parsed::Legacy(c) => Some(Wide {
-            space: Space::Srgb,
-            c: [c.r, c.g, c.b].map(|v| f64::from(v) / 255.0),
-            alpha: c.a,
-        }),
+        exact_color::Parsed::Wide(w) | exact_color::Parsed::Legacy(_, w) => Some(w),
         exact_color::Parsed::Current => None,
     }
 }
 
+/// A legacy colour that is its bytes, as written.
+fn bytes(c: exact_color::Rgba8) -> Wide {
+    Wide::new(
+        Space::Srgb,
+        [c.r, c.g, c.b].map(|v| f64::from(v) / 255.0),
+        c.a,
+    )
+}
+
+/// `#rrggbbaa`, as a legacy half is written back.
+fn hex(c: exact_color::Rgba8) -> String {
+    format!(
+        "#{:02x}{:02x}{:02x}{:02x}",
+        c.r,
+        c.g,
+        c.b,
+        (c.a * 255.0).round() as u8
+    )
+}
+
+/// A legacy colour, or a `light-dark()` of two, whose bytes are not all a
+/// gradient's interpolation reads (CSS Color 4 §12): an `rgb()`, `hsl()` or
+/// `hwb()` with a `none`, a fraction of a byte, or hsl or hwb components (a
+/// gray's written hue), interned as written. `None` for any other, which its
+/// bytes give exactly.
+pub fn parse_written(text: &str) -> Option<ColorValue> {
+    intern(text, true)
+}
+
 /// A modern colour, or a `light-dark()` with a modern half, interned.
 pub fn parse_wide(text: &str) -> Option<ColorValue> {
+    intern(text, false)
+}
+
+/// What [`parse_wide`] interns, or with `legacy`, what [`parse_written`] does.
+fn intern(text: &str, legacy: bool) -> Option<ColorValue> {
     let text = text.trim();
+    let modern = |t: &str| matches!(exact_color::parse(t), Some(exact_color::Parsed::Wide(_)));
+    // A legacy colour that its bytes do not give exactly.
+    let unrounded = |t: &str| match exact_color::parse(t) {
+        Some(exact_color::Parsed::Legacy(c, w)) => w != bytes(c),
+        _ => false,
+    };
+    // A legacy one as `#rrggbbaa` when its bytes are all it says, else as
+    // written, so the text reads back the same colour.
+    let css = |w: Wide, t: &str| match exact_color::parse(t) {
+        Some(exact_color::Parsed::Legacy(c, _)) if w == bytes(c) => hex(c),
+        Some(exact_color::Parsed::Legacy(..)) => t.to_ascii_lowercase(),
+        _ => w.css(),
+    };
     let (light, dark, canonical, modern) = if let Some(inner) = text
         .strip_prefix("light-dark(")
         .and_then(|t| t.strip_suffix(')'))
     {
         let comma = super::top_level_comma(inner)?;
         let (a, b) = (inner[..comma].trim(), inner[comma + 1..].trim());
-        let modern = |t: &str| matches!(exact_color::parse(t), Some(exact_color::Parsed::Wide(_)));
-        if !modern(a) && !modern(b) {
+        let wanted = if legacy {
+            !modern(a) && !modern(b) && (unrounded(a) || unrounded(b))
+        } else {
+            modern(a) || modern(b)
+        };
+        if !wanted {
             return None;
         }
         let (l, d) = (half(a)?, half(b)?);
-        let css = |w: Wide, t: &str| {
-            if modern(t) {
-                w.css()
-            } else {
-                let c = w.srgb8();
-                format!(
-                    "#{:02x}{:02x}{:02x}{:02x}",
-                    c.r,
-                    c.g,
-                    c.b,
-                    (c.a * 255.0).round() as u8
-                )
-            }
-        };
         let canonical = format!("light-dark({}, {})", css(l, a), css(d, b));
         (l, Some(d), canonical, [modern(a), modern(b)])
     } else {
         match exact_color::parse(text)? {
-            exact_color::Parsed::Wide(w) => (w, None, w.css(), [true; 2]),
+            exact_color::Parsed::Wide(w) if !legacy => (w, None, w.css(), [true; 2]),
+            exact_color::Parsed::Legacy(_, w) if legacy && unrounded(text) => {
+                (w, None, css(w, text), [false; 2])
+            }
             _ => return None,
         }
     };

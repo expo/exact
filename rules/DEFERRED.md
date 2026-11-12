@@ -516,8 +516,8 @@ WebMCP), each arriving as a URL at the navigation root or as a tool call of
 origin `tool`. Consumer: Shelf's Add Book, Continue Reading, books in
 Spotlight and Log Pages. Unblocks reaching an app's screens and writes
 without opening it. Take: none named; the ruling is its own waiver. Still
-out, each until a consumer asks (LLP 1133.023 §13): App Intents in widgets,
-controls and Live Activities; interactive snippets and
+out, each until a consumer asks (LLP 1133.023 §13): further App Intents in
+widgets beyond the fixed enum configuration below; controls and Live Activities; interactive snippets and
 `requestConfirmation`'s snippet content; assistant schemas; `IndexedEntity`
 and Spotlight's semantic index; `NSUserActivity` and Handoff; long-running
 intents; an App Intents extension; a structured `returns` through a face;
@@ -525,6 +525,15 @@ entities that are not content-index entries; Android's App Actions built-in
 intents; the web's Launch Handler; Windows' and Linux's system search and
 Windows App Actions; a content index larger than 5,000 entries; and remote
 icons.
+
+**Expanded (Charlie, 2026-11-12, #212; LLP 1126 and LLP 1133.023):**
+Apple widgets declare fixed enum parameters for Edit Widget and watchOS
+complication recommendations. Each placement's choices reach only its snapshot
+render; refresh and its cache remain shared.
+The Categories consumer unblocks this first stage. Take: none named; Charlie's
+2026-11-12 decision to the maintainers' agent waives the trade for enum-only
+configuration on Apple. Data-backed options, entity queries and
+configuration-dependent refresh stay deferred.
 
 **Admitted (Charlie, 2026-10-06: "this is pretty great. commit and push this
 and document that TUI is now an officially supported platform for Exact2";
@@ -1903,3 +1912,10 @@ Consumer: T3 sidebar subscriptions and timeline minimap. LLP 1005 records the
 bounded event, browser executors and the shared AppKit/UIKit/Linux geometry
 slice; native qualification remains open. Container
 queries, derive-time frame and general live-position feedback stay deferred.
+
+**EAS Build compatibility (Charlie, 2026-11-12, #48; LLP 1030.003 D6, D8):**
+"Def want to make Exact work well w EAS Build" ([issue comment](https://github.com/expo/exact/issues/48#issuecomment-6807074446)).
+The owner admitted unattended native build commands, signing/version inputs,
+Android App Bundle output and one EAS recipe per platform on 2026-11-12. This unblocks an app repository's
+custom EAS build. Provider adapters and automatic account, credential and
+store provisioning remain deferred.

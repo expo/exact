@@ -152,7 +152,7 @@ impl Picture {
         Rc::ptr_eq(&self.publication, publication)
     }
     pub(super) fn capture(
-        painter: &Painter,
+        painter: &mut Painter,
         scene: &Scene<'_>,
         region: &crate::content_region::ContentRegionState,
         publication: &Rc<RegionPublication>,
@@ -301,6 +301,7 @@ impl Picture {
                     NodeType::Svg => {
                         let mut svg =
                             super::svg::resolve_svg(scene, &node, geometry.content, painter.dark);
+                        painter.svg_note(&node, &svg);
                         exact_kernel::style::wide::Settle::settle(&mut svg);
                         Payload::Svg(Rc::new(svg))
                     }

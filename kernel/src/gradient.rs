@@ -464,8 +464,9 @@ impl Gradient {
         out
     }
 
-    /// As written; else Oklab when a stop is a modern colour; `None` is
-    /// legacy sRGB, as CSS says.
+    /// As written; else Oklab when a stop is a modern colour; else sRGB, as
+    /// legacy colours interpolate, sampled here when a stop has a missing
+    /// component; else `None`, the host's own legacy sRGB ramp.
     pub fn interpolation(&self, dark: bool) -> Option<exact_color::Interpolation> {
         self.interpolation_with(dark, &crate::style::wide::wide)
     }
@@ -476,15 +477,25 @@ impl Gradient {
         wide: Lookup<'_>,
     ) -> Option<exact_color::Interpolation> {
         self.interpolation.or_else(|| {
-            self.stops
-                .iter()
-                .any(|s| match s.color {
-                    ColorValue::Wide(id) => {
-                        wide(id).is_some_and(|w| w.modern[usize::from(dark && w.dark.is_some())])
-                    }
-                    _ => false,
-                })
-                .then_some(exact_color::Interpolation::OKLAB)
+            let half = |c: ColorValue| match c {
+                ColorValue::Wide(id) => wide(id).map(|w| {
+                    let dark = dark && w.dark.is_some();
+                    (w.modern[usize::from(dark)], w.half(dark))
+                }),
+                _ => None,
+            };
+            let halves: Vec<_> = self.stops.iter().filter_map(|s| half(s.color)).collect();
+            if halves.iter().any(|(modern, _)| *modern) {
+                Some(exact_color::Interpolation::OKLAB)
+            } else {
+                halves
+                    .iter()
+                    .any(|(_, w)| w.missing.contains(&true))
+                    .then_some(exact_color::Interpolation {
+                        space: exact_color::MixSpace::Srgb,
+                        hue: exact_color::HueMethod::Shorter,
+                    })
+            }
         })
     }
 
@@ -508,6 +519,7 @@ impl Gradient {
                     space: exact_color::Space::Srgb,
                     c: [c.r(), c.g(), c.b()].map(|v| f64::from(v) / 255.0),
                     alpha: f64::from(c.a()) / 255.0,
+                    missing: [false; 4],
                 })
             }
         };
@@ -524,8 +536,26 @@ impl Gradient {
         }
         const STEPS: usize = 16;
         let mut out = Vec::with_capacity(stops.len() * STEPS);
+        // Each segment takes its ends as an interpolation does: a component
+        // missing at one end is the other end's (CSS Color 4 §12.4). So a stop
+        // with one is two colours, the end of the segment before it and the
+        // start of the one after.
+        let missing = |w: &exact_color::Wide| w.missing.contains(&true);
         for (i, &(at, c)) in stops.iter().enumerate() {
-            out.push((at, c.linear_srgb(), c.alpha));
+            let previous = i.checked_sub(1).map(|p| stops[p].1);
+            let next = stops.get(i + 1).map(|s| s.1);
+            if let Some(p) = previous.filter(|_| missing(&c)) {
+                let (v, a) = exact_color::mix(&p, &c, 1.0, how);
+                out.push((at, v, a));
+            }
+            match next {
+                Some(n) if missing(&c) => {
+                    let (v, a) = exact_color::mix(&c, &n, 0.0, how);
+                    out.push((at, v, a));
+                }
+                None if previous.is_some() && missing(&c) => {}
+                _ => out.push((at, c.linear_srgb(), c.alpha)),
+            }
             let Some(&(end, n)) = stops.get(i + 1) else {
                 continue;
             };
@@ -1047,6 +1077,7 @@ fn stops(args: &[&str], conic: bool) -> Result<Vec<Stop>, &'static str> {
         }
         let color = words[..split].join(" ");
         let color = ColorValue::parse_light_dark(&color)
+            .or_else(|| crate::style::wide::parse_written(&color))
             .or_else(|| Color::parse(&color).map(ColorValue::Fixed))
             .ok_or("a stop's colour is a CSS colour (hex, `rgb()`, `hsl()`, `hwb()`, a named colour, `transparent`) or `light-dark(a, b)`")?;
         // LLP 1100 D3: nothing converts a profile's colour, so nothing mixes it.

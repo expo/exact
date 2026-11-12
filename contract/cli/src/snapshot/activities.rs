@@ -183,6 +183,7 @@ pub(super) fn compile_file(
             preview: &activity.preview,
             families: &[],
             refresh: None,
+            configuration: None,
         },
         app,
     )?;

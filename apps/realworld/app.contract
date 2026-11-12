@@ -210,29 +210,36 @@ component RealWorld
         if c.ok and c.kind == "delete"
           nav = open(nav, "/")
       case none
-  // Your Feed is the signed-in reader's; a signed-out visit goes to sign in,
-  // in place of its entry, as React's <Navigate to="/login" replace />. A
-  // tab's first entry can only be its root, so a first visit's entry gives
-  // up its query, and /login follows on the next tick: Back is the global
-  // feed, never Your Feed again. A tick looks, since `me` answering runs
-  // nothing.
-  action settle
-    let nextNav = loginNext and current.name == "home" and not me.signedIn ? push(nav, "/login") : nav
-    if loginNext
-      loginNext = false
-      if current.name == "home" and not me.signedIn
-        nav = nextNav
-    if following and not pending(me) and not me.signedIn
-      if depth(nextNav) > 1
-        nav = replace(nextNav, "/login")
+  // A signed-out reader on a route that needs a reader goes to sign in, in
+  // place of that route's entry, as React's <Navigate to="/login" replace />.
+  // The router has no guards: an action checks and applies `replace` (LLP
+  // 1038 §7), from a task the session arms, since `me` answering runs nothing.
+  // Every route not named in `publicRoute` needs a reader, so one added later does
+  // too. Signed out is known only once `me` has answered.
+  derive publicRoute = (current.name == "home" and not following) or current.name == "tag" or current.name == "login" or current.name == "register" or current.name == "article" or current.name == "profile" or current.name == "favorites" or current.name == "notfound"
+  derive signedOut = not pending(me) and not me.signedIn
+  task leave when signedOut and not publicRoute key=current.id
+    after(1, toSignIn)
+  task signInNext when loginNext
+    after(1, pushSignIn)
+  action toSignIn
+    // A push already due lands on whatever home entry is on top.
+    if signedOut and not publicRoute and not loginNext
+      if depth(nav) > 1
+        nav = replace(nav, "/login")
       else
+        // A tab's first entry can only be its root, so a first visit gives up
+        // its query, and /login follows (`signInNext`): Back is the global
+        // feed, never Your Feed again.
         loginNext = true
-        nav = replace(nextNav, "/")
-  task settling mount
-    every(100, settle)
+        nav = replace(nav, "/")
+  action pushSignIn
+    loginNext = false
+    if current.name == "home" and not me.signedIn
+      nav = push(nav, "/login")
 
   view
-    main navigationKey=`${current.id}`
+    main navigationKey=`${current.id}` testId="app"
       navigationBack="back"
       navigate=followLink
       width="100%"

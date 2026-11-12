@@ -9,6 +9,7 @@ import { resolve, basename, dirname } from 'node:path';
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { verifyBakeFiles } from '../../scripts/app.mjs';
 import { webRefusal, browserEntitlements } from './documents.mjs';
+import { memoryEntitlements } from './plist.mjs';
 import { listAssets } from '../web/serve.mjs';
 import { appIcon, buildInfo, iosAssets, appleAssets, copyNativeResources, IOS_RESOURCE_ROOT, iosBundleGrants, iosExecutableRefusal, shareIosResources, signingOrder, helperEntitlements, wrapFramework, assertArchiveFrameworks } from './assets.mjs';
 import { allows, profile, identity, embeddedProfile } from './devices.mjs';
@@ -222,7 +223,7 @@ export function assembleIOS({intents, shared, library, serviceDylibs, triple, ap
   }
   // A grant's signing entitlement needs a profile that allows it, which a
   // team wildcard never does for HealthKit (LLP 1069.008.000 D4).
-  const required = appleReach?.entitlements ?? [], appRequired = [...required, ...browserEntitlements({ ...app, widgetTV: tv }, distribution)];
+  const required = appleReach?.entitlements ?? [], appRequired = [...required, ...browserEntitlements({ ...app, widgetTV: tv }, distribution), ...memoryEntitlements({ ...app, widgetTV: tv })];
   // With entries, the app's and the extension's profiles together, each granting the shared groups (LLP 1126.001 WP13).
   const provisioned = shared && device && !unsigned ? entryProfiles({ app, udid: ph?.udid, required: appRequired }) : null;
   const appProfile = device && !unsigned ? provisioned?.app ?? (allows(prof, appRequired) ? prof : profile(ph?.udid, app.id, appRequired)) : null;

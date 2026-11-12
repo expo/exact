@@ -152,13 +152,7 @@ pub(crate) struct Recents {
 impl Recents {
     /// `$XDG_DATA_HOME/recently-used.xbel` (`~/.local/share` when unset).
     fn of(app_id: &str) -> Option<Self> {
-        let base = std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .or_else(|| {
-                let home = PathBuf::from(std::env::var_os("HOME")?);
-                home.is_absolute().then(|| home.join(".local/share"))
-            })?;
+        let base = crate::picker::xdg_base("XDG_DATA_HOME", ".local/share")?;
         let exe = std::env::current_exe().ok()?;
         Some(Self::at(base.join(STORE), app_id, &exe))
     }

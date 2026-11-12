@@ -221,6 +221,7 @@ fn a_host_with_no_toolkit_under_it_draws_the_webs_neutral_look() {
     std::env::set_var("EXACT_FONT", "DejaVu Sans");
     exact_linux::app::show_neutral_look();
     fields::bare_size_and_empty_date_regressions();
+    buttons::control_sizes_follow_the_root_in_measure_and_paint();
     buttons::plain_faces_fade_without_a_wash();
     fields::focus_changes_during_flow_damage();
     fields::select_and_date_focus();

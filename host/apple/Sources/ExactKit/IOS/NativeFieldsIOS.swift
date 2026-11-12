@@ -55,7 +55,7 @@ extension NodeView {
         #if os(iOS)
         f.pasteDelegate = FieldSelections.tracks(self) ? self : nil
         #endif
-        f.tintColor = props["emojiPicker"] == "true" ? .clear : nil
+        f.tintColor = fieldTint
         if (set["emojiPicker"] != nil || clear.contains("emojiPicker")), f.isFirstResponder { f.reloadInputViews() }
         if let v = props["value"] { writeValue(v, into: f) }
         applyPlaceholder(f); applyFieldName(f)
@@ -234,12 +234,20 @@ extension NodeView {
         // The chrome's fill is the design's Field where it overrides it.
         searchChrome?.backgroundColor = fieldGroundColor
         #endif
+        field.tintColor = fieldTint
         if isNativeTextControl {
             field.defaultTextAttributes[.kern] = number("letter_spacing")
-            field.tintColor = caretColor ?? ownTintColor("accent_color")
             showFocusRing(false)
         }
         layoutField()
+    }
+    /// An `input`'s tint, which colours UIKit's caret and selection handles:
+    /// clear in the emoji picker's field, which shows no caret, else the
+    /// author's `caret-color`, else a native field's accent; nil, a bare
+    /// field takes the tint around it (`UIView.tintColor`).
+    private var fieldTint: UIColor? {
+        if props["emojiPicker"] == "true" { return .clear }
+        return isNativeTextControl ? caretColor ?? ownTintColor("accent_color") : caretColor
     }
     func applyFieldContent(_ payload: [String: Any]) {
         let r = payload["rect"] as? [Double]

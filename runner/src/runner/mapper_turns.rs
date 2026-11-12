@@ -143,7 +143,7 @@ impl<D: DataSource> Runner<D> {
             message,
             reason: String::new(),
         };
-        Break(self.release_failed(ticket, target, why))
+        Break(self.release_failed_as_asked(ticket, target, why))
     }
 
     fn turn_landed(
@@ -198,7 +198,7 @@ impl<D: DataSource> Runner<D> {
         self.arm_next(result.is_ok());
         self.log_outcome(&what, &result, was_poisoned);
         if let (Err(e), true) = (&result, self.holds(stream)) {
-            return self.release_failed(stream, target, Failure::of(e));
+            return self.release_failed_as_asked(stream, target, Failure::of(e));
         }
         result.map(Some)
     }

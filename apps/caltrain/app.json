@@ -35,6 +35,11 @@
         "accessoryInline",
         "accessoryCorner"
       ],
+      "configuration": {
+        "title": "Departures",
+        "parameters": [{ "name": "rows", "type": "enum", "title": "Departures", "default": "two",
+          "values": [{ "value": "one", "title": "1" }, { "value": "two", "title": "2" }] }]
+      },
       "component": "NextTrains",
       "props": "NextTrainsProps",
       "refresh": "nextTrains",

@@ -14,6 +14,9 @@ pub enum TapForm {
     /// `into "key"`: a virtualized list's row brought into view by its key
     /// (LLP 1070.000 §5), so a row outside the rendered window can be tapped.
     Into(String),
+    /// `history <delta>`: browser Back or Forward through `history.go`
+    /// on the navigation root (LLP 1038 D11).
+    History(i32),
     /// `pinch <scale> [at x y]`: two fingers about the node's middle, or
     /// about `at` in its box (stocks: the agent's pinch, in a test file).
     Pinch {

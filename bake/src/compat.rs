@@ -32,8 +32,8 @@ const ABI_HEADER: &str = include_str!(concat!(
 pub const GPU_MODULE_ABI: u32 = 1;
 /// The separately linked Rust data-source wire ABI: admitted secret names
 /// before the store snapshot (LLP 1048.000 D9), two-way sockets (LLP 1016.003),
-/// and cache-mode tag 12 (LLP 1162 D4).
-pub(crate) const RUST_ABI: u32 = 7;
+/// cache-mode tag 12 (LLP 1162 D4), and stream protocol names (LLP 1016.000).
+pub(crate) const RUST_ABI: u32 = 8;
 /// The data-module runtime a TypeScript bundle may rely on in the binary's
 /// own prelude (`js/src/prelude.js`, compiled into the host): moved when the
 /// prelude learns something a bundle cannot do without and an older prelude
@@ -73,7 +73,8 @@ pub(crate) const RUST_ABI: u32 = 7;
 /// the method through an alias, so no text in the bundle shows the call: a
 /// module whose grants admit `sqlite.open` needs 10 ([`typescript_runtime_of`]).
 /// 11: Fetch's `cache` (LLP 1162 D4), which an older prelude ignores.
-pub(crate) const TYPESCRIPT_RUNTIME: u32 = 11;
+/// 12: `exactProtocols`, which an older prelude would ignore (LLP 1016.000).
+pub(crate) const TYPESCRIPT_RUNTIME: u32 = 12;
 
 /// What each runtime past the first added that a bundle names to use (see
 /// [`TYPESCRIPT_RUNTIME`]): a `fetch` option an older prelude would ignore,
@@ -84,7 +85,8 @@ pub(crate) const TYPESCRIPT_RUNTIME: u32 = 11;
 /// `Response` now needs 8, as do constructors whose readable side can become
 /// a request body. `structuredClone` names none of them. 10 is read from the
 /// grants, not the bundle.
-const RUNTIME_OPTIONS: [(u32, &str); 24] = [
+const RUNTIME_OPTIONS: [(u32, &str); 25] = [
+    (12, "exactProtocols"),
     (11, "cache"),
     (9, "exactIdleTimeout"),
     (8, "Response"),
@@ -658,7 +660,7 @@ fn compatibility_with_trust(
     if !widgets.is_empty() {
         inputs["widgets"] = json!(widgets
             .iter()
-            .map(|w| json!({"kind":w.kind,"families":w.families,"watchFamilies":w.watch_families,"requiresSecrets":w.requires_secrets,"title":w.title,"description":w.description}))
+            .map(|w| json!({"kind":w.kind,"families":w.families,"watchFamilies":w.watch_families,"requiresSecrets":w.requires_secrets,"title":w.title,"description":w.description,"configuration":w.configuration.as_ref().map(contract::Configuration::json)}))
             .collect::<Vec<_>>());
     }
     let activities = manifest.live_activities()?;

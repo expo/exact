@@ -673,7 +673,7 @@ function protocolHandlerProblems({ protocol_handlers = [], host }) {
  * `color_scheme_dark` keeps only the W3C draft's members, and with the app's
  * `dir` each icon gets the `sizes` and `type` of its file (LLP 1163 D2). */
 export function webAppManifest(manifest, name, notes = [], dir = null) {
-  const keys = ['name', 'short_name', 'description', 'id', 'start_url', 'display', 'display_override', 'theme_color', 'background_color', 'icons', 'lang', 'orientation', 'file_handlers', 'protocol_handlers', 'launch_handler', 'shortcuts'];
+  const keys = ['name', 'short_name', 'description', 'id', 'start_url', 'display', 'display_override', 'theme_color', 'background_color', 'icons', 'lang', 'orientation', 'file_handlers', 'protocol_handlers', 'launch_handler', 'shortcuts', 'categories'];
   const web = Object.fromEntries(keys.filter((k) => manifest[k] !== undefined).map((k) => [k, manifest[k]]));
   if (web.file_handlers) web.file_handlers = web.file_handlers.filter((h) => !Object.keys(h.accept ?? {}).includes('inode/directory'));
   if (web.protocol_handlers) web.protocol_handlers = web.protocol_handlers.filter((h) => !isWebScheme(h.protocol));
@@ -691,7 +691,7 @@ export function webAppManifest(manifest, name, notes = [], dir = null) {
   web.lang ??= 'en';
   return web;
 }
-export function nativeManifestMetadata(manifest, platform) { return {app:manifest.app,host:manifest.host?.[platform]??{},icons:manifest.icons??[],...(platform === 'ios' && manifest.color_scheme_dark?.icons ? {dark_icons:manifest.color_scheme_dark.icons} : {}),...(manifest.frame_health ? {frame_health:manifest.frame_health} : {}),...(['macos','ios'].includes(platform) && manifest.protocol_handlers?.length ? {protocol_handlers:manifest.protocol_handlers} : {}),...(['ios','android'].includes(platform) && manifest.orientation ? {orientation:manifest.orientation} : {}),...(['macos','ios'].includes(platform) && ['light','dark'].includes(manifest.userInterfaceStyle) ? {userInterfaceStyle:manifest.userInterfaceStyle} : {})}; }
+export function nativeManifestMetadata(manifest, platform) { return {app:manifest.app,host:manifest.host?.[platform]??{},icons:manifest.icons??[],...(platform === 'ios' && manifest.color_scheme_dark?.icons ? {dark_icons:manifest.color_scheme_dark.icons} : {}),...(manifest.frame_health ? {frame_health:manifest.frame_health} : {}),...(['macos','ios'].includes(platform) && manifest.protocol_handlers?.length ? {protocol_handlers:manifest.protocol_handlers} : {}),...(['ios','android'].includes(platform) && manifest.orientation ? {orientation:manifest.orientation} : {}),...(['macos','ios'].includes(platform) && ['light','dark'].includes(manifest.userInterfaceStyle) ? {userInterfaceStyle:manifest.userInterfaceStyle} : {}),...(['macos','ios'].includes(platform) && manifest.categories ? {categories:manifest.categories} : {})}; }
 let cachedSchema = null;
 function schema() {
   return cachedSchema ??= JSON.parse(readFileSync(resolve(ROOT, 'scripts/app.schema.json'), 'utf8'));
@@ -918,6 +918,23 @@ export const executableName = (app) => app.displayName.replace(/[<>:"/\\|?*\x00-
 /** Match CFBundle's decomposed executable path so codesign excludes the main executable
  * from its resource seal. Directory traversal preserves the filename's spelling. */
 export const appleExecutableName = (app) => executableName(app).normalize('NFD');
+/** The App Clip `host.ios.appClip` declares, or null: its bundle id (`<app id>.Clip`, as Xcode names one), its
+ * name (the app's) and the executable's name. An App Clip is an app (LLP 1126 D12): the clip bundle runs the whole
+ * app under this second identity, using the same executable target. The web build names its id in the origin's
+ * `apple-app-site-association` (LLP 1030). */
+/** The `applinks:` and other associated domains `host.ios.associatedDomains` claims: its list as written, or, when it
+ * is `true`, the declared origin's host (LLP 1038 D8). The entitlements sign these, and the origin's association file
+ * claims the app only when they name its host. */
+export const associatedDomains = (app) => {
+  const ios = app.manifest.host?.ios ?? {};
+  return Array.isArray(ios.associatedDomains) ? ios.associatedDomains : ios.associatedDomains && app.origin ? [`applinks:${new URL(app.origin).host}`] : [];
+};
+export const appClip = (app) => {
+  const clip = app.manifest.host?.ios?.appClip;
+  if (!clip) return null;
+  const id = clip.id ?? `${app.id}.Clip`, name = clip.name ?? app.displayName;
+  return { id, name, executable: appleExecutableName({ id, displayName: name ?? '' }) };
+};
 export const windowsFile = (app, path) => basename(path) === `${app.crate('windows')}.exe` ? `${executableName(app)}.exe` : basename(path);
 export function bakeTarget(platform) {
   if (platform === 'web') return 'wasm32-unknown-unknown';
@@ -1252,7 +1269,7 @@ export function buildBake(app, platform, target, options = {}) {
   // logic to determinism lints; the gpu-dev loop runs them in its preceding check.
   if(app.manifest.game&&(options.profile??'')!=='gpu-dev')lintGame(app.dir,app.manifest.game,{env});
   const gpuPackage=(pkg)=>pkg.id===graph.surface?.id||graph.modules.some((m)=>m.id===pkg.id), moduleProducts={}, preparedProducts=new Map();
-  delete env.EXACT_GPU_PRODUCT; delete env.EXACT_GPU_MODULES; delete env.EXACT_BAKE_INPUTS;
+  delete env.EXACT_GPU_PRODUCT; delete env.EXACT_GPU_MODULES; delete env.EXACT_GPU_WEB_PRODUCTS; delete env.EXACT_BAKE_INPUTS;
   if (options.part && !bindGpuProduct(options.profile, env.EXACT_UPDATE_TRUST) && graph.surface) {
     const extension = target.includes('apple') ? 'dylib' : target.includes('windows') ? 'dll' : 'so';
     env.EXACT_GPU_DEVELOPMENT = `lib${cargoLibraryTarget(graph.surface).name.replaceAll('-','_')}.${extension}`;
@@ -1306,6 +1323,8 @@ export function buildBake(app, platform, target, options = {}) {
       if (module) { moduleProducts[module.name] = prepared; env.EXACT_GPU_MODULES = JSON.stringify(moduleProducts); }
       else if (!options.part || bindGpuProduct(options.profile, env.EXACT_UPDATE_TRUST)) env.EXACT_GPU_PRODUCT = prepared;
     }
+    // The web's bake binds no GPU digest but reads each wasm product's surface arguments (expo/exact#176).
+    if (gpuPackage(pkg) && platform === 'web') env.EXACT_GPU_WEB_PRODUCTS = JSON.stringify([...JSON.parse(env.EXACT_GPU_WEB_PRODUCTS ?? '[]'), ...output.filter(m => m.reason === 'compiler-artifact' && m.package_id === pkg.id).flatMap(m => m.filenames).filter(f => f.endsWith('.wasm'))]);
   }
   if (options.part === 'gpu') {
     // The proof completes the independent input/product receipt. There is no

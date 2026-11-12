@@ -76,7 +76,7 @@ mod preload;
 pub use logic::{
     apple_linked, linux_entry, native_storage_constructor, rust_entry, web_linked, web_rust_mode,
 };
-pub use manifest::{Activity, Manifest, Widget};
+pub use manifest::{Activity, Configuration, Manifest, Parameter, Widget};
 pub use map::{plan_digest, SourceMap};
 pub use module_rust::module_rust;
 pub use preload::preload_expression;
@@ -968,7 +968,13 @@ fn compile_loaded(
     let placed = package_views::placed(&plan);
     for v in views.iter().filter(|v| placed.contains(&v.tag)) {
         let binds: Vec<&str> = v.binds.iter().map(String::as_str).collect();
-        plan.add_view(&v.tag, (&v.extension, &v.package), v.displayed, &binds);
+        plan.add_view(
+            &v.tag,
+            (&v.extension, &v.package),
+            v.displayed,
+            &binds,
+            &v.agent,
+        );
     }
     reach::from_manifest(path, &app_root, &file, &mut plan)?;
     Ok((plan, sites.map(|sites| SourceMap::new(sites, sources))))

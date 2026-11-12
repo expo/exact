@@ -257,18 +257,19 @@ every node in one preorder list (`depth` and `children` give the nesting), and `
 pending, … }`. `app` is the app's name; an app outside the exact2
 checkout is found through `EXACT_APP_DIR` (its directory), as its own `exact.mjs agent`
 sets it, so a script run with plain `bun` sets it to the app's directory too
-(`EXACT_APP_DIR=/path/to/app bun ../verify.mjs`, the script kept outside the app
-folder, where it would count as a build input); the working directory alone does
+(`EXACT_APP_DIR=/path/to/app bun verify.mjs`; a script that `app.ts` never imports
+is no build input); the working directory alone does
 not select the app, and `webDist` alone does not select an app. `s.op(request)` is the
 host's wire beneath them: it addresses views by numeric `id`, and it refuses a
 request it would answer by doing nothing (a `target`, an unknown op, a web
 `tap` with no browser input behind it). A reload or a raw browser step goes
-through `s.carrier` (`reset({keep: true})` reloads the current browser route with
-its store and agent launch facts; `evaluate`, and on Chrome `call`, drive raw browser steps;
+through `s.carrier` (`reset({keep: true})` reloads the current browser history
+entry with its store and agent launch facts, keeping Back and Forward entries;
+`evaluate`, and on Chrome `call`, drive raw browser steps;
 `evaluate` takes an expression string or a function of no arguments, which runs in the page,
 so it sees none of the script's variables).
 
-Use the existing five repository checks for repository changes. Do not add a
+Use the existing six repository checks for repository changes. Do not add a
 new global check or fixture framework for an ordinary app edit. For documentation,
 compile complete examples, parse authored tests, and check local links.
 
@@ -1106,8 +1107,9 @@ receive-only. See
 [the reference](reference.md#generate-typescript-data-source-types) for bounds and events.
 
 A large response needs a parse that yields. On native hosts each turn of an
-answer has 100 ms: from its call, or from the `fetch` or storage step it
-awaited, until it next awaits one. A turn over that is refused, so a parse
+answer has 100 ms of its own (CPU) time: from its call, or from the `fetch` or
+storage step it awaited, until it next awaits one. A turn over that is refused;
+a resource keeps its value and is asked again twice before it fails, so a parse
 that passes its tests on a 300 KB thread fails on a 1 MB one.
 `await scheduler.yield()` (the web's [Prioritized Task
 Scheduling](https://wicg.github.io/scheduling-apis/#dom-scheduler-yield)) ends
@@ -1366,10 +1368,11 @@ With a token in hand, the caller owns where and how it is sent:
 If the API requires a credential on the handshake URL, it refuses an
 unauthenticated upgrade before `open`; a first message cannot authenticate it.
 Use the ticket exchange:
-call `provider.fetch` over HTTPS for a short-lived, single-use ticket, then open
+call `provider.fetch(store, url, { method: "POST" })` over HTTPS for a short-lived,
+single-use ticket, then open
 `fetch('wss://…?ticket=…', { exactStream })` synchronously in a fresh source call.
 Keep the ticket in data code and obtain a new one for each reconnect. See the
-socket-ticket recipe under `docs/recipes/socket-ticket`.
+[socket-ticket recipe](recipes/socket-ticket.md).
 
 The following excerpt is only for an API that accepts the upgrade without a
 credential, then accepts an `authenticate` message and reports expiry with
@@ -1648,10 +1651,11 @@ and omitted stops use CSS fix-up after layout. A zero period paints its last
 stop, as Chrome does. `background-attachment="local"` is still
 refused: separate row backgrounds restart at each row, and repetition alone
 does not make a virtualized list’s background follow its content.
-`contract vocab background-image` gives the grammar and limits. AppKit’s captured
-hatch matches Chrome exactly; UIKit qualification is pending. On UIKit, repeating
-backgrounds share the existing drawn-gradient limitation for
-`background-attachment="fixed"` ([open issue](../issues/20261011-repeating-hatch-across-list-rows.md)).
+`contract vocab background-image` gives the grammar and limits. AppKit’s, UIKit’s,
+Linux’s and the web’s hatches match Chrome
+([closed issue](../issues/closed/20261011-repeating-hatch-across-list-rows.md)). On UIKit
+a repeating background with `background-attachment="fixed"` draws unfixed, as
+any drawn gradient does there.
 
 For scrolling, provide a bound and inspect measured layout. For virtualized
 lists, use `list virtualized=true` (no other tag takes it), one direct keyed
@@ -1678,8 +1682,8 @@ reach is past it, and on iOS the pull-to-refresh spinner draws below
 §6.9). `scroll-padding` (`-top`/`-bottom`, a row list's `-left`/`-right`, the
 same forms) is where its `scrollIntoView` aligns a row, as CSS's snapport:
 with `scroll-padding-top` equal to a header's height, the first row's
-`block="start"` is `scrollTop` 0. Only a virtualized list takes it
-(`lower-scroll-padding` elsewhere: native hosts read it nowhere else).
+`block="start"` is `scrollTop` 0. Any scroll container takes it, not only a
+virtualized list.
 `reorderdrop` belongs only on a vertical `list virtualized=true`
 (each row's handle names it with `reorderFor`); the compiler refuses it on any
 other element, where no host could drag. Lists that share a `reorderGroup`
@@ -3728,7 +3732,9 @@ mouse is the app's only full screen or while a dialog is open; inline, ⌘-click
 on the run's link is the terminal's own.
 
 Localized strings use `t("key", name=value)` and app `strings/<locale>.json`
-files. Compile against the files to check keys and placeholders. Formatting
+files. Compile against the files to check keys and placeholders. A language
+setting calls `setLocale("de")` (`setLocale("")` for System) in its action; the
+choice is kept across launches and read before the first frame. Formatting
 functions accept a narrow set of literal formats; app wording is an app `fn`.
 
 #### Folds on iOS

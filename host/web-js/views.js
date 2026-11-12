@@ -19,7 +19,7 @@
 import { After, say, viewId } from "./rt.js";
 import { displayed } from "./wakelock-glue.js";
 
-/** `views`: tag → [extension, displayed, binding props]; `chunk(extension)`, its web implementation's module;
+/** `views`: tag → [extension, displayed, binding props, agent vocabulary]; `chunk(extension)`, its web implementation's module;
  * `instance(extension)`, the session's instance of it. */
 export function packageViews(views, chunk, instance) {
   const tags = Object.keys(views);

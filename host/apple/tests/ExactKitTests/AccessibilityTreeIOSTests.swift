@@ -68,6 +68,36 @@ final class AccessibilityTreeIOSTests: XCTestCase {
         XCTAssertEqual(image.accessibilityValue, image.rangeValueText)
     }
 
+    /// A `spinbutton`'s value is its number, whatever its bounds, as WebKit
+    /// on iOS speaks one and `UIPickerView`'s adjustable column its row ("3");
+    /// ARIA gives the role no default bounds. A slider's is a percentage of
+    /// its range, as `UISlider` speaks its own ("30%").
+    func testASpinbuttonSpeaksItsNumberAndASliderItsPercentage() throws {
+        let p = try fixture()
+        func range(_ id: UInt32, _ props: [String: String]) -> NodeView {
+            let node = NodeView(id: id, kind: "view", presenter: p)
+            p.views[node.id] = node
+            p.root.addSubview(node)
+            node.frame = CGRect(x: 0, y: 300 + CGFloat(id - 40) * 30, width: 100, height: 24)
+            node.applyProps(set: props, clear: [])
+            return node
+        }
+        let bounded = range(40, ["accessibilityRole": "spinbutton", "accessibilityLabel": "Quantity",
+                                 "accessibilityValueNow": "3", "accessibilityValueMin": "1", "accessibilityValueMax": "99"])
+        let unbounded = range(41, ["accessibilityRole": "spinbutton", "accessibilityValueNow": "3"])
+        let slider = range(42, ["accessibilityRole": "slider", "accessibilityValueNow": "30"])
+        XCTAssertTrue(bounded.isAccessibilityElement)
+        XCTAssertEqual(bounded.accessibilityValue, "3", "not 2%, its place between 1 and 99")
+        XCTAssertEqual(unbounded.accessibilityValue, "3", "not 3%, as if bounded by 0 and 100")
+        XCTAssertNil(unbounded.rangeNumbers?.min)
+        XCTAssertNil(unbounded.rangeNumbers?.max)
+        XCTAssertEqual(slider.accessibilityValue, NumberFormatter.localizedString(from: 0.3, number: .percent))
+        bounded.applyProps(set: ["accessibilityValueNow": "2.5"], clear: [])
+        XCTAssertEqual(bounded.accessibilityValue, NumberFormatter.localizedString(from: 2.5, number: .decimal))
+        bounded.applyProps(set: ["accessibilityValueText": "3 tickets"], clear: [])
+        XCTAssertEqual(bounded.accessibilityValue, "3 tickets", "`aria-valuetext` first")
+    }
+
     /// A native control is named by `aria-labelledby` as by `aria-label`
     /// (accname), and follows the text it names.
     func testANativeCheckboxIsNamedByTheTextItsLabelledbyNames() throws {

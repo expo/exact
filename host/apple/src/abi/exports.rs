@@ -438,14 +438,14 @@ macro_rules! host {
             }, |n| n)
         }
 
-        /// Snapshot bytes, kind and optional props JSON, concatenated in the input buffer.
+        /// Snapshot bytes, kind, and optional props and configuration JSON, concatenated in the input buffer.
         #[no_mangle]
-        pub extern "C" fn exact_boot_entry(rt: u32, plan: usize, kind: usize, props: usize, width: f32, height: f32) -> u32 {
+        pub extern "C" fn exact_boot_entry(rt: u32, plan: usize, kind: usize, props: usize, configuration: usize, width: f32, height: f32) -> u32 {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, hooks| {
                 b.set_compat($compat);
                 if let Some(refusal) = b.refuse_analysis() { return refusal; }
                 b.set_delivery($delivery);
-                b.boot_entry(plan, kind, props, ($new)(), hooks, width, height)
+                b.boot_entry(plan, kind, props, configuration, ($new)(), hooks, width, height)
             }, |n| n)
         }
         /// Refresh the entry's declared source; returns a JSON timeline or an error.
@@ -890,10 +890,11 @@ macro_rules! host {
         /// An `img` source of a package's scheme, admitted (LLP 1133.019 D11
         /// item 1): the source in the input buffer; the output is
         /// `{"extension", "agent", "owned"?}`, `{"error", "message"}`, or
-        /// empty for a source of no package's scheme.
+        /// empty for a source of no package's scheme. `count` is 0 to
+        /// recheck admission without counting another draw.
         #[no_mangle]
-        pub extern "C" fn exact_picture(rt: u32, len: usize) -> u32 {
-            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.picture(len), |n| n)
+        pub extern "C" fn exact_picture(rt: u32, len: usize, count: u8) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.picture(len, count != 0), |n| n)
         }
 
         /// The agent's `prefer extension` in the input buffer (LLP 1124 D7).

@@ -377,7 +377,7 @@ test('presence binding probes read the committed clock and release their depende
       // Moving the clock alone does not publish a new committed time.
       rt.clock.now = 2000;
       for (let i = 0; i < 3; i++) bindings.captureExits();
-      const result = { exit: bindings.exitOf(exit), gains: bindings.gains().length, listeners: signal.n.obs.size - listeners };
+      const result = { exit: rt.exitOf(exit), gains: bindings.gains().length, listeners: signal.n.obs.size - listeners };
       rt.end(own); exit.remove(); layout.remove();
       return result;
     });
@@ -405,7 +405,7 @@ test('presence row maps stay cached until their subject or key dependencies chan
       });
       const capture = () => {
         bindings.captureExits();
-        const result = [keys, bindings.exitOf(exit)];
+        const result = [keys, rt.exitOf(exit)];
         keys = 0;
         return result;
       };

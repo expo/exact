@@ -197,6 +197,7 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
     const target = targetInfos.find((t) => t.type === 'page') ?? (await cdp.send('Target.createTarget', { url: 'about:blank' }));
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
     const heldKeys = new Map();
+    let documentLoader = null;
     const call = async (method, params, timeoutMs) => {
       const reply = await cdp.send(method, withHeldModifiers(method, params, heldKeys), sessionId, timeoutMs);
       if (method === 'Input.dispatchKeyEvent') {
@@ -207,6 +208,7 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
     };
     cdp.listeners.push((msg) => {
       if (msg.sessionId !== sessionId) return;
+      if (msg.method === 'Page.frameNavigated' && !msg.params.frame.parentId) documentLoader = msg.params.frame.loaderId;
       if (msg.method === 'Runtime.consoleAPICalled') hostLines.push(`console.${msg.params.type}: ` + msg.params.args.map((a) => a.value ?? a.description ?? a.type).join(' '));
       else if (msg.method === 'Runtime.exceptionThrown') hostLines.push('exception: ' + (msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text));
       else if (msg.method === 'Log.entryAdded' && msg.params.entry.level !== 'verbose') hostLines.push(`${msg.params.entry.level}: ${msg.params.entry.text}`);
@@ -249,7 +251,9 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
     // Display preferences are the agent's from launch, never the machine's (LLP 1069.007 D2); `prefer` changes them.
     const emulated = { ...LAUNCH_MEDIA };
     await call('Emulation.setEmulatedMedia', { features: Object.entries(emulated).map(([name, value]) => ({ name, value })) });
-    await call('Page.navigate', { url: page.href });
+    // Reset before the history mirror records the new session's browser index.
+    await call('Page.resetNavigationHistory');
+    await evaluate(`location.replace(${JSON.stringify(page.href)})`);
     // The first frame: the glue stamps the root when it is in the DOM. A fresh profile's first launch can be slow.
     const t = Date.now();
     let boot = null;
@@ -293,7 +297,7 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
         const ms = await evaluate("document.getElementById('exact-root')?.dataset.gpuMs ?? null");
         return ms == null ? null : Number(ms);
       },
-      /** A fresh document on this page: its origin's storage emptied, or `keep`ing it (a test's `reload`, mail F19). A new `session` on a reused carrier starts from the launch display preferences and pointer, never the last session's `prefer` (LLP 1069.007 D2; agent-prefer.mjs). */
+      /** A fresh test clears storage and history; `keep` reloads the current entry with its history and store (LLP 1038 D7). A new `session` on a reused carrier starts from the launch display preferences and pointer, never the last session's `prefer` (LLP 1069.007 D2; agent-prefer.mjs). */
       async reset({ keep = false, failFetch, epoch, session = false } = {}) {
         if (session) { for (const name of Object.keys(emulated)) delete emulated[name]; Object.assign(emulated, LAUNCH_MEDIA); await call('Emulation.setEmulatedMedia', { features: Object.entries(emulated).map(([name, value]) => ({ name, value })) }); await call('Emulation.setTouchEmulationEnabled', { enabled: false }); }
         // Release browser-owned input while its original document still exists.
@@ -305,21 +309,17 @@ async function openWebUnlocked({ browser = 'chrome', plan, world, size = VIEWPOR
         await evaluate('sessionStorage.clear()');
         if (!keep) await call('Storage.clearDataForOrigin', {origin:page.origin, storageTypes:'all'});
         const destination = withEpoch(withFaults(keep ? await evaluate('location.href') : page.href, failFetch), epoch);
-        await call('Page.navigate', {url:'about:blank'});
-        const deadline = Date.now() + 30000;
-        while (!await evaluate("location.href === 'about:blank'").catch(() => false)) {
-          if (Date.now() > deadline) throw new Error('the reused page never left its old document');
-          await sleep(15);
-        }
+        const previousLoader = documentLoader, deadline = Date.now() + 30000;
         hostLines.length = 0;
-        await call('Page.navigate', {url:destination});
+        if (!keep) await call('Page.resetNavigationHistory');
+        await evaluate(`history.replaceState(${keep ? 'history.state' : 'null'}, '', ${JSON.stringify(destination)})`);
+        await call('Page.reload');
         let boot;
-        while ((boot = await evaluate("document.getElementById('exact-root')?.dataset.bootMs ?? null").catch(() => null)) == null) {
+        while (documentLoader === previousLoader || (boot = await evaluate("document.getElementById('exact-root')?.dataset.bootMs ?? null").catch(() => null)) == null) {
           if (Date.now() > deadline) throw new Error('the reused page never booted');
           await sleep(15);
         }
         await evaluate('exact.ready');
-        await call('Page.resetNavigationHistory');
         this.boot = Number(boot);
       },
       ask, async reveal(id) { const r = await ask({ op: 'reveal', id }); if (r.scrolled) await frame(); return r; },

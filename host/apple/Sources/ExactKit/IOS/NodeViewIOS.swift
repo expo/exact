@@ -1198,18 +1198,17 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         if !wordsOnly || !canRasterText { setNeedsDisplay() }
     }
 
-    /// CSS `filter` (LLP 1055.000 D14): the box shows through a filtered
-    /// picture (`BoxFilter`), drawn again when what it shows changes.
+    /// CSS `filter` (LLP 1055.000 D14), as a picture or the layer's own effect.
     private(set) var boxFilter: BoxFilter?
     var hasBoxFilter: Bool { boxFilter != nil }
     func applyFilter() {
         // A node with no `filter` and none before makes no `BoxFilter` (three
         // layers) to learn so: every styled node passes through here.
         guard boxFilter != nil || style["filter"] != nil else { return }
+        defer { refreshPressOpacity() }
         let f = boxFilter ?? BoxFilter()
         if f.set(style["filter"]) {
             boxFilter = f
-            layer.mask = f.hide
             presenter?.boxFilters.add(self) { [weak self] in self?.renderFilter(fresh: $0) }
             redrawFilter()
         } else if let f = boxFilter {
@@ -1217,6 +1216,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
             boxFilter = nil
             presenter?.boxFilters.remove(self)
             applyBoxMask()
+            presenter?.afterBatch { [weak self] in self?.filterPublished() }
         }
     }
 

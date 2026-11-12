@@ -1031,13 +1031,13 @@ fn a_plan_without_compiled_values_keeps_every_other_data_range() {
     assert_eq!(same, plan);
 }
 
-/// Full interface identities on module, event and view rows change the plan
-/// format. Every host needs a new binary (LLP 1030 D3a). The digest covers
+/// Agent vocabulary on view rows changes the plan format. Every host needs
+/// a new binary (LLP 1030 D3a). The digest covers
 /// all of `tables/format.json`, including comments.
 #[test]
 fn the_format_digest_is_pinned() {
     assert_eq!(
-        FORMAT_DIGEST, 0xcb68389a9697d958,
+        FORMAT_DIGEST, 0x472359df4b8253b4,
         "the plan format digest moved: if intended, name the break and the hosts that move"
     );
 }

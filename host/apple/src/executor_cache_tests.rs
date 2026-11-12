@@ -101,7 +101,10 @@ impl Server {
     ) -> (Core, Receiver<()>) {
         let owners = (0..WORKERS)
             .map(|_| {
-                Some(ibex2::host::Host::new().endow(ibex2::grant::GrantSet::parse(grants).unwrap()))
+                Some(
+                    crate::executor::core::tests::lane_host()
+                        .endow(ibex2::grant::GrantSet::parse(grants).unwrap()),
+                )
             })
             .collect();
         let (wake, woke) = channel();
@@ -111,7 +114,7 @@ impl Server {
             Box::new(move || {
                 let _ = wake.send(());
             }),
-            Arc::new(ibex2::host::Host::new),
+            Arc::new(crate::executor::core::tests::lane_host),
             asynchronous.then(asynch_lanes),
         );
         if cache {
@@ -1032,10 +1035,16 @@ fn canonical_url_identity_matches_the_transports_url_parser() {
 
 #[test]
 fn hit_completions_wait_for_lane_bytes_before_copying_the_body() {
-    for forget_hit in [false, true] {
-        let asynchronous = false;
+    for (asynchronous, mode) in [
+        (false, "drain"),
+        (false, "forget"),
+        (true, "drain"),
+        (true, "forget"),
+        (true, "retire"),
+    ] {
+        let forget_hit = mode == "forget";
         let server = Server::new();
-        let (core, woke) = server.core(asynchronous, true);
+        let (mut core, woke) = server.core(asynchronous, true);
         server.plan("/cached", Plan::new(200, FRESH, &vec![1; MAX_ENTRY - 2048]));
         read(&core, &woke, &server, 1, "/cached");
         let mut releases = Vec::new();
@@ -1060,6 +1069,25 @@ fn hit_completions_wait_for_lane_bytes_before_copying_the_body() {
             drop(state);
             assert!(bytes <= BYTES[0], "{bytes} exceeds {}", BYTES[0]);
             assert!(waiting);
+        }
+        if mode == "retire" {
+            core.retire();
+            for release in releases {
+                release.send(()).unwrap();
+            }
+            let state = core.shared.state.lock().unwrap();
+            let (state, _) = core
+                .shared
+                .ready
+                .wait_timeout_while(state, HANG, |s| !s.running.is_empty())
+                .unwrap();
+            assert!(state.running.is_empty());
+            assert_eq!(state.bytes, [0, 0]);
+            assert_eq!(state.counts, [0, 0]);
+            assert!(state.jobs.iter().all(VecDeque::is_empty));
+            assert!(state.completed.iter().all(VecDeque::is_empty));
+            assert!(state.cache.is_none());
+            continue;
         }
         if forget_hit {
             core.forget(|ticket| ticket != 8);

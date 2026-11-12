@@ -6,7 +6,9 @@ import { need } from '../../scripts/coverage.mjs';
 
 const { unavailable } = chromium();
 const test = need('chrome', unavailable, { test: bunTest });
-let server, suite, cdp, evaluate, call;
+let server, cdp, evaluate, call;
+// Register the shared browser's shutdown hook before beforeAll runs.
+const suite = unavailable ? null : await cdpBrowser({ args: [DESKTOP_INPUT] });
 beforeAll(async () => {
   if (unavailable) return;
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch(req) {
@@ -18,7 +20,6 @@ beforeAll(async () => {
       headers: { 'content-type': path.endsWith('.js') ? 'text/javascript' : 'text/html' },
     });
   }});
-  suite = await cdpBrowser({ args: [DESKTOP_INPUT] });
   ({ cdp } = suite);
   const { sessionId } = await suite.page();
   call = (method, params) => cdp.send(method, params, sessionId);
@@ -653,6 +654,42 @@ test('reach-margin moves reachend earlier or later; the default is one port', as
     return lists.map(l => l.at);
   })()`);
   expect(result).toEqual([5768, 5128, 5128, 6080]);
+}, 60_000);
+
+test('replacement lists fire both edges at their reach-margin thresholds', async () => {
+  const result = await evaluate(`(async () => {
+    const results = [];
+    for (const reach of [undefined, '0px', '300%', '0PX 960px', undefined]) {
+      const el = document.createElement('div');
+      el.id = 'feed'; el.style.cssText = 'height:320px;width:400px;overflow:auto';
+      document.getElementById('exact-root').append(el);
+      const starts = [], ends = [];
+      const own = rt.scope(() => list.vl(el, () => Array.from({length:200}, (_, i) => i), i => i(), (w, i) => {
+        const row = document.createElement('div'); row.textContent = String(i()); row.style.height = '32px'; w.append(row);
+      }, {est:32, pw:[], ph:[320], start: () => { starts.push(el.scrollTop); }, end: () => { ends.push(el.scrollTop); }, reach}));
+      // Only the first mount is also published when the controller loads.
+      rt.settled(); await exact.lists.pending(); await exact.lists.settle();
+      const scroll = async top => {
+        await new Promise(resolve => { el.addEventListener('scroll', resolve, {once:true}); el.scrollTop = top; });
+        await exact.lists.settle();
+      };
+      // Each boundary only touches an edge row; the next pixel overlaps it.
+      for (const top of [1000, 5088, 5089, 5728, 5729, 6048, 6049, 6080]) await scroll(top);
+      for (const top of [1000, 992, 991, 352, 351, 32, 31, 0]) await scroll(top);
+      await scroll(6080);
+      results.push({starts, ends});
+      rt.end(own); el.remove(); rt.settled();
+      if (exact.lists.internals.Lists.size) throw Error('a retired list is still registered');
+    }
+    return results;
+  })()`);
+  expect(result).toEqual([
+    {starts:[0, 351], ends:[5729, 6080]},
+    {starts:[0, 31], ends:[6049, 6080]},
+    {starts:[0, 991], ends:[5089, 6080]},
+    {starts:[0, 31], ends:[5089, 6080]},
+    {starts:[0, 351], ends:[5729, 6080]},
+  ]);
 }, 60_000);
 
 // @ref LLP 1027.004 D3 — the edge band leads a fling as the window does (reach.rs `Margin::band`). The

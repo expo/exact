@@ -20,12 +20,69 @@ const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
  * explicit `DEVELOPER_DIR` is kept. Said on stderr: a drive's stdout is its reply. */
 export function useXcode() {
   if (process.platform !== 'darwin' || process.env.DEVELOPER_DIR) return;
-  const selected = spawnSync('xcode-select', ['-p'], { encoding: 'utf8' }).stdout?.trim() ?? '';
-  const xcode = '/Applications/Xcode.app/Contents/Developer';
-  if (selected.includes('CommandLineTools') && existsSync(xcode)) {
+  const selected = spawnSync('xcode-select', ['-p'], { encoding: 'utf8' }).stdout?.trim() ?? '', xcode = developerDir();
+  if (xcode !== selected) {
     process.env.DEVELOPER_DIR = xcode;
     console.error(`host/apple: xcode-select names the Command Line Tools (${selected}); using ${xcode}`);
   }
+}
+/** The developer directory an Apple build under `env` uses (`useXcode`). */
+export function developerDir(env = process.env) {
+  if (env.DEVELOPER_DIR) return env.DEVELOPER_DIR;
+  const selected = spawnSync('xcode-select', ['-p'], { encoding: 'utf8', env }).stdout?.trim() ?? '';
+  const xcode = '/Applications/Xcode.app/Contents/Developer';
+  return selected.includes('CommandLineTools') && existsSync(xcode) ? xcode : selected;
+}
+
+/** The oldest SDK each platform's Swift host compiles against: the newest
+ * symbol it names, as the SDK declares it, behind `#available` or not (an
+ * `@available` on the host's own code is no floor: it compiles on an older SDK
+ * when every symbol it names is there). iOS: UIKit's `UIArrangementViewController`,
+ * 27.1 (IOS/ArrangementIOS.swift). tvOS: `AVAudioSession.didBecomeInactiveNotification`
+ * and its `DeactivationContext` and `ResumptionContext`, 27.0 (AudioSession.swift).
+ * macOS: `NSGlassEffectView` (Mac/NodeViewMac.swift) and WKWebView's
+ * `obscuredContentInsets` (webarm/WebArm.swift), 26.0; sound_engine.m compiles
+ * the 27 SDKs' AVAudioEngine calls only from those SDKs. A newer SDK is no
+ * promise that the host compiles; an older one certainly does not. Xcode N.M
+ * carries the N.M SDKs. */
+export const HOST_SDKS = { ios: '27.1', tvos: '27.0', macos: '26.0' };
+/** Each SDK a build compiles with: its platform's floor and its name in a message. */
+const SDK_NAMES = { iphoneos: ['ios', 'iOS'], iphonesimulator: ['ios', 'iOS Simulator'], appletvos: ['tvos', 'tvOS'], appletvsimulator: ['tvos', 'tvOS Simulator'], macosx: ['macos', 'macOS'] };
+/** The SDK an Apple build compiles with: a device's or a simulator's (`device`), or the Mac's. */
+export const appleSdkName = (platform, device) => ({ ios: device ? 'iphoneos' : 'iphonesimulator', tvos: device ? 'appletvos' : 'appletvsimulator', macos: 'macosx' })[platform];
+
+/** Whether a build with `args` is `--embed` alone: what an embedding app links, with no Swift built. */
+export function appleEmbedOnly(args) {
+  return args.includes('--embed') && !args.includes('--archive') && !args.includes('--run') && !args.includes('--host');
+}
+/** Whether a build with `args` compiles the Swift host: neither `--embed` alone nor the Mac's painted carrier
+ *  (`--painted-benchmark`, host/apple-painted) does. */
+export const compilesSwiftHost = (args) => !appleEmbedOnly(args) && !(args.includes('--painted-benchmark') && !['--ios', '--device', '--tvos', '--watchos'].some((flag) => args.includes(flag)));
+
+/** Whether dotted version `have` is older than `need` (`27.0.1` < `27.1`; a missing part is 0). */
+export function olderVersion(have, need) {
+  const a = have.split('.').map(Number), b = need.split('.').map(Number);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0);
+  return false;
+}
+
+/** Why the selected Xcode cannot compile the Swift host with SDK `sdkName`
+ * (`appleSdkName`'s), or null when it can. An SDK older than the floor is
+ * named, with the Xcode it needs and how to select one: it would fail deep in
+ * the Swift compile, after the Rust build, on a missing symbol. An SDK whose
+ * version cannot be read is said in xcrun's own words. `run` runs a command
+ * (as `spawnSync`) in `developer`, the developer directory the build uses. */
+export function xcodeRefusal(sdkName, run = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8' }), developer = developerDir()) {
+  const [platform, label] = SDK_NAMES[sdkName], need = HOST_SDKS[platform];
+  const probe = run('xcrun', ['--sdk', sdkName, '--show-sdk-version']), sdk = probe.status === 0 ? probe.stdout.trim() : '';
+  if (/^\d+(\.\d+)*$/.test(sdk) && !olderVersion(sdk, need)) return null;
+  const built = run('xcodebuild', ['-version']), xcode = `${built.status === 0 ? built.stdout.trim().split('\n')[0] : 'no Xcode'}, ${developer || 'none selected'}`;
+  if (!/^\d+(\.\d+)*$/.test(sdk)) {
+    const said = [...new Set(String(probe.stderr ?? '').split('\n').map(line => line.trim()).filter(line => /error/.test(line)))];
+    return `host/apple: the selected Xcode (${xcode}) could not report its ${label} SDK: ${said.join('; ') || sdk || `xcrun exited ${probe.status ?? probe.error?.message}`}`;
+  }
+  return `host/apple: the selected Xcode (${xcode}) has the ${label} ${sdk} SDK; the Swift host needs the ${label} ${need} SDK, which Xcode ${need} and later carry. `
+    + 'Select one for this build with DEVELOPER_DIR=/path/to/Xcode.app/Contents/Developer, or for every build with sudo xcode-select -s /path/to/Xcode.app';
 }
 const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`;
 const read = (cmd, args, opts = {}) => { useXcode(); return spawnSync(cmd, args, { cwd: root, encoding: 'utf8', ...opts }); };
@@ -664,9 +721,11 @@ export const lacks = (p, required = []) => required.filter((name) => !allowsEnti
  * signing entitlements, LLP 1069.008.000 D4). */
 export const allows = (p, required = []) => !!p && lacks(p, required).length === 0;
 
-/** What a profile that lacks a grant's entitlement needs, said once. */
+/** What a profile that lacks a required entitlement needs, said once. */
 const missing = (bundle, required, why) => new Error(required.includes('com.apple.developer.web-browser')
   ? `browser-device-profile: ${required.join(', ')} required by ${bundle}, and ${why}. Request Apple's managed default-browser approval, enable it for this App ID, then install a profile that grants it (or name it with EXACT_PROFILE).`
+  : required.includes('com.apple.developer.kernel.increased-memory-limit')
+  ? `memory-device-profile: ${required.join(', ')} required by ${bundle} (app.json's host.ios.increasedMemoryLimit${required.length > 1 ? ' and its grants' : ''}), and ${why}. In the Apple Developer portal, enable Increased Memory Limit${required.length > 1 ? ' and the grants\' capabilities' : ''} for the App ID ${bundle}, then install a profile that grants ${required.length > 1 ? 'them' : 'it'} (or name it with EXACT_PROFILE).`
   : `grant-device-profile: ${required.join(', ')} ${required.length > 1 ? 'are' : 'is'} needed by this app's grants, and ${why} (a team wildcard never allows HealthKit). In the Apple Developer portal, register the App ID ${bundle} with that capability, make a development profile for it that includes this phone, and install it (or name it with EXACT_PROFILE).`);
 
 /** A development profile on this Mac covering the phone and the bundle id (the team's wildcard or the id itself, under the profile's App ID prefix, which an older team's App IDs keep apart from its team id), unexpired; DEVELOPMENT_TEAM restricts the team, and EXACT_PROFILE overrides that choice.

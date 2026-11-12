@@ -1,5 +1,5 @@
 {
-  "fleet": "ccheever@100.65.137.99 (expose-builder-pixel)",
+  "fleet": "a Linux machine of the build fleet",
   "runtime": "Bun 1.3.14",
   "setup": {
     "initialPinnedDependenciesSeconds": 1.48,

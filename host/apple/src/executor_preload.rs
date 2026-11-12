@@ -783,7 +783,7 @@ impl FetchEvents for Events {
         }
         let _ = self.send.send(Message::Reply(self.index, result, at));
     }
-    fn next_hop(&self, start: Box<dyn FnOnce() + Send>) {
+    fn next_hop(&self, _url: &str, start: Box<dyn FnOnce() + Send>) {
         let _ = self.send.send(Message::Hop(start));
     }
 }

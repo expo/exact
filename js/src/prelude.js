@@ -651,7 +651,8 @@
     var ticket = nextTicket++;
     // A WebSocket stream owns a two-way socket (LLP 1016.000 D7); an HTTP one's body that is not events is bytes.
     var socket = stream && (!!listen || !!own || /^wss?:/i.test(String(url)));
-    var wire = JSON.stringify({ method: method, url: String(url), headers: Array.from(headers.entries()), body: body, body_base64: bytes ? toBase64(bytes) : undefined, max_response_bytes: ceiling, stream: stream ? true : undefined, socket: socket ? true : undefined, bytes: stream && !socket && !poll && !upload ? true : undefined, upload_progress: upload ? true : undefined, long_poll: poll, timeout_ms: timeout, idle_timeout_ms: idle, body_from: bodyFrom, body_to: bodyTo, redirect: redirect, cache: cache, held: held ? true : undefined, listen: listen });
+    var protocols; try { protocols = binary.socketProtocols(init ? init.exactProtocols : undefined, !!stream && /^wss?:/i.test(url)); } catch (e) { return optionRefused(e); }
+    var wire = JSON.stringify({ protocols: protocols, method: method, url: String(url), headers: Array.from(headers.entries()), body: body, body_base64: bytes ? toBase64(bytes) : undefined, max_response_bytes: ceiling, stream: stream ? true : undefined, socket: socket ? true : undefined, bytes: stream && !socket && !poll && !upload ? true : undefined, upload_progress: upload ? true : undefined, long_poll: poll, timeout_ms: timeout, idle_timeout_ms: idle, body_from: bodyFrom, body_to: bodyTo, redirect: redirect, cache: cache, held: held ? true : undefined, listen: listen });
     var error; try { error = host(1, String(ticket), wire); } catch (e) { throw mark(e); } // only the door's own refusal, never what building the request threw
     if (error !== undefined) return optionRefused(new Error(error));
     call.tickets.push(ticket);
@@ -1346,7 +1347,7 @@
     var o = JSON.parse(outcomeJson), event, socket = call.socket, listened = socket && socket.listen && o.message ? sockets.listenEvent(socket, o.message) : null;
     if (listened) event = listened.event;
     else if (call.upload && (o.response || o.message && o.message.event === "exact:progress")) event = binary.uploadEvent(o);
-    else if (o.message) event = { type: o.message.event || "message", data: binary.messageData(o.message), lastEventId: o.message.id, coalesced: o.message.coalesced };
+    else if (o.message) event = { type: o.message.event || "message", data: binary.messageData(o.message), lastEventId: o.message.id, coalesced: o.message.coalesced, protocol: o.message.protocol };
     else if (o.closed) event = { type: "close", data: "", lastEventId: "", coalesced: 0, code: o.closed.code, reason: o.closed.reason, wasClean: o.closed.wasClean };
     else if (o.failed) event = { type: "error", data: "", lastEventId: "", coalesced: 0, kind: o.failed.kind, message: o.failed.message, status: 0 };
     else event = { type: "error", data: o.response.body, lastEventId: "", coalesced: 0, kind: "Response", message: "HTTP " + o.response.status, status: o.response.status };

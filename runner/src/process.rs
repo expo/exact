@@ -99,6 +99,7 @@ impl Request {
             long_poll: None,
             timeout_ms: None,
             idle_timeout_ms: None,
+            protocols: Vec::new(),
             body_from: None,
             body_to: None,
             redirect: Redirect::Follow,

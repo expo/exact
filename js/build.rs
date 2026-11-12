@@ -216,7 +216,7 @@ fn main() {
         "timers",
         "outlive",
         "kept-json",
-        "nul",
+        "nul-byte",
     ] {
         let source = manifest.join(format!("tests/fixtures/{name}.ts"));
         println!("cargo:rerun-if-changed={}", source.display());

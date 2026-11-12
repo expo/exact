@@ -319,6 +319,101 @@ component Day
 }, 180_000);
 
 
+test('a web reload preserves browser history and a new test isolates it', async () => {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const dir = mkdtempSync(join(root, 'target/reload-history-'));
+  const contract = join(dir, 'app.contract'), plan = join(dir, 'app.plan'), dist = join(dir, 'dist'), file = join(dir, 'app.test.contract');
+  writeFileSync(join(dir, 'app.json'), JSON.stringify({ name: 'History', app: { id: 'test.exact.history', name: 'History' }, host: {}, deploy: {} }));
+  writeFileSync(contract, `routes nav
+  home "/"
+    item "/item/:id"
+
+component App
+  action navigate(url: string)
+    nav = go(nav, url)
+  derive url = top(nav).url
+  derive depth = stack(nav).length
+  view
+    main testId="root" navigationKey=\`\${top(nav).id}\` navigationBack="back" navigate=navigate
+      for e in stack(nav) key=e.id
+        column navigationKey=\`\${e.id}\`
+          text e.url
+`);
+  writeFileSync(file, `test "reload keeps earlier visits" on web
+  type "root" "/item/one"
+  expect state depth == 2
+  type "root" "/item/two"
+  expect state depth == 3
+  tap "root" history -1
+  expect state url == "/item/one"
+  tap "root" history 1
+  expect state url == "/item/two"
+  clock +60000
+  reload
+  expect state url == "/item/two"
+  expect state depth == 2
+  tap "root" history -1
+  expect state url == "/item/one"
+  tap "root" history -1
+  expect state url == "/"
+  tap "root" history 2
+  expect state url == "/item/two"
+  tap "root" history -1
+  expect state url == "/item/one"
+  reload
+  tap "root" history 1
+  expect state url == "/item/two"
+test "a separate test has its own history" on web
+  expect state url == "/"
+`);
+  const compiler = join(process.env.CARGO_TARGET_DIR ?? join(root, 'target'), 'debug', 'contract');
+  let server;
+  try {
+    const compile = spawnSync(compiler, ['build', contract, '-o', plan], { cwd: root, encoding: 'utf8' });
+    expect(compile.status, compile.stderr).toBe(0);
+    const build = spawnSync(process.execPath, ['host/web-js/build.mjs', 'history', '--plan', plan, '--out', dist, '--render', 'none'], { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8' });
+    expect(build.status, build.stderr).toBe(0);
+    server = createServer((request, response) => serveBuildTree(dist, request, response));
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const histories = [], ends = [];
+    const result = await runTests({ host: 'web', file, app: 'caltrain', url: `http://127.0.0.1:${server.address().port}/`,
+      atStep: async (s, step) => { if (['type', 'reload'].includes(step.op)) histories.push(await s.carrier.call('Page.getNavigationHistory')); },
+      atEnd: async (s, t) => {
+        ends.push(await s.carrier.call('Page.getNavigationHistory'));
+        if (t.index === 0) {
+          await s.carrier.reset({ session: true });
+          ends.push(await s.carrier.call('Page.getNavigationHistory'));
+        }
+        return {};
+      },
+    });
+    expect(result.results.map(t => t.failures)).toEqual([[], []]);
+    expect(result.results.map(t => t.end)).toEqual([{}, {}]);
+    const paths = h => h.entries.map(e => new URL(e.url).pathname);
+    expect(paths(histories[0])).toEqual(['/', '/item/one']);
+    expect(paths(histories[1])).toEqual(['/', '/item/one', '/item/two']);
+    for (const history of histories.slice(2)) {
+      expect(paths(history)).toEqual(paths(histories[1]));
+      expect(history.entries.map(e => e.id)).toEqual(histories[1].entries.map(e => e.id));
+    }
+    expect(histories.map(h => h.currentIndex)).toEqual([1, 2, 2, 1]);
+    expect(paths(ends[1])).toEqual(['/']);
+    expect(paths(ends[2])).toEqual(['/']);
+    const { open } = await import('./agent.mjs');
+    const session = await open({ host: 'web', url: `http://127.0.0.1:${server.address().port}/item/7#moves` });
+    try {
+      expect((await session.state()).derives.url).toBe('/item/7');
+      await session.carrier.evaluate('globalThis.beforeSessionReset = true');
+      await session.carrier.reset({ session: true });
+      expect(await session.carrier.evaluate('globalThis.beforeSessionReset ?? false')).toBe(false);
+      expect((await session.state()).derives.url).toBe('/item/7');
+      const history = await session.carrier.call('Page.getNavigationHistory');
+      expect(history.currentIndex).toBe(0);
+      expect(history.entries.map(e => new URL(e.url).pathname + new URL(e.url).hash)).toEqual(['/item/7#moves']);
+    } finally { await session.close(); }
+  } finally { server?.close(); rmSync(dir, { recursive: true, force: true }); }
+}, 180_000);
+
 test('expect refusal asserts an observed mutation failure and preserves unrelated wiring findings', async () => {
   const {refusalsOf} = await import('./verify.mjs');
   const lines=[

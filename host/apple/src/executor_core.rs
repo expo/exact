@@ -66,6 +66,8 @@ struct Running {
     started: std::time::Instant,
     ticket: u64,
     lane: usize,
+    /// The machine's transport; delivery and bytes stay on `lane` (LLP 1162 D1).
+    transport_lane: usize,
     charge: usize,
     limit: usize,
     /// A safe read's own abort, which forgetting fires; other work has none.
@@ -195,6 +197,8 @@ struct Shared {
     /// Notifications issued by the executor, independent of wait scheduling.
     #[cfg(test)]
     worker_notifications: AtomicUsize,
+    #[cfg(test)]
+    queued_deadlines: Arc<AtomicUsize>,
     abort: AbortController,
     /// Where the app's files are, as the host names them; unset on a host or
     /// drive that has none.
@@ -331,6 +335,8 @@ impl Core {
             ready: Condvar::new(),
             #[cfg(test)]
             worker_notifications: AtomicUsize::new(0),
+            #[cfg(test)]
+            queued_deadlines: Arc::default(),
             abort: AbortController::new(),
             root_paths: std::sync::OnceLock::new(),
             roots: std::sync::OnceLock::new(),
@@ -526,13 +532,15 @@ impl Core {
                 .as_millis()
                 .min(u128::from(u64::MAX)) as u64,
         };
-        drained(&mut state, done.ticket);
+        let release_count = drained(&mut state, done.ticket);
         if lane == 0 {
             state.ordered.pop_front();
         }
         state.next = 1 - lane;
         if !done.message {
-            state.counts[lane] -= 1;
+            if release_count {
+                state.counts[lane] -= 1;
+            }
             state.light -= usize::from(done.light);
             state.agains -= usize::from(done.again);
             state.streams -= usize::from(done.stream);
@@ -628,8 +636,12 @@ impl Core {
             state.wake = None;
             // Queued closures are destroyed by their executor owner. Doing
             // it here could run an arbitrary destructor on the UI thread.
-            for queue in &mut state.completed {
-                queue.clear();
+            if self.machine.is_none() {
+                for queue in &mut state.completed {
+                    queue.clear();
+                }
+            } else if let Some(machine) = &self.machine {
+                machine.stop(&mut state);
             }
             state.waiting.clear();
             state.waiting_set.clear();
@@ -642,6 +654,7 @@ impl Core {
         self.preloads.lock().unwrap().take();
         if let Some(machine) = &self.machine {
             machine.retire();
+            self.idle.lock().unwrap().take();
         }
         let _ = stream::close_sockets(&self.shared, None);
         process::quit(&self.shared);
@@ -775,6 +788,9 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
     let finished_at = std::time::Instant::now();
     let mut state = shared.state.lock().unwrap();
     if state.retired {
+        if state.book.retiring {
+            asynch::external_end(shared, &mut state, ticket);
+        }
         return;
     }
     let Some(at) = state.running.iter().position(|run| run.ticket == ticket) else {

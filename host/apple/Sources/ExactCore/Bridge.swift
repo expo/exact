@@ -77,6 +77,9 @@ public struct Batch {
     /// The journal's other lines, for the unified log at a lower level (LLP 1143).
     public var journal: [String] = []
     package var frameWorkTiming: FrameWorkTiming?
+    /// It may change the screen when it applies: it has ops, a control's
+    /// viewless contents, page facts or the orientation lock. An error is only logged.
+    package var changesScreen: Bool { !ops.isEmpty || controls || facts || orientation != nil }
     package init(ops: [BatchOp], timers: Bool, motion: Bool, clock: Double?, error: String?, timerDueMs: Double? = nil, pending: Bool = false, busy: Bool = false) {
         self.ops = ops; self.timers = timers; self.motion = motion; self.clock = clock
         self.error = error; self.timerDueMs = timerDueMs; self.pending = pending
@@ -144,7 +147,9 @@ package final class Runtime {
         guard !destroyed else { return }
         destroyed = true
         let rt = rt
-        on { exact_destroy(rt) }
+        // From a callback the owner waits on (a native module's `call` that
+        // ends its session), after the owner's current job (LLP 1072 T5, §8.4).
+        Owner.shared.syncOrLater { exact_destroy(rt) }
     }
 
     // @ref LLP 1072 T1/T2 — every runtime lives on the owner thread; each
@@ -296,12 +301,12 @@ package final class Runtime {
     }
     /// Boot a snapshot entry's plan by its kind (LLP 1126 D2): the headless
     /// session's boot, which a running host's `bootPlan` refuses.
-    package func bootEntry(_ bytes: Data, kind: String, props: Data? = nil, width: CGFloat, height: CGFloat) -> Batch {
+    package func bootEntry(_ bytes: Data, kind: String, props: Data? = nil, configuration: Data? = nil, width: CGFloat, height: CGFloat) -> Batch {
         let batch = on { () -> Batch in
             let name = Data(kind.utf8)
-            var payload = bytes; payload.append(name); payload.append(props ?? Data())
+            var payload = bytes; payload.append(name); payload.append(props ?? Data()); payload.append(configuration ?? Data())
             _ = write(payload)
-            return read(exact_boot_entry(rt, bytes.count, name.count, props?.count ?? 0, Float(width), Float(height)))
+            return read(exact_boot_entry(rt, bytes.count, name.count, props?.count ?? 0, configuration?.count ?? 0, Float(width), Float(height)))
         }
         return islands(batch)
     }
@@ -843,9 +848,9 @@ package final class Runtime {
     package func bindExtensions(_ names: [String]) { on { exact_bind_extensions(rt, write(names.joined(separator: "\n"))) } }
     /// A package picture's admission (LLP 1133.019 D11 item 1): nil for a
     /// source of no package's scheme.
-    package func picture(_ source: String) -> [String: Any]? {
+    package func picture(_ source: String, count: Bool = true) -> [String: Any]? {
         on(busy: ["error": "NotAllowedError", "message": "busy"]) {
-            let len = exact_picture(rt, write(source))
+            let len = exact_picture(rt, write(source), count ? 1 : 0)
             guard len > 0 else { return nil }
             let data = Data(bytes: exact_out(rt), count: Int(len))
             return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? ["error": "NotAllowedError"]

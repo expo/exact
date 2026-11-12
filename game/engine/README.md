@@ -147,7 +147,8 @@ bound a new message refuses. A device event displaces the oldest move, otherwise
 the oldest non-message; if all entries are messages it refuses the new device event.
 A displaced pointer's deltas join its next queued event when one exists. Each
 kind journals once per overflow episode, which ends below capacity. Paused input
-updates held state directly without tick edges or queued wheel deltas.
+updates held state directly without tick edges or queued wheel deltas, after the
+device events still queued from before the pause.
 Tables, pads and sequence markers use this contract when admitted;
 this engine currently admits keys, pointers, controls, wheels, messages and typed events.
 

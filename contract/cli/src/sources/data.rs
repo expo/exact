@@ -1,9 +1,8 @@
-//! The packages the app's TypeScript data code imports, whose module
-//! declarations are in the plan as a Contract `use` would put them (LLP 1133
-//! D6 rule 1: a data-code call of a declared module is admitted as a
-//! Contract read is, which reads the module's rows). The walk is the
-//! TypeScript half of the bake's `usedPackages` (`js/bake/src/typescript.mjs`),
-//! so the plan names no package the bake does not link.
+//! The declarations needed by TypeScript imports and package views. Data
+//! imports retain their module rows for admission (LLP 1133 D6 rule 1);
+//! a view's rows are retained only if the expanded root places that view.
+//! The TypeScript walk matches the bake's `usedPackages`
+//! (`js/bake/src/typescript.mjs`).
 
 use super::{Loader, Package};
 use crate::resolve::{lexical, resolve, Origin};
@@ -12,6 +11,34 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 impl Loader<'_> {
+    /// Reserve data calls before implicit module declarations take their names.
+    pub(super) fn data_sources(&self) -> BTreeSet<String> {
+        self.units
+            .iter()
+            .enumerate()
+            .flat_map(|(index, unit)| {
+                contract_syntax::scope::sources(&mut unit.file.clone())
+                    .into_iter()
+                    .filter(move |name| !self.names_module(index, name))
+            })
+            .collect()
+    }
+
+    fn names_module(&self, index: usize, name: &str) -> bool {
+        let unit = &self.units[index];
+        unit.file.modules.iter().any(|m| m.name == name)
+            || unit
+                .file
+                .uses
+                .iter()
+                .zip(&unit.targets)
+                .any(|(u, &target)| {
+                    u.names
+                        .iter()
+                        .any(|n| n.local() == name && self.names_module(target, &n.name))
+                })
+    }
+
     /// Load the declaration of each package `app.ts` reaches an import of,
     /// when the program's root is the app's `app.contract`, and mark its
     /// names `imported`. A package that is not a module declaration (a
@@ -24,8 +51,38 @@ impl Loader<'_> {
         {
             return Ok(());
         }
+        self.load_packages(imported(self.app_root), true)
+    }
+
+    /// Read view packages' declarations without marking their names used:
+    /// lowering decides which views the expanded root actually places.
+    pub(super) fn load_view_packages(&mut self) -> Result<(), Vec<crate::CompileError>> {
+        let tags: BTreeSet<String> = self
+            .units
+            .iter()
+            .flat_map(|u| contract_lower::module_tags(&u.file))
+            .map(|(tag, _)| tag)
+            .collect();
+        if tags.is_empty() {
+            return Ok(());
+        }
+        let views = crate::package_views::declared(self.app_root)
+            .map_err(|e| vec![super::name_error(e.id, e.message, Span::default())])?;
+        let packages = views
+            .values()
+            .filter(|v| tags.contains(&v.tag))
+            .map(|v| v.package.clone())
+            .collect();
+        self.load_packages(packages, false)
+    }
+
+    fn load_packages(
+        &mut self,
+        names: BTreeSet<String>,
+        imported: bool,
+    ) -> Result<(), Vec<crate::CompileError>> {
         let app_root = self.app_root;
-        for name in imported(app_root) {
+        for name in names {
             let mut consulted = Vec::new();
             let Ok(resolved) = resolve(&name, app_root, &Origin::App, app_root, &mut consulted)
             else {
@@ -53,14 +110,20 @@ impl Loader<'_> {
                 self.sources.packages.push(package);
             }
             self.sources.consulted.extend(consulted);
-            let described = format!("`{name}`, which the app's data code imports");
+            let described = if imported {
+                format!("`{name}`, which the app's data code imports")
+            } else {
+                format!("`{name}`, which serves a view the app places")
+            };
             let span = Span {
                 line: 1,
                 ..Span::default()
             };
+            let view_only = !imported && !self.cache.contains_key(&resolved.key);
             let unit = self.load_resolved(resolved, &described, span)?;
             for m in &mut self.units[unit].file.modules {
-                m.imported = true;
+                m.imported |= imported;
+                m.view_only |= view_only;
             }
         }
         Ok(())

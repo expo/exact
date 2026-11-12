@@ -118,6 +118,8 @@ bun exact.mjs contract vocab for match persist grouped-form choice   # keywords,
 bun exact.mjs contract vocab timers dates-and-days task        # a timer, a day's log
 ```
 
+For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md).
+
 |Pattern|Already has|
 |---|---|
 |`one-screen`|a tracker: a total, quick-add buttons, a dated log in a file|
@@ -181,8 +183,8 @@ fragment is the same screen: `/item/7#moves` opens at its `id="moves"` once its 
 and a `link href="#moves"` goes there. Every host, the web
 too, hides a stack's covered routes itself (not the page under a sheet, nor a wide split's list
 beside its detail); `for e in stack(nav)` keeps them mounted with their scroll, which `[top(nav)]`
-loses. A query follows the path:
-`` path("home") + `?q=${v}` ``. This list takes the scroll's place:
+loses. A query follows the path, its value encoded:
+`` path("home") + `?q=${encodeURIComponent(v)}` ``. This list takes the scroll's place:
 
 ```contract
 shape Item

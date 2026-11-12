@@ -1,13 +1,13 @@
 //! Letting requests go: the runner's forgotten ones (safe reads cancelled,
-//! the rest let run), an app's aborted ones (cancelled whatever their method),
-//! and queued requests that can no longer start.
+//! the rest let run) and an app's aborted ones (cancelled whatever their method).
 use super::*;
 
 /// Dropping a queued request also retires its timer. Only independent HTTP
 /// uses this timer; its wait counts against the same deadline as transport.
 pub(super) struct QueuedDeadline {
     at: std::time::Instant,
-    _done: std::sync::mpsc::Sender<()>,
+    _done: Option<std::sync::mpsc::Sender<()>>,
+    machine: Option<(Arc<asynch::timer::Timer>, (u64, u64))>,
 }
 
 impl QueuedDeadline {
@@ -15,9 +15,16 @@ impl QueuedDeadline {
         let at = std::time::Instant::now() + std::time::Duration::from_millis(ms.into());
         let (done, wait) = std::sync::mpsc::channel();
         let owner = Arc::downgrade(shared);
+        #[cfg(test)]
+        let active = {
+            shared.queued_deadlines.fetch_add(1, Ordering::AcqRel);
+            DeadlineThread(shared.queued_deadlines.clone())
+        };
         std::thread::Builder::new()
             .name("exact-queued-deadline".into())
             .spawn(move || {
+                #[cfg(test)]
+                let _active = active;
                 if !matches!(
                     wait.recv_timeout(at.saturating_duration_since(std::time::Instant::now())),
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout)
@@ -31,24 +38,29 @@ impl QueuedDeadline {
                 if state.retired {
                     return;
                 }
-                let Some(index) = state.jobs[lane].iter().position(|job| job.ticket == ticket)
-                else {
-                    return;
-                };
-                settle_queued(
-                    &shared,
-                    &mut state,
-                    lane,
-                    index,
-                    ms.into(),
-                    failed(
-                        FailureKind::Timeout,
-                        format!("the request timed out after {ms} ms"),
-                    ),
-                );
+                expire_queued(&shared, &mut state, lane, ticket, ms);
             })
             .map_err(|_| ())?;
-        Ok(Self { at, _done: done })
+        Ok(Self {
+            at,
+            _done: Some(done),
+            machine: None,
+        })
+    }
+
+    pub(super) fn on_machine(
+        timer: Arc<asynch::timer::Timer>,
+        lane: usize,
+        ticket: u64,
+        ms: u32,
+    ) -> Self {
+        let at = std::time::Instant::now() + std::time::Duration::from_millis(ms.into());
+        timer.arm(ms, lane, (ticket, 0), AbortController::new());
+        Self {
+            at,
+            _done: None,
+            machine: Some((timer, (ticket, 0))),
+        }
     }
 
     pub(super) fn remaining(&self, request: &mut Request) -> bool {
@@ -59,6 +71,40 @@ impl QueuedDeadline {
         request.timeout_ms = Some(left.as_nanos().div_ceil(1_000_000).min(u32::MAX as u128) as u32);
         true
     }
+}
+
+#[cfg(test)]
+struct DeadlineThread(Arc<AtomicUsize>);
+#[cfg(test)]
+impl Drop for DeadlineThread {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+impl Drop for QueuedDeadline {
+    fn drop(&mut self) {
+        if let Some((timer, run)) = &self.machine {
+            timer.remove(*run);
+        }
+    }
+}
+
+pub(super) fn expire_queued(shared: &Shared, state: &mut State, lane: usize, ticket: u64, ms: u32) {
+    let Some(index) = state.jobs[lane].iter().position(|job| job.ticket == ticket) else {
+        return;
+    };
+    settle_queued(
+        shared,
+        state,
+        lane,
+        index,
+        ms.into(),
+        failed(
+            FailureKind::Timeout,
+            format!("the request timed out after {ms} ms"),
+        ),
+    );
 }
 
 /// A stream admitted after a read was queued may have taken the room it needs.
@@ -165,19 +211,23 @@ impl Core {
                     true
                 });
                 let running = &mut state.running;
+                let book = &mut state.book;
                 state.completed[lane].retain(|done| {
                     if held(done.ticket) {
                         return true;
                     }
                     // Its bytes held by a job still physically running go
                     // when that ends (LLP 1120 D5).
-                    if let Some(run) = running.iter_mut().find(|r| r.ticket == done.ticket) {
-                        run.drained = true;
-                    }
+                    let release_count = running
+                        .iter_mut()
+                        .find(|r| r.ticket == done.ticket)
+                        .is_none_or(|run| asynch::release_count(book, run));
                     // A forgotten stream's message: the stream itself
                     // releases the reservation when its reader ends.
                     if !done.message {
-                        *counts -= 1;
+                        if release_count {
+                            *counts -= 1;
+                        }
                         *light -= usize::from(done.light);
                         *agains -= usize::from(done.again);
                         *streams -= usize::from(done.stream);

@@ -383,7 +383,11 @@ and imports. Rust argument edits reach that declaration through the next GPU bui
 so while the game's Rust is newer than it, `contract build` reports its findings as
 warnings beside every other diagnostic, and `contract types` and `contract rust`
 never stop on them; a bake checks them against the declaration it has just written.
-The dev compiler retains its last good plan on an error.
+The dev compiler retains its last good plan on an error. A native or web build also
+checks the plan against the GPU product it packages, which carries its own argument
+names: when a source changed while the build ran, so that a canvas passes a name the
+product lacks or more values by position than it has arguments, the build stops with
+"build again" rather than ship a canvas that fails to bind.
 
 ### Controls
 

@@ -32,7 +32,7 @@ use std::rc::Rc as SurfaceRef;
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc as SurfaceRef;
 
-pub use exact_plan::Value;
+pub use exact_plan::{surface_arguments, Value};
 pub use wgpu;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -322,7 +322,10 @@ pub trait Surface {
     }
     /// Every output pixel of this instance has alpha one under its current
     /// clear/background policy. Evaluated after binding, never by surface type.
-    /// Allows a host to present a full-window canvas beneath its UI.
+    /// Allows a host to present a full-window canvas beneath its UI. On Android
+    /// that is a `SurfaceView` the system compositor takes as its own layer; a
+    /// canvas that is not opaque is composed into the window instead, so every
+    /// frame it draws makes HWUI redraw the window.
     fn opaque(&self) -> bool {
         false
     }

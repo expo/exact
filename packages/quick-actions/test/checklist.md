@@ -95,10 +95,13 @@ Build: `bun scripts/agent-android.mjs build shelf --apk`, then `adb
 install -r` the APK it names.
 
 10. **The launcher's menu.** Long press Shelf's icon: Add Book and, after
-    Shelf has run once, Continue *title*. Tap Add Book, cold and with
-    Shelf in the background: Shelf shows the add sheet each time.
+    Shelf has run once, Continue *title*. Add Book has a plus icon;
+    Continue keeps the launcher's circle because it declares no symbol.
+    Tap Add Book, cold and with Shelf in the background: Shelf shows the
+    add sheet each time.
 11. **A pinned shortcut.** Drag Continue *title* from the menu to the
-    Home Screen; tap it: Shelf opens on the book.
+    Home Screen: it keeps the launcher's circle. Tap it: Shelf opens on
+    the book.
 12. **A URL from outside.** `adb shell am start -a
     android.intent.action.VIEW -d /add -n <package>/dev.exact.app.MainActivity`,
     cold and warm: Shelf lands on the add sheet. `-d /nowhere`: Shelf
@@ -107,6 +110,11 @@ install -r` the APK it names.
 
 AppFunctions (Log Pages from Gemini) are not built (LLP 1133.023 stage
 3's as-built note).
+
+Android resolves `apple.symbol` through the shared symbol table, using its
+Material shape where one exists. A missing symbol or one with no portable
+counterpart leaves the icon to the launcher, for static, dynamic and pinned
+shortcuts alike.
 
 ## Windows (the NucBox, signed-in console session)
 

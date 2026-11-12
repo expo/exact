@@ -47,6 +47,7 @@ import { interfaceStyle, withInterfaceStyle, withLook } from './look.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
 import { appManifestDigest, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
 import { foreignBeside } from './generations.mjs';
+import { writeAppleAssociation } from './association.mjs';
 
 guardFlags('web-build', process.argv.slice(2));
 const target = ['--js', '--wasm'].find((flag) => process.argv.includes(flag));
@@ -128,6 +129,9 @@ if (target !== '--wasm' && !game && !bakeOnly) {
     // the build rewrote them, are one line (LLP 1116.001 D4.5).
     for (const line of compiler) console.error(line);
     for (const line of (js.stderr ?? '').split('\n')) if (/^(warning|app\.contract\.d\.ts): /.test(line)) console.error(line);
+    // The origin's association file, from the manifest's claims (LLP 1030 D1). Its `webcredentials` comes from the
+    // bake's grants, which only the wasm build below runs.
+    writeAppleAssociation(stage, app);
     // The receipt first, since what it records may come from the build's intermediates. `release`: a site to host
     // (`--out`), built again (to the same directory, as a release) when what it was built from changes.
     // `env`: each setting app.ts read, as inlined, and its source (LLP 1153 D4), for the drive's logs and `changedSettings`.
@@ -509,13 +513,7 @@ const authReach = bakedReceipt.reach?.auth ?? {};
 const originHost = app.origin ? new URL(app.origin).hostname : null;
 const passkeyHere = (authReach.passkeys ?? []).includes(originHost);
 const webcredentials = passkeyHere || (authReach.callbacks ?? []).some((c) => app.origin && c.startsWith(new URL(app.origin).origin + '/'));
-if ((ios.associatedDomains || webcredentials) && ios.team) {
-  mkdirSync(resolve(stage, '.well-known'), { recursive: true });
-  writeFileSync(resolve(stage, '.well-known/apple-app-site-association'), JSON.stringify({
-    ...(ios.associatedDomains ? { applinks: { details: [{ appIDs: [`${ios.team}.${app.id}`], components: [{ '/': '*' }] }] } } : {}),
-    ...(webcredentials ? { webcredentials: { apps: [`${ios.team}.${app.id}`] } } : {}),
-  }) + '\n');
-}
+writeAppleAssociation(stage, app, { webcredentials });
 // Android's statement (LLP 1133.011 D6): the package may use this domain's passkeys, for each certificate the app
 // lists. Every other RP ID's two entries are printed, for the domain that serves it.
 const certificates = app.manifest.host?.android?.certificates ?? [];

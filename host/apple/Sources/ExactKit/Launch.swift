@@ -205,9 +205,9 @@ public final class ExactLaunch: NSObject {
         scheduleEvaluate()
     }
 
-    /// Records a batch that changed the screen (one with ops).
+    /// Records a batch that changed the screen (`Batch.changesScreen`).
     func applied(_ session: ExactSession, _ batch: Batch) {
-        guard session === launchSession, ttiOutcome == nil, !batch.ops.isEmpty else { return }
+        guard session === launchSession, ttiOutcome == nil, batch.changesScreen else { return }
         // Nothing outstanding, but the screen still changing: TTI waits for
         // a frame with no change, so this is what holds it then (a fresh
         // answer replacing a kept one, a fade). Its span: first to last.
@@ -223,8 +223,9 @@ public final class ExactLaunch: NSObject {
     }
 
     /// A batch's op kinds and a few of the views it touched (test ID, else
-    /// kind), for the TTI trace.
+    /// kind), or what it changed with no ops, for the TTI trace.
     private static func summary(_ batch: Batch, _ presenter: Presenter) -> String {
+        if batch.ops.isEmpty { return [batch.controls ? "controls" : nil, batch.facts ? "facts" : nil, batch.orientation != nil ? "orientation" : nil].compactMap { $0 }.joined(separator: " ") }
         var kinds: [String: Int] = [:], names: [String] = []
         for op in batch.ops {
             kinds[op.op.rawValue, default: 0] += 1
@@ -294,7 +295,9 @@ public final class ExactLaunch: NSObject {
     /// `kind:name` items, plus failed resources and whether the runner is
     /// poisoned. Nil when there is none to read: a destroyed session, or a
     /// runner that answers with an error (busy, gone), whose missing lists
-    /// would otherwise read as nothing outstanding.
+    /// would otherwise read as nothing outstanding. The runner's call comes
+    /// first and waits for the owner, so work sent there before it has
+    /// published its batch when `hostOutstanding` reads the published queue.
     static func ledger(_ session: ExactSession) -> (items: [String], failed: [String], poisoned: Bool)? {
         guard session.state != .destroyed, let data = session.agent("{\"op\":\"outstanding\"}").data(using: .utf8),
               let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any], o["error"] == nil else { return nil }

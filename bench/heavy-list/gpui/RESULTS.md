@@ -2197,7 +2197,7 @@ client, against the Mac's 800×768 content area. Rust is **1.97.0**, Bun
 **1.4.2**; the native build uses SDK **10.0.26100.0**'s x64 `fxc`.
 The measured executables use source `f3bd9710aa`, based on `origin/main`
 `48653eb5cb`, which includes the requested `be5413a907`. The clean NucBox mirror at
-`C:\Users\Charlie Cheever\projects\exact2` advanced through local Git
+`C:\Users\<user>\projects\exact2` advanced through local Git
 bundles on `lane/g6-windows`; no branch was pushed. The spaced startup
 driver is `336fa9e44b`; the executables are unchanged.
 
@@ -6598,7 +6598,7 @@ Aqua session with a fresh suffix, after the before-each-launch M10 guard:
 
 ```sh
 cd ~/projects/exact2-measure
-sudo -n launchctl asuser $(id -u) sudo -u ccheever \
+sudo -n launchctl asuser $(id -u) sudo -u <user> \
   /usr/bin/caffeinate -u -d -i /usr/bin/python3 \
   target/g0/clock-2035d50319/run-clock.py services --suffix=-new
 ```
@@ -7462,7 +7462,7 @@ The original and updated default summaries agree on all 30 startup samples;
 the local 120 Hz summary equals the NucBox summary.
 
 The own mirror is
-`C:\Users\Charlie Cheever\projects\exact2-1149-001-win120`.
+`C:\Users\<user>\projects\exact2-1149-001-win120`.
 Its `target/g7/` retains the exact build scripts, logs, binary hashes,
 mode enumerations, driver snapshots, three diagnostic captures and CSVs,
 startup JSON/quiet logs, native test outputs, DPI captures and UIA tree.
@@ -7689,7 +7689,7 @@ The main base is `4ee50baec5`; before is instrumented `b7c52c6d22`, after is
 GPUI and egui `a91fd38b4d`, with the same probe in all five bundles. All
 executable/library and instrument hashes match the silver provenance.
 `target/m10-cut7/measured-source.bundle` retains the pre-rebase commits. The remote original
-is `/Users/ccheever/projects/exact2-measure/target/g0/m10-cut7-4ee50baec5/`;
+is `~/projects/exact2-measure/target/g0/m10-cut7-4ee50baec5/`;
 the local signed mirror and every raw attempt are in `target/m10-cut7/silver/`.
 
 Preparation attempt 1 uses a LaunchAgent and fails Accessibility preflight
@@ -7865,7 +7865,7 @@ formatting, `git diff --check` and staged structural caps with
 ### Vulkan and Windows parity after review
 
 Claude 1's Vulkan gap is closed at `b1b0e9c993`. The tracked sources were
-rsynced to `ccheever@100.85.211.16` (`expose-builder-pixel-a`), into its own
+rsynced to a Linux machine of the team's build fleet, into its own
 `~/projects/exact2-wt-1149-raster`, and every changed runtime file was checked
 against the local SHA-256 manifest. The builder ran Rust 1.97.0 and Bun 1.4.2.
 Mesa lavapipe 25.2.8 was extracted under that mirror's
@@ -7998,7 +7998,7 @@ zero paint attempts and presentations in both carriers; caret presents
 twenty frames in each sample.
 
 Retained evidence is `target/m10-cut7-review/silver/`, mirrored from
-`/Users/ccheever/projects/exact2-measure/target/g0/m10-cut7-review-b1b0e9c993/`.
+`~/projects/exact2-measure/target/g0/m10-cut7-review-b1b0e9c993/`.
 `session-1/` and `session-2/` contain every attempt, ready record, driver log,
 schedule, five-second quiet observation and power configuration.
 `combined/selection.json` names the pairs; `combined/paired.json` contains
@@ -8548,7 +8548,7 @@ match `data.sha256`. No display events are posted on the black Mac.
 
 All artifacts are retained under `target/m10-c1b/`, with silver's raw output
 under `silver/`; the remote root is
-`ccheever@100.76.94.78:~/projects/exact2-measure/target/g0/m10-c1b/`.
+`~/projects/exact2-measure/target/g0/m10-c1b/`.
 `InkBefore.app`, `InkAfter.app`, `InkAfter2.app` and `InkAfter3.app` retain the
 local signed binaries. Each remote cohort's `provenance.json` records the
 executable and driver hashes. `after-source.patch` preserves the final
@@ -8755,7 +8755,7 @@ The diagnostic source is **`6f8ea91f86`**; product code is unchanged by this
 cut. `target/m10-c1c/silver/` retains the measured signed bundle copies,
 probe and fixture binaries, launch scripts, raw records and session logs.
 The remote copy is
-`ccheever@100.76.94.78:~/projects/exact2-measure/target/g0/m10-c1c/`.
+`~/projects/exact2-measure/target/g0/m10-c1c/`.
 All windows ran there through `sudo -n /bin/launchctl asuser 501`, followed
 by a user switch and `caffeinate -u -d -i`. No GO file was needed and no
 display events were posted on the development Mac.
@@ -9437,7 +9437,7 @@ and `caffeinate -u -d -i`. No GO file or development-Mac display input was neede
 Use a fresh output base when repeating; preserve all recorded originals.
 
 Retained evidence is `target/m10-c2/silver/`, with its remote copy at
-`ccheever@100.76.94.78:~/projects/exact2-measure/target/g0/m10-c2/`.
+`~/projects/exact2-measure/target/g0/m10-c2/`.
 `build-context.json` records main `4a165fd466`, source `8116a09a55`, Bun and
 Rust versions; `after-source.patch` retains the source delta against the M10 tip.
 Reproduce the tables and each launch's load maxima without opening a window:
@@ -9681,7 +9681,7 @@ retained cut 2 arms; after is `a98e9b83f2`, rebased onto `47bdcd085f`.
 committed before the run in `22e11bd5f7`. No new benchmark hook is added.
 
 Raw files are retained locally at `target/m10-c3/silver/` and on the silver at
-`ccheever@100.76.94.78:~/projects/exact2-measure/target/g0/m10-c3/`.
+`~/projects/exact2-measure/target/g0/m10-c3/`.
 `collection-final.json` retains each collection command, PID and exit;
 `provenance.json` and each cohort’s copy hash the executables. Every signed
 measurement arm receives a throwaway launch before collection.
@@ -9949,8 +9949,8 @@ The implementation is `35eea646e6`; `build-context.json` records the rebase,
 tool versions, worktree and build command. All arms use the worktree's own
 build output or the retained signed controls. The silver needs no go file.
 
-Raw files are retained at `target/m10-c4/silver/` locally and at
-`ccheever@100.76.94.78:~/projects/exact2-measure/target/g0/m10-c4/`.
+Raw files are retained at `target/m10-c4/silver/` locally and on the silver at
+`~/projects/exact2-measure/target/g0/m10-c4/`.
 `collection-final.json` records commands, PIDs and exits; each cohort's
 `provenance.json` hashes its executables. Re-run the retained `run-final.py`
 in a fresh artifact directory, in the silver's GUI session under
@@ -10299,8 +10299,8 @@ cut 4's retained signed controls. `instrument-diff.patch` is empty: the
 committed probe, driver and wheel helper are unchanged. The two Ink probes
 have the same SHA-256, recorded in `silver/probe-hashes.json`.
 
-Raw files remain in `target/m10-c5/silver/` and
-`ccheever@100.76.94.78:~/projects/exact2-measure/target/g0/m10-c5/`.
+Raw files remain in `target/m10-c5/silver/` and, on the silver,
+`~/projects/exact2-measure/target/g0/m10-c5/`.
 The silver is dedicated and requires no go file. `collection-final.json`
 records each command, PID and exit; cohort provenance files hash the signed
 executables. All freshly signed arms receive a throwaway launch before the
@@ -10600,7 +10600,7 @@ not established by these one-sample checks. The ordinary idle stop and
 post-boot drawing behavior pass their separate drives.
 
 **Reproduction and retained files.** Work stays in
-`/Users/ccheever/projects/exact2-wt-1149-c1`, branch
+`~/projects/exact2-wt-1149-c1`, branch
 `lane/1149-001-m10-c1`. The lane rebased onto `ab50634c87` before the fix;
 `rebase.txt` and `rebase-code.diff` retain that boundary. Prediction commit
 `50d2444b49` precedes the candidate run; implementation `54929835ce` is the
@@ -11196,7 +11196,7 @@ The background diagnostic uses a separate copied bundle and probe; it
 does not supply a scoreboard sample.
 
 The retained silver session is
-`/Users/ccheever/projects/exact2-measure/target/g0/m10-review-fix/landing/`,
+`~/projects/exact2-measure/target/g0/m10-review-fix/landing/`,
 mirrored locally at `target/m10-review-fix/landing/silver/`. Launches are
 process-cold with application and system caches retained. The driver
 commands, environment policy, original slots, quiet observations and
@@ -11842,7 +11842,7 @@ with G6's 25 ms.
 ### G7b reproduction and verification
 
 All originals remain at `target/g7b/` in this worktree and
-`C:\Users\Charlie Cheever\projects\exact2-1149-001-win120b\target\g7b\`
+`C:\Users\<user>\projects\exact2-1149-001-win120b\target\g7b\`
 on the NucBox. The local `nucbox/` tree mirrors the observations: both
 60-launch cold cohorts, all 20 first-paint processes, both failed foreground
 attempts and all six capture-repair diagnostics. No earlier retained files
@@ -12120,7 +12120,7 @@ raw Unix/QPC times, rather than repeated local 01:xx labels, establish order.
 ### G7c reproduction and verification
 
 Retained evidence is under `target/g7c/` in this worktree and
-`C:\Users\Charlie Cheever\projects\exact2-1149-001-win120b\target\g7c\`
+`C:\Users\<user>\projects\exact2-1149-001-win120b\target\g7c\`
 on the NucBox. No G7b raw files or binaries are removed. The local `nucbox/`
 tree mirrors the cold and visible cohorts, including excluded attempts,
 application and PresentMon logs, PID logs, CPU endpoints, wheel posts,

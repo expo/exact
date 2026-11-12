@@ -100,7 +100,7 @@ pub fn extensions(plan: &Plan) -> Vec<String> {
 /// members spelled out, so a preferred value outside them is refused; then a
 /// loader of each extension's web implementation (`ext-<name>.js`, which
 /// the build writes beside the app, LLP 1133.002 D15); then each package
-/// view, by its tag, `[extension, displayed, binding props]` (views.js);
+/// view, by its tag, `[extension, displayed, binding props, agent vocabulary]` (views.js);
 /// then the events the root hears.
 fn modules(plan: &Plan, body: &mut String) -> String {
     if plan.modules.is_empty() && plan.views.is_empty() && plan.module_events.is_empty() {
@@ -141,11 +141,12 @@ fn modules(plan: &Plan, body: &mut String) -> String {
         .map(|v| {
             let binds: Vec<&str> = plan.str(v.binds).split_whitespace().collect();
             format!(
-                "{}:[{},{},{}]",
+                "{}:[{},{},{},{}]",
                 serde_json::to_string(plan.str(v.tag)).unwrap(),
                 serde_json::to_string(plan.str(v.extension)).unwrap(),
                 v.displayed,
-                serde_json::to_string(&binds).unwrap()
+                serde_json::to_string(&binds).unwrap(),
+                plan.str(v.agent)
             )
         })
         .collect();
@@ -234,6 +235,24 @@ pub fn activation(plan: &Plan) -> String {
         runtime_kept(plan) || exact_runner::activation::wake(plan).is_none(),
         exact_runner::viewport_reads::Reads::of(plan).any()
     )
+}
+
+#[test]
+fn a_view_carries_its_agent_vocabulary_without_module_names() {
+    let mut plan = exact_plan::builder::PlanBuilder::new(0, 0)
+        .finish()
+        .unwrap();
+    plan.add_view(
+        "words-panel",
+        ("words", "@fixture/words"),
+        false,
+        &[],
+        r#"{"heard":"string"}"#,
+    );
+    let mut body = String::new();
+    modules(&plan, &mut body);
+    assert!(body.contains(r#""words-panel":["words",false,[],{"heard":"string"}]"#));
+    assert!(body.contains(r#""words":()=>import("./ext-words.js")"#));
 }
 
 #[test]

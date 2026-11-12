@@ -987,6 +987,11 @@
         {
           "name": "binds",
           "codec": "str"
+        },
+        {
+          "name": "agent",
+          "codec": "str",
+          "_comment": "LLP 1133.012 §9: the interface's agent vocabulary as a JSON object, including a view-only interface with no module names."
         }
       ]
     },

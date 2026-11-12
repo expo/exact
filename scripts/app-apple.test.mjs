@@ -9,7 +9,7 @@ import { delimiter, resolve, toNamespacedPath } from 'node:path';
 import { HERMES_INSTALLER, PINNED_RUST, hermesBundle, hermesLeanSysRoots } from './app.mjs';
 import { androidHermes, checkHermesBundles, appleCrossTargets, appleSetupTargets, platformRowNames } from './exact.mjs';
 import { iosAssets, iosTarget, entitlements, infoPlist, macInfoPlist, documentTypes, importedTypes, exportedTypes, writeUsageStrings, designCompatible, COMPATIBLE_SDK, moduleTripleFor } from '../host/apple/build.mjs';
-import { useXcode } from '../host/apple/devices.mjs';
+import { HOST_SDKS, olderVersion, useXcode, xcodeRefusal } from '../host/apple/devices.mjs';
 import { encodePng } from './png.mjs';
 import { macReleaseEntitlements, launchImageInventory } from '../host/apple/assets.mjs';
 
@@ -287,6 +287,8 @@ test.skipIf(process.platform === 'win32')('an iOS, phone, Apple TV or iOS test b
     const build = (installed, ...args) => {
       // The pinned toolchain has `installed`; an ambient RUSTUP_TOOLCHAIN's has every target, which the build does not use.
       writeFileSync(resolve(bin, 'rustup'), `#!/bin/sh\ncase " $* " in *" --toolchain ${PINNED_RUST} "*) printf '${installed}\\n';; *) printf '${[iosTarget, 'aarch64-apple-ios', 'aarch64-apple-tvos', 'aarch64-apple-tvos-sim'].join('\\n')}\\n';; esac\n`, { mode: 0o755 });
+      // This machine's Xcode is not what is tested: its SDK is new enough.
+      writeFileSync(resolve(bin, 'xcrun'), `#!/bin/sh\ncase "$*" in *--show-sdk-version*) echo ${HOST_SDKS.ios};; *) exec /usr/bin/xcrun "$@";; esac\n`, { mode: 0o755 });
       return spawnSync(process.execPath, ['host/apple/build.mjs', ...args, 'no-such-app'], { encoding: 'utf8', env: { ...process.env, RUSTUP_TOOLCHAIN: 'stable', PATH: bin + delimiter + process.env.PATH } });
     };
     const phone = build('aarch64-apple-ios-sim', '--device');
@@ -310,8 +312,8 @@ test.skipIf(process.platform === 'win32')('an archive of an app without a 1024 p
     const bin = resolve(scratch, 'bin'), app = resolve(scratch, 'noicon'), log = resolve(scratch, 'log');
     mkdirSync(bin); mkdirSync(app);
     writeFileSync(resolve(bin, 'rustup'), `#!/bin/sh\nprintf 'aarch64-apple-ios\\n'\n`, { mode: 0o755 });
-    // Every compiler the build could start records that it was started, and compiles nothing.
-    for (const tool of ['cargo', 'rustc', 'swift', 'swiftc', 'xcodebuild', 'xcrun']) writeFileSync(resolve(bin, tool), `#!/bin/sh\necho "${tool} $*" >> '${log}'\nexit 9\n`, { mode: 0o755 });
+    // Every compiler the build could start records that it was started, and compiles nothing; the SDK is new enough.
+    for (const tool of ['cargo', 'rustc', 'swift', 'swiftc', 'xcodebuild', 'xcrun']) writeFileSync(resolve(bin, tool), `#!/bin/sh\n${tool === 'xcrun' ? `case "$*" in *--show-sdk-version*) echo ${HOST_SDKS.ios}; exit 0;; esac\n` : ''}echo "${tool} $*" >> '${log}'\nexit 9\n`, { mode: 0o755 });
     writeFileSync(resolve(app, 'app.contract'), 'component A\n');
     mkdirSync(resolve(app, 'assets'));
     writeFileSync(resolve(app, 'assets/small.png'), encodePng({ width: 192, height: 192, data: new Uint8Array(192 * 192 * 4).fill(255) }));
@@ -846,6 +848,22 @@ test('an App Clip is its parent\'s app under a second identity: NSAppClip, the p
   const origin = { ...app, origin: 'https://exact.test', manifest: { host: { ios: { associatedDomains: true, appClip: {} } } } };
   assert.match(flat(entitlements({ ...origin, id: clip.id, clipParent: app.id }, 'TEAM', true)), /<array><string>appclips:exact.test<\/string><\/array>/);
   assert.doesNotMatch(entitlements({ ...origin, widgetTV: true }, 'TEAM', true), /appclips:/);
+  // The origin's association file names the clip under `appclips`, beside the app's `applinks` (LLP 1030).
+  const { appleAssociation } = await import('../host/web/association.mjs');
+  const team = (a) => ({ ...a, manifest: { host: { ios: { ...a.manifest.host.ios, team: 'TEAM' } } } });
+  assert.deepEqual(appleAssociation(team(origin)), {
+    applinks: { details: [{ appIDs: ['TEAM.com.exact.test'], components: [{ '/': '*' }] }] },
+    appclips: { apps: ['TEAM.com.exact.test.Clip'] },
+  });
+  assert.deepEqual(Object.keys(appleAssociation({ ...team(base), origin: 'https://exact.test' }, { webcredentials: true })), ['applinks', 'webcredentials']);
+  assert.equal(appleAssociation(origin), null, 'no team, no file');
+  // It claims the app only where the entitlements claim this origin's host as applinks:.
+  const listed = (associatedDomains) => team({ ...origin, manifest: { host: { ios: { associatedDomains, appClip: {} } } } });
+  assert.equal(appleAssociation(listed(['applinks:other.example'])), null);
+  assert.equal(appleAssociation(listed([])), null);
+  assert.deepEqual(Object.keys(appleAssociation(listed(['applinks:exact.test?mode=developer']))), ['applinks', 'appclips']);
+  assert.deepEqual([['applinks:*.exact.test'], ['applinks:*.test'], ['applinks:*.xexact.test']].map((l) => !!appleAssociation(listed(l))), [true, true, false]);
+  assert.equal(appleAssociation({ ...team(origin), origin: undefined }), null, 'no origin, no host to claim');
   // With widgets, the clip shares the parent's App Group and Keychain group, and takes no push environment.
   const entries = { ...app, manifest: { ...app.manifest, live_activities: [{ kind: 'departure', push: true }] } };
   const grouped = flat(entitlements({ ...entries, id: clip.id, clipParent: app.id }, 'TEAM', true, null, { prefix: 'PREFIX' }));

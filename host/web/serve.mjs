@@ -31,7 +31,7 @@ const PUBLIC_FILES = new Set([
   '/app.js', '/app.hbc', '/app.module.json', '/app.plan', '/app.wasm', '/exact.json',
   '/gpu.js', '/gpu_bg.wasm', '/markup-editor.wasm', '/textflow.wasm', '/index.html', '/manifest.json',
   // The one dot path a static origin serves: the deep-link association
-  // file bake generates (LLP 1030 D1), read by Apple's CDN over HTTPS.
+  // file the web build writes (LLP 1030 D1), read by Apple's CDN over HTTPS.
   '/.well-known/apple-app-site-association',
 ]);
 // `/gpu/`: each declared GPU module's wasm and its glue (LLP 1009 D6).
@@ -836,9 +836,9 @@ export function buildTreeFileAsync(dist, pathname, accept = '', { miss = false }
 function* treeFile(dist, pathname, accept, miss) {
   let path;
   try { path = installRoute(decodeURIComponent(pathname)); } catch { return null; }
-  // No dot path, but the auth callback page's (LLP 1069.006 D4: `/.exact/auth/…`)
-  // and the install pages and their data (LLP 1030.003 D6a).
-  if (!path.startsWith('/') || path.includes('\\') || path.includes('\0') || (!INSTALL_PUBLIC.includes(path) && path.replace(/^\/\.exact\/auth\//, '/').split('/').some((part) => part.startsWith('.')))) return null;
+  // No dot path, but the auth callback page's (LLP 1069.006 D4: `/.exact/auth/…`), the install pages and their
+  // data (LLP 1030.003 D6a), and the deep-link association file (`PUBLIC_FILES`).
+  if (!path.startsWith('/') || path.includes('\\') || path.includes('\0') || (!PUBLIC_FILES.has(path) && path.replace(/^\/\.exact\/auth\//, '/').split('/').some((part) => part.startsWith('.')))) return null;
   const navigation = acceptsHTML(accept), page = navigation && appDocumentPath(pathname, true);
   // Asked again, three times at most: a build put in place as it was looked up
   // moves the tree it resolved away under it (its files then resolve to

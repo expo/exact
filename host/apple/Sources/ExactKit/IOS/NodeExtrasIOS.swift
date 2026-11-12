@@ -373,9 +373,7 @@ extension NodeView {
         canvas.needsCapture = true
         canvases?.scheduleCapture()
     }
-    /// Its filter published new pixels, at once or when its chain landed: the
-    /// canvas it is drawn through captures it again, as that picture
-    /// (`filterPicture`).
+    /// Its filter's pixels or layer effect changed: its canvas captures again.
     func filterPublished() {
         guard let canvas = canvasAbove else { return }
         canvas.needsCapture = true

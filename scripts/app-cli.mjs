@@ -283,7 +283,9 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
     const shells = await import(resolve(exact2, 'scripts/app-shells.mjs'));
     const named = shells.namesPlatform(existsSync(manifest) ? JSON.parse(readFileSync(manifest, 'utf8')) : {}, platform);
     const device = rest.includes('--device') || verb === 'share';
-    const report = named ? null : await import(resolve(exact2, 'scripts/exact.mjs')).then(({ sdkReport, platformReport }) => platformReport(platform, sdkReport(process.env, { only: platform, device }), { device })).catch((error) => ({ error: String(error?.message ?? error) }));
+    // The Xcode row holds a build to the SDK it compiles with, and only a build that compiles the Swift host to its floor.
+    const destination = { only: platform, device, tv: rest.includes('--tvos'), swift: named || await import(resolve(exact2, 'host/apple/devices.mjs')).then(({ compilesSwiftHost }) => compilesSwiftHost(rest), () => true) };
+    const report = named ? null : await import(resolve(exact2, 'scripts/exact.mjs')).then(({ sdkReport, platformReport }) => platformReport(platform, sdkReport(process.env, destination), { device })).catch((error) => ({ error: String(error?.message ?? error) }));
     const brought = await shells.bringPlatform(dir, platform, { report, name });
     if (brought.refused) { console.error(brought.refused); reply?.({ code: 'platform_refused', error: brought.refused }); return log(1); }
     for (const line of brought.lines) console.error(line);

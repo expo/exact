@@ -81,9 +81,29 @@ final class InvokerButtonIOSTests: XCTestCase {
         p.apply(wireBatch([["op": "props", "id": 6, "set": ["accessibilityRole": "alertdialog"]]]))
         let retargeted = try overlay(p)
         XCTAssertFalse(retargeted.showsMenuAsPrimaryAction)
-        XCTAssertTrue(scroll.touchesShouldCancel(in: retargeted), "a reused menu wrapper follows its current primary action")
+        XCTAssertTrue(scroll.touchesShouldCancel(in: retargeted), "a retargeted invoker's button follows its current primary action")
         XCTAssertFalse(scroll.touchesShouldCancel(in: UISlider()))
         XCTAssertFalse(scroll.touchesShouldCancel(in: UITextField()))
+    }
+
+    /// An invoker whose confirmation becomes a menu gets the menu's button:
+    /// a tap shows the pull-down, and the confirmation's action is gone.
+    func testAConfirmationInvokerWhoseTargetBecomesAMenuShowsTheMenu() throws {
+        let p = page([], ids: [], role: "alertdialog")
+        let confirmation = try overlay(p)
+        XCTAssertFalse(confirmation.showsMenuAsPrimaryAction)
+        p.apply(wireBatch([["op": "props", "id": 6, "set": ["accessibilityRole": "menu"]]]))
+        let menu = try overlay(p)
+        XCTAssertTrue(type(of: menu) == MenuButton.self, "the menu's own button")
+        XCTAssertTrue(menu.showsMenuAsPrimaryAction, "UIKit shows the menu on a tap only with this")
+        XCTAssertNotNil(menu.menu)
+        var confirms = 0
+        menu.enumerateEventHandlers { action, _, _, _ in
+            if action?.identifier == UIAction.Identifier("exact.confirmation") { confirms += 1 }
+        }
+        XCTAssertEqual(confirms, 0, "no confirmation action is left to run on a tap")
+        XCTAssertNil(confirmation.superview, "the confirmation's button is gone")
+        XCTAssertEqual(try XCTUnwrap(p.views[2]).subviews.filter { $0 is InvokerButton }.count, 1)
     }
 
     func testAFlatLeafOverAnInteractiveChildKeepsTheMenu() throws {

@@ -1,7 +1,8 @@
 import { sendRequest } from "./request-send.js";
 import { markdownText } from './markdown.js';
-import { captureExits, exitBinding, exitOf, gains, restyled, presenceArm, presenceRows } from './presence-bindings.js';
-export { px, lt } from './presence-bindings.js';
+export { px, lt, presenceUse } from './presence-bindings.js';
+// Bound exits and layout transitions: presence-bindings.js's probes, which the compiler hands over only when a plan binds one (LLP 1047.002 D1)
+let Probes = null; export function usePresenceBindings(b) { Probes = b; } const presentArm = (view, ...a) => Probes ? Probes.arm(view, ...a) : view; export const presentRows = (row, ...a) => Probes ? Probes.rows(row, ...a) : row;
 import { inOrder, rowKey } from './rows.js';
 import { resourceInspection } from "./resource-inspection.js"; export { canvasColor } from "./said.js";
 import { oneActivation, suppressedInvocation, imageEvent, releaseAsset as rel } from "./elements.js"; import { reloadOnGone } from "./generation-reload.js"; import { rt as Link } from "./rt-link.js";
@@ -171,7 +172,7 @@ function settle() { for (const n of Settle) if (!n.gone) fresh(n); }
 export function commit(f, what = "commit", finished) {
   if (Writes) { if (finished) Finishes.push(finished); return f(); }
   if (Poisoned) return say(`refused ${what}: the runner is poisoned; reload`);
-  captureExits();
+  Probes?.capture();
   Writes = []; Commands = []; Out = []; Landed = []; Sends = []; Refresh = []; Finishes = finished ? [finished] : []; Refused = null; Why = ""; time();
   const was = Now.v, undo = [], saved = Resources.map(r => r.save()), held = Mutations.map(m => [m.ticket, m.tickets, m.concluded]), store = Store.save(), queued = Sched?.save(), writes = Ov.save();
   let ok = true, step = Booting ? "building the view" : `running the ${what}`; // where a refusal stops it (`Why`)
@@ -213,7 +214,7 @@ export function commit(f, what = "commit", finished) {
   const tail = Object.assign(() => { try { return update(); } finally { unrun("its tree update failed"); } }, { unrun: () => unrun("its tree update never ran") });
   const update = () => { // the tree update; inside a view transition when it may hand on a shared element's name (LLP 1013.000 D7)
     for (const f of Before) f();
-    Pres?.before({ ops: gains() }, Views); // presence measures what it tracks, and what may gain the row, before the tree changes (LLP 1063)
+    Pres?.before({ ops: Probes?.gains() ?? [] }, Views); // presence measures what it tracks, and what may gain the row, before the tree changes (LLP 1063)
     try { flush(); openTabs(); } catch (e) { Poisoned = true; Why = why("updating the tree", String(e)); say(`poisoned: ${e.pc != null ? `Instance(${e.message})` : e.message}`); console.error(e); Sched?.forget(); for (const f of finishes) f(false); return false; } // a trap as the runner's InstanceError (LLP 1090 D6)
     for (const f of finishes) f(ok);
     settled(true); if (!ok) return Sched?.scan(false), false;
@@ -805,7 +806,7 @@ export function nm(e) {
 }
 export const mapped = (v, map, clear) => typeof v === "string" && !v.trim() ? clear === undefined ? map(null) : clear : map(v);
 export function S(e, prop, unit, f) {
-  exitBinding(e, prop, unit, f);
+  Probes?.bind(e, prop, unit, f);
   let rendered = Adopt;
   effect(() => { css(e, prop, unit, f(), rendered); rendered = false; });
 }
@@ -845,7 +846,7 @@ export function css(e, prop, unit, v, rendered) {
  * name not yet in the tree is resolved again after the commit builds it. */
 let Refs = null;
 export function Sr(e, prop, unit, f) {
-  exitBinding(e, prop, unit, f);
+  Probes?.bind(e, prop, unit, f);
   effect(() => {
     const v = f(), write = () => {
       let missing = false;
@@ -870,7 +871,7 @@ export const Hooks = {};
 /** `S` on a node the motion engine follows (`mo`): while a hold owns it, a
  * write goes to the authored style the hold restores. */
 export function Sm(e, prop, unit, f) {
-  exitBinding(e, prop, unit, f);
+  Probes?.bind(e, prop, unit, f);
   effect(() => {
     const v = f();
     // Held: the hold's authored style takes it, and what css() last wrote no longer says what shows.
@@ -963,6 +964,7 @@ let Pres = null, Presence = null, Present = null, Leave = null, Sh = null; // Sh
 /** The after-paint pieces on their way (the agent waits for them before an
  * operation, as glue.js's `agentSettled` waits for `pieces.pending()`). */
 export const pieces = () => Promise.all([Motion, Inputs, Presence, Flow, Native, Media?.mediaPiece(), OnHooks.loading].filter(Boolean)).then(() => {}, () => {});
+const EXIT = "--exact-exit-animation"; export const exitOf = n => (n.$exit ?? n.style.getPropertyValue(EXIT)).trim(); // an element's exit: a bound one's value from the commit's start (presence-bindings.js `px`), else its style's
 /** A virtualized list's row wrapper `el` leaves with the exit its row's `root` declares (list.js): whether it stays,
  * leaving, for presence-glue.js to remove. */
 export function exitView(el, root) { const css = root && exitOf(root); if (!Pres || !css) return false; Pres.exit(el, css); return exiting(el); }
@@ -978,7 +980,7 @@ export function pr(e) {
       Created.length = 0;
       // After a commit's tree: which views declare the row now (the created
       // ones), and every tracked one that moved plays back from where it was.
-      Present = () => Pres.after({ ops: [...Created.splice(0).filter(e => e.isConnected).map(e => ({ op: "create", id: viewId(e) })), ...restyled()] }, Views);
+      Present = () => Pres.after({ ops: [...Created.splice(0).filter(e => e.isConnected).map(e => ({ op: "create", id: viewId(e) })), ...(Probes?.restyled() ?? [])] }, Views);
       // A removed region node that declares an exit leaves with it (the
       // kernel's `exit`: a destroyed root whose parent stays).
       Leave = n => {
@@ -1182,7 +1184,7 @@ export function when(p, subject, a0, a1) {
     const want = subject() ? 0 : a1 ? 1 : -1;
     if (want === arm) return;
     arm = want;
-    const view = presenceArm(want < 0 ? null : want ? a1 : a0, subject, want);
+    const view = presentArm(want < 0 ? null : want ? a1 : a0, subject, want);
     if (!b) return untracked(() => { [s, b] = adoptArm(p, view, own); });
     untracked(() => { if (s) end(s); clear(a, b); s = view ? build(b, view, own) : null; });
   }).$r = () => [a, b]; // the region's range, for shared.js
@@ -1197,7 +1199,7 @@ export function match(p, subject, a0, a1) {
     if (v != null) write(bound.n, v);
     if (want === arm) return;
     arm = want;
-    const view = presenceArm(want < 0 ? null : want ? a1 : p2 => a0(p2, bound), subject, want, bound);
+    const view = presentArm(want < 0 ? null : want ? a1 : p2 => a0(p2, bound), subject, want, bound);
     if (!b) return untracked(() => { [s, b] = adoptArm(p, view, own); });
     untracked(() => { if (s) end(s); clear(a, b); s = view ? build(b, view, own) : null; });
   }).$r = () => [a, b]; // the region's range, for shared.js
@@ -1205,7 +1207,7 @@ export function match(p, subject, a0, a1) {
 /** `each`: rows by key in item order; a kept row keeps its elements, its
  * item and position are signals its bindings read. */
 export function each(p, list, key, row, pure) {
-  row = presenceRows(row, list, key);
+  row = presentRows(row, list, key);
   let [a, b] = range(p), own = Owner;
   let rows = new Map(), single = false, order = null;
   effect(() => {
@@ -1438,13 +1440,12 @@ export * from "./roster.js"; // the roster's pure entries
 // The plan's tables, base first: [name, rtl, {key: text}]. The locale slot
 // holds the table the viewer's launch locale reads before state initializes;
 // `t` reads that table, else the base.
-let Texts = [];
+let Texts = []; export const Chosen = { tag: null }; // the language the app chose with `setLocale` (chosen.js), null while it follows the page's
 export function strings(tables) { Texts = tables; }
-/** RFC 4647 lookup of the page's locale (an agent's `?locale`): the longest
+/** RFC 4647 lookup of `tag`, by default the app's chosen language, else the page's locale (an agent's `?locale`): the longest
  * subtag prefix a table is named for, without case, else the base. A render has no launch locale: the base (LLP 1060 D4). */
-export function locale() {
-  let tag = Texts[0]?.[0] ?? "";
-  if (!globalThis.__exactRender) try { tag = reportPlace().split("\0")[0]; } catch {}
+export function locale(tag = Chosen.tag) {
+  if (tag == null) { tag = Texts[0]?.[0] ?? ""; if (!globalThis.__exactRender) try { tag = reportPlace().split("\0")[0]; } catch {} }
   for (;;) {
     const t = Texts.find(r => r[0].toLowerCase() === tag.toLowerCase());
     if (t) return t[0];

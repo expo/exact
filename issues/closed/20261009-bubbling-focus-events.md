@@ -43,8 +43,8 @@ Passed after rebase:
 - `cargo test -p exact-web-js --bins --no-fail-fast` — 42 passed.
 - `cargo test -p exact-kernel -p contract -p contract-lower -p contract-analyze -p exact-runner -p exact-web -p exact-apple --lib --bins --tests --no-fail-fast` — 2,989 passed, 32 ignored, zero failed.
 - `ONLY_CLASSES=ExactKitTests.ClickFocusMacTests,ExactKitTests.KeyUpMacTests bun host/apple/build.mjs --test` — 8 + 8 tests passed. The temporary `xctest.mjs` class filter was removed.
-- `/private/tmp/claude-501/-Users-ccheever-projects-exact2/5f1c298e-7e97-40bc-8a1a-486f1889060d/scratchpad/ios-verify.sh /Users/ccheever/projects/exact2-iss-focus KeyboardFocusIOSTests AC228731-1097-4E4A-A81B-34A2BEEE90EC` — 11 passed on iOS 27. The simulator was Shutdown before selection and Shutdown after the run; temporary build-script filtering was removed.
-- `CHROME=/Users/ccheever/Library/Caches/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-mac-arm64/chrome-headless-shell bun test host/web/tests/js-runtime.test.mjs host/web/tests/js-link-press.test.mjs host/web/tests/js-storage-scope.test.mjs host/web/tests/form-chrome.test.mjs host/web/tests/js-autofocus.test.mjs --timeout 60000` — 61 passed.
+- `<scratchpad>/ios-verify.sh /Users/<user>/projects/exact2-iss-focus KeyboardFocusIOSTests AC228731-1097-4E4A-A81B-34A2BEEE90EC` — 11 passed on iOS 27. The simulator was Shutdown before selection and Shutdown after the run; temporary build-script filtering was removed.
+- `CHROME=/Users/<user>/Library/Caches/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-mac-arm64/chrome-headless-shell bun test host/web/tests/js-runtime.test.mjs host/web/tests/js-link-press.test.mjs host/web/tests/js-storage-scope.test.mjs host/web/tests/form-chrome.test.mjs host/web/tests/js-autofocus.test.mjs --timeout 60000` — 61 passed.
 - With the same `CHROME`, `EXACT_GLUE_FAST=1 bun test host/web/tests/document.test.mjs --timeout 60000` — 21 passed, 8 skipped. Built-wasm-app cases lack a current artifact; the Weatherlight build is explicitly skipped. The focused `-t 'early focus replay|Chrome orders|capture'` run also passed (4 passed, 1 skipped).
 - `cargo fmt --all -- --check`; `git add -A && bun scripts/caps.mjs`; `bun scripts/boot.mjs`; `bun scripts/issue.mjs check`; `git diff --check`.
 
@@ -73,7 +73,7 @@ run with passing isolated reruns, not a full-suite green result.
 the semantics comparison: `lake build: No such file or directory (os error 2)`.
 Lean/lake is not installed. No semantics pass is claimed.
 
-`cargo clippy -p exact-linux -p exact-web-js --all-targets --keep-going -- -D warnings` also passed. Logs for this pass are `/tmp/focus-rebase-*.log`; the UIKit log is `/Users/ccheever/projects/exact2-iss-focus.ios.log`.
+`cargo clippy -p exact-linux -p exact-web-js --all-targets --keep-going -- -D warnings` also passed. Logs for this pass are `/tmp/focus-rebase-*.log`; the UIKit log is `/Users/<user>/projects/exact2-iss-focus.ios.log`.
 
 Main advanced to `a9901821c` during this verification; these results qualify
 the `57ab536e3` base. A further rebase and verification follows.
@@ -154,7 +154,7 @@ focus change or new test was needed.
 Command (run before and after the test correction):
 
 ```sh
-/private/tmp/claude-501/-Users-ccheever-projects-exact2/5f1c298e-7e97-40bc-8a1a-486f1889060d/scratchpad/ios-verify.sh /Users/ccheever/projects/exact2-iss-focus KeyboardFocusIOSTests AC228731-1097-4E4A-A81B-34A2BEEE90EC
+<scratchpad>/ios-verify.sh /Users/<user>/projects/exact2-iss-focus KeyboardFocusIOSTests AC228731-1097-4E4A-A81B-34A2BEEE90EC
 ```
 
 **Passed: all 11 `KeyboardFocusIOSTests`, zero failures**, on iPhone Air,
@@ -162,7 +162,7 @@ iOS 27. This includes `testFocusTransitionUsesTheRenamedId`,
 `testReadOnlySelectionSendsFocusAndBlur`, passive ancestor transitions/removal,
 and hardware-keyboard navigation. The runner booted and shut down only the
 specified simulator. The final log is
-`/Users/ccheever/projects/exact2-iss-focus.ios.log`; the reproduced failure is
+`/Users/<user>/projects/exact2-iss-focus.ios.log`; the reproduced failure is
 preserved in `/tmp/focus-ios-followup-red.log`. These results supersede the
 unqualified UIKit entries in the earlier rounds below.
 
@@ -196,7 +196,7 @@ Passed:
 - `bun test host/web/tests/document.test.mjs -t 'early focus replay|Chrome orders' --timeout 180000` — 2 Chrome tests, including both the normal and detached event paths. The replay assertion failed before the fix (extra outer handlers). Initial CDP launches timed out; these probes use the already installed Playwright Chrome launcher. A draft body-listener assertion used unsupported `onfocusout`; it was corrected to `addEventListener` and the final run passed.
 - `bun test host/web/tests/js-runtime.test.mjs -t 'focus handlers stop|a key handler stops' --timeout 60000` — 2 tests. The focus test now imports a fresh runtime so an earlier deliberate poison test cannot disable its handlers.
 - `bun /tmp/focus-r2-browser.mjs` — production JS runtime driven in Chrome, stopped focus transitions and payloads passed.
-- AppKit: `bun host/apple/build.mjs --test` with a temporary `ClickFocusMacTests` class filter reproduced both new failures before the fix. The fixed rerun waited behind the Cargo build lock, so it was stopped; `EXACT_TESTS=1 EXACT_LIB_DIR=/Users/ccheever/projects/exact2-iss-focus/target/host-dev EXACT_LIB=caltrain_apple EXACT_APP_COMPOSITION=embedded MACOSX_DEPLOYMENT_TARGET=14.0 swift build --build-tests --scratch-path <existing-test-scratch>` (from `host/apple`, with the absolute library path), then `EXACT_CONTRACT=$PWD/target/debug/contract xcrun xctest -XCTest ExactKitTests.ClickFocusMacTests <scratch>/out/Products/Debug/ExactKitTests.xctest` passed all 8 tests. The temporary class filter was removed. Logs: `/tmp/focus-r3-swift-green.log`, `/tmp/focus-r3-mac-tests-green.log`.
+- AppKit: `bun host/apple/build.mjs --test` with a temporary `ClickFocusMacTests` class filter reproduced both new failures before the fix. The fixed rerun waited behind the Cargo build lock, so it was stopped; `EXACT_TESTS=1 EXACT_LIB_DIR=/Users/<user>/projects/exact2-iss-focus/target/host-dev EXACT_LIB=caltrain_apple EXACT_APP_COMPOSITION=embedded MACOSX_DEPLOYMENT_TARGET=14.0 swift build --build-tests --scratch-path <existing-test-scratch>` (from `host/apple`, with the absolute library path), then `EXACT_CONTRACT=$PWD/target/debug/contract xcrun xctest -XCTest ExactKitTests.ClickFocusMacTests <scratch>/out/Products/Debug/ExactKitTests.xctest` passed all 8 tests. The temporary class filter was removed. Logs: `/tmp/focus-r3-swift-green.log`, `/tmp/focus-r3-mac-tests-green.log`.
 - `swiftc host/apple/Sources/ExactKit/FocusEvents.swift /tmp/focus-r3-nested.swift -o /tmp/focus-r3-nested`, then `/tmp/focus-r3-nested` — production state machine failed before the change and passed after it.
 - `cargo fmt --all -- --check`, `bun scripts/boot.mjs`, `bun scripts/issue.mjs check`, `git diff --check`, staged `bun scripts/caps.mjs`.
 

@@ -349,6 +349,7 @@ impl NodeArena {
             (StyleId::ColumnGap, own.column_gap)
         };
         Some(ButtonFaceStyle {
+            root_font_size: self.root_font_size(),
             neutral_tab_root,
             neutral_role_floor: self.neutral_role_floor(slot),
             title,

@@ -435,8 +435,10 @@ impl<D: DataSource> Host<D> {
         }
         let plan = plan_bytes.decode().map_err(HostError::Plan)?;
         let entry_props = match plan_bytes {
-            PlanBytes::Entry(_, _, Some(bytes)) => {
-                Some(snapshot::props(&plan, bytes).map_err(HostError::Layout)?)
+            PlanBytes::Entry(_, _, props, configuration)
+                if props.is_some() || configuration.is_some() =>
+            {
+                Some(snapshot::slots(&plan, props, configuration).map_err(HostError::Layout)?)
             }
             _ => None,
         };

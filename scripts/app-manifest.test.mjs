@@ -5,6 +5,23 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
+test('a widget declares fixed enum configuration choices', async () => {
+  const { readManifest } = await import('./app.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'widget-configuration-'));
+  const parameter = { name: 'rows', title: 'Rows', type: 'enum', values: [{ value: 'one', title: '1' }], default: 'one' };
+  const manifest = { name: 'Choices', app: { id: 'dev.exact.choices', name: 'Choices' }, widgets: [{
+    kind: 'card', families: ['systemSmall'], component: 'Card', props: 'Props', refresh: 'refresh', preview: {},
+    configuration: { title: 'Card', parameters: [parameter] },
+  }] };
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
+    assert.deepEqual(readManifest(dir, 'choices').widgets[0].configuration.parameters[0], parameter);
+    parameter.type = 'entity';
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify(manifest));
+    assert.throws(() => readManifest(dir, 'choices'), /type/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('each painted host admits ink, carries it in native metadata and refuses gpu', async () => {
   const { readManifest, nativeManifestMetadata } = await import('./app.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'manifest-painter-'));

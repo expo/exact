@@ -1,5 +1,5 @@
 // Virtualized collections' DOM controller (@ref LLP 1010 §6), the list
-// engine's browser half: an after-paint piece, fetched when a batch first
+// engine's browser half: an after-paint piece, activated when a batch first
 // commits a collection (LLP 1047 D5); navigation.js stands in until then.
 // `fill` (LLP 1050.000 §6): `velocity` in CSS px/s toward the end, and
 // `limit`, the rows past what the report owes it may build (null: any);

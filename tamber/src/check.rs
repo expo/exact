@@ -1109,6 +1109,7 @@ impl<'a> Checker<'a> {
                         space: exact_color::Space::Oklch,
                         c: [0.7, 0.15, 140.0],
                         alpha: 0.8,
+                        missing: [false; 4],
                     }))),
                 ],
                 (DialValue::Number(_), Some((lo, hi))) => {

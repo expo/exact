@@ -7,6 +7,7 @@ import { plistFile, wrapFramework, frameworkLayout, frameworkInstallName } from 
 import { assertCapabilityFrameworks, stripProductionExecutable } from './link.mjs';
 import { linkedPlanArgs } from '../../scripts/linked-plan.mjs';
 import { appleLinkArgs } from '../../scripts/package-libraries.mjs';
+import { constValueArgs, intentsMetadata } from './intents.mjs';
 import { appexArgs, keepMain } from './extensions.mjs';
 import { coveringProfiles, missingDevelopmentProfile, installedProfiles, decodeProfile, profilesFor, profileMisfit, byExpiry, METHODS, iosProfile, allowsEntitlement } from './devices.mjs';
 import { fileURLToPath } from 'node:url';
@@ -240,6 +241,83 @@ export function widgetReload({ directory, triple, sdk, device, platform = 'ios',
   writeFileSync(stamp, digest);
   return binary;
 }
+/** The extension's generated Swift: one `Widget` per entry, static or, with a `configuration`, an
+ * `AppIntentConfiguration` whose intent has one `AppEnum` parameter per row (`widget/Timeline.swift`'s
+ * `ExactIntentTimelineProvider` stamps its values on each entry). Labels and values are Swift string literals:
+ * the manifest admits no control characters in them, and JSON's escapes are Swift's for the rest. */
+export function widgetBundleSource(entries, { platform = 'ios', activities = false, alarmMember = '' } = {}) {
+  const mac = platform === 'macos', literal = JSON.stringify;
+  const names = entries.map((_, i) => `Entry${i}`);
+  const human = kind => kind.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  const gamut = platform === 'ios' ? '.environment(\\.widgetDisplayGamut, UITraitCollection.current.displayGamut == .P3 ? "p3" : "srgb")' : mac ? '.environment(\\.widgetDisplayGamut, NSScreen.main?.colorSpace?.cgColorSpace?.isWideGamutRGB == true ? "p3" : "srgb")' : '';
+  // LLP 1126: these identifiers survive reordering and distinguish punctuation. UTF-8 hex is injective.
+  const identifier = text => Buffer.from(text, 'utf8').toString('hex');
+  const intentName = entry => `Configure_${identifier(entry.kind)}`;
+  const intent = (configuration, name) => {
+    const parameters = configuration.parameters;
+    const enums = parameters.map(p => `enum ${name}_${identifier(p.name)}: String, AppEnum {
+    ${p.values.map(v => `case v${identifier(v.value)} = ${literal(identifier(v.value))}`).join('; ')}
+    var exactValue: String { switch self { ${p.values.map(v => `case .v${identifier(v.value)}: ${literal(v.value)}`).join('; ')} } }
+    static var typeDisplayRepresentation: TypeDisplayRepresentation = ${literal(p.title)}
+    static var caseDisplayRepresentations: [Self: DisplayRepresentation] = [${p.values.map(v => `.v${identifier(v.value)}: ${literal(v.title)}`).join(', ')}]
+}`);
+    const fallback = p => `v${identifier(p.default ?? p.values[0].value)}`;
+    // watchOS has no parameter form: offer every combination, default first.
+    // The manifest caps watch entries at 64 combinations before this generation.
+    const combinations = platform === 'watchos' ? parameters.reduce((rows, p) => {
+      const value = p.default ?? p.values[0].value;
+      const values = [...p.values.filter(v => v.value === value), ...p.values.filter(v => v.value !== value)];
+      return rows.flatMap(row => values.map(v => [...row, { p, v }]));
+    }, [[]]) : [];
+    const labels = combinations.map(row => row.map(({ p, v }) => `${p.title}: ${v.title}${p.values.some(other => other !== v && other.title === v.title) ? ` (${v.value})` : ''}`).join(', '));
+    // Swift compares canonically equivalent strings as equal. A suffix on every
+    // label keeps authored text from colliding with a disambiguated label too.
+    const repeated = new Set(labels.map(label => label.normalize('NFC'))).size !== labels.length;
+    const recommendations = combinations.map((row, i) => {
+      const label = labels[i] + (repeated ? ` [${row.map(({ v }) => identifier(v.value)).join('-')}]` : '');
+      return `{ let intent = Self(); ${row.map(({ p, v }) => `intent.\`parameter_${p.name}\` = .v${identifier(v.value)}`).join('; ')}; return AppIntentRecommendation(intent: intent, description: ${literal(label)}) }()`;
+    });
+    return `${enums.join('\n')}
+struct ${name}: WidgetConfigurationIntent, ExactConfigurationIntent {
+    static var title: LocalizedStringResource = ${literal(configuration.title)}
+    static var description = IntentDescription(${literal(configuration.description ?? configuration.title)})
+    ${parameters.map(p => `@Parameter(title: ${literal(p.title)}, default: .${fallback(p)}) var \`parameter_${p.name}\`: ${name}_${identifier(p.name)}?`).join('\n    ')}
+    ${platform === 'watchos' ? `static var exactRecommendations: [AppIntentRecommendation<Self>] { [\n        ${recommendations.join(',\n        ')}\n    ] }` : ''}
+    var exactConfiguration: [String: String] { [${parameters.map(p => `${literal(p.name)}: (\`parameter_${p.name}\` ?? .${fallback(p)}).exactValue`).join(', ')}] }
+}
+`;
+  };
+  const generated = entries.map((entry, i) => {
+    const configured = entry.configuration && intentName(entry);
+    return `${configured ? intent(entry.configuration, configured) : ''}struct ${names[i]}: Widget {
+    let kind = ${literal(entry.kind)}
+    var body: some WidgetConfiguration {
+        ${configured
+          ? `AppIntentConfiguration(kind: kind, intent: ${configured}.self, provider: ExactIntentTimelineProvider<${configured}>(kind: kind))`
+          : 'StaticConfiguration(kind: kind, provider: ExactTimelineProvider(kind: kind))'} { entry in
+            ExactWidgetView(entry: entry)${gamut}
+        }
+        .configurationDisplayName(${literal(entry.title ?? human(entry.kind))}).description(${literal(entry.description ?? human(entry.kind))})
+        .supportedFamilies([${entry.families.map(f => `.${f}`).join(', ')}]).contentMarginsDisabled()
+    }
+}`;
+  }).join('\n');
+  if (activities) names.push('ExactActivities');
+  return `import AppIntents\nimport SwiftUI\nimport WidgetKit\n${platform === 'ios' ? 'import UIKit\n' : mac ? 'import AppKit\n' : ''}${generated}\n@main struct ExactWidgets: WidgetBundle { var body: some Widget { ${names.map(n => `${n}()`).join('; ')}${alarmMember} } }\n`;
+}
+
+/** One module name for compilation and metadata, including AlarmKit's shared attributes. */
+export function widgetCompilation({ entries, platform, activities, alarm, source, values, directory }) {
+  const configured = entries.some(entry => entry.configuration);
+  const moduleName = platform === 'ios' && alarm ? alarm : 'ExactWidgets';
+  const sources = [resolve(pkg, 'widget/Timeline.swift'), resolve(pkg, 'widget/Configuration.swift'),
+    resolve(pkg, 'widget/WidgetTimelineWaiters.swift'), ...(activities ? [resolve(pkg, 'widget/Activity.swift')] : []),
+    ...(platform === 'ios' && alarm ? alarmSources : []), source];
+  const args = ['-module-name', moduleName, ...(configured ? ['-wmo', ...constValueArgs(values, directory)] : []),
+    ...(platform === 'ios' && alarm ? ['-Xlinker', '-weak_framework', '-Xlinker', 'AlarmKit'] : [])];
+  return { moduleName, sources, args };
+}
+
 export function packageWidgets({ app, bundle, shared, directory, sdk, triple, device, entitlements, sign, runApple, production, symbols = directory, profile = null, platform = 'ios', entries = platformWidgetEntries(app, platform), alarm = null }) {
   const mac = platform === 'macos', contents = mac ? resolve(bundle, 'Contents') : bundle;
   const resources = mac ? resolve(contents, 'Resources') : contents;
@@ -268,39 +346,38 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
     copyFileSync(widgetReload({ directory, triple, sdk, device, platform, production, runApple }), resolve(frameworks, reload));
     wrapFramework(frameworks, reload, 'ExactWidgetReload', app, mac ? 'MacOSX' : device ? 'iPhoneOS' : 'iPhoneSimulator');
   }
-  const names = entries.map((_, i) => `Entry${i}`);
-  const human = kind => kind.replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  const generated = entries.map((entry, i) => `struct ${names[i]}: Widget {
-    let kind = ${JSON.stringify(entry.kind)}
-    var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: ExactTimelineProvider(kind: kind)) { entry in
-            ExactWidgetView(entry: entry)${platform === 'ios' ? '.environment(\\.widgetDisplayGamut, UITraitCollection.current.displayGamut == .P3 ? \"p3\" : \"srgb\")' : mac ? '.environment(\\.widgetDisplayGamut, NSScreen.main?.colorSpace?.cgColorSpace?.isWideGamutRGB == true ? "p3" : "srgb")' : ''}
-        }
-        .configurationDisplayName(${JSON.stringify(entry.title ?? human(entry.kind))}).description(${JSON.stringify(entry.description ?? human(entry.kind))})
-        .supportedFamilies([${entry.families.map(f => `.${f}`).join(', ')}]).contentMarginsDisabled()
-    }
-}`).join('\n');
   // The one ActivityConfiguration for every activity kind (`widget/Activity.swift`, LLP 1126.001 WP10): the
   // envelope's attributes name the kind and the generation at render time, so the generated bundle holds no
   // activity string at all, and an app with activities and no widgets has it as its one member.
   // ActivityKit exists on iOS alone: the watch's and the Mac's bundles have no activities.
   const activities = platform === 'ios' && activityEntries(app).length > 0;
-  if (activities) names.push('ExactActivities');
   const source = resolve(directory, 'WidgetBundle.swift');
   // An alarm's countdown beside them, from iOS 26 (LLP 1133.030 D8 item 2).
   const alarmMember = alarm && platform === 'ios' ? '; if #available(iOS 26.0, *) { ExactAlarmCountdown() }' : '';
-  writeFileSync(source, `import SwiftUI\nimport WidgetKit\n${platform === 'ios' ? 'import UIKit\n' : mac ? 'import AppKit\n' : ''}${generated}\n@main struct ExactWidgets: WidgetBundle { var body: some Widget { ${names.map(n => `${n}()`).join('; ')}${alarmMember} } }\n`);
+  writeFileSync(source, widgetBundleSource(entries, { platform, activities, alarmMember }));
   const entitlementPath = resolve(directory, 'widget-entitlements.plist');
   writeFileSync(entitlementPath, entitlements);
   writeFileSync(resolve(extensionContents, 'Info.plist'), plistFile({ CFBundleIdentifier: widgetId(app), CFBundleName: 'ExactWidgets', CFBundleDisplayName: app.displayName, CFBundleExecutable: 'ExactWidgets', CFBundlePackageType: 'XPC!', ...versions, ...(!mac ? { UIDeviceFamily: appInfo.UIDeviceFamily } : {}), ...capabilities,
     CFBundleSupportedPlatforms: mac ? ['MacOSX'] : appInfo.CFBundleSupportedPlatforms, ...(appInfo.DTPlatformName ? { DTPlatformName: appInfo.DTPlatformName } : {}), ...(appInfo.NSAppTransportSecurity ? { NSAppTransportSecurity: appInfo.NSAppTransportSecurity } : {}), ExactAppGroup: appInfo.ExactAppGroup ?? widgetGroup(app), ExactAppIdentifier: appInfo.ExactAppIdentifier ?? app.id, ExactWidgetTypeScript: platform !== 'watchos' && existsSync(resolve(app.dir, 'app.ts')), ...(appInfo.ExactKeychainAccessGroup ? { ExactKeychainAccessGroup: appInfo.ExactKeychainAccessGroup } : {}), ...(mac ? { ExactWidgetSecretsAvailable: !!appInfo.ExactKeychainAccessGroup, ExactWidgetRequiresSecrets: appInfo.ExactWidgetRequiresSecrets ?? [] } : {}), ExactWidgetGeneration: appInfo.ExactWidgetGeneration, ...(typeof app.origin === 'string' ? { ExactLinkBase: app.origin } : {}),
     NSExtension: { NSExtensionPointIdentifier: 'com.apple.widgetkit-extension' } }));
+  // A configured entry's intent reaches the Edit Widget sheet through the extension's App Intents metadata, which
+  // Xcode's pass extracts from the module's constant values (`intents.mjs`).
+  const configured = entries.some(entry => entry.configuration);
+  const intents = resolve(directory, 'widget-intents'), values = resolve(intents, 'ExactWidgets.swiftconstvalues');
+  if (configured) { rmSync(intents, { recursive: true, force: true }); mkdirSync(intents, { recursive: true }); }
+  const compilation = widgetCompilation({ entries, platform, activities, alarm: alarmMember ? alarm : null, source, values, directory: intents });
+  const { moduleName, sources: swiftSources } = compilation;
   runApple('xcrun', ['--sdk', mac ? 'macosx' : platform === 'watchos' ? 'watchsimulator' : device ? 'iphoneos' : 'iphonesimulator', 'swiftc', '-parse-as-library', '-O', ...(production ? ['-g'] : []), ...appexArgs, ...keepMain, ...(!production ? ['-D', 'EXACT_INSPECT'] : []), '-target', triple, '-sdk', sdk,
+    ...compilation.args,
     '-module-cache-path', resolve(directory, 'cache'), '-I', resolve(root, 'host/apple/Sources/CExact'), '-I', resolve(shared.framework, 'Modules'), '-F', resolve(shared.framework, '..'), '-framework', 'ExactCore',
     '-Xlinker', '-rpath', '-Xlinker', mac ? '@executable_path/../../../../Frameworks' : '@executable_path/../../Frameworks',
     ...(!device && !mac ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
-    ...(alarmMember ? alarmArgs(alarm) : []),
-    shared.snapshotArchive, resolve(root, 'host/apple/widget/Timeline.swift'), resolve(root, 'host/apple/widget/WidgetTimelineWaiters.swift'), ...(activities ? [resolve(root, 'host/apple/widget/Activity.swift')] : []), source, '-o', extensionBinary]);
+    shared.snapshotArchive, ...swiftSources, '-o', extensionBinary]);
+  if (configured) {
+    const metadata = intentsMetadata({ moduleName, dir: intents, sdk, triple, platform, deployment: versions[mac ? 'LSMinimumSystemVersion' : 'MinimumOSVersion'] ?? (mac ? '14.0' : platform === 'watchos' ? '10.0' : '17.0'),
+      binary: extensionBinary, sources: swiftSources, values, runApple });
+    cpSync(metadata, resolve(extensionResources, 'Metadata.appintents'), { recursive: true });
+  }
   stripProductionExecutable(extensionBinary, { production, dsym: resolve(symbols, 'ExactWidgets.appex.dSYM'), sourceDsym: `${extensionBinary}.dSYM` });
   sign(extension, entitlementPath);
 }
@@ -309,8 +386,9 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
  * AlarmKit weak-linked (the app's minimum is below iOS 26), and the module named as the package's, which compiles the
  * same `ExactAlarmMetadata` into the app: ActivityKit names an attributes type by its module and type name, as
  * `activities.mjs` keeps the envelope's in `ExactSnapshot` on both sides. */
+const alarmSources = [resolve(root, 'host/apple/widget/Alarm.swift'), resolve(root, 'host/apple/widget/AlarmAttributes.swift')];
 const alarmArgs = module => ['-module-name', module, '-Xlinker', '-weak_framework', '-Xlinker', 'AlarmKit',
-  resolve(root, 'host/apple/widget/Alarm.swift'), resolve(root, 'host/apple/widget/AlarmAttributes.swift')];
+  ...alarmSources];
 
 /** The package that asks the host for AlarmKit's countdown (`"apple": {"activity": "alarmkit"}`, LLP 1133.030 D12
  * item 3), by its Swift module's name; one at most, since the extension's module takes that name. */

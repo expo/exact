@@ -1,0 +1,67 @@
+component App
+  state removed = ""
+  action remove(id: string)
+    removed = removed + id
+  view
+    column
+      Grouped(look="auto", id="grouped", remove=remove("g"))
+      Cells(direction="column", id="cell", remove=remove("c"))
+      EnumCells(direction="column", remove=remove("e"))
+      EnumScroll(axis="scroll", remove=remove("s"))
+
+component Grouped
+  props
+    look: string
+    id: string
+    remove: action
+  view
+    list appearance=look
+      section
+        row delete=remove testId=id
+          text id
+        scroll swipeContent=`row-${id}` swipeTrailing="flag" delete=remove testId="prop-swipe" overflow-x="scroll" overflow-y="hidden"
+          row id=`row-${"grouped"}`
+            text "Authored swipe"
+          button "Flag" id="flag" press=remove
+
+component Cells
+  props
+    direction: string
+    id: string
+    remove: action
+  view
+    list display="flex" flex-direction=direction
+      row delete=remove testId=id
+        text id
+
+component EnumCells
+  props
+    direction: enum<"column", "row">
+    remove: action
+  view
+    list display="flex" flex-direction=direction
+      row delete=remove testId="enum-cell"
+        text "An enum direction stays ascribed"
+
+component EnumScroll
+  props
+    axis: enum<"scroll", "hidden">
+    remove: action
+  view
+    list overflow-x=axis overflow-y="hidden"
+      row delete=remove testId="enum-scroll"
+        text "An enum overflow stays ascribed"
+
+test "component props preserve list admission and the generated action"
+  expect tree has "grouped-delete"
+  expect tree has "cell-delete"
+  expect tree missing "prop-swipe-delete"
+  tap "grouped-delete"
+  tap "cell-delete"
+  expect state removed == "gc"
+
+test "enum arguments keep the plan's list admission"
+  expect tree missing "enum-cell-delete"
+  expect tree has "enum-scroll-delete"
+  tap "enum-scroll-delete"
+  expect state removed == "s"

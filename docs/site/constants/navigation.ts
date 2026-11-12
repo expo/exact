@@ -370,6 +370,12 @@ export const sections: NavSection[] = [
         description: 'For shared server data, exact new app --snapback writes a guestbook and wires its driver, generated operations and device.',
       },
       {
+        route: 'recipeSocketTicket',
+        path: '/recipes/socket-ticket',
+        source: 'recipes/socket-ticket.md',
+        description: 'A WebSocket whose server checks the signed-in person at connect opens with a single-use ticket bought over HTTPS with @exact/oauth.',
+      },
+      {
         route: 'recipeSymbols',
         path: '/recipes/symbols',
         source: 'recipes/symbols.md',

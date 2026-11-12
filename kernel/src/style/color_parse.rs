@@ -11,7 +11,7 @@ impl Color {
             return Some(Color::rgba(0, 0, 0, 0));
         }
         Color::parse_hex(text).or_else(|| match exact_color::parse(text)? {
-            exact_color::Parsed::Legacy(c) => {
+            exact_color::Parsed::Legacy(c, _) => {
                 Some(Color::rgba(c.r, c.g, c.b, (c.a * 255.0).round() as u8))
             }
             _ => None,

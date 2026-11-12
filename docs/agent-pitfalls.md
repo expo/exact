@@ -57,14 +57,12 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
   (Web split metadata fixtures, `lower-zero-size`, 2026-10-14.)
 
-- **A px `width` beside text in a role does not grow with Dynamic Type.** A `text` whose
-  font is a role (`-exact-body`, or a `rem`/`em` size) scales with the person's text size,
-  and a box the author sized in px does not, so at accessibility sizes the text runs past
-  it (a day label under its icon, "Low" and "High" run together). That is CSS too. Fix: say
-  the width in `rem` or `em` (`width="3rem"`), size columns with a grid of `auto` tracks,
-  or let the row wrap (`flex-wrap="wrap"`). The compiler warns `lower-text-px-width`
-  where it can prove the box keeps its px width around such text, and is silent where it
-  cannot. (Bake-off round 13, weather; LLP 1116.011 D2.4.)
+- **A computed px `width` beside text in a role does not grow with Dynamic Type.** The
+  compiler warns `lower-text-px-width` of a literal px width around text that scales with
+  the person's text size; of a computed one (`width=(narrow ? 48 : 60)`) it says nothing,
+  and at accessibility sizes the text runs past it. Fix: the width in `rem`
+  (`width="3rem"`), a grid of `auto` tracks, or `flex-wrap="wrap"` on the row. (Bake-off
+  round 13, weather; LLP 1116.011 D2.4.)
 
 - **A border on one cell of a grid of `flex=1` cells pushes its column out of line.**
   A border adds to a box's outer size (CSS's `content-box`, and `border-box` too: a
@@ -108,15 +106,6 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `progress` with no `width` or `flex` beside a `text` in a `row`. (Wave 2 of
   LLP 1115.000, Chrome 154 and the kernel alike, 2026-10-11.)
 
-- **A heading's lines are a screen apart with `line-height=28`.** Cause: a bare
-  number is CSS's unitless `line-height`, a multiple of the font size (at 22 px,
-  28 × 22 = 616 px), unlike a bare number on a length row such as `font-size` or
-  `width`, which means pixels. Fix: write `line-height="28px"`, or a ratio such as
-  `line-height=1.3` (28.6 px at 22 px). A bare 4 or more is warned
-  (`lower-line-height-multiplier`), and a quoted `line-height="28"` is refused
-  with the `px` form. (Authoring bench, LLP 1087: three Codex
-  builders, caught only by a screenshot, 2026-10-05; the euxy port, 2026-10-16.)
-
 - **A `\n` in a text runs its two lines together.** ``text `${ref}\nResults rounded.` ``
   showed one line on the web and in an iOS grouped footer. Cause: `white-space:
   normal` (CSS's default) collapses a line feed to a space, as a `<div>` does. Fix:
@@ -142,11 +131,6 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `scroll flex=1` inside with it. Cause: CSS `min-height: auto` on the column. Fix:
   `min-height=0` on the column, as `lower-scroll-grows` says; `layout <scroll>` shows the
   height. A UIKit sheet sizes nothing for you here. (euxy port 14, FRICTION 9.)
-- **A `symbol:` image's `-exact-tint-color` does nothing.** A symbol is drawn in its
-  computed `color` on every host (LLP 1081 stage 2); `-exact-tint-color` colours a
-  raster image only, and a native button's face symbol. Write
-  `image "symbol:forward-chevron" color="-exact-tertiary-label"`. The build warns
-  (`lower-symbol-tint`).
 - **`color-scheme="light dark"` is refused.** Contract accepts only `light` or
   `dark` to fix a subtree's scheme. Leave it unsaid to follow the surrounding
   scheme; put `color-scheme="dark"` on a media viewer itself, not its shared
@@ -159,20 +143,20 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   holds the whole app in light as `overrideUserInterfaceStyle` does. (Shelf port,
   2026-10-09.)
 
-- **The app is wider than the window, and its tests still pass.** A root with
-  `width="100%"` and `padding=24` is 48 points too wide: sizes are `content-box`, as
-  on the web, so padding adds to the width. Buttons at the right edge are cut off,
-  and an `expect` never sees it. Fix: `box-sizing="border-box"` on any box sized in
-  percent that also has padding or a border (`exact new`'s template does), and
-  `min-width=0` on a `flex=1` input in a row. Look at a screenshot on each host.
-  (Fresh-agent README trial, 2026-10-04.)
+- **The app is wider than the window, and its tests still pass.** A box with
+  `width="100%"` and padding is wider than its parent by the padding (`content-box`, as
+  in CSS without a reset), and an `expect` never sees it. The compiler warns
+  (`lower-width-padding`) when the width and the padding are literal; a computed width or
+  padding, and `height="100%"` with padding, it does not. Fix: `box-sizing="border-box"`
+  on the box, or drop `width`: a box in a block or a `column` already fills the width.
+  Look at a screenshot on each host. (Fresh-agent README trial, 2026-10-04.)
 
 - **A list of buttons is ragged: each is only as wide as its text.** A `button`
   directly in a `scroll` or another block container shrinks to fit, so a row's
   `flex-grow` title never grows and its trailing columns sit right after it.
-  Cause: as on the web, a button is `inline-block`; only a flex item, or one given
-  a width, fills its line. Fix: `width="100%"` on the button, or put the rows in
-  a `column`. (The LLP terminal reader's document tree, 2026-10-08.)
+  Cause: a button is a block that shrinks to fit (HTML's is `inline-block`); only a
+  flex item, or one given a width, fills its line. Fix: `width="100%"` on the button,
+  or put the rows in a `column`. (The LLP terminal reader's document tree, 2026-10-08.)
 
 - **A raised `z-index` leaves a dragged card under the next column.** A card at
   `position="relative" z-index=10`, dragged over a neighbouring column, paints
@@ -212,17 +196,6 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `<n> 1 0%`; `contract vocab flex`). Fix: `flex="none"` (`0 0 auto`: the width
   is the size), or no `flex` and `flex-shrink=0`. (Stocks DIARY, about 15
   minutes; reproduced on the web and macOS, 2026-10-04.)
-
-- **A `width="100%"` box with padding runs past its parent.** A full-width column
-  with `padding=16` measured 1,232 px in a 1,200 px window; an inbox row's time
-  painted off the right edge of a phone. Cause: a box is `box-sizing: content-box`,
-  as in CSS without a reset, so padding and border add to `width` (and to
-  `height="100%"`). Fix: `box-sizing="border-box"` on the padded box or its style;
-  or drop `width`, since a box in a block or a `column` already fills the width.
-  (Chat2 and Workout DIARY, Gallery's `height`; reproduced on the web, 2026-10-04.)
-  **Diagnosed:** the compiler warns (`lower-width-padding`) for a content-box
-  container with `width="100%"` and horizontal padding or a border, and `check`
-  names the box that runs past its parent by its padding (LLP 1116.009 D5).
 
 - **A one-edge border draws a frame, and a drawer closed to `height=0` stays open
   a few pixels.** `border-top-width=1 border-style="solid"` on a 60 × 20 box drew a
@@ -824,8 +797,8 @@ screen, 2026-10-16.)
 - **A glyph sits at the left of its round button.** euxy's clear and dice glyphs and its
   BPM − and + sat 10 points left of centre in buttons with `align-items="center"
   justify-content="center"`. Cause: every React Native `View` is a flex container; a
-  `button` is `inline-block` and a `view` is `block`, as on the web, so those two do
-  nothing there (a button centres its content vertically on its own, as browsers do).
+  `button` and a `view` are blocks, so those two do nothing there (a button centres its
+  content vertically on its own, as browsers do).
   Fix: `display="flex"` on the button or view.
 - **`display="flex" align-items="center"` centres up and down, not across.** A ported
   `alignItems: 'center'` on a `view` left its icon and label at the left edge, centred
@@ -878,11 +851,6 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   when an action is also named `setMode` (`syntax-call-ambiguous`). Rename the
   action and its bindings, for example to `chooseMode`.
 
-- **`nav` read after it is assigned in the same action is the old value.** State
-  writes land when the action ends (`analyze-read-after-assign`), so `nav = push(nav,
-  "/d")` then `top(nav)` still sees the route before it. Fix: `let next = push(nav,
-  "/d")`, `nav = next`, and read `next`. (euxy port, three times, 2026-10-15.)
-
 - **A scalar resource cannot use `empty("idle")`.** `empty()` takes named
   fields only for a record shape; a string's `empty()` is `""`. Use a pure
   fallback function for a nonempty string. (`type-placeholder-fields`,
@@ -930,13 +898,6 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   a web build sends that request from a server (`docs/contract-for-agents.md`,
   "An app's own sign-in screens").
 
-- **Resetting a mutation beside its send can discard the new reply.** For a
-  mutation without `queue`, `saved = none` in the action that sends `saved`
-  forgets its in-flight reply even when the reset is written first: assignments
-  commit after sends. Fix: keep the slot and hide a previous error while
-  `pending(saved)`. `none` means no reply, not a failed write; inspect
-  `failure(saved)` or the shaped reply. See [after a write](recipes/after-a-write.md).
-
 - **`Date.now()` in a data module passes its Bun tests and fails on the
   device.** Since 2026-10-05 the build refuses a direct use by file and line
   (`Date.now()`, `new Date()`, `Math.random()`, `setInterval` and the frame
@@ -965,20 +926,6 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   (`agent macos --seed 7 …`), or drive against the stand-in
   (`bun exact.mjs docs convex live queries`). A launch outside the driver draws
   the system's entropy. (LLP 1157 §6, 2026-11-10.)
-
-- **A helper action does not see what its caller just assigned.** `sel = next`
-  then `follow()`, with `follow` reading `sel`, would read the old `sel`: a call
-  is its callee's statements in the caller's one commit, and every statement
-  reads the state the action started with (LLP 1089 D2). The compiler warns of
-  the read (`analyze-read-after-assign`, naming both lines; a warning since LLP
-  1035.005.002 C2, as the same read in the action's own body is). Fix: pass the
-  value the helper should see, `follow(next)`, or a `let` bound before the
-  assignment for the old one. (Spreadsheet F21 and Files F27 diaries, where a
-  copied block was the workaround.) In the action's own body the same read is
-  the same warning: `now = performanceNow()` then `if now >= endsAt`
-  tests the last tick's time (focus-timer's phases changed 250 ms late in two
-  bake-off rounds). Fix: `let stamp = performanceNow()`, `now = stamp`, and read
-  `stamp`.
 
 - **A delete or save is lost when the page reloads right after it.** An action that
   `send`s a write and navigates away in the same commit passes every test, but a
@@ -1532,14 +1479,15 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   `.nonactivatingPanel` in an XCTest (it becomes key without activating the app)
   and read its pixels with `CGWindowListCreateImage`. (Issue #179, 2026-10-07.)
 
-- **A drive script kept in the app folder makes the build stale.** Editing
-  `verify.mjs` beside `app.contract` made the driver refuse the next drive until
-  `bun exact.mjs web-build`. Cause: a file in the app folder counts as a build input
-  unless it is an output (a screenshot, a log) or git-ignored outside the input trees
-  (`data/`, `web/`, `assets/` and the like count even when ignored); any `.json`
-  counts, since the bake captures it. Fix: keep drive scripts, evidence, logs and
-  runtime files in the app's `.exact/` (no build, dev-loop watcher or freshness
-  check reads a dot directory at the app's root), or outside the app folder.
+- **A drive script kept in the app folder makes the build stale.** A `drive.py` beside
+  `app.contract` made the driver refuse the next drive until `bun exact.mjs web-build`.
+  Cause: a file in the app folder counts as a build input unless no build reads it: an
+  output (a screenshot, a log), a `.sh` or `.ops` helper, anything under `tools/`,
+  `shots/` or `repros/`, a file git ignores outside the input trees (`data/`, `web/`,
+  `assets/` and the like count even when ignored), and a script or `.json` that `app.ts`
+  never imports (with no `app.ts`, every one counts). Fix: keep drive scripts, evidence,
+  logs and runtime files in the app's `.exact/` (no build, dev-loop watcher or freshness
+  check reads a dot directory at the app's root), in `tools/`, or outside the app folder.
   (Authoring bench, LLP 1087: five builders, 2026-10-05; Depot's evidence JSON,
   2026-10-05.)
 
