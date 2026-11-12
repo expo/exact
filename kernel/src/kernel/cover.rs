@@ -54,10 +54,7 @@ impl Kernel {
     /// (`apply`): a bar's clearance, or none where the scroller at the box's
     /// bottom edge takes it as its platform inset.
     pub fn cover_bottom(&self, key: crate::NodeKey) -> f32 {
-        match self.arena.cover(key.index) {
-            Some(HostCover::Edges(_)) => applied_padding(&self.arena, key.index)[2],
-            _ => 0.0,
-        }
+        applied_padding(&self.arena, key.index)[2]
     }
 
     /// Set or clear (`None`) what a host container covers of `view`.
@@ -218,10 +215,10 @@ impl Kernel {
 /// A cover's part of a box's engine style (@ref LLP 1075.003 §3.5): a
 /// container's bars add to the padding of the route they cover, a box a bar
 /// replaces takes no space, and a scroller the platform insets ends its
-/// content box that much sooner (LLP 1116.000 D1.2): both insets are the
-/// gutter at its padding box's bottom (`lay_inset`), so its children keep
-/// their start and its scroll extent ends where the platform's own inset
-/// begins.
+/// content box that much sooner (LLP 1116.000 D1.2): both insets are a
+/// gutter below its padding box, as a horizontal scrollbar's is, so its
+/// children keep their start and its scroll extent ends where the
+/// platform's own inset begins.
 pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     // A popover is the host's to lift, out of flow, open or closed (`style::top_layer`).
     crate::style::top_layer::apply(arena, slot, s);
@@ -240,18 +237,18 @@ pub(crate) fn apply(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
                 left: style.padding_left.spaced(env, across).floor_lp(env, left),
             };
         }
-        Some(HostCover::Inset([top, bottom])) => lay_inset(s, top + bottom),
-        Some(HostCover::Gutter([right, bottom])) => {
-            s.scrollbar_width = right.max(bottom);
-            // Taffy reserves its scalar width on Scroll axes. Hidden keeps
-            // the same scroll-container layout without reserving that axis.
-            if right == 0.0 && s.overflow.y == taffy::style::Overflow::Scroll {
-                s.overflow.y = taffy::style::Overflow::Hidden;
+        Some(HostCover::Inset([top, bottom])) => {
+            // A vertical scroller's hidden `overflow-x` lays out as `Scroll`,
+            // the same box but for the bottom gutter, which Taffy reserves
+            // only on a `Scroll` axis. A definite size, flex basis or aspect
+            // ratio leaves the gutter out; a size taken from content counts
+            // it, as a scrollbar's.
+            if s.overflow.x == taffy::style::Overflow::Hidden {
+                s.overflow.x = taffy::style::Overflow::Scroll;
             }
-            if bottom == 0.0 && s.overflow.x == taffy::style::Overflow::Scroll {
-                s.overflow.x = taffy::style::Overflow::Hidden;
-            }
+            lay_gutter(s, [0.0, top + bottom]);
         }
+        Some(HostCover::Gutter(gutter)) => lay_gutter(s, gutter),
         None => {}
     }
     // An absolutely positioned child is placed against its parent's padding
@@ -415,8 +412,7 @@ fn positioned(arena: &NodeArena, slot: u32) -> bool {
 /// child is still placed past the whole cover (`added_padding`).
 pub(crate) fn applied_padding(arena: &NodeArena, slot: u32) -> [f32; 4] {
     let [top, right, bottom, left] = added_padding(arena, slot);
-    let edges = matches!(arena.cover(slot), Some(HostCover::Edges(_)));
-    let bottom = if edges && scroller_insets_bottom(arena, slot) {
+    let bottom = if bottom > 0.0 && scroller_insets_bottom(arena, slot) {
         0.0
     } else {
         bottom
@@ -447,24 +443,17 @@ pub(crate) fn without_inset(arena: &NodeArena, slot: u32, s: &mut taffy::style::
     }
 }
 
-/// Lay a scroller's `inset` points of platform scroll insets out as the
-/// gutter a horizontal scrollbar takes at the bottom of its padding box
-/// (LLP 1116.000 D1.2): the content box loses them and the scroll extent
-/// leaves them out. A definite size keeps the box, since no box sizing,
-/// definite flex basis or aspect ratio counts a gutter; a size taken from
-/// content counts the insets as it counts a scrollbar's gutter. Taffy
-/// reserves `scrollbar_width` on each `Scroll` axis, and `Hidden` keeps the
-/// same scroll container without reserving the vertical scrollbar's gutter.
-/// A vertical scroller's `overflow-x` lays out as `Scroll` or `Hidden`, the
-/// same box but for the gutter; a box that does not scroll keeps its
-/// overflow and no gutter.
-fn lay_inset(s: &mut taffy::style::Style, inset: f32) {
-    s.scrollbar_width = inset;
-    if s.overflow.x == taffy::style::Overflow::Hidden {
-        s.overflow.x = taffy::style::Overflow::Scroll;
-    }
-    if s.overflow.y == taffy::style::Overflow::Scroll {
+/// Reserve native scrollbar gutters beside and below the padding box,
+/// `right` and `bottom` wide (CSS 2.1 §11.1.1). Taffy reserves one width on
+/// each `Scroll` axis, and `Hidden` keeps the same scroll container without
+/// reserving that axis's gutter.
+fn lay_gutter(s: &mut taffy::style::Style, [right, bottom]: [f32; 2]) {
+    s.scrollbar_width = right.max(bottom);
+    if right == 0.0 && s.overflow.y == taffy::style::Overflow::Scroll {
         s.overflow.y = taffy::style::Overflow::Hidden;
+    }
+    if bottom == 0.0 && s.overflow.x == taffy::style::Overflow::Scroll {
+        s.overflow.x = taffy::style::Overflow::Hidden;
     }
 }
 
