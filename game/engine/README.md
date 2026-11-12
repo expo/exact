@@ -490,7 +490,11 @@ every skin: each named `.tex` is requested while an instance names it and releas
 none draws it, and until all of an instance's named textures can draw, it keeps the ones
 it drew before (the model's own the first time). `MaterialOverride.uv_offset` scrolls
 the base colour and emission textures on one instance, after the material's own UV
-transform: a tail running along a ribbon, flowing water. `World::drawn(e)` is the displayed
+transform: a tail running along a ribbon, flowing water. Optional `roughness`,
+`metallic`, `clearcoat` and `clearcoat_roughness` replace the material factors
+on that instance; `None` keeps each factor. Values are clamped to [0, 1],
+non-finite values are ignored, and roughness/metallic still multiply texture
+channels. A zero coat removes it. Unlit and custom materials ignore these factors. `World::drawn(e)` is the displayed
 pose and opacity, in the same walk as `World::is_visible`. Picking, layout, physics
 and gameplay use the simulated pose.
 

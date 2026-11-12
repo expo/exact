@@ -481,13 +481,33 @@ impl Assets {
                 1.. => levels[level - 1].model.as_str(),
                 _ => name,
             };
-            // The level's materials drawn with this instance's textures.
             let mut variants = Vec::new();
-            if !shown.textures.is_empty() {
-                let materials = r.model(model).map(|d| d.materials.to_vec());
-                for (index, names) in &shown.textures {
-                    if let Some(&base) = materials.as_ref().and_then(|m| m.get(*index as usize)) {
-                        if let Some(variant) = r.material_variant(base, names) {
+            let coated = |index: usize| {
+                overrides
+                    .as_ref()
+                    .and_then(|rows| rows.0.iter().find(|o| o.material as usize == index))
+                    .is_some_and(|o| o.clearcoat.is_some_and(|v| v.is_finite() && v > 0.))
+            };
+            if !shown.textures.is_empty()
+                || overrides
+                    .as_ref()
+                    .is_some_and(|rows| rows.0.iter().any(|o| coated(o.material as usize)))
+            {
+                let materials = r
+                    .model(model)
+                    .map(|d| d.materials.to_vec())
+                    .unwrap_or_default();
+                let empty = Slots::default();
+                for (index, base) in materials.into_iter().enumerate() {
+                    let names = shown
+                        .textures
+                        .iter()
+                        .find(|(i, _)| *i as usize == index)
+                        .map(|(_, s)| s);
+                    if names.is_some() || coated(index) {
+                        if let Some(variant) =
+                            r.material_variant(base, names.unwrap_or(&empty), coated(index))
+                        {
                             variants.push((base, variant));
                         }
                     }
@@ -519,7 +539,7 @@ impl Assets {
                     .0
                     .iter()
                     .find(|o| o.material as usize == index)?;
-                Some((o.color, o.emissive, o.uv_offset))
+                Some(o)
             };
             drawn |= !nodes.is_empty();
             if !nodes.is_empty() {
@@ -543,23 +563,32 @@ impl Assets {
                 // The material's UV offset, in each of the record's entries.
                 // A custom material's shader reads no look table.
                 let offset = material_look(material)
-                    .and_then(|l| l.2)
+                    .and_then(|o| o.uv_offset)
                     .filter(|_| !draws.custom.contains(&material));
                 let [u, v] = offset.unwrap_or_default();
+                let factors = material_look(material)
+                    .filter(|_| !draws.custom.contains(&material))
+                    .map_or([-1.; 4], |o| {
+                        [o.roughness, o.metallic, o.clearcoat, o.clearcoat_roughness]
+                            .map(scalar_override)
+                    });
+                let surface = factors != [-1.; 4];
                 if parts.len() <= 1 {
                     look = parts.first().and_then(find);
                     // One neutral entry for the whole record, holding the offset.
-                    if offset.is_some() {
+                    if offset.is_some() || surface {
                         base = self.part_looks.len() as u32 + 1;
-                        let mut entry = [0.; 18];
+                        let mut entry = [0.; 22];
                         entry[..4].copy_from_slice(&[1.; 4]);
-                        entry[16..].copy_from_slice(&[u, v]);
-                        let mut end = [0.; 18];
+                        entry[16..18].copy_from_slice(&[u, v]);
+                        entry[18..].copy_from_slice(&factors);
+                        let mut end = [0.; 22];
                         end[7] = f32::from_bits(u32::MAX);
                         self.part_looks.extend([entry, end]);
                     }
                 } else if !materials.is_empty()
                     || offset.is_some()
+                    || surface
                     || parts.iter().any(|p| find(p).is_some())
                 {
                     // A merged draw finds each vertex's part by its vertex range,
@@ -596,21 +625,25 @@ impl Assets {
                                         m[7],
                                         u,
                                         v,
+                                        factors[0],
+                                        factors[1],
+                                        factors[2],
+                                        factors[3],
                                     ]
                                 }),
                         );
-                    let mut end = [0.; 18];
+                    let mut end = [0.; 22];
                     end[7] = f32::from_bits(u32::MAX);
                     self.part_looks.push(end);
                 }
                 let (mut tint, mut glow) =
                     look.map_or(([1.; 4], [0.; 3]), |l| (l.color, l.emissive));
-                if let Some((color, g, _)) = material_look(material) {
-                    if let Some(c) = color {
+                if let Some(o) = material_look(material) {
+                    if let Some(c) = o.color {
                         tint = std::array::from_fn(|i| tint[i] * c[i]);
                         base |= REPLACE;
                     }
-                    glow = std::array::from_fn(|i| glow[i] + g[i]);
+                    glow = std::array::from_fn(|i| glow[i] + o.emissive[i]);
                 }
                 let material = variants
                     .iter()
@@ -708,6 +741,9 @@ fn look_digests(w: &World) -> BTreeMap<u32, u64> {
             l.emissive.map(f32::to_bits).hash(h);
             l.textures.names().hash(h);
             l.uv_offset.map(|o| o.map(f32::to_bits)).hash(h);
+            [l.roughness, l.metallic, l.clearcoat, l.clearcoat_roughness]
+                .map(|v| v.map(f32::to_bits))
+                .hash(h);
         }
     }
     hashers.into_iter().map(|(k, h)| (k, h.finish())).collect()
@@ -746,4 +782,11 @@ impl Work {
         format!("{{\"textureUploads\":{},\"meshUploads\":{},\"pipelineCreations\":{},\"modelSkinBufferReallocations\":{}}}",
             self.texture_uploads, self.mesh_uploads, self.pipeline_creations, self.buffer_reallocations)
     }
+}
+
+fn scalar_override(value: Option<f32>) -> f32 {
+    value
+        .filter(|v| v.is_finite())
+        .map(|v| v.clamp(0., 1.))
+        .unwrap_or(-1.)
 }

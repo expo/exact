@@ -64,6 +64,7 @@ impl Writes for Recording {
         &mut self,
         _: MaterialId,
         names: &[Option<String>; 5],
+        _: bool,
     ) -> Option<MaterialId> {
         let set = self.sets.iter().position(|s| s == names);
         Some(MaterialId(
@@ -410,4 +411,31 @@ fn a_fallback_draws_without_the_new_models_levels() {
     r.revision += 1;
     feed(&mut assets, &w, &mut r);
     assert_eq!(assets.records.len(), 4, "walnut and its coarse level");
+}
+
+#[test]
+fn scalar_factors_are_clamped_ignore_nonfinite_values_and_stay_outside_the_hash() {
+    let mut w = World::new(60, 0);
+    let e = w.spawn((Transform::default(), Mesh::asset("model")));
+    let hash = w.hash();
+    let look = |roughness| {
+        exact_game::MaterialOverrides(vec![exact_game::MaterialOverride {
+            roughness: Some(roughness),
+            metallic: Some(1.2),
+            clearcoat: Some(-0.2),
+            clearcoat_roughness: Some(f32::NAN),
+            ..Default::default()
+        }])
+    };
+    w.insert(e, look(0.2));
+    assert_eq!(w.hash(), hash);
+    let (mut assets, mut r) = (Assets::default(), Recording::default());
+    feed(&mut assets, &w, &mut r);
+    assert_eq!(&assets.part_looks[0][18..], &[0.2, 1., 0., -1.]);
+    let shape = (assets.records.len(), assets.part_looks.len());
+    w.insert(e, look(0.8));
+    assert!(assets.patch_looks(&w, &mut r).unwrap());
+    assert_eq!(w.hash(), hash);
+    assert_eq!(&assets.part_looks[0][18..], &[0.8, 1., 0., -1.]);
+    assert_eq!((assets.records.len(), assets.part_looks.len()), shape);
 }

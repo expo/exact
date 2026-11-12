@@ -51,6 +51,7 @@ fn mapped_normal(input:ModelVarying, front:bool) -> vec3<f32> {
 // directional albedo times the diffuse irradiance, scaling `lobe` by
 // 1 - max3(sheenColor) E(NdotV) (KHR_materials_sheen, "Albedo-scaling technique").
 fn layered_ambient(n:vec3<f32>, v:vec3<f32>, lobe:vec3<shading>) -> vec3<shading> {
+    if surface_layer.coat==0.0 && all(surface_layer.sheen==vec3(0.0)) { return lobe; }
     let nv=max(dot(n,v),0.0001);
     let nc=surface_layer.normal;
     let cv=max(dot(nc,v),0.0001);
@@ -96,8 +97,10 @@ fn model_shade(input:ModelVarying, front:bool, visibility:f32) -> vec4<f32> {
     }
     let n=mapped_normal(input,front);
     if MODEL_DISCARD && baked.flags.x==1.0 && base.a < baked.emission_cutoff.w { discard; }
-    let metallic=clamp(baked.surface.x*mr.b*input.part.x,0.0,1.0);
-    let roughness=clamp(baked.surface.y*mr.g*input.part.y,0.045,1.0);
+    let metal_factor=select(baked.surface.x,input.surface_override.y,input.surface_override.y>=0.0);
+    let rough_factor=select(baked.surface.y,input.surface_override.x,input.surface_override.x>=0.0);
+    let metallic=clamp(metal_factor*mr.b*input.part.x,0.0,1.0);
+    let roughness=clamp(rough_factor*mr.g*input.part.y,0.045,1.0);
     let v=view_direction(input.world);
     // The colour in `shading` (frame.wgsl): f16 where the device has it.
     let albedo=vec3<shading>(base.rgb);
@@ -107,8 +110,11 @@ fn model_shade(input:ModelVarying, front:bool, visibility:f32) -> vec4<f32> {
     var glow=vec3<shading>(input.glow.xyz);
     if LAYERED && !MATTE {
         // The roughness floors keep the coat's GGX peak and the sheen's 1/alpha finite.
-        let coat_normal=normalize(input.normal)*select(-1.0,1.0,front);
-        surface_layer=SurfaceLayer(clamp(baked.coat.x,0.0,1.0),clamp(baked.coat.y,0.045,1.0),clamp(baked.coat.z,0.07,1.0),max(baked.sheen.rgb,vec3(0.0)),coat_normal);
+        let geometric_normal=normalize(input.normal)*select(-1.0,1.0,front);
+        let coat_normal=select(geometric_normal,n,input.surface_override.z==0.0);
+        let coat=select(baked.coat.x,input.surface_override.z,input.surface_override.z>=0.0);
+        let coat_roughness=select(baked.coat.y,input.surface_override.w,input.surface_override.w>=0.0);
+        surface_layer=SurfaceLayer(clamp(coat,0.0,1.0),clamp(coat_roughness,0.045,1.0),clamp(baked.coat.z,0.07,1.0),max(baked.sheen.rgb,vec3(0.0)),coat_normal);
         environment=layered_ambient(n,v,environment);
         // KHR_materials_clearcoat, "Emission": the coat darkens what the base emits.
         let under=shading(1.0-surface_layer.coat*coat_fresnel(max(dot(coat_normal,v),0.0001)));

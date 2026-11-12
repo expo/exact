@@ -740,6 +740,20 @@ changed too, until every texture of its new set is
 resident, so a skin never draws with mixed maps; the feed watches the names it waits
 for and rebuilds when one arrives.
 A variant is reclaimed with its material or when one of its textures retires.
+
+`MaterialOverride.roughness`, `metallic`, `clearcoat` and `clearcoat_roughness`
+replace those material factors on one instance. `None` keeps the authored
+factor; finite values are clamped to [0, 1], and non-finite values are ignored.
+Roughness and metallic still multiply their texture channels. A zero coat
+removes its reflection and attenuation; its roughness has the same .045 floor
+as an authored coat. Unlit and custom materials ignore these factors.
+
+The factors live in the optional look table. Their first appearance or removal
+can rebatch; later values patch in place. Enabling a coat on an uncoated material selects a layered variant, shared by all its
+coated instances with the same textures; it may compile that family on first
+use. Changing factors within that family creates no new material or texture.
+Turning off an added coat returns to the uncoated family. The instance record does
+not grow, and simulation state, saves and hashes are unchanged.
 `MaterialOverride.uv_offset` adds to the coordinates the material's base colour and
 emission textures are sampled at on that instance, after the material's
 `KHR_texture_transform` (`MaterialData.uv_transforms`), in the transformed space, so

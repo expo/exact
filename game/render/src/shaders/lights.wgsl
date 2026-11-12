@@ -81,7 +81,7 @@ fn sheen_albedo(nv: f32, roughness: f32) -> f32 {
 fn layered_brdf(n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, base: vec3<shading>, metallic: f32,
         roughness: f32) -> vec3<shading> {
     let lobe = brdf(n, v, l, base, metallic, roughness);
-    if !LAYERED || MATTE { return lobe; }
+    if !LAYERED || MATTE || (surface_layer.coat==0.0 && all(surface_layer.sheen==vec3(0.0))) { return lobe; }
     let nl = max(dot(n, l), 0.0001);
     let nv = max(dot(n, v), 0.0001);
     let sum = v + l;

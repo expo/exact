@@ -35,7 +35,7 @@ impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
             for (word, value) in m.words[at + 36..at + 43].iter_mut().zip(&entry[..7]) {
                 *word = value.to_bits();
             }
-            for (word, value) in m.words[at + 12..at + 14].iter_mut().zip(&entry[16..]) {
+            for (word, value) in m.words[at + 12..at + 18].iter_mut().zip(&entry[16..]) {
                 *word = value.to_bits();
             }
         }
