@@ -912,6 +912,23 @@ export const executableName = (app) => app.displayName.replace(/[<>:"/\\|?*\x00-
 /** Match CFBundle's decomposed executable path so codesign excludes the main executable
  * from its resource seal. Directory traversal preserves the filename's spelling. */
 export const appleExecutableName = (app) => executableName(app).normalize('NFD');
+/** The App Clip `host.ios.appClip` declares, or null: its bundle id (`<app id>.Clip`, as Xcode names one), its
+ * name (the app's) and the executable's name. An App Clip is an app (LLP 1126 D12): the clip bundle runs the whole
+ * app under this second identity, using the same executable target. The web build names its id in the origin's
+ * `apple-app-site-association` (LLP 1030). */
+/** The `applinks:` and other associated domains `host.ios.associatedDomains` claims: its list as written, or, when it
+ * is `true`, the declared origin's host (LLP 1038 D8). The entitlements sign these, and the origin's association file
+ * claims the app only when they name its host. */
+export const associatedDomains = (app) => {
+  const ios = app.manifest.host?.ios ?? {};
+  return Array.isArray(ios.associatedDomains) ? ios.associatedDomains : ios.associatedDomains && app.origin ? [`applinks:${new URL(app.origin).host}`] : [];
+};
+export const appClip = (app) => {
+  const clip = app.manifest.host?.ios?.appClip;
+  if (!clip) return null;
+  const id = clip.id ?? `${app.id}.Clip`, name = clip.name ?? app.displayName;
+  return { id, name, executable: appleExecutableName({ id, displayName: name ?? '' }) };
+};
 export const windowsFile = (app, path) => basename(path) === `${app.crate('windows')}.exe` ? `${executableName(app)}.exe` : basename(path);
 export function bakeTarget(platform) {
   if (platform === 'web') return 'wasm32-unknown-unknown';

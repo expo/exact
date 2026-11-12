@@ -47,6 +47,12 @@ test('a navigation to a dotted deep link is the document; a fetch of one is not'
     expect((await readWebRequest(dist, '/assets/missing.pdf', html)).found).toBe(null);
     expect(buildTreeFile(dist, '/deck/missing.html', html)).toBe(null);
     expect((await readWebRequest(dist, '/assets/hero.model', html)).found).toBe(null);
+    // The one dot path a build tree serves beside the install pages: the association file Apple's CDN fetches.
+    mkdirSync(resolve(dist, '.well-known'));
+    writeFileSync(resolve(dist, '.well-known/apple-app-site-association'), '{}');
+    writeFileSync(resolve(dist, '.well-known/other'), '{}');
+    expect(buildTreeFile(dist, '/.well-known/apple-app-site-association')?.route).toBe('/.well-known/apple-app-site-association');
+    expect(buildTreeFile(dist, '/.well-known/other')).toBe(null);
   } finally { rmSync(dist, {recursive: true, force: true}); }
 });
 

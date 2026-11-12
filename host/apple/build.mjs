@@ -47,7 +47,7 @@ import { closeSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, mkdte
 import { evictArms, keepRoster, keptRoster, rosterRoutes, snapshotSources } from './arms.mjs';
 import { HOST_MACOS, freeSpace, ROOM_GB } from '../../scripts/filesystem.mjs';
 import { documentTypes, exportedTypes, importedTypes, openingLinks, webPageTypes, browserEntitlements } from './documents.mjs';
-import { appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, appleCargoClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
+import { appClip, associatedDomains as claimedDomains, appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, appleCargoClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
 import { copyStaticTreeIfPresent, listAssets } from '../web/serve.mjs';
 import { startSweep } from '../../scripts/sweep.mjs';
 import { appleBuildRefusal, guardFlags, reportBuilt } from '../../scripts/help.mjs';
@@ -331,15 +331,7 @@ export function developmentLinks(app, page, access) {
  * which HealthKit splits the identifier by (LLP 1069.008.000 D3). */
 export const SIMULATOR_PREFIX = 'SIMULATORX';
 
-/** The App Clip `host.ios.appClip` declares, or null: its bundle id (`<app id>.Clip`, as Xcode names one), its
- * name (the app's) and the executable's name. An App Clip is an app (LLP 1126 D12): the clip bundle runs the whole
- * app under this second identity, using the same executable target. */
-export const appClip = (app) => {
-  const clip = app.manifest.host?.ios?.appClip;
-  if (!clip) return null;
-  const id = clip.id ?? `${app.id}.Clip`, name = clip.name ?? app.displayName;
-  return { id, name, executable: appleExecutableName({ id, displayName: name ?? '' }) };
-};
+export { appClip };
 
 /** Device identity comes from the profile. Simulators need an app identity too: Keychain's default access group
  * is the application-identifier. A simulator's is `SIMULATORX.<id>`, with the bare id it had before kept as a
@@ -369,7 +361,7 @@ export const entitlements = (app, team = null, debuggable = true, reach = null, 
   }
   if (app.manifest.share_target && simulator && !app.widgetTV && !app.widgetHost && !app.clipParent) dict['com.apple.security.application-groups'] ??= [widgetGroup(app)]; // the share inbox (LLP 1133.024 D4)
   // @ref LLP 1038 D8 — explicit applinks entries, or the declared origin.
-  const domains = Array.isArray(ios.associatedDomains) ? ios.associatedDomains : ios.associatedDomains && app.origin ? [`applinks:${new URL(app.origin).host}`] : [];
+  const domains = claimedDomains(app);
   // @ref LLP 1069.006 D2 — a claimed https auth callback needs `webcredentials:` (the bake's derivation from the `auth.callback` grants, LLP 1069.008).
   const linked = [...domains, ...associatedDomains(reach?.auth, debuggable)];
   // An App Clip is invoked from its `appclips:` domains, which its parent's entitlements list too (Apple,
