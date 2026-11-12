@@ -198,3 +198,25 @@ fn integral_deadlines_match_the_manifest_schema() {
         );
     }
 }
+
+#[test]
+fn secret_references_before_the_url_path_are_refused_under_wildcard_grants() {
+    for url in [
+        "https://{secret:session}.example.com/feed",
+        "{secret:session}://api.example/feed",
+        "https://api.example:{secret:session}/feed",
+        "https://{secret:session}@api.example/feed",
+        "https:{secret:session}.example.com/feed",
+        "https:\n//{secret:session}.example.com/feed",
+        " \thttps://{secret:session}.example.com/feed",
+    ] {
+        let error = check(vec![("feed".into(), json!({"url":url}))],
+            Some("net.fetch https://*.example.com\nnet.fetch https://api.example\nsecret.keep session")).unwrap_err();
+        assert!(error.starts_with("preload.feed.url:"), "{error}");
+        assert!(
+            error.contains("secret references are allowed only in the URL path or query"),
+            "{error}"
+        );
+    }
+    assert!(entry(json!({"url":"https://api.example/feed?tenant={secret:session}"})).is_ok());
+}

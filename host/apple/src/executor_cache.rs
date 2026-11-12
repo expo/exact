@@ -85,6 +85,7 @@ pub(super) struct Exchange {
 
 pub(super) struct Cache {
     pub(super) preload_starting: bool,
+    pub(super) preload_definitions_due: Option<Instant>,
     pub(super) grants: String,
     entries: VecDeque<Arc<Entry>>,
     // In-flight validations still own these bytes (LLP 1162 D4's bound).
@@ -99,6 +100,7 @@ impl Cache {
     pub(super) fn new(grants: String) -> Self {
         Self {
             preload_starting: false,
+            preload_definitions_due: None,
             grants,
             entries: VecDeque::new(),
             retired: Vec::new(),

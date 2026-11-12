@@ -273,6 +273,23 @@ fn owners(bindings: Option<ibex2::host::Bindings>) -> Vec<Option<ibex2::host::Bi
 }
 
 impl Core {
+    #[cfg(test)]
+    #[allow(dead_code)] // Shared hosts build without Apple's launch tests (LLP 1162.000 D4).
+    pub(super) fn test_start(
+        asynchronous: bool,
+        bindings: Option<ibex2::host::Bindings>,
+        grants: &str,
+        wake: Wake,
+    ) -> Self {
+        Self::with_owners_lanes(
+            owners(bindings),
+            grants,
+            wake,
+            Arc::new(ibex2::host::Host::new),
+            asynchronous.then(asynch::asynch_lanes),
+        )
+    }
+
     #[allow(dead_code)] // the tests'; the hosts' executors use `start_switched` or `start_on`
     pub(super) fn start(bindings: Option<ibex2::host::Bindings>, grants: &str, wake: Wake) -> Self {
         // Additional transports are constructed on their own threads, not
@@ -1009,10 +1026,21 @@ fn worker(
                     state = shared.state.lock().unwrap();
                     continue;
                 }
+                if let Some(cache) = state.cache.as_mut() {
+                    preload::expire(cache);
+                }
                 if let Some(next) = reads::next_job(&shared, &mut state, lane) {
                     break next;
                 }
-                state = shared.ready.wait(state).unwrap();
+                let delay = state.cache.as_ref().and_then(|cache| {
+                    cache
+                        .preload_definitions_due
+                        .map(|due| due.saturating_duration_since((cache.clock)()))
+                });
+                state = match delay {
+                    Some(delay) => shared.ready.wait_timeout(state, delay).unwrap().0,
+                    None => shared.ready.wait(state).unwrap(),
+                };
             }
         };
         let Job {

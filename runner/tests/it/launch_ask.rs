@@ -94,3 +94,65 @@ fn a_refresh_asked_before_the_source_is_ready_stays_a_refresh() {
     r.data_ready().unwrap();
     assert!(one_request(&mut r).forced);
 }
+
+struct ImmediateLaunch {
+    ready: bool,
+    asks: usize,
+    fail: bool,
+}
+impl DataSource for ImmediateLaunch {
+    fn grants(&self) -> &str {
+        "secret.keep peer\nnet.fetch https://example.test"
+    }
+    fn ready(&self) -> bool {
+        self.ready
+    }
+    fn query(&mut self, _: &str, _: &[Value]) -> Result<Value, DataError> {
+        unreachable!()
+    }
+    fn answer(&mut self, store: &mut Store, _: &str, _: &[Value]) -> Result<Answer, DataError> {
+        let _ = store.get("peer");
+        self.asks += 1;
+        if self.asks == 1 {
+            if self.fail {
+                return Err(DataError::Unavailable("launch failed".into()));
+            }
+            return Ok(Answer::Now(Value::str("launch")));
+        }
+        Ok(Answer::Later(Request::get("https://example.test/feed")))
+    }
+}
+
+#[test]
+fn a_launch_ask_ending_now_or_failed_does_not_mark_a_later_store_refresh() {
+    let mut unforced = Vec::new();
+    for fail in [false, true] {
+        let mut r = Runner::boot(
+            contract::compile(SOURCE).unwrap(),
+            ImmediateLaunch {
+                ready: false,
+                asks: 0,
+                fail,
+            },
+            Kernel::with_monospace(),
+            Default::default(),
+            "/",
+        )
+        .unwrap();
+        r.data().ready = true;
+        r.data_ready().unwrap();
+        assert!(r.take_requests().is_empty());
+        assert_eq!(r.data().asks, 1);
+        r.store_changed(vec![("peer".into(), b"changed".to_vec())])
+            .unwrap();
+        let requests = r.take_requests();
+        assert_eq!(requests.len(), 1, "{requests:?}");
+        if !requests[0].forced {
+            unforced.push(fail);
+        }
+    }
+    assert!(
+        unforced.is_empty(),
+        "unforced store refreshes after launch (failed): {unforced:?}"
+    );
+}
