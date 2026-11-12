@@ -127,7 +127,24 @@ for (const f of readdirSync(DIST, { recursive: true, encoding: 'utf8' }).filter(
   prepainted++;
 }
 
-writeFileSync(join(DIST, 'robots.txt'), `User-agent: *\nAllow: /\n${ORIGIN ? `Sitemap: ${ORIGIN}/sitemap.xml\n` : ''}`);
+const SIGNAL = 'Content-Signal: search=yes, ai-input=yes, ai-train=yes';
+const CRAWLERS: [string, string[]][] = [
+  ['OpenAI', ['GPTBot', 'OAI-SearchBot', 'ChatGPT-User']],
+  ['Anthropic', ['ClaudeBot', 'Claude-User', 'Claude-SearchBot']],
+  ['Perplexity', ['PerplexityBot', 'Perplexity-User']],
+  ['Google and Apple usage-control tokens', ['Google-Extended', 'Applebot-Extended']],
+  ['Other AI data crawlers', ['CCBot', 'Meta-ExternalAgent', 'Amazonbot', 'Bytespider']],
+];
+const crawler = (agent: string) => `User-agent: ${agent}\n${SIGNAL}\nAllow: /\n`;
+writeFileSync(
+  join(DIST, 'robots.txt'),
+  [
+    `# Content signals express how ${site.name} content may be used after access.\n# search: building a search index and returning links or excerpts.\n# ai-input: retrieval and grounding for AI-generated answers.\n# ai-train: training or fine-tuning AI models.\n`,
+    crawler('*'),
+    ...CRAWLERS.map(([owner, agents]) => `# ${owner}\n${agents.map(crawler).join('\n')}`),
+    ...(ORIGIN ? [`Sitemap: ${ORIGIN}/sitemap.xml\n`] : []),
+  ].join('\n'),
+);
 
 writeFileSync(
   join(DIST, 'llms.txt'),
