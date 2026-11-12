@@ -62,6 +62,9 @@ async function forecastFixture() {
     }
     writeFileSync(resolve(source, 'app.ts'), readFileSync(resolve(root, 'apps/weatherlight/app.ts'), 'utf8') + '\n' + fetch);
     const baked = resolve(scratch, 'baked');
+    // An Apple build bakes with appleBakeTool, so nothing else keeps this binary built.
+    const tool = Bun.spawnSync([bakeTool.command, ...bakeTool.args], { ...bakeTool.options(), stdout: 'inherit', stderr: 'inherit' });
+    if (tool.exitCode !== 0) throw new Error(`the bake tool did not build (${bakeTool.command} ${bakeTool.args.join(' ')})`);
     const child = Bun.spawn([bakeTool.built, source, '--out', baked],
       { cwd: root, stdout: 'ignore', stderr: 'pipe' });
     const error = await new Response(child.stderr).text();
