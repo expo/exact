@@ -238,3 +238,35 @@ fn refreshing_a_list_refreshes_a_member_whose_launch_ask_waits() {
     r.act("again", vec![]).unwrap();
     assert!(one_request(&mut r).forced, "the app's refresh");
 }
+
+const SENDS: &str = r##"component App
+  resource feed = feed() as shape string
+  mutation saved as shape string
+  action save
+    send saved = save("draft")
+  view
+    text feed
+"##;
+
+#[test]
+fn the_ask_made_with_sends_waiting_for_the_source_is_not_a_refresh() {
+    let mut r = Runner::boot(
+        contract::compile(SENDS).unwrap(),
+        Feed {
+            ready: false,
+            overruns: 0,
+        },
+        Kernel::with_monospace(),
+        Default::default(),
+        "/",
+    )
+    .unwrap();
+    r.act("save", vec![]).unwrap();
+    assert!(r.take_requests().is_empty(), "the source is not ready");
+    r.data().ready = true;
+    r.data_ready().unwrap();
+    let requests = r.take_requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    let read = requests.iter().find(|o| o.target == "feed").unwrap();
+    assert!(!read.forced, "the launch's own ask");
+}
