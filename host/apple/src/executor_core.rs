@@ -585,9 +585,10 @@ impl Core {
     }
 
     pub(super) fn begin_pump(&self) {
+        // A refusal made by waiting admission keeps its wake (LLP 1162 D1).
+        self.shared.state.lock().unwrap().notified = false;
         self.resume_waiting();
         let mut state = self.shared.state.lock().unwrap();
-        state.notified = false;
         // A refusal may use this turn instead of a completion. Preserve the
         // completion wake even in that case. An extra empty pump is harmless.
         if has_ready(&state) {
@@ -788,7 +789,7 @@ fn complete(shared: &Shared, ticket: u64, outcome: Outcome) {
         again: false,
         reply: false,
     });
-    if has_ready(&state) {
+    if has_ready(&state) || (run.read && !state.ordered_barrier && !state.fenced.is_empty()) {
         wake(&mut state);
     }
 }

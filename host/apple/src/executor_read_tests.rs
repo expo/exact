@@ -640,6 +640,96 @@ fn post_reads_overlap_but_a_parallel_send_waits_for_them() {
 }
 
 #[test]
+fn a_waiting_post_read_is_admitted_on_an_out_of_order_completion_wake() {
+    let server = Server::new();
+    let (core, woke) = server.core(false);
+    for ticket in 1..=16 {
+        core.run(read_job(&server, ticket), None).unwrap();
+    }
+    core.run(job(17, server.post(17), RequestClass::Read), None)
+        .unwrap();
+    core.run(read_job(&server, 18), None).unwrap();
+    server.seen(&[1, 2, 3, 4, 5, 6]);
+    {
+        let state = core.shared.state.lock().unwrap();
+        assert_eq!(state.counts[0], 16);
+        assert_eq!(
+            state.fenced.iter().map(Fenced::ticket).collect::<Vec<_>>(),
+            [17, 18]
+        );
+    }
+    server.reply(2, b"second");
+    woke.recv_timeout(HANG)
+        .expect("a freed effect slot wakes the host");
+    core.begin_pump();
+    assert!(core.drain().is_empty(), "ticket 1 still holds delivery");
+    {
+        let state = core.shared.state.lock().unwrap();
+        assert!(state.ordered.contains(&17));
+        assert_eq!(state.fenced.front().unwrap().ticket(), 18);
+    }
+    for ticket in 3..=16 {
+        server.seen(&[ticket]);
+        server.reply(ticket, b"read");
+    }
+    server.seen(&[17]);
+    assert!(server.state.0.lock().unwrap().held.contains_key(&1));
+    server.reply(17, b"post");
+    server.reply(1, b"first");
+    let mut done = Vec::new();
+    for count in [17, 18] {
+        if count == 18 {
+            server.seen(&[18]);
+            server.reply(18, b"last");
+        }
+        while done.len() < count {
+            woke.recv_timeout(HANG).expect("a host pump needs a wake");
+            core.begin_pump();
+            done.extend(
+                core.drain()
+                    .into_iter()
+                    .map(|(ticket, outcome, _)| (ticket, outcome)),
+            );
+        }
+    }
+    assert_eq!(tickets(&done), (1..=18).collect::<Vec<_>>());
+    assert!(done
+        .iter()
+        .all(|(_, outcome)| matches!(outcome, Outcome::Response(_))));
+    assert!(core.ordered_idle());
+}
+
+#[test]
+fn a_refusal_from_waiting_admission_wakes_even_when_no_reply_can_drain() {
+    let server = Server::new();
+    let (core, woke) = server.core(false);
+    for ticket in 1..=128 {
+        core.run(read_job(&server, ticket), None).unwrap();
+    }
+    core.run(job(129, server.post(129), RequestClass::Read), None)
+        .unwrap();
+    for ticket in 2..=114 {
+        server.seen(&[ticket]);
+        server.reply(ticket, b"read");
+    }
+    wait_state(&core, |s| s.light == 113);
+    // Isolate the admission turn from transport wakes (LLP 1162 D1).
+    core.notify();
+    woke.recv_timeout(HANG).expect("the host pumps");
+    core.begin_pump();
+    assert!(core.drain().is_empty(), "ticket 1 still holds delivery");
+    woke.recv_timeout(HANG).expect("the deferred refusal wakes");
+    assert_eq!(
+        core.resume_ordered(),
+        [(129, "native executor admission limit reached")]
+    );
+    assert!(core.resume_ordered().is_empty());
+    core.forget(|_| false);
+    wait_state(&core, |s| s.counts[0] == 0);
+    assert!(core.ordered_idle());
+}
+
+#[test]
 fn read_admission_forgetting_and_the_refusal_fence_stay_on_the_ordered_lane() {
     let server = Server::new();
     let (core, woke) = server.core(false);

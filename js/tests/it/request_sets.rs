@@ -798,3 +798,57 @@ fn a_worker_reply_can_hand_over_a_new_set() {
         }
     }
 }
+
+#[test]
+fn an_unnamed_reply_requires_a_single_fetch_on_placed_and_mixed_sources() {
+    use exact_data::Mixed;
+    use exact_runner::DataError;
+    let sources: Vec<Box<dyn DataSource>> = vec![
+        Box::new(placed(Placement::Worker)),
+        Box::new(Mixed::new(placed(Placement::Main), RustSource(true), &["batch"], &[]).unwrap()),
+        Box::new(Mixed::new(placed(Placement::Worker), RustSource(true), &["batch"], &[]).unwrap()),
+    ];
+    for mut data in sources {
+        data.activate().unwrap();
+        let mut s = store();
+        let target = Target::Resource(0);
+        let args = [Value::Number(2.)];
+        let turn = later(data.answer_for(target, &mut s, "batch", &args).unwrap());
+        let outcome = run(data.dispatch(turn.continuation.unwrap(), &s));
+        let first = later(
+            data.parse_for(target, &mut s, "batch", &args, outcome)
+                .unwrap(),
+        );
+        let mut requests = vec![first];
+        requests.extend(data.more_for(target));
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            data.parse_for(target, &mut s, "batch", &args, response("ambiguous")),
+            Err(DataError::Unavailable(
+                "`batch`: more than one request is in flight; the reply must name its fetch".into()
+            )),
+        );
+        for (i, request) in requests.iter().enumerate() {
+            let outcome = response(&i.to_string());
+            let turn = if i == 0 {
+                data.parse_fetch_for(target, request.fetch, &mut s, "batch", &args, outcome)
+                    .unwrap()
+                    .unwrap()
+            } else {
+                data.parse_for(target, &mut s, "batch", &args, outcome)
+                    .unwrap()
+            };
+            let turn = later(turn);
+            assert_eq!(turn.fetch, request.fetch);
+            let outcome = run(data.dispatch(turn.continuation.unwrap(), &s));
+            let answer = data
+                .parse_fetch_for(target, turn.fetch, &mut s, "batch", &args, outcome)
+                .unwrap();
+            if i == 0 {
+                assert!(answer.is_none());
+            } else {
+                assert_eq!(answer, Some(Answer::Now(value("0/1"))));
+            }
+        }
+    }
+}

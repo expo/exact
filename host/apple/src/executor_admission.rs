@@ -42,8 +42,8 @@ impl Core {
         let waits_for_effect =
             (effect_read || waiting) && state.counts[0] - state.light >= COUNTS[0];
         if ordered && (state.ordered_barrier || !state.fenced.is_empty() || waits_for_effect) {
-            // Refusals settle before later work; reads waiting for effect
-            // slots hold later requests in the same fence (LLP 1162 D1).
+            // Later requests, GETs included, wait behind a held read so
+            // admission preserves reply order (LLP 1162 D1).
             let held = state
                 .fenced
                 .iter()
@@ -302,6 +302,7 @@ impl Core {
                 state.fenced.push_front(Fenced::Refused(ticket, reason));
             }
             state.ordered_barrier = true;
+            wake(&mut state);
         }
     }
 }

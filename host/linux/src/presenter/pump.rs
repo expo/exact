@@ -17,6 +17,13 @@ impl<D: DataSource> Presenter<D> {
     pub fn pump(&mut self, now_ms: f64) -> Option<String> {
         let region_error = self.poll_content_region();
         self.executor.begin_pump();
+        // Waiting admission can refuse without a completion to commit (LLP 1162 D1).
+        if !self.host.has_ordered_request_refusals() {
+            for (ticket, reason) in self.executor.resume_ordered() {
+                self.host.refuse_request(ticket, reason, true);
+                self.executor.notify();
+            }
+        }
         let region_error = region_error.or(self.dispatch_authored_scroll());
         // An abort a source heard off this thread (a worker's let-go).
         self.host.runner_mut().collect_aborts();

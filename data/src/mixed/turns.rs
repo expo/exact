@@ -75,11 +75,14 @@ impl<J: DataSource, R: DataSource> Mixed<J, R> {
         outcome: Outcome,
     ) -> Result<Answer, DataError> {
         let call_key = key(self.owner(source)?, target, source, args);
-        let fetch = self
-            .stages
-            .keys()
-            .find(|(k, _)| *k == call_key)
-            .and_then(|(_, fetch)| *fetch);
+        // Without a fetch, only a single request can identify the reply (LLP 1162 D2).
+        let mut requests = self.stages.keys().filter(|(k, _)| *k == call_key);
+        let fetch = requests.next().and_then(|(_, fetch)| *fetch);
+        if requests.next().is_some() {
+            return Err(unavailable(format!(
+                "`{source}`: more than one request is in flight; the reply must name its fetch"
+            )));
+        }
         self.parse_with_fetch(target, fetch, store, source, args, outcome)?
             .ok_or_else(|| unavailable("the answer still has requests in flight"))
     }
