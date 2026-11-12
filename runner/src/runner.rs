@@ -869,7 +869,7 @@ impl<D: DataSource> Runner<D> {
             background: Default::default(),
             module_work: Default::default(),
             mapper_turns: Default::default(),
-            picked_count: 0,
+            picked_count: carried.map_or(0, |c| c.picked_count),
             forgot: false,
             heard_aborts: Vec::new(),
             module_aborts: Vec::new(),

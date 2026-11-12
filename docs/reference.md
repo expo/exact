@@ -3190,7 +3190,23 @@ from an action to open it. `change` receives `Picked[]` with each file's name, t
 launch and a counter, never after the file: show or upload it under `name`. A
 specific `accept` list is limited to media types and types in the app's
 `file_handlers`. The live Linux picker is unavailable;
-its agent substitute accepts any file. Image pixel and Canvas readback remain
+its agent substitute accepts any file. Android uses the system photo picker for
+`image/*`, `video/*` or both wildcards on Android 13
+or Android 11 with R extension 2, and `ACTION_OPEN_DOCUMENT` otherwise. `multiple`
+works with either. Files are copied before `change`; the app needs no persistent
+access to the provider. Cancellation,
+a launch failure or a copy failure fires `cancel`, with failures journaled. A missing
+Photo Picker falls back to the document picker once. An unknown extension in `accept`
+uses an unrestricted document picker, then the selection is checked against `accept`.
+HEIC/HEIF is kept when accepted (including `image/*`); otherwise an image accept that
+requires D6's JPEG conversion receives JPEG at quality 0.9, with orientation applied
+and source metadata removed. A specific list containing `image/jpeg`, `.jpg` or
+`.jpeg` uses the document picker and includes `image/heic` and `image/heif` alongside
+the requested types. A PNG-only filter offers no HEIC conversion. The delivered result is checked against `accept`. Provider
+metadata, stream opening and copying run on a worker. The result callback takes
+persistable read permission before returning and releases it after the copy; a
+permission already held by the app is left intact. Under the agent the picker stays held.
+Image pixel and Canvas readback remain
 deferred.
 
 For a PDF picker, declare the type in `app.json`:
@@ -3254,13 +3270,15 @@ times. It resolves `{path, type, size, width, height}`, `type` the one written
 ```ts
 export const grants = 'fs.read app:/tmp\nfs.write app:/tmp';
 // files from `change` on an `input type="file"`; posts: 4000 px and 2 MB
+await storage.fs.mkdir('app:/tmp/upload');
 const out = await storage.fs.compressImage(files[0].path, `app:/tmp/upload/${seed}.jpg`,
   { maxDimension: 4000, maxBytes: 2_000_000 });
 const body = await storage.fs.readFile(out.path);
 ```
 
-Both paths are `app:/` files (`fs.read` on `from`, `fs.write` on `to`); `to` is
-replaced atomically, and left as it was on any failure. It always re-encodes, so
+Both paths are `app:/` files (`fs.read` on `from`, `fs.write` on `to`); create
+`to`'s parent directory first with `storage.fs.mkdir`. `to` is replaced atomically,
+and left as it was on any failure. It always re-encodes, so
 compare the pick's `size`, `width` and `height` first to skip it. It is one
 storage operation in the module's queue; natively it runs off the JS thread. A bad option
 (a `type` other than `'image/jpeg'`, the default, or `'image/png'` too)

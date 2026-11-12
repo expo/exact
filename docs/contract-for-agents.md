@@ -1800,6 +1800,16 @@ types and the app's `file_handlers`. For audio, declare `audio/mpeg`, `audio/wav
 `audio/*` remains outside the admitted wildcard types. XHTML uses
 `application/xhtml+xml` in the same way. On Linux the agent can answer a held
 picker, but the live picker is unavailable (LLP 1069.002, "Any-type input").
+Android uses the system Photo Picker for `image/*`, `video/*`, or both wildcards,
+when the picker is available. Specific MIME types and other lists
+use the document picker; unknown extensions leave its filter unrestricted, with
+`accept` checked after import. Both support `multiple` and return copies; no
+photo-library or storage permission prompt is needed. Back fires `cancel`.
+HEIC/HEIF stays original for an empty `accept`, `*/*`, `image/*` or an explicit
+HEIC/HEIF type or extension. A specific list containing `image/jpeg`, `.jpg` or
+`.jpeg` also offers HEIC/HEIF in the document picker, then converts it to upright
+JPEG at quality 0.9 without location metadata. The delivered type
+must still match `accept`; conversion failures fire `cancel` with a journal reason.
 
 The view forms are element, component use, `if`/`else` (and `else if`),
 keyed `for`, exhaustive option `match`, and `children`. Wrap root regions in a

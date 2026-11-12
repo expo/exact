@@ -220,7 +220,7 @@ class AuthTest {
         try {
             controller.pause().stop().destroy()
             assertNull(Exact.reader)
-            owner.call { Host.pending.set(intArrayOf(18, 3, 1, 2) + authRequest(1)) }
+            owner.call { Host.pending.set(intArrayOf(19, 3, 1, 2) + authRequest(1)) }
             owner.ask { } // Request delivery is now queued on main.
             shadowOf(Looper.getMainLooper()).idle()
             owner.ask { } // The cancellation has reached the owner.
@@ -252,7 +252,7 @@ class AuthTest {
         assertTrue(Auth.receive(activity, callback))
         assertEquals(listOf(uri.toString()), Host.urls)
         assertNull(callback.data)
-        requests.perform(intArrayOf(18, 2, 1, 1))
+        requests.perform(intArrayOf(19, 2, 1, 1))
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(11))
         assertTrue(Host.answers.isEmpty())
     }

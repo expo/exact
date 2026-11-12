@@ -1352,9 +1352,14 @@ reading. Nothing that isn't HTML is added by it.
   1133.019 §9): videos in the library and a Live Photo's movie; albums as
   shared words; editing a photo in place, reverting it and deleting;
   download progress for an iCloud photo; a change-details protocol for a
-  large grid; the picker's Android arm (LLP 1069.002's); filters and
+  large grid; filters and
   adjustments, metadata read as values, and RAW; and the tvOS, visionOS,
   Windows and Linux cells.
+  **Expanded (maintainers' #377 implementation request, 2026-11-12):**
+  Android file inputs use the system Photo Picker or document picker and import
+  copies, through LLP 1115.001 D5's existing request channel. This unblocks
+  gallery attachments. Take waived by the scoped implementation request;
+  document handles and export remain unavailable on Android.
 - **Expanded (Charlie, 2026-10-25, "Waive both (Recommended)", on LLP
   1133.026 §16 question 8):** the person's health store, read
   (`healthStatus`, `requestHealthAuthorization`, `healthStatistics` and
