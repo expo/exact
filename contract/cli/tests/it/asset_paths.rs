@@ -51,7 +51,7 @@ fn a_literal_image_outside_assets_is_refused_with_where_it_ships_from() {
         dir.refused(),
         [(
             5,
-            "image source `public/logo.png` is outside assets/, the folder bundled into the app, so the app would ship without it; move the file under assets/ and write \"assets/logo.png\"".to_string()
+            "image source `public/logo.png` is outside assets/, the folder every host ships the app's pictures and media from; move the file under assets/ and write \"assets/logo.png\"".to_string()
         )]
     );
     // Either arm of a choice, a template of literals, a bare file name, a
@@ -76,6 +76,18 @@ fn a_literal_image_outside_assets_is_refused_with_where_it_ships_from() {
                 .1
                 .starts_with("video poster `public/poster.png` is outside assets/"),
         "{refused:?}"
+    );
+}
+
+#[test]
+fn a_bundled_folder_in_another_case_is_refused_as_its_spelling() {
+    let dir = AppDir::new(&app("      image \"Assets/logo.png\"\n"));
+    assert_eq!(
+        dir.refused(),
+        [(
+            5,
+            "image source `Assets/logo.png` spells the assets/ folder in another case, which a case-sensitive file system (Linux, a web server) does not find; write it \"assets/…\" in lowercase".to_string()
+        )]
     );
 }
 

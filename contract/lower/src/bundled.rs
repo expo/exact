@@ -1,9 +1,10 @@
-//! A literal file an `image`, `video` or `audio` names ships only from the
-//! app's `assets/` (or `deck/`): the build bundles those folders and nothing
-//! else (docs/recipes/app-json.md), so `image "public/logo.png"` built green
-//! and drew nothing on the phone (expo/exact-build#4). A URL, a symbol, a
-//! host path (`/…`) or a computed source is not a file of the app's; a bare
-//! word is `lower-image-source`'s warning.
+//! A literal file an `image`, `video` or `audio` names is read from the
+//! app's `assets/` (or `deck/`), the folders every host ships for them, so
+//! `image "public/logo.png"` built green and drew nothing on the phone
+//! (expo/exact-build#4). A `host.*.resources` tree is not one: it ships
+//! separately, for native code and `fs.read bundle:/` (docs/reference.md). A
+//! URL, a symbol, a host path (`/…`) or a computed source is not a file of
+//! the app's; a bare word is `lower-image-source`'s warning.
 
 use crate::LowerError;
 use contract_syntax::{Expr, Node, Span};
@@ -96,11 +97,20 @@ fn refusal(what: &str, source: &str, span: Span) -> Option<LowerError> {
         return None;
     }
     let name = source.rsplit(['/', '\\']).next().unwrap_or(source);
+    // `Assets/` resolves on a Mac's case-insensitive volume and nowhere
+    // case-sensitive (Linux, a web server): the folder's own spelling.
+    let first = source.split('/').find(|s| !s.is_empty() && *s != ".");
+    let message = match first.and_then(|f| BUNDLED.iter().find(|b| b.eq_ignore_ascii_case(f) && **b != f)) {
+        Some(folder) => format!(
+            "{what} `{source}` spells the {folder}/ folder in another case, which a case-sensitive file system (Linux, a web server) does not find; write it \"{folder}/…\" in lowercase"
+        ),
+        None => format!(
+            "{what} `{source}` is outside assets/, the folder every host ships the app's pictures and media from; move the file under assets/ and write \"assets/{name}\""
+        ),
+    };
     Some(LowerError {
         id: "lower-asset-path",
-        message: format!(
-            "{what} `{source}` is outside assets/, the folder bundled into the app, so the app would ship without it; move the file under assets/ and write \"assets/{name}\""
-        ),
+        message,
         span,
     })
 }
