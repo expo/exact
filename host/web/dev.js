@@ -129,8 +129,9 @@ async function fetchGeneration(message, signal, first = false) {
   if (rust && (!rust.wasm || Object.keys(rust).some(k => !["wasm", "native", "tiered"].includes(k)))) throw new Error("invalid Rust manifest");
   const rustCards = rust ? Object.values(rust).flatMap(v => [v.receipt, v.module]) : [];
   const cards = [envelope.plan, ...envelope.assets, ...moduleCards, ...rustCards];
+  // Match the server and its retained dev cache quota (serve.mjs).
   if (cards.some((card) => !Number.isSafeInteger(card?.bytes) || card.bytes < 0 || card.bytes > 64 * 1024 * 1024)
-      || cards.reduce((sum, card) => sum + card.bytes, 0) > 256 * 1024 * 1024) throw new Error("generation exceeds the payload budget");
+      || cards.reduce((sum, card) => sum + card.bytes, 0) > 4 * 1024 * 1024 * 1024) throw new Error("generation exceeds the payload budget");
   // All admitted payloads are independent. One bounded queue avoids separate
   // network rounds for the plan, assets and module without raising concurrency.
   const jobs = [[envelope.plan, "app.plan"], ...envelope.assets.map(card => [card, card.name]),

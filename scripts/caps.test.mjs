@@ -414,8 +414,10 @@ for (const [name, html, files, expectCode, expect] of [
 // Independent dev payloads share a bounded queue; integrity still gates return.
 {
   const origin = 'http://exact.test/', body = Buffer.from('payload');
+  const assetBody = Buffer.alloc(56 * 1024 * 1024, 7);
+  const assetHash = sha256(assetBody);
   const card = name => ({ url: origin + name, bytes: body.length, sha256: sha256(body) });
-  const assets = Array.from({ length: 5 }, (_, i) => ({ name: `assets/${i}.txt`, ...card(`assets/${i}.txt`) }));
+  const assets = Array.from({ length: 5 }, (_, i) => ({ name: `assets/${i}.txt`, url: origin + `assets/${i}.txt`, bytes: assetBody.length, sha256: assetHash }));
   const module = Object.fromEntries(['native', 'receipt', 'web'].map(key => [key, card(key)]));
   const canonical = { assets: assets.map(({ name, bytes, sha256 }) => ({ bytes, name, sha256 })),
     module: Object.fromEntries(['native', 'receipt', 'web'].map(key => [key, { bytes: body.length, sha256: sha256(body) }])),
@@ -424,36 +426,43 @@ for (const [name, html, files, expectCode, expect] of [
   // The cards are in the index the envelope names, fetched before the queue.
   const index = Buffer.from(JSON.stringify({ assets }));
   const envelope = { exact: 1, app: { id: 'com.exact.test' }, dev: identity, plan: card('app.plan'), assets: { url: origin + 'assets.json', bytes: index.length, sha256: sha256(index), count: 5 }, module };
-  let pending = [], peak = 0, count = 0, corrupt = false;
-  const context = { TextEncoder, TextDecoder, AbortController, URL, setTimeout, clearTimeout,
+  let pending = [], peak = 0, count = 0, corrupt = false, wake = () => {};
+  const context = { crypto: globalThis.crypto, TextEncoder, TextDecoder, AbortController, URL, setTimeout, clearTimeout,
     performance, location: { href: origin, origin: new URL(origin).origin }, exact: { ready: Promise.resolve(), compat: { inputs: { app: 'com.exact.test' } } },
     fetch: async url => {
       if (url === origin + 'exact.json') return new Response(JSON.stringify(envelope));
       if (url === origin + 'assets.json') return new Response(index);
       count++;
       return await new Promise(resolve => {
-        pending.push(() => resolve(new Response(corrupt && url === origin + 'web' ? 'damaged' : body)));
+        pending.push(() => resolve(new Response(corrupt && url === origin + 'web' ? 'damaged' : url.includes('/assets/') ? assetBody : body)));
         peak = Math.max(peak, pending.length);
+        wake();
       });
     } };
   runInNewContext(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../host/web/dev.js'), 'utf8'), context);
   const run = async () => {
     let done = false;
     const promise = context.fetchGeneration({ ...identity, envelope: origin + 'exact.json' }, new AbortController().signal)
-      .then(value => ({ value }), error => ({ error })).finally(() => { done = true; });
-    await new Promise(setImmediate);
+      .then(value => ({ value }), error => ({ error })).finally(() => { done = true; wake(); });
+    await new Promise(resolve => {
+      wake = resolve;
+      if (pending.length || done) resolve();
+    });
     const first = pending.length;
-    for (let i = 0; !done && i < 20; i++) {
-      const batch = pending; pending = []; batch.forEach(resolve => resolve());
-      await new Promise(setImmediate);
+    while (!done) {
+      const batch = pending; pending = [];
+      await new Promise(resolve => {
+        wake = resolve;
+        batch.forEach(resolve => resolve());
+        if (done) resolve();
+      });
     }
-    if (!done) throw new Error('dev fetch queue did not settle');
     return { first, ...await promise };
   };
   const good = await run();
   corrupt = true;
   const bad = await run();
-  result('dev payloads fetch concurrently within four slots and refuse bad integrity',
+  result('a 280 MiB dev asset generation fetches within four slots and refuses bad integrity',
     good.first === 4 && peak === 4 && count === 16 && good.value?.assets.size === 5 && good.value?.module
       && bad.error?.message.includes('payload integrity failed: module web'),
     JSON.stringify({first:good.first,peak,count,goodError:good.error?.message,badError:bad.error?.message,assets:good.value?.assets.size}));
