@@ -12,6 +12,7 @@ mod animation_trigger;
 mod announce;
 mod app_action_snapshots;
 mod aria;
+mod asset_paths;
 mod at;
 mod attestation_age_tracking;
 mod auth;
