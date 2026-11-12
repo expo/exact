@@ -777,6 +777,7 @@ impl Backend for Recorder {
     }
 
     fn row_begin(&mut self, id: u32, origin: (f32, f32), previous: Option<u32>) {
+        self.shared_row_begin();
         self.row = Some(RowRecording {
             clips: std::mem::take(&mut self.clips),
             matrix: self.matrix.take(),
@@ -831,6 +832,7 @@ impl Backend for Recorder {
             self.kept.get_mut(&old).expect("kept").1 = images;
             self.keep_slots(old, slots);
             self.layers.row_end(old);
+            self.shared_row_end(old);
             return old;
         }
         let body = body.to_vec();
@@ -839,6 +841,7 @@ impl Backend for Recorder {
         self.recorded = Some((id, at));
         self.ops.extend(sets);
         self.layers.row_end(id);
+        self.shared_row_end(id);
         id
     }
 
@@ -887,6 +890,10 @@ impl Backend for Recorder {
     }
     fn shared_end(&mut self) {
         self.shared_close();
+    }
+
+    fn row_reusable(&self, id: u32, _: (f32, f32)) -> bool {
+        self.shared_row_reusable(id)
     }
 
     fn row_culled(&self, bounds: Rect4) -> bool {
@@ -941,6 +948,7 @@ impl Backend for Recorder {
         self.kept.remove(&id);
         self.slot_contexts.remove(&id);
         self.layers.row_free(id);
+        self.shared.rows.remove(&id);
         self.ops.extend([ROW_FREE, id]);
     }
 

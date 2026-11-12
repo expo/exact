@@ -18,6 +18,7 @@ internal class SharedElements(
     private val player: Player,
     private val pictures: (Int) -> Bitmap?,
     private val layerMap: (Int, RectF) -> Unit,
+    private val layerOpacity: (Int) -> Float,
     private val groupMap: (Int, RectF) -> Unit,
 ) {
     internal data class Pose(val box: RectF, val radius: Float, val crop: RectF,
@@ -45,7 +46,7 @@ internal class SharedElements(
         var layers = IntArray(0)
         var parents = LongArray(0)
     }
-    private class Flight(val from: Pose, var progress: Float) { var shown: Pose = from }
+    private class Flight(val from: Pose, var progress: Float, var ancestorOpacity: Float) { var shown: Pose = from }
     private val elements = LinkedHashMap<Long, Element>()
     private val flights = LinkedHashMap<Long, Flight>()
     private val alive = HashSet<Long>()
@@ -65,13 +66,14 @@ internal class SharedElements(
         reduced = b.get(2) != 0
         val next = LinkedHashMap<Long, Flight>()
         repeat(b.get(3)) { n ->
-            val at = 4 + n * 5
+            val at = 4 + n * 6
             val from = key(b, at); val to = key(b, at + 2); val progress = f(b, at + 4)
-            val flight = flights[to] ?: capture(from)?.let { Flight(it, progress) }
-            if (flight != null) { flight.progress = progress; next[to] = flight }
+            val opacity = f(b, at + 5)
+            val flight = flights[to] ?: capture(from)?.let { Flight(it, progress, opacity) }
+            if (flight != null) { flight.progress = progress; flight.ancestorOpacity = opacity; next[to] = flight }
         }
         flights.clear(); flights.putAll(next)
-        val live = 4 + b.get(3) * 5
+        val live = 4 + b.get(3) * 6
         alive.clear()
         repeat(b.get(live)) { order ->
             val key = key(b, live + 1 + order * 2)
@@ -180,6 +182,12 @@ internal class SharedElements(
             naturalH = from.naturalH, unit = from.unit)
     }
 
+    private fun ancestorOpacity(e: Element, flight: Flight): Float {
+        var opacity = flight.ancestorOpacity
+        for (id in e.layers) opacity *= layerOpacity(id)
+        return opacity.coerceIn(0f, 1f)
+    }
+
     fun draw(canvas: Canvas) {
         if (reduced) return
         val ordered = flights.entries.sortedBy { elements[it.key]?.order ?: 0 }
@@ -195,10 +203,13 @@ internal class SharedElements(
             val radius = pose.radius.coerceIn(0f, min(pose.box.width(), pose.box.height()) / 2f)
             clip.addRoundRect(pose.box, radius, radius, Path.Direction.CW)
             canvas.clipPath(clip)
+            val opacity = ancestorOpacity(element, flight)
             if (element.fit != 0) {
-                paint.alpha = (element.opacity.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+                paint.alpha = (element.opacity.coerceIn(0f, 1f) * opacity * 255f + 0.5f).toInt()
                 pictures(pose.image)?.let { canvas.drawBitmap(it, null, rasterRect(pose), paint) }
             } else {
+                // The content already includes its own and its descendants' opacity.
+                if (opacity < 1f) canvas.saveLayerAlpha(pose.box, (opacity * 255f + 0.5f).toInt())
                 canvas.translate(pose.box.left, pose.box.top)
                 val scale = pose.box.width() / element.box.width().coerceAtLeast(0.001f)
                 canvas.scale(scale, scale)

@@ -186,6 +186,8 @@ internal class Layers(
         rect.offset(layer.ox, layer.oy)
     }
 
+    fun sharedOpacity(id: Int): Float = layers[id]?.node?.alpha ?: 1f
+
     /** A snapshot for the worker: one shared by every row recorded until a layer comes or goes (a fast fling records
      * many rows a frame, and copying the map for each cost the main thread ~2%). */
     private var snapshot: Map<Int, RenderNode>? = null

@@ -159,6 +159,7 @@ impl<D: DataSource> Presenter<D> {
 
     pub(super) fn give_clock(&mut self) {
         self.clock_generation = self.clock_generation.wrapping_add(1);
+        self.host.flights.enabled = self.brush.backend() == "canvas";
         self.host.reader_frame_clock(self.live_clock.is_some());
         self.host.runner_mut().use_native_timers(self.native_timers);
         let wall = self.live_clock.clone();

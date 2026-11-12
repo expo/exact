@@ -356,7 +356,6 @@ impl<D: DataSource> Host<D> {
         // The engine hears the whole tree once: values, no transitions; an
         // `animation` starts now, as a browser starts one on a new element.
         host.lowering_from_env();
-        host.flights.enabled = cfg!(target_os = "android");
         let mut sync = MotionSync::default();
         host.discover_height_handles();
         host.discover_transform_handles();

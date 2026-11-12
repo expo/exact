@@ -107,7 +107,7 @@ class ExactView(context: Context, private val live: Boolean, private val onFirst
         p.slot = { slots.nodes[it] }
     }
     private val background = Player(fonts)
-    private val shared = SharedElements(main, { images[it] }, layers::mapShared) { id, rect ->
+    private val shared = SharedElements(main, { images[it] }, layers::mapShared, layers::sharedOpacity) { id, rect ->
         groups[id]?.let { rect.offset(it.translationX, it.translationY) }
     }
     /** Each picture's slot; its own Player records one again while [main] may be mid-replay. */

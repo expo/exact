@@ -3,6 +3,7 @@ package dev.exact.canvas
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Canvas
+import android.graphics.HardwareRenderer
 import android.graphics.RectF
 import android.graphics.RenderNode
 import java.nio.IntBuffer
@@ -20,9 +21,10 @@ class SharedElementsTest {
     private fun f(n: Float) = n.toRawBits()
     private fun key(k: Long) = intArrayOf(k.toInt(), (k ushr 32).toInt())
     private fun rect(r: RectF) = intArrayOf(f(r.left), f(r.top), f(r.width()), f(r.height()))
-    private fun state(alive: List<Long>, pairs: List<Triple<Long, Long, Float>> = emptyList(), reduced: Boolean = false): IntBuffer {
+    private fun state(alive: List<Long>, pairs: List<Triple<Long, Long, Float>> = emptyList(), reduced: Boolean = false,
+        ancestorOpacity: Float = 1f): IntBuffer {
         val body = arrayListOf(if (reduced) 1 else 0, pairs.size)
-        for ((a, b, p) in pairs) body.addAll((key(a) + key(b) + f(p)).toList())
+        for ((a, b, p) in pairs) body.addAll((key(a) + key(b) + f(p) + f(ancestorOpacity)).toList())
         body.add(alive.size)
         for (k in alive) body.addAll(key(k).toList())
         return IntBuffer.wrap(intArrayOf(49, body.size) + body.toIntArray())
@@ -37,16 +39,26 @@ class SharedElementsTest {
     }
     private class Fixture {
         val pictures = HashMap<Int, Bitmap>()
+        val layers = Layers({ _, _, _, _, _ -> })
         var scroll = 0f
         var layerScale = 1f
         val player = Player(emptyMap())
         val shared = SharedElements(player, { pictures[it] }, { _, r ->
             r.set(r.left * layerScale, r.top * layerScale, r.right * layerScale, r.bottom * layerScale)
-        }, { _, r -> r.offset(0f, scroll) })
+        }, layers::sharedOpacity, { _, r -> r.offset(0f, scroll) })
         val page = RenderNode("test page").apply { setPosition(0, 0, 500, 800) }
         init { player.shared = { shared.node(it) } }
         fun define(b: IntBuffer) { shared.define(b, 0) { _, _ -> } }
         fun draw() { shared.draw(page.beginRecording()); page.endRecording() }
+        fun pixels(): Bitmap {
+            val canvas = page.beginRecording()
+            canvas.drawColor(Color.WHITE)
+            shared.draw(canvas)
+            page.endRecording()
+            return HardwareRenderer::class.java.getDeclaredMethod("createHardwareBitmap",
+                RenderNode::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
+                .invoke(null, page, 100, 100) as Bitmap
+        }
     }
     private fun assertRect(expected: RectF, actual: RectF) {
         assertEquals(expected.left, actual.left, 0.01f); assertEquals(expected.top, actual.top, 0.01f)
@@ -142,6 +154,100 @@ class SharedElementsTest {
             pixels.eraseColor(Color.TRANSPARENT)
             t.shared.draw(Canvas(pixels))
             assertEquals(alpha, Color.alpha(pixels.getPixel(50, 50)))
+        }
+    }
+
+    @Test fun aLiftedImageKeepsItsLiveAncestorsOpacity() {
+        val t = Fixture()
+        val box = RectF(0f, 0f, 100f, 100f)
+        t.pictures[7] = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
+        t.layers.node(3).alpha = 0.5f
+        t.shared.begin(state(listOf(1)))
+        t.define(definition(1, box, 7, 1, layers = intArrayOf(3))); t.shared.finish()
+        t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f))))
+        t.define(definition(2, box, 7, 1, layers = intArrayOf(3))); t.shared.finish()
+        val pixels = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+        for ((opacity, alpha) in listOf(0.5f to 128, 0.25f to 64)) {
+            t.layers.node(3).alpha = opacity
+            pixels.eraseColor(Color.TRANSPARENT)
+            t.shared.draw(Canvas(pixels))
+            assertEquals("the live parent changes without a new shared definition", alpha, Color.alpha(pixels.getPixel(50, 50)))
+        }
+    }
+
+    @Test fun aLiftedSubtreeKeepsItsLiveAncestorsOpacity() {
+        val t = Fixture()
+        val box = RectF(0f, 0f, 100f, 100f)
+        t.layers.node(3).alpha = 0.5f
+        t.shared.begin(state(listOf(1)))
+        t.define(definition(1, box, layers = intArrayOf(3))); t.shared.finish()
+        t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f))))
+        t.define(definition(2, box, layers = intArrayOf(3))); t.shared.finish()
+        for ((opacity, green) in listOf(0.5f to 127, 0.25f to 191)) {
+            t.layers.node(3).alpha = opacity
+            val pixels = t.pixels()
+            assertEquals("the live subtree composites under the parent's alpha", green, Color.green(pixels.getPixel(50, 50)))
+            pixels.recycle()
+        }
+    }
+
+    @Test fun staticAndLiveAncestorsMultiplyWithImageOpacityOnce() {
+        val t = Fixture()
+        val box = RectF(0f, 0f, 100f, 100f)
+        t.pictures[7] = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
+        t.shared.begin(state(listOf(1)))
+        t.define(definition(1, box, 7, 1, opacity = 0.5f)); t.shared.finish()
+        t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f)), ancestorOpacity = 0.5f))
+        val pixels = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
+        t.layers.node(3).alpha = 0.5f
+        t.layers.node(4).alpha = 0.5f
+        for ((layers, alpha) in listOf(intArrayOf() to 64, intArrayOf(3) to 32, intArrayOf(3, 4) to 16)) {
+            t.define(definition(2, box, 7, 1, opacity = 0.5f, layers = layers))
+            t.shared.finish()
+            pixels.eraseColor(Color.TRANSPARENT)
+            t.shared.draw(Canvas(pixels))
+            assertEquals(alpha, Color.alpha(pixels.getPixel(50, 50)))
+        }
+    }
+
+    @Test fun aLiftedSubtreeCompositesStaticAndLiveAncestorsOnce() {
+        val t = Fixture()
+        val box = RectF(0f, 0f, 100f, 100f)
+        val fill = intArrayOf(2, Color.RED) + rect(box) + IntArray(8)
+        // Two overlapping fills must fade as one subtree. Its own opacity is already recorded.
+        val content = intArrayOf(1, f(1f), 0, 0, f(1f), 0, 0, 7, f(0.5f)) + fill + fill + 6
+        t.shared.begin(state(listOf(1)))
+        t.define(definition(1, box, content = content, opacity = 0.5f))
+        t.shared.finish()
+        t.shared.begin(state(listOf(2), listOf(Triple(1, 2, 0.5f)), ancestorOpacity = 0.5f))
+        t.define(definition(2, box, content = content, opacity = 0.5f, layers = intArrayOf(3)))
+        t.shared.finish()
+        for ((opacity, green) in listOf(1f to 191, 0.5f to 223, 0.25f to 239)) {
+            t.layers.node(3).alpha = opacity
+            val pixels = t.pixels()
+            // Each compositing layer quantizes its alpha to eight bits.
+            assertEquals(green.toFloat(), Color.green(pixels.getPixel(50, 50)).toFloat(), 1f)
+            pixels.recycle()
+        }
+    }
+
+    @Test fun retainedFlightsReadCurrentStaticAncestorOpacity() {
+        for (image in listOf(false, true)) {
+            val t = Fixture()
+            val box = RectF(0f, 0f, 100f, 100f)
+            t.pictures[7] = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
+            val fit = if (image) 1 else 0
+            t.shared.begin(state(listOf(1)))
+            t.define(definition(1, box, 7, fit)); t.shared.finish()
+            val pairs = listOf(Triple(1L, 2L, 0.5f))
+            t.shared.begin(state(listOf(2), pairs, ancestorOpacity = 0.5f))
+            t.define(definition(2, box, 7, fit)); t.shared.finish()
+            for ((opacity, green) in listOf(0.5f to 127, 0.25f to 191, 0f to 255, 0.5f to 127)) {
+                t.shared.begin(state(listOf(2), pairs, ancestorOpacity = opacity)); t.shared.finish()
+                val pixels = t.pixels()
+                assertEquals("retained image=$image, ancestor opacity=$opacity", green, Color.green(pixels.getPixel(50, 50)))
+                pixels.recycle()
+            }
         }
     }
 

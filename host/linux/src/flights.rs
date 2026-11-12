@@ -12,6 +12,7 @@ pub(crate) struct FlightFrame {
     pub from: NodeKey,
     pub to: NodeKey,
     pub progress: f32,
+    pub ancestor_opacity: f32,
 }
 
 struct Flight {
@@ -22,6 +23,8 @@ struct Flight {
 #[derive(Default)]
 pub(crate) struct Flights {
     pub enabled: bool,
+    /// Definitions recorded for the reader, including retained rows.
+    pub recorded: std::collections::HashSet<u64>,
     running: Vec<Flight>,
     pub reveal: Vec<NodeKey>,
 }
@@ -30,7 +33,8 @@ impl<D: DataSource> Host<D> {
     /// The live reader starts motion at its first produced frame (LLP 1003.001).
     /// A deterministic driver instead starts pending curves at its takeover time.
     pub(crate) fn reader_frame_clock(&mut self, live: bool) {
-        if !self.flights.enabled || self.engine.starts_on_frame() == live {
+        let live = live && self.flights.enabled;
+        if self.engine.starts_on_frame() == live {
             return;
         }
         let at = (self.now_ms / 1000.0).max(self.engine.now());
@@ -78,7 +82,9 @@ impl<D: DataSource> Host<D> {
             keep
         });
         for h in &receipt.handoffs {
-            if self.runner.kernel().node_by_key(h.to).is_none() {
+            if !self.flights.recorded.contains(&motion_node(h.from))
+                || self.runner.kernel().node_by_key(h.to).is_none()
+            {
                 continue;
             }
             let node = motion_node(h.to) | FLIGHT;
@@ -107,6 +113,7 @@ impl<D: DataSource> Host<D> {
                     from: h.from,
                     to: h.to,
                     progress: 0.0,
+                    ancestor_opacity: 1.0,
                 },
                 lands_after,
             });
@@ -150,7 +157,23 @@ impl<D: DataSource> Host<D> {
     }
 
     pub(crate) fn flight_frames(&self) -> Vec<FlightFrame> {
-        self.flights.running.iter().map(|f| f.frame).collect()
+        self.flights
+            .running
+            .iter()
+            .map(|f| {
+                let mut frame = f.frame;
+                let mut next = self.kernel().node_by_key(frame.to).and_then(|n| n.parent);
+                while let Some(node) = next.and_then(|id| self.kernel().node(id)) {
+                    let shown = self.presented(node.id);
+                    // The reader samples lowered ancestor layers independently.
+                    if shown.lowered & lower::LOWER_OPACITY == 0 {
+                        frame.ancestor_opacity *= shown.opacity.clamp(0., 1.);
+                    }
+                    next = node.parent;
+                }
+                frame
+            })
+            .collect()
     }
 
     pub(crate) fn flying(&self, id: ViewId) -> bool {
@@ -212,18 +235,172 @@ mod tests {
             .unwrap()
             .id
     }
-    fn host() -> Host<()> {
-        let (mut host, error) = Host::boot(
-            &crate::test_plan(APP),
+    fn presenter(app: &str) -> Presenter<()> {
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(app),
             (),
-            Box::new(exact_kernel::MonospaceMeasurer::default()),
-            400.0,
-            700.0,
+            (400., 700.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Canvas,
         )
         .unwrap();
         assert!(error.is_none(), "{error:?}");
-        host.flights.enabled = true;
-        host
+        p.frame();
+        p
+    }
+
+    #[test]
+    fn an_unrecorded_source_does_not_disable_its_arrival() {
+        for (style, paint_source) in [("display=\"none\"", true), ("", false)] {
+            let app = APP.replace(
+                "view sharedElement=\"card\" width=80",
+                &format!("view {style} sharedElement=\"card\" width=80"),
+            );
+            let (mut p, error) = Presenter::boot_with(
+                &crate::test_plan(&app),
+                (),
+                (400., 700.),
+                1.,
+                std::path::PathBuf::new(),
+                PainterChoice::Canvas,
+            )
+            .unwrap();
+            assert!(error.is_none(), "{error:?}");
+            if paint_source {
+                p.frame();
+            }
+            let toggle = id(p.host(), "toggle");
+            p.host_mut().dispatch_at(toggle, Event::Press, 100.);
+            p.after_commit();
+            p.frame();
+            let child = id(p.host(), "inside");
+            let rect = p.boxes().iter().find(|b| b.id == child).unwrap().rect;
+            assert_eq!(
+                p.hit(rect.0 + 5., rect.1 + 5.),
+                Some(child),
+                "an arrival with no captured source is immediately interactive"
+            );
+            assert!(p.access_tree().0.iter().any(|n| n.view == child));
+            assert!(p.host().flight_frames().is_empty());
+        }
+    }
+
+    #[test]
+    fn retained_sources_fly_but_reload_does_not_reuse_old_definitions() {
+        let app = APP.replace("    column\n", "    scroll width=400 height=700\n");
+        let mut p = presenter(&app);
+        p.repaint();
+        p.frame();
+        let toggle = id(p.host(), "toggle");
+        p.tap(toggle).unwrap();
+        assert_eq!(p.host().flight_frames().len(), 1);
+        p.frame();
+        p.tap(toggle).unwrap();
+        p.frame();
+        p.reload(
+            &crate::test_plan(&APP.replace("width=80", "display=\"none\" width=80")),
+            (),
+        )
+        .unwrap();
+        p.frame();
+        let toggle = id(p.host(), "toggle");
+        p.tap(toggle).unwrap();
+        p.frame();
+        assert!(p.host().flight_frames().is_empty());
+        let child = id(p.host(), "inside");
+        assert!(p.access_tree().0.iter().any(|n| n.view == child));
+    }
+
+    #[test]
+    fn the_surface_loop_advances_without_canvas_reader_frames() {
+        let app = r#"component App
+  state faded = false
+  action fade
+    faded = true
+  view
+    column
+      button "Fade" press=fade testId="fade"
+      box width=60 height=60 opacity=(faded ? 0 : 1) transition="opacity 1s linear" testId="box"
+"#;
+        let (mut p, error) = Presenter::boot_with(
+            &crate::test_plan(app),
+            (),
+            (200., 200.),
+            1.,
+            std::path::PathBuf::new(),
+            PainterChoice::Cpu,
+        )
+        .unwrap();
+        assert!(error.is_none(), "{error:?}");
+        // Reproduce the former Android Host boot flag on a headless surface painter.
+        p.host_mut().flights.enabled = true;
+        p.set_live_clock(Some(std::rc::Rc::new(|| 0.)));
+        p.frame();
+        let button = id(p.host(), "fade");
+        p.host_mut().dispatch_at(button, Event::Press, 100.);
+        p.after_commit();
+        let mut last_tick = 0.;
+        p.android_clock(600., true, &mut last_tick, 16.);
+        p.tick(600.);
+        let box_id = id(p.host(), "box");
+        assert!((p.host().presented(box_id).opacity - 0.5).abs() < 1e-5);
+        p.android_clock(1300., true, &mut last_tick, 16.);
+        p.tick(1300.);
+        assert_eq!(p.host().presented(box_id).opacity, 0.);
+        assert!(!p.host().engine().starts_on_frame());
+        assert!(!p.host().flights.enabled);
+    }
+
+    #[test]
+    fn flights_sample_static_ancestor_opacity_even_when_no_row_records() {
+        for scroll in [false, true] {
+            let app = format!(
+                r#"keyframes fade
+  from opacity=0.5
+  to opacity=0.25
+component App
+  state open = false
+  state alpha = 0.5
+  action toggle
+    open = not open
+  action fade
+    alpha = alpha - 0.25
+  view
+    column
+      button "Toggle" press=toggle testId="toggle"
+      button "Fade" press=fade testId="fade"
+      column opacity=alpha
+        {} width=400 height=500
+          column
+            if open
+              column animation="fade 1s linear infinite"
+                box sharedElement="card" width=200 height=150 background-color="red" -exact-layout-transition="1s linear"
+            else
+              box sharedElement="card" width=80 height=60 background-color="red" -exact-layout-transition="1s linear"
+"#,
+                if scroll { "scroll" } else { "column" }
+            );
+            let mut p = presenter(&app);
+            p.host_mut().lowering = true;
+            p.host_mut()
+                .engine
+                .set_lowered_properties(&[Property::Opacity]);
+            let toggle = id(p.host(), "toggle");
+            let fade = id(p.host(), "fade");
+            p.tap(toggle).unwrap();
+            p.frame();
+            for expected in [0.5, 0.25, 0.] {
+                let flights = p.host().flight_frames();
+                assert_eq!(flights.len(), 1);
+                assert_eq!(
+                    flights[0].ancestor_opacity, expected,
+                    "only static ancestry enters the frame; live alpha is sampled by the reader"
+                );
+                p.tap(fade).unwrap();
+                p.frame();
+            }
+        }
     }
 
     #[test]
@@ -261,7 +438,6 @@ component App
         )
         .unwrap();
         assert!(error.is_none(), "{error:?}");
-        p.host_mut().flights.enabled = true;
         p.host_mut().lowering = true;
         p.host_mut()
             .engine
@@ -291,45 +467,52 @@ component App
 
     #[test]
     fn a_delayed_first_reader_frame_starts_at_the_source_and_takeover_settles() {
-        let mut host = host();
-        host.reader_frame_clock(true);
-        host.dispatch_at(id(&host, "toggle"), Event::Press, 100.0);
-        host.tick(250.0);
-        assert_eq!(host.flight_frames()[0].progress, 0.0);
-        host.present_reader_frame(250.0);
-        assert_eq!(host.flight_frames()[0].progress, 0.0);
-        host.tick(266.0);
-        host.present_reader_frame(266.0);
-        assert!((host.flight_frames()[0].progress - 0.016).abs() < 1e-5);
-        host.dispatch_at(id(&host, "toggle"), Event::Press, 300.0);
-        host.reader_frame_clock(false);
-        host.tick(1301.0);
-        assert!(host.flight_frames().is_empty());
+        let mut p = presenter(APP);
+        p.set_live_clock(Some(std::rc::Rc::new(|| 0.)));
+        let toggle = id(p.host(), "toggle");
+        p.host_mut().dispatch_at(toggle, Event::Press, 100.0);
+        p.tick(250.0);
+        assert_eq!(p.host().flight_frames()[0].progress, 0.0);
+        p.reader_clock(250.0, true);
+        p.frame();
+        assert_eq!(p.host().flight_frames()[0].progress, 0.0);
+        p.reader_clock(266.0, true);
+        assert!((p.host().flight_frames()[0].progress - 0.016).abs() < 1e-5);
+        p.host_mut().dispatch_at(toggle, Event::Press, 300.0);
+        assert_eq!(p.host().flight_frames().len(), 1);
+        p.set_live_clock(None);
+        p.tick(1301.0);
+        assert!(p.host().flight_frames().is_empty());
     }
 
     #[test]
     fn flight_clock_reverses_and_retires_with_the_destination() {
-        let mut host = host();
-        let source = host.kernel().node(id(&host, "thumb")).unwrap().key;
-        host.dispatch_at(id(&host, "toggle"), Event::Press, 100.0);
-        let first = host.flight_frames();
+        let mut p = presenter(APP);
+        let source = p.host().kernel().node(id(p.host(), "thumb")).unwrap().key;
+        let toggle = id(p.host(), "toggle");
+        p.host_mut().dispatch_at(toggle, Event::Press, 100.0);
+        p.after_commit();
+        p.frame();
+        let first = p.host().flight_frames();
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].from, source);
         assert_eq!(first[0].progress, 0.0);
-        assert!(host.motion());
-        host.tick(500.0);
-        assert!((host.flight_frames()[0].progress - 0.4).abs() < 1e-5);
-        host.dispatch_at(id(&host, "toggle"), Event::Press, 500.0);
-        let reversed = host.flight_frames();
+        assert!(p.host().motion());
+        p.tick(500.0);
+        assert!((p.host().flight_frames()[0].progress - 0.4).abs() < 1e-5);
+        p.host_mut().dispatch_at(toggle, Event::Press, 500.0);
+        let reversed = p.host().flight_frames();
         assert_eq!(reversed.len(), 1);
         assert_eq!(reversed[0].from, first[0].to);
         assert_eq!(reversed[0].progress, 0.0);
-        assert!(!host
-            .engine
+        assert!(!p
+            .host()
+            .engine()
             .is_active(motion_node(first[0].to) | FLIGHT, Property::Layout));
-        host.dispatch_at(id(&host, "remove"), Event::Press, 600.0);
-        assert!(host.flight_frames().is_empty());
-        assert!(!host.motion());
+        let remove = id(p.host(), "remove");
+        p.host_mut().dispatch_at(remove, Event::Press, 600.0);
+        assert!(p.host().flight_frames().is_empty());
+        assert!(!p.host().motion());
     }
 
     #[test]
@@ -340,11 +523,11 @@ component App
             (400.0, 700.0),
             1.0,
             std::path::PathBuf::new(),
-            PainterChoice::Cpu,
+            PainterChoice::Canvas,
         )
         .unwrap();
         assert!(error.is_none());
-        p.host_mut().flights.enabled = true;
+        p.frame();
         let toggle = id(p.host(), "toggle");
         p.host_mut().dispatch_at(toggle, Event::Press, 100.0);
         p.after_commit();
@@ -367,22 +550,14 @@ component App
     #[test]
     fn android_spring_lands_at_the_apple_hosts_threshold() {
         let source = APP.replace("1s linear", "-exact-spring(270, 33, 1)");
-        let mut host = Host::boot(
-            &crate::test_plan(&source),
-            (),
-            Box::new(exact_kernel::MonospaceMeasurer::default()),
-            400.0,
-            700.0,
-        )
-        .unwrap()
-        .0;
-        host.flights.enabled = true;
-        host.dispatch_at(id(&host, "toggle"), Event::Press, 100.0);
-        host.tick(300.0);
-        assert_eq!(host.flight_frames().len(), 1);
-        host.tick(1100.0);
-        assert!(host.flight_frames().is_empty());
-        assert!(!host.motion());
+        let mut p = presenter(&source);
+        let toggle = id(p.host(), "toggle");
+        p.host_mut().dispatch_at(toggle, Event::Press, 100.0);
+        p.tick(300.0);
+        assert_eq!(p.host().flight_frames().len(), 1);
+        p.tick(1100.0);
+        assert!(p.host().flight_frames().is_empty());
+        assert!(!p.host().motion());
     }
 
     #[test]
@@ -416,7 +591,6 @@ component App
             )
             .unwrap();
             assert!(error.is_none(), "{error:?}");
-            p.host_mut().flights.enabled = true;
             let first = p.display_frame().unwrap();
             assert!(p.display_complete(&first));
             p.tap(id(p.host(), "toggle")).unwrap();
@@ -467,11 +641,10 @@ component App
             (400., 800.),
             1.,
             std::path::PathBuf::new(),
-            PainterChoice::Cpu,
+            PainterChoice::Canvas,
         )
         .unwrap();
         assert!(error.is_none(), "{error:?}");
-        p.host_mut().flights.enabled = true;
         p.frame();
         let port = id(p.host(), "port");
         assert_eq!(p.scroll_of(port), (0., 0.));

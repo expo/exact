@@ -190,7 +190,10 @@ fn shared_flights_make_native_fields_inert_until_landing() {
         view sharedElement="card" width=80 height=50 -exact-layout-transition="1s linear"
 "#,
     );
+    p.brush
+        .replace_backend(Box::new(crate::canvas::Recorder::new()));
     p.host_mut().flights.enabled = true;
+    p.frame();
     p.tap(id(&p, "toggle")).unwrap();
     p.frame();
     assert_eq!(read(&p.reader_fields(1.).unwrap())[0].flags & 2, 2);

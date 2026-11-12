@@ -8,6 +8,7 @@ pub struct SharedState {
     pub(crate) frames: Vec<crate::host::flights::FlightFrame>,
     pub(crate) reduced: bool,
     pub(crate) alive: Vec<u64>,
+    pub(crate) recorded: std::collections::HashSet<u64>,
     epoch: Option<u64>,
 }
 
@@ -38,6 +39,7 @@ impl Painter {
     pub(super) fn order_shared(&mut self, scene: &Scene<'_>) {
         self.shared.alive.clear();
         if !scene.kernel.has_prop(PropId::SharedElement) {
+            self.shared.recorded.clear();
             return;
         }
         let mut stack: Vec<_> = scene.roots.iter().copied().rev().collect();
@@ -65,6 +67,8 @@ impl Painter {
             }
             stack.extend(children.into_iter().rev());
         }
+        let alive: std::collections::HashSet<_> = self.shared.alive.iter().copied().collect();
+        self.shared.recorded.retain(|key| alive.contains(key));
     }
 
     pub(super) fn node_at(
@@ -153,6 +157,7 @@ impl Painter {
         self.node_content(walk, id, ts, offset, clip);
         if opened {
             self.backend.shared_end();
+            self.shared.recorded.insert(motion_node(node.key));
         }
     }
 

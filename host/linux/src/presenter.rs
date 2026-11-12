@@ -471,6 +471,7 @@ impl<D: DataSource> Presenter<D> {
                 .map_err(HostError::Painter)?,
             None => opened.expect("synchronous painter"),
         };
+        host.flights.enabled = backend.name() == "canvas";
         if assets.is_selected() {
             if let Some(error) = error {
                 return Err(HostError::Layout(error));
@@ -1394,7 +1395,6 @@ impl<D: DataSource> Presenter<D> {
     pub fn pending(&self) -> bool {
         self.host.runner().has_pending()
     }
-
     /// Another host took over, with its executor: it is measured as the
     /// last was, given what the last was given, and counted.
     pub(crate) fn replaced(&mut self) {
@@ -1404,6 +1404,7 @@ impl<D: DataSource> Presenter<D> {
         self.modules_replaced();
         // A new kernel may have the same epoch.
         self.brush.paint_epoch = None;
+        self.brush.shared = Default::default();
         // A new runner reuses view ids and node keys: an unbound control's
         // own state, a choice or typed text (LLP 1069.001 D4), an edit to
         // commit, a caret, an open menu, a hover, a held pointer or a GPU
@@ -1430,7 +1431,6 @@ impl<D: DataSource> Presenter<D> {
         self.hosts += 1;
         self.measure();
     }
-
     /// Measure the work of every binary but a production one (LLP 1079
     /// D1), once its compat is known: the runner boots measuring nothing.
     pub(crate) fn measure(&mut self) {

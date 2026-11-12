@@ -10,6 +10,8 @@ pub(super) const DRAW: u32 = 51;
 #[derive(Default)]
 pub(super) struct Shared {
     open: Vec<Open>,
+    pub(super) rows: std::collections::HashMap<u32, Vec<u32>>,
+    row: Option<(Vec<u32>, bool)>,
     order: std::collections::HashMap<u64, u32>,
     sent: Vec<u32>,
     active: bool,
@@ -27,6 +29,23 @@ struct Open {
 }
 
 impl Recorder {
+    pub(super) fn shared_row_begin(&mut self) {
+        self.shared.row = Some((self.layers.shared_ancestors(), false));
+    }
+
+    pub(super) fn shared_row_end(&mut self, id: u32) {
+        if let Some((layers, true)) = self.shared.row.take() {
+            self.shared.rows.insert(id, layers);
+        }
+    }
+
+    pub(super) fn shared_row_reusable(&self, id: u32) -> bool {
+        self.shared
+            .rows
+            .get(&id)
+            .is_none_or(|layers| *layers == self.layers.shared_ancestors())
+    }
+
     pub(super) fn shared_state(&mut self, state: &SharedState) {
         let active = !state.alive.is_empty() || !state.frames.is_empty();
         if !active && !self.shared.active {
@@ -35,7 +54,7 @@ impl Recorder {
         self.shared.active = active;
         let mut words = vec![
             STATE,
-            3 + state.frames.len() as u32 * 5 + state.alive.len() as u32 * 2,
+            3 + state.frames.len() as u32 * 6 + state.alive.len() as u32 * 2,
             u32::from(state.reduced),
             state.frames.len() as u32,
         ];
@@ -44,7 +63,7 @@ impl Recorder {
                 let key = motion_node(key);
                 words.extend([key as u32, (key >> 32) as u32]);
             }
-            words.push(f.progress.to_bits());
+            words.extend([f.progress.to_bits(), f.ancestor_opacity.to_bits()]);
         }
         words.push(state.alive.len() as u32);
         for key in &state.alive {
@@ -68,6 +87,9 @@ impl Recorder {
     pub(super) fn shared_open(&mut self, e: &SharedElement<'_>) -> bool {
         if !self.planes.is_empty() {
             return false;
+        }
+        if let Some((_, named)) = &mut self.shared.row {
+            *named = true;
         }
         self.need(None);
         let rect = |r: Rect4| {
@@ -214,6 +236,57 @@ mod tests {
             expected,
             "finish must not corrupt a shared header or drawing"
         );
+    }
+
+    #[test]
+    fn kept_shared_rows_refresh_when_live_ancestors_change() {
+        let mut r = Recorder::new();
+        r.begin(400., 800., 1.);
+        let e = SharedElement {
+            key: 1,
+            rect: (0., 0., 80., 60.),
+            radius: 0.,
+            opacity: 1.,
+            transform: Transform::identity(),
+            image: None,
+            fit: 0,
+            content: (0., 0., 80., 60.),
+        };
+        let layer = |r: &mut Recorder, alpha| {
+            assert!(r.layer_begin(
+                7,
+                Transform::identity(),
+                (0., 0.),
+                [0., 0., 1., 0., alpha, 0., 0.]
+            ));
+        };
+        r.row_begin(1, (0., 0.), None);
+        r.shared_begin(&e);
+        r.shared_end();
+        assert_eq!(r.row_end(e.rect), 1);
+        assert!(r.row_reusable(1, (0., 0.)));
+        layer(&mut r, 0.5);
+        assert!(
+            !r.row_reusable(1, (0., 0.)),
+            "a new live ancestor must enter the shared definition"
+        );
+        r.row_begin(2, (0., 0.), Some(1));
+        r.shared_begin(&e);
+        r.shared_end();
+        assert_eq!(r.row_end(e.rect), 2);
+        r.layer_end();
+        layer(&mut r, 0.25);
+        assert!(
+            r.row_reusable(2, (0., 0.)),
+            "live alpha changes need no new drawing"
+        );
+        r.layer_end();
+        assert!(
+            !r.row_reusable(2, (0., 0.)),
+            "a removed live ancestor must leave the shared definition"
+        );
+        r.row_free(2);
+        assert!(!r.shared.rows.contains_key(&2));
     }
 
     #[test]
@@ -498,7 +571,7 @@ mod tests {
             "capture source before any frees or node mutations"
         );
         assert_eq!(after[3], 2, "parent and child have their own flights");
-        assert_eq!(after[14], 2, "only the arriving names remain alive");
+        assert_eq!(after[16], 2, "only the arriving names remain alive");
         let mut arrived = Vec::new();
         definitions(&after, &mut arrived);
         assert_eq!(arrived.len(), 2);
