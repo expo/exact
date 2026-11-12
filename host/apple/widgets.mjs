@@ -372,7 +372,7 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
   writeFileSync(runtimeInfo, plistFile({ ...runtime, ...versions, ...capabilities }));
   const frameworks = resolve(contents, 'Frameworks'), reload = 'libexact_widget_reload.dylib';
   if (platform !== 'watchos') {
-    copyFileSync(widgetReload({ directory: shared.base, triple, sdk, device, platform, production, runApple }), resolve(frameworks, reload));
+    copyFileSync(widgetReload({ directory: shared.base ?? directory, triple, sdk, device, platform, production, runApple }), resolve(frameworks, reload));
     wrapFramework(frameworks, reload, 'ExactWidgetReload', app, mac ? 'MacOSX' : device ? 'iPhoneOS' : 'iPhoneSimulator');
   }
   // The one ActivityConfiguration for every activity kind (`widget/Activity.swift`, LLP 1126.001 WP10): the
