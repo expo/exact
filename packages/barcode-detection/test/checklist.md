@@ -49,13 +49,26 @@ Build: `bun host/apple/build.mjs shelf-apple --run`, on a Mac with a camera
 2. With Continuity Camera, choose the iPhone in the camera menu if one is
    offered: the scan reads as on the phone.
 
-## Android phone (stage 4, not built)
+## Android phone
 
-The Kotlin implementation over ML Kit is not built (LLP 1133.027 §12, stage
-4's as-built note). When it lands: build the APK (`bun
-scripts/agent-android.mjs build shelf --apk`; the NDK and JDK 17 as
-`host/android/README.md` says), install it, and repeat the iPhone steps on a
-Pixel. Step 8 is Settings → Apps → Shelf → Permissions → Camera → Don't allow.
+The Kotlin implementation uses ML Kit's bundled barcode model (LLP 1133.027
+D14). Its JVM tests cover attachment failures, a shared detector with per-scan
+filters and history, frame cleanup, result mapping and upright image decoding.
+Camera scanning and ML Kit inference still need a device run.
+
+Build the APK (`bun scripts/agent-android.mjs build shelf --apk`; the NDK
+and JDK 17 as `host/android/README.md` says), install it, and repeat the
+iPhone steps on a Pixel. Step 8 is Settings → Apps → Shelf → Permissions →
+Camera → Don't allow. Check the minified APK too: ML Kit's manifest-named
+registrars must retain their no-argument constructors.
+
+In an app that asks for QR and PDF417, scan both formats and then hide the
+viewfinder. Confirm the scan becomes idle and the camera indicator goes
+out, then reopen it and scan again. Rotate the phone while scanning and
+check that results stay upright beside the viewfinder. Take a photo while
+scanning. Repeat offline on a fresh install.
+Under the Android agent a scan currently reports its state without frames:
+the camera's agent picture is not yet carried by the track table.
 
 ## Chrome on Android, Safari on iPhone, a desktop browser
 

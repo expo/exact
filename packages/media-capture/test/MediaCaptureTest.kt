@@ -68,6 +68,65 @@ class MediaCaptureTest {
     private fun subscribe(id: String, consumer: Consumer, origin: String = "app", start: Boolean = false) =
         context.tracks.subscribe(id, consumer, start, origin)
 
+    @Test fun anObserverNeverStartsOrHoldsTheCamera() {
+        val id = open()
+        val observer = Consumer()
+        val leave = context.tracks.observe(id, observer)
+        assertEquals(listOf("idle"), observer.events)
+        foreground(false)
+        foreground(true)
+        assertEquals(listOf("idle"), observer.events)
+        val release = subscribe(id, Consumer())
+        assertEquals(listOf("idle", "video", "unmuted"), observer.events)
+        release()
+        assertEquals("idle", observer.events.last())
+        assertTrue(state(id).getBoolean("muted"))
+        leave()
+    }
+
+    @Test fun observersHearMuteResumeAndEndAndAreThenCleared() {
+        val id = open()
+        val leaveConsumer = subscribe(id, Consumer())
+        val observer = Consumer()
+        val leave = context.tracks.observe(id, observer)
+        assertEquals(listOf("video"), observer.events)
+        foreground(false)
+        foreground(true)
+        module.preferred(JSONObject().put("mediaStreamTrack", JSONObject().put("muted", true).put("muteReason", "interrupted")))
+        module.preferred(JSONObject().put("mediaStreamTrack", JSONObject().put("muted", false)))
+        call("stopTrack", JSONObject().put("track", id))
+        assertEquals(listOf("video", "background", "unmuted", "interrupted", "unmuted", "ended"), observer.events)
+        val videos = context.tracks.lookup(id)!!.owner as VideoTracks
+        val tracks = org.robolectric.util.ReflectionHelpers.getField<Map<String, VideoTracks.Track>>(videos, "tracks")
+        assertTrue(tracks.getValue(id).observers.isEmpty())
+        assertTrue(tracks.getValue(id).consumers.isEmpty())
+        val late = Consumer()
+        context.tracks.observe(id, late)()
+        assertEquals(listOf("ended"), late.events)
+        leave(); leaveConsumer()
+    }
+
+    @Test fun anObserverIsNotAConsumerAndCannotReopenADisabledTrack() {
+        val id = open()
+        val observer = Consumer()
+        val leave = context.tracks.observe(id, observer)
+        val videos = context.tracks.lookup(id)!!.owner as VideoTracks
+        val tracks = org.robolectric.util.ReflectionHelpers.getField<Map<String, VideoTracks.Track>>(videos, "tracks")
+        val track = tracks.getValue(id)
+        assertTrue(track.consumers.isEmpty())
+        assertEquals(1, track.observers.size)
+        call("setTrackEnabled", JSONObject().put("track", id).put("enabled", false))
+        call("setTrackEnabled", JSONObject().put("track", id).put("enabled", true))
+        assertFalse(track.leased)
+        assertEquals(listOf("idle"), observer.events)
+        leave(); leave()
+        assertTrue(track.observers.isEmpty())
+        val release = subscribe(id, Consumer())
+        assertTrue(track.leased)
+        assertEquals(listOf("idle"), observer.events)
+        release()
+    }
+
     @Test fun aViewfinderRecreatedBeforeForegroundTakesItsLeaseOnReturn() {
         for (releaseBeforeBackground in listOf(true, false)) {
             val id = open()

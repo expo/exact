@@ -18,5 +18,15 @@
   "names": [],
   "views": [],
   "hatches": [],
-  "artifacts": []
+  "artifacts": [],
+  "sources": {
+    "kotlin": [
+      "."
+    ]
+  },
+  "maven": [
+    "androidx.camera:camera-core:1.6.2",
+    "com.google.mlkit:barcode-scanning:17.3.0"
+  ],
+  "class": "exact.barcodedetection.BarcodeDetectionModule"
 }
