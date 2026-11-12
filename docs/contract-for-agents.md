@@ -2710,8 +2710,10 @@ sits under the bar (none when content other than control bars sits above it), an
 for the bottom edge the scroller at the route's bottom.
 `contentScrollView(for:)` reports Exact's selections too, so it does not tell an
 automatic edge from a selected one. UIKit takes a selection for the top and bottom
-edges only: it ignores one for a side edge, and `contentScrollView(for:)` raises an
-exception when asked for one. The two edges are independent, and `.all` selects both.
+edges only: it ignores one for a side edge. The getter `contentScrollView(for:)`
+accepts only `.top` or `.bottom`; a side edge or `.all` raises an exception. The two
+edges are independent. The setter `setContentScrollView(_:for:)` accepts `.all` to
+select both.
 For example, a menu action can select the secondary pane after the arrangement
 has mounted:
 
