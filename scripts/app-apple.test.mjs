@@ -226,6 +226,8 @@ test('unsigned device builds and archives refuse incompatible options before bui
   }
   assert.match(appleBuildRefusal(['--device', '--unsigned', '--run'], {}), /ad-hoc signed device bundle cannot launch on a stock device/);
   for (const args of [['--watchos', '--unsigned'], ['--watchos', '--device', '--unsigned']]) assert.match(appleBuildRefusal(args, {}), /--unsigned takes no --watchos/);
+  for (const args of [['--device', '--development'], ['--device', '--unsigned', '--development'], ['--device', '--archive', 'a.ipa', '--development']]) assert.match(appleBuildRefusal(args, {}), /--development needs --archive and --unsigned/);
+  assert.equal(appleBuildRefusal(['--device', '--archive', 'a.ipa', '--unsigned', '--development'], {}), null);
   const result = spawnSync(process.execPath, ['host/apple/build.mjs', '--device', '--unsigned', '--run', 'no-such-app'], { encoding: 'utf8' });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /--unsigned takes no --run/);

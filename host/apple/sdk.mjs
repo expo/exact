@@ -5,6 +5,10 @@ import { crossSdk } from './toolchain.mjs';
 import { plistCommand } from './plist.mjs';
 import { spawnSync } from 'node:child_process';
 
+export { iosSimulatorTarget } from './link.mjs';
+/** Whether the Darwin cross SDK has `name` (iphoneos, iphonesimulator, …) configured. */
+export const hasCrossSdk = (name, env = process.env) => { try { crossSdk(name, env); return true; } catch { return false; } };
+
 export const CROSS_IOS_ROWS = ['Apple cross SDK', 'Swift for Apple cross compilation', 'LLVM Apple tools', 'Apple codesign'];
 
 /** Linux's build prerequisites; checking them never installs or changes the SDK. */

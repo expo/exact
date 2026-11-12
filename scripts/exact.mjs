@@ -56,9 +56,7 @@ const { appleArtifacts, assertAppleIdentity } = await import('../host/apple/buil
 const { closeFilesystemReader } = await import('./filesystem.mjs');
 const { builtAppMatches, jsTargetBuild } = await import('../host/web/serve.mjs');
 const { signRelease } = await import('../host/apple/assets.mjs');
-const { appleCrossReport, CROSS_IOS_ROWS } = await import('../host/apple/sdk.mjs');
-const { crossSdk } = await import('../host/apple/toolchain.mjs');
-const { iosSimulatorTarget } = await import('../host/apple/link.mjs');
+const { appleCrossReport, CROSS_IOS_ROWS, hasCrossSdk, iosSimulatorTarget } = await import('../host/apple/sdk.mjs');
 const { chromium } = await import('./agent-launch.mjs');
 const { androidLockCommand, androidSdk, androidSdkPackages, androidSdkFix, androidJavaEnv, androidJavaFix, androidToolchainEnv } = await import('./agent-android.mjs');
 const { hermesAndroidBundle } = await import('./hermes-android.mjs');
@@ -78,9 +76,9 @@ export const executableIn = (bundle, app) => resolve(bundle, 'Contents/MacOS', a
 export const commandOf = (app) => app.manifest.app?.command ?? app.name;
 /** Where `install` puts the app. */
 export const installedAt = (app) => resolve(APPLICATIONS, `${appleExecutableName(app)}.app`);
+
 /** The targets this host cross-compiles its Apple destinations for, each needing the pinned toolchain's Rust std and, for
- * TypeScript, a Hermes bundle; each is needed only for its destination (on a Mac only with Xcode; on Linux, with the cross
- * SDK, which defaults to an ARM simulator). */
+ * TypeScript, a Hermes bundle, and only for its destination: on a Mac with Xcode; on Linux with the cross SDK (an ARM simulator). */
 export function appleCrossTargets(os = process.platform, cpu = process.arch) {
   if (!['darwin', 'linux'].includes(os)) return [];
   return [
@@ -97,8 +95,7 @@ export const appleSetupTargets = (os = process.platform, cpu = process.arch, dev
  * Xcode the Apple build selects (host/apple/devices.mjs `useXcode`: Xcode.app
  * when xcode-select names the Command Line Tools) is the one asked. */
 function iphoneosSdk(os = process.platform) {
-  if (os === 'linux') { try { crossSdk('iphoneos'); return true; } catch { return false; } }
-  if (os !== 'darwin') return false;
+  if (os !== 'darwin') return os === 'linux' && hasCrossSdk('iphoneos');
   const selected = spawnSync('xcode-select', ['-p'], {encoding: 'utf8'}).stdout?.trim() ?? '';
   const xcode = '/Applications/Xcode.app/Contents/Developer';
   const env = !process.env.DEVELOPER_DIR && selected.includes('CommandLineTools') && existsSync(xcode) ? {...process.env, DEVELOPER_DIR: xcode} : process.env;
@@ -611,10 +608,9 @@ export function sdkReport(env = process.env, { only = null, device = false, tv =
       .filter(([, onPath, xcode]) => onPath && xcode && !['/usr/bin', dirname(xcode)].includes(dirname(realpathSync(onPath))));
     rows.push(row('clang and swift on PATH', other.length ? other.map(([tool, onPath]) => `${tool}: ${onPath}`).join(', ') : "Xcode's", "Xcode's (/usr/bin or xcrun --find)", !other.length,
       `put /usr/bin before ${[...new Set(other.map(([, onPath]) => dirname(onPath)))].join(' and ')} on PATH, or unset the toolchain manager's override`, 'iOS and macOS builds'));
-  }
+  } else if (process.platform === 'linux' && want(...CROSS_IOS_ROWS)) rows.push(...appleCrossReport(env));
   // Native builds and captures take tens of gigabytes; a full disk fails them midway (LLP 1156.000 D3).
   if (!only) { const room = freeSpace(homedir()); if (room) rows.push(row('Free disk', `${room.gb} GB`, `${ROOM_GB} GB for a cold native build`, room.gb >= ROOM_GB, room.text, 'native builds')); }
-  if (process.platform === 'linux' && want(...CROSS_IOS_ROWS)) rows.push(...appleCrossReport(env));
   const hostName = `Hermes bundle (${hermesTarget() ?? 'no host bundle'})`;
   if (want(hostName)) {
     const host = checkHermesBundles(env);
