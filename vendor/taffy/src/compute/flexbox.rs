@@ -1144,24 +1144,17 @@ fn determine_flex_base_size(
 
         drop(child_style);
 
-        // EXACT PATCH 28: CSS Flexbox §9.2 3E. A column item whose cross size
-        // is auto and not definite is measured for its main size at
-        // fit-content: max(min-content, min(max-content, available)). Measured
-        // under the available width alone, a row container sized itself to
-        // its items' summed bases, so its text took one line, and the item's
-        // height stayed one line after it was laid out at the narrower
-        // fit-content width (determine_hypothetical_cross_size, the same
-        // condition). A leaf too: its min-content can be wider than the space
-        // (a word `overflow-wrap: break-word` breaks), and then fit-content is
-        // that width under its max, not the space it wraps to. A sizing
-        // keyword keeps its own width; a ratio keeps its own path. Measured
-        // only when a probe below needs it.
+        // EXACT PATCH 28: CSS Flexbox §9.2 3E measures an indefinite auto
+        // cross size at fit-content before determining a column item's main
+        // size. An available width alone can return a wrapped line's width
+        // rather than the item's fit-content width, shrinking a ratio leaf's
+        // derived height. A sizing keyword keeps its own constraint.
+        // Resolve the width only when a probe below needs it.
         let fit_content_available = match cross_axis_available_space.maybe_sub(cross_axis_margin_sum) {
             AvailableSpace::Definite(available)
                 if !dir.is_row()
                     && provisional_cross_removed.cross(dir).is_none()
                     && child.size_style.cross(dir).is_auto()
-                    && child.aspect_ratio.is_none()
                     && !tree.get_flexbox_child_style(child.node).is_compressible_replaced() =>
             {
                 Some(available)

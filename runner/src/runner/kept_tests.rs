@@ -689,7 +689,7 @@ fn only_explicitly_kept_surface_facts_retain_a_launch_snapshot() {
                 "{source}, keep={keep}"
             );
             assert_eq!(
-                kept::obsolete(&plan, &snapshot).is_empty(),
+                kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
                 allowed,
                 "{source}, keep={keep}"
             );
@@ -702,7 +702,10 @@ fn only_explicitly_kept_surface_facts_retain_a_launch_snapshot() {
         }
         plan.resources[0].transient = true;
         assert!(!kept::kept_surface(&plan, 0), "{source}");
-        assert!(!kept::obsolete(&plan, &snapshot).is_empty(), "{source}");
+        assert!(
+            !kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
+            "{source}"
+        );
         let decoded = Plan::decode(&plan.encode()).unwrap();
         assert!(!kept::kept_surface(&decoded, 0), "{source}");
         plan.resources[0].transient = false;
@@ -711,7 +714,10 @@ fn only_explicitly_kept_surface_facts_retain_a_launch_snapshot() {
             !kept::kept_surface(&plan, 0),
             "a kept reader needs a declared surface: {source}"
         );
-        assert!(!kept::obsolete(&plan, &snapshot).is_empty(), "{source}");
+        assert!(
+            !kept::obsolete(&plan, snapshot.iter().map(|(name, _)| name)).is_empty(),
+            "{source}"
+        );
     }
 }
 
@@ -734,6 +740,39 @@ fn a_cold_boot_forgets_kept_answers_no_declared_reader_seeds() {
         .collect();
     assert_eq!(removed, [gone.as_str()]);
     assert_eq!(answer_writes(&r), 0);
+}
+
+/// What a host leaves out of its snapshot (past `Store::KEPT_TOTAL_BYTES`)
+/// it names after the boot, and what the boot would have forgotten is.
+#[test]
+fn a_cold_boot_forgets_the_kept_entries_the_host_did_not_read() {
+    let removed = |r: &Runner<Source>| -> Vec<String> {
+        (r.store.writes().iter())
+            .filter(|w| w.value.is_none())
+            .map(|w| w.name.clone())
+            .collect()
+    };
+    let (answer, gone) = (kept::kept_name("answer"), kept::kept_name("gone"));
+    let mut r = seeded();
+    r.forget_unread_kept(&[answer.clone(), gone.clone()]);
+    shows(&r, "kept");
+    assert_eq!(removed(&r), [gone], "a read entry stays");
+    let mut transient = plan(2, false);
+    transient.resources[0].transient = true;
+    let mut r = boot(transient, Source::default(), Vec::new());
+    r.forget_unread_kept(std::slice::from_ref(&answer));
+    assert_eq!(
+        removed(&r),
+        std::slice::from_ref(&answer),
+        "a transient reader's"
+    );
+    let source = Source {
+        private: Some("health-read"),
+        ..Source::default()
+    };
+    let mut r = boot(plan(2, false), source, Vec::new());
+    r.forget_unread_kept(std::slice::from_ref(&answer));
+    assert_eq!(removed(&r), [answer], "an app that keeps no answers");
 }
 
 #[test]

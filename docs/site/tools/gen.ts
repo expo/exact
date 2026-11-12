@@ -491,5 +491,5 @@ writeFileSync(APP, `${app.slice(0, begin + ROUTES_BEGIN.length)}\n${routes}\n${a
 
 const broken = links.filter(l => !l.ok);
 for (const l of broken) console.error(`broken link: ${l.from} -> ${l.to}`);
-console.log(`${pages.length} pages from ${docs.length} docs at exact2 ${SHA.slice(0, 10)}, ${links.length} internal links, ${broken.length} broken`);
+console.log(`${pages.length} pages from ${docs.length} docs at Exact ${SHA.slice(0, 10)}, ${links.length} internal links, ${broken.length} broken`);
 if (broken.length || badRedirects.length) process.exit(1);

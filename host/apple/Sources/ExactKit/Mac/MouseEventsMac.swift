@@ -229,7 +229,6 @@ extension NodeView {
         presenter?.collections.pointerDown(id, event: event)
         presenter?.mouseChain.down(self, event: event)
         guard !disabled else { pressed = false; return }
-        presenter?.interacting = id
         if let target = presenter?.svg.target(id, at: local(event.locationInWindow)) { svgPressed = target; return }
         if isParagraph, let run = inlineTarget(at: local(event.locationInWindow), handler: "press") {
             inlinePressed = run.id
@@ -299,7 +298,6 @@ extension NodeView {
         contact?.validate()
         if contact?.cancelled == true {
             let taken = chain?.up(event) == true
-            chain?.presenter?.interacting = 0
             if !taken, !inert { dispatchDblclick(dblclickTarget(event)) }
             return
         }
@@ -307,7 +305,6 @@ extension NodeView {
         guard !inert else { return }
         if isSurfaceControl || ownsSurfaceControl { _ = control("up", point: local(event.locationInWindow), timestamp: event.timestamp); finishPointerPress(); return }
         if canvasInput?.pointer(event, phase: "up") == true { return }
-        defer { holdPresenter?.interacting = 0 }
         if presenter?.mouseChain.up(event) == true { return }
         presenter?.collections.releaseInteractionLater()
         let double = dblclickTarget(event)

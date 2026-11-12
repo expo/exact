@@ -768,9 +768,11 @@ else here was admitted because a real app needed it.
   remain the publisher's work.
 - **No JSX or React tier.** Nothing runs JavaScript above the data seam. The door stays
   open, but no one is building it.
-- **Code updates in production.** Signed delivery covers plans and assets. Signed
-  delivery of TypeScript or Rust modules isn't implemented, and app-store rules limit
-  it anyway.
+- **Code updates in production.** Signed delivery covers plans, assets and one
+  module pair: Apple accepts TypeScript or an enabled Rust module, Linux a Rust
+  module only, and Windows has no update store. The installed binary's runtime,
+  app identity, grants and Rust policy still bind. Delivering TypeScript and Rust
+  modules together is not implemented.
 - **Linux editing.** The web and Apple hosts edit; Linux reads. Linux also has no
   word segmenter, so flowed Thai, Lao, Khmer, and Myanmar text breaks only at spaces.
 - **Out on purpose for v1.** A gesture arena, general layout animation, grid or

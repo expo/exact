@@ -938,7 +938,9 @@ All without `sorry` or axioms beyond Lean's own (`propext`,
   event from a reachable configuration, whatever the oracle answers,
   commit or fail for a `Legitimate` reason — never a type error, an
   unbound name or a `pending` read — and every reachable configuration is
-  well typed.**
+  well typed.** The checks at a derive, a slot written and a slot
+  initialized report a value of another type as a type error (`unfit`),
+  so the theorem says they refuse only a number that is not finite.
 - Numbers (`Binary64Facts.lean`). A finite double `y` is the integer
   `y.scaled` times `2^-1074`, and an operation's exact result `±a / (d *
   2^1074)`, so distances are compared in integers. `round_nearest`: the

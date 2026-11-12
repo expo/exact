@@ -605,7 +605,6 @@ package final class Presenter {
     /// A scroller (nil: the page) moved, handler or not: `frame()` reads
     /// boxes where the viewer sees them (LLP 1051.000 D1).
     var onScrolled: ((UInt32?, Double, Double) -> Void)?
-    var interacting: UInt32 = 0
     var listViews: [UInt32: NodeView] = [:]
     var textViews: [UInt32: NodeView] = [:] { didSet { NodeView.textGeometry &+= 1 } }
     let textIndex = TextIndex()

@@ -61,9 +61,9 @@ pub use error::{HostError, LET_GO_AFTER};
 
 pub use store_writer::drain as drain_store_writes;
 pub use store_writer::take_warnings as take_store_warnings;
+use system::{physical_memory, store_read};
 #[cfg(test)]
-use system::StoreWrites;
-use system::{physical_memory, store_snapshot};
+use system::{store_snapshot, StoreWrites};
 
 /// Caller-owned plan bytes, or linked bytes whose data pool stays in place.
 #[derive(Clone, Copy)]
@@ -260,7 +260,7 @@ impl<D: DataSource> Host<D> {
         crate::picker::know_roots(data.app_id());
         // A named drive's secrets, read before the runner takes the source.
         // A carried reload keeps its memory store and does not touch the files.
-        let mut store_snapshot = store_snapshot(data.app_id(), carried.is_some());
+        let (mut store_snapshot, unread_kept) = store_read(data.app_id(), carried.is_some());
         // Locked secrets' backend, reconciled before boot (LLP 1133.010 D4).
         let presence = crate::presence_secrets::backend(data.app_id(), data.grants());
         presence
@@ -293,6 +293,7 @@ impl<D: DataSource> Host<D> {
         drop(boot_trace);
         #[cfg(any(windows, target_os = "macos"))]
         crate::app::boot_phase(c"runner-ready");
+        runner.forget_unread_kept(&unread_kept);
         if let Some(p) = presence {
             runner.install_presence(p.backend, p.keystore);
         }

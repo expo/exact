@@ -90,6 +90,18 @@ pub(super) struct State {
     told: Option<u32>,
 }
 
+impl State {
+    /// A new tree: what the bars were read from is the old one's, though
+    /// the new kernel may be at the same epoch, and a held or focused
+    /// target stood for one of its nodes.
+    pub(super) fn replaced(&mut self) {
+        self.read = None;
+        self.scroller = None;
+        self.pressed = None;
+        self.focused = None;
+    }
+}
+
 /// A bar for a driver and a test: what it is and what can be touched.
 pub struct Bar<'a> {
     /// Its frame in the window: x, y, width, height, points.

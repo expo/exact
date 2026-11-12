@@ -193,7 +193,6 @@ export function limiter({ rate = 5, per = 60_000, clock = Date.now, keys = 4096 
       const b = level(key);
       if (b.tokens < 1) return false;
       b.tokens -= 1; b.told = false;
-      if (b.tokens >= rate) buckets.delete(key);
       return true;
     },
     wait(key) { const b = level(key); return b.tokens >= 1 ? 0 : Math.ceil((1 - b.tokens) * per / rate); },

@@ -1446,6 +1446,7 @@ dependencies = [
  "exact-filesystem",
  "exact-gpu-reflect",
  "exact-kernel",
+ "exact-logic-abi",
  "exact-plan",
  "exact-runner",
  "exact-svg-file",

@@ -132,7 +132,7 @@ struct Told {
     seq: i32,
     value: String,
     look: Vec<i32>,
-    strings: [String; 4],
+    strings: [String; 5],
 }
 
 fn string(words: &[i32], at: usize) -> (String, usize) {
@@ -154,7 +154,8 @@ fn read(words: &[i32]) -> Vec<Told> {
         let (placeholder, next) = string(words, look + 18);
         let (autocomplete, next) = string(words, next);
         let (family, next) = string(words, next);
-        let (axes, end) = string(words, next);
+        let (axes, next) = string(words, next);
+        let (features, end) = string(words, next);
         out.push(Told {
             id: words[at] as ViewId,
             generation: words[at + 1],
@@ -164,7 +165,7 @@ fn read(words: &[i32]) -> Vec<Told> {
             seq: words[at + 12],
             value,
             look: words[look..look + 18].to_vec(),
-            strings: [placeholder, autocomplete, family, axes],
+            strings: [placeholder, autocomplete, family, axes, features],
         });
         at = end;
     }
@@ -211,6 +212,46 @@ fn inked(p: &mut Presenter<()>, name: &str) -> bool {
         }
     }
     inked
+}
+
+#[test]
+fn a_hosted_field_receives_its_numeric_features() {
+    struct Faces(std::sync::Mutex<Vec<FieldFace>>);
+    impl FieldMetrics for Faces {
+        fn measure(&self, face: &FieldFace, _: &str, _: Option<f32>) -> [f32; 3] {
+            self.0.lock().unwrap().push(face.clone());
+            [80.0, 20.0, 16.0]
+        }
+    }
+    let shell = Box::leak(Box::new(Faces(std::sync::Mutex::new(Vec::new()))));
+    let _hosting = crate::fields::host_here(shell, 1.0);
+    let mut p = boot(
+        r#"component App
+  state mode = 0
+  action next
+    mode = mode + 1
+  view
+    column font-variant-numeric=(mode < 2 ? "tabular-nums" : "normal") font-feature-settings=(mode == 1 ? "'tnum' 0, 'zero'" : mode == 3 ? "'tnum' 1" : "normal")
+      input value="1111"
+      textarea value="8888"
+      button "Next" press=next testId="next"
+"#,
+    );
+    for expected in ["'tnum' 1", "'tnum' 0, 'zero' 1", "", "'tnum' 1"] {
+        let fields = told(&mut p);
+        assert_eq!(fields.len(), 2);
+        for field in fields {
+            assert_eq!(field.strings[4], expected, "the displayed field's features");
+        }
+        let faces = std::mem::take(&mut *shell.0.lock().unwrap());
+        assert!(!faces.is_empty(), "layout must ask with the new features");
+        assert!(faces.iter().any(|f| f.multiline));
+        assert!(faces.iter().any(|f| !f.multiline));
+        for face in faces {
+            assert_eq!(face.features, expected, "the measured field's features");
+        }
+        tap(&mut p, "next");
+    }
 }
 
 #[test]
@@ -279,6 +320,7 @@ fn the_reader_is_told_each_field_its_box_and_its_keyboard() {
         name.strings,
         [
             "Name".to_string(),
+            String::new(),
             String::new(),
             String::new(),
             String::new()

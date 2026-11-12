@@ -765,9 +765,10 @@ impl Store {
             if self.record.seq != envelope.stream.seq
                 || self.record.digest.as_ref() != Some(&envelope.digest)
             {
-                self.record.seq = envelope.stream.seq;
-                self.record.digest = Some(envelope.digest.clone());
-                self.write_record()?;
+                let mut record = self.record.clone();
+                record.seq = envelope.stream.seq;
+                record.digest = Some(envelope.digest.clone());
+                self.adopt_record(record)?;
             }
             self.sunset = envelope.sunset.clone();
             self.collect();
@@ -783,19 +784,22 @@ impl Store {
                     envelope.digest
                 )
             })?;
+        let mut record = self.record.clone();
         if self.hold {
             // `app-decides`: whole on disk and known, booted by no launch
             // until the app says so.
-            self.record.pending = Some(envelope.digest.clone());
+            record.pending = Some(envelope.digest.clone());
         } else {
-            self.record.selected = Some(envelope.digest.clone());
-            self.record.pending = None;
-            self.record.failures = 0;
+            record.selected = Some(envelope.digest.clone());
+            record.pending = None;
+            record.failures = 0;
+        }
+        record.seq = envelope.stream.seq;
+        record.digest = Some(envelope.digest.clone());
+        self.adopt_record(record)?;
+        if !self.hold {
             self.view = Some(view);
         }
-        self.record.seq = envelope.stream.seq;
-        self.record.digest = Some(envelope.digest.clone());
-        self.write_record()?;
         self.sunset = envelope.sunset.clone();
         self.collect();
         Ok(Check::Staged {
@@ -1193,6 +1197,17 @@ impl Store {
             return Ok(());
         }
         write_atomic(&self.record_path(), self.record.to_json().as_bytes(), true)
+    }
+
+    /// Write `record` durably, then make it this store's: a failed write
+    /// leaves memory agreeing with the disk, so `status` reports nothing
+    /// staged that the next launch would not boot.
+    fn adopt_record(&mut self, record: Record) -> Result<(), String> {
+        if self.read_only().is_none() {
+            write_atomic(&self.record_path(), record.to_json().as_bytes(), true)?;
+        }
+        self.record = record;
+        Ok(())
     }
 
     /// Write a boot mark — the failure count, the last-good bundle — whole

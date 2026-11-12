@@ -4,6 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
 import {buildingServer, devPort} from './dev.mjs';
 import {readStatus, startStatus, waitReady} from './status.mjs';
+import {acceptModuleReply} from '../host/web/dev-phase.mjs';
 
 // Loaded only in subprocesses: keep the real launchers and substitute the two
 // expensive startup commands with a build whose descendant ignores cancellation.
@@ -433,7 +434,7 @@ test('TypeScript producer callback publishes success, reports failure and accept
   const start = source.indexOf("  child.stdout.on('data', chunk => {");
   const callback = source.slice(start,source.indexOf("  child.on('error'",start));
   const phases=[], errors=[], publications=[];
-  const run = new Function('early','console','publications',`
+  const run = new Function('early','console','publications','acceptModuleReply',`
     const child={stdout:{on(_,fn){this.reply=fn}}}, dev=child, scrubAsks=new Map();
     let buffered='', active, moduleRun=0, moduleStage, currentModule, moduleDesign, moduleScrubbed, moduleReleased, designSnapshot, designSource, seq=0;
     const pending=new Map(), clients=new Set(), MODULE_FILES={web:'app.js'}, app={id:'test'}, tamber=null;
@@ -441,8 +442,8 @@ test('TypeScript producer callback publishes success, reports failure and accept
     let contractStamp, contractTreeStamp; const contractInputsStamp=()=> 'tree'; ${source.match(/function contractReady[^\n]+/)[0]}
     const captureGeneration=()=>publications.push(seq), push=()=>{}, announcement=()=>({}), watchPackages=()=>{}, rmSync=()=>{}, sayReady=line=>console.log(line);
     ${callback}
-    return (ok, design='built-hash')=>{active={id:++moduleRun,design,contract:design,output:'out',stage:'stage',started:Date.now()}; currentModule=null; child.stdout.reply(JSON.stringify({id:moduleRun,ok,error:ok?undefined:'bad TypeScript'})+'\\n');return contractStamp;};
-  `)({phase:(producer,phase)=>phases.push([producer,phase])},{log(){},error:message=>errors.push(message)},publications);
+    return (ok, design='built-hash')=>{active={id:++moduleRun,design,contract:design,output:'out',stage:'stage',started:Date.now()}; currentModule=null; child.stdout.reply(JSON.stringify({id:moduleRun,ok,error:ok?undefined:'bad TypeScript',warnings:[]})+'\\n');return contractStamp;};
+  `)({phase:(producer,phase)=>phases.push([producer,phase])},{log(){},error:message=>errors.push(message)},publications,acceptModuleReply);
   expect(run(true)).toBe('built-hash');
   run(false); run(true);
   expect(publications).toEqual([1,2]);

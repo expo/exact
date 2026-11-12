@@ -123,7 +123,6 @@ final class BubbledPress {
         path.nodes.append(PressNode(node, bubbled: true))
         validate()
         guard !cancelled else { return }
-        node.presenter?.interacting = node.id
         if node.pressable { target = node; node.pressed = true }
         else { node.presenter?.mouseChain.responder(from: node, event: event)?.mouseDown(with: event) }
     }

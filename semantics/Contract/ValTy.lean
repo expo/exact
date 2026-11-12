@@ -430,4 +430,9 @@ theorem flat_unknown {p : Program} : ∀ {xss : List Value}, ValTys p xss .unkno
   | [], _ => rfl
   | x :: _, h => by cases x <;> simp [ValTys, ValTy] at h
 
+/-- A boundary check's failure on a value of its type is a refusal. -/
+theorem unfit_typed {b : Bool} {finite wrong : String} (h : b = true) :
+    unfit b finite wrong = .refused finite := by
+  simp [unfit, h]
+
 end Contract

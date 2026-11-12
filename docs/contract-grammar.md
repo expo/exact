@@ -1270,9 +1270,12 @@ Several tags share a kernel node type with different fixed properties.
 | SVG filters | `filter`, `feBlend`, `feColorMatrix`, `feComponentTransfer`, `feComposite`, `feConvolveMatrix`, `feDiffuseLighting`, `feDisplacementMap`, `feDropShadow`, `feFlood`, `feFuncR`, `feFuncG`, `feFuncB`, `feFuncA`, `feGaussianBlur`, `feMerge`, `feMergeNode`, `feMorphology`, `feOffset`, `feSpecularLighting`, `feTile`, `feTurbulence`, `feDistantLight`, `fePointLight`, `feSpotLight` |
 
 `h1` to `h6` are `text role="heading" aria-level=1` to `6` (LLP 1116.017 D1). `text` inside SVG has SVG semantics. A hyphenated tag names a native module: the
-bake checks it against `app.json`'s `modules` list (`bake-unknown-module`), and
-its unknown attributes, and an SVG element's own props, pass to the module as one
-object. A known attribute binds to the module's box, and the box takes only layout,
+bake checks it against `app.json`'s `modules` list or a dependency's `exact.json`
+`views` (`bake-unknown-module`). An app module's unknown attributes, and an SVG
+element's own props, pass to the module as one object. A package view accepts only
+its declared props and events beyond standard box attributes and common module
+events; an undeclared attribute is `lower-native-attr`.
+A known attribute binds to the module's box, and the box takes only layout,
 box and paint rows, handlers, `testId`, `id`, `class`, `data-*`, `role`, ARIA,
 `disabled` and `inert`; any other known name (`color`, `value`, `command`, `href`)
 is `lower-native-attr` (LLP 1024 D1, LLP 1088 D7.2). A package cannot declare a

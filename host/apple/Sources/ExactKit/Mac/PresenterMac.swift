@@ -785,7 +785,6 @@ package final class Presenter {
     var onScrolled: ((UInt32?, Double, Double) -> Void)?
     var onListIndex: ((UInt32, String) -> Int?)?
     var onListText: ((UInt32, (String, Int, Int)?, (String, Int, Int)?) -> String)?
-    var interacting: UInt32 = 0
     private(set) var listViews: [UInt32: NodeView] = [:]
 
     /// Everything kept for `id`, out of the maps (not out of the window);

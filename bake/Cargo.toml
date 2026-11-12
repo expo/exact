@@ -21,6 +21,8 @@ contract = { path = "../contract/cli" }
 contract-syntax = { path = "../contract/syntax" }
 exact-color = { path = "../color" }
 exact-kernel = { path = "../kernel" }
+# The Rust module seam's ABI, which a Rust cohort and its artifacts require.
+exact-logic-abi = { path = "../logic/abi" }
 exact-plan = { path = "../plan" }
 exact-runner = { path = "../runner" }
 # The app's SVG images, read for the island module a fixed build carries.

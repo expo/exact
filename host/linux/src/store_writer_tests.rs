@@ -388,37 +388,44 @@ fn acquire_secret(
     lease
 }
 
+struct Data {
+    app: String,
+    grants: &'static str,
+    shared: Option<std::sync::Arc<dyn exact_runner::SharedSecrets>>,
+}
+impl exact_runner::DataSource for Data {
+    fn app_id(&self) -> &str {
+        &self.app
+    }
+    fn grants(&self) -> &'static str {
+        self.grants
+    }
+    fn query(
+        &mut self,
+        _: &str,
+        _: &[exact_plan::Value],
+    ) -> Result<exact_plan::Value, exact_runner::DataError> {
+        unreachable!()
+    }
+    fn configure_secrets(
+        &mut self,
+        shared: std::sync::Arc<dyn exact_runner::SharedSecrets>,
+    ) -> Result<(), exact_runner::DataError> {
+        self.shared = Some(shared);
+        Ok(())
+    }
+}
+
 fn boot_secret_session(
     app: &str,
     grants: &'static str,
 ) -> std::sync::Arc<dyn exact_runner::SharedSecrets> {
-    struct Data {
-        app: String,
-        grants: &'static str,
-        shared: Option<std::sync::Arc<dyn exact_runner::SharedSecrets>>,
-    }
-    impl exact_runner::DataSource for Data {
-        fn app_id(&self) -> &str {
-            &self.app
-        }
-        fn grants(&self) -> &'static str {
-            self.grants
-        }
-        fn query(
-            &mut self,
-            _: &str,
-            _: &[exact_plan::Value],
-        ) -> Result<exact_plan::Value, exact_runner::DataError> {
-            unreachable!()
-        }
-        fn configure_secrets(
-            &mut self,
-            shared: std::sync::Arc<dyn exact_runner::SharedSecrets>,
-        ) -> Result<(), exact_runner::DataError> {
-            self.shared = Some(shared);
-            Ok(())
-        }
-    }
+    let host = boot_session(app, grants);
+    host.runner().data_ref().shared.clone().unwrap()
+}
+
+/// App `app` booted with `grants`, from the store it has.
+fn boot_session(app: &str, grants: &'static str) -> super::super::Host<Data> {
     let plan = contract::compile("component App\n  view\n    text \"ready\"\n").unwrap();
     let (host, error) = super::super::Host::boot(
         &plan.encode(),
@@ -433,7 +440,33 @@ fn boot_secret_session(
     )
     .unwrap();
     assert!(error.is_none(), "{error:?}");
-    host.runner().data_ref().shared.clone().unwrap()
+    host
+}
+
+/// A kept answer past the read budget is forgotten at boot as a read one
+/// is: here the plan reads none, so the boot forgets them all.
+#[test]
+fn a_boot_forgets_the_kept_answers_past_its_read_budget() {
+    if !in_child("a_boot_forgets_the_kept_answers_past_its_read_budget") {
+        return;
+    }
+    let app = "test.exact.store-writer-unread";
+    let big = "x".repeat(exact_runner::Store::KEPT_TOTAL_BYTES / 2 + 1);
+    let kept: Vec<_> = (["a", "b", "c"].iter())
+        .map(|key| write(&format!("exact.kept.{key}"), Some(&big)))
+        .collect();
+    assert!(submit(app, kept).is_empty());
+    assert!(drain(Duration::from_secs(10)));
+    let (snapshot, unread) = super::super::system::store_read(app, false);
+    assert_eq!((snapshot.len(), unread.len()), (1, 2), "one fits");
+    // The boot's writes go with its first commit.
+    let mut host = boot_session(app, "secret.keep token");
+    assert_eq!(host.commit(&[], None), None);
+    assert!(drain(Duration::from_secs(10)));
+    let left: Vec<_> = (["a", "b", "c"].iter())
+        .filter(|key| on_disk(app, key).is_some())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
 }
 
 #[cfg(unix)]

@@ -28,6 +28,14 @@ pub(crate) struct PadRoute {
     owner: Option<u32>,
     readings: std::collections::BTreeMap<u8, ([f32; 17], [f32; 4])>,
 }
+
+impl PadRoute {
+    /// A new tree's canvas has no pads yet, though its view id may be the
+    /// old owner's: the next reading gives them to it.
+    pub(crate) fn replaced(&mut self) {
+        self.owner = None;
+    }
+}
 /// The contact of a control pressed without a pointer: a declared shortcut,
 /// as the web's assistive click (gpu-glue.js) presses it. It moves no focus,
 /// so a focused world keeps its keyboard and its held keys.

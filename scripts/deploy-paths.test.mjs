@@ -12,7 +12,7 @@ import { pinned } from './test-workspace.mjs';
 const {changedPaths, failures, owners, retainSkippedFailures} = asyncLane;
 
 // LLP 1153 D1.1, D1.5: the native platforms a deploy ships are the ones the manifest names, under deploy, else under
-// host (library-gate and scale-gate name theirs there alone), and only a manifest that names none in either is web-only.
+// host, and only a manifest that names none in either is web-only.
 test('a deploy ships the native platforms the manifest names, and a manifest naming none is web-only', () => {
   for (const manifest of [{}, { deploy: {} }, { host: { web: {} }, deploy: { store: { web: '0' } } }]) {
     expect([nativePlatforms(manifest), namesNative(manifest)]).toEqual([[], false]);

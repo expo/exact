@@ -13,9 +13,12 @@ use exact_kernel::NodeKey;
 use exact_motion::spring::SpringConfig;
 use exact_runner::{ReorderBinding, ReorderEnding, ReorderPhase, ReorderStep, ReorderToken};
 
-/// The grouped drag's edge band (points) and top speed (points per second).
-const BAND: f32 = 24.;
-const SPEED: f32 = 300.;
+/// The grouped drag's edge band (points), its speed (points per second) and
+/// the most time one step catches up (seconds), as the web host's
+/// (`group-glue.js`) and Apple's (`ReorderEdge`).
+const BAND: f32 = 32.;
+const SPEED: f32 = 720.;
+const CATCH_UP: f64 = 0.032;
 /// The lifted look, the same on every host (D6).
 const LIFTED: f32 = 1.03;
 /// The ghost's return: the preview's `-exact-spring(300,30,1)`.
@@ -527,9 +530,9 @@ impl<D: DataSource> Presenter<D> {
                 ),
             ] {
                 let speed = if p < start + BAND {
-                    -SPEED * ((start + BAND - p) / BAND).min(1.)
+                    -SPEED
                 } else if p > start + len - BAND {
-                    SPEED * ((p - (start + len - BAND)) / BAND).min(1.)
+                    SPEED
                 } else {
                     0.
                 };
@@ -552,7 +555,7 @@ impl<D: DataSource> Presenter<D> {
         let s = self.group.as_mut().unwrap();
         let dt = s
             .edge_clock
-            .map_or(0., |last| ((now - last) / 1000.).clamp(0., 0.05) as f32);
+            .map_or(0., |last| ((now - last) / 1000.).clamp(0., CATCH_UP) as f32);
         let owner = s.token;
         s.edge_clock = Some(now);
         let Some(node) = self.host.kernel().node(id) else {

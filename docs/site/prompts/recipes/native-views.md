@@ -1,5 +1,5 @@
 ```prompt Add a native view in Swift
-Put a native Swift view (a map, the camera) in the Exact app in this folder. Use https://github.com/expo/exact/blob/main/docs/recipes/native-views.md as the source for each step. The exact2 checkout has the same page at docs/recipes/native-views.md.
+Put a native Swift view (a map, the camera) in the Exact app in this folder. Use https://github.com/expo/exact/blob/main/docs/recipes/native-views.md as the source for each step. The Exact checkout has the same page at docs/recipes/native-views.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. If I did not say which view and which platform API it uses, ask me before you write code. If it is a video, use the `video` element with a `poster`, and write no Swift. If it is a Skia or Reanimated screen, build it from boxes, SVG and keyframes, and write no Swift.

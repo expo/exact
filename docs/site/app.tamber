@@ -54,7 +54,7 @@ icons
   icon.cursor = icon(svg "icons/cursor.svg")
   icon.openai = icon(svg "icons/openai.svg")
   icon.codex = icon(svg "icons/codex.svg")
-  // exact2's mark (assets/brand/exact-mark.svg), its stroke drawn as fills so the icon tints.
+  // Exact's mark (assets/brand/exact-mark.svg), its stroke drawn as fills so the icon tints.
   icon.exactmark = icon(svg "icons/exact-mark.svg")
   // GitHub's Octicons (MIT, assets/icons/octicons-LICENSE.txt): device-desktop, sun, moon and the GitHub mark.
   icon.desktop = icon(svg "icons/desktop.svg")

@@ -16,18 +16,19 @@ import java.util.concurrent.CountDownLatch
  * shell's `agent=<name>` extra). Only adb's own user (shell, or root) is served: any app on the phone can reach an
  * abstract socket, and a driver holds the whole app.
  *
- * The first line out is the handler's `ready`, written once the app's first content has been drawn. A `screenshot`
- * is not answered here: the picture is the device's, and the carrier takes it (`screencap`).
+ * The first line out is the handler's `ready`, written after the first frame following successful startup, even
+ * with an empty page or only bars. A `screenshot` is not answered here: the picture is the device's, and the carrier
+ * takes it (`screencap`).
  */
 class AgentDrive(name: String) : Drive {
     private val server = LocalServerSocket(name)
-    private val drawn = CountDownLatch(1)
+    private val presented = CountDownLatch(1)
 
     init {
         Thread({ serve() }, "exact-agent").apply { isDaemon = true }.start()
     }
 
-    override fun contentReady() = drawn.countDown()
+    override fun contentReady() = presented.countDown()
 
     private fun serve() {
         while (true) {
@@ -42,7 +43,7 @@ class AgentDrive(name: String) : Drive {
         val lines = socket.inputStream.bufferedReader(Charsets.UTF_8)
         val out = socket.outputStream
         fun say(line: String) { out.write((line + "\n").toByteArray(Charsets.UTF_8)); out.flush() }
-        drawn.await()
+        presented.await()
         say(Exact.agent("{\"op\":\"ready\"}"))
         while (true) {
             val line = lines.readLine() ?: return

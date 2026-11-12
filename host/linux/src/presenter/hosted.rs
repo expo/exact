@@ -216,9 +216,10 @@ impl<D: DataSource> Presenter<D> {
     ///   line height in pixels (0: the font's own) as float bits (the
     ///   weight a count); and the revision, start and end of the selection
     ///   a command last set;
-    /// - four strings: its placeholder, its `autocomplete`, its font's
+    /// - five strings: its placeholder, its `autocomplete`, its font's
     ///   file ([`crate::fields::FieldFace::family`]) and its axes as
-    ///   `font-variation-settings` ([`crate::fields::FieldFace::axes`]).
+    ///   `font-variation-settings` ([`crate::fields::FieldFace::axes`]),
+    ///   then its effective OpenType features ([`crate::fields::FieldFace::features`]).
     ///
     /// A field the reader knew that a statement leaves out is gone.
     pub fn reader_fields(&mut self, scale: f32) -> Option<Vec<i32>> {
@@ -435,6 +436,7 @@ impl<D: DataSource> Presenter<D> {
         requests::string(out, props.str(PropId::Autocomplete).unwrap_or(""));
         requests::string(out, &face.family);
         requests::string(out, &face.axes);
+        requests::string(out, &face.features);
     }
 
     /// Whether `id` is a field the reader hosts and knows at `generation`:

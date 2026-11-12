@@ -401,8 +401,9 @@ pub fn keep(owner: u64, real: &Path, bookmark: &str, mode: &str) -> Option<Strin
         .records
         .iter()
         .position(|r| r.identity == identity && r.folder == folder);
-    let mut r = match at {
-        Some(i) => store.records.remove(i),
+    let was = at.map(|i| (i, store.records.remove(i)));
+    let mut r = match &was {
+        Some((_, r)) => r.clone(),
         None => {
             super::keep(n, &app);
             Record {
@@ -417,8 +418,16 @@ pub fn keep(owner: u64, real: &Path, bookmark: &str, mode: &str) -> Option<Strin
             }
         }
     };
+    // What the list held before this choice, back in place: the set on disk
+    // still holds it.
+    let undo = |records: &mut Vec<Record>| {
+        if let Some((i, r)) = was.clone() {
+            records.insert(i, r);
+        }
+    };
     // Kept before this launch restored it: it resolves from now.
     if r.n != n && !super::adopt(r.n, &real, &r.name, identity, folder, owner, &app) {
+        undo(&mut store.records);
         return None;
     }
     r.mode = mode.into();
@@ -431,6 +440,7 @@ pub fn keep(owner: u64, real: &Path, bookmark: &str, mode: &str) -> Option<Strin
     if save(store).is_err() {
         // Not written is not kept: the next launch would not know it.
         store.records.remove(0);
+        undo(&mut store.records);
         return None;
     }
     let listeners = announce(store);

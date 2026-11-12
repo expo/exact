@@ -25,7 +25,7 @@ fn spacing(v: &str, font_size: f64) -> Option<(String, f64)> {
         return None;
     }
     let value = exact_num::parse_f64(n).ok()?;
-    Some((format!("{}{unit}", font::js_number(value)), px))
+    Some((format!("{}{unit}", exact_num::js(value)), px))
 }
 
 impl Inner {

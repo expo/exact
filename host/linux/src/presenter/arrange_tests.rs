@@ -747,10 +747,11 @@ fn grouped_edge_scroll_keeps_its_speed_while_the_pointer_moves() {
         assert!(p.needs_animation_frame(), "an edge band pumps");
         p.tick(30.);
         let before = p.scroll_of(board).0;
-        for n in 1..=12 {
+        // Four frames, short of the board's end.
+        for n in 1..=4 {
             let at = 30. + n as f64 * 1000. / 60.;
             if let Some(lead) = lead {
-                // Move along the edge so its depth, and thus speed, stays fixed.
+                // Move along the edge, within its band.
                 p.pointer_move(x, y + (n % 2) as f32, at - lead).unwrap();
             }
             p.tick(at);
@@ -759,9 +760,31 @@ fn grouped_edge_scroll_keeps_its_speed_while_the_pointer_moves() {
         p.pointer_up(x, y, 240.).unwrap();
     }
     assert!(
-        distances.iter().all(|(_, d)| (d - 40.).abs() < 0.001),
-        "200 points per second for 0.2 seconds, regardless of move timing: {distances:?}"
+        distances.iter().all(|(_, d)| (d - 48.).abs() < 0.001),
+        "720 points per second for 1/15 second, regardless of move timing: {distances:?}"
     );
+}
+
+#[test]
+fn grouped_edge_scroll_runs_at_the_web_hosts_speed_and_catch_up() {
+    // 8 points inside the board's edge, held: 720 points a second
+    // whatever the depth in the 32-point band, and a late frame catches up
+    // 32 ms at most (`group-glue.js`).
+    let mut p = board();
+    let board = id(&p, "board");
+    let r = p.rect_of(board).unwrap();
+    let (x, y) = (r.0 + r.2 - 8., r.1 + 30.);
+    carry(&mut p, "a2", (x - 62., y), 0.);
+    p.pointer_move(x, y, 30.).unwrap();
+    p.tick(30.);
+    let before = p.scroll_of(board).0;
+    p.tick(50.);
+    let tick = p.scroll_of(board).0 - before;
+    p.tick(150.);
+    let gap = p.scroll_of(board).0 - before - tick;
+    assert!((tick - 14.4).abs() < 0.001, "20 ms: {tick}");
+    assert!((gap - 23.04).abs() < 0.001, "100 ms, capped at 32: {gap}");
+    p.pointer_up(x, y, 160.).unwrap();
 }
 
 #[test]
@@ -783,13 +806,13 @@ fn grouped_edge_scroll_restarts_its_clock_after_leaving_the_band() {
                 "the first frame in the band starts the clock"
             );
             p.tick(entered + 30.);
-            assert!((p.scroll_of(board).0 - before - 4.).abs() < 0.001);
+            assert!((p.scroll_of(board).0 - before - 14.4).abs() < 0.001);
             p.pointer_move(x - 62., y, entered + 40.).unwrap();
             assert!(p.group_edge().is_none());
             if frame_outside {
                 p.tick(entered + 50.);
             }
-            assert!((p.scroll_of(board).0 - before - 4.).abs() < 0.001);
+            assert!((p.scroll_of(board).0 - before - 14.4).abs() < 0.001);
         }
         p.pointer_cancel(1100.).unwrap();
         let before = p.scroll_of(board).0;

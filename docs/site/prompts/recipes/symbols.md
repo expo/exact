@@ -1,5 +1,5 @@
 ```prompt Use symbols for my app's icons
-Make the icons in the Exact app in this folder the platform's symbols. Use https://github.com/expo/exact/blob/main/docs/recipes/symbols.md as the source for each step. The exact2 checkout has the same page at docs/recipes/symbols.md.
+Make the icons in the Exact app in this folder the platform's symbols. Use https://github.com/expo/exact/blob/main/docs/recipes/symbols.md as the source for each step. The Exact checkout has the same page at docs/recipes/symbols.md.
 
 1. If this folder is not an Exact app (it has no exact.mjs and app.contract), stop and tell me.
 2. List each icon the app draws, including emoji and characters used as icons (▦, ☏), with the symbol role you would use for it from `bun exact.mjs contract vocab symbol`. Show me the list and ask before you change anything.

@@ -465,29 +465,31 @@ impl Kernel {
             .into_iter()
             .filter_map(|id| self.node(id))
             .filter(is_option)
-            .map(|option| {
-                let text: String = option.text_runs().iter().map(|r| &*r.text).collect();
-                let label = option_label(&text);
-                Choice {
-                    view: option.id,
-                    value: option
-                        .props
-                        .str(PropId::Value)
-                        .map_or_else(|| self.option_value(option.id), str::to_owned),
-                    label,
-                    disabled: disabled || option.props.bool(PropId::Disabled) == Some(true),
-                }
+            .map(|option| Choice {
+                view: option.id,
+                value: option
+                    .props
+                    .str(PropId::Value)
+                    .map_or_else(|| self.option_text(option.id, false), str::to_owned),
+                label: self.option_text(option.id, true),
+                disabled: disabled || option.props.bool(PropId::Disabled) == Some(true),
             })
             .collect()
     }
 
-    // HTML option values read text content, before CSS transforms or text shaping.
-    fn option_value(&self, view: ViewId) -> String {
+    // HTML's option text: the text content of the option and its
+    // descendants, whitespace collapsed. Its value reads it before CSS
+    // transforms; its label (`shown`) as each node's `text-transform` shows it.
+    fn option_text(&self, view: ViewId, shown: bool) -> String {
         let mut text = String::new();
         let mut pending = vec![view];
         while let Some(id) = pending.pop() {
             if let Some(node) = self.node(id) {
-                text.push_str(node.props.str(PropId::Text).unwrap_or(""));
+                let own = node.props.str(PropId::Text).unwrap_or("");
+                match node.shown_text().filter(|_| shown) {
+                    Some(transformed) => text.push_str(&transformed),
+                    None => text.push_str(own),
+                }
                 pending.extend(node.children().into_iter().rev());
             }
         }
@@ -900,7 +902,9 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(k.select_choices(2)[1].value, "Darker");
+        let choices = k.select_choices(2);
+        assert_eq!(choices[1].value, "Darker");
+        assert_eq!(choices[1].label, "Darker", "the label reads the same text");
         assert_eq!(k.select_chosen(2).map(|c| c.view), Some(4));
     }
 

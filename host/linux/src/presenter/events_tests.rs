@@ -1116,6 +1116,9 @@ fn a_reload_forgets_unbound_controls_own_state() {
     column
       input type="checkbox" testId="box"
       input testId="free"
+      scroll testId="list" height=100
+        column height=1000
+          text "Tall"
 "#;
     let plan = contract::compile(src).unwrap().encode();
     let (mut p, error) = Presenter::boot_with(
@@ -1134,7 +1137,12 @@ fn a_reload_forgets_unbound_controls_own_state() {
     p.type_text(free, "draft").unwrap();
     assert_eq!(p.field_text(free), "draft");
     assert_eq!(p.edited, Some(free));
+    let _ = p.frame();
+    let list = id(&p, "list");
+    p.wheel(list, 0., 40.).unwrap();
+    assert_eq!(p.last_wheel, Some(list));
     p.reload(&plan, Keeps).unwrap();
+    assert_eq!(p.last_wheel, None, "a wheel moved none of the new tree");
     assert_eq!(
         p.edited, None,
         "the old field's edit is not the new one's to commit"
