@@ -715,6 +715,15 @@ export function shareIosResources(manifest, from, to) {
     cpSync(root, resolve(to, IOS_RESOURCE_ROOT), { recursive: true });
 }
 
+/** The fallback PNGs actool writes beside Assets.car for the `CFBundleIconFiles` of the icon keys it returned
+ *  (`AppIcon60x60@2x.png`, `AppIcon76x76@2x~ipad.png`, an alternate's), by name in `dir`: a bundle that takes
+ *  those keys (the App Clip's) takes these files too, since iOS looks for them in the bundle that names them. */
+export function iconFiles(keys, dir) {
+  const names = [keys.CFBundleIcons, keys['CFBundleIcons~ipad']].flatMap(icons => icons ? [icons.CFBundlePrimaryIcon, ...Object.values(icons.CFBundleAlternateIcons ?? {})] : [])
+    .flatMap(icon => icon?.CFBundleIconFiles ?? []);
+  return readdirSync(dir).filter(file => names.some(name => file.startsWith(name) && /^(@[0-9]x)?(~ipad)?\.png$/.test(file.slice(name.length))));
+}
+
 /** Validate links before copying. Relative links stay inside their declared
  * tree, so a copied helper cannot accidentally depend on the producer machine.
  * An iOS tree holds neither links, which `bundle:` follows none of, nor
