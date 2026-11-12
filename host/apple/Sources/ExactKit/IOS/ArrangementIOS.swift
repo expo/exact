@@ -254,7 +254,9 @@ final class ArrangementHost {
             guard node.isDescendant(of: route), node.transform.isIdentity, node.clipPath == nil,
                   top ? room.minY <= 0.5 : node.bounds.maxY - room.maxY <= 0.5,
                   reachesEdge(node, in: route, top: top) else { return [] }
-            let holders = entry.holders.filter { !entry.isHidden($0) && !$0.node.isHidden && !$0.view.bounds.isEmpty }
+            // Leave out a pane laid out with no size, so that it neither owns an edge nor keeps its sibling from one: one
+            // UIKit shows again is 0×0 until its covers follow
+            let holders = entry.holders.filter { !entry.isHidden($0) && !$0.node.isHidden && !$0.view.bounds.isEmpty && !$0.node.bounds.isEmpty }
             let touching = holders.filter { holder in
                 let allocation = holder.view.convert(holder.view.bounds, to: node)
                 return abs(top ? allocation.minY : node.bounds.maxY - allocation.maxY) < 1
@@ -265,7 +267,7 @@ final class ArrangementHost {
                 // Compare the pane with the block it was last told, not with UIKit's allocation: when a cover's answer
                 // resizes the arrangement, UIKit resizes the allocation a layout before the pane follows, and a pane
                 // measured against it then gives up the edge, which pads the route and resizes the allocation back.
-                // The top needs no block, since the pane sits at its allocation's origin.
+                // The top compares only the pane's origin, where it sits whatever block it was told.
                 let pane = holder.node, frame = pane.convert(pane.bounds, to: holder.view)
                 guard case .size(let height)? = presenter.owners.told[pane.id]?.block.height else { return false }
                 return pane.scrollView != nil && pane.scrollsVertically && pane.transform.isIdentity && pane.clipPath == nil && NavigationHost.inFlow(pane)
