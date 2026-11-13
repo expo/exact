@@ -895,7 +895,19 @@ export const linuxBinary = (app, bin = app.crate('linux')) => resolve(app.target
  * profiles on the command line, as its Apple build does (injectedProfiles). */
 export const linuxBuild = (app, bin = null) => ['cargo', 'build', ...injectedProfiles(app), '--profile', HOST_DEV, '-p', app.crate('linux'), ...(bin ? ['--bin', bin] : [])];
 /** The executable (and Apple bundle) as Xcode and Visual Studio name a project's: the app's name, less what a file name cannot carry (LLP 1030 D2); `windowsFile` is a Windows build's name for a Cargo product. */
-export const executableName = (app) => app.displayName.replace(/[<>:"/\\|?*\x00-\x1f]/g, '-').replace(/^[. ]+|[. ]+$/g, '') || app.id.split('.').pop();
+/** What an iOS bundle's root holds beside the executable, which a name the same but for case would collide with
+ * (expo/exact-build#89): the bundle's own files and folders, the static trees (`APPLE_STATIC_TREES`, here in lower
+ * case), localizations, Metal libraries and icons. */
+const BUNDLE_ROOT = new Set(['assets', 'deck', 'shaders', 'exact-metal', 'rust', 'plans', 'typescript', 'activities',
+  'frameworks', 'plugins', 'extensions', 'appclips', 'watch', 'info.plist', 'pkginfo', '_codesignature',
+  'embedded.mobileprovision', 'sc_info', 'receipt.json', 'assets.car', 'metadata.appintents', 'exactsvgfilter.metallib']);
+const inBundleRoot = (name) => BUNDLE_ROOT.has(name.toLowerCase()) || /\.(lproj|metallib|bundle|framework|appex)$|^appicon.*\.png$/i.test(name);
+/** The executable's name: the app's, made a file name, and given an " App" suffix when it would name one of the
+ * bundle's own entries (an app called "Assets" or "Frameworks"), so such an app still builds. */
+export const executableName = (app) => {
+  const name = app.displayName.replace(/[<>:"/\\|?*\x00-\x1f]/g, '-').replace(/^[. ]+|[. ]+$/g, '') || app.id.split('.').pop();
+  return inBundleRoot(name) ? `${name} App` : name;
+};
 /** Match CFBundle's decomposed executable path so codesign excludes the main executable
  * from its resource seal. Directory traversal preserves the filename's spelling. */
 export const appleExecutableName = (app) => executableName(app).normalize('NFD');
