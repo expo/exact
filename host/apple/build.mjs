@@ -1246,7 +1246,7 @@ async function main(args, lockHeld = false) {
       stripped = stripProductionExecutable(executable, { production, ipa });
       if (stripped && !ipa) console.log(`host/apple: symbols: ${p === 'ExactClip' ? resolve(paths.products, relative(binDir, stripped.dsym)) : p === product ? resolve(paths.products, basename(stripped.dsym)) : `${basename(stripped.dsym)}, beside the host product`} (${(stripped.saved / 1048576).toFixed(1)} MB off the executable)`);
     }
-    if (launchPartsDir) { auditLaunchParts(launchPartsObjects(swiftBinDir), launchModules(app.dir, app.manifest), read); }
+    if (launchPartsDir) { auditLaunchParts(launchPartsObjects(swiftBinDir, launchPartsDir), launchModules(app.dir, app.manifest), read); }
   } finally { releaseSwift(); }
   const tSwift = Date.now(); buildStep('arms');
   for (const placed of arms) await placed();

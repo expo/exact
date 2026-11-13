@@ -34,13 +34,15 @@ export const launchServices = (modules, buildDir) => modules.filter(m => m.servi
 /** swiftc's arguments for a service dylib, before its target. */
 export const serviceArgs = svc => ['-parse-as-library', '-emit-library', '-O', '-swift-version', '5', '-module-name', `ExactService_${svc.name}`, ...svc.sources, '-lsqlite3', '-o', svc.built];
 
-/** The objects SwiftPM compiled ExactLaunchParts into, in `binDir` (its --show-bin-path): Swift Build links the
- * target into one `ExactLaunchParts.o`; the native build system (what a Linux cross build runs) leaves one object
- * per source in `ExactLaunchParts.build/`. Empty when neither is there. */
-export function launchPartsObjects(binDir) {
+/** The objects SwiftPM compiled ExactLaunchParts into, in `binDir` (its --show-bin-path), from the sources in
+ * `sourcesDir` (what writeLaunchParts left): Swift Build links the target into one `ExactLaunchParts.o`; the native
+ * build system (what a Linux cross build runs) leaves `<source>.o` per source in `ExactLaunchParts.build/`. That
+ * directory is shared by every app with the same destination and keeps a removed source's object, so only the
+ * current sources' objects are named, whether or not they exist. Empty when neither layout is there. */
+export function launchPartsObjects(binDir, sourcesDir) {
   const merged = resolve(binDir, 'ExactLaunchParts.o'), dir = resolve(binDir, 'ExactLaunchParts.build');
   if (existsSync(merged)) return [merged];
-  return existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith('.o')).sort().map(f => resolve(dir, f)) : [];
+  return existsSync(dir) ? readdirSync(sourcesDir).filter(f => f.endsWith('.swift')).sort().map(f => resolve(dir, `${f}.o`)) : [];
 }
 
 /** Throws unless the linked launch parts have at most 32 KiB of text and data

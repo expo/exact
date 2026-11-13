@@ -38,17 +38,24 @@ test('launch-part inspection accepts the byte limit and reports all forbidden co
 });
 
 test('the launch parts are found in either SwiftPM layout, and missing ones cannot be audited', () => {
-  const bin = mkdtempSync(resolve(tmpdir(), 'exact-launch-parts-'));
+  const bin = mkdtempSync(resolve(tmpdir(), 'exact-launch-parts-')), sources = resolve(bin, 'sources');
   try {
-    expect(launchPartsObjects(bin)).toEqual([]);
-    expect(() => auditLaunchParts(launchPartsObjects(bin), modules, () => size)).toThrow('cannot be audited: SwiftPM left no ExactLaunchParts object');
-    // The native build system (a Linux cross build): one object per source.
-    mkdirSync(resolve(bin, 'ExactLaunchParts.build'));
-    for (const f of ['Registry.swift.o', 'EighteenLaunch.swift.o', 'ExactLaunchParts.swiftmodule']) writeFileSync(resolve(bin, 'ExactLaunchParts.build', f), '');
-    expect(launchPartsObjects(bin)).toEqual(['EighteenLaunch.swift.o', 'Registry.swift.o'].map(f => resolve(bin, 'ExactLaunchParts.build', f)));
+    mkdirSync(sources);
+    for (const f of ['Registry.swift', 'observe-EighteenLaunch.swift']) writeFileSync(resolve(sources, f), '');
+    expect(launchPartsObjects(bin, sources)).toEqual([]);
+    expect(() => auditLaunchParts(launchPartsObjects(bin, sources), modules, () => size)).toThrow('cannot be audited: SwiftPM left no ExactLaunchParts object');
+    // The native build system (a Linux cross build): one object per source, beside a removed source's object and
+    // another app's, which the shared directory keeps and the link does not use.
+    const native = resolve(bin, 'ExactLaunchParts.build');
+    mkdirSync(native);
+    for (const f of ['Registry.swift.o', 'observe-EighteenLaunch.swift.o', 'observe-OldLaunch.swift.o', 'other-Launch.swift.o', 'ExactLaunchParts.swiftmodule']) writeFileSync(resolve(native, f), '');
+    expect(launchPartsObjects(bin, sources)).toEqual(['Registry.swift.o', 'observe-EighteenLaunch.swift.o'].map(f => resolve(native, f)));
+    // A current source whose object is missing is named, so the audit refuses it.
+    writeFileSync(resolve(sources, 'observe-New.swift'), '');
+    expect(() => auditLaunchParts(launchPartsObjects(bin, sources), modules, () => size)).toThrow('observe-New.swift.o is missing');
     // Swift Build: the target linked into one object, which wins.
     writeFileSync(resolve(bin, 'ExactLaunchParts.o'), '');
-    expect(launchPartsObjects(bin)).toEqual([resolve(bin, 'ExactLaunchParts.o')]);
+    expect(launchPartsObjects(bin, sources)).toEqual([resolve(bin, 'ExactLaunchParts.o')]);
   } finally { rmSync(bin, { recursive: true, force: true }); }
   expect(() => auditLaunchParts([object, `${object}.missing`], modules, () => size)).toThrow(`${object}.missing is missing`);
 });
