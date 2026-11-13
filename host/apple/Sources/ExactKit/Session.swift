@@ -781,6 +781,7 @@ public final class ExactSession {
         }
         presenter.selectOptions = { [unowned self] id in runtime.selectOptions(id) }
         presenter.controls.radioGroup = { [unowned self] id in runtime.radioGroup(id) }
+        presenter.controls.roleKeys = { [unowned self] id, key, focused in runtime.roleKeys(id, key: key, focused: focused) }
         presenter.buttonFace = { [unowned self] id in runtime.buttonFace(id) }
         presenter.onIntrinsic = { [unowned self] sizes in whenIdle(bound: true) { [unowned self] in applyUnlessEmpty(runtime.intrinsics(sizes)) } }
         // @ref LLP 1075.003 §3.5, Q3 (c) — what a bar covers reaches layout as an intrinsic

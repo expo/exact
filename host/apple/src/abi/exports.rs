@@ -1266,6 +1266,13 @@ macro_rules! host {
             $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.radio_group(view), |n| n)
         }
 
+        /// A painted group's keys and Tab stop for a member (LLP 1166.000
+        /// D2), the key's name in the input buffer, JSON; returns its length.
+        #[no_mangle]
+        pub extern "C" fn exact_role_keys(rt: u32, view: u32, focused: u32, len: usize) -> u32 {
+            $crate::abi::with_runtime(&EXACT_RUNTIMES, rt, false, |b, _| b.role_keys(view, focused, len), |n| n)
+        }
+
         /// A navigation root's tabs by the kernel's rule (LLP 1115.001
         /// D11), JSON; returns its length.
         #[no_mangle]

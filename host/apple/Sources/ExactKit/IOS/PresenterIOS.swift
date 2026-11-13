@@ -440,11 +440,11 @@ package final class Presenter {
         while let next = top?.presentedViewController, !next.isBeingDismissed { top = next }
         let scope: UIView? = top === window.rootViewController ? window : top?.presentationController?.containerView ?? top?.view
         guard let scope else { return false }
-        var listed: [NodeView] = []
+        var listed: [NodeView] = [], start: Int? // where a focused member of a painted group that is no stop stands among them
         func walk(_ view: UIView) {
             if view.isHidden || (view as? NodeView)?.props["inert"] == "true" { return }
             if let node = view as? NodeView, views[node.id] === node, Self.tabbable(node),
-               !fields || node.field != nil || node.textArea != nil { listed.append(node) }
+               !fields || node.field != nil || node.textArea != nil { listed.append(node) } else if view.isFirstResponder, (view as? NodeView)?.paintedGroup != nil { start = listed.count }
             view.subviews.forEach(walk)
         }
         walk(scope)
@@ -457,7 +457,8 @@ package final class Presenter {
         let focused = order.firstIndex { $0.isFirstResponder || $0.field?.isFirstResponder == true || $0.textArea?.isFirstResponder == true }
         if fields, focused.map({ backward ? $0 == 0 : $0 == order.count - 1 }) ?? true { return false }
         let next = focused.map { (backward ? $0 - 1 + order.count : $0 + 1) % order.count } ?? (backward ? order.count - 1 : 0)
-        let target = order[next]
+        // From a focused member of a painted group that is no stop (`tabindex=-1`, LLP 1166.000 D1), the stop after or before its place.
+        let target = focused == nil ? start.map { backward ? ($0 > 0 ? listed[$0 - 1] : order[order.count - 1]) : ($0 < listed.count ? listed[$0] : order[0]) } ?? order[next] : order[next]
         let responder: UIView = target.headerField ?? target.textArea ?? target.field ?? target
         chooseFocus(target)
         let became = responder.becomeFirstResponder()
@@ -470,8 +471,8 @@ package final class Presenter {
     private static func tabbable(_ v: NodeView) -> Bool {
         if v.formDisabled || v.inert || v.cssVisibilityHidden || v.bounds.width == 0 || v.bounds.height == 0 { return false }
         if let index = v.explicitTabIndex, index < 0 { return false }
-        // A radio group is one stop (x2apps survey #2), an authored one too.
-        return v.ariaRadioGroup != nil ? v.ariaRadioTabStop : v.field != nil || v.textArea != nil || v.handlers.contains("press") || v.canBecomeFirstResponder && (!v.isRadio || v.radioTabStop)
+        // A radio group is one stop (x2apps survey #2), as is a painted radio group or tablist (LLP 1166.000).
+        return v.roleTabStop ?? (v.field != nil || v.textArea != nil || v.handlers.contains("press") || v.canBecomeFirstResponder && (!v.isRadio || v.radioTabStop))
     }
 
     lazy var popoverEvents = PopoverEvents(self)

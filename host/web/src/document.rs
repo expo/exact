@@ -1292,9 +1292,7 @@ fn escape(out: &mut String, text: &str, attribute: bool) -> Result<(), &'static 
     Ok(())
 }
 
-// Resolve the first concrete ARIA role before supplying item semantics; navigation.js has the same vocabulary.
-// https://www.w3.org/TR/wai-aria-1.3/#host_general_role
-// https://www.w3.org/TR/dpub-aria-1.1/ and https://www.w3.org/TR/graphics-aria-1.0/
+// Resolve the first concrete ARIA role before supplying item semantics.
 fn role_is(value: &str, wanted: &str) -> bool {
     let mut words = value
         .split(['\t', '\n', '\x0c', '\r', ' '])
@@ -1308,8 +1306,11 @@ fn role_is(value: &str, wanted: &str) -> bool {
     let Some(next) = words.next() else {
         return false;
     };
-    const ROLES: &str = "alert alertdialog application article banner blockquote button caption cell checkbox code columnheader combobox comment complementary contentinfo definition deletion dialog directory doc-abstract doc-acknowledgments doc-afterword doc-appendix doc-backlink doc-biblioentry doc-bibliography doc-biblioref doc-chapter doc-colophon doc-conclusion doc-cover doc-credit doc-credits doc-dedication doc-endnote doc-endnotes doc-epigraph doc-epilogue doc-errata doc-example doc-footnote doc-foreword doc-glossary doc-glossref doc-index doc-introduction doc-noteref doc-notice doc-pagebreak doc-pagefooter doc-pageheader doc-pagelist doc-part doc-preface doc-prologue doc-pullquote doc-qna doc-subtitle doc-tip doc-toc document emphasis feed figure form generic graphics-document graphics-object graphics-symbol grid gridcell group heading image img insertion link list listbox listitem log main mark marquee math menu menubar menuitem menuitemcheckbox menuitemradio meter navigation none note option paragraph presentation progressbar radio radiogroup region row rowgroup rowheader scrollbar search searchbox sectionfooter sectionheader separator slider spinbutton status strong subscript suggestion superscript switch tab table tablist tabpanel term textbox time timer toolbar tooltip tree treegrid treeitem";
-    let known = |word: &str| ROLES.split(' ').any(|r| r.eq_ignore_ascii_case(word));
+    let known = |word: &str| {
+        exact_kernel::ARIA_ROLES
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(word))
+    };
     !known(first)
         && std::iter::once(next)
             .chain(words)

@@ -101,6 +101,12 @@ export const sections: NavSection[] = [
         description: 'A transcript open at its newest message, over Messages\' composer.',
       },
       {
+        route: 'recipeCombobox',
+        path: '/recipes/combobox',
+        source: 'recipes/combobox.md',
+        description: 'Filter options while a field keeps focus and names its active option.',
+      },
+      {
         route: 'recipeContentDesign',
         path: '/recipes/content-design',
         source: 'recipes/content-design.md',

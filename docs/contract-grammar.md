@@ -1293,6 +1293,9 @@ plan; a host carries none.
 The compiler's built-in tag vocabulary is grouped here by use. It is not an
 HTML parser: arbitrary HTML names outside this table are not implicitly accepted.
 Several tags share a kernel node type with different fixed properties.
+`radiogroup`, `tablist` and `menu` have group keys; other composite widget roles
+warn with `lower-role-keys` unless they handle keys, another element names their
+literal `id` with `aria-controls`, or a toolbar has `toolbarPlacement`.
 
 | Family | Names |
 | --- | --- |
@@ -1312,6 +1315,7 @@ bake checks it against `app.json`'s `modules` list or a dependency's `exact.json
 element's own props, pass to the module as one object. A package view accepts only
 its declared props and events beyond standard box attributes and common module
 events; an undeclared attribute is `lower-native-attr`.
+A literal `role` must name a concrete ARIA role, or it is refused.
 A known attribute binds to the module's box, and the box takes only layout,
 box and paint rows, handlers, `testId`, `id`, `class`, `data-*`, `role`, ARIA,
 `disabled` and `inert`; any other known name (`color`, `value`, `command`, `href`)
@@ -2590,6 +2594,15 @@ macOS, iOS and iPadOS with a hardware keyboard, Linux):
   Tab moves the focus, arrows move the caret; on the web arrows, Space and
   the page keys also scroll the page or the focus's scroller (a native
   scroller does not scroll by key, so there is nothing there to prevent).
+  Where Exact paints the group (on the web, Linux, Windows and Android's
+  reader always; on the Mac and iOS where no segmented control, sidebar,
+  toolbar or tab bar stands in for it), a
+  `radiogroup` of `button role="radio"` has one Tab stop and arrows move and
+  press the next eligible radio; a `tablist` has one stop and arrows move
+  without pressing (Left/Right, mirrored in RTL, or Up/Down with
+  `aria-orientation="vertical"`), with Home/End reaching its ends. A `role="menu"`
+  painted in the page moves by Up/Down and Home/End among its buttons, links
+  and `menuitem`s without pressing, and each item stays a Tab stop.
 - **Claiming a key.** An action run by a `key` event that calls the host
   command `preventDefault()` is the handler's `event.preventDefault()`: that
   default does not happen. Ancestors' handlers still hear the key, as they do

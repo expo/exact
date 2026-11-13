@@ -449,6 +449,39 @@ pub fn option_label(text: &str) -> String {
     text.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Where an arrow, Home or End at a member of a painted group goes
+/// (`Kernel::role_step_order`, LLP 1166.000 D2): to the first of `order` the
+/// host can focus; with none, the key is consumed where it is. For a host
+/// the kernel cannot ask while it decides: the Apple host's views live on
+/// the main thread, its runtime on another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleStep {
+    /// The group whose key it is.
+    pub group: ViewId,
+    /// The group's role, a row of the `roles` table.
+    pub role: &'static str,
+    /// The eligible members the key moves to, in the order they are tried.
+    pub order: Vec<ViewId>,
+    /// Whether a move presses the member it reaches.
+    pub press: bool,
+}
+
+/// A painted group's one Tab stop (`Kernel::role_tab_order`, LLP 1166.000
+/// D2). A menu has no stop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoleStop {
+    /// The member's group.
+    pub group: ViewId,
+    /// The group's role, a row of the `roles` table.
+    pub role: &'static str,
+    /// A member has the focus: the first of `order` is the stop whatever
+    /// the host can focus, and none when that member's `tabindex` is negative.
+    pub held: bool,
+    /// The members that can be the stop, in the order they are tried: the
+    /// first the host can focus is the stop.
+    pub order: Vec<ViewId>,
+}
+
 impl Kernel {
     /// A select's options in order, from its children (LLP 1069.001 D2);
     /// empty for any other node.
@@ -547,6 +580,265 @@ impl Kernel {
                 self.node(*id)
                     .is_some_and(|r| r.props.bool(PropId::Disabled) != Some(true))
             })
+    }
+
+    fn role_member(&self, view: ViewId, row: &crate::RoleKeys) -> bool {
+        let Some(node) = self.node(view) else {
+            return false;
+        };
+        // A native radio's role is the lowering's; its group is HTML's, by
+        // `name` (`radio_group`), and its keys `radio_step`'s.
+        if ControlKind::of(node.node_type, node.props) == Some(ControlKind::Radio) {
+            return false;
+        }
+        let role = node.props.str(PropId::AccessibilityRole).unwrap_or("");
+        // A member tag names the element the web makes of the node
+        // (`host/web/src/element.rs`, `element`): a pressable or an inline
+        // run with an `href` is an `a`; any other pressable, and a native
+        // button, a `button`.
+        let link = node.props.str(PropId::Href).is_some()
+            && (node.node_type == NodeType::Pressable || node.is_inline_run());
+        row.member_roles.iter().any(|member| {
+            member
+                .strip_suffix('*')
+                .map_or(role == *member, |prefix| role.starts_with(prefix))
+        }) || row.member_tags.iter().any(|tag| match *tag {
+            "button" => {
+                !link
+                    && (node.node_type == NodeType::Pressable
+                        && node
+                            .props
+                            .str(PropId::SemanticTag)
+                            .is_none_or(|t| t == "button")
+                        || ControlKind::of(node.node_type, node.props) == Some(ControlKind::Button))
+            }
+            "a[href]" => link,
+            _ => false,
+        })
+    }
+
+    fn role_group(
+        &self,
+        view: ViewId,
+        children: bool,
+    ) -> Option<(ViewId, &'static crate::RoleKeys)> {
+        let member = self.node(view)?;
+        let mut at = member.parent;
+        if children {
+            let parent = at.and_then(|id| self.node(id))?;
+            return crate::ROLE_KEYS
+                .iter()
+                .find(|r| {
+                    !r.descendants
+                        && parent.props.str(PropId::AccessibilityRole) == Some(r.role)
+                        && self.role_member(view, r)
+                })
+                .map(|row| (parent.id, row));
+        }
+        if crate::ROLE_KEYS
+            .iter()
+            .any(|r| r.descendants && member.props.str(PropId::AccessibilityRole) == Some(r.role))
+        {
+            return None;
+        }
+        while let Some(id) = at {
+            let node = self.node(id)?;
+            if let Some(row) = crate::ROLE_KEYS.iter().find(|r| {
+                r.descendants && node.props.str(PropId::AccessibilityRole) == Some(r.role)
+            }) {
+                return self.role_member(view, row).then_some((id, row));
+            }
+            at = node.parent;
+        }
+        None
+    }
+
+    fn role_members(&self, group: ViewId, row: &crate::RoleKeys) -> Vec<ViewId> {
+        let Some(node) = self.node(group) else {
+            return Vec::new();
+        };
+        let candidates = if row.descendants {
+            self.preorder_where(&node.children(), |_, _| true)
+        } else {
+            node.children()
+        };
+        candidates
+            .into_iter()
+            .filter(|id| {
+                self.role_group(*id, !row.descendants)
+                    .is_some_and(|(owner, _)| owner == group)
+            })
+            .collect()
+    }
+
+    /// Eligibility from what the kernel holds (LLP 1166.000 D1); the host's
+    /// "can focus" is applied to the orders below.
+    fn role_eligible(&self, view: ViewId) -> bool {
+        let Some(node) = self.node(view) else {
+            return false;
+        };
+        if node.props.bool(PropId::Disabled) == Some(true)
+            || node.props.bool(PropId::AccessibilityDisabled) == Some(true)
+            || node.computed_row(StyleId::Visibility, |s| s.visibility)
+                != crate::Visibility::Visible
+        {
+            return false;
+        }
+        let mut at = Some(view);
+        while let Some(id) = at {
+            let Some(node) = self.node(id) else {
+                return false;
+            };
+            if node.style.display == crate::Display::None
+                || node.props.bool(PropId::Inert) == Some(true)
+            {
+                return false;
+            }
+            at = node.parent;
+        }
+        true
+    }
+
+    /// A painted group's key destination and whether to press it (LLP 1166.000 D2).
+    /// `axis` overrides orientation for a host's sidebar. Direction is the group's
+    /// computed CSS direction. `None` means the view or key is not the group's;
+    /// a destination equal to `view` consumes the key without a press.
+    pub fn role_step(
+        &self,
+        view: ViewId,
+        key: &str,
+        axis: Option<crate::RoleAxis>,
+        mut can_focus: impl FnMut(ViewId) -> bool,
+    ) -> Option<(ViewId, bool)> {
+        let step = self.role_step_order(view, key, axis)?;
+        let to = step
+            .order
+            .into_iter()
+            .find(|id| can_focus(*id))
+            .unwrap_or(view);
+        Some((to, step.press && to != view))
+    }
+
+    /// `role_step` for a host that applies its "can focus" itself: the
+    /// eligible members the key moves to, in the order they are tried.
+    pub fn role_step_order(
+        &self,
+        view: ViewId,
+        key: &str,
+        axis: Option<crate::RoleAxis>,
+    ) -> Option<RoleStep> {
+        use crate::{Direction, RoleAxis};
+        let (group, row, forward) = [true, false].into_iter().find_map(|children| {
+            let (group, row) = self.role_group(view, children)?;
+            let node = self.node(group)?;
+            let vertical = row.orientation
+                && node.props.str(PropId::AccessibilityOrientation) == Some("vertical");
+            let axis = axis.unwrap_or(if vertical {
+                RoleAxis::Vertical
+            } else {
+                row.axis
+            });
+            let rtl = node.computed_row(StyleId::Direction, |s| s.direction) == Direction::Rtl;
+            let forward = match key {
+                "ArrowDown" if axis != RoleAxis::Horizontal => Some(true),
+                "ArrowUp" if axis != RoleAxis::Horizontal => Some(false),
+                "ArrowRight" if axis != RoleAxis::Vertical => Some(!rtl),
+                "ArrowLeft" if axis != RoleAxis::Vertical => Some(rtl),
+                "Home" | "End" if row.ends => None,
+                _ => return None,
+            };
+            Some((group, row, forward))
+        })?;
+        let members = self.role_members(group, row);
+        let at = members.iter().position(|id| *id == view)?;
+        let (before, after) = (&members[..at], &members[at + 1..]);
+        // Past one end, around from the other when the row wraps.
+        let around = |part: &[ViewId]| if row.wraps { part.to_vec() } else { Vec::new() };
+        // Home and End go to the first and last eligible member (D1): from an
+        // eligible member, one before or after it; from an ineligible one, any.
+        let ends = (!self.role_eligible(view)).then(|| [before, after].concat());
+        let order: Vec<ViewId> = match forward {
+            Some(true) => after.iter().copied().chain(around(before)).collect(),
+            Some(false) => before
+                .iter()
+                .rev()
+                .copied()
+                .chain(around(after).into_iter().rev())
+                .collect(),
+            None if key == "Home" => ends.unwrap_or_else(|| before.to_vec()),
+            None => ends
+                .unwrap_or_else(|| after.to_vec())
+                .into_iter()
+                .rev()
+                .collect(),
+        };
+        Some(RoleStep {
+            group,
+            role: row.role,
+            order: order
+                .into_iter()
+                .filter(|id| self.role_eligible(*id))
+                .collect(),
+            press: row.press && forward.is_some(),
+        })
+    }
+
+    /// Whether a painted member is its group's one Tab stop (LLP 1166.000 D2).
+    /// `None` leaves the Tab rule to the host: for a nonmember, and for a
+    /// member of a group that sets no stop (a menu).
+    /// A focused member suppresses the others even when it is ineligible or
+    /// has an authored negative `tabindex`, which never becomes a stop.
+    pub fn role_tab_stop(
+        &self,
+        view: ViewId,
+        focused: Option<ViewId>,
+        mut can_focus: impl FnMut(ViewId) -> bool,
+    ) -> Option<bool> {
+        let stop = self.role_tab_order(view, focused)?;
+        let stop = if stop.held {
+            stop.order.first().copied()
+        } else {
+            stop.order.into_iter().find(|id| can_focus(*id))
+        };
+        Some(stop == Some(view))
+    }
+
+    /// `role_tab_stop` for a host that applies its "can focus" itself:
+    /// `view`'s group and the members that can be its stop, in the order
+    /// they are tried.
+    pub fn role_tab_order(&self, view: ViewId, focused: Option<ViewId>) -> Option<RoleStop> {
+        let (group, row) = self
+            .role_group(view, true)
+            .or_else(|| self.role_group(view, false))?;
+        let stop = |held, order| RoleStop {
+            group,
+            role: row.role,
+            held,
+            order,
+        };
+        // A row with no entry (a menu) sets no stop: its members keep the host's rule.
+        let entry = row.tab_entry?;
+        let allowed = |id| {
+            self.node(id).is_some_and(|n| {
+                n.props
+                    .get(PropId::TabIndex)
+                    .and_then(|v| v.as_int())
+                    .is_none_or(|i| i >= 0)
+            })
+        };
+        let all = self.role_members(group, row);
+        if let Some(at) = focused.filter(|at| all.contains(at)) {
+            return Some(stop(true, allowed(at).then_some(at).into_iter().collect()));
+        }
+        // The named member first, then the rest in tree order.
+        let (named, rest): (Vec<_>, Vec<_>) = all
+            .into_iter()
+            .filter(|id| allowed(*id) && self.role_eligible(*id))
+            .partition(|id| {
+                self.node(*id)
+                    .is_some_and(|n| n.props.bool(entry) == Some(true))
+            });
+        Some(stop(false, named.into_iter().chain(rest).collect()))
     }
 
     /// A radio's value, HTML's: its `value`, or `on` when it has none.

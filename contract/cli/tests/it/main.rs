@@ -294,6 +294,7 @@ mod voip_calls;
 mod vscode_grammar;
 mod wakelock;
 mod warnings;
+mod warnings_role_keys;
 mod warnings_screens;
 mod warnings_time;
 mod when;

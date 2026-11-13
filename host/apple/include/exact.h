@@ -1010,6 +1010,19 @@ uint32_t exact_select_options(ExactRuntime rt, uint32_t view);
  * {"group":[view...],"next":view|null,"previous":view|null} — the radios of its
  * name in tree order, and the enabled radio ArrowDown/ArrowUp moves the check to. */
 uint32_t exact_radio_group(ExactRuntime rt, uint32_t view);
+/* A member of a painted radiogroup, tablist or menu (LLP 1166.000 D2), JSON in the
+ * output buffer, not a batch: {"stop":null|{"group":view,"role":name,"held":bool,
+ * "order":[view...]},"step":null|{"group":view,"role":name,"to":[view...],"press":bool}},
+ * or null when both parts are. The key (DOM's `key`) is the input buffer's first
+ * `len` bytes, none when 0; `focused` is the view that has the focus, or 0. Each
+ * list is in the order the kernel tries it. `stop`: the group's Tab stop is the
+ * first of `order` the host can focus (while a member has the focus, `held`: the
+ * first, whatever it can); null for a group that sets none (a menu, whose members
+ * keep the host's own Tab rule) and for a view that is no member. `step`: the key
+ * moves to the first of `to` the host can focus, `press` saying whether to press
+ * it; with none, the key is consumed where it is; null for no key or one that is
+ * not the group's. */
+uint32_t exact_role_keys(ExactRuntime rt, uint32_t view, uint32_t focused, size_t len);
 /* A navigation root's tabs by the kernel's rule (LLP 1115.001 D11), JSON in the
  * output buffer, not a batch: {"tablist":view,"tabs":[view...],"panels":[view...],
  * "unsaid":bool,"covered":bool}, the tabs that name a panel and those panels in tab

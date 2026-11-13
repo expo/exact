@@ -1492,5 +1492,7 @@ fn block_axis_records_distinguish_size_maximum_and_route_fitting() {
     }
 }
 
+#[path = "abi_role_keys_tests.rs"]
+mod role_keys;
 #[path = "abi_roles_tests.rs"]
 mod roles;

@@ -119,6 +119,9 @@ function collectWeb(nodes, snapshot, limit) {
       // An aria-pressed toggle's state (Chrome's `pressed`), as `checked` is kept.
       const pressed = prop(n, 'pressed'); if (pressed != null) states.pressed = pressed === 'mixed' ? 'mixed' : pressed === true || pressed === 'true';
       const level = prop(n, 'level'); if (level != null) states.level = Number(level);
+      // The option a focused field names as active (LLP 1166.001 D2), as the view Chrome resolved it to.
+      const active = n.properties?.find(p => p.name === 'activedescendant')?.value?.relatedNodes?.[0]?.backendDOMNodeId;
+      if (active != null && dom.has(active)) { const view = stamp(dom.get(active)); if (view != null) states.activedescendant = view; }
       const el = d !== undefined && isElement(d) ? attrs(d) : {};
       const tag = d !== undefined ? str(doc.nodes.nodeName[d]) : null;
       if (tag === 'INPUT' && el.type === 'password') states.protected = true;
@@ -260,9 +263,10 @@ export function axFindings(reply) {
     const h = hiddenBy(e);
     if (h) flagged.set(e.i, h.id);
     if (h && flagged.get(e.parent) !== h.id) out.push({ kind: 'exposed-hidden', i: e.i, id: e.id, testId: e.testId, detail: `${e.role} "${e.name}" under #${h.id} (${h.why})`, under: h.id });
-    // UIKit's rule is the host's to apply (it knows the modal view's siblings); elsewhere, outside the modal element.
+    // UIKit's rule is the host's to apply (it knows the modal view's siblings); elsewhere, outside the modal element. The
+    // modal's own ancestors hold it and stay exposed while it is open (Chrome keeps a modal dialog's `main`): not outside it.
     const leaks = ax.source === 'uikit' ? e.outsideModal === true : ax.modal?.present && ax.modal.element != null && e.via !== 'none'
-      && !inside(e, ax.modal.element) && !(ax.source === 'appkit' && ax.modal.presented?.some(i => inside(e, i)));
+      && !inside(e, ax.modal.element) && !inside(byIndex.get(ax.modal.element), e.i) && !(ax.source === 'appkit' && ax.modal.presented?.some(i => inside(e, i)));
     if (leaks) out.push({ kind: 'outside-modal', i: e.i, id: e.id, testId: e.testId, detail: `${e.role} "${e.name}"`, basis: ax.source === 'uikit' ? 'documented-rule' : ax.source === 'appkit' ? 'sheet' : 'platform' });
   }
   return out;

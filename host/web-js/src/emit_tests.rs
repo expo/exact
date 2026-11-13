@@ -1388,3 +1388,17 @@ fn delivery_version_fields_are_emitted_for_baked_and_unbaked_plans() {
         assert!(js.contains(r#"["version","buildNumber"]"#), "{js}");
     }
 }
+
+#[test]
+fn an_active_descendant_uses_the_live_hosts_attribute_static_and_bound() {
+    let plan = contract::compile(
+        "component App\n  state active = \"option-a\"\n  view\n    column\n      input aria-activedescendant=\"option-b\"\n      input aria-activedescendant=active\n",
+    )
+    .unwrap();
+    let js = crate::emit::emit(&plan, false, false).unwrap().js;
+    assert!(
+        js.contains("\"aria-activedescendant\":\"option-b\""),
+        "{js}"
+    );
+    assert!(js.matches("\"aria-activedescendant\"").count() >= 2, "{js}");
+}

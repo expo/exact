@@ -453,7 +453,7 @@ package final class NodeView: UIView, UITextViewDelegate, UITextFieldDelegate, U
         // (the platformer's diary, R8).
         let name = presses.first?.key.map(NodeView.keyName)
         let held = presses.first?.key.map { KeyCodes.held($0.modifierFlags) } ?? ""
-        if !formDisabled, isFirstResponder, let key = presses.first?.key, let name, hardwareKey(key, down: true) || presenter?.controls.radioKey(self, name, held: held) == true { return }
+        if !formDisabled, isFirstResponder, let key = presses.first?.key, let name, hardwareKey(key, down: true) || presenter?.controls.roleKey(self, name, held: held) == true || presenter?.controls.radioKey(self, name, held: held) == true { return }
         if inputCanvas?.canvasInput?.presses(presses, down: true, source: self) == true { return }
         if let name, activateKey(name) { return }
         super.pressesBegan(presses, with: event)

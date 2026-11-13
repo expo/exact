@@ -209,15 +209,15 @@ Ports    web: --port/EXACT_PORT, else a named store’s port (20000-47999), else
     ],
     internal: ['--app <name>'],
     body: `web launches at 390x844 and 1280x900, ios at the simulator's own size with UIKit's bars (an edit to only
-app.contract or app.ts runs its new plan, no native rebuild), each on a fresh scratch store, and runs check
-light and dark on the screen it opens to. The tests are app.test.contract's, then each other *.test.contract's
-beside it, as test runs them. Each test's last screen is checked the same way in the test's own session (web: at
-both widths; ios runs the tests with UIKit's bars). Then the app relaunches once, on real time, on the store a
-passing test left, and says whether its first screen shows what that test stored. One short report: the build if
-it built, the compiler's warnings (as contract build says them, built or not), the tests, check's findings (each
-once, naming the screens it was on), the relaunch, then "verify: clean" or "verify: N problems". A clean verify
-is done. One screenshot of each screen goes to .exact/verify/ (the first screen's per width and scheme, each
-test's named by the test, the relaunch's): look at them when the features work.
+app.contract or app.ts runs its new plan, no native rebuild), each on a fresh scratch store, and runs check light
+and dark on the screen it opens to. The tests are app.test.contract's, then each other *.test.contract's beside it,
+as test runs them. Each test's last screen is checked the same way in the test's own session (web: at both widths;
+ios runs the tests with UIKit's bars). Then the app relaunches once, on real time, on the store a passing test left,
+and says whether its first screen shows what that test stored. One short report: the build if it built, the
+compiler's warnings (as contract build says them, built or not), the tests, check's findings (each once, naming the
+screens it was on), tree --ax's (each screen's accessibility tree, read once), the relaunch, then "verify: clean" or
+"verify: N problems". A clean verify is done. One screenshot of each screen goes to .exact/verify/ (the first
+screen's per width and scheme, each test's named by the test, the relaunch's): look at them when the features work.
 Large    each of those screens again at the largest text size (ios: the simulator's, put back
          after; web: a 53 px root, iOS's body there, at 390x844, and the tests run again there
          to read up to 12 screens they pass through). Reports spills past an edge, squeezing and
@@ -225,11 +225,11 @@ Large    each of those screens again at the largest text size (ios: the simulato
          projects into its navigation bar. A smaller or fixed font is the tell, as is a line-clamp
          in a list's row or hyphens="auto" on several words (a UILabel hyphenates only a word longer
          than its line; grouped list rows hyphenate as cells do). Counted ("3 at the largest text size"), never failing.
-Native   windows: headless at app.json's window size, then the desktop's window (windows-window.png); android: the APK, light and dark. Neither checks, reads the largest text or scrolls yet.
+Native   windows: headless at app.json's window size, then the desktop's window (windows-window.png); android: the APK, light and dark. Neither checks, reads the accessibility tree or the largest text, or scrolls yet.
 Scroll   ios: ~15 s of real touches on a long first-screen list, once per build (host/apple/feel): "like UIKit", or
          a counted finding per metric the app can fix; Exact's own one uncounted line; load > cores: physics only.
 Runs     to completion: exit 1 when the build, a test, a launch or the relaunch fails; the
-         findings (check's, the relaunch's, the largest text size's, scrolling's) and the compiler's
+         findings (check's, tree --ax's, the relaunch's, the largest text size's, scrolling's) and the compiler's
          warnings are counted, never fail it but under --strict. A screen no test ends on is not checked: end a test there.
          Its first line says about how long it takes (its last run's time): wait that once.
 Server   an app with its own (server.ts, the rest pattern's): verify runs it where app.ts calls

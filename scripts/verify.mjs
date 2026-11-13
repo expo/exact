@@ -3,9 +3,9 @@
 // drives, check and screenshots were three to five turns. It builds when the build is stale (web: the dist's
 // record against its sources, as the driver checks it; iOS: agent-build.mjs `buildFirst`, the plan fast path
 // included), runs the app's tests (app.test.contract and each other `*.test.contract` beside it, app.mjs
-// `authoredTests`; agent-test.mjs `runTests`), launches the app on a fresh scratch store at a
-// phone width and a desktop width (iOS: the simulator's own size, with UIKit's bars), and runs `check` light and
-// dark there. Each test's end screen is checked the same way inside the test's own session (the web at both
+// `authoredTests`; agent-test.mjs `runTests`), launches the app on a fresh scratch store at a phone width and a desktop
+// width (iOS: the simulator's own size, with UIKit's bars), and runs `check` light and dark there, having read the screen's
+// accessibility tree once (verify-ax.mjs). Each test's end screen is checked the same way inside the test's own session (the web at both
 // widths, resized to each), so its secondary screens and populated states are in the report. Then the app
 // relaunches once on the store a passing test left, on real time (at most REAL_MS) and under the zone, locale and seed
 // the test launched with and the date it had reached (its launch date plus its `clock` steps, as a `reload` relaunches,
@@ -19,7 +19,7 @@
 // the host journaled during the run (`logs`: 'swipeContent … is refused: …') is shown first in the report (LLP 1116.010 D5). One capture of each screen is kept in
 // .exact/verify/ for milestones (four of the first screen: each width and scheme). It prints one short report
 // ending "verify: clean" or "verify: N problems" (`--json`: one object). Exit 1 when the build, a test, a launch
-// or the relaunch fails; check's findings, the relaunch's, those at the largest text size and the compiler's warnings
+// or the relaunch fails; check's findings, the accessibility tree's, the relaunch's, those at the largest text size and the compiler's warnings
 // (`contract build`'s, whether or not this run built) are counted in the last line but fail it only under `--strict`, since check reads the screen
 // by heuristics and some of either only advise; a warning that is information (`tamber-unreachable`) is said, not
 // counted. The web's tests and its two launches run at once; a simulator takes one drive at a time, and runs the
@@ -50,7 +50,7 @@ import { guardFlags } from './help.mjs';
 import { holderOf, takePort } from './port-lock.mjs';
 import { backendOriginSelection, privateNetwork } from '../js/bake/src/typescript.mjs';
 import { contractVerify, semanticsSummary } from './verify-semantics.mjs';
-import { byRule, groups, ruleOf, largeRemedy, iosNavigationContent } from './verify-findings.mjs';
+import { axGroup, byRule, FIRST, groups, placesOf, RELAUNCH, ruleOf, largeRemedy, iosNavigationContent } from './verify-findings.mjs';
 import { cargoDiagnosticFilter } from './cargo-check.mjs';
 export { byRule, groups, ruleOf, largeRemedy };
 
@@ -61,7 +61,6 @@ const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 export const WEB_SIZES = [[390, 844], [1280, 900]];
 const SHOWN = 6, WARNINGS = 4; // the findings and build warnings shown; the count says the rest
 const REAL_MS = 4000, REAL_STEP = 250; // the relaunch's bound on real time for its first loads, in steps
-const FIRST = 'first screen', RELAUNCH = 'relaunch';
 // How long a run takes, said when it starts so a builder waits once rather than polling (LLP 1116.021 D3): the app's
 // last run on that host, else these (a run that must build first takes that build's time too).
 const ESTIMATE = { web: 30_000, ios: 60_000, windows: 60_000, android: 120_000 };
@@ -669,9 +668,10 @@ async function reloadEnd(s, t, persisted = []) {
 }
 
 /** `check both` on the session at each of `sizes` (null: as it is; else resized to it first), a run per size and scheme
- * tagged with its `screen`; a resource that failed is a line of each. `shot(viewport, scheme)` names a capture to keep. */
-async function checkHere(s, { screen, sizes = [null], shot, state }) {
-  const { checkOp } = await import('./agent-check.mjs');
+ * tagged with its `screen`; a resource that failed is a line of each. `shot(viewport, scheme)` names a capture to keep.
+ * With `ax`, the screen's accessibility tree is read once first, as it stands, and kept as the runs' `ax` (LLP 1166.002 D1). */
+async function checkHere(s, { screen, sizes = [null], shot, state, ax = true }) {
+  const [{ checkOp }, { axHere }] = await Promise.all([import('./agent-check.mjs'), import('./verify-ax.mjs')]);
   const failed = Object.entries(state?.failed ?? {}).map(([name, why]) => `  failed   resource ${name}: ${why}; the screen shows its placeholder or last value`);
   // The Windows host has no `check` observation yet: the screen's capture alone, `unchecked`, its failed resources still said.
   if (s.host === 'windows') {
@@ -681,6 +681,7 @@ async function checkHere(s, { screen, sizes = [null], shot, state }) {
   }
   const runs = [];
   if (s.host === 'android') return (await import('./agent-android.mjs')).androidCaptures(s, { screen, shot, failed });
+  const read = ax ? await axHere(s, screen, ACCEPT) : null;
   for (const size of sizes) {
     if (size) { await s.resize(...size); await s.clock('settle'); }
     const r = await checkOp(s, ['both'], { shots: shot, accept: ACCEPT });
@@ -691,12 +692,11 @@ async function checkHere(s, { screen, sizes = [null], shot, state }) {
       return { screen, size: [vp.w, vp.h], scheme: run.scheme, asked: run.asked, ...(kept ? { shot: kept } : {}), findings: run.findings ?? [], accepted: run.accepted ?? [], lines: [...failed, ...(all ?? g.lines)], hidden: all ? 0 : g.hidden, advice: g.advice };
     }));
   }
-  return runs;
+  return Object.defineProperty(runs, 'ax', { value: read });
 }
 
-
 /** What verify android does not do yet (agent-android.mjs `androidCaptures`), said in its report. */
-const ANDROID = 'not on Android yet: check\'s findings (each screen is captured unjudged, light and dark: look at them), the largest text size, the scrolling probe (iOS\'s), a test end\'s reload (the web\'s)';
+const ANDROID = 'not on Android yet: check\'s findings (each screen is captured unjudged, light and dark: look at them), a read of the accessibility tree (tree --ax), the largest text size, the scrolling probe (iOS\'s), a test end\'s reload (the web\'s)';
 
 // LLP 1116.019 D2: each screen verify visits is read again at the largest text size, and what spills is reported, counted
 // and never failing the run (LLP 1116.020 D4: uncounted, half of the builders who saw them stopped at "verify: clean"): the
@@ -889,7 +889,7 @@ export function tourNews(visited, toured) {
 /** One launch at `size` (null: the device's own) on a fresh scratch store: the app's data landed and its
  * transitions ended, then `check both`, its captures kept in `shots`. A run per scheme, `{ screen, size, scheme,
  * asked, shot, findings, lines, hidden }` (`lines`: check's own text for it, with a line for a resource that
- * failed), and at the phone's width what it shows (`seen`), for the relaunch. */
+ * failed), and at the phone's width what it shows (`seen`), for the relaunch, and its accessibility tree (`ax`). */
 async function checkAt(host, app, size, store, shots) {
   const [{ open }, { driveStore, removeBrowserProfile }] = await Promise.all([import('./agent.mjs'), import('./agent-launch.mjs')]);
   const fresh = { EXACT_AGENT_STORAGE_FRESH: '1' };
@@ -899,7 +899,7 @@ async function checkAt(host, app, size, store, shots) {
     await s.clock('settle');
     const state = await s.state().catch(() => ({}));
     const facts = !size || size === WEB_SIZES[0] ? await seen(s, state) : null;
-    const runs = await checkHere(s, { screen: FIRST, shot: (vp, scheme) => resolve(shots, `${host}-${vp.w}x${vp.h}-${scheme}.png`), state });
+    const runs = await checkHere(s, { screen: FIRST, shot: (vp, scheme) => resolve(shots, `${host}-${vp.w}x${vp.h}-${scheme}.png`), state, ax: !size || size === WEB_SIZES[0] });
     if (facts) Object.defineProperty(runs, 'seen', { value: facts });
     Object.defineProperty(runs, 'refusals', { value: await refusalsIn(s) });
     if (host === 'ios' || size === WEB_SIZES[0]) Object.defineProperty(runs, 'large', { value: await largestText(s, FIRST) });
@@ -1101,7 +1101,6 @@ async function relaunch(host, app, test, fresh, shots) {
   }
 }
 
-
 const BOX = /\s*\[-?\d+,-?\d+ \d+×\d+\]/g;
 const sizeOf = (r) => r.size.join('x'), schemeOf = (r) => r.asked ?? r.scheme, screenOf = (r) => r.screen ?? FIRST;
 const screenName = (screen) => (screen === FIRST || screen === RELAUNCH || screen.startsWith('line ') ? screen : quoted(screen, 28));
@@ -1129,7 +1128,7 @@ const KINDS_FROM = 10; // findings from which the closing line says their kinds
 
 /** The report's lines and its problem count, from what each stage gave; `full`, every finding of each group, one a line,
  *  which verify writes to `listed` (a path the report names when the groups leave any line out). */
-export function report({ host, built, compiler = [], server, tested, checks, relaunched, refused = [], reloads = [], large = [], fixed = { lines: [], accepted: [] }, scrolled = null, desktop = null, shots, copied, own = [], accept = [], ms, cwd = process.cwd(), listed = null, strict = false }) {
+export function report({ host, built, compiler = [], server, tested, checks, ax = [], relaunched, refused = [], reloads = [], large = [], fixed = { lines: [], accepted: [] }, scrolled = null, desktop = null, shots, copied, own = [], accept = [], ms, cwd = process.cwd(), listed = null, strict = false }) {
   const out = [], full = [];
   const all = listed ? `${listed} lists them all` : 'verify --json lists them all';
   let failedTests = 0, findings = 0, broken = 0;
@@ -1192,8 +1191,7 @@ export function report({ host, built, compiler = [], server, tested, checks, rel
   if (runs.length) {
     const shown = distinctFindings(runs), count = shown.length + Math.max(0, ...runs.map((r) => r.hidden));
     const kept = runs.some((r) => r.asked && r.asked !== r.scheme) ? '; the app keeps its own scheme' : '';
-    const screens = [...new Set(runs.map(screenOf))], ends = screens.filter((sc) => sc !== FIRST && sc !== RELAUNCH).length;
-    const where = [screens.includes(FIRST) && FIRST, ends && plural(ends, 'test end'), screens.includes(RELAUNCH) && RELAUNCH].filter(Boolean).join(', ');
+    const where = placesOf([...new Set(runs.map(screenOf))]);
     const head = `check ${where} · ${[...new Set(runs.map(sizeOf))].join(', ')} · ${[...new Set(runs.map(schemeOf))].join(', ')}${kept}: ${count ? plural(count, 'finding') : 'no findings'}`;
     out.push(head, ...byRule(shown));
     if (count > shown.length) out.push(`  … and ${count - shown.length} more (verify --json lists them all)`);
@@ -1201,6 +1199,10 @@ export function report({ host, built, compiler = [], server, tested, checks, rel
     out.push(...new Set(runs.flatMap((r) => r.advice ?? [])));
     findings += count; for (const l of shown) { counted(ruleOf(l)); acceptable.add(ruleOf(l)); } counted('check (not listed)', count - shown.length);
   }
+  // The accessibility tree of the same screens, read once each (LLP 1166.002 D1): findings, as check's are.
+  const axSaid = axGroup(ax, screenName, host);
+  out.push(...axSaid.out); full.push(...axSaid.full);
+  findings += axSaid.lines.length; for (const l of axSaid.lines) { counted(ruleOf(l)); acceptable.add(ruleOf(l)); }
   // Font and symbol sizes the app's Contract fixes and words it breaks (LLP 1116.020 D4, LLP 1116.021 D6): findings, as
   // check's are.
   if (fixed.lines.length) {
@@ -1211,9 +1213,9 @@ export function report({ host, built, compiler = [], server, tested, checks, rel
     findings += fixed.lines.length; for (const l of fixed.lines) { counted(ruleOf(l)); acceptable.add(ruleOf(l)); }
   }
   // What app.json's `verify.accept` names as the app's design: said once each, not counted; an entry that took nothing is named.
-  const accepted = [...distinctFindings(runs.map((r) => ({ ...r, lines: (r.accepted ?? []).map((f) => f.line) }))), ...fixed.accepted.map((f) => f.line)];
+  const accepted = [...distinctFindings(runs.map((r) => ({ ...r, lines: (r.accepted ?? []).map((f) => f.line) }))), ...fixed.accepted.map((f) => f.line), ...axSaid.accepted];
   const took = (e, f) => f.accept?.finding === e.finding && f.accept?.node === e.node;
-  const idle = accept.filter((e) => !runs.some((r) => (r.accepted ?? []).some((f) => took(e, f))) && !fixed.accepted.some((f) => took(e, f)));
+  const idle = accept.filter((e) => ![...runs, ...ax].some((r) => (r.accepted ?? []).some((f) => took(e, f))) && !fixed.accepted.some((f) => took(e, f)));
   if (accepted.length || idle.length) {
     out.push(`accepted (app.json verify.accept, not counted): ${plural(accepted.length, 'finding')}`, ...accepted.slice(0, SHOWN));
     if (accepted.length > SHOWN) out.push(`  … and ${accepted.length - SHOWN} more (${all})`);
@@ -1294,7 +1296,7 @@ export function report({ host, built, compiler = [], server, tested, checks, rel
   }
   // Windows: the drives above are headless (DejaVu Sans, no frame); the desktop's picture is one more, never counted.
   if (desktop) out.push(desktop.error ? `window: not captured (${firstLine(desktop.error)})` : `window: ${relative(cwd, desktop.shot)}, the app opened on the desktop at ${desktop.size?.join('x')} with the system's font, title bar and theme${desktop.foreground ? '' : ' (not the foreground window: its title bar is drawn inactive)'}`,
-    '  not on Windows yet: check\'s findings (the host has no check observation; each screen is captured unjudged), the largest text size, the scrolling probe (iOS\'s), a test end\'s reload (the web\'s)');
+    '  not on Windows yet: check\'s findings (the host has no check observation; each screen is captured unjudged), a read of the accessibility tree (tree --ax), the largest text size, the scrolling probe (iOS\'s), a test end\'s reload (the web\'s)');
   // How a person opens what ran (LLP 1116.008 D2): the dev loop serves the web app, the simulator build launches on iOS.
   if (host === 'android') out.push(ANDROID);
   if (!failedTests && !broken) out.push(host === 'ios' ? 'open it: bun exact.mjs ios --run (launches what verify checked)' : host === 'windows' ? 'open it: bun exact.mjs windows --run (opens what verify checked)' : host === 'android' ? 'open it: bun exact.mjs android --run (installs and launches what verify checked)' : 'open it: bun exact.mjs web (serves what verify checked)');
@@ -1311,10 +1313,10 @@ export function report({ host, built, compiler = [], server, tested, checks, rel
     ...(many ? [`${plural(findings + largeCount, 'finding')}: ${kindsSaid}`] : [findings && plural(findings, 'finding'), largeCount && `${largeCount} at the largest text size`])].filter(Boolean);
   const [top, topCount] = byKind[0] ?? [];
   if (many && acceptable.has(top) && topCount * 2 > findings + largeCount) out.push(`most findings are ${top} (${topCount}): fix them, or, where the design means them, app.json's verify.accept takes each by its kind and testId (docs/recipes/tests.md)`);
-  out.push(problems ? `verify: ${plural(problems, 'problem')} (${why.join(', ')}${failedTests || broken ? '' : '; the tests passed'}) in ${secs(ms)}` : `verify: clean in ${secs(ms)}`);
+  out.push(problems ? `verify: ${plural(problems, 'problem')} (${why.join(', ')}${failedTests || broken ? '' : '; the tests passed'})${axSaid.tree ? `, and ${axSaid.tree}` : ''} in ${secs(ms)}` : `verify: clean${axSaid.tree ? `, but ${axSaid.tree}` : ''} in ${secs(ms)}`);
   // Counted problems never fail a run (LLP 1116.020 D4) unless the caller gates on them: `--strict` (LLP 1156.001 D1). A
   // finding verify.accept takes is not counted; a compiler warning is, and is fixed in the source, never accepted.
-  return { lines: out, problems, exit: failedTests || broken || (strict && problems) ? 1 : 0, full: grouped ? full : [] };
+  return { lines: out, problems, exit: failedTests || broken || (strict && problems) ? 1 : 0, full: grouped ? full : [], axUnread: axSaid.unread };
 }
 
 // `ended` takes the report's last line, which `main` prints last with `contract verify`'s summary.
@@ -1415,6 +1417,7 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   // A test's end screen that could not be checked fails the run, unless the test failed already (its FAIL line says why).
   const ends = results.flatMap((t) => (t.end?.error ? (t.failures.length ? [] : [{ size: null, label: `${quoted(t.name)} end`, error: t.end.error }]) : t.end?.runs ?? []));
   const checks = [...firsts.flat(), ...ends, ...(relaunched?.runs ?? [])];
+  const axReads = [...firsts.map((runs) => runs.ax), ...results.map((t) => t.end?.runs?.ax), relaunched?.runs?.ax].filter(Boolean);
   const compiler = await compiling;
   const kept = [...new Set([...checks.map((c) => c.shot), relaunched?.shot, desktop?.shot])].filter((p) => p && existsSync(p));
   // `--shots <dir>`: every capture of this run copied out, under its own name (LLP 1116.008 D2).
@@ -1438,16 +1441,16 @@ async function deviceMain(argv, emitJSON, declined, ended) {
   if (copyTo) for (const p of large.flatMap((l) => l.shots ?? [])) if (existsSync(p)) copyFileSync(p, resolve(copyTo, basename(p)));
   const fixed = await fixedType(app.dir, host);
   const findingsFile = resolve(shots, `${host}-findings.txt`), listed = relative(process.cwd(), findingsFile);
-  const r = report({ host, built, compiler, server: serverSaid, tested, checks, relaunched, refused: refusedList, reloads, large, fixed, scrolled, desktop, shots: kept, copied: copyTo && resolve(copyTo), own, accept: ACCEPT, ms: Date.now() - started, listed: listed.startsWith('..') ? findingsFile : listed, strict: args.includes('--strict') });
+  const r = report({ host, built, compiler, server: serverSaid, tested, checks, ax: axReads, relaunched, refused: refusedList, reloads, large, fixed, scrolled, desktop, shots: kept, copied: copyTo && resolve(copyTo), own, accept: ACCEPT, ms: Date.now() - started, listed: listed.startsWith('..') ? findingsFile : listed, strict: args.includes('--strict') });
   if (r.full.length) writeFileSync(findingsFile, r.full.join('\n') + '\n'); else rmSync(findingsFile, { force: true });
   writeFileSync(resolve(shots, 'last.json'), JSON.stringify({ ...lastRuns(app), [host]: Date.now() - started }) + '\n');
   if (json) {
     const testsOut = tested?.results ? { ...tested, results: results.map(({ name, file, failures, end }) => ({ name, file, failures, ...(end?.shot && existsSync(end.shot) ? { shot: end.shot } : {}), ...(end?.error ? { endError: end.error } : {}) })) } : tested;
     const relaunchOut = relaunched && (({ runs, large, ...rest }) => rest)(relaunched);
-    emitJSON({ host, built: built && { ms: built.ms, said: built.said ?? [], warnings: built.warnings }, compiler, ...(serverSaid ? { server: serverSaid } : {}), refused: refusedList, tests: testsOut, checks, reloads, large, fixed, relaunch: relaunchOut, ...(scrolled ? { scrolling: scrollingOut(scrolled) } : {}), ...(desktop ? { window: desktop } : {}), screenshots: kept, problems: r.problems, exit: r.exit, ms: Date.now() - started });
+    emitJSON({ host, built: built && { ms: built.ms, said: built.said ?? [], warnings: built.warnings }, compiler, ...(serverSaid ? { server: serverSaid } : {}), refused: refusedList, tests: testsOut, checks, ax: axReads, reloads, large, fixed, relaunch: relaunchOut, ...(scrolled ? { scrolling: scrollingOut(scrolled) } : {}), ...(desktop ? { window: desktop } : {}), screenshots: kept, problems: r.problems, axUnread: r.axUnread, exit: r.exit, ms: Date.now() - started });
   } else { say(r.lines.slice(0, -1)); ended(r.lines.at(-1)); }
   // The run, against the build it used (LLP 1146 D2: `bun scripts/evidence.mjs`).
-  (await import('./evidence.mjs')).recordRun(app.selector, { host, what: 'verify', result: r.problems ? `${r.problems} problem${r.problems === 1 ? '' : 's'}${tested?.failed ? `, ${tested.failed} failed test${tested.failed === 1 ? '' : 's'}` : ''}` : 'clean', timing: 'agent', sim });
+  (await import('./evidence.mjs')).recordRun(app.selector, { host, what: 'verify', result: `${r.problems ? `${r.problems} problem${r.problems === 1 ? '' : 's'}${tested?.failed ? `, ${tested.failed} failed test${tested.failed === 1 ? '' : 's'}` : ''}` : 'clean'}${r.axUnread ? `${r.problems ? ', and' : ', but'} the accessibility tree was not read whole` : ''}`, timing: 'agent', sim });
   return r.exit;
 }
 

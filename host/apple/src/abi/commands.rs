@@ -3,7 +3,7 @@
 //! an auth session's arm and report (LLP 1069.006), a host line into the
 //! runner's journal, a select's options for the menu the presenter
 //! builds (LLP 1069.001 D5), a radio's group (x2apps survey #2), a
-//! grouped list's sections (LLP 1084), and
+//! painted group's keys (LLP 1166.000), a grouped list's sections (LLP 1084), and
 //! whether a followed link names one of the app's routes (LLP 1038 §7),
 //! a scroll that moves the timelines a scroller drives (LLP 1057.003 D5),
 //! where the host's own Back goes (LLP 1115 D5), and a package's call of
@@ -423,6 +423,59 @@ impl<D: DataSource> Bridge<D> {
             None => "{\"group\":[],\"next\":null,\"previous\":null}".into(),
         };
         self.output = json.into_bytes();
+        self.output.len() as u32
+    }
+
+    /// A member of a painted group (`exact_role_keys`, LLP 1166.000 D2), as
+    /// JSON in the output buffer: `{"stop":null|{"group":view,"role":name,
+    /// "held":bool,"order":[view...]},"step":null|{"group":view,"role":name,
+    /// "to":[view...],"press":bool}}`, or `null` when both parts are. `stop`
+    /// is `Kernel::role_tab_order`'s, null for a member of a group that sets
+    /// no stop (a menu) and for a view that is no member; `step` is
+    /// `role_step_order`'s for the key, which is the input buffer's first
+    /// `len` bytes (DOM's `key`; none when 0), null for none or a key that is
+    /// not the group's. `focused` is the view that has the focus, 0 for none.
+    /// The kernel cannot ask the host's views whether they can take the
+    /// focus, so it answers in order and the host takes the first it can
+    /// focus. Not a batch: nothing changes.
+    pub fn role_keys(&mut self, view: u32, focused: u32, len: usize) -> u32 {
+        let key = String::from_utf8_lossy(&self.input[..len.min(self.input.len())]).into_owned();
+        let list = |ids: &[u32]| ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let json = self.host.as_ref().and_then(|h| {
+            let kernel = h.runner().kernel();
+            let stop = kernel
+                .role_tab_order(view, (focused != 0).then_some(focused))
+                .map(|s| {
+                    format!(
+                        "{{\"group\":{},\"role\":\"{}\",\"held\":{},\"order\":[{}]}}",
+                        s.group,
+                        s.role,
+                        s.held,
+                        list(&s.order)
+                    )
+                });
+            let step = (!key.is_empty())
+                .then(|| kernel.role_step_order(view, &key, None))
+                .flatten()
+                .map(|s| {
+                    format!(
+                        "{{\"group\":{},\"role\":\"{}\",\"to\":[{}],\"press\":{}}}",
+                        s.group,
+                        s.role,
+                        list(&s.order),
+                        s.press
+                    )
+                });
+            (stop.is_some() || step.is_some()).then(|| {
+                let null = || "null".to_owned();
+                format!(
+                    "{{\"stop\":{},\"step\":{}}}",
+                    stop.unwrap_or_else(null),
+                    step.unwrap_or_else(null)
+                )
+            })
+        });
+        self.output = json.unwrap_or_else(|| "null".into()).into_bytes();
         self.output.len() as u32
     }
 

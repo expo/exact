@@ -70,7 +70,7 @@ pub mod wire;
 
 pub use arena::text_style::bolder;
 pub use bars::{Bar, HeaderShape, RootTabs};
-pub use control::{Choice, ControlKind, PressFace, Progress, Range};
+pub use control::{Choice, ControlKind, PressFace, Progress, Range, RoleStep, RoleStop};
 pub use control_measurement::{
     ButtonFaceStyle, ButtonFonts, ButtonImagePlacement, ButtonMeasure, ButtonMeasureRequest,
     ControlFont, ControlTextStyles, FieldChrome, FieldChromeRequest, FieldKind,

@@ -80,6 +80,7 @@ export function compileFixtures(root, run, env, dir, prefix, appId) {
   contract([resolve(root, 'host/apple/tests/fixtures/progress-contexts.contract'), '-o', env[`${prefix}_PROGRESS_CONTEXTS_PLAN`] = resolve(dir, 'progress-contexts.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/agent-unmounted.contract'), '-o', env[`${prefix}_AGENT_UNMOUNTED_PLAN`] = resolve(dir, 'agent-unmounted.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/fractional-borders.contract'), '-o', env[`${prefix}_FRACTIONAL_BORDERS_PLAN`] = resolve(dir, 'fractional-borders.plan')]);
+  contract([resolve(root, 'host/apple/tests/fixtures/painted-groups.contract'), '-o', env[`${prefix}_PAINTED_GROUPS_PLAN`] = resolve(dir, 'painted-groups.plan')]);
   contract([resolve(root, 'host/apple/tests/fixtures/top-layer-pins.contract'), '-o', env[`${prefix}_TOP_LAYER_PINS_PLAN`] = resolve(dir, 'top-layer-pins.plan')]);
   // PositionAreaRegionIOSTests' pages: Chrome's position-area table, and mirrored.
   contract([resolve(root, 'host/apple/tests/fixtures/position-area-region.contract'), '-o', env[`${prefix}_POSITION_AREA_PLAN`] = resolve(dir, 'position-area-region.plan')]);
