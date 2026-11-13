@@ -23,20 +23,20 @@ extension GroupedListHost {
 }
 
 extension GroupedListView {
-    /// UIKit's card and cell margins, left then right, inside the list's
-    /// content box. The kernel already applies CSS padding and lays the list out in the safe area, while
-    /// its native view reaches past that box; including either in the card margins would subtract it from a
-    /// custom row's width twice.
-    func margins() -> [CGFloat]? {
-        guard collection.window != nil, // PROTO: publish margins only for a list in its native hierarchy
-              let cell = collection.visibleCells.first as? UICollectionViewListCell,
+    /// UIKit's cells as its list lays them out now: their width, then their
+    /// left and right layout margins. The kernel lays a custom row out at
+    /// that width; one value UIKit gives, read with the margins from one
+    /// layout, where insets from the kernel's box for the list mixed two
+    /// layouts that change at different moments.
+    func cells() -> [CGFloat]? {
+        guard collection.window != nil else { return nil }
+        collection.layoutIfNeeded()
+        guard let cell = collection.visibleCells.first as? UICollectionViewListCell,
               let path = collection.indexPath(for: cell),
               let frame = collection.layoutAttributesForItem(at: path)?.frame else { return nil }
         let m = cell.directionalLayoutMargins
         let rtl = cell.effectiveUserInterfaceLayoutDirection == .rightToLeft
-        return [max(0, frame.minX - reach.left - owner.reach.left - horizontalPadding.left),
-                max(0, collection.bounds.width - frame.maxX - reach.right - owner.reach.right - horizontalPadding.right),
-                rtl ? m.trailing : m.leading, rtl ? m.leading : m.trailing]
+        return [frame.width, rtl ? m.trailing : m.leading, rtl ? m.leading : m.trailing]
     }
 
     /// Before a batch: the carried rows it must read at home go back. An op

@@ -127,7 +127,7 @@ pub struct NodeArena {
     owners: Vec<(u32, Env, Env)>,
     /// The margins the platform's own list gives a grouped list's cards and
     /// cells, by the list's slot: a few lists at most, as the covers.
-    grouped_margins: Vec<(u32, crate::grouped::GroupedMargins)>,
+    grouped_cells: Vec<(u32, crate::grouped::GroupedCells)>,
     /// The margin the platform's cell gives a cells list's rows at each end,
     /// by the list's slot (LLP 1138): a few lists at most.
     list_margins: Vec<(u32, [f32; 2])>,
@@ -210,7 +210,7 @@ impl Clone for NodeArena {
             intrinsic: self.intrinsic.clone(),
             covers: self.covers.clone(),
             owners: self.owners.clone(),
-            grouped_margins: self.grouped_margins.clone(),
+            grouped_cells: self.grouped_cells.clone(),
             list_margins: self.list_margins.clone(),
             alert_prefixes: self.alert_prefixes.clone(),
             blocks: self.blocks.clone(),
@@ -311,7 +311,7 @@ impl NodeArena {
         self.intrinsic.clear();
         self.covers = Default::default();
         self.owners.clear();
-        self.grouped_margins.clear();
+        self.grouped_cells.clear();
         self.list_margins.clear();
         self.alert_prefixes.clear();
         self.blocks = Default::default();
@@ -966,7 +966,7 @@ impl NodeArena {
         self.intrinsic.remove(&slot);
         self.covers.remove(slot);
         self.owners.retain(|(s, _, _)| *s != slot);
-        self.grouped_margins.retain(|(s, _)| *s != slot);
+        self.grouped_cells.retain(|(s, _)| *s != slot);
         self.list_margins.retain(|(s, _)| *s != slot);
         self.alert_prefixes.remove(slot);
         self.blocks.remove(slot);
@@ -1176,15 +1176,15 @@ impl NodeArena {
     }
 
     /// The margins the platform's list gives the grouped list `slot`.
-    pub(crate) fn grouped_margins(&self, slot: u32) -> Option<crate::grouped::GroupedMargins> {
-        self.grouped_margins
+    pub(crate) fn grouped_cells(&self, slot: u32) -> Option<crate::grouped::GroupedCells> {
+        self.grouped_cells
             .iter()
             .find(|(s, _)| *s == slot)
             .map(|(_, m)| *m)
     }
 
-    pub(crate) fn has_grouped_margins(&self) -> bool {
-        !self.grouped_margins.is_empty()
+    pub(crate) fn has_grouped_cells(&self) -> bool {
+        !self.grouped_cells.is_empty()
     }
 
     /// The margin the platform's cell gives the cells list `slot`'s rows.
@@ -1200,13 +1200,13 @@ impl NodeArena {
         self.list_margins.extend(margins.map(|m| (slot, m)));
     }
 
-    pub(crate) fn set_grouped_margins(
+    pub(crate) fn set_grouped_cells(
         &mut self,
         slot: u32,
-        margins: Option<crate::grouped::GroupedMargins>,
+        margins: Option<crate::grouped::GroupedCells>,
     ) {
-        self.grouped_margins.retain(|(s, _)| *s != slot);
-        self.grouped_margins.extend(margins.map(|m| (slot, m)));
+        self.grouped_cells.retain(|(s, _)| *s != slot);
+        self.grouped_cells.extend(margins.map(|m| (slot, m)));
     }
 
     pub(crate) fn set_content(&mut self, slot: u32, content: (f32, f32)) {

@@ -17,8 +17,9 @@
 //! inset moves it) and its published scroll extent leaves them out (the
 //! platform adds them back). Scrolling content still passes under both.
 //!
-//! The margins a platform's own list gives a grouped list's cards and cells
-//! are a claim of the same kind (`grouped::GroupedMargins`), set here.
+//! The cells a platform's own list gives a grouped list (their width and
+//! layout margins) are a claim of the same kind (`grouped::GroupedCells`),
+//! set here.
 
 use super::Kernel;
 use crate::arena::NodeArena;
@@ -222,25 +223,25 @@ impl Kernel {
         Ok(())
     }
 
-    /// Set or clear (`None`) the margins the platform's list gives the
+    /// Set or clear (`None`) the cells the platform's list gives the
     /// grouped list `view`. Nonfinite or negative lengths are refused.
-    pub fn set_grouped_margins(
+    pub fn set_grouped_cells(
         &mut self,
         view: ViewId,
-        margins: Option<crate::grouped::GroupedMargins>,
+        margins: Option<crate::grouped::GroupedCells>,
     ) -> Result<(), KernelError> {
         let slot = self
             .arena
             .slot_of(view)
             .ok_or(LayoutError::UnknownView(view))?;
-        let lengths = margins.map_or([0.0; 4], |m| [m.card[0], m.card[1], m.cell[0], m.cell[1]]);
+        let lengths = margins.map_or([0.0; 3], |m| [m.width, m.cell[0], m.cell[1]]);
         if !lengths.iter().all(|l| l.is_finite() && *l >= 0.0) {
             return Err(LayoutError::InvalidIntrinsicSize(view).into());
         }
-        if self.arena.grouped_margins(slot) == margins {
+        if self.arena.grouped_cells(slot) == margins {
             return Ok(());
         }
-        self.arena.set_grouped_margins(slot, margins);
+        self.arena.set_grouped_cells(slot, margins);
         if let Some(r) = &mut self.region {
             r.intrinsic(slot);
         }

@@ -1,10 +1,11 @@
-//! A grouped list's custom rows start where the platform's list starts a
-//! standard row's text: at the cell's layout margin. UIKit chooses its
-//! margins (16 or 20 points, none beside the iPhone Duo's side strip), the
-//! host reports them (`Kernel::set_grouped_margins`), and the sheet's
-//! stand-ins give way to them where the author wrote nothing.
+//! A grouped list's custom rows are as wide as the platform's cells and
+//! start where the platform's list starts a standard row's text: at the
+//! cell's layout margin. UIKit chooses the cells' width and margins (a card
+//! 16 or 20 points in, margins of 16 or 20, none beside the iPhone Duo's side
+//! strip), the host reports them (`Kernel::set_grouped_cells`), and the
+//! sheet's stand-ins give way to them where the author wrote nothing.
 
-use exact_kernel::{Frame, GroupedMargins, Kernel, Offer, Op};
+use exact_kernel::{Frame, GroupedCells, Kernel, Offer, Op};
 use exact_runner::{DataError, DataSource, Event, Runner, Value};
 
 struct NoData;
@@ -56,9 +57,9 @@ fn frame(r: &Runner<NoData>, test_id: &str) -> Frame {
     r.kernel().node(id(r, test_id)).unwrap().frame
 }
 
-fn report(r: &mut Runner<NoData>, margins: Option<GroupedMargins>) {
+fn report(r: &mut Runner<NoData>, cells: Option<GroupedCells>) {
     let list = id(r, "list");
-    r.kernel_mut().set_grouped_margins(list, margins).unwrap();
+    r.kernel_mut().set_grouped_cells(list, cells).unwrap();
     lay_out(r);
 }
 
@@ -129,78 +130,80 @@ fn custom_rows_follow_the_platforms_cards_and_cell_margins() {
     let mut r = boot(&ROWS.replace("STYLE", "inset-grouped"));
     // The sheet's stand-ins: a card 16 in from each edge, content 16 into it.
     assert_eq!(content(&r, "box", "custom-end"), (32.0, 370.0));
-    // The iPhone Duo's inner panel: a card 20 in, ending at the side strip,
-    // and cells with 20-point margins.
-    let duo = GroupedMargins {
-        card: [20.0, 0.0],
+    // The iPhone Duo's inner panel: cards 20 in and ending at the side strip,
+    // so 382 wide, and cells with 20-point margins. The card is as wide as
+    // UIKit's cell whatever this layout's box for the list is; the cell, not
+    // this box, places a carried row, so the card stands at the box's start.
+    let duo = GroupedCells {
+        width: 382.0,
         cell: [20.0, 20.0],
     };
     let native = edges(&r, "native", false);
     report(&mut r, Some(duo));
     assert_eq!(
-        content(&r, "box", "custom-end"),
-        (40.0, 382.0),
-        "the card's 20 and the cell's 20 at the leading edge, 20 short of the trailing edge"
+        edges(&r, "custom", false),
+        (0.0, 382.0),
+        "the row is as wide as UIKit's cell"
     );
     assert_eq!(
-        edges(&r, "custom", false).1,
-        402.0,
-        "the row ends with its card, its inset inside it"
+        content(&r, "box", "custom-end"),
+        (20.0, 362.0),
+        "its content starts and ends at the cell's 20-point margins"
     );
     let (star, lines) = (frame(&r, "star"), frame(&r, "lines"));
     assert_eq!(
         (lines.x, star.x + star.width / 2.0 < lines.x),
-        (79.0, true),
+        (59.0, true),
         "after a symbol, the text 39 past the margin at the 16-point body, as UIKit's symbol cell sets it"
     );
     assert_eq!(
         content(&r, "swiped", "swiped"),
-        (40.0, 382.0),
+        (20.0, 362.0),
         "a swipe row's inset is inside it, and moves with the margin"
     );
     assert_eq!(
         edges(&r, "swipe", true),
-        (20.0, 402.0),
+        (0.0, 382.0),
         "and its scroll spans the card, so the whole cell swipes and presses"
     );
     assert_eq!(
         (native, edges(&r, "native", false)),
-        ((32.0, 386.0), (40.0, 402.0)),
+        ((32.0, 386.0), (20.0, 382.0)),
         "a native button row starts at the margin and keeps its own padding, so it still ends with the card"
     );
     assert_eq!(
         edges(&r, "native-full", false),
-        (40.0, 402.0),
+        (20.0, 382.0),
         "a native button as wide as its row: its widest moves with its inset, so it ends with the card"
     );
     assert_eq!(
         content(&r, "own-box", "own-end"),
-        (20.0, 398.0),
+        (0.0, 378.0),
         "an end the author wrote stays the author's"
     );
     assert_eq!(
         (content(&r, "hand-text", "hand-text"), edges(&r, "hand", false).1),
-        ((40.0, 382.0), 402.0),
+        ((20.0, 362.0), 382.0),
         "a swipe written by hand is styled as `delete=`'s: its row spans the card, its insets inside it"
     );
     r.dispatch(id(&r, "native"), Event::Press).unwrap();
     lay_out(&mut r);
     assert_eq!(
         content(&r, "late-box", "late-end"),
-        (40.0, 382.0),
-        "a row that comes after the report takes the margins too"
+        (20.0, 362.0),
+        "a row that comes after the report takes the cells too"
     );
     assert_eq!(
         content(&r, "late-swiped", "late-swiped"),
-        (40.0, 382.0),
+        (20.0, 362.0),
         "and a swipe row's content"
     );
     assert_eq!(
         content(&r, "late-section-box", "late-section-end"),
-        (40.0, 382.0),
+        (20.0, 362.0),
         "and a section's"
     );
-    // A row moved out of the list into the page sheds the margins with it.
+    // A row moved out of the list into the page sheds the cells with it.
     let (root, custom) = (id(&r, "root"), id(&r, "custom"));
     let mut children = r.kernel().node(root).unwrap().children();
     children.push(custom);
@@ -246,8 +249,8 @@ fn a_plain_lists_rows_follow_its_cells_margins() {
     // Beside the Duo's side strip a plain list's cells have no trailing margin.
     report(
         &mut r,
-        Some(GroupedMargins {
-            card: [0.0, 0.0],
+        Some(GroupedCells {
+            width: 402.0,
             cell: [20.0, 0.0],
         }),
     );
@@ -264,14 +267,11 @@ fn a_margin_that_is_no_length_is_refused() {
     let mut r = boot(&ROWS.replace("STYLE", "inset-grouped"));
     let list = id(&r, "list");
     for bad in [f32::NAN, -1.0, f32::INFINITY] {
-        let margins = GroupedMargins {
-            card: [bad, 0.0],
+        let cells = GroupedCells {
+            width: bad,
             cell: [16.0, 16.0],
         };
-        assert!(r
-            .kernel_mut()
-            .set_grouped_margins(list, Some(margins))
-            .is_err());
+        assert!(r.kernel_mut().set_grouped_cells(list, Some(cells)).is_err());
     }
 }
 

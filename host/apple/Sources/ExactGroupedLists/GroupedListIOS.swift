@@ -201,7 +201,7 @@ final class GroupedListHost: GroupedLists {
     private(set) var lists: [UInt32: GroupedListView] = [:]
     /// The theme's generation the lists last drew from (`sync`).
     private var theme = ThemeRoles.generation
-    /// Each list's margins as the kernel was last told them (`tell`).
+    /// Each list's cells as the kernel was last told them (`tell`).
     var told: [UInt32: [CGFloat]] = [:]
     /// A list's model: the kernel's, through the runtime; a test's own.
     lazy var model: (UInt32) -> GroupedListModel? = { [unowned self] id in read(id) }
@@ -247,8 +247,8 @@ final class GroupedListHost: GroupedLists {
         tell()
     }
 
-    /// The kernel lays a list's custom rows out by the margins UIKit gave its
-    /// cards and cells (`GroupedMargins`), told after the batch and once no
+    /// The kernel lays a list's custom rows out at the width and margins
+    /// UIKit gave its cells (`GroupedCells`), told after the batch and once no
     /// slice is in flight, as a route's blocks are (`OwnerBlocks.publish`):
     /// sampled when told, so a report that waited tells what is current, and
     /// one behind it finds nothing changed. A list of standard rows alone
@@ -260,15 +260,15 @@ final class GroupedListHost: GroupedLists {
                 guard let self else { return }
                 var changes: [(UInt32, [CGFloat]?)] = []
                 for (id, list) in lists where list.carriesCustomRows {
-                    guard let margins = list.margins(), told[id] != margins else { continue }
-                    told[id] = margins
-                    changes.append((id, margins))
+                    guard let cells = list.cells(), told[id] != cells else { continue }
+                    told[id] = cells
+                    changes.append((id, cells))
                 }
                 for id in Array(told.keys) where lists[id] == nil {
                     told[id] = nil
                     if presenter.views[id] != nil { changes.append((id, nil)) }
                 }
-                if !changes.isEmpty { session.apply(session.runtime.groupedMargins(changes)) }
+                if !changes.isEmpty { session.apply(session.runtime.groupedCells(changes)) }
             }
         }
     }

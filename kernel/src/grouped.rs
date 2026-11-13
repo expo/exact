@@ -528,28 +528,30 @@ impl Kernel {
     }
 }
 
-/// Where the platform's own list puts a grouped list's cards and their
-/// content, in points: each card's inset from the list's content-box edges
-/// (excluding CSS padding), and each cell's layout margins, left and right.
-/// UIKit chooses them by the device, the list's width and what lies beside
-/// it (16 or 20 points, and none beside the iPhone Duo's side strip). The host
-/// reads them from its list (`GroupedPlacingIOS.swift`), and the sheet's stand-ins
-/// (`grouped-card-inset`, `grouped-row-inset`, `grouped-row-padding-end`)
-/// give way to them: a custom row's content then starts where a standard
-/// row's text does, at the cell's margin, as UIKit's own content
-/// configurations put it.
+/// The cells the platform's own list gives a grouped list, in points: the
+/// width of its cards, which is each cell's, and each cell's layout margins,
+/// left and right. UIKit chooses them by the device, the list's width and
+/// what lies beside it (a card 16 or 20 points in from each side, and beside
+/// the iPhone Duo's side strip as far in again as the strip). The host reads
+/// them from its list's own layout (`GroupedPlacingIOS.swift`), and the sheet's
+/// stand-ins (`grouped-card-inset`, `grouped-row-inset`,
+/// `grouped-row-padding-end`) give way to them: a custom row is as wide as
+/// its cell, and its content starts where a standard row's text does, at the
+/// cell's margin, as UIKit's own content configurations put it. The width is
+/// UIKit's value itself, not a difference between UIKit's cell and this
+/// layout's box for the list, which change at different moments.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GroupedMargins {
-    /// The card's left and right insets from the list's content-box edges.
-    pub card: [f32; 2],
+pub struct GroupedCells {
+    /// The width of the list's cards.
+    pub width: f32,
     /// The cell's left and right layout margins.
     pub cell: [f32; 2],
 }
 
-/// The margins of the list `slot` holds the rows of, when it is a section's
+/// The cells of the list `slot` holds the rows of, when it is a section's
 /// group (not its `header` or `footer`) and the host gave the list some.
-fn group_margins(arena: &NodeArena, slot: u32) -> Option<GroupedMargins> {
-    let margins = arena.grouped_margins(arena.parent(arena.parent(slot)?)?)?;
+fn group_cells(arena: &NodeArena, slot: u32) -> Option<GroupedCells> {
+    let margins = arena.grouped_cells(arena.parent(arena.parent(slot)?)?)?;
     (!is_label(arena, slot)).then_some(margins)
 }
 
@@ -585,24 +587,26 @@ fn inset_inside(arena: &NodeArena, scroll: u32) -> bool {
 pub(crate) fn apply_margins(arena: &NodeArena, slot: u32, s: &mut taffy::style::Style) {
     use taffy::style::{LengthPercentage as Lp, LengthPercentageAuto as Lpa};
     use taffy::util::MaybeResolve;
-    if !arena.has_grouped_margins() {
+    if !arena.has_grouped_cells() {
         return;
     }
-    if let Some(m) = group_margins(arena, slot) {
-        s.margin.left = Lpa::length(m.card[0]);
-        s.margin.right = Lpa::length(m.card[1]);
+    // A group is its card, as wide as UIKit's cell: the cell, not this box, places a carried row
+    if let Some(m) = group_cells(arena, slot) {
+        s.size.width = taffy::style::Dimension::length(m.width);
+        s.margin.left = Lpa::length(0.0);
+        s.margin.right = Lpa::length(0.0);
         return;
     }
     let Some(parent) = arena.parent(slot) else {
         return;
     };
-    let (m, content) = match group_margins(arena, parent) {
+    let (m, content) = match group_cells(arena, parent) {
         Some(_) if inset_inside(arena, slot) => return,
         Some(m) => (m, false),
         None if inset_inside(arena, parent) => {
             let named =
                 arena.props(parent).str(PropId::SwipeContent) == arena.props(slot).str(PropId::Id);
-            match arena.parent(parent).and_then(|g| group_margins(arena, g)) {
+            match arena.parent(parent).and_then(|g| group_cells(arena, g)) {
                 Some(m) if named => (m, true),
                 _ => return,
             }
@@ -656,10 +660,10 @@ pub(crate) fn apply_margins(arena: &NodeArena, slot: u32, s: &mut taffy::style::
 /// reach `slot` where it stands: a list four boxes up at most has them (a
 /// `delete=` row's content is the deepest box `apply_margins` moves).
 pub(crate) fn reached(arena: &NodeArena, slot: u32) -> bool {
-    (arena.has_grouped_margins()
+    (arena.has_grouped_cells()
         && std::iter::successors(arena.parent(slot), |s| arena.parent(*s))
             .take(4)
-            .any(|s| arena.grouped_margins(s).is_some()))
+            .any(|s| arena.grouped_cells(s).is_some()))
         || crate::rows::in_cells(arena, slot)
 }
 

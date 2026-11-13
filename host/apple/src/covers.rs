@@ -5,14 +5,14 @@
 //! of its own (LLP 1115.002 D8.2): a split's pane, a sheet, and where it
 //! shows that subtree's root when it does not lift it to the top layer (a
 //! stack's route, LLP 1123 D2), which only the runner's geometry reads.
-//! And the margins UIKit's own list gives a grouped list's cards and cells,
+//! And the cells UIKit's own list gives a grouped list (their width and margins),
 //! which split placeholders a pane shows (LLP 1116.006 D2), the size a
 //! person dragged a box's `resize` grip to (`Runner::resize_box`), and a
 //! content owner's values (LLP 1123 D9).
 
 use super::Host;
 use exact_kernel::{
-    BlockMeasure, BlockShown, GroupedMargins, HostBlock, HostCover, OwnerValues, ViewId,
+    BlockMeasure, BlockShown, GroupedCells, HostBlock, HostCover, OwnerValues, ViewId,
 };
 use exact_runner::DataSource;
 
@@ -36,8 +36,8 @@ pub struct Claims<'a> {
     pub blocks: &'a [(ViewId, Option<HostBlock>)],
     /// Where a block's root is shown.
     pub placements: &'a [(ViewId, Option<exact_runner::BlockPlacement>)],
-    /// A grouped list's card and cell margins.
-    pub margins: &'a [(ViewId, Option<GroupedMargins>)],
+    /// A grouped list's cell width and layout margins.
+    pub cells: &'a [(ViewId, Option<GroupedCells>)],
     /// A cells list's rows' cell margin.
     pub list_margins: &'a [(ViewId, Option<[f32; 2]>)],
     /// A host's restyles: a split's own placeholder (LLP 1116.006 D2), a
@@ -116,7 +116,7 @@ impl<D: DataSource> Host<D> {
             covers,
             blocks,
             placements,
-            margins,
+            cells,
             list_margins,
             restyles,
             owners,
@@ -152,7 +152,7 @@ impl<D: DataSource> Host<D> {
             || self.far_owed
             || !(covers.is_empty()
                 && blocks.is_empty()
-                && margins.is_empty()
+                && cells.is_empty()
                 && list_margins.is_empty());
         if needs_layout {
             self.height_targets_dirty = true;
@@ -193,9 +193,9 @@ impl<D: DataSource> Host<D> {
         for &(view, how) in shown {
             moved |= self.runner.kernel_mut().set_host_block_shown(view, how);
         }
-        for &(view, list) in margins {
-            if let Err(e) = self.runner.kernel_mut().set_grouped_margins(view, list) {
-                error.get_or_insert(format!("grouped margins: {e:?}"));
+        for &(view, list) in cells {
+            if let Err(e) = self.runner.kernel_mut().set_grouped_cells(view, list) {
+                error.get_or_insert(format!("grouped cells: {e:?}"));
             }
         }
         // @ref LLP 1138 — a cells list's rows, the platform's cell margin.

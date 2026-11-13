@@ -79,7 +79,7 @@ pub use error::{
 };
 pub use generated::*;
 pub use grouped::{
-    Accessory, GroupedList, GroupedMargins, GroupedRow, GroupedSection, GroupedSeparator, TextFont,
+    Accessory, GroupedList, GroupedCells, GroupedRow, GroupedSection, GroupedSeparator, TextFont,
     TextLook,
 };
 pub use handoff::Handoff;

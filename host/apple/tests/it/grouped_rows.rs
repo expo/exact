@@ -2,10 +2,10 @@
 
 use crate::host::{view, NoData};
 use exact_apple::Host;
-use exact_kernel::{GroupedMargins, MonospaceMeasurer};
+use exact_kernel::{GroupedCells, MonospaceMeasurer};
 
 #[test]
-fn horizontal_padding_and_native_card_margins_each_reduce_the_row_once() {
+fn a_rows_width_is_its_cells_as_told() {
     for direction in ["ltr", "rtl"] {
         for style in ["plain", "inset-grouped"] {
             let src = format!(
@@ -40,19 +40,15 @@ fn horizontal_padding_and_native_card_margins_each_reduce_the_row_once() {
                         "{style}, {direction}, padding {padding}: {frame:?}"
                     );
                 }
-                // Unequal card margins are LTR's alone: under RTL the kernel
-                // swaps them, padding or none (QUEUE.md).
-                let uneven = if direction == "ltr" {
-                    [20.0, 16.0]
-                } else {
-                    [16.0, 16.0]
-                };
-                for card in [[0.0, 0.0], uneven, [0.0, 0.0]] {
+                // The row is as wide as UIKit's cell, which UIKit has already
+                // narrowed by the list's padding and the card's insets: the
+                // kernel takes the width as told and narrows it by neither.
+                for width in [402.0 - padding, 402.0 - padding - 36.0, 402.0 - padding] {
                     let batch = host.set_claims(&exact_apple::Claims {
-                        margins: &[(
+                        cells: &[(
                             list,
-                            Some(GroupedMargins {
-                                card,
+                            Some(GroupedCells {
+                                width,
                                 cell: [16.0, 16.0],
                             }),
                         )],
@@ -62,14 +58,17 @@ fn horizontal_padding_and_native_card_margins_each_reduce_the_row_once() {
                     assert!(batch["error"].is_null(), "{batch}");
                     let frame = host.runner().kernel().node(row).unwrap().frame;
                     let note = format!(
-                        "{style}, {direction}, padding {padding}, card {card:?}: {frame:?}"
+                        "{style}, {direction}, padding {padding}, width {width}: {frame:?}"
                     );
-                    assert!((frame.x - padding - card[0]).abs() < 0.01, "{note}");
-                    assert!(
-                        (frame.width - (402.0 - padding - card[0] - card[1])).abs() < 0.01,
-                        "{note}"
-                    );
+                    assert!((frame.width - width).abs() < 0.01, "{note}");
                 }
+                // Cleared, so the next root font starts from the sheet's
+                let batch = host.set_claims(&exact_apple::Claims {
+                    cells: &[(list, None)],
+                    ..Default::default()
+                });
+                let batch: serde_json::Value = serde_json::from_str(&batch).unwrap();
+                assert!(batch["error"].is_null(), "{batch}");
             }
         }
     }

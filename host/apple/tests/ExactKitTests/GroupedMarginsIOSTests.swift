@@ -6,22 +6,20 @@ import XCTest
 
 final class GroupedPaddingIOSTests: GroupedListFixture {
     /// A list's view reaches past its laid-out box to a side safe area, where UIKit keeps its cards clear of that area.
-    /// The kernel lays the rows out in the box, so the card's margins it is told are from the box: told from the view's
-    /// edge, the strip beside an open iPhone Duo's inspector came off the rows' width twice.
-    func testACardsMarginsAreFromTheListsBoxWhereItsViewReachesPastIt() throws {
+    /// The kernel is told the width UIKit's layout gives the cards there: no part of it comes from the box or the reach,
+    /// so the strip beside an open iPhone Duo's inspector is taken off the rows once, by UIKit.
+    func testTheToldWidthIsUIKitsCellWidthWhereTheViewReachesPastItsBox() throws {
         let p = presenter { self.model("inset-grouped", custom: true) }
         let l = try list(p), collection = l.collection
-        collection.layoutIfNeeded()
-        let before = try XCTUnwrap(l.margins())
+        let before = try XCTUnwrap(l.cells())
         SafeReach.apply(UIEdgeInsets(top: 0, left: 0, bottom: 0, right: 84), to: l.owner)
         collection.frame = l.owner.scrollFrame
         (collection as? GroupedCollectionView)?.sideSafeArea = (0, 84)
-        collection.layoutIfNeeded()
-        let after = try XCTUnwrap(l.margins())
+        let after = try XCTUnwrap(l.cells())
         let card = try XCTUnwrap(collection.layoutAttributesForItem(at: IndexPath(item: 0, section: 0))).frame
         XCTAssertEqual(collection.bounds.width, l.owner.frame.width, "the view reached")
-        XCTAssertEqual(after[0], before[0], accuracy: 0.5, "the left margin")
-        XCTAssertEqual(after[1], max(0, l.owner.bounds.width - 84 - card.maxX), accuracy: 0.5, "the right margin is from the box, 84 points inside the view's edge")
+        XCTAssertEqual(after[0], card.width, accuracy: 0.5, "the width told is the cell's, whatever the reach")
+        XCTAssertEqual(Array(after[1...]), Array(before[1...]), "the cells' margins")
     }
 
     /// A box and the list inside it both reach a side safe edge, as the Info route and its list in the iPhone Duo's
@@ -80,7 +78,7 @@ final class GroupedPaddingIOSTests: GroupedListFixture {
         XCTAssertEqual(try inset(), before, accuracy: 0.5, "the cards' inset is UIKit's again")
     }
 
-    func testHorizontalPaddingInsetsSectionsAndIsNotReportedAsACardMargin() throws {
+    func testHorizontalPaddingInsetsSectionsAndIsNotReportedAsACellMargin() throws {
         for appearance in ["plain", "grouped", "inset-grouped"] {
             for direction in ["ltr", "rtl"] {
                 let p = presenter(style: ["direction": direction]) { self.model(appearance, custom: true) }
@@ -105,7 +103,7 @@ final class GroupedPaddingIOSTests: GroupedListFixture {
                         try XCTUnwrap(collection.layoutAttributesForSupplementaryElement(ofKind: $0, at: IndexPath(item: 0, section: 0))).frame
                     }
                 }
-                let original = try frames(), margins = try XCTUnwrap(l.margins())
+                let original = try frames(), cells = try XCTUnwrap(l.cells())
                 let port = collection.frame
                 // Other owners can add room for refresh and keyboard avoidance.
                 collection.contentInset.top += 31
@@ -120,10 +118,9 @@ final class GroupedPaddingIOSTests: GroupedListFixture {
                         XCTAssertEqual(after.minX, before.minX + left, accuracy: 0.5, note)
                         XCTAssertEqual(after.maxX, before.maxX - right, accuracy: 0.5, note)
                     }
-                    let reported = try XCTUnwrap(l.margins())
-                    for (before, after) in zip(margins, reported) {
-                        XCTAssertEqual(after, before, accuracy: 0.5, "CSS padding is not a native margin: \(note)")
-                    }
+                    let reported = try XCTUnwrap(l.cells())
+                    XCTAssertEqual(reported[0], cells[0] - left - right, accuracy: 0.5, "UIKit's cells take the padding off: \(note)")
+                    XCTAssertEqual(Array(reported[1...]), Array(cells[1...]), "CSS padding is not a cell's margin: \(note)")
                     XCTAssertEqual(collection.frame, port, "padding leaves the scroll port intact")
                     XCTAssertEqual(collection.contentInset, insets, "horizontal padding preserves the other inset owners")
                     p.apply(wireBatch([]))
@@ -166,8 +163,8 @@ final class GroupedPaddingIOSTests: GroupedListFixture {
 /// its cell's layout margin, which UIKit widens from 16 to 20 points on a
 /// wide screen (the iPhone Duo's inner panel, an iPhone in landscape); on
 /// the Duo's simulator it is 20 at both widths used here. The host tells
-/// the kernel the margins UIKit chose, again when they change, and the
-/// kernel lays the custom row out by them.
+/// the kernel the margins and width UIKit chose, again when they change, and
+/// the kernel lays the custom row out by them.
 final class GroupedMarginsIOSTests: XCTestCase {
     func testACustomRowStartsAtItsCellsMarginAsTheWidthChanges() throws {
         let path = try XCTUnwrap(ProcessInfo.processInfo.environment["EXACT_GROUPED_REVEAL_PLAN"])
@@ -220,7 +217,9 @@ final class GroupedMarginsIOSTests: XCTestCase {
         }
         let wide = try starts()
         XCTAssertEqual(wide.margin, 20, "UIKit's cell margin on a screen this wide; the test needs one other than the sheet's 16")
-        XCTAssertEqual(host.told[list.owner.id]?[2], wide.margin, "the kernel was told UIKit's margin")
+        XCTAssertEqual(host.told[list.owner.id]?[1], wide.margin, "the kernel was told UIKit's margin")
+        let cellWidth = try XCTUnwrap(list.collection.visibleCells.first { button.isDescendant(of: $0) }).frame.width
+        XCTAssertEqual(host.told[list.owner.id]?[0], cellWidth, "and its cell's width")
         XCTAssertEqual(wide.row, wide.margin, accuracy: 0.5, "the custom row's content starts at the margin")
         // An iPhone's width, as a fold or a turn changes it, while a
         // collection's slice is in flight: the change lands with the slice,
@@ -243,7 +242,7 @@ final class GroupedMarginsIOSTests: XCTestCase {
         XCTAssertNil(agent.reveal(["id": Int(button.id)])["error"])
         settle()
         let narrow = try starts()
-        XCTAssertEqual(host.told[list.owner.id]?[2], narrow.margin)
+        XCTAssertEqual(host.told[list.owner.id]?[1], narrow.margin)
         XCTAssertEqual(narrow.row, narrow.margin, accuracy: 0.5, "the custom row follows the margin that shows")
         guard narrow.margin != wide.margin else {
             throw XCTSkip("UIKit's list margin is \(narrow.margin) at both widths on this device (the iPhone Duo's), so a report sampled when it was owed would pass too")
