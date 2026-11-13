@@ -65,6 +65,19 @@ export function createGame(destination, directory = import.meta.dir, options = {
   if (collided) throw new Error(`${name}: its Rust type would collide with an exact_game export or a template item; choose another name, such as ${name}-game`);
   destination = local ? resolve(destination) : resolve(directory, 'games', name);
   if (existsSync(destination) && readdirSync(destination).length) throw new Error(`Game already exists: ${destination}`);
+  // A failure (Cargo cannot fetch the engine's crates offline, say) leaves
+  // nothing of ours behind: the directory itself when we made it, and only
+  // what it held before when the author did. Then exact new can run again.
+  const existed = existsSync(destination);
+  try {
+    return writeGame(destination, directory, options, {name, local});
+  } catch (error) {
+    if (existed) for (const entry of readdirSync(destination)) rmSync(resolve(destination, entry), {recursive:true, force:true});
+    else rmSync(destination, {recursive:true, force:true});
+    throw error;
+  }
+}
+function writeGame(destination, directory, options, {name, local}) {
   cpSync(resolve(directory, 'new'), destination, {recursive:true});
   if (options.assets === true) withModel(destination, directory);
   destination = realpathSync(destination);

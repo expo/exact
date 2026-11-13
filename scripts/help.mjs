@@ -586,8 +586,8 @@ in app.json the first time it runs and builds in a workspace generated under .ex
 --name and --bundle-id here, before the first build: a later change to the id makes the next build cold
 and leaves the old app installed. Then cd there: its exact.mjs runs everything, and bun exact.mjs help
 lists its verbs. Read docs/start-here-site.md first for a website, else docs/start-here.md.
-A game uses --game without --name or --bundle-id. Set app.name and app.id in its generated app.json
-before the first build.
+A game uses --game without --name or --bundle-id; its id is com.exact.<name> until app.json says
+otherwise. Before the first build, set "app": {"name", "id"} in its app.json (create it if absent).
 Ports    none. Runs to completion.`,
     example: 'bun scripts/exact.mjs new ~/notes --name Notes --bundle-id com.yourcompany.notes && cd ~/notes && bun exact.mjs test web',
   },
