@@ -293,7 +293,7 @@ component App
   view
     view navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow width="100%" height="100%" background-color="var(--color-background-screen)" font-family="var(--font-sans)" color="var(--color-text-default)"
       for e in stack(nav).slice(-1) key=e.id
-        column navigationKey=`${e.id}` navigationScroll=`page-${e.id}` navigationBar="none" position="absolute" inset=0
+        column navigationKey=`${e.id}` navigationScroll=`page-${e.id}` navigationBar="none" position="absolute" inset=0 overflow-x="clip"
           padding-top="clamp(0px, (960px - 100vw) * 1000, 57px)" padding-left=(sidebar ? "calc(234px - clamp(0px, (960px - 100vw) * 1000, 234px))" : "calc(48px - clamp(0px, (960px - 100vw) * 1000, 48px))") -exact-layout-transition="220ms ease"
           if e.name == "notfound"
             head title=page.title description=page.description status=404
