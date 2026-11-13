@@ -1,6 +1,7 @@
 # Android gamepad rumble throws on a small magnitude
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A positive rumble magnitude's amplitude is at least 1, which VibrationEffect.createOneShot accepts.
 **Systems:** packages/gamepad
 **Severity:** P2
 **Author:** Grok 4.7

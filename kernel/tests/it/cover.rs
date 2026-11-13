@@ -598,7 +598,7 @@ fn an_inset_scroller_keeps_the_box_its_sizes_give_it() {
     // definite sizes give it. Under `content-box`: a height (an arranged pane
     // fills its allocation with `height: 100%`), a minimum, a maximum, a flex
     // basis, and a share of the column, which Taffy floors at the box's
-    // padding and border (insets laid out as padding take 525, not 438).
+    // padding and border.
     // Under both sizings: a height too small for the padding and the insets,
     // whose box stays with an empty content box, and the width an aspect
     // ratio gives.
@@ -757,11 +757,11 @@ fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
     assert_eq!(kernel.node(4).unwrap().content.1, 670.0, "844 - 174");
     // A vertical scrollbar's gutter is at the end edge, which is the left in
     // right-to-left text; there the first row starts at the client box's
-    // right edge. Points are from the border box's left (AppKit's
-    // `kernelDocumentOrigin` takes a left gutter off), so the client box's
-    // right edge is 375 left to right and 390 right to left, and an empty
-    // list's extent ends there.
-    for (direction, right) in [("ltr", 375.0), ("rtl", 390.0)] {
+    // right edge, and the column records clear the gutter as their rows do.
+    // Points are from the border box's left (AppKit's `kernelDocumentOrigin`
+    // takes a left gutter off), so the client box's right edge is 375 left
+    // to right and 390 right to left, and an empty list's extent ends there.
+    for (direction, start, right) in [("ltr", 0.0, 375.0), ("rtl", 390.0, 390.0)] {
         let mut kernel = columns(
             &[full.clone(), (StyleId::Direction, text(direction))],
             &[100.0],
@@ -769,10 +769,22 @@ fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
         kernel
             .set_host_cover(4, Some(HostCover::Gutter([15.0, 0.0])))
             .unwrap();
-        if direction == "rtl" {
-            let row = frame(&mut kernel, 20);
-            assert_eq!(row.0 + row.2, 390.0, "rtl: the first row's start");
-        }
+        let first = frame(&mut kernel, 20);
+        let edge = if direction == "rtl" {
+            first.0 + first.2
+        } else {
+            first.0
+        };
+        assert_eq!(edge, start, "{direction}: the first row's start");
+        let records = &kernel.columns(kernel.node(4).unwrap().key).unwrap().columns;
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].x, first.0, "{direction}: column and row align");
+        assert_eq!(records[0].width, 179.5);
+        assert_eq!(
+            records[1].x,
+            if direction == "rtl" { 15.0 } else { 195.5 },
+            "{direction}: the last column clears the gutter"
+        );
         kernel
             .apply(
                 3,
@@ -784,11 +796,35 @@ fn a_multi_column_scroller_lays_its_columns_out_inside_its_gutters() {
             )
             .unwrap();
         frame(&mut kernel, 4);
+        assert!(kernel
+            .columns(kernel.node(4).unwrap().key)
+            .unwrap()
+            .columns
+            .iter()
+            .all(|c| !c.holds));
         assert_eq!(
             kernel.node(4).unwrap().content.0,
             right,
             "{direction}: the client box's right edge"
         );
+
+        // Two rows balance into a row per column; each record is where its
+        // row is.
+        let mut paired = columns(
+            &[full.clone(), (StyleId::Direction, text(direction))],
+            &[20.0, 20.0],
+        );
+        paired
+            .set_host_cover(4, Some(HostCover::Gutter([15.0, 0.0])))
+            .unwrap();
+        let first = frame(&mut paired, 20);
+        let second = frame(&mut paired, 21);
+        let records = paired.columns(paired.node(4).unwrap().key).unwrap();
+        assert_eq!(records.columns.len(), 2);
+        assert!(records.columns.iter().all(|c| c.holds));
+        assert_eq!(records.columns[0].x, first.0);
+        assert_eq!(records.columns[1].x, second.0);
+        assert_eq!((first.0 - second.0).abs() - first.2, records.gap);
     }
     // Six 20-point rows under an 80-point cap: the columns end above the
     // bottom gutter, 33 points tall, so each holds one row and they run on

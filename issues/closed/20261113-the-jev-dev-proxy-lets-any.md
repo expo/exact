@@ -1,6 +1,7 @@
 # The Jev dev proxy lets any website spend the gateway key
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The proxy refuses, with no CORS headers, every request whose `Origin` is not an `http:` loopback page, and echoes only an admitted origin in place of `*`.
 **Systems:** game/tennis
 **Severity:** P2
 **Author:** Grok 4.7

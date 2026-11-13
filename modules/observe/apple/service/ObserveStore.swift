@@ -82,9 +82,11 @@ final class ObserveStore {
         run("INSERT INTO metrics (session, time, category, name, value, route, params) VALUES (?, ?, ?, ?, ?, ?, ?)", [session, time, category, name, value, route, json])
     }
 
-    func addLog(session: String, time: Double, severity: String, name: String, body: String?, attributes: [String: Any], dropped: Int) {
+    /// Whether the row was stored.
+    @discardableResult
+    func addLog(session: String, time: Double, severity: String, name: String, body: String?, attributes: [String: Any], dropped: Int) -> Bool {
         let json = String(decoding: (try? JSONSerialization.data(withJSONObject: attributes, options: [.sortedKeys])) ?? Data("{}".utf8), as: UTF8.self)
-        run("INSERT INTO logs (session, time, severity, name, body, attributes, dropped) VALUES (?, ?, ?, ?, ?, ?, ?)", [session, time, severity, name, body, json, dropped])
+        return run("INSERT INTO logs (session, time, severity, name, body, attributes, dropped) VALUES (?, ?, ?, ?, ?, ?, ?)", [session, time, severity, name, body, json, dropped])
     }
 
     func acknowledge(_ signal: String, from first: Int64, through last: Int64) {

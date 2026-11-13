@@ -1,6 +1,7 @@
 # An atomic replace of a kept document forgets it when the keep set cannot be saved
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `carry` returns the failed save of the keep set and the atomic write fails with it (from Rust and TypeScript) after writing the file; the session keeps the new identity, not the destroyed one, so writing again carries the entry and saves the set.
 **Systems:** data documents
 **Severity:** P2
 **Author:** Grok 4.7

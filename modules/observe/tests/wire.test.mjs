@@ -328,5 +328,7 @@ test.skipIf(process.platform !== 'darwin')('the Apple service sends wire.json\'s
     expect(out.refused.metrics.length).toBeGreaterThan(0);
     expect(out.refused.metrics.every(metric => metric.sent === false)).toBe(true);
     expect(out.acknowledged.metrics.filter(metric => metric.sent === true).length).toBe(1);
+    // A crash record whose row the store refused stays for the next launch, which stores it once.
+    expect(out.crash).toEqual({ refusedRows: 0, keptAfterRefusal: true, storedRows: 1, keptAfterStore: false });
   } finally { rmSync(work, { recursive: true, force: true }); }
 }, 120_000);

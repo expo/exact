@@ -806,6 +806,8 @@ const USAGE = `exact — run an Exact app from the command line (macOS)
   exact snapback <app> [--port <n>] [--online] [--rebuild [--artifact-only]]
                                wire an app to the backend above it; --port moves
                                its loopback origin, grants and test fetch prefixes
+                               (both need the Snapback client in this checkout's
+                               snapback4/, which the repository does not include)
   exact new <path> --game      a new game (game/README.md): a Rust world under
                                Contract's menus, with the same exact.mjs verbs;
                                --assets declares game.assets

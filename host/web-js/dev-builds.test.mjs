@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { suiteBrowser } from '../../scripts/agent-launch.mjs';
+import { appSources } from '../web/serve.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const sha = text => createHash('sha256').update(text).digest('hex');
@@ -316,7 +317,9 @@ test('the JS loop: two loops on two apps under one target/ build at once, each i
     loops = await Promise.all([devLoop(dirs[0], { EXACT_DEV_BUILD_HOLD_MS: '8000', CARGO_TARGET_DIR: target }), devLoop(dirs[1], { CARGO_TARGET_DIR: target })]);
     for (const [i, name] of ['stagea', 'stageb'].entries()) {
       expect(loops[i].said()).not.toContain('does not build');
-      expect(JSON.parse(readFileSync(join(loops[i].dist, '.exact-build.json'), 'utf8')).app.id).toBe(`com.exact.${name}`);
+      const receipt = JSON.parse(readFileSync(join(loops[i].dist, '.exact-build.json'), 'utf8'));
+      // Its sources as `serve` lists them, so `serve` on the loop's directory builds nothing again (expo/exact#415).
+      expect([receipt.app.id, receipt.sources]).toEqual([`com.exact.${name}`, appSources(dirs[i], resolve(loops[i].dist)).digest]);
     }
   } finally {
     await Promise.all(loops.map(l => l.stop()));

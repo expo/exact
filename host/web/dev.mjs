@@ -489,8 +489,9 @@ function captureGeneration(reuseCurrentAssets = false, tableUpdate = null) {
     assets.push(...assetCards(entries));
   }
   assets.sort((a, b) => Buffer.compare(Buffer.from(a.name), Buffer.from(b.name)));
+  // Match the retained dev cache quota in serve.mjs.
   if ([planBytes, ...files.values()].some((body) => body.length > 64 * 1024 * 1024)
-    || [...files.values()].reduce((sum, body) => sum + body.length, 0) > 256 * 1024 * 1024) throw new Error('generation exceeds the payload budget');
+    || [...files.values()].reduce((sum, body) => sum + body.length, 0) > 4 * 1024 * 1024 * 1024) throw new Error('generation exceeds the payload budget');
   const envelope = webEnvelope(app, planBytes, assets);
   const generation = devGenerationDigest({ sha256: envelope.plan.sha256, bytes: planBytes.length }, assets, module, rust);
   const prefix = `/__dev/generation/${epoch}/${seq}/`;

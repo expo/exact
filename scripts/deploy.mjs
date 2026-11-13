@@ -51,6 +51,7 @@ import { buildRust, publishedSignature, rustBundle, rustPackage, tieredNative } 
 import { appleProduction } from '../host/apple/link.mjs';
 import { assertOwnTarget, bakedEntryAssets, cargoReproducibilityFlags, readManifest, buildBake, bakeTarget, readBuilds, cohortReceipt, classifyArtifacts, resolveApp, shaderWatchRoots } from './app.mjs';
 import { gameShells } from "../game/app/shells.mjs";
+import { streamBundle, unbundledTextures } from './texture-families.mjs';
 import { blobPath, channelOrigin, openOrigin, OriginUnavailable, sha256, streamPath, parseWebRoot, webRootPath, webRootStream, webReleasePath, validateChannel } from './origin.mjs';
 import { filesystemLock, removePrivateTree } from './filesystem.mjs';
 import { listBuildFiles, listPublicFiles, readStaticCandidate } from '../host/web/serve.mjs';
@@ -666,14 +667,16 @@ function readBundle(web, app) {
 
 /** Hold each platform's bake graph to the bundle its stream publishes. A TypeScript app's widget and activity
  * generation lists its module pair (`typescript/`, bake/src/widgets.rs), which the web bundle carries as its own
- * module instead: that platform's bundle (`bundle.platforms`) adds the pair its bake made. Any other difference refuses. */
+ * module instead: that platform's bundle (`bundle.platforms`) adds the pair its bake made, and leaves out the
+ * texture families its devices do not read (scripts/texture-families.mjs). Any other difference refuses. */
 export function holdBundles(bundle, builds, directory) {
   const cards = (b) => canonicalJson([{ name: 'app.plan', sha256: b.plan.sha256, bytes: b.plan.bytes.length },
     ...b.assets.map((a) => ({ name: a.name, sha256: a.sha256, bytes: a.bytes.length }))].sort((a, c) => a.name.localeCompare(c.name)));
   const { platforms, ...base } = bundle;
   for (const [platform, build] of Object.entries(builds)) {
     const pair = bakedEntryAssets(directory, build, (name) => name.startsWith('typescript/'));
-    if (pair.length) bundle.platforms = { ...bundle.platforms, [platform]: { ...base, assets: [...base.assets, ...pair] } };
+    const unbundled = unbundledTextures(base.assets.map((a) => a.name), build.compat.inputs?.textureFamily);
+    if (pair.length || unbundled.size) bundle.platforms = { ...bundle.platforms, [platform]: { ...base, assets: [...base.assets.filter((a) => !unbundled.has(a.name)), ...pair], thinned: base.assets.filter((a) => unbundled.has(a.name)) } };
     const graph = build.graph.artifacts.map(({ name, sha256, bytes }) => ({ name, sha256, bytes })).sort((a, c) => a.name.localeCompare(c.name));
     if (canonicalJson(graph) !== cards(bundle.platforms?.[platform] ?? base)) refuse(`${platform} bake graph differs from the packaged bundle`);
   }
@@ -1015,7 +1018,7 @@ export async function classify({ app, opts, origin, channel, snapshot, release, 
     const installed=frozen ?? (!head&&!record&&candidate?cohortReceipt(candidate):null);
     const check=classifyArtifacts(candidate,installed,signingKey);
     const inputs=installed?.compat.inputs ?? compat[platform]?.inputs;
-    const selectedBundle=bundle.platforms?.[platform] ?? bundle;
+    const selectedBundle=streamBundle(bundle,platform,inputs);
     const changes=admission?.usable?changesAgainst(selectedBundle,admission.head,sunsetFor(app,stream)):head?[{name:'exact.json',change:'repair',note:admission.problem}]:changesAgainst(selectedBundle,null,sunsetFor(app,stream));
     let seq=admission?.seq;
     if(changes.length && (check.bundle || item.platform)) {
@@ -1341,6 +1344,7 @@ async function deployCaptured(opts, capsule) {
   const compat=Object.fromEntries(Object.entries(builds).map(([p,r])=>[p,r.compat]));
   if (!webOnly) holdBundles(bundle, builds, resolve(run, 'bake'));
   if (!webOnly && rustPackage(app)) {
+    const held = bundle.platforms ?? {};
     bundle.platforms = {};
     const env = sealedSourceEnv(sourceRoot, {CARGO_TARGET_DIR:app.target,EXACT_UPDATE_TRUST:'production'});
     const nativeTargets = [...new Set(platforms.filter(p=>['native','tiered'].includes(builds[p].compat.inputs.rustMode)).map(p=>builds[p].compat.target))];
@@ -1354,7 +1358,7 @@ async function deployCaptured(opts, capsule) {
       const signed=['native','tiered'].includes(build.compat.inputs.rustMode) && build.compat.target.includes('apple');
       const reused=signed && publishedSignature(produced?.variants.native?.bytes, await publishedModule(origin, app, {channel, compatibilityId:build.compat.id}));
       if (reused) { produced={...produced,variants:{...produced.variants,native:{...produced.variants.native,bytes:reused}}}; log(`  ${platform}: the published Rust module's signature stands (same code, same certificate)`); }
-      const result=rustBundle(app,bundle,build,produced);
+      const result=rustBundle(app,held[platform] ?? bundle,build,produced);
       builds[platform]=result.build; bundle.platforms[platform]=result.bundle;
     }
   }
@@ -1386,7 +1390,7 @@ async function deployCaptured(opts, capsule) {
     if (row.action === 'unavailable') { failed.push({ platform: row.platform, compatibilityId: row.compatibilityId, error: row.reason }); log(`  ${name}: unavailable — ${row.reason}`); continue; }
     if (row.action === 'binary') { refused.push({ platform: row.platform, compatibilityId: row.compatibilityId, reason: row.reason }); log(`  ${name}: refused — ${row.reason}`); continue; }
     try {
-      const result = await publishStream({ origin, row, bundle: bundle.platforms?.[row.platform] ?? bundle, compat: row.receipt?.compat ?? compat[row.platform], app, signer, release, snapshot: table.snapshot, opts, log, build:builds[row.platform] });
+      const result = await publishStream({ origin, row, bundle: streamBundle(bundle, row.platform, (row.receipt?.compat ?? compat[row.platform])?.inputs), compat: row.receipt?.compat ?? compat[row.platform], app, signer, release, snapshot: table.snapshot, opts, log, build:builds[row.platform] });
       published.push(result);
       log(result.action === 'published' ? `  ${name}: head seq ${result.seq} (${result.head.sha256.slice(0, 12)}), previous ${result.previous ? result.previous.slice(0, 12) : 'none'}` : `  ${name}: ${result.note}`);
     } catch (e) {

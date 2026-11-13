@@ -57,6 +57,7 @@ import { documentTypes, exportedTypes, importedTypes, openingLinks, webPageTypes
 import { appClip, associatedDomains as claimedDomains, appleExecutableName, HOST_DEV, PINNED_RUST, checkModuleRoster, moduleDirectory, copyShaders, appleCargoClaims, awaitBuildOutput, cargoLibraryTarget, claimBuildOutput, appSourceKey, bakeOutput, buildBake, contractLast, bakeTarget, developmentBuildEnv, developmentURLScheme, gpuModules, hermesBundle, injectedProfiles, resolveApp, verifyBakeFiles } from '../../scripts/app.mjs';
 import { copyStaticTreeIfPresent, listAssets } from '../web/serve.mjs';
 import { startSweep } from '../../scripts/sweep.mjs';
+import { thinTextures } from '../../scripts/texture-families.mjs';
 import { bundleShaderLibraries } from './shader-libraries.mjs';
 import { appleBuildRefusal, guardFlags, reportBuilt } from '../../scripts/help.mjs';
 import { appleImplementations } from '../../js/bake/src/typescript.mjs';
@@ -66,7 +67,7 @@ import { writeDataKeys } from './data-keys.mjs';
 import { backgroundKeys, declaredOrigin, interfaceStyle, localNetworking, memoryEntitlements, modulePlist, nfcKeys, startLocation, storeKeys, transportSecurity, updateActivation, withPackageKeys } from './plist.mjs';
 import { compileFixtures, iosTestRuns, macTests, onlyClasses } from './xctest.mjs';
 import { APPLE_STATIC_TREES, appIcon, appleRefusals, buildInfo, iosAssets, appleAssets, appleAssetCatalogInventory, copyNativeResources, signingOrder, helperEntitlements, plistFile, wrapFramework, signedGpuProduct, assertArchiveFrameworks } from './assets.mjs';
-import { auditLaunchParts, launchModules, launchServices, serviceArgs, writeLaunchParts } from './launch-parts.mjs';
+import { auditLaunchParts, launchModules, launchPartsObjects, launchServices, serviceArgs, writeLaunchParts } from './launch-parts.mjs';
 import { keptModules } from './modules.mjs';
 import { appleLinkArgs, embedLibrary, prepareLibrary } from '../../scripts/package-libraries.mjs';
 import { quiet, quietFor } from './quiet.mjs';
@@ -759,8 +760,9 @@ async function main(args, lockHeld = false) {
     ...(tv ? { TVOS_DEPLOYMENT_TARGET: compiled.ios } : ios ? { IPHONEOS_DEPLOYMENT_TARGET: compiled.ios } : { MACOSX_DEPLOYMENT_TARGET: targets.macos }),
     // Package.swift's `platforms` entry, which is what SwiftPM compiles each target for (not --triple's OS version).
     ...(ios || tv ? { EXACT_IOS_DEPLOYMENT: compiled.ios } : {}),
-    // The launch modules alone compile at the app's minimum (Package.swift), so the host shares the floor's compile.
-    ...(launchPartsDir && (ios || tv) ? { EXACT_LAUNCH_PARTS_TARGET: iosTripleFor(app, device, tv) } : {}),
+    // Under the native build system the launch modules and ExactIOS compile at the app's minimum (Package.swift), so
+    // the host shares the floor's compile (compiledTargets).
+    ...(launchPartsDir && (ios || tv) && process.platform === 'linux' ? { EXACT_LAUNCH_PARTS_TARGET: iosTripleFor(app, device, tv) } : {}),
     EXACT_LIB_DIR: libDir,
     EXACT_LIB: crate.replace(/-/g, '_'),
     EXACT_APP_COMPOSITION: composition,
@@ -890,6 +892,7 @@ async function main(args, lockHeld = false) {
     }
     bakedPlan = readFileSync(resolve(cargoEnv.EXACT_BAKE_OUTPUT, `${ios ? 'ios' : 'macos'}-${target}.plan`));
     copyAppleStaticTrees(app.dir, capture, [['assets', 'assets'], ['deck', 'deck']]);
+    thinTextures(capture, buildReceipt.compat.inputs.textureFamily); // the one family the bake's roster kept, if it thinned
     copyAppleStaticTrees(resolve(cargoEnv.EXACT_BAKE_OUTPUT, `${ios ? 'ios' : 'macos'}-${target}.entries`), capture, [['plans', 'plans'], ['typescript', 'typescript'], ['activities', 'activities']]);
     copyShaders(app, resolve(capture, 'shaders'));
     // The MSL development runs recorded, compiled for this SDK (shader-libraries.mjs).
@@ -1238,7 +1241,7 @@ async function main(args, lockHeld = false) {
       stripped = stripProductionExecutable(executable, { production, ipa });
       if (stripped && !ipa) console.log(`host/apple: symbols: ${p === 'ExactClip' ? resolve(paths.products, relative(binDir, stripped.dsym)) : p === product ? resolve(paths.products, basename(stripped.dsym)) : `${basename(stripped.dsym)}, beside the host product`} (${(stripped.saved / 1048576).toFixed(1)} MB off the executable)`);
     }
-    if (launchPartsDir) { auditLaunchParts(resolve(swiftBinDir, 'ExactLaunchParts.o'), launchModules(app.dir, app.manifest), read); }
+    if (launchPartsDir) { auditLaunchParts(launchPartsObjects(swiftBinDir), launchModules(app.dir, app.manifest), read); }
   } finally { releaseSwift(); }
   const tSwift = Date.now(); buildStep('arms');
   for (const placed of arms) await placed();

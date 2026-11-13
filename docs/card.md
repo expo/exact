@@ -17,7 +17,7 @@ functions: call -> result
   first(xs) -> option<T>
   xs.flat() -> T[]
   floor(n) -> number
-  formatDate(ms, offsetMinutes, "medium"|"month-year"|"iso") -> string
+  formatDate(msOrDayKey, offsetMinutes, "medium"|"month-year"|"iso") -> string
   formatDay(then, now, offsetMinutes, "day"|"day-time"|"list") -> string  (Today, Monday)
   formatDecimal(units, digits) -> string  (cents to "12.34"; literal digits)
   formatNumber(n, "compact"|"decimal"|"percent"|"currency", "USD") -> string  (1,234.5; 26%)
@@ -171,7 +171,7 @@ reading and writing data: app.ts's `loadItems`, `addItem` answer exactly their s
   action add
     send added = addItem("Milk")
   text items.join(", ")
-a dated record: The write reads the clock, not a ticked `now`, and stores `at`; `performanceNow()` alone is 0 each launch. `"iso"` is the day, compared as text; its label `formatDay(at, now, …)`: Today, Yesterday. Tests pin `epoch` and `time-zone`.
+a dated record: The write reads the clock, not a ticked `now`; `performanceNow()` alone is 0 each launch. `"iso"` is the day, compared as text; its label `formatDay(at, now, …)`: Today, Yesterday. Tests pin `epoch` and `time-zone`.
   shape Time
     epochAtZero: number
     utcOffset: number

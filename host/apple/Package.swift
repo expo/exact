@@ -11,9 +11,10 @@ let libName = ProcessInfo.processInfo.environment["EXACT_LIB"] ?? "caltrain_appl
 // The app's module launch parts. `build.mjs` generates this target when the
 // manifest's `launch` names any; otherwise the empty default is used.
 let launchParts = ProcessInfo.processInfo.environment["EXACT_LAUNCH_PARTS"] ?? "Sources/ExactLaunchParts"
-// The app's launch modules compile at its own minimum, where Swift checks their availability; the rest of the
-// package compiles at the floor every app shares (EXACT_IOS_DEPLOYMENT). swiftc takes the last `-target`, and a
-// module may import one compiled for an earlier target. Set by build.mjs for iOS and tvOS.
+// Under SwiftPM's native build system (the Linux cross build), the app's launch modules and ExactIOS, which imports
+// them, compile at the app's own minimum, where Swift checks the modules' availability; the rest of the package
+// compiles at the floor every app shares (EXACT_IOS_DEPLOYMENT). swiftc takes the last `-target`, and a module may
+// import one compiled for an earlier target. Set by build.mjs for iOS and tvOS on Linux.
 let launchPartsTarget = ProcessInfo.processInfo.environment["EXACT_LAUNCH_PARTS_TARGET"].flatMap { $0.isEmpty ? nil : $0 }
 
 let composition = ProcessInfo.processInfo.environment["EXACT_APP_COMPOSITION"] ?? "embedded"
@@ -97,7 +98,8 @@ let core: [Target] = [
 let executables: [Target] = [
     .executableTarget(name: "ExactWatch", dependencies: ["ExactCore", "ExactSnapshot"], path: "Sources/ExactWatch", swiftSettings: devTools),
     .executableTarget(name: "ExactMac", dependencies: ["ExactKit", "ExactComposition", "ExactLaunchParts"], path: "Sources/ExactMac"),
-    .executableTarget(name: "ExactIOS", dependencies: ["ExactKit", "ExactComposition", "ExactLaunchParts"], path: "Sources/ExactIOS"),
+    .executableTarget(name: "ExactIOS", dependencies: ["ExactKit", "ExactComposition", "ExactLaunchParts"], path: "Sources/ExactIOS",
+                     swiftSettings: launchPartsTarget.map { [.unsafeFlags(["-target", $0])] } ?? []),
     .executableTarget(name: "ExactHostMac", dependencies: ["ExactKit", "ExactComposition"], path: "Sources/ExactHostMac"),
     .executableTarget(name: "ExactHostIOS", dependencies: ["ExactKit", "ExactComposition"], path: "Sources/ExactHostIOS"),
 ]

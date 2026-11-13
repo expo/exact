@@ -1,6 +1,7 @@
 # Android cancel during authorization leaves the payment sheet
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A call let go while its final handler runs is marked let go, so that handler finishes but a later authorization is refused without calling the app.
 **Systems:** packages/payments
 **Severity:** P2
 **Author:** Grok 4.7

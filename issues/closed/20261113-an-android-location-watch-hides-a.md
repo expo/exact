@@ -1,6 +1,7 @@
 # An Android location watch hides a disabled provider
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A disabled provider's POSITION_UNAVAILABLE replaces the fix a watch holds, so the re-read answers it; the registration survives, so the next fix after the provider returns answers the watch.
 **Systems:** packages/geolocation
 **Severity:** P2
 **Author:** Grok 4.7

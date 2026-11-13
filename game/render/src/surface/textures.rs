@@ -6,9 +6,10 @@ use exact_gpu::wgpu;
 
 /// The family chosen from the device's granted features, and every requested
 /// file name still answered or in flight, with the authored name it carries.
-#[derive(Default)]
 pub(crate) struct Payloads {
     pub family: TextureFamily,
+    /// The compressed families the files on offer hold (`TextureFamily::BUNDLED`).
+    held: &'static [TextureFamily],
     files: Vec<(String, String)>,
     /// Files of a previous family, which the host forgets with the next drain.
     stale: Vec<String>,
@@ -16,16 +17,44 @@ pub(crate) struct Payloads {
     fallbacks: Vec<String>,
 }
 
+impl Default for Payloads {
+    fn default() -> Self {
+        Self {
+            family: TextureFamily::Rgba8,
+            held: TextureFamily::BUNDLED,
+            files: Vec::new(),
+            stale: Vec::new(),
+            fallbacks: Vec::new(),
+        }
+    }
+}
+
 /// BC where granted (desktop GPUs, Apple silicon), else ASTC (phones), else
-/// RGBA8. BC is preferred where both exist: BC4 halves one-channel maps and
-/// the measured quality of the others is equal.
-pub(crate) fn family(features: wgpu::Features) -> TextureFamily {
-    if features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC) {
-        TextureFamily::Bc
-    } else if features.contains(wgpu::Features::TEXTURE_COMPRESSION_ASTC) {
-        TextureFamily::Astc
-    } else {
-        TextureFamily::Rgba8
+/// RGBA8, among the families `held`. BC is preferred where both exist: BC4
+/// halves one-channel maps and the measured quality of the others is equal.
+pub(crate) fn family(features: wgpu::Features, held: &[TextureFamily]) -> TextureFamily {
+    [
+        (TextureFamily::Bc, wgpu::Features::TEXTURE_COMPRESSION_BC),
+        (
+            TextureFamily::Astc,
+            wgpu::Features::TEXTURE_COMPRESSION_ASTC,
+        ),
+    ]
+    .into_iter()
+    .find(|(family, feature)| held.contains(family) && features.contains(*feature))
+    .map_or(TextureFamily::Rgba8, |(family, _)| family)
+}
+
+impl<G: exact_game::Game, P: super::Executor, const ASSETS: bool, H: crate::Hooks>
+    super::WorldSurface<G, P, ASSETS, H>
+{
+    /// The compressed texture families the files on offer hold, in place of
+    /// this target's bundle's (`TextureFamily::BUNDLED`): a test's, which
+    /// serves every family the bake wrote.
+    #[doc(hidden)]
+    pub fn texture_families(mut self, held: &'static [TextureFamily]) -> Self {
+        self.payloads.held = held;
+        self
     }
 }
 
@@ -33,7 +62,7 @@ impl Payloads {
     /// Adopt a device's family. On a change every earlier file is retired;
     /// the caller re-requests the textures, which then name the new family.
     pub fn choose(&mut self, features: wgpu::Features) -> bool {
-        let next = family(features);
+        let next = family(features, self.held);
         if next == self.family {
             return false;
         }
@@ -110,9 +139,17 @@ impl Payloads {
 mod tests {
     use super::*;
     use wgpu::Features as F;
+    const BOTH: &[TextureFamily] = &[TextureFamily::Bc, TextureFamily::Astc];
+    /// Payloads where both families are on offer, as on the web.
+    fn payloads() -> Payloads {
+        Payloads {
+            held: BOTH,
+            ..Payloads::default()
+        }
+    }
     #[test]
     fn requests_name_the_device_family_and_retire_every_file() {
-        let mut p = Payloads::default();
+        let mut p = payloads();
         assert!(p.choose(F::TEXTURE_COMPRESSION_ASTC));
         let files = p.request(vec!["fox.model".into(), "fox/0.tex".into()]);
         assert_eq!(files, ["fox.model", "fox/0.astc.tex"]);
@@ -132,7 +169,7 @@ mod tests {
     }
     #[test]
     fn a_missing_family_payload_falls_back_to_the_authored_file() {
-        let mut p = Payloads::default();
+        let mut p = payloads();
         p.choose(F::TEXTURE_COMPRESSION_BC);
         assert_eq!(p.request(vec!["hand.tex".into()]), ["hand.bc.tex"]);
         assert!(p.missing("hand.bc.tex"));
@@ -142,5 +179,34 @@ mod tests {
         // Retirement forgets the fallback; a later request tries the family again.
         assert_eq!(p.retire(vec!["hand.tex".into()]), ["hand.tex"]);
         assert_eq!(p.request(vec!["hand.tex".into()]), ["hand.bc.tex"]);
+    }
+    /// A device chooses among the families its bundle holds: an iPad that
+    /// reads BC and ASTC takes the ASTC its bundle holds, a Mac BC. A bundle
+    /// holds one its every device reads; without it, the authored RGBA8.
+    #[test]
+    fn a_device_chooses_among_the_families_its_bundle_holds() {
+        let pad = F::TEXTURE_COMPRESSION_BC | F::TEXTURE_COMPRESSION_ASTC;
+        assert_eq!(family(pad, BOTH), TextureFamily::Bc);
+        assert_eq!(family(pad, &[TextureFamily::Astc]), TextureFamily::Astc);
+        assert_eq!(family(pad, &[TextureFamily::Bc]), TextureFamily::Bc);
+        assert_eq!(
+            family(F::TEXTURE_COMPRESSION_ASTC, &[TextureFamily::Bc]),
+            TextureFamily::Rgba8
+        );
+        assert_eq!(family(F::empty(), BOTH), TextureFamily::Rgba8);
+        let mut p = Payloads {
+            held: &[TextureFamily::Astc],
+            ..Payloads::default()
+        };
+        assert!(p.choose(pad));
+        assert_eq!(p.request(vec!["fox/0.tex".into()]), ["fox/0.astc.tex"]);
+        let target = if cfg!(target_os = "macos") {
+            &[TextureFamily::Bc][..]
+        } else if cfg!(any(target_os = "ios", target_os = "tvos")) {
+            &[TextureFamily::Astc][..]
+        } else {
+            BOTH
+        };
+        assert_eq!(Payloads::default().held, target);
     }
 }

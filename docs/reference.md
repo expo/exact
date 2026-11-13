@@ -3482,7 +3482,8 @@ requests (`apps/markdown/data`). A kept item is the object chosen: a move
 or rename is followed and keeps its path (`<name>` is the name it was
 chosen by); a file another program replaced at its name is not the
 document, and the app's own `atomicWriteFile` carries the entry to the file
-it wrote, from Rust or TypeScript. A path whose entry is gone
+it wrote, from Rust or TypeScript. When the kept set cannot be saved, that
+write fails after writing the file, and writing it again keeps it. A path whose entry is gone
 refuses `ENOENT`: ask the person to choose again. Without `doc.keep`
 both calls are refused. Under the agent on a Mac the kept set is the
 drive's scratch store (`--storage`), never the person's.

@@ -371,8 +371,13 @@ impl<D: DataSource> Presenter<D> {
 
     /// [`Presenter::mark_field`] for a selection the shell's own field
     /// already shows (LLP 1115.001 D8): kept for the next `input`, and
-    /// nothing here is painted again for it.
+    /// nothing here is painted again for it. A selection that moved in the
+    /// value the field shows is a `selectionchange`, as
+    /// [`Presenter::mark_field`] queues it.
     pub(super) fn note_field(&mut self, id: ViewId, value: &str, selection: FieldSelection) {
+        if self.field_value(id) == value && self.field_selection(id) != selection {
+            self.field_change_tasks.insert(id);
+        }
         let mark = FieldMark {
             selection,
             value: value.to_owned(),
@@ -861,26 +866,6 @@ impl<D: DataSource> Presenter<D> {
         }
     }
 
-    /// An edit's new value and the caret it leaves: kept, the field marked
-    /// typed into (its `change` waits for blur or Enter), and its `input`,
-    /// which carries the selection. The watch is the bound value from before
-    /// the dispatch, so a write during the edit replaces the typed text and
-    /// one that writes nothing leaves it (LLP 1069.001 D4).
-    pub(super) fn field_edit(
-        &mut self,
-        id: ViewId,
-        next: String,
-        after: FieldSelection,
-        bound: String,
-        now_ms: f64,
-    ) {
-        if let Some(e) =
-            self.apply_field_edit(id, next, after, bound, now_ms, InputDetails::default())
-        {
-            eprintln!("exact: {e}");
-        }
-    }
-
     pub(super) fn edit_field(
         &mut self,
         id: ViewId,
@@ -933,6 +918,11 @@ impl<D: DataSource> Presenter<D> {
             || self.field_text(id) != value))
     }
 
+    /// An edit's new value and the caret it leaves: kept, the field marked
+    /// typed into (its `change` waits for blur or Enter), and its `input`,
+    /// which carries the selection. The watch is the bound value from before
+    /// the dispatch, so a write during the edit replaces the typed text and
+    /// one that writes nothing leaves it (LLP 1069.001 D4).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_field_edit(
         &mut self,

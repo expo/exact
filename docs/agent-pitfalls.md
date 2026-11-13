@@ -230,6 +230,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
 
 ## Lists and scrolling
 
+- **A long text on iOS or macOS loses its kerning, ligatures and right-to-left
+  order.** A whole document in one `text` (an article, a long Markdown note) is
+  one string to Core Text, and Core Text does not shape a string longer than a
+  length it does not document: Arabic is unjoined and runs left to right, and
+  Latin text is not kerned, so a line can break at another word. The length was
+  10,240 UTF-16 units on iOS 27.1 and macOS 27.2, and can change in any release.
+  Give each paragraph or block its own `text`, and never split inside a
+  paragraph ([long text](recipes/long-text.md)). (Duo Lab, 2026-11-12.)
+  **Candidate diagnostic:** `check` could name a text whose string is that long.
+
 - **A frame's cell count is not its stretched layout width.** Giving the
   harness's animation rows a width of `animCols` cells changed fullscreen layout in
   a window narrower than the animation's minimum 20 cells. `width="100%"`
@@ -1879,6 +1889,15 @@ price: answers arrive `Later`, outside the action's transaction (LLP 1027.002 D1
   (`.at(-1)`), or `replace` when the top is that route and the URL is its own:
   `nav = top(nav).name == "shop" and (url == "/" or url.slice(0, 2) == "/?") ? replace(nav, url) : go(nav, url)`,
   so Back leaves the shop rather than stepping through each filter. (The same store, 2026-11-01.)
+
+- **A route that says `activate=interaction` offers a browser's agent no tools at load.** Its page
+  registers its faced tools with `document.modelContext` only when its script starts: at the
+  person's first use of a control, on a page with an `intersect` handler at a scroll or when that
+  element shows, or when the viewport differs from one the page's comparisons were rendered for.
+  Until then `getTools()` is empty. Leave `activate` unsaid on such a route: in an app with a faced
+  tool on the web door, an undeclared route whose page would wait for the reader activates `idle`
+  instead, and registers its tools once the page has loaded and is idle. (Exact Bistro, a WebMCP
+  demo site, 2026-11-12.)
 
 ## Working on Exact itself
 

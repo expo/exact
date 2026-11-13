@@ -40,6 +40,7 @@ import { bakedEntryAssets, bakeOutput, classifyArtifacts, cohortReceipt, readBui
 import { buildRust, rustBundle, RustBaker } from './rust.mjs';
 import { blobPath, channelOrigin, openOrigin, sha256, streamPath, validateChannel } from './origin.mjs';
 import { filesystem, filesystemRead } from './filesystem.mjs';
+import { unbundledTextures } from './texture-families.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const USAGE = 'usage: bun scripts/push.mjs <app> [--origin <dir|url>] [--channel <name>] [--keys <dir>] [--seq-above <n>] [--watch]';
@@ -171,13 +172,17 @@ function bakedAssets(app, build, env) {
 }
 
 /** The head's assets other than its module pair: an `assets/` or `deck/`
- * file as it is now in the app, anything else (shaders) as the head has it. */
-async function carriedAssets(origin, app, head) {
+ * file as it is now in the app, but for the texture families a cohort baked
+ * with one (`inputs.textureFamily`) does not read, and anything else (shaders)
+ * as the head has it. A cohort baked before thinning names no family: its
+ * renderer falls back to files a thinned update would leave out. */
+async function carriedAssets(origin, app, head, inputs) {
   const out = [];
   for (const folder of ['assets', 'deck']) {
     const root = resolve(app.dir, folder);
-    const names = filesystem({ op: 'names', root, optionalRoot: true });
-    for (const name of Object.keys(names ?? {})) {
+    const names = Object.keys(filesystem({ op: 'names', root, optionalRoot: true }) ?? {});
+    const unbundled = unbundledTextures(names.map((name) => `${folder}/${name}`), inputs?.textureFamily);
+    for (const name of names.filter((name) => !unbundled.has(`${folder}/${name}`))) {
       const encoded = await filesystemRead({ op: 'get', root, path: name });
       if (encoded === null) refuse(`${folder}/${name}: asset disappeared during push`);
       const bytes = Buffer.from(encoded, 'base64');
@@ -237,7 +242,7 @@ export async function pusher(opts) {
     for (const { stream, head, cohort, platform, build: binary } of found) {
       const graph = planGraph(tools.graph, app, built.plan, cohort, env);
       const inputs = cohort.compat.inputs;
-      const assets = head ? await carriedAssets(origin, app, head) : bakedAssets(app, binary, env);
+      const assets = head ? await carriedAssets(origin, app, head, inputs) : bakedAssets(app, binary, env);
       let bundle = { plan: { bytes: built.plan, sha256: sha256(built.plan), formatVersion: inputs.formatVersion, kernelSchema: inputs.kernelSchema }, assets };
       let build = { version: 1, trust: 'production', compat: cohort.compat, binary: { sha256: cohort.binary },
         graph: { ...graph, artifacts: [graph.artifacts[0], ...assets.map((a) => ({ name: a.name, sha256: a.sha256, bytes: a.bytes.length, kind: 'bundle', requires: {} }))] } };

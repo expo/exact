@@ -9,6 +9,7 @@ import {bakedEntryAssets, classifyArtifacts} from './app.mjs';
 import {spawnSync as realSpawnSync} from 'node:child_process';
 import {channelOf} from './deploy.mjs';
 import {filesystem, filesystemRead} from './filesystem.mjs';
+import {unbundledTextures} from './texture-families.mjs';
 
 // The publisher's functions with boundary doubles, for an app at a fresh
 // root whose cohort's binary has prelude runtime 4 and whose baked module
@@ -29,7 +30,7 @@ function harness(classify=()=>({bundle:true}), runtime=4, {bake, cohortRuntime=4
   };
   const bindings={
     ...Object.fromEntries(['existsSync','readFileSync','writeFileSync','mkdtempSync','rmSync'].map(name=>[name,fs[name]])), watch,
-    filesystem, filesystemRead,
+    filesystem, filesystemRead, unbundledTextures,
     channelOf,validateChannel,resolve,relative,homedir,ROOT:fileURLToPath(new URL('..',import.meta.url)),
     process:{env:{EXACT_GAME_PROOF_PROFILE:'gpu-dev',EXACT_UPDATE_TRUST:'development'}},
     console:{log(){}},Refusal:Error,refuse(message){throw Error(message)},
@@ -230,7 +231,7 @@ test('push inventories current app files and carries only head-owned artifacts',
     const shader = Buffer.from('shader');
     const source = fs.readFileSync(new URL('./push.mjs', import.meta.url), 'utf8');
     const fn = source.slice(source.indexOf('async function carriedAssets('), source.indexOf('\nfunction gitHead('));
-    const carried = new Function('filesystem', 'filesystemRead', 'resolve', 'sha256', 'blobPath', 'refuse', fn + ';return carriedAssets;')(filesystem, filesystemRead, resolve, sha256, blobPath, (message) => { throw Error(message); });
+    const carried = new Function('filesystem', 'filesystemRead', 'unbundledTextures', 'resolve', 'sha256', 'blobPath', 'refuse', fn + ';return carriedAssets;')(filesystem, filesystemRead, unbundledTextures, resolve, sha256, blobPath, (message) => { throw Error(message); });
     const asked = [];
     const assets = await carried({ get: async (path) => { asked.push(path); return shader; } }, { dir: root }, { assets: [
       { name: 'assets/deleted.png', sha256: 'deleted' }, { name: 'shaders/x.wgsl', sha256: sha256(shader) },
@@ -238,6 +239,13 @@ test('push inventories current app files and carries only head-owned artifacts',
     expect(assets.map(a => a.name)).toEqual(['assets/new.png', 'deck/nested/.config', 'shaders/x.wgsl']);
     expect(assets.map(a => a.bytes.toString())).toEqual(['new', 'config', 'shader']);
     expect(assets.every(a => a.sha256 === sha256(a.bytes))).toBe(true);
+    // A baked texture's three files: a cohort baked with ASTC alone is sent its ASTC payload. An iOS cohort
+    // baked before thinning names no family, and its renderer falls back to the RGBA8 file: it is sent all three.
+    for (const name of ['fox.tex', 'fox.bc.tex', 'fox.astc.tex']) fs.writeFileSync(resolve(root, 'assets', name), name);
+    const textures = async (inputs) => (await carried({ get: async () => shader }, { dir: root }, {}, inputs)).map(a => a.name).filter(n => n.endsWith('.tex')).sort();
+    expect(await textures({ platform: 'ios', textureFamily: 'astc' })).toEqual(['assets/fox.astc.tex']);
+    expect(await textures({ platform: 'ios' })).toEqual(['assets/fox.astc.tex', 'assets/fox.bc.tex', 'assets/fox.tex']);
+    expect(await textures({ platform: 'linux' })).toEqual(['assets/fox.astc.tex', 'assets/fox.bc.tex', 'assets/fox.tex']);
     expect(asked).toEqual([blobPath(sha256(shader))]);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
@@ -255,7 +263,7 @@ test.each([
     for (const name of names) fs.writeFileSync(resolve(root, name), bytes);
     const source = fs.readFileSync(new URL('./push.mjs', import.meta.url), 'utf8');
     const fn = source.slice(source.indexOf('async function carriedAssets('), source.indexOf('\nfunction gitHead('));
-    const carried = new Function('filesystem', 'filesystemRead', 'resolve', 'sha256', 'blobPath', 'refuse', fn + ';return carriedAssets;')(filesystem, filesystemRead, resolve, sha256, blobPath, (message) => { throw Error(message); });
+    const carried = new Function('filesystem', 'filesystemRead', 'unbundledTextures', 'resolve', 'sha256', 'blobPath', 'refuse', fn + ';return carriedAssets;')(filesystem, filesystemRead, unbundledTextures, resolve, sha256, blobPath, (message) => { throw Error(message); });
     const assets = await carried({}, { dir: root }, {});
     expect(assets.map(asset => asset.name)).toEqual(names);
     for (const asset of assets) {

@@ -1,6 +1,7 @@
 # Saving a harness key truncates the key file before the new text is written
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** `write_line` writes the new text to a 0600 file created beside the keys file, syncs it, renames it over the keys file and syncs the folder, so the old file stays whole until the new one replaces it.
 **Systems:** harness keys
 **Severity:** P2
 **Author:** Grok 4.7

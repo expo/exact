@@ -1,6 +1,7 @@
 # The list-detail pattern keeps a failed write in its cache
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The starter's `save` replaces its cache only after `atomicWriteFile` succeeds, and its mutations run one at a time, each on what the one before it saved.
 **Systems:** docs/patterns/list-detail/app.ts, docs/patterns/list-detail/app.contract
 **Author:** Codex
 **Date:** 2026-11-12

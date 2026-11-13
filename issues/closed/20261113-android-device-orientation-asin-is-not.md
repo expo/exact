@@ -1,6 +1,7 @@
 # Android device orientation asin is not clamped
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Android's deviceOrientation clamps the rotation matrix's sin(beta) element to [-1, 1] before asin, as Apple's does.
 **Systems:** packages/motion
 **Severity:** P2
 **Author:** Grok 4.7

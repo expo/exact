@@ -91,8 +91,11 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
         if (now.toString() == before) return
         context.changed("photos.photoLibraryStatus")
         context.changed("photos.photoAssets")
-        if (now.getString("access") == "full") return
-        // What the app may read narrowed: a picture of a photo it can no longer open is withdrawn (D6).
+        if (now.getString("access") != "full") withdraw()
+    }
+
+    /** What the app may read narrowed: a picture of a photo it can no longer open is withdrawn (D6). */
+    private fun withdraw() {
         val ids = drawn.toList()
         work.execute {
             val gone = ids.filter { !opens(Uri.parse(it)) }
@@ -165,13 +168,17 @@ class PhotosModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    /** API 34's selection dialog: the read request again, while access is limited (D6). Answers the status. */
+    /** API 34's selection dialog: the read request again, while access is limited (D6). Answers the status. The dialog
+     * can answer with the activity still resumed, and a limited library changed within itself reads the same status,
+     * so the pictures of photos it took out are withdrawn here, not at a resume. */
     private fun manage(reply: (JSONObject) -> Unit) {
         if (Build.VERSION.SDK_INT < 34 || status().getString("access") != "limited") return reply(status())
         context.requestPermissions(reads.toTypedArray()) {
             context.changed("photos.photoLibraryStatus")
             context.changed("photos.photoAssets")
-            reply(status())
+            val now = status()
+            if (now.getString("access") != "full") withdraw()
+            reply(now)
         }
     }
 

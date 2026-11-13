@@ -1723,10 +1723,10 @@
     },
     {
       "name": "formatDate",
-      "params": ["number", "number", "\"medium\" | \"month-year\" | \"iso\""],
+      "params": ["number | string", "number", "\"medium\" | \"month-year\" | \"iso\""],
       "locale": true,
       "returns": "string",
-      "_comment": "@ref LLP 1054.000.003 D2/D7/D8: the calendar date of (epochMs, utcOffset), as Intl.DateTimeFormat(\"en-US\") prints it: `medium` is { dateStyle: \"medium\" }, `month-year` is { month: \"long\", year: \"numeric\" }. @ref LLP 1102 §3.4: `iso` is `YYYY-MM-DD`, the date at that wall time: `Date.prototype.toISOString`'s date part at a whole-minute offset (a fractional offset's wall time is not clipped to a millisecond again, as no style's is); outside years 1–9999 it prints `\"\"`, as every style does (D7). The linked capability `format`. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
+      "_comment": "@ref LLP 1054.000.003 D2/D7/D8: the calendar date of (epochMs, utcOffset), as Intl.DateTimeFormat(\"en-US\") prints it: `medium` is { dateStyle: \"medium\" }, `month-year` is { month: \"long\", year: \"numeric\" }. @ref LLP 1102 §3.4: `iso` is `YYYY-MM-DD`, the date at that wall time: `Date.prototype.toISOString`'s date part at a whole-minute offset (a fractional offset's wall time is not clipped to a millisecond again, as no style's is); outside years 1–9999 it prints `\"\"`, as every style does (D7). A string input is a strict ASCII `YYYY-MM-DD` Gregorian date in years 0001–9999, formatted without shifting its calendar day. The offset must still be finite and within ±1080 minutes; invalid keys or offsets print `\"\"`. The linked capability `format`. @ref LLP 1054.000.003 D6 (amended 2026-11-12): `locale` marks the format locale the compiler passes after the parameters, which no call writes: `\"\"` prints these en-US forms, another names a table whose format data the plan carries (the format slot), printed as Intl prints that locale."
     },
     {
       "name": "formatNumber",

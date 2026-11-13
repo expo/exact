@@ -1,6 +1,7 @@
 # A reloaded Android canvas stays marked presented
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A replaced host drops each Android window's buffer frame and marks it preparing, and the reader, finding a presented window preparing again, covers it with the retained image and observes its status until the new canvas presents.
 **Systems:** host/linux, host/android
 **Severity:** P2
 **Author:** Grok 4.7

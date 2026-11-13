@@ -438,6 +438,8 @@ component Cart
 - Dates: `formatDate(ms, offset, "iso")` is `YYYY-MM-DD`, and `calendarDiff(from, to,
   "years")` (or `"months"`) is the whole periods between two such dates as an
   `option<number>`, counted as an age is (a Feb 29 birthday has its year on Mar 1).
+  `formatDate(due, 0, "medium")` labels a picked `YYYY-MM-DD` day directly;
+  a key keeps its calendar day at every valid offset ([dates recipe](recipes/dates-and-days.md)).
   `formatDay(then, now, offset, "day")` names a day from `now` (`Today`, `Yesterday`, else
   the date; `"day-time"` adds the time, `"list"` is a list row's, as Mail's).
 - `formatTime`, `formatDate`, `formatDay` and `formatNumber` follow the strings table
@@ -2732,6 +2734,9 @@ component Editor
       text body markup="markdown"
 ```
 
+A document longer than a screen is one reader per block, never one reader for
+the whole document ([long text](recipes/long-text.md)).
+
 Mentions, tags and citations drawn as pills in that editor and reader are
 inline atoms: declare `atom` kinds by their source form, list them in `atoms=`,
 give each source a face with `atomFaces=` (its label, icon and tooltip, its
@@ -2994,9 +2999,10 @@ control bars sits above it), and for the bottom edge the scroller at the route's
 bottom.
 `contentScrollView(for:)` reports Exact's selections too, so it does not tell an
 automatic edge from a selected one. UIKit takes a selection for the top and bottom
-edges only: it ignores a selection for a side edge, and `contentScrollView(for:)`
-raises an exception when asked for a side edge. The two edges are independent, and
-`.all` selects both.
+edges only: it ignores a selection for a side edge. The two edges are independent:
+the setter `setContentScrollView(_:for:)` takes `.all` to select both, while the
+getter `contentScrollView(for:)` takes only `.top` or `.bottom` and raises an
+exception for a side edge or `.all`.
 For example, a menu action can select the secondary pane after the arrangement
 has mounted:
 
@@ -3069,6 +3075,16 @@ tab switching, the same-URL push, external navigation, and route parameters.
 Exact's web servers use declared routes for file-like deep links: `/profile/:handle`
 admits a navigation to `/profile/photos.zip`. Existing public files win; unmatched
 file paths stay 404, even with `notfound`.
+
+A route literal may hold Unicode and spaces as they are (`"/item/café"`) or escaped, but spells
+an escape as a browser sends it: the router matches a path only as written, while a host serves
+every spelling from one file. An escape of a character a URL carries as itself (`%41` for `A`)
+or one in lower case (`%c3`) is refused (`route-pattern`), naming the spelling to write. A
+`render=build` page is written at its path decoded (`/item/caf%C3%A9` to
+`item/café/index.html`), but for what no file name may hold on every system, which stays escaped:
+a separator, `%`, `<>:"|?*`, a control character, a trailing dot or space, and a Windows device
+name's first letter (`/docs/con` to `docs/%63on/index.html`). `serve` looks pages up by that
+name; two pages that would share a file are refused.
 
 **A built site, hosted.** `bun exact.mjs web-build --out dist` writes the site to `dist/`, a
 release build as deploy makes one (no agent mode): a page for each `render=build` route

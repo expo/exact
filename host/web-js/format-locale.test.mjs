@@ -32,3 +32,31 @@ test('the format slot is the table with the hour cycle the page forces', () => {
   // "" formats en-US, with no record.
   expect(roster.x_formatTime(0, 0, 'short', '')).toBe('12:00 AM');
 });
+
+test('formatDate labels strict day keys without shifting their calendar day', () => {
+  for (const key of ['2026-10-16', '2024-02-29', '2000-02-29', '2400-02-29', '0001-01-01', '0099-12-31', '9999-12-31']) {
+    const ms = Date.parse(`${key}T00:00:00Z`);
+    for (const loc of ['', 'de', 'fr', 'ar-EG']) {
+      for (const style of ['medium', 'month-year', 'iso']) {
+        const want = roster.x_formatDate(ms, 0, style, loc);
+        for (const offset of [-1080, -720, -420, 0, 345.5, 840, 1080]) {
+          expect(roster.x_formatDate(key, offset, style, loc)).toBe(want);
+        }
+      }
+    }
+  }
+  for (const key of ['', '2026-02-29', '1900-02-29', '2100-02-29', '2024-04-31',
+    '2024-00-01', '2024-13-01', '2024-01-00', '2024-01-32', '0000-01-01',
+    '10000-01-01', '2024-2-09', '24-02-09', '2024/02/09', ' 2024-02-09',
+    '2024-02-09 ', '2024-02-09\n', '2024-02-09T00:00:00Z', '1707436800000',
+    '２０２４-02-09', '2024-٠٢-09']) {
+    for (const loc of ['', 'de']) {
+      for (const style of ['medium', 'month-year', 'iso']) {
+        expect(roster.x_formatDate(key, 0, style, loc)).toBe('');
+      }
+    }
+  }
+  for (const offset of [NaN, Infinity, -1081, 1080.1]) {
+    expect(roster.x_formatDate('2026-10-16', offset, 'medium', '')).toBe('');
+  }
+});

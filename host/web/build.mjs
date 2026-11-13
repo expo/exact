@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { writeCrawlerFiles } from './crawl.mjs';
+import { buildPageFiles, writeCrawlerFiles } from './crawl.mjs';
 import { warmGameInputs, warmGameEnvironment, publishWarmGame } from '../web-js/module.mjs';
 import { generatedInputFiles } from '../../game/inputs.mjs';
 // Build the web app (LLP 1071): the JS target, `host/web-js/build.mjs`, the
@@ -48,7 +48,7 @@ import { guardFlags, reportBuilt } from '../../scripts/help.mjs';
 import { BINARYEN_DOWNLOAD, optimizeWasm, splitStages, unsplitReason } from './stages.mjs';
 import { interfaceStyle, withInterfaceStyle, withLook } from './look.mjs';
 import { webIconLinks, webThemeColors } from '../../scripts/app-icons.mjs';
-import { appManifestDigest, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
+import { appManifestDigest, appSources, buildFileCards, copyStaticTreeIfPresent, listAssets, hostingNotes, planRouteTable, publicFileCards, replaceBuild, webEnvelope, moduleCards, MODULE_FILES } from './serve.mjs';
 import { foreignBeside } from './generations.mjs';
 import { writeAppleAssociation } from './association.mjs';
 import { cargoInputPaths, compilerPaths } from '../../scripts/cargo-dep-info.mjs';
@@ -164,6 +164,13 @@ export function webSourceRoots(app, js, render = 'rust') {
   return [...roots, ...[...files].map(file => ({ file }))];
 }
 
+/** A receipt's `sources` (serve.mjs `appSources`): the app's files as the build ends, or null when one came or went
+ * while it built (`atStart`), so that `serve` builds it again. */
+function sourcesBuilt(app, dist, atStart) {
+  const now = appSources(app.dir, dist).digest;
+  return now === atStart ? now : null;
+}
+
 function completeWebInputs(app, js, render, inputRoots, inputs, inputsAt) {
   const next = webSourceRoots(app, js, render);
   inputRoots.splice(0, inputRoots.length, ...next);
@@ -254,7 +261,7 @@ if (target !== '--wasm' && !game && !bakeOnly) {
   // What this build reads, and when, as it starts: the next check (webChanges) compares every input
   // changed since then, so a source changed or gone while it compiles, or a build published over it
   // meanwhile, is a change, never taken as built. A site to host is no drive's, and its marker names no source.
-  const inputsAt = Date.now(), inputs = outDir ? null : webInputDigests(app, true, inputRoots);
+  const inputsAt = Date.now(), inputs = outDir ? null : webInputDigests(app, true, inputRoots), sources = appSources(app.dir, dist).digest;
   // A site to host is a release, as delivery builds one (`--production`): agent mode refused, the app's storage its id
   // alone, its install pages a release's.
   const release = outDir ? { flags: ['--production'], env: { EXACT_UPDATE_TRUST: 'production' } } : { flags: [], env: {} };
@@ -279,7 +286,8 @@ if (target !== '--wasm' && !game && !bakeOnly) {
     // (`--out`), built again (to the same directory, as a release) when what it was built from changes.
     // `env`: each setting app.ts read, as inlined, and its source (LLP 1153 D4), for the drive's logs and `changedSettings`.
     writeFileSync(resolve(stage, '.exact-build.json'), JSON.stringify({ exactBuild: 1, target: 'js', app: { id: app.id, name: app.displayName },
-      manifestSha256: appManifestDigest(app), files: buildFileCards(stage), ...(inputs ? { inputs, inputsAt, inputRoots } : {}), ...builtSettings(stage), ...(outDir ? { release: true } : {}) }) + '\n');
+      manifestSha256: appManifestDigest(app), files: buildFileCards(stage), ...(inputs ? { inputs, inputsAt, inputRoots } : {}), sources: sourcesBuilt(app, dist, sources),
+      ...builtSettings(stage), ...(outDir ? { release: true } : {}) }) + '\n');
     // A site to host holds the site, not the build's intermediates (`.gen`, the app's captured sources among them;
     // the receipt's file cards name no dot path), but for what `serve` renders a `render=request` or `cached` route's
     // page with, when it has such a route: the server bundle (LLP 1153 D3.4) and the analyzed sheet a page selects
@@ -333,7 +341,7 @@ const keepNames = process.env.EXACT_WEB_NAMES === '1';
 const unsplit = keepNames || buildEnv.EXACT_WEB_LINK === 'all' ? 'a development or names build' : unsplitReason();
 if (keepNames || !unsplit) buildEnv.CARGO_PROFILE_WEB_STRIP = 'debuginfo';
 // Capture before the bake so edits made during compilation or packaging stay detectable.
-const inputsAt = Date.now(), inputs = webInputDigests(app, false, inputRoots);
+const inputsAt = Date.now(), inputs = webInputDigests(app, false, inputRoots), sources = appSources(app.dir, dist).digest;
 const generated = game ? generatedInputFiles(app.dir) : [];
 const warmInputs = !bakeOnly ? warmGameInputs(app, {...buildEnv, EXACT_GAME_PROOF_PROFILE:proofProfile}) : null;
 const buildReceipt = contractLast(() => buildBake(app, 'web', 'wasm32-unknown-unknown', {env:buildEnv, check:bakeOnly, gpuProfile}));
@@ -640,15 +648,15 @@ if (buildLocations.length && renderAt) {
   const shell = readFileSync(resolve(stage, 'index.html'), 'utf8');
   const pages = rendered.stdout.split('\n').filter(Boolean).map((line) => JSON.parse(line));
   if (pages.length) writeFileSync(resolve(stage, 'shell.html'), shell);
-  for (const doc of pages) {
-    if (doc.error) throw new Error(`${renderBin} ${doc.location}: ${doc.error}`);
-    const html = doc.page;
-    const file = doc.notfound ? '404.html' : `${decodeURIComponent(doc.location).replace(/^\/|\/$/g, '')}/index.html`.replace(/^\//, '');
-    if (resolve(stage, file) === stage || !within(stage, resolve(stage, file))) throw new Error(`${renderBin}: location ${doc.location} leaves dist`);
+  for (const doc of pages) if (doc.error) throw new Error(`${renderBin} ${doc.location}: ${doc.error}`);
+  // Each page's file as the JS target's writers choose it and the servers look it up (crawl.mjs `buildPageFiles`).
+  const routeTable = planRouteTable(planBytes), files = buildPageFiles(stage, pages, routeTable);
+  for (const [i, doc] of pages.entries()) {
+    const html = doc.page, file = files[i];
     mkdirSync(resolve(stage, file, '..'), { recursive: true });
     writeFileSync(resolve(stage, file), html);
   }
-  if (pages.length) writeCrawlerFiles(stage, pages, app.origin, planRouteTable(planBytes));
+  if (pages.length) writeCrawlerFiles(stage, pages, app.origin, routeTable);
   // A render that reached its deadline still ships: its placeholders show
   // until the runtime asks what was pending (LLP 1048.000 D9).
   const late = pages.filter((doc) => doc.settled === false).map((doc) => doc.location);
@@ -732,7 +740,7 @@ writeFileSync(resolve(stage, '.exact-build.json'), JSON.stringify({
   exactBuild: 1, app: { id: app.id, name: app.displayName }, manifestSha256: appManifestDigest(app),
   files: await publicFileCards(stage).finally(closeFilesystemReader),
   // Content digests of what this build read: a staleness check compares bytes, not times.
-  inputs, inputsAt, inputRoots,
+  inputs, inputsAt, inputRoots, sources: sourcesBuilt(app, dist, sources),
   // Each setting its module inlined (LLP 1153 D4), from the paired module's receipt, as a JS build's marker says them.
   ...builtSettings(stage),
 }) + '\n');

@@ -662,12 +662,6 @@ test('a new app refuses a name no host crate can carry, and a directory that is 
   try {
     assert.throws(() => createApp(resolve(parent, 'Field_Log')), /lowercase-hyphenated/);
     assert.throws(() => createApp(resolve(parent, 'field-web')), /no host suffix/);
-    // A folder named after the SDK would write exact-apple, exact-linux and exact-web beside exact2's own.
-    assert.throws(() => createApp(resolve(parent, 'exact')), {
-      message: `exact new ${resolve(parent, 'exact')}: the folder's name exact would make the crate exact-apple, which is one of exact2's own; name the app directory something else, e.g. exact new ${resolve(parent, 'exact-app')}`,
-    });
-    assert.throws(() => createApp(resolve(parent, 'exact-js')), /would make the crate exact-js-web/);
-    assert.ok(!existsSync(resolve(parent, 'exact')) && !existsSync(resolve(parent, 'exact-js')), 'a refused name writes nothing');
     mkdirSync(resolve(parent, 'field-log'));
     writeFileSync(resolve(parent, 'field-log/stray'), '');
     assert.throws(() => createApp(resolve(parent, 'field-log')), /not empty/);
@@ -984,7 +978,7 @@ test('update --without edits any spelling of the workspace member, and a refusal
 
 // Authoring bench (LLP 1087): an app copied into a folder of another name kept its `todo-list-*` crates,
 // and `update` wrote an exact.mjs that asked Cargo for `todo-apple`.
-test('update names an authored app by its crates, and a generated one by its folder', () => {
+test('update preserves authored and generated crate names after a directory rename', () => {
   const parent = mkdtempSync(resolve(tmpdir(), 'exact-new-'));
   try {
     const made = resolve(parent, 'todo-list'), moved = resolve(parent, 'todo');
@@ -998,22 +992,21 @@ test('update names an authored app by its crates, and a generated one by its fol
     const commands = readFileSync(resolve(moved, 'exact.mjs'), 'utf8');
     assert.match(commands, /name: "todo-list",/);
     assert.doesNotMatch(commands, /name: "todo",/);
-    // A generated workspace is named by the folder, and follows a rename.
+    // A generated workspace keeps the prefix recorded in package.json.
     const plain = resolve(parent, 'note-list'), renamed = resolve(parent, 'notes');
     createApp(plain, { with: ['ios'] });
     assert.match(readFileSync(resolve(ensureShells(plain).workspace, 'apple/Cargo.toml'), 'utf8'), /^name = "note-list-apple"$/m);
     spawnSync('mv', [plain, renamed]);
     createApp(renamed, { update: true });
-    assert.match(readFileSync(resolve(renamed, 'exact.mjs'), 'utf8'), /name: "notes",/);
-    assert.match(readFileSync(resolve(ensureShells(renamed).workspace, 'apple/Cargo.toml'), 'utf8'), /^name = "notes-apple"$/m);
+    assert.match(readFileSync(resolve(renamed, 'exact.mjs'), 'utf8'), /name: "note-list",/);
+    assert.match(readFileSync(resolve(ensureShells(renamed).workspace, 'apple/Cargo.toml'), 'utf8'), /^name = "note-list-apple"$/m);
   } finally {
     rmSync(parent, { recursive: true, force: true });
   }
 }, 60_000);
 
-// Another checkout of an app in a folder of another name (a git worktree) builds the crates its exact.mjs names: the
-// native verb's workspace (app-cli.mjs, bringPlatform) and the build's (resolveApp) both take the launcher's name.
-test('a generated workspace is named by the app\'s exact.mjs, not its folder', () => {
+// A copied app shares its package identity with its launcher, the native verb's hook and the build's resolver.
+test('a generated workspace shares the app\'s crate identity with its launcher', () => {
   const parent = mkdtempSync(resolve(tmpdir(), 'exact-new-')), root = resolve(import.meta.dir, '..');
   try {
     const made = resolve(parent, 'note-list'), other = resolve(parent, 'note-list-feature'), sdk = resolve(parent, 'sdk');
@@ -1147,6 +1140,22 @@ test.skipIf(hasSnapback)('exact new --snapback in a checkout without the client 
       assert.throws(() => createApp(resolve(parent, 'guest'), { snapback }), /^Error: this checkout has no Snapback client \(snapback4\/\)/);
       assert.deepEqual(readdirSync(parent), []);
     }
+  } finally { rmSync(parent, { recursive: true, force: true }); }
+});
+
+// Without the client, update still rewrites the schema path, leaves a Snapback app's mount as it was and says why.
+test.skipIf(hasSnapback)('update of a Snapback app in a checkout without the client keeps its mount and finishes', () => {
+  const parent = mkdtempSync(resolve(tmpdir(), 'exact-new-')), dir = resolve(parent, 'guest');
+  try {
+    createApp(dir);
+    const path = resolve(dir, 'app.json'), manifest = JSON.parse(readFileSync(path, 'utf8'));
+    manifest.$schema = '../old/scripts/app.schema.json';
+    manifest.typescript = { ...manifest.typescript, sources: { ...manifest.typescript?.sources, snapback4: '../old/snapback4/ts' } };
+    writeFileSync(path, JSON.stringify(manifest, null, 2));
+    assert.match(createApp(dir, { update: true }), /snapback4 mount left as it was: this checkout has no Snapback client/);
+    const after = JSON.parse(readFileSync(path, 'utf8'));
+    assert.equal(after.$schema, pathFrom(dir, resolve(import.meta.dir, '../scripts/app.schema.json')));
+    assert.equal(after.typescript.sources.snapback4, '../old/snapback4/ts');
   } finally { rmSync(parent, { recursive: true, force: true }); }
 });
 

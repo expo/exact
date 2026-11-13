@@ -1,8 +1,12 @@
 import { expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { posix, resolve, win32 } from 'node:path';
 import { buildPageFiles, writeCrawlerFiles } from './crawl.mjs';
+import { serveBuildTree } from './serve.mjs';
+import { webCompiler } from '../web-js/module.mjs';
 
 const ORIGIN = 'https://site.invalid';
 const page = (location, more = {}) => ({ location, notfound: false, status: 200, robots: null, page: '<html>', ...more });
@@ -110,3 +114,40 @@ test('robots directives use their names, not values', () => {
   ]);
   expect(locs(sitemap)).toEqual(['https://site.invalid/preview', 'https://site.invalid/other']);
 });
+
+// No page file is a name Windows refuses: a device name, with any extension or in any case, keeps its first letter
+// escaped, as the servers look it up.
+test('a page at a Windows device name is written with its first letter escaped', () => {
+  const pages = ['/docs/con', '/CON', '/aux.html', '/x/Nul', '/com1', '/lpt9.txt', '/com%C2%B9', '/console', '/com10', '/con-tact'].map((location) => page(location));
+  for (const [paths, dir] of [[posix, '/site/dist'], [win32, 'C:\\site\\dist']]) {
+    expect(buildPageFiles(dir, pages, [], paths)).toEqual(['docs/%63on/index.html', '%43ON/index.html', '%61ux.html/index.html', 'x/%4Eul/index.html',
+      '%63om1/index.html', '%6Cpt9.txt/index.html', '%63om¹/index.html', 'console/index.html', 'com10/index.html', 'con-tact/index.html']);
+  }
+});
+
+// expo/exact#414: a route declared percent-encoded, one in Unicode as written and one at a device name are in the
+// sitemap at their URLs, and each URL serves its page.
+test('a render=build page is served at its sitemap URL however its route spells the path', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(tmpdir(), 'crawl-site-')), out = resolve(dir, 'dist');
+  let server;
+  try {
+    writeFileSync(resolve(dir, 'app.json'), JSON.stringify({ name: 'Site', app: { id: 'test.site', name: 'Site', origin: 'https://site.invalid' }, host: { web: {} } }));
+    writeFileSync(resolve(dir, 'app.contract'), 'routes nav\n  home "/" render=build\n  encoded "/item/caf%C3%A9" render=build\n  literal "/word/naïve" render=build\n'
+      + '  device "/docs/con" render=build\n\ncomponent App\n  view\n    text `Page ${top(nav).name}`\n');
+    const built = spawnSync(process.execPath, ['host/web/build.mjs', dir, '--out', out, '--render', 'js'], { cwd: root, env: { ...process.env, EXACT_APP_DIR: dir }, encoding: 'utf8' });
+    expect(built.status, built.stdout + built.stderr).toBe(0);
+    expect(['item/café/index.html', 'word/naïve/index.html', 'docs/%63on/index.html'].map((file) => existsSync(resolve(out, file)))).toEqual([true, true, true]);
+    const urls = ['/item/caf%C3%A9', '/word/na%C3%AFve', '/docs/con'];
+    expect(locs(readFileSync(resolve(out, 'sitemap.xml'), 'utf8'))).toEqual(['https://site.invalid/', ...urls.map((u) => `https://site.invalid${u}`)]);
+    server = createServer((req, res) => serveBuildTree(out, req, res));
+    await new Promise((ok) => server.listen(0, '127.0.0.1', ok));
+    for (const [path, name] of [[urls[0], 'encoded'], [urls[1], 'literal'], [urls[2], 'device']]) {
+      const r = await fetch(`http://127.0.0.1:${server.address().port}${path}`, { headers: { accept: 'text/html' } });
+      expect([path, r.status, (await r.text()).includes(`Page ${name}`)]).toEqual([path, 200, true]);
+    }
+  } finally {
+    if (server) { server.closeAllConnections(); await new Promise((ok) => server.close(ok)); }
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 120000);

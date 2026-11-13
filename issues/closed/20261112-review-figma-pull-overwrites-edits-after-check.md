@@ -1,6 +1,7 @@
 # A Figma pull overwrites edits made after its conflict check
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A check records the export it read and the file's collections and variables as it read them (refusing if they changed during its reads), and the apply of that export compares the file with that record just before its first write and writes nothing if anything changed.
 **Systems:** tools/figma-tamber/src/code.ts, tools/figma-tamber/src/ui.ts
 **Author:** Codex
 **Date:** 2026-11-12

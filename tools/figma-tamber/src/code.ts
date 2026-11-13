@@ -97,9 +97,11 @@ async function holding(plan: Plan): Promise<{ now: Held; unread: { variable: str
  * longer has go, a variable whose type changed is made again. A collection
  * of the plan's name this plugin did not make is refused, never taken
  * over. Each collection's id and its modes' are written into the plan. */
-async function write(plan: Plan, before: Plan | null, fresh = false) {
+async function write(plan: Plan, before: Plan | null, fresh = false, seen?: string) {
   const collections = await figma.variables.getLocalVariableCollectionsAsync();
   const variables = await figma.variables.getLocalVariablesAsync();
+  // (`seen`: the file as the check read it; from this read on nothing waits until the writes are done)
+  if (seen !== undefined && stateOf(collections, variables) !== seen) throw new Error(CHANGED);
   // Each collection first, refused before anything is touched: the one the
   // last pull wrote (by id), else one of the plan's name this plugin made
   // that no other of the last pull's collections is; one each.
@@ -229,6 +231,17 @@ async function roomRefusal(e: any): Promise<string> {
 }
 /** Whether the document changed since the last undo step was committed. */
 let dirty = false;
+
+/** The file's collections and variables, everything a pull reads or writes:
+ * equal states, nothing there changed between them. Read without a wait. */
+const stateOf = (collections: any[], variables: any[]) => JSON.stringify([
+  collections.map(c => [c.id, c.name, c.defaultModeId, c.modes.map((m: any) => [m.modeId, m.name]), c.getSharedPluginData?.(KEY, 'owned') ?? '']),
+  variables.map(v => [v.id, v.name, v.variableCollectionId, v.resolvedType, v.getSharedPluginData?.(KEY, 'token') ?? '', v.valuesByMode]),
+]);
+const state = async () => stateOf(await figma.variables.getLocalVariableCollectionsAsync(), await figma.variables.getLocalVariablesAsync());
+/** The last check: the export it read and the file as it read it, which an apply of that export must find unchanged. */
+let checked: { text: string; state: string } | null = null;
+const CHANGED = 'the file\'s variables changed after this pull was checked, and it would write over what was not reviewed: pull again';
 /** Figma's refusal of one mode too many, as `write` marks it at `addMode`, and nothing else. */
 const tooManyModes = (e: any) => typeof e?.capacity === 'number';
 /** The modes a collection may have, from Figma's refusal (`Limited to N modes`). */
@@ -250,6 +263,9 @@ figma.ui.onmessage = async (msg: any) => {
         // one, by token and context; and the contexts the design added or dropped.
         // And what it could not read there (an alias to nowhere, a mode gone), which a pull overwrites.
         // And the variables a pull removes or makes again (a token the design dropped, a type changed): their bindings go.
+        // (and the file as it read it, unchanged across its reads, which the apply of this export must find again)
+        checked = null;
+        const start = await state();
         const { plan } = stored(), doc = JSON.parse(msg.text), held = plan ? await holding(plan) : { now: {}, unread: [] };
         // (each live variable that goes, in each collection, by the name it has in the file now)
         const fresh = new Map(pull(doc, Infinity).collections[0].variables.map(v => [v.token, v.type])), drops: { token: string; collection: string; variable: string; why: string }[] = [];
@@ -291,6 +307,9 @@ figma.ui.onmessage = async (msg: any) => {
             }
           }
         }
+        const end = await state();
+        if (end !== start) throw new Error('the file\'s variables changed while this pull was being checked: pull again');
+        checked = { text: msg.text, state: end };
         say({ type: 'checked', conflicts: plan ? conflicts(plan, doc, held.now) : [], unread: held.unread, drops, aliases, revived, contexts: plan ? contextsMoved(plan, doc) : { added: [], removed: [] } });
         break;
       }
@@ -300,6 +319,10 @@ figma.ui.onmessage = async (msg: any) => {
         // is. The whole apply is one undo step: refused, Figma's undo takes
         // back everything it did, the earlier pull's collections, modes,
         // variables, values and the kept export as they were.
+        // Only the export the last check read, over the file as it read it (write compares, before any change).
+        const seen = checked;
+        checked = null;
+        if (!seen || seen.text !== msg.text) throw new Error('this pull was not checked: pull again');
         const doc = JSON.parse(msg.text), before = stored().plan;
         // (undone only when something changed since the step began: never an undo of the person's own last edit)
         const undo = () => { if (dirty) figma.triggerUndo(); dirty = false; };
@@ -309,7 +332,7 @@ figma.ui.onmessage = async (msg: any) => {
           // The last pull's layout while the contexts are the same: one collection a tuple stays so, a plan's limit raised or not.
           const moved = before && contextsMoved(before, doc), split = !!before?.collections.some(c => c.name !== 'Tamber');
           let plan = pull(doc, split && !moved?.added.length && !moved?.removed.length ? 2 : Infinity);
-          try { await write(plan, before); } catch (e) {
+          try { await write(plan, before, false, seen.state); } catch (e) {
             if (!tooManyModes(e)) throw e;
             undo();
             figma.commitUndo();

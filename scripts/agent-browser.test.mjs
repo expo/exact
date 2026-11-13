@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { hostname, tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { need, notApplicable } from './coverage.mjs';
-import { chromium, driveStore, exclusiveWebStore, launchFacts, webNeeds, quitBrowser, pollUntil } from './agent-launch.mjs';
+import { chromium, driveStore, exclusiveWebStore, launchFacts, removeDriveStore, webNeeds, quitBrowser, pollUntil } from './agent-launch.mjs';
 import { resolveApp } from './app.mjs';
 
 const posix = process.platform === 'win32' ? 'SingletonLock is a POSIX symlink' : null;
@@ -128,6 +128,20 @@ test('a named browser that does not exit on close keeps its owner record and rel
     await expect(carrier.close()).rejects.toThrow('did not exit');
     expect(readFileSync(owner, 'utf8')).toBe(`${hostname()}-${process.pid}`);
     await expect(exclusiveWebStore(options, () => { throw new Error('must refuse first'); })).rejects.toThrow(`Chrome ${process.pid} still owns this profile`);
+    // A throwaway store's cleanup keeps the profile and the record while that browser may live.
+    const store = driveStore(resolveApp(options.app), options.storage, options.env);
+    mkdirSync(store.profile, {recursive: true});
+    expect(await removeDriveStore(store, options.storage)).toBe(false);
+    expect([existsSync(store.profile), existsSync(owner)]).toEqual([true, true]);
+    const closed = await exclusiveWebStore({...options, storage: 'closed'}, async launched => {
+      launched.beforeSpawn(); launched.onProcess({pid: process.pid});
+      return {close: async () => {}};
+    });
+    await closed.close();
+    const gone = driveStore(resolveApp(options.app), 'closed', options.env);
+    mkdirSync(gone.profile, {recursive: true});
+    expect(await removeDriveStore(gone, 'closed')).toBe(true);
+    expect([existsSync(gone.profile), existsSync(resolve(base + '-locks', 'closed'))]).toEqual([false, false]);
   } finally { rmSync(cache, {recursive: true, force: true}); }
 });
 

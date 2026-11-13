@@ -1,6 +1,7 @@
 # Android speech availability checks leak a thread per call
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** checkRecognitionSupport answers on the application's main executor, so an availability check makes no thread.
 **Systems:** packages/speech-recognition
 **Severity:** P2
 **Author:** Grok 4.7

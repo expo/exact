@@ -1005,7 +1005,10 @@ the host presents no frames (the harness never does): due at
 the runner's (`runner/src/stdlib.rs`, `runner/src/format/`) transcribed:
 `en-US` at the fixed UTC offset the call names, the wall time truncated
 then shifted and held to years 1–9999 (else `""`), the calendar by
-Hinnant's `civil_from_days` over integers, compact numbers from the
+Hinnant's `civil_from_days` over integers. `formatDate` also takes a strict
+ASCII `YYYY-MM-DD` Gregorian day key in years 0001–9999, validated by
+`Str.isoDate` and formatted without shifting its day; invalid keys or offsets
+print `""`. Compact numbers come from the
 shortest digits Rust's `{}` prints (of two equally near shortest forms the
 upper, where `toString` takes the even). `t(...)` reads the strings tables
 (`strings/<locale>.json` beside the source), which the embedding carries

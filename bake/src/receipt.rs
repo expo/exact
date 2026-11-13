@@ -78,7 +78,15 @@ pub(crate) fn emit(
     }
     source_map(trust, app, out, &plan, &plan_bytes);
     let plan_card = json!({"sha256": hash(&plan_bytes), "bytes": plan_bytes.len()});
-    let mut assets = asset_cards(app, out, manifest)?;
+    let (mut assets, thinned) = asset_cards(app, out, manifest, platform)?;
+    // A binary whose roster holds one texture family has a renderer that
+    // chooses among what its bundle holds; an older one falls back to files
+    // a thinned update leaves out. So thinning is a new cohort, and an update
+    // is thinned only for a cohort that says it was (`scripts/push.mjs`).
+    if let Some(family) = thinned {
+        compat.inputs["textureFamily"] = Value::String(family);
+        compat.id = crate::compat::compatibility_digest(&compat.inputs);
+    }
     let pictures = asset_islands(app, &assets);
     let (widget_assets, plans) = crate::widgets::emit(
         out,
@@ -229,29 +237,46 @@ fn gpu_card(
 // The same directory-owned gate used by copying, including direct Cargo
 // bakes. This tooling process does not link Unix filesystem code into a wasm
 // consumer of `contract`; its Cargo cache is distinct from the calling build.
-fn asset_cards(app: &Path, out: &Path, manifest: &Manifest) -> Result<Vec<Value>, String> {
+// A native platform's roster leaves out the texture families its devices do
+// not read (`scripts/texture-families.mjs`), and its bundle holds the roster;
+// the family it kept, when it left any file out.
+fn asset_cards(
+    app: &Path,
+    out: &Path,
+    manifest: &Manifest,
+    platform: &str,
+) -> Result<(Vec<Value>, Option<String>), String> {
     let gate = Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/filesystem.mjs");
     println!("cargo:rerun-if-changed={}", gate.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        gate.with_file_name("texture-families.mjs").display()
+    );
     let code = r#"
         import {pathToFileURL} from 'node:url';
         import {resolve} from 'node:path';
         import {createHash} from 'node:crypto';
         const {filesystem} = await import(pathToFileURL(process.argv[1]));
         const {shaderFiles,shaderRoots,shaderPreludeFiles} = await import(pathToFileURL(resolve(process.argv[1],'../app.mjs')));
+        const {bundledFamily,unbundledTextures} = await import(pathToFileURL(resolve(process.argv[1],'../texture-families.mjs')));
         const app={dir:process.argv[2],manifest:JSON.parse(process.argv[3])};
-        const cards=[];
+        let cards=[];
         for (const [source,prefix] of [['assets','assets'],['deck','deck']]) {
             const tree=filesystem({op:'inventory',root:resolve(process.argv[2],source),optionalRoot:true});
             for (const [name,card] of Object.entries(tree??{})) cards.push({name:`${prefix}/${name}`,...card});
         }
+        const held=bundledFamily(process.argv[4]), unbundled=unbundledTextures(cards.map(c=>c.name),held);
+        cards=cards.filter(c=>!unbundled.has(c.name));
         for (const [name,bytes] of shaderFiles(app)) cards.push({name:`shaders/${name}`,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length});
-        process.stdout.write(JSON.stringify({cards:cards.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0),roots:[...shaderRoots(app),...shaderPreludeFiles(app)]}));
+        process.stdout.write(JSON.stringify({cards:cards.sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0),roots:[...shaderRoots(app),...shaderPreludeFiles(app)],
+            family:unbundled.size?held:null}));
     "#;
     let output = crate::bun()
         .args(["--input-type=module", "-e", code])
         .arg(gate)
         .arg(app)
         .arg(manifest.json.to_string())
+        .arg(platform)
         .output()
         .map_err(|e| format!("bake asset gate: {}", crate::bun_error(e)))?;
     if !output.status.success() {
@@ -307,7 +332,8 @@ fn asset_cards(app: &Path, out: &Path, manifest: &Manifest) -> Result<Vec<Value>
     for path in paths {
         println!("cargo:rerun-if-changed={}", path.display());
     }
-    Ok(cards)
+    let family = inventory["family"].as_str().map(str::to_owned);
+    Ok((cards, family))
 }
 
 /// Whether an asset of `cards` is an SVG whose picture can show an island

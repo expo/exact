@@ -1,12 +1,15 @@
 // Location and pattern matching shared by the JS router and web servers.
 const HEX = "0123456789ABCDEF", utf8 = new TextEncoder();
 export const enc = (s, esc) => { let o = ""; for (const b of utf8.encode(s)) o += esc(b) ? "%" + HEX[b >> 4] + HEX[b & 15] : String.fromCharCode(b); return o; };
-/** A built page's filesystem path keeps separators, percent signs and filename-reserved bytes escaped. */
+/** A built page's filesystem path keeps separators, percent signs and filename-reserved bytes escaped, and a Windows
+ * device name (`CON`, `NUL`, `COM1`, `LPT¹`…, with any extension) its first letter, so no segment is a name Windows
+ * refuses ("Naming Files, Paths, and Namespaces"). */
 export function filePathOf(path) {
   const escape = c => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0');
   return path.split('/').map(s => decodeURIComponent(s)
     .replace(/[%/\\:*?"<>|\x00-\x1f]/g, escape)
-    .replace(/[. ]+$/, s => [...s].map(escape).join(''))).join('/');
+    .replace(/[. ]+$/, s => [...s].map(escape).join(''))
+    .replace(/^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?=\.|$)/i, s => escape(s[0]) + s.slice(1))).join('/');
 }
 export const dec = (s, plus) => { const out = []; for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); if (c === 37 && /^[0-9a-f]{2}$/i.test(s.substr(i + 1, 2))) { out.push(parseInt(s.substr(i + 1, 2), 16)); i += 2; } else if (plus && c === 43) out.push(32); else out.push(...utf8.encode(s[i])); } return new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(out)); };
 const clean = s => s.replace(/^[\0- ]+|[\0- ]+$/g, "").replace(/[\t\n\r]/g, "");

@@ -1,10 +1,11 @@
 import { test, expect } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, relative, resolve } from 'node:path';
 import { webChanges, webInputDigests } from '../../scripts/agent-launch.mjs';
 import { webSourceRoots } from './build.mjs';
+import { appSources } from './serve.mjs';
 import { WEB_TOOLCHAIN } from '../../scripts/app.mjs';
 
 const root = resolve(import.meta.dir, '../..');
@@ -246,4 +247,30 @@ test('a web marker without roots checks the shared runtime by time, as the dev l
     utimesSync(marker, new Date(10_000), new Date(10_000));
     expect(webChanges(dist, { dir, manifest: {} }).shared).toContain('host/web-js/rt.js');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// expo/exact#415: what a build writes under the app is no source of it, wherever Cargo's target directory is, so a
+// build's receipt and `serve` list the same sources before and after it.
+test('the sources a receipt lists leave out the build output, dependencies and Cargo\'s target directory', () => {
+  const dir = mkdtempSync(resolve(tmpdir(), 'web-sources-')), out = resolve(dir, 'dist'), was = process.env.CARGO_TARGET_DIR;
+  try {
+    write(dir, 'app.contract', 'component App\n  view\n    text "a"\n');
+    write(dir, 'assets/a.txt', 'a');
+    process.env.CARGO_TARGET_DIR = resolve(dir, 'build');
+    const before = appSources(dir, out);
+    for (const file of ['build/web-js-dev-stage/0123/app.js', 'target/debug/x', 'node_modules/p/index.js', 'dist/index.html', 'dist.gen/x/app.js', 'app.contract.d.ts', '.exact/x'])
+      write(dir, file, 'x');
+    expect(appSources(dir, out).digest).toBe(before.digest);
+    // The app named through a link, and the output by its real path (as `web-build --out` names it): the same files.
+    const link = `${dir}-link`;
+    symlinkSync(dir, link);
+    try { expect(appSources(link, resolve(realpathSync(dir), 'dist')).digest).toBe(before.digest); } finally { rmSync(link, { force: true }); }
+    write(dir, 'assets/b.txt', 'b');
+    const added = appSources(dir, out).digest;
+    rmSync(resolve(dir, 'assets/a.txt'));
+    expect([added === before.digest, appSources(dir, out).digest === added]).toEqual([false, false]);
+  } finally {
+    if (was === undefined) delete process.env.CARGO_TARGET_DIR; else process.env.CARGO_TARGET_DIR = was;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

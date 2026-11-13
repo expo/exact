@@ -1041,7 +1041,6 @@ public final class ExactSession {
     /// @ref LLP 1038 D7/D11 — observation only; Swift never interprets slots.
     private(set) var routerOp: [String: Any]?
 
-
     /// A batch from a timer, a scroll event or a host's measurement: one that
     /// changes nothing only moves the clock. An app's timer that writes nothing
     /// (a poll that finds no news), a `scroll=` handler whose writes show
@@ -1160,6 +1159,7 @@ public final class ExactSession {
         }
         // Each presenter takes its boot's table, a second one with the same too.
         ThemeRoles.apply(batch, root: presenter.root); if batch.ops.contains(where: { $0.op == .roles }) { presenter.applyThemeTint() }
+        let orientationChanged = presenter.orientationChangesScreen(batch)
         ThemeRoles.within(presenter.root) { presenter.apply(batch) }; Tambers.moved(self) // bindings' places (LLP 1121 D12)
         if !batch.canvasImages.isEmpty { presenter.canvas2d.load(batch.canvasImages) }
         AnimatedRasters.shared.poke()
@@ -1186,7 +1186,7 @@ public final class ExactSession {
             transformInputHold?.cancelIfInputIneligible()
             presenter.transformGeometry.changed()
             applying = false
-            ExactLaunch.shared.applied(self, batch)
+            ExactLaunch.shared.applied(self, batch, orientationChanged: orientationChanged)
             workEnded()
             #if os(macOS)
             regions.flush()

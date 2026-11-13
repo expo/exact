@@ -8,7 +8,8 @@
 // route with no header, so its tab is a plain view controller. Home and Five
 // push a route, and Home presents Sheet, whose Five selects Five. With
 // Redirect on, Four's press selects Three: a press that moves the router to a
-// tab other than the one tapped.
+// tab other than the one tapped. With Decline on, Six's press leaves the
+// router where it is.
 routes nav
   tab home "/"
     detail "/detail"
@@ -22,8 +23,9 @@ routes nav
 
 component MoreTabs
   state redirecting = false
+  state declining = false
   action pick(name: string)
-    nav = select(nav, (redirecting and name == "four") ? "three" : name)
+    nav = (declining and name == "six") ? nav : select(nav, (redirecting and name == "four") ? "three" : name)
   action open(url: string)
     nav = push(nav, url)
   action back
@@ -32,6 +34,8 @@ component MoreTabs
     nav = go(nav, url)
   action redirect
     redirecting = not redirecting
+  action decline
+    declining = true
   view
     main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%" display="flex" flex-direction="column"
       column flex=1 min-height=0 position="relative"
@@ -61,6 +65,8 @@ component MoreTabs
                       text "Detail"
                     button press=redirect testId="redirect"
                       text (redirecting ? "Redirecting Four" : "Redirect Four")
+                    button press=decline testId="decline"
+                      text "Decline Six"
                     button press=open("/sheet") testId="open-sheet"
                       text "Sheet"
                   if e.name == "sheet"

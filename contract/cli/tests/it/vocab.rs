@@ -653,7 +653,7 @@ fn the_functions_are_listed_and_in_the_json() {
     assert!(one["function"]["rules"][0]["example"]
         .as_str()
         .unwrap()
-        .contains("Sep 21, 2026"));
+        .contains("`formatDate(\"2026-10-16\", 0, \"medium\")` is `\"Oct 16, 2026\"`"));
 }
 
 /// The grammar's table is the roster's: every standard function has a row

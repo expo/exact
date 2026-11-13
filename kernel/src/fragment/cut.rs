@@ -397,14 +397,15 @@ pub(crate) fn container(
     let s = arena.style(slot);
     let l = tree.layout(node);
     let (p, b) = (l.padding, l.border);
-    let (x0, y0) = (p.left + b.left, p.top + b.top);
+    let rtl = arena.computed_style(slot, StyleMask::INHERITED).direction == Direction::Rtl;
+    let gutter_left = if rtl { l.scrollbar_size.width } else { 0.0 };
+    let (x0, y0) = (p.left + b.left + gutter_left, p.top + b.top);
     // The block axis outside the content box: padding, borders and a bottom gutter
     let inset_v = p.top + p.bottom + b.top + b.bottom + l.scrollbar_size.height;
     let u = (l.size.width - p.left - p.right - b.left - b.right - l.scrollbar_size.width).max(0.0);
     let (n, w) = m.columns(u);
     let n = n as usize;
     let gap = m.gap;
-    let rtl = arena.computed_style(slot, StyleMask::INHERITED).direction == Direction::Rtl;
     let left = |k: usize| {
         let at = k as f32 * (w + gap);
         if rtl {

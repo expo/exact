@@ -3,7 +3,8 @@
 // sidebar-adaptable bar. The last says `rel="search"`, so iOS 18 and later
 // make it a `UISearchTab`; its root's header field says `autofocus`, so
 // iOS 26 activates the field when the tab is selected. Home pushes Detail;
-// Strip takes away the search tab's symbol, label and field.
+// Strip takes away the search tab's symbol, label and field; with Hold on,
+// Saved's press leaves the router where it is: the app declines Saved.
 routes nav
   tab home "/"
     detail "/detail"
@@ -13,8 +14,9 @@ routes nav
 component SearchTabs
   state query = ""
   state bare = false
+  state holding = false
   action pick(name: string)
-    nav = select(nav, name)
+    nav = (holding and name == "saved") ? nav : select(nav, name)
   action follow(url: string)
     nav = go(nav, url)
   action open
@@ -25,6 +27,8 @@ component SearchTabs
     query = v
   action strip
     bare = true
+  action hold
+    holding = true
   view
     main navigationKey=`${top(nav).id}` navigationBack="back" navigate=follow testId="app" width="100%" height="100%"
       display="flex" flex-direction="column"
@@ -49,6 +53,8 @@ component SearchTabs
                       text "Open"
                     button press=strip testId="strip"
                       text "Strip"
+                    button press=hold testId="hold"
+                      text "Hold"
                   text `${e.name} ${query}` testId=`text-${e.name}`
       row role="tablist" testId="tabs"
         button role="tab" aria-controls="panel-home" aria-selected=(nav.tab == "home") press=pick("home")

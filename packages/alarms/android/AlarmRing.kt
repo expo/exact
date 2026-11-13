@@ -283,6 +283,9 @@ class AlarmService : Service() {
     private val limits = HashMap<String, Runnable>()
     private var player: MediaPlayer? = null
     private var foregroundCode = 0
+    /** The latest start delivered. Stopping with it (`stopSelf(startId)`) ends the service only when no newer start is
+     * on its way, so an alarm started as the last ring ends is not taken down with the service. */
+    private var lastStart = 0
     private val main = Handler(Looper.getMainLooper())
 
     /** Notifications or the alarm channel blocked while ringing takes the Stop away, so every ring ends (D7). Android
@@ -307,6 +310,7 @@ class AlarmService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastStart = startId
         val tag = intent?.getStringExtra("tag")
         val r = tag?.let { AlarmRecords.get(this, it) }
         AlarmRing.channels(this)
@@ -316,7 +320,7 @@ class AlarmService : Service() {
             if (ringing.isEmpty()) {
                 foreground(Int.MAX_VALUE, Notification.Builder(this, AlarmRing.RING).setSmallIcon(android.R.drawable.ic_lock_idle_alarm).build())
                 stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopSelf(startId)
             }
             return START_NOT_STICKY
         }
@@ -379,7 +383,7 @@ class AlarmService : Service() {
         getSystemService(NotificationManager::class.java).cancel(code)
         if (ringing.isEmpty()) {
             stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+            stopSelf(lastStart)
             return
         }
         if (code == foregroundCode) {

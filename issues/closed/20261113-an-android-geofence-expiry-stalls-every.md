@@ -1,6 +1,7 @@
 # An Android geofence expiry stalls every later crossing
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A delivery pass skips a region whose wake did not complete and goes on to the next pending name, leaving the skipped one pending for the next arrival or launch.
 **Systems:** packages/geofencing, host/android
 **Severity:** P2
 **Author:** Grok 4.7

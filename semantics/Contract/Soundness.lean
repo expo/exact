@@ -650,6 +650,7 @@ theorem stdlib_good {env : Env} {p : Program} {name : String} {vs : List Value} 
     | (repeat' split at h <;> simp_all
        all_goals first
          | (subst t; exact formatting_good)
+         | (obtain ⟨-, rfl⟩ := h; exact formatting_good)
          | (obtain ⟨-, rfl⟩ := h; exact text_good))
 
 /-! ## Scopes and environments -/

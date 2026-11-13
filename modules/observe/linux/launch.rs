@@ -435,8 +435,14 @@ impl Service {
         }
         let _queue = s.hold("queue.lock");
         s.reload();
-        s.ingest_crashes();
-        s.save();
+        let records = s.ingest_crashes();
+        // A pending record is the only copy of its panic: it goes only once the queue
+        // that holds the panic is on disk, and stays for the next launch otherwise.
+        if s.commit(true).is_ok() {
+            for path in records {
+                let _ = std::fs::remove_file(path);
+            }
+        }
         s
     }
 
@@ -495,6 +501,12 @@ impl Service {
 
     /// Writes the queue file, forgetting sessions no queued row refers to, except this one.
     fn save(&mut self) {
+        let _ = self.commit(false);
+    }
+
+    /// Replaces the queue file with this process's copy; `durable` also syncs the new
+    /// file and the rename to disk before returning.
+    fn commit(&mut self, durable: bool) -> std::io::Result<()> {
         let live: std::collections::HashSet<&str> = self
             .metrics
             .iter()
@@ -506,9 +518,16 @@ impl Service {
             .retain(|s, _| s == current || live.contains(s.as_str()));
         let q = json!({ "sessions": self.sessions, "metrics": self.metrics, "logs": self.logs });
         let tmp = self.dir.join("queue.json.tmp");
-        if std::fs::write(&tmp, q.to_string()).is_ok() {
-            let _ = std::fs::rename(&tmp, self.dir.join("queue.json"));
+        let mut file = std::fs::File::create(&tmp)?;
+        std::io::Write::write_all(&mut file, q.to_string().as_bytes())?;
+        if durable {
+            file.sync_all()?;
         }
+        std::fs::rename(&tmp, self.dir.join("queue.json"))?;
+        if durable {
+            std::fs::File::open(&self.dir)?.sync_all()?;
+        }
+        Ok(())
     }
 
     fn metric(
@@ -770,8 +789,10 @@ impl Service {
         self.metric("navigation", name, value, wall, Some(&e["route"]), params);
     }
 
-    /// Turns each pending panic record from an earlier process into a `native.exception` log.
-    fn ingest_crashes(&mut self) {
+    /// Turns each pending panic record from an earlier process into a `native.exception`
+    /// log, and returns the records' paths, which the caller removes once the queue is saved.
+    fn ingest_crashes(&mut self) -> Vec<PathBuf> {
+        let mut records = Vec::new();
         for entry in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             if !name.starts_with("pending-") || name.contains(&self.session) {
@@ -779,7 +800,7 @@ impl Service {
             }
             let path = entry.path();
             let o = read_json(&path);
-            let _ = std::fs::remove_file(&path);
+            records.push(path);
             let Some(crashed) = o["session"].as_str() else {
                 continue;
             };
@@ -809,6 +830,7 @@ impl Service {
                 (attrs, 0),
             );
         }
+        records
     }
 
     fn resource(&self, meta: &Value) -> Value {

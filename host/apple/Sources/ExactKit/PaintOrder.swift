@@ -169,7 +169,7 @@ extension NodeView {
         }
         dense?.top = top
         #if os(iOS) || os(tvOS)
-        (parent as? ScrollView)?.keepPlatformViewsOver()
+        if parent is ScrollView || parent is PresentationMount { parent.keepPlatformViewsOver() }
         #endif
     }
 
@@ -286,17 +286,21 @@ extension NSView {
 #endif
 
 #if os(iOS) || os(tvOS)
-extension ScrollView {
-    /// UIKit hangs a scroller's edge effect (iOS 26) in a view after its
-    /// content, at depth 0, to draw over it. A child ranked above 0 (one
-    /// holding a native button, a `position: relative` card, a `z-index`)
-    /// would paint over the effect and run sharp under the bar, so each
-    /// view of UIKit's after the last ranked child goes to the top child's
-    /// depth, where its later place puts it over them. One with a depth of
-    /// its own (the indicators' 1000, a view sent behind) keeps it. After a
-    /// ranking, and after UIKit's layout, which adds and moves its views.
-    /// Skip the session viewport, whose children include native presentations.
-    /// A route viewport holds only its document and keeps UIKit's effects above it.
+extension UIView {
+    /// UIKit adds views of its own after the nodes they draw over, at
+    /// depth 0: a scroller's edge effect (iOS 26), and the highlight a
+    /// context menu grows a row from in its route's `PresentationMount`
+    /// (`LiftTarget.container`), while UIKit hides the row itself. A child
+    /// ranked above 0 (a positioned route, one holding a native button, a
+    /// `position: relative` card, a `z-index`) would paint over them: the
+    /// effect would run sharp under the bar and the row would show blank.
+    /// So each view of UIKit's after the last ranked child goes to the top
+    /// child's depth, where its later place puts it over them. One with a
+    /// depth of its own (the indicators' 1000, a view sent behind) keeps it.
+    /// After a ranking, after UIKit's layout, which adds and moves its views,
+    /// and as a mount gains one. Skip the session viewport, whose children
+    /// include native presentations. A route viewport holds only its document
+    /// and keeps UIKit's effects above it.
     func keepPlatformViewsOver() {
         if let viewport = self as? Viewport, viewport.documentNode == nil { return }
         guard let top = DensePaintRanks.existing(self)?.top, top > 0 else { return }

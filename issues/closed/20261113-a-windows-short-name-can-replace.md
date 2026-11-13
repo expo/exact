@@ -1,6 +1,7 @@
 # A Windows short name can replace a stream head with put
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Just before the rename, `put` refuses a four-segment path whose first directory is `.exact` and whose leaf is the same file as that cohort's `exact.json` or `.lock`, comparing file identities rather than names.
 **Systems:** filesystem
 **Severity:** P2
 **Author:** Grok 4.7

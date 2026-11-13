@@ -82,7 +82,9 @@ format takes the format locale last, as `contract lean` writes it (LLP
 1054.000.003 D6). -/
 def unsupportedTy (name : String) (ts : List Ty) : Option Ty :=
   if name = "formatTime" ∨ name = "formatDate" then
-    match ts with | [.number, .number, .string, .string] => .some .string | _ => .none
+    if ts = [.number, .number, .string, .string] ∨
+        (name = "formatDate" ∧ ts = [.string, .number, .string, .string]) then .some .string
+    else .none
   else if name = "formatNumber" then
     match ts with | [.number, .string, .string, .string] => .some .string | _ => .none
   else if name = "toFixed" ∨ name = "formatDecimal" then

@@ -20,6 +20,37 @@ const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 
 /** The platforms a manifest can name, each with the crate that serves it. */
 export const PLATFORMS = { ios: 'apple', macos: 'apple', tvos: 'apple', linux: 'linux', android: 'android', windows: 'windows' };
+/** SDK dependencies whose names app and game crates may not take. */
+export const SDK_CRATES = new Set(['ibex2-sqlite', 'exact-logic', 'exact-apple', 'exact-apple-update', 'exact-js', 'exact-js-bake', 'exact-linux', 'exact-painted', 'exact-web', 'exact-web-capabilities', 'exact-js-web', 'exact-game-bake', 'exact-game-render']);
+
+/** Authored host crates own their identity. Otherwise package.json keeps the scaffold's prefix across directory
+ * and display-name changes; a caller's name or the folder supplies it for an app without a package manifest. */
+export function appCrateName(dir, fallback = basename(dir), title = null) {
+  const kinds = ['web', ...new Set(Object.values(PLATFORMS)), 'ios', 'macos', 'tvos'];
+  for (const kind of kinds) {
+    const file = resolve(dir, kind, 'Cargo.toml');
+    if (!existsSync(file)) continue;
+    try {
+      const name = Bun.TOML.parse(readFileSync(file, 'utf8')).package?.name;
+      if (name?.endsWith(`-${kind}`)) return name.slice(0, -kind.length - 1);
+    } catch { /* Cargo reports an invalid authored manifest. */ }
+  }
+  let name = fallback;
+  const pkg = resolve(dir, 'package.json');
+  if (existsSync(pkg)) {
+    const declared = JSON.parse(readFileSync(pkg, 'utf8')).name;
+    if (typeof declared === 'string' && declared.trim()) { name = declared; title = null; }
+  }
+  const normalize = value => {
+    const slug = value.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'app';
+    return /^[a-z]/.test(slug) ? slug : `app-${slug}`;
+  };
+  const collides = prefix => kinds.some(kind => SDK_CRATES.has(`${prefix}-${kind}`));
+  name = normalize(name);
+  if (collides(name) && title !== null) name = normalize(title);
+  return collides(name) ? `${name}-app` : name;
+}
 /** The platforms that hold an update store, so a stream (scripts/deploy.mjs), and Windows, whose host refuses every
  * store level but "0" (it has no update store yet, LLP 1115.004 D15) while an absent key reads as "A". */
 const STORED = ['ios', 'macos', 'linux', 'windows'];
@@ -284,11 +315,10 @@ function writeChanged(path, text) {
  * checkout's path and the files the workspace copies from it, and this module. Returns the workspace directory and
  * whether anything was written. The lock is exact2's, re-resolved offline for these members; one this machine's cache
  * cannot resolve is left as the copy for the first build, which fetches (scripts/app.mjs `checkOutsideLock`).
- * The crates are `<name>-<kind>`: `name` is the one the app's exact.mjs passes, which another checkout of the app in a
- * folder of another name (a git worktree) shares; without one, the folder's. */
+ * The crates are `<name>-<kind>`, with the prefix `appCrateName` reads. */
 export function ensureShells(dir, manifest = readManifest(dir), name = null) {
   dir = realpathSync(dir);
-  name ??= basename(dir);
+  name = appCrateName(dir, name ?? basename(dir));
   const shells = shellsDir(dir), title = manifest.app?.name ?? manifest.name ?? titleOf(name);
   // The package that fills the native slot (LLP 1154 D3); the bake refuses two.
   const crates = shellCrates(manifest), native = nativePackages(dir).map(p => p.name);
@@ -348,7 +378,7 @@ ${patches.join('\n')}
 /** What a native verb does before its build (LLP 1153 D1.2): when the manifest does not name `platform`, check that
  * platform's setup rows (`report`: the rows, or `{ error }` when they could not be read) and stop on a missing one,
  * nothing written; then name it, writing an app.json the app lacked. Then keep the generated workspace current unless
- * the app authored one, its crates named `name` (`ensureShells`). Returns the lines to say, or `{ refused }`. */
+ * the app authored one (`ensureShells`). Returns the lines to say, or `{ refused }`. */
 export async function bringPlatform(dir, platform, { report = null, os = process.platform, name = null } = {}) {
   const lines = [], verb = `bun exact.mjs ${platform === 'macos' ? 'mac' : platform}`;
   const manifest = existsSync(resolve(dir, 'app.json')) ? readManifest(dir) : null;

@@ -1230,3 +1230,52 @@ fn coalesced_router_changes_keep_latest_visits_and_all_retired_ids() {
     assert!(change.visits.iter().any(|(_, url)| url == "/post/b"));
     assert!(!change.visits.iter().any(|(id, _)| *id == retired));
 }
+
+/// expo/exact#414: a route literal has one spelling, the one a browser sends.
+/// An escape of a character a path carries as itself, or one in lower case,
+/// would make a route the router matches apart from the URL a host serves the
+/// same page at; the refusal names the spelling to write.
+#[test]
+fn a_route_literal_spells_its_escapes_as_a_browser_sends_them() {
+    let source = |pattern: &str| {
+        format!("routes nav\n  home \"/\"\n  item \"{pattern}\"\n  notfound\ncomponent App\n  view\n    text top(nav).name\n")
+    };
+    for pattern in [
+        "/item/caf%C3%A9",
+        "/item/café",
+        "/a%20b",
+        "/a%2Fb",
+        "/100%25",
+        "/a%3Ab",
+        "/a%3Fb",
+    ] {
+        assert!(contract::compile(&source(pattern)).is_ok(), "{pattern}");
+    }
+    for (pattern, said, spelled) in [
+        (
+            "/item/%41",
+            "`%41` escapes `A`, which a URL carries as itself",
+            "/item/A",
+        ),
+        (
+            "/a%7Eb",
+            "`%7E` escapes `~`, which a URL carries as itself",
+            "/a~b",
+        ),
+        (
+            "/item/caf%c3%a9",
+            "a browser writes `%c3` as `%C3`",
+            "/item/caf%C3%A9",
+        ),
+        ("/x%2f%41", "a browser writes `%2f` as `%2F`", "/x%2FA"),
+    ] {
+        let error = contract::compile(&source(pattern)).unwrap_err();
+        assert_eq!(error.id, "route-pattern", "{pattern}");
+        assert!(
+            error.message.starts_with(&format!("route item: {said};"))
+                && error.message.ends_with(&format!("write `{spelled}`")),
+            "{pattern}: {}",
+            error.message
+        );
+    }
+}

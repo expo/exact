@@ -54,8 +54,36 @@ use super::field::utf16_len;
 use super::*;
 use exact_kernel::style::roles;
 use exact_kernel::{ColorValue, StyleId, StyleMask};
-use exact_runner::{FieldSelection, SelectionDirection};
+use exact_runner::{FieldSelection, InputDetails, SelectionDirection};
 use std::collections::BTreeSet;
+
+/// An edit the reader told, from the text before it and after, as the
+/// web's `InputEvent` names it: the text put in where the two differ
+/// (`insertText`, or `insertCompositionText`, which cannot be prevented,
+/// while the field composes), else a deletion.
+fn told_edit(before: &str, after: &str, composing: bool) -> InputDetails {
+    let same = |a: &mut dyn Iterator<Item = char>, b: &mut dyn Iterator<Item = char>| {
+        a.zip(b)
+            .take_while(|(x, y)| x == y)
+            .map(|(x, _)| x.len_utf8())
+            .sum::<usize>()
+    };
+    let head = same(&mut before.chars(), &mut after.chars());
+    let most = before.len().min(after.len()) - head;
+    let tail = same(&mut before.chars().rev(), &mut after.chars().rev()).min(most);
+    let inserted = &after[head..after.len() - tail];
+    let input_type = match (inserted.is_empty(), composing) {
+        (true, _) => "deleteContentBackward",
+        (false, true) => "insertCompositionText",
+        (false, false) => "insertText",
+    };
+    InputDetails {
+        input_type: input_type.into(),
+        data: (!inserted.is_empty()).then(|| inserted.to_owned()),
+        cancelable: !composing,
+        is_composing: composing,
+    }
+}
 
 /// The action key or Tab, as the reader names it
 /// ([`Presenter::reader_field_action`]): what the key said it does.
@@ -533,9 +561,19 @@ impl<D: DataSource> Presenter<D> {
             // Told back what it shows: the next statement answers this edit.
             return;
         }
-        let bound = self.bound_text(id);
         self.forget_replaced_choices();
-        self.field_edit(id, value.to_owned(), selection, bound, now_ms);
+        // The platform's field made the edit already, but the app has not
+        // heard it: `beforeinput` runs first, as on desktop, and an edit it
+        // prevents goes no further. The next statement answers this edit
+        // with the text from before, which the reader's field then takes.
+        let edit = told_edit(
+            &self.field_text(id),
+            value,
+            self.hosted.composing.contains_key(&id),
+        );
+        if let Some(e) = self.edit_field(id, value.to_owned(), selection, now_ms, edit) {
+            eprintln!("exact: {e}");
+        }
     }
 
     /// The reader's field began to compose, holding `value`, or its

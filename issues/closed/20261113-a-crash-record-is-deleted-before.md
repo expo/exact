@@ -1,6 +1,7 @@
 # A crash record is deleted before the queue write sticks
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Linux removes pending panic records only after a synced write and rename of `queue.json`, and Apple removes a crash record only after its SQLite insert succeeds; on failure each stays for the next launch.
 **Systems:** modules/observe
 **Severity:** P2
 **Author:** Grok 4.7

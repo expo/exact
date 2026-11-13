@@ -17,12 +17,19 @@ android {
             "../../../packages/calls/android", "../../../packages/calls/test",
             "../../../packages/camera/android", "../../../packages/camera/test",
             "../../../packages/contacts/android", "../../../packages/contacts/test",
+            "../../../packages/gamepad/android", "../../../packages/gamepad/test",
+            "../../../packages/geofencing/android", "../../../packages/geofencing/test",
+            "../../../packages/geolocation/android", "../../../packages/geolocation/test",
             "../../../packages/text-detection/android", "../../../packages/text-detection/test",
+            "../../../packages/language-model/android", "../../../packages/language-model/test",
             "../../../packages/media-capture/android", "../../../packages/media-capture/test",
+            "../../../packages/motion/android", "../../../packages/motion/test",
             "../../../packages/local-auth/android", "../../../packages/local-auth/test",
             "../../../packages/passkeys/android", "../../../packages/passkeys/test",
             "../../../packages/payments/android", "../../../packages/payments/test",
+            "../../../packages/photos/android", "../../../packages/photos/test",
             "../../../packages/recording/android", "../../../packages/recording/test",
+            "../../../packages/speech-recognition/android", "../../../packages/speech-recognition/test",
         ))
     }
 }
@@ -31,6 +38,7 @@ dependencies {
     testImplementation("com.google.android.play:age-signals:0.0.4")
     testImplementation("com.google.mlkit:text-recognition:16.0.1")
     testImplementation("com.google.mlkit:barcode-scanning:17.3.0")
+    testImplementation("com.google.mlkit:genai-prompt:1.0.0-beta4")
     testImplementation("junit:junit:4.13.2")
     testImplementation(libs.robolectric)
     testImplementation("androidx.camera:camera-camera2:1.6.2")
@@ -39,6 +47,7 @@ dependencies {
     testImplementation("androidx.lifecycle:lifecycle-runtime:2.9.4")
     testImplementation("androidx.credentials:credentials:1.6.0")
     testImplementation("com.google.android.gms:play-services-wallet:20.0.0")
+    testImplementation("com.google.android.gms:play-services-location:21.4.0")
     testImplementation("androidx.core:core-telecom:1.0.1")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
 }

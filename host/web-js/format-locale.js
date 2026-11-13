@@ -1,7 +1,7 @@
 // The formatters in a locale other than en-US on the JS target (LLP 1054.000.003 D6): runner/src/format/locale.rs's
 // rules over the same record (contract/lower/src/formats.rs has its fields), byte for byte. Imported only by a plan
 // whose tables carry format data (emit.rs), which hands it the records with `formats`.
-import { localized, wall, civil, rounded, shortest, x_formatDate, CODES } from "./format.js";
+import { localized, wall, dateWall, civil, rounded, shortest, x_formatDate, CODES } from "./format.js";
 import { memo } from "./rt.js";
 import { reportPlace } from "./navigation.js";
 
@@ -163,7 +163,7 @@ function format(name, args, loc) {
     case "formatTime": { const w = wall(args[0], args[1]); return w === null ? "" : time(r, w, c); }
     case "formatDate": {
       if (args[2] === "iso") return x_formatDate(args[0], args[1], "iso", "");
-      const w = wall(args[0], args[1]);
+      const w = dateWall(args[0], args[1]);
       return w === null ? "" : args[2] === "month-year" ? date(r, w, F.monthYear, F.monthYearNames) : date(r, w, F.medium, F.mediumNames);
     }
     case "formatDay": return day(r, args[0], args[1], args[2], args[3], c);

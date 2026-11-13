@@ -1084,7 +1084,8 @@ six core checks.
 
 Put models, sprite PNGs and WAV or Ogg Vorbis sounds under `art/`;
 [the baker](bake/README.md) produces validated `.model`, `.tex` and `.sound` assets,
-each texture as RGBA8, BC and ASTC files of which a device fetches one
+each texture as RGBA8, BC and ASTC files of which a device fetches one, and an
+Apple bundle holds only its devices' family
 ([texture payloads](bake/README.md#texture-payloads)). Name the authored `x.tex`
 everywhere. Declare simulation dependencies in `Game::ASSETS`; setup waits for them.
 Put everything else the game shows in `Game::STREAMED`: those are fetched from the

@@ -9,7 +9,8 @@
 // - Structured output is validated, not enforced (D8), and there are no tools (D9): `structuredOutput` reads
 //   `validated` and `tools` false, and a create with tools fails `NotSupportedError`.
 // - ML Kit generates only for the app in the foreground (D10): a prompt in the background fails `NotAllowedError`,
-//   `background`, and one running when the app leaves ends so, with its text so far. One generation runs per process.
+//   `background`, and one running or queued when the app leaves ends so, with its text so far. One generation runs per
+//   process.
 package exact.languagemodel
 
 import dev.exact.canvas.ExactExtension
@@ -477,10 +478,12 @@ class LanguageModelModule(context: ExtensionContext) : ExactExtension(context) {
         }
     }
 
-    /** A return to the foreground reads the availability again (D5); leaving it ends what generates (D10). */
+    /** A return to the foreground reads the availability again (D5); leaving it fails every live response, those
+     * queued too, since a prompt from the background is refused (D10). */
     override fun foreground(shown: Boolean) {
         if (shown) { announce(AVAILABILITY); return }
-        for (r in responses.values.toList()) if (r.live && r.session.responding === r) {
+        // The queued first: ending a generating one begins its session's next, which must not start in the background.
+        for (r in responses.values.sortedBy { it.session.responding === it }) if (r.live) {
             say("${r.id}: the app left the foreground")
             if (agent) advance(r)
             end(r, "failed", "NotAllowedError", "background")

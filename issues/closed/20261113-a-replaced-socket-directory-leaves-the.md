@@ -1,6 +1,7 @@
 # A replaced socket directory leaves the listener on the old watch
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The watch reports when its own directory is renamed or removed (`IN_MOVE_SELF`, `IN_DELETE_SELF`, `IN_IGNORED`; `NOTE_RENAME`, `NOTE_DELETE`), and the listener then looks at its path, watches the directory now at the path's parent and looks again; with no directory to watch it does so every 100 ms.
 **Systems:** host/listen
 **Severity:** P2
 **Author:** Grok 4.7

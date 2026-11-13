@@ -288,13 +288,15 @@ mod tests {
         for attributes in ["", "readonly=true"] {
             let (mut p, id, _) = fixture("", attributes);
             let value = "first line\nsecond 🦀 line";
-            p.field_edit(
+            let seeded = p.apply_field_edit(
                 id,
                 value.into(),
                 FieldSelection::at_end(value),
                 "seed".into(),
                 0.,
+                Default::default(),
             );
+            assert!(seeded.is_none(), "{seeded:?}");
             p.hardware_key("ControlLeft", "Control", true, false);
             p.hardware_key("Home", "Home", true, false);
             p.hardware_key("Home", "Home", false, false);

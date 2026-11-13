@@ -1,6 +1,7 @@
 # An Android limited-library change does not revoke pictures
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** When the selection dialog answers, every drawn picture whose photo no longer opens is revoked, by the same check a resume runs.
 **Systems:** packages/photos
 **Severity:** P2
 **Author:** Grok 4.7

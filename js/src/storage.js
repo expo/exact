@@ -396,7 +396,13 @@
       };
       return atomic.apply(null, arguments).then(
         function (v) {
-          done("replaced ");
+          // A kept set that cannot be saved fails the write, though the file is written; writing again keeps it.
+          if (t)
+            try {
+              host(6, "kept", "replaced " + t);
+            } catch (e) {
+              throw storageError(String((e && e.message) || e));
+            }
           return v;
         },
         function (e) {

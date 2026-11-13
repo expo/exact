@@ -1,6 +1,7 @@
 # Updating a Snapback app writes, then fails when the client is absent
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Without the Snapback driver in the checkout, `refreshManifestPaths` still rewrites `$schema`, leaves the `snapback4` mount as it was, and update finishes and reports `NO_SNAPBACK` beside its other notes.
 **Systems:** game
 **Severity:** P2
 **Author:** Grok 4.7

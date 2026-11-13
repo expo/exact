@@ -44,7 +44,7 @@ import { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, WEB_RUSTFLAGS, webToolchainEnv, cargo
   NO_WORKSPACE, androidCargo, appleCargo, authoredWorkspace, cargoDiagnosticsCommand,
   cargoOnPath, claimTargetCrates, knownWorkspace, rememberWorkspace, shellsDir, targetRustflags } from './cargo-check.mjs';
 export { WEB_TOOLCHAIN, WEB_STD, WEB_SIZE, webToolchainEnv, cargoEnvironment, cargoOnPath } from './cargo-check.mjs';
-import { ensureShells } from './app-shells.mjs';
+import { appCrateName, ensureShells } from './app-shells.mjs';
 import { installProblems } from './install-page.mjs';
 import { gameDefaults, lintGame, prepareGame } from '../game/app/shells.mjs';
 import { generatedInputFiles } from '../game/inputs.mjs';
@@ -413,17 +413,14 @@ export function moduleDirectory(dir, platform) {
   return existsSync(own) ? own : resolve(dir, 'modules', ['ios', 'macos', 'tvos'].includes(platform) ? 'apple' : platform);
 }
 
-/** The app `nameOrCrate` names (`caltrain`, `caltrain-web`, …; `EXACT_APP_DIR`'s basename when unset): its directory, cargo workspace, target directory, crate names, and manifest. */
+/** The app `nameOrCrate` selects (`caltrain`, `caltrain-web`, …; or `EXACT_APP_DIR`): its directory, Cargo workspace,
+ * target directory, crate identity (`appCrateName`), and manifest. */
 export function resolveApp(nameOrCrate) {
   const path = nameOrCrate && /[\\/]|^\.\.?$/.test(String(nameOrCrate)) ? resolve(String(nameOrCrate)) : null;
   const outside = path ?? (process.env.EXACT_APP_DIR ? resolve(process.env.EXACT_APP_DIR) : null);
   if (path) nameOrCrate = undefined;
   let name = nameOrCrate ? String(nameOrCrate).replace(/-(web|apple|ios|macos|linux|windows|gpu)$/, '') : outside ? basename(outside) : 'caltrain';
-  // What selects this app again, by name and directory, here and in a child
-  // that inherits this environment: the path given, else the name, which an
-  // unchanged `EXACT_APP_DIR` places as it did now. The directory alone would
-  // rename an app `EXACT_APP_DIR` holds under another name (`--app original`
-  // with `EXACT_APP_DIR=…/copy`); a game's name below is its crate's.
+  // Keep the directory selector separate from the crate identity, so a child can select this app again.
   const selector = path ?? name;
   let dir = outside ?? resolve(ROOT, 'apps', name);
   if (!outside && !existsSync(resolve(dir, 'app.contract')) && existsSync(resolve(ROOT, 'game/games', name, 'app.contract'))) dir = resolve(ROOT, 'game/games', name);
@@ -435,6 +432,7 @@ export function resolveApp(nameOrCrate) {
   installedFileDependencies(dir); // every package reader reads node_modules, where a `file:` package is as of the last install
   // Materialize defaults before Cargo inspects workspace members on a clean checkout.
   const manifest = readManifest(dir, name);
+  if (manifest.game === undefined) name = appCrateName(dir, name);
   if (dirname(dir) === resolve(ROOT, 'game/games') && manifest.game === undefined) {
     throw new Error(`${dir}/app.json: game is required for an app under game/games/`);
   }

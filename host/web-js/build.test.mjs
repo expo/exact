@@ -868,6 +868,18 @@ test('web-build --out writes a site that serve.mjs serves by the hosting rule, r
     await new Promise(ok => setTimeout(ok, 350));
     expect((await get('/live')).status).toBe(200);
     await heard((text) => rebuilds(text) === 2);
+    // A source gone is a change too, though no file is newer than the build: an asset deleted is no longer served once
+    // the next page has built the site again.
+    mkdirSync(resolve(app, 'assets')); writeFileSync(resolve(app, 'assets/demo.txt'), 'Old asset\n');
+    await new Promise(ok => setTimeout(ok, 350));
+    expect((await get('/live')).status).toBe(200);
+    await heard((text) => rebuilds(text) === 3);
+    const asset = await fetch(`http://127.0.0.1:${serve.port}/assets/demo.txt`);
+    expect([asset.status, await asset.text()]).toEqual([200, 'Old asset\n']);
+    rmSync(resolve(app, 'assets/demo.txt')); await new Promise(ok => setTimeout(ok, 350));
+    expect((await get('/live')).status).toBe(200);
+    await heard((text) => rebuilds(text) === 4);
+    expect((await fetch(`http://127.0.0.1:${serve.port}/assets/demo.txt`)).status).toBe(404);
     writeFileSync(resolve(app, 'app.contract'), source.replace('text note.text\n', 'text note.text\n      nosuchtag "x"\n'));
     await new Promise(ok => setTimeout(ok, 350));
     writeFileSync(resolve(out, 'live.md'), '# Stale live\n');

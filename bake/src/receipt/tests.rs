@@ -872,7 +872,9 @@ fn a_masked_svg_image_loads_the_svg_island_module() {
         .unwrap();
     let manifest = Manifest::read(&root).unwrap();
     let loads = |root: &Path| {
-        let cards = asset_cards(root, &root.join("out"), &manifest).unwrap();
+        let cards = asset_cards(root, &root.join("out"), &manifest, "ios")
+            .unwrap()
+            .0;
         let pictures = asset_islands(root, &cards);
         artifact_graph(&plan, &json!({}), &cards, pictures, "aarch64-apple-ios").unwrap()["loads"]
             .clone()
@@ -906,7 +908,9 @@ fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
         std::fs::write(root.join(folder).join(".DS_Store"), b"Bud1").unwrap();
     }
     let manifest = Manifest::read(&root).unwrap();
-    let cards = asset_cards(&root, &root.join("out"), &manifest).unwrap();
+    let cards = asset_cards(&root, &root.join("out"), &manifest, "ios")
+        .unwrap()
+        .0;
     assert_eq!(
         cards,
         vec![
@@ -915,17 +919,19 @@ fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
         ]
     );
     assert_eq!(
-        asset_cards(&root.join("absent/.."), &root.join("out"), &manifest).unwrap(),
+        asset_cards(&root.join("absent/.."), &root.join("out"), &manifest, "ios")
+            .unwrap()
+            .0,
         cards
     );
     std::fs::write(root.join("assets/two words.png"), b"space").unwrap();
-    assert!(asset_cards(&root, &root.join("out"), &manifest)
+    assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
         .unwrap_err()
         .contains("bake asset gate: the asset name assets/two words.png is not portable"));
     std::fs::remove_file(root.join("assets/two words.png")).unwrap();
     std::fs::write(root.join("outside"), b"must not be embedded").unwrap();
     std::os::unix::fs::symlink("../outside", root.join("assets/escape")).unwrap();
-    assert!(asset_cards(&root, &root.join("out"), &manifest)
+    assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
         .unwrap_err()
         .contains("bake asset gate"));
     std::fs::remove_file(root.join("assets/escape")).unwrap();
@@ -933,7 +939,7 @@ fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
     std::fs::write(root.join("outside-dir/file"), b"outside").unwrap();
     for target in ["../outside-dir", "../missing"] {
         std::os::unix::fs::symlink(target, root.join("assets/nested")).unwrap();
-        assert!(asset_cards(&root, &root.join("out"), &manifest)
+        assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
             .unwrap_err()
             .contains("bake asset gate"));
         std::fs::remove_file(root.join("assets/nested")).unwrap();
@@ -941,14 +947,15 @@ fn the_embedded_roster_uses_the_copy_gate_and_refuses_symlink_assets() {
     std::fs::remove_dir_all(root.join("assets")).unwrap();
     for target in ["outside-dir", "missing"] {
         std::os::unix::fs::symlink(target, root.join("assets")).unwrap();
-        assert!(asset_cards(&root, &root.join("out"), &manifest)
+        assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
             .unwrap_err()
             .contains("bake asset gate"));
         std::fs::remove_file(root.join("assets")).unwrap();
     }
     std::fs::remove_dir_all(root.join("deck")).unwrap();
-    assert!(asset_cards(&root, &root.join("out"), &manifest)
+    assert!(asset_cards(&root, &root.join("out"), &manifest, "ios")
         .unwrap()
+        .0
         .is_empty());
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -974,9 +981,72 @@ fn a_large_embedded_roster_hashes_each_file_without_a_tree_reply() {
         expected.push(json!({"name":name,"sha256":hash(&bytes),"bytes":bytes.len()}));
     }
     let manifest = Manifest::read(&root).unwrap();
-    let cards = asset_cards(&root, &root.join("out"), &manifest);
+    let cards = asset_cards(&root, &root.join("out"), &manifest, "ios");
     std::fs::remove_dir_all(root).unwrap();
-    assert_eq!(cards.unwrap(), expected);
+    assert_eq!(cards.unwrap().0, expected);
+}
+
+/// A baked texture's three files: a Mac's roster holds its BC payload, an
+/// iPhone's its ASTC payload, the web's all three. An authored `.tex` with no
+/// payloads stays everywhere. A roster that left a file out names the family
+/// it kept, which joins the cohort's inputs; one that left none out names none.
+#[test]
+fn a_native_roster_holds_only_its_platforms_texture_family() {
+    let root = std::env::temp_dir().join(format!(
+        "exact-bake-textures-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(root.join("assets/fox")).unwrap();
+    for name in [
+        "fox/0.tex",
+        "fox/0.bc.tex",
+        "fox/0.astc.tex",
+        "hand.tex",
+        "fox.model",
+    ] {
+        std::fs::write(root.join("assets").join(name), name).unwrap();
+    }
+    let manifest = Manifest::read(&root).unwrap();
+    let names = |platform| {
+        asset_cards(&root, &root.join("out"), &manifest, platform)
+            .unwrap()
+            .0
+            .iter()
+            .map(|card| card["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let family = |platform| {
+        asset_cards(&root, &root.join("out"), &manifest, platform)
+            .unwrap()
+            .1
+    };
+    assert_eq!(family("macos").as_deref(), Some("bc"));
+    assert_eq!(family("ios").as_deref(), Some("astc"));
+    assert_eq!(family("web"), None);
+    assert_eq!(
+        names("macos"),
+        ["assets/fox.model", "assets/fox/0.bc.tex", "assets/hand.tex"]
+    );
+    assert_eq!(
+        names("ios"),
+        [
+            "assets/fox.model",
+            "assets/fox/0.astc.tex",
+            "assets/hand.tex"
+        ]
+    );
+    for platform in ["web", "linux", "windows", "android"] {
+        assert_eq!(names(platform).len(), 5, "{platform}");
+    }
+    for name in ["fox/0.tex", "fox/0.bc.tex", "fox/0.astc.tex"] {
+        std::fs::remove_file(root.join("assets").join(name)).unwrap();
+    }
+    assert_eq!(family("ios"), None, "nothing left out: an older cohort's");
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 fn signed_fixture() -> (Compat, Value, Vec<u8>) {

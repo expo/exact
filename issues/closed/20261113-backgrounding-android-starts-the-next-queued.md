@@ -1,6 +1,7 @@
 # Backgrounding Android starts the next queued model prompt
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** Leaving the foreground fails every live response, the queued ones before the generating one, so none begins in the background.
 **Systems:** packages/language-model
 **Severity:** P2
 **Author:** Grok 4.7

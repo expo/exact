@@ -1,6 +1,7 @@
 # A failed share delivery leaves file tokens pending
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** The painted host's `receive` lands a claimed share's files whether or not setting its tokens or delivering its location failed, `land` sets every token even after one fails, and the first error is still the answer, as on Apple.
 **Systems:** host/linux
 **Severity:** P2
 **Author:** Grok 4.7

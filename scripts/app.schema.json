@@ -643,7 +643,7 @@
       "description": "The Web App Manifest's share target: this app in other apps' share sheets (LLP 1133.024 D1). A share arrives as one location, `action` with the shared members under the names `params` gives them; files by a token that `sharedFiles(entry, name)` reads. The Apple bake derives a share extension, Android intent filters; the published web member is always GET with the text members only.",
       "required": ["action", "params"],
       "properties": {
-        "action": { "type": "string", "pattern": "^/", "description": "A path one of the app's routes matches." },
+        "action": { "type": "string", "pattern": "^/", "description": "A path one of the app's routes matches, as the router matches a location: `/share/` matches no route `/share`." },
         "method": { "enum": ["GET", "POST"] },
         "enctype": { "enum": ["application/x-www-form-urlencoded", "multipart/form-data"] },
         "params": {

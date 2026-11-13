@@ -288,17 +288,17 @@ class PaymentsModule(context: ExtensionContext) : ExactExtension(context) {
             context.log("payments: ${s.id}: $result")
             // Past the budget the request ends for the app (D6): the send answers the failure now, though Google's
             // sheet stays up, and the request is abandoned, so no later authorization calls the app.
-            if (value == null) { s.letGo = true; s.reply(out) }
+            if (value == null && !s.letGo) { s.letGo = true; s.reply(out) }
             complete(if (result == "success") JSONObject().put("transactionState", "SUCCESS").toString()
                 else failed("The payment didn’t go through.", "PAYMENT_AUTHORIZATION", "PAYMENT_DATA_INVALID"))
         }
     }
 
     /** The call was let go: a sheet waiting to open never does; one up stays, so the request is abandoned (D6
-     * phase 3). */
+     * phase 3). A final handler running then finishes, and its answer is Google's; a later authorization calls none. */
     override fun cancel(request: Int) {
         val s = sheet ?: return
-        if (s.request != request || s.authorizing) return
+        if (s.request != request) return
         s.letGo = true
         if (s.withdraw()) return finish(s, Activity.RESULT_CANCELED, null)
         context.log("payment ${s.id}: abandoned, its call was let go; the sheet stays until it is closed")

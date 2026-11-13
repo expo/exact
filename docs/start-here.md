@@ -44,7 +44,10 @@ bun exact.mjs pattern      # lists the starters; `pattern <name>` writes one; so
 bun exact.mjs ios --prebuild  # the first iOS build: ten to fifteen minutes, in the background; it names iOS in app.json
 ```
 
-`new` also takes `--name Groceries --bundle-id com.yourcompany.groceries --with ios,android`. The folder's name is lowercase with hyphens, not `exact` or ending `-web`, `-apple`, `-linux`, `-gpu`.
+`new` also takes `--name Groceries --bundle-id com.yourcompany.groceries --with ios,android`. The folder's name is lowercase with hyphens, without a `-web`, `-apple`, `-linux` or `-gpu` suffix.
+For an SDK-named folder such as `exact`, `--name Everbloom` supplies the crate prefix `everbloom`;
+a prefix that still collides gains `-app`. The prefix stays in `package.json`'s `name` across
+updates and directory renames. Authored host crates keep their own names.
 `bun <exact2>/scripts/exact.mjs setup` takes a few minutes, a first macOS or iOS build ten to fifteen on a laptop, later builds a minute or two.
 Run each once and let it finish, in the background with a completion notification if your tool has one, rather than polling its log.
 
@@ -148,6 +151,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a pick from six or more options (a picker)|`select`|
 |a chat that opens at its newest message|`chat-thread`|
 |a long list or grid that loads more|`long-lists`|
+|a document or article longer than a screen, a long Markdown note|`long-text`|
 |a welcome at first launch|`first-launch`|
 |a tip that teaches a control until it is used (TipKit)|`tips`|
 |records kept across launches, a saved library (`state` holds values, not records): a JSON file, SQLite, grants|`files-and-grants`|
@@ -171,6 +175,7 @@ For EAS Build, use [iOS](recipes/eas-ios.md) or [Android](recipes/eas-android.md
 |a module in Swift that `app.ts` asks; a value from the launch environment (a resource that reads `native.available` or calls `native.call` keeps its answer across launches)|`native-module`|
 |a canvas drawn in Rust on the GPU (a `Surface`); Rust of the app's own, in its own Cargo workspace|`gpu-module`|
 |app.json keys, `assets/`, the `modules` folder|`app-json`|
+|an action Siri, Shortcuts or a browser's agent calls (a `tool` line and its face)|`tools`|
 |a phone manifest: orientation, appearance, HTTP, a public setting|`phone-manifest`|
 |a section of the long guides, whole, by its heading|`bun exact.mjs docs <heading words>`|
 

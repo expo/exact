@@ -172,6 +172,9 @@ class Natives(
                 live = true
                 val f = try { Native.canvasFrame(e.id) } catch (x: UnsatisfiedLinkError) { -2L }
                 if (f == -2L) { refused = true; unbuffer(e); any = true; continue }
+                // None after one was drawn: a new canvas (the host was replaced), whose ring may reuse the old one's
+                // numbers. The image drawn stays until its first frame.
+                if (f == -1L && e.drawn != -1L) { e.drawn = -1L; e.wrapped.clear() }
                 if (f < 0 || f == e.drawn) continue
                 val key = f ushr 32
                 val bmp = e.wrapped[key] ?: run {
@@ -359,6 +362,7 @@ class Natives(
         if (!e.fullWindow) e.presentation.failed = false
         if (kind == 3) {
             presentation(e, e.fullWindow && windowCanvas)
+            if (e.view is SurfaceView && e.presentation.replaced(Native.canvasReady(id))) { e.dirty = true; poll() }
         }
         if (json != null) e.disabled = json.optBoolean("disabled")
         e.rows.add(row)

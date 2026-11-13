@@ -92,10 +92,6 @@ final class NavigationTabsIOSTests: XCTestCase {
         try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, "no \(testId)")
     }
 
-    private func tapNode(_ session: ExactSession, _ testId: String) throws {
-        _ = Agent(session: session).tap(["id": Int(try node(session, testId).id)])
-    }
-
     /// The fixture's own switch between the tab bar and the authored
     /// tablist (`appearance: none` on it), as the app's state writes it.
     private func authoredTabs(_ session: ExactSession, _ authored: Bool) throws {
@@ -932,7 +928,12 @@ final class NavigationTabsIOSTests: XCTestCase {
         until("Home popped to its root again") { home.viewControllers.count == 1 && home.transitionCoordinator == nil }
     }
 
-    func testATabFollowedAfterItsPopStartsCompletesNavigation() throws {
+    /// Home selected in code, which sends no tab delegate call, and popped in
+    /// the same turn: UIKit starts the pop before Home's route appears, so
+    /// Exact follows the selection as the pop reaches it, and the pop then
+    /// reaches the router as one Back on Home and is not written back.
+    func testATabSelectedInCodeIsFollowedBeforeItsPop() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit starts the pop before the tab's route appears in a scene's window") }
         let session = try fixture("tabs-follow-mid-pop")
         let navigation = session.presenter.navigation
         let tabs = try XCTUnwrap(navigation.tabController)
@@ -943,14 +944,12 @@ final class NavigationTabsIOSTests: XCTestCase {
         until("Home holds its pushed route") { home.viewControllers.count == 2 }
         tapTab(tabs, 1)
         until("Exact follows the other tab") { tabs.selectedIndex == 1 && navigation.primaryNavigation.map { $0 !== home } == true }
-        let second = try XCTUnwrap(navigation.primaryNavigation)
-        let root = try XCTUnwrap(home.viewControllers.first)
+        let root = try XCTUnwrap(home.viewControllers.first as? RouteController)
         let detail = try XCTUnwrap(home.topViewController)
 
-        // UIKit shows the selection before Exact's delayed selection batch follows it
         tabs.selectedIndex = 0
         tabs.view.layoutIfNeeded()
-        XCTAssertNotNil(home.view.window, "Home is visible before its pop starts")
+        XCTAssertFalse(navigation.primaryNavigation === home, "Home's route has not appeared: the router is on the other tab")
         UIView.setAnimationsEnabled(true)
         defer { UIView.setAnimationsEnabled(false) }
         home.popViewController(animated: true)
@@ -958,20 +957,54 @@ final class NavigationTabsIOSTests: XCTestCase {
         XCTAssertTrue(transition.isAnimated)
         XCTAssertTrue(transition.viewController(forKey: .from) === detail)
         XCTAssertTrue(transition.viewController(forKey: .to) === root)
-        XCTAssertTrue(navigation.primaryNavigation === second, "the pop starts before Exact follows Home")
-        try tapNode(session, "tab-home")
-        XCTAssertTrue(navigation.primaryNavigation === home)
-        XCTAssertNotNil(home.transitionCoordinator, "Exact follows Home before the native pop finishes")
-
-        // didShow supplies completion when willShow ran before Exact followed Home
-        until("the completed pop releases navigation and reaches the router") {
-            home.transitionCoordinator == nil && !navigation.inTransition
-                && home.viewControllers.count == 1
-                && navigation.selectedKey == (home.topViewController as? RouteController)?.key
+        until("the completed pop releases navigation and reaches the router on Home") {
+            home.transitionCoordinator == nil && !navigation.inTransition && navigation.primaryNavigation === home
+                && navigation.selectedKey == root.key
         }
+        waitForMainQueue()
+        let journal = session.agent(#"{"op":"logs","since":0}"#)
+        XCTAssertTrue(home.viewControllers.elementsEqual([root], by: ===), "Home keeps its root alone")
+        XCTAssertEqual(journal.components(separatedBy: "(back)").count - 1, 1, "one Back reached the router")
+        XCTAssertFalse(journal.contains("written back"), "the pop was followed")
     }
 
-    /// The same in a container the app owns (the tabs hatch).
+    /// Home popped and another tab selected in code in one turn: the pop
+    /// reaches the router as Home's Back, the router follows the selection
+    /// after it, and no sync writes Detail back into Home.
+    func testAPopAndAnotherTabSelectedInCodeInOneTurnAreBothFollowed() throws {
+        guard hostedWindowScene() != nil else { throw missing("scene", "UIKit drops a pop's transition for a tab change as in an app only in a scene's window") }
+        let session = try fixture("tabs-pop-then-select")
+        let navigation = session.presenter.navigation
+        let tabs = try XCTUnwrap(navigation.tabController)
+        // A bar built from `UITab`s tells the delegate of a selection made in code
+        if #available(iOS 18.0, *), !tabs.tabs.isEmpty { throw XCTSkip("UIKit's didSelectTab follows a selection made in code") }
+        let home = try XCTUnwrap(tabs.tabControllers?[0] as? UINavigationController)
+        try tapNode(session, "detail")
+        until("Home holds its pushed route") { home.viewControllers.count == 2 && !navigation.inTransition }
+        // The other tab built, so it has a route to appear: a tab not built shows none
+        tapTab(tabs, 1)
+        until("the other tab is built") { navigation.routerTab == 1 && !navigation.inTransition }
+        tapTab(tabs, 0)
+        until("Home again, with its pushed route") { navigation.primaryNavigation === home && home.viewControllers.count == 2 && !navigation.inTransition }
+        let root = try XCTUnwrap(home.viewControllers.first as? RouteController)
+        UIView.setAnimationsEnabled(true)
+        defer { UIView.setAnimationsEnabled(false) }
+        home.popViewController(animated: true)
+        tabs.selectedIndex = 1
+        tabs.view.layoutIfNeeded()
+        until("the router follows the other tab") { navigation.routerTab == 1 && !navigation.inTransition }
+        waitForMainQueue()
+        let journal = session.agent(#"{"op":"logs","since":0}"#)
+        XCTAssertEqual(journal.components(separatedBy: "(back)").count - 1, 1, "one Back reached the router")
+        XCTAssertFalse(journal.contains("written back"), "the pop was followed")
+        tapTab(tabs, 0)
+        until("Home shows again") { navigation.routerTab == 0 && navigation.primaryNavigation === home && !navigation.inTransition }
+        waitForMainQueue()
+        XCTAssertTrue(home.viewControllers.elementsEqual([root], by: ===), "Home keeps its root alone")
+    }
+
+    /// `testATabSelectedDuringAPushLeavesNavigationFree` in a container the
+    /// app owns (the tabs hatch).
     func testATabSelectedDuringAPushInTheAppsContainerLeavesNavigationFree() throws {
         setenv("EXACT_FIXTURE_CONTAINER", "app", 1)
         defer { unsetenv("EXACT_FIXTURE_CONTAINER"); NativeViews.uninstallTable() }
@@ -1396,6 +1429,32 @@ extension XCTestCase {
         if controller === tabs.selectedViewController { (controller as? UINavigationController)?.popToRootViewController(animated: true) }
         else { tabs.selectedViewController = controller }
         tabs.delegate?.tabBarController?(tabs, didSelect: controller)
+    }
+
+    /// Waits until `nav`'s transition has started its animations: the
+    /// coordinator runs its alongside block then.
+    func waitForAnimationsToStart(_ nav: UINavigationController, file: StaticString = #filePath, line: UInt = #line) {
+        var started = false
+        guard nav.transitionCoordinator?.animate(alongsideTransition: { _ in started = true }) == true else {
+            return XCTFail("a transition runs", file: file, line: line)
+        }
+        waitFor("the transition's animations start", onFailure: { XCTFail($0, file: file, line: line) }) { started }
+        XCTAssertNotNil(nav.transitionCoordinator, "and it still runs", file: file, line: line)
+    }
+
+    /// Size classes set by trait overrides and laid out at once: one move
+    /// between the bar and More for each call that changes them.
+    func setSizeClasses(_ tabs: UITabBarController, horizontal: UIUserInterfaceSizeClass, vertical: UIUserInterfaceSizeClass? = nil) {
+        tabs.traitOverrides.horizontalSizeClass = horizontal
+        if let vertical { tabs.traitOverrides.verticalSizeClass = vertical }
+        tabs.view.setNeedsLayout()
+        tabs.view.layoutIfNeeded()
+    }
+
+    /// The agent's tap on the node whose `testId` is `testId`.
+    func tapNode(_ session: ExactSession, _ testId: String) throws {
+        let node = try XCTUnwrap(session.presenter.views.values.first { $0.props["testId"] == testId }, "no \(testId)")
+        _ = Agent(session: session).tap(["id": Int(node.id)])
     }
 }
 #endif

@@ -329,6 +329,16 @@ export async function exclusiveWebStore(options, launch) {
   }
 }
 
+/** Remove a throwaway named store: its profile and its lock directory. A store whose `browser-owner` record
+ * remains is kept, and false returned: exclusiveWebStore keeps that record while its Chrome's exit is unconfirmed,
+ * and a reset of the profile it guards would hand a live browser's store to the next drive. */
+export async function removeDriveStore(store, storage) {
+  const locks = resolve(store.base + '-locks', storage);
+  if (existsSync(resolve(locks, 'browser-owner'))) return false;
+  try { await removeBrowserProfile(store.profile); } finally { rmSync(locks, {recursive: true, force: true}); }
+  return true;
+}
+
 /** The one port a web drive's page is served on, `--port <n>` else `EXACT_PORT`, or null for the default (a free port;
  * a named store's from its hash). Builders on a shared machine must keep every listener in an assigned range (app farm
  * wave 1: 21 builds could not). A test run serves its tests on it one at a time. A named store's data is its origin's,

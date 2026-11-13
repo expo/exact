@@ -194,7 +194,8 @@ async function work(_source:string, args:unknown[], store:Store, storage:Storage
   }
   // LLP 1069.010.000 D4: the app's own atomic save of a kept file.
   if (op === "kept-save") {
-    await storage.fs.atomicWriteFile(value, new TextEncoder().encode("saved"));
+    try { await storage.fs.atomicWriteFile(value, new TextEncoder().encode("saved")); }
+    catch (e: any) { return {text: `${e.kind} ${e.code}`}; }
     return {text: (await storage.fs.recentDocuments()).map((d) => d.path).join(",")};
   }
   // LLP 1069.010.000 D1, D2a: the answer watches a chosen file and its

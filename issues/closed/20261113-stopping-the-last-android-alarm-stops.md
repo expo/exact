@@ -1,6 +1,7 @@
 # Stopping the last Android alarm stops a newer ring
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** AlarmService stops with the latest start id it was delivered, so the system keeps it for a start that is still on its way.
 **Systems:** packages/alarms
 **Severity:** P2
 **Author:** Grok 4.7

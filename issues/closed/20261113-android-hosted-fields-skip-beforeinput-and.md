@@ -1,6 +1,7 @@
 # Android hosted fields skip beforeinput and caret selectionchange
 
-**Status:** Open
+**Status:** Closed
+**Resolution:** A hosted field's edit runs beforeinput through edit_field and is dropped when prevented, and a caret move the reader reports queues selectionchange.
 **Systems:** host/android, host/linux
 **Severity:** P2
 **Author:** Grok 4.7

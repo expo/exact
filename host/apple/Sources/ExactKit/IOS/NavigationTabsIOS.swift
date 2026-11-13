@@ -264,28 +264,19 @@ extension NavigationHost {
         // stack for the tab whose routes UIKit moved there (`routesStack`),
         // else in the tab's own. A tab's controller is empty until the runner
         // builds the tab, when it is first selected or More's list is about
-        // to show it (LLP 1075.003 §9.14).
-        // Until More's `didShow` reports its pop, write no tab's routes and keep More's record, from which that
-        // `didShow` finds the Back (`morePopTab`)
-        let popping = morePopTab != nil
-        if !popping {
-            // Record what More holds once UIKit moved routes out of it, which More's `didShow` need not report, and the
-            // own controller of the tab whose routes More holds, which holds none of them: what UIKit puts back there
-            // as More pops is then no pop pending (LLP 1075.003 §9.16)
-            if let more { recordOwned(more) }
-            let held = moreTab
-            if let held, let own = navs[held] as? UINavigationController { recordOwned(own) }
-            for index in navs.indices where index != p.at {
-                setRoutes(base(p.wanted[index]), in: index == held ? more ?? navs[index] : navs[index])
-            }
+        // to show it (LLP 1075.003 §9.14). A stack that holds the routes
+        // already is only projected again; one UIKit is moving (`writable`) is
+        // written once the move ends.
+        for index in navs.indices where index != p.at {
+            let stack = routesStack(index) ?? navs[index]
+            let routes = base(p.wanted[index])
+            if stack.stackRoutes.elementsEqual(routes, by: ===) || writable(stack, routes) { setRoutes(routes, in: stack) } else { tabsHeld = true }
         }
         // Fill the router's tab's controller with its first routes, or project
         // its bar when the router's tab changes, before UIKit shows it, where
-        // nothing animates in; `sync` writes the rest of its stack. While a pop
-        // of More is pending, an empty controller is left to `sync`, which
-        // waits for More's `didShow` while the router is on the tab More pops.
+        // nothing animates in; `sync` writes the rest of its stack.
         let selected = routesStack(p.at) ?? navs[p.at]
-        if selected.stackRoutes.isEmpty { if !popping { setRoutes(base(p.wanted[p.at]), in: selected) } }
+        if selected.stackRoutes.isEmpty { if writable(selected, p.wanted[p.at]) { setRoutes(base(p.wanted[p.at]), in: selected) } }
         else if routerTab != p.at { prepareRoutes(base(p.wanted[p.at]), in: selected) }
         // @ref LLP 1038 D6 — a tab change swaps immediately. UIKit's selection
         // is the state (LLP 1075.003 §3.7): it is written only when the
@@ -295,6 +286,7 @@ extension NavigationHost {
         // reorders tabs. A tab UIKit is selecting (`tapping`) is left to UIKit.
         if routerTab != p.at {
             routerTab = p.at
+            selectionPressed = nil
             if let container = tabController, container.selectedViewController !== navs[p.at], navs[p.at] !== tapping {
                 container.selectedViewController = navs[p.at]
                 refollowFloatingBar() // (no push or pop: the stack it shows keeps its wish on an iPad)
@@ -398,35 +390,13 @@ extension NavigationHost {
     /// More where UIKit has none.
     var more: UINavigationController? { adoptedMore }
 
-    /// The tab whose routes UIKit pops in More (its Back, More tapped again)
-    /// before More's `didShow` has reported it: More holds a prefix of what
-    /// Exact last recorded, a route it dropped is More's child or in no
-    /// navigation controller, and the tab's own controller holds none of its
-    /// routes, as it does once a size class change moves them there (LLP
-    /// 1075.003 §9.16). While a pop is pending, `syncTabs` writes no tab's
-    /// routes, so none that UIKit popped goes back into a controller, and a
-    /// sync waits while the router is on that tab (`changing`). A pop within the tab's routes that ends while another
-    /// tab shows stays pending until More's next `didShow`, which UIKit sends
-    /// when More shows again (§9.16). With another delegate on More, Exact
-    /// hears no `didShow`, so a pop is pending only while More's delegate is
-    /// Exact's.
-    var morePopTab: Int? {
-        guard let more, let stack = stacks[ObjectIdentifier(more)], more.delegate === stack.proxy else { return nil }
-        let written = stack.written
-        let now = more.viewControllers.map(ObjectIdentifier.init)
-        guard now.count < written.count, written.starts(with: now), let dropped = controllers.values.first(where: {
-            let id = ObjectIdentifier($0)
-            return written.contains(id) && !now.contains(id) && ($0.navigationController.map { $0 === more } ?? true)
-        }), let tab = tabIndex(ofRoute: dropped) else { return nil }
-        return tabStack(tab)?.stackRoutes.isEmpty != false ? tab : nil
-    }
-
-    /// Whether `nav` is More showing its list, which Exact follows
-    /// (`followMoresList`) whichever stack navigation follows by then: once
-    /// More holds no route of the tab, `syncTabs` points navigation at the
-    /// tab's own controller, which can come before More's `didShow`.
-    func showsMoresList(_ nav: UINavigationController) -> Bool {
-        nav === more && nav.topViewController != nil && nav.topViewController === nav.viewControllers.first
+    /// Whether Exact may write `routes` into `stack` now: UIKit runs no
+    /// transition there (a tab tapped in the turn of its pop leaves one there
+    /// until the tab shows again, LLP 1075.003 §9.16), and moves none of the
+    /// routes (`routesInFlight`). The write waits for the transition's end
+    /// (`runHeldSync`) or the move's.
+    func writable(_ stack: UIViewController, _ routes: [RouteController]) -> Bool {
+        (stack as? UINavigationController)?.transitionCoordinator == nil && !routesInFlight(routes)
     }
 
     /// The tab whose routes UIKit holds in More's stack: a row of its list
@@ -460,21 +430,19 @@ extension NavigationHost {
         logicalParent(of: route.node).flatMap { tabPanels.firstIndex(of: $0.id) }
     }
 
-    /// More shows a controller: a row of its list was picked, which sends no
-    /// tab delegate call (measured), or More was selected again with a tab's
-    /// controller on top (LLP 1075.003 §9.16). A tab the router does not show
-    /// is pressed now, before More's push draws, as `mayShow` presses a tab a
-    /// tap on the bar selects; its routes then follow More's stack. The press
-    /// runs with `tapping` set, as a tap's does, because UIKit has selected
-    /// the tab, or is selecting More. A transition from another controller of
-    /// the same tab is UIKit's push or pop within it, not a pick, and presses
-    /// nothing: a tap on another tab can move the router to that tab after
-    /// More's pop is asked for and before More's `willShow` for the pop
-    /// (§9.16). The routes UIKit moved into
-    /// More are then projected as pushed over its list, and More's bar shown
-    /// as the top one wants, before the push draws: the bar was decided for
-    /// them before this, as their own stack's. More's list, shown again by a
-    /// pop or a swipe, gets the tabs it shows built (`buildTabsUnderMore`).
+    /// More shows a controller. A tab UIKit selected that the router is not
+    /// on is pressed now, before More's push draws (`followSelection`), as
+    /// `mayShow` presses a tab a tap on the bar selects: UIKit reports the tab
+    /// selected by More's `willShow` for a row of its list picked, which
+    /// sends no tab delegate call, and for the tab selected in code. For a tap
+    /// on More from another tab, UIKit reports it only at `didSelect`, which
+    /// presses it (`followUIKit`), and during a pop within the tab's routes it
+    /// reports the tab the router is on, so neither presses anything here
+    /// (LLP 1075.003 §9.16). The routes UIKit moved into More are then
+    /// projected as pushed over its list, and More's bar shown as the top one
+    /// wants, before the push draws: the bar was decided for them before
+    /// this, as their own stack's. More's list, shown again by a pop or a
+    /// swipe, gets the tabs it shows built (`buildTabsUnderMore`).
     func followMore(_ shown: UIViewController, animated: Bool) {
         guard let more else { return }
         watchPops(more)
@@ -482,38 +450,37 @@ extension NavigationHost {
             if shown === more.viewControllers.first { buildTabsUnderMore() }
             return
         }
-        let withinTab = more.transitionCoordinator?.viewController(forKey: .from).flatMap(tabIndex(ofShown:)) == index
-        if index == routerTab {
-            // The router's own tab picked again: UIKit moved its routes back into More
-            primaryNavigation = routesStack(index) as? UINavigationController ?? primaryNavigation
-        } else if !withinTab, let tab = authoredTab(index) {
-            tapping = tabStack(index)
-            defer { tapping = nil }
-            pressTab(tab)
-        }
+        // Follow More when the router's own tab shows again there: UIKit moved its routes back into More
+        if index == routerTab { primaryNavigation = routesStack(index) as? UINavigationController ?? primaryNavigation }
+        followSelection(showing: shown)
         let routes = more.stackRoutes.compactMap { $0 as? RouteController }
         guard !routes.isEmpty else { return }
         prepareRoutes(routes, in: more)
         showBar(more, for: shown as? RouteController, animated: animated)
     }
 
+    /// Press the tab UIKit selected when the router is on another and UIKit
+    /// shows that tab (`shown` is one of its controllers), once for that selection, with
+    /// `tapping` set as a tap's press runs, because UIKit has selected it.
+    /// While a selection is applied, UIKit can show the new tab with the old
+    /// one still reported selected (LLP 1075.003 §9.16), and a shown
+    /// controller of another tab than the selected one presses nothing. A
+    /// press that leaves the router where it was is the app declining the tab
+    /// (`declineMoreRow`).
+    func followSelection(showing shown: UIViewController) {
+        guard let tabs = tabController, let selected = tabs.selectedViewController, let index = tabIndex(of: selected),
+              index != routerTab, tabIndex(ofShown: shown) == index, tapping == nil, selected !== selectionPressed,
+              let tab = authoredTab(index) else { return }
+        selectionPressed = selected
+        tapping = selected
+        defer { tapping = nil }
+        pressTab(tab)
+    }
+
     /// The tab of a controller More shows: a plain tab it pushed for a row,
     /// or a route UIKit moved into it.
     func tabIndex(ofShown shown: UIViewController) -> Int? {
         tabIndex(of: shown) ?? (shown as? RouteController).flatMap(tabIndex(ofRoute:))
-    }
-
-    /// More showed its list again, having dropped the router's top route
-    /// (`popped`: its Back on a root, More tapped again): a Back to the tab's
-    /// root, unless the routes left More for their tab's own controller, as a
-    /// size class change moves them. More can report its list then (this
-    /// host's journal, iPhone Duo simulator, iOS 27.1), and the router keeps
-    /// its tab. One route above the root, it is the platform's Back, which
-    /// presses the authored control; further up, a history jump.
-    func followMoresList(_ nav: UINavigationController, popped: [String]) {
-        let moved = controllers.values.contains { $0.key == selectedKey && $0.navigationController.map { $0 !== nav } == true }
-        guard !moved, let top = selectedKey, popped.contains(top), let root = shownKeys.first, top != root else { return }
-        if shownKeys.firstIndex(of: top) == 1, back != nil { goBack() } else { goBack(from: top, to: root) }
     }
 
     /// Whether More showed a row's tab that the app declined: the row's press
@@ -523,12 +490,12 @@ extension NavigationHost {
     func declineMoreRow(_ shown: UIViewController) -> Bool {
         guard let more, let index = tabIndex(ofShown: shown), index != routerTab, tabStack(routerTab) != nil else { return false }
         more.popToRootViewController(animated: false)
-        recordOwned(more)
         showRouterTab(declining: index)
         return true
     }
 
-    /// A tap on the bar, before UIKit selects. A tap on another tab presses
+    /// A tap on the bar, before UIKit selects. A pop UIKit made before the tap
+    /// reaches the router first (`followPops`). A tap on another tab presses
     /// that tab's authored tab now, as a click on the web's tablist presses
     /// it, so the tab is built and projected before UIKit shows it, as a
     /// hand-built app's tab is ready before it is tapped. A press that leaves
@@ -536,11 +503,13 @@ extension NavigationHost {
     /// nothing, and UIKit shows the router's tab (`syncTabs` selects the
     /// router's tab when the press moved the router to a third tab). A tap on
     /// the tab UIKit shows, above its root, lets UIKit pop it to the root
-    /// only where Back goes (`backAllows`), and the tab is pressed once the
-    /// pop ends; at the root, its screen scrolls to its top after the tab's
-    /// press (`followUIKit`). More is UIKit's: a tap that shows its list gets
-    /// the tabs it lists built first (`buildTabsUnderMore`).
+    /// only where Back goes (`backAllows`), and the tab is pressed after that
+    /// Back; at the root, its screen scrolls to its top after the tab's press
+    /// (`followUIKit`). More is UIKit's: a tap that shows its list gets the
+    /// tabs it lists built first (`buildTabsUnderMore`).
     func mayShow(_ tabs: UITabBarController, _ controller: UIViewController) -> Bool {
+        followPops()
+        selectionPressed = nil
         #if os(iOS)
         // Adopt the More a tap on its item shows, which UIKit may have made anew; only a controller that is no tab's is
         // read against `moreNavigationController`, which makes a More where UIKit has none
@@ -555,9 +524,7 @@ extension NavigationHost {
         guard let index = tabIndex(of: controller) else { return true }
         if controller === tabs.selectedViewController {
             if controller.stackRoutes.count > 1 {
-                guard backAllows("tab reselect") else { return false }
-                reselectedPop = controller as? UINavigationController
-                return true
+                return backAllows("tab reselect")
             }
             reselected = reselectedRoot(index)
             return true
@@ -576,17 +543,22 @@ extension NavigationHost {
         return false
     }
 
-    /// UIKit selected a tab. After a tap on another tab the router shows it
-    /// already (`mayShow`), and the tab is laid out and its covers reported
-    /// once, as `sync` reports after its own layout (`tapping`). A tab
-    /// UIKit shows that the router does not (one under More) is pressed now,
-    /// and a press that leaves the router on another tab selects the
-    /// router's tab again. At the root of the tab UIKit showed, tapped again,
-    /// the press runs and the screen scrolls to its top. Above its root, the
-    /// press runs once UIKit's pop has ended and the router has followed it
-    /// as a Back, so the tab's press runs on every tap of its item, as the
-    /// web's tablist presses a tab on every click.
+    /// UIKit selected a tab. A pop UIKit committed reaches the router first
+    /// (`followPops`): a tap on the selected tab above its root has popped
+    /// its stack (LLP 1075.003 §9.16: UIKit's pop has its coordinator by
+    /// `didSelect` and its `willShow` after it), and on the `tabs` path code
+    /// can pop a stack in the turn it selects a tab. After a tap on another
+    /// tab the router shows it already (`mayShow`), and the tab is laid out
+    /// and its covers reported once, as `sync` reports after its own layout
+    /// (`tapping`). A tab UIKit shows that the router does not (one under
+    /// More, after a tap on More from another tab, or one selected in code on
+    /// the `tabs` path) is pressed now, and a press that leaves the router on
+    /// another tab selects the router's tab again. A tab tapped again is
+    /// pressed: after the Back above its root; at its root, and then its
+    /// screen scrolls to its top. So the tab's press runs on every tap of its
+    /// item, as the web's tablist presses a tab on every click.
     func followUIKit(_ tabs: UITabBarController) {
+        let popped = followPops()
         let screen = reselected
         reselected = nil
         if tapping != nil {
@@ -594,7 +566,7 @@ extension NavigationHost {
             // now that UIKit selected the tab, before the tab's first frame
             if pendingSync {
                 tapping = nil
-                sync(Batch(ops: [], timers: false, motion: false, clock: nil, error: nil))
+                resync()
                 return refollowFloatingBar()
             }
             refollowFloatingBar()
@@ -603,32 +575,21 @@ extension NavigationHost {
             return reportCovers()
         }
         guard let index = tabIndex(of: tabs.selectedViewController) else { return }
-        // UIKit's pop has its coordinator by `didSelect` but sends `willShow` after it (iOS 27, measured), so a press
-        // queued on that coordinator would run before the Back the pop is: it waits for the pop's end
-        // (`completeTransition`), unless no pop is under way
-        if let popping = reselectedPop, popping.transitionCoordinator == nil, !nativePopPending(on: popping) {
-            reselectedPop = nil
-            pressReselected(popping)
-        }
-        if index == routerTab, screen == nil { return refollowFloatingBar() }
+        if index == routerTab, screen == nil, !popped { return refollowFloatingBar() }
         guard let tab = authoredTab(index) else { return }
+        let again = index == routerTab
         pressTab(tab, scrolling: screen)
-        if screen != nil { return }
+        // Leave the router's own tab, tapped again, to its press; another tab's press can leave the router elsewhere
+        if again { return }
         guard routerTab != index, tabStack(routerTab) != nil else { return refollowFloatingBar() }
         showRouterTab(declining: index)
-    }
-
-    /// Press the tab whose stack a tap popped to its root (`mayShow`), once
-    /// the pop has ended and the router has followed it as a Back.
-    func pressReselected(_ stack: UINavigationController) {
-        guard let index = tabIndex(of: stack), index == routerTab, let tab = authoredTab(index) else { return }
-        pressTab(tab)
     }
 
     /// Select the router's tab again: tab `index`'s press left the router on
     /// it, the app's answer to a person's pick of `index`.
     func showRouterTab(declining index: Int) {
         guard let tabs = tabController, let stack = tabStack(routerTab) else { return }
+        selectionPressed = nil
         tabs.selectedViewController = stack
         presenter.session?.log("navigation: tab \(index)'s press left the router on tab \(routerTab), which UIKit shows again")
     }

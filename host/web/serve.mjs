@@ -13,7 +13,7 @@ import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSy
 import { arch, cpus, networkInterfaces, platform } from 'node:os';
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { filesystem, filesystemRead } from '../../scripts/filesystem.mjs';
+import { filesystem, filesystemRead, filesystemTree } from '../../scripts/filesystem.mjs';
 import { withLock } from './build-lock.mjs';
 import { canonicalBytes, readAssetIndex } from '../../scripts/deploy-signing.mjs';
 import { copyShaders, developmentURLScheme, resolveApp, webDist, webHostFiles } from '../../scripts/app.mjs';
@@ -21,6 +21,7 @@ import { settingChanges } from '../../js/bake/src/__exact_env.mjs';
 import { acceptsHTML, appDocumentPath, prefersMarkdown, webRequestURL, parseWebRoot, sha256, webReleasePath, webRootPath } from '../../scripts/origin.mjs';
 import { canonical, filePathOf, matchPattern } from '../web-js/route-pattern.js';
 import { guardFlags } from '../../scripts/help.mjs';
+import { slashRelative, within } from '../../scripts/paths.mjs';
 
 import { INSTALL_FILES, INSTALL_PUBLIC, INSTALL_ROOT, installRoute, installNetworkPage } from '../../scripts/install-page.mjs';
 import { COMPRESSIBLE, acceptedEncodings, bodyDigest, compressionCache, matchesETag } from './compression.mjs';
@@ -114,12 +115,22 @@ export function moduleCards(files, appId) {
     return [key, { bytes: bytes.length, sha256: sha256(bytes) }];
   }));
 }
-export function retainDevGeneration(cache, epoch, seq, files, quota = DEV_GENERATION_CACHE_BYTES, previousToken = null) {
+export function retainDevGeneration(cache, epoch, seq, files, quota = DEV_GENERATION_CACHE_BYTES, previousToken = null, batch = 64 * 1024 * 1024) {
   if (!/^[0-9a-f]{32}$/.test(epoch) || !Number.isSafeInteger(seq) || seq < 0) throw new Error('invalid dev generation identity');
+  // The assets the index names are kept once, by digest, for every generation. One request cannot hold a large
+  // generation: batches of new assets go first, each admitted with the bytes still to come (`reserve`).
+  const root = resolve(cache), index = files.get('assets.json'), own = {}, fresh = new Map(), sent = [], kept = new Set(filesystem({ op: 'list', root, path: 'blobs' }) ?? []);
+  const digests = new Map(index ? JSON.parse(index).assets.map((asset) => [asset.name, asset.sha256]) : []);
+  for (const [name, bytes] of files) { const digest = digests.get(name); if (!digest) own[staticRelative(name)] = bytes; else if (!kept.has(digest)) fresh.set(digest, bytes); }
+  let reserve = [...Object.values(own), ...fresh.values()].reduce((sum, bytes) => sum + bytes.length, 0), blobs = {}, pending = 0, result;
+  const send = (more) => { reserve -= pending; result = filesystem({ op: 'retain', root, path: `${epoch}/${seq}`, quota, previousToken, blobs, reserve: more ? 0 : reserve, ...more }); previousToken = result.token; sent.push(...Object.keys(blobs)); blobs = {}; pending = 0; };
   try {
-    return filesystem({ op: 'retain', root: resolve(cache), path: `${epoch}/${seq}`, quota, previousToken,
-      files: Object.fromEntries([...files].map(([name, bytes]) => [staticRelative(name), Buffer.from(bytes).toString('base64')])) });
+    for (const [digest, bytes] of fresh) { blobs[digest] = Buffer.from(bytes).toString('base64'); if ((pending += bytes.length) >= batch) send(); }
+    send({ files: Object.fromEntries(Object.entries(own).map(([name, bytes]) => [name, Buffer.from(bytes).toString('base64')])) });
+    return result;
   } catch (error) {
+    // A refused publication's blobs that no published generation names are not left charged against the quota.
+    if (sent.length) try { filesystem({ op: 'release', root, blobs: sent }); } catch (release) { error.message += `; its kept assets were not released: ${release.message}`; }
     if (error.message.includes('cache quota exceeded')) throw new Error(`dev generation cache is full: ${resolve(cache)}; close all pages and native dev connections before manually removing this cache, then restart the dev server`);
     throw error;
   }
@@ -142,9 +153,10 @@ function* devGenerationRead(cache, pathname) {
     const moduleKey = Object.keys(MODULE_FILES).find(key => MODULE_FILES[key] === name);
     const rustCard = Object.values(envelope.rust ?? {}).flatMap(v => [v.receipt, v.module]).find(card => card.url?.endsWith('/' + name) || card.url === name);
     let card = name === 'app.plan.map.json' ? envelope.dev.sourceMap : name === 'app.plan' ? envelope.plan : name === 'assets.json' ? envelope.assets : moduleKey ? envelope.module?.[moduleKey] : rustCard;
-    if (!card && envelope.assets) { const index = (yield { op: 'get', root: resolve(cache), path: `${prefix}/assets.json` }); card = index !== null && readAssetIndex(envelope.assets, Buffer.from(index, 'base64')).find((asset) => asset.name === name); }
+    let path = `${prefix}/${name}`;
+    if (!card && envelope.assets) { const index = (yield { op: 'get', root: resolve(cache), path: `${prefix}/assets.json` }); card = index !== null && readAssetIndex(envelope.assets, Buffer.from(index, 'base64')).find((asset) => asset.name === name); path = `blobs/${card?.sha256}`; }
     if (!card) return null;
-    const value = (yield { op: 'get', root: resolve(cache), path: `${prefix}/${name}` });
+    const value = (yield { op: 'get', root: resolve(cache), path });
     if (value === null) return null;
     const body = Buffer.from(value, 'base64');
     if (body.length !== card.bytes || sha256(body) !== card.sha256) return null;
@@ -250,9 +262,7 @@ export function syncStaticTree(source, target, validate = null) {
   }
 }
 
-function staticTreeSnapshot(root) {
-  return new Map(Object.entries(filesystem({ op: 'tree', root: resolve(root), optionalRoot: true }) ?? {}).map(([name, bytes]) => [name, Buffer.from(bytes, 'base64')]));
-}
+const staticTreeSnapshot = (root) => filesystemTree(resolve(root)) ?? new Map();
 
 /** Atomically reconcile a watched whole-tree creation/deletion and return
  * only changed leaf rows. Root events are common when Darwin removes a
@@ -1016,8 +1026,7 @@ const assetTrees = (rust) => ['assets', 'deck', 'shaders', 'plans', 'activities'
 export function captureAssets(dir, rust = false) {
   const files = new Map();
   for (const tree of assetTrees(rust)) {
-    const captured = filesystem({ op: 'tree', root: resolve(dir, tree), optionalRoot: true }) ?? {};
-    for (const [relative, encoded] of Object.entries(captured)) files.set(`${tree}/${relative}`, Buffer.from(encoded, 'base64'));
+    for (const [relative, bytes] of filesystemTree(resolve(dir, tree)) ?? []) files.set(`${tree}/${relative}`, bytes);
   }
   return files;
 }
@@ -1323,37 +1332,46 @@ function settleBuild(dist) {
   return built.status === 0 ? 0 : built.status ?? 1;
 }
 
+/** The files of the app in `app` that a build of it into `out` reads: its files at any depth, but for what builds and
+ * tools write (`out` and what is kept beside it, dependencies, Cargo's target directory, `target` or `CARGO_TARGET_DIR`
+ * as resolveApp takes it, dot directories but `.env`s, generated types, test reports). `newest`: the latest modification
+ * time among them. `digest`: of their paths, which a build's receipt records as `sources`, so that a file come or gone
+ * since the build is a change whatever its time; it names no file. As real paths: the app may be named through a link. */
+export function appSources(app, out) {
+  const real = (p) => { try { return realpathSync(p); } catch { try { return resolve(realpathSync(dirname(p)), basename(p)); } catch { return resolve(p); } } };
+  const SKIP = new Set(['node_modules', 'target', 'test-results', 'playwright-report']), cargo = process.env.CARGO_TARGET_DIR ? real(process.env.CARGO_TARGET_DIR) : null;
+  let paths = [], newest = 0, root = real(app), output = real(out);
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const path = resolve(dir, e.name);
+      if (SKIP.has(e.name) || (cargo && within(cargo, path)) || (e.name.startsWith('.') && !e.name.startsWith('.env')) || e.name.endsWith('.d.ts') || within(output, path) || path.startsWith(`${output}.`)) continue;
+      if (e.isDirectory()) walk(path); else if (e.isFile()) { paths.push(slashRelative(root, path)); newest = Math.max(newest, statSync(path).mtimeMs); }
+    }
+  };
+  walk(root); return { newest, digest: sha256(Buffer.from(paths.sort().join('\n'))) };
+}
+
 /** For a build whose app's sources are beside it, as `settleBuild` builds a changed setting again: a function a
- * request for a page awaits (`asksPage`), which builds the site again once a source changed since the build (newer than its
- * receipt), as a framework's dev server does, or once another build with other settings replaced it (a test run's,
- * for its own API), and answers the build's output when it failed (null when it built or nothing changed). Null for a build without its sources (a site copied to a host), which is served as it is. */
+ * request for a page awaits (`asksPage`), which builds the site again once a source changed since the build (newer
+ * than its receipt) or one came or went (`appSources`), as a framework's dev server does, or once another build with
+ * other settings replaced it (a test run's, for its own API), and answers the build's output when it failed (null when
+ * it built or nothing changed). Null for a build without its sources (a site copied to a host), which is served as it is. */
 function rebuildOnChange(dist) {
   let marker;
   try { marker = JSON.parse(readFileSync(resolve(dist, '.exact-build.json'), 'utf8')); } catch { return null; }
   const app = sourcesOf(dist, marker.app?.id);
   if (!app || (!marker.release && resolve(dist) !== webDist())) return null;
   const out = resolve(dist), receipt = () => { try { return statSync(resolve(dist, '.exact-build.json')).mtimeMs; } catch { return 0; } };
-  // What a build reads: the app's files at any depth, but for what builds and tools write (its outputs,
-  // dependencies, dot directories but `.env`s, generated types, test reports).
-  const SKIP = new Set(['node_modules', 'target', 'test-results', 'playwright-report']);
-  const newest = (dir) => {
-    let at = 0;
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
-      const path = resolve(dir, e.name);
-      if (SKIP.has(e.name) || (e.name.startsWith('.') && !e.name.startsWith('.env')) || e.name.endsWith('.d.ts') || path === out || path.startsWith(`${out}.`)) continue;
-      if (e.isDirectory()) at = Math.max(at, newest(path)); else if (e.isFile()) at = Math.max(at, statSync(path).mtimeMs);
-    }
-    return at;
-  };
   let since = receipt(), checked = 0, running = null;
   const target = marker.target === 'js' ? [] : ['--wasm'], release = marker.release ? ['--out', dist] : [];
   return () => {
     if (running) return running;
     if (Date.now() - checked < 300) return null;
     checked = Date.now();
-    let settings = [];
-    try { settings = settingChanges(JSON.parse(readFileSync(resolve(dist, '.exact-build.json'), 'utf8')).env ?? {}, process.env, app); } catch { /* being replaced */ }
-    if (!settings.length && newest(app) <= Math.max(since, receipt())) return null;
+    let settings = [], built = null;
+    try { const now = JSON.parse(readFileSync(resolve(dist, '.exact-build.json'), 'utf8')); settings = settingChanges(now.env ?? {}, process.env, app); built = now.sources; } catch { /* being replaced */ }
+    const sources = appSources(app, out);
+    if (!settings.length && sources.newest <= Math.max(since, receipt()) && sources.digest === built) return null;
     const started = Date.now();
     console.log(`${app}: ${settings.length ? `the build has other settings than this server (${settings.map((c) => c.name).join(', ')})` : 'a source changed since the build'}: building it again`);
     running = new Promise((done) => {

@@ -120,6 +120,15 @@ final class PresentationMount: UIView {
     /// Relay a modal presentation's events to its logical ancestors (`MountRelay`).
     var relay: MountRelay?
     #endif
+    // UIKit's views over the ranked route (`keepPlatformViewsOver`).
+    override func didAddSubview(_ subview: UIView) {
+        super.didAddSubview(subview)
+        keepPlatformViewsOver()
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        keepPlatformViewsOver()
+    }
     #if !os(tvOS)
     override func focusItems(in rect: CGRect) -> [any UIFocusItem] { FocusSearch.items(self, in: rect) }
     #endif

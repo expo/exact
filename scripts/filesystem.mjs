@@ -291,6 +291,17 @@ export function filesystem(input) {
   if (result.status !== 0) throw new Error(`exact-filesystem exited before replying (status ${result.status}, signal ${result.signal ?? 'none'})${result.stderr ? `: ${result.stderr}` : ''}`);
   return decode(JSON.parse(result.stdout));
 }
+/** Every file under `root` (null when it is absent), read in pages: one reply cannot hold a large tree. */
+export function filesystemTree(root, limit = 64 * 1024 * 1024) {
+  const files = new Map();
+  for (let page = filesystem({ op: 'tree', root, optionalRoot: true, limit }); page; ) {
+    const rest = [];
+    for (const [name, bytes] of Object.entries(page)) if (bytes === null) rest.push(name); else files.set(name, Buffer.from(bytes, 'base64'));
+    if (!rest.length) return files;
+    page = filesystem({ op: 'tree', root, limit, paths: rest });
+  }
+  return null;
+}
 /** One child owns the root and OS lock throughout the asynchronous callback. */
 export async function filesystemLock(root, path, fn) {
   const child = spawn(executable(), [], { stdio: ['pipe', 'pipe', 'pipe'] });

@@ -72,6 +72,8 @@ function fakeFigma(limit: number) {
 let f: ReturnType<typeof fakeFigma>;
 let asked = 0;
 const send = async (msg: any, reply: string) => {
+  // An apply goes after a check of its export, as the UI sends it, unless the test made that check (`checked`).
+  if (msg.type === 'apply' && !msg.checked) await f.figma.ui.onmessage({ type: 'check', text: msg.text, id: ++asked });
   const id = ++asked;
   await f.figma.ui.onmessage({ ...msg, id });
   const got = f.said.find((m: any) => m.id === id);
@@ -946,4 +948,19 @@ test.each(['variable', 'baseline#1', 'plan#n'])('leftovers: a refusal at %s rest
     expect(attempted!.parts['plan#1']).toBeDefined();
   }
   expect(documentState()).toStrictEqual(before);
+});
+
+// A pull's apply writes only over what its check read: an edit since then is refused, nothing written.
+test('an edit after the check refuses the pull, which writes nothing, and a fresh check lets it through', async () => {
+  await load(10);
+  await send({ type: 'apply', text: TEXT }, 'applied');
+  expect((await send({ type: 'check', text: TEXT }, 'checked')).conflicts).toEqual([]);
+  const fill = f.variables.find(v => v.name === 'accent/fill'), mode = f.collections[0].defaultModeId;
+  const red = { r: 1, g: 0, b: 0, a: 1 };
+  fill.valuesByMode[mode] = red;
+  await expect(send({ type: 'apply', text: TEXT, checked: true }, 'applied')).rejects.toThrow(/changed after this pull was checked/);
+  expect(fill.valuesByMode[mode]).toEqual(red);
+  expect((await send({ type: 'check', text: TEXT }, 'checked')).conflicts).toHaveLength(1);
+  await send({ type: 'apply', text: TEXT, checked: true }, 'applied');
+  expect(fill.valuesByMode[mode]).not.toEqual(red);
 });

@@ -70,7 +70,8 @@ impl Watch {
                 | libc::IN_DELETE
                 | libc::IN_MOVED_FROM
                 | libc::IN_MOVED_TO
-                | libc::IN_DELETE_SELF;
+                | libc::IN_DELETE_SELF
+                | libc::IN_MOVE_SELF;
             if libc::inotify_add_watch(fd, name.as_ptr(), mask) < 0 {
                 let e = io::Error::last_os_error();
                 libc::close(fd);
@@ -86,27 +87,55 @@ impl Watch {
     }
 
     /// Take every pending notice: the caller looks at the path itself.
-    pub fn drain(&self) {
+    /// True when the watched directory itself was removed or renamed: the
+    /// watch is then on what is no longer the path's directory.
+    pub fn drain(&self) -> bool {
+        let mut gone = false;
         #[cfg(target_vendor = "apple")]
         {
             let zero = libc::timespec {
                 tv_sec: 0,
                 tv_nsec: 0,
             };
-            // SAFETY: an empty kevent array of 8 on the stack.
+            // SAFETY: an empty kevent array of 8 on the stack; `kevent`
+            // fills the first `n`.
             unsafe {
                 let mut events: [libc::kevent; 8] = std::mem::zeroed();
-                while libc::kevent(self.fd, std::ptr::null(), 0, events.as_mut_ptr(), 8, &zero) > 0
-                {
+                loop {
+                    let n =
+                        libc::kevent(self.fd, std::ptr::null(), 0, events.as_mut_ptr(), 8, &zero);
+                    if n <= 0 {
+                        break;
+                    }
+                    gone |= (events[..n as usize].iter())
+                        .any(|e| e.fflags & (libc::NOTE_DELETE | libc::NOTE_RENAME) != 0);
                 }
             }
         }
         #[cfg(not(target_vendor = "apple"))]
         {
             let mut buf = [0u8; 4096];
-            // SAFETY: reading into a buffer on the stack.
-            while unsafe { libc::read(self.fd, buf.as_mut_ptr().cast(), buf.len()) } > 0 {}
+            let header = std::mem::size_of::<libc::inotify_event>();
+            loop {
+                // SAFETY: reading into a buffer on the stack.
+                let n = unsafe { libc::read(self.fd, buf.as_mut_ptr().cast(), buf.len()) };
+                if n <= 0 {
+                    break;
+                }
+                let mut at = 0;
+                while at + header <= n as usize {
+                    // SAFETY: the kernel wrote whole events (inotify(7)), one
+                    // at `at`; read unaligned, as the buffer is bytes.
+                    let event: libc::inotify_event =
+                        unsafe { std::ptr::read_unaligned(buf.as_ptr().add(at).cast()) };
+                    gone |= event.mask
+                        & (libc::IN_DELETE_SELF | libc::IN_MOVE_SELF | libc::IN_IGNORED)
+                        != 0;
+                    at += header + event.len as usize;
+                }
+            }
         }
+        gone
     }
 }
 

@@ -18,6 +18,7 @@ import { isAbsolute, join, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { captureAssets, assetCards, copyStaticTreeIfPresent, webEnvelope, publicFileCards, listAssets, readStaticFile, readDevGeneration, retainDevGeneration } from '../host/web/serve.mjs';
 import { resolveApp, webGpuArtifacts, withAppFixture } from './app.mjs';
+import { streamBundle } from './texture-families.mjs';
 import { bake, sealEnvelope, canonicalBytes, classify, classifyArtifacts, cohortReceipt, defaultRelease, deployRun, holdBundles, inspectHead, materializeSnapshot, readAssetIndex, streamIndex, portableAssetNames, publishRoot, publishStream, renderTable, snapshotOf as capturedSnapshotOf, streamHead } from './deploy.mjs';
 import { blobPath, DirectoryOrigin, HttpsOrigin, OriginUnavailable, sha256, webReleasePath, webRootPath } from './origin.mjs';
 // Minimal compiler receipts for origin protocol fixtures below; capability
@@ -1129,6 +1130,40 @@ test('a native stream of a TypeScript app with a Live Activity publishes the mod
     writeFileSync(join(entries, 'typescript/app.hbc'), 'bytecode');
     builds.macos.graph.artifacts.push({ name: 'plans/other.plan', sha256: sha256(Buffer.from('x')), bytes: 1, kind: 'bundle', requires: {} });
     expect(() => holdBundles(fresh(), builds, dir)).toThrow('macos bake graph differs from the packaged bundle');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// A game's baked texture: the web root carries its three files, and each Apple stream the one family its
+// bake's roster holds (scripts/texture-families.mjs).
+test('a native stream publishes only the texture family its platform reads', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'exact-hold-textures-'));
+  try {
+    const card = (name) => ({ name, bytes: Buffer.from(name), sha256: sha256(Buffer.from(name)) });
+    const plan = card('app.plan'), model = card('assets/fox.model');
+    const [rgba, bc, astc] = ['assets/fox/0.tex', 'assets/fox/0.bc.tex', 'assets/fox/0.astc.tex'].map(card);
+    const graph = (cards) => ({ artifacts: cards.map(({ name, bytes, sha256 }) => ({ name, sha256, bytes: bytes.length, kind: 'bundle', requires: {} })) });
+    const builds = {
+      web: { compat: { inputs: { platform: 'web' } }, graph: graph([plan, model, rgba, bc, astc]) },
+      macos: { compat: { inputs: { platform: 'macos', textureFamily: 'bc' } }, graph: graph([plan, model, bc]) },
+      ios: { compat: { inputs: { platform: 'ios', textureFamily: 'astc' } }, graph: graph([plan, model, astc]) },
+    };
+    const bundle = { plan: { sha256: plan.sha256, bytes: plan.bytes }, assets: [model, rgba, bc, astc] };
+    holdBundles(bundle, builds, dir);
+    expect(bundle.assets.length).toBe(4);
+    expect(Object.keys(bundle.platforms)).toEqual(['macos', 'ios']);
+    expect(bundle.platforms.macos.assets.map((a) => a.name)).toEqual(['assets/fox.model', 'assets/fox/0.bc.tex']);
+    expect(bundle.platforms.ios.assets.map((a) => a.name)).toEqual(['assets/fox.model', 'assets/fox/0.astc.tex']);
+    // A stream of an iOS cohort baked with ASTC alone is sent ASTC; one baked before thinning, every file.
+    expect(streamBundle(bundle, 'ios', { textureFamily: 'astc' }).assets.map((a) => a.name)).toEqual(['assets/fox.model', 'assets/fox/0.astc.tex']);
+    expect(streamBundle(bundle, 'ios', { platform: 'ios' }).assets.map((a) => a.name).sort()).toEqual(['assets/fox.model', 'assets/fox/0.astc.tex', 'assets/fox/0.bc.tex', 'assets/fox/0.tex']);
+    // A macOS bake that kept another family differs from the bundle its stream publishes.
+    builds.macos.graph = graph([plan, model, bc, astc]);
+    expect(() => holdBundles({ plan: bundle.plan, assets: [model, rgba, bc, astc] }, builds, dir)).toThrow('macos bake graph differs from the packaged bundle');
+    // A bake that thinned nothing names no family, and its stream publishes every file.
+    builds.macos = { compat: { inputs: { platform: 'macos' } }, graph: graph([plan, model, rgba, bc, astc]) };
+    const whole = { plan: bundle.plan, assets: [model, rgba, bc, astc] };
+    holdBundles(whole, builds, dir);
+    expect(Object.keys(whole.platforms)).toEqual(['ios']);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

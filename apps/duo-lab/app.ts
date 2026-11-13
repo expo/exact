@@ -74,17 +74,17 @@ function imageRows() {
 function document() {
   const next = lcg(951);
   // The screen's title is the document's heading
-  const parts: string[] = ['A long document for the text caches: headings, paragraphs, lists and code, laid out at 951 points and again at 466.', ''];
+  const blocks: string[] = ['A long document for the text caches: headings, paragraphs, lists and code, laid out at 951 points and again at 466.'];
   for (let h = 1; h <= 14; h++) {
-    parts.push(`## ${h}. ${sentence(next, 3).slice(0, -1)}`, '');
-    for (let p = 0; p < 4; p++) parts.push(paragraph(next, 5 + Math.floor(next() * 4)), '');
-    parts.push(`### ${sentence(next, 2).slice(0, -1)}`, '');
-    for (let b = 0; b < 5; b++) parts.push(`- ${sentence(next, 6 + Math.floor(next() * 8))}`);
-    parts.push('', '```', `fn segment(x: u8, y: u8) -> Rect { grid[y * cols + x] } // ${h}`, `let posture = if any_division_active { "folded" } else { "continuous" };`, '```', '');
-    for (let p = 0; p < 2; p++) parts.push(paragraph(next, 4 + Math.floor(next() * 4)), '');
-    parts.push(`> ${sentence(next, 12)}`, '');
+    blocks.push(`## ${h}. ${sentence(next, 3).slice(0, -1)}`);
+    for (let p = 0; p < 4; p++) blocks.push(paragraph(next, 5 + Math.floor(next() * 4)));
+    blocks.push(`### ${sentence(next, 2).slice(0, -1)}`);
+    blocks.push(Array.from({ length: 5 }, () => `- ${sentence(next, 6 + Math.floor(next() * 8))}`).join('\n'));
+    blocks.push(['```', `fn segment(x: u8, y: u8) -> Rect { grid[y * cols + x] } // ${h}`, `let posture = if any_division_active { "folded" } else { "continuous" };`, '```'].join('\n'));
+    for (let p = 0; p < 2; p++) blocks.push(paragraph(next, 4 + Math.floor(next() * 4)));
+    blocks.push(`> ${sentence(next, 12)}`);
   }
-  return { body: parts.join('\n') };
+  return { blocks: blocks.map((text, id) => ({ id, text })) };
 }
 
 // ------------------------------------------------------------- Reflow's feed

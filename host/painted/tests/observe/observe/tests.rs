@@ -371,6 +371,50 @@ fn launch_defers_subscription_and_recovers_a_panic() {
         .any(|a| { a["key"] == "event.name" && a["value"]["stringValue"] == "retained" }));
 }
 
+#[test]
+fn a_crash_record_stays_until_the_queue_holding_it_is_written() {
+    let dir = std::env::temp_dir().join(format!(
+        "exact-observe-test-unsaved-crash-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let record = dir.join("pending-crashed.json");
+    std::fs::write(
+        &record,
+        json!({ "session": "crashed", "sessionStart": 1.0, "time": 2.0, "type": "panic", "message": "boom" })
+            .to_string(),
+    )
+    .unwrap();
+    let open = |session: &str| {
+        Service::new(
+            Map::new(),
+            &json!({}),
+            true,
+            dir.clone(),
+            session.into(),
+            0.0,
+        )
+    };
+    // A directory where the temporary queue file goes makes the queue write fail.
+    std::fs::create_dir(dir.join("queue.json.tmp")).unwrap();
+    open("s-a");
+    assert!(record.exists(), "the panic is in no queue yet");
+    std::fs::remove_dir(dir.join("queue.json.tmp")).unwrap();
+    open("s-b");
+    assert!(!record.exists());
+    let logs = read_json(&dir.join("queue.json"))["logs"].clone();
+    let crashes: Vec<_> = logs
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["session"] == "crashed")
+        .collect();
+    assert_eq!(crashes.len(), 1);
+    assert_eq!(crashes[0]["name"], "native.exception");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The event names of every logs request the sink received, sorted.
 fn posted_names(seen: &Seen) -> Vec<String> {
     let mut names: Vec<String> = seen
