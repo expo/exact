@@ -43,7 +43,7 @@ function app(name) {
   return Object.fromEntries([...sources.filter(s => s.origin === 'app' && s.path.endsWith('.contract')).map(s => s.path), resolve(dirname(main), 'app.json')].map(path => [relative(dirname(main), path), readFileSync(path, 'utf8')]));
 }
 const run = args => JSON.parse(Bun.spawnSync([contract, ...args], { stdout: 'pipe', stderr: 'pipe' }).stdout.toString());
-const symbols = file => run(['symbols', file]);
+const symbols = file => run(['symbols', file, '--editor']);
 const errors = file => run(['build', file, '--json', '--errors-only']);
 
 // The compiler's columns count UTF-8 bytes (proved below); LSP's count UTF-16 units.

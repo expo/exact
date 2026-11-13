@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { open } from './test/lsp.mjs';
 import { project, ready } from './mapper.test.mjs';
@@ -30,8 +30,11 @@ component Hello
 const col = (line, text, past = 0) => starter.split('\n')[line - 1].indexOf(text) + 1 + past;
 const items = r => (Array.isArray(r) ? r : r?.items ?? []).map(i => i.insertText ?? i.label);
 const complete = (server, file, line, col) => server.request('textDocument/completion', { textDocument: { uri: `file://${file}` }, position: { line: line - 1, character: col - 1 } }).then(items);
-const vocabulary = JSON.parse(Bun.spawnSync([process.env.EXACT_CONTRACT ?? 'contract', 'vocab', '--json', '--all']).stdout.toString() || '{}');
-const attribute = name => vocabulary.attributes?.find(a => a.name === name);
+const contract = process.env.EXACT_CONTRACT ?? ['target/release/contract', 'target/debug/contract'].map(p => resolve(root, p)).find(existsSync) ?? 'contract';
+// Asked only by a test that runs, so a checkout with no compiler built skips these as the others do.
+let asked;
+const vocabulary = () => asked ??= JSON.parse(Bun.spawnSync([contract, 'vocab', '--json', '--all']).stdout.toString() || '{}');
+const attribute = name => vocabulary().attributes?.find(a => a.name === name);
 
 test('hover on a tag or attribute shows the vocabulary\'s documentation for it', async () => {
   if (!ready()) return;
@@ -40,7 +43,7 @@ test('hover on a tag or attribute shows the vocabulary\'s documentation for it',
     server.openFile(f);
     const button = await server.hover(f, 14, col(14, 'button'));
     expect(button).toContain('tag `button`: a Pressable (html)');
-    expect(button).toContain(vocabulary.tags.find(t => t.name === 'button').note.slice(0, 60));
+    expect(button).toContain(vocabulary().tags.find(t => t.name === 'button').note.slice(0, 60));
     expect(await server.hover(f, 14, col(14, 'press'))).toContain('handler attribute `press`: the `press` event.');
     expect(await server.hover(f, 14, col(14, 'aria-label'))).toContain('prop attribute `aria-label`: sets `accessibilityLabel`, str.');
     const padding = await server.hover(f, 17, col(17, 'padding'));
@@ -81,7 +84,7 @@ test('every tag and attribute the compiler reports in caltrain and the starter h
       const content = readFileSync(file, 'utf8');
       // The places the mapper writes: those the compiler reports where the authored text is the name.
       const placed = transform(file, content).mappings.filter(m => m[5] & 1).map(m => m[2]);
-      const symbols = JSON.parse(Bun.spawnSync([process.env.EXACT_CONTRACT ?? 'contract', 'symbols', file]).stdout.toString());
+      const symbols = JSON.parse(Bun.spawnSync([contract, 'symbols', file, '--editor']).stdout.toString());
       const elements = symbols.elements.filter(e => resolve(e.file) === resolve(file));
       const lines = content.split('\n'), starts = lines.reduce((a, l) => [...a, a.at(-1) + l.length + 1], [0]);
       // The compiler counts UTF-8 bytes; the language server, UTF-16 units.

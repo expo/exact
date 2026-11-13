@@ -38,11 +38,15 @@ impl Table for Checked<'_> {
 
 impl<'a> Resolver<'a> {
     /// What `print` writes, with each shape it names noted in the graph's
-    /// `shapes`; none when it names a shape the printer cannot write.
+    /// `shapes`; none when it names a shape the printer cannot write, and
+    /// none outside `symbols --editor`.
     fn printed(
         &mut self,
         print: impl FnOnce(&Checked, &mut Noted<Ty>) -> Option<String>,
     ) -> Option<String> {
+        if !self.graph.editor {
+            return None;
+        }
         let table = Checked(&self.types.shapes);
         let mut named = Noted::default();
         let text = print(&table, &mut named)?;

@@ -3,9 +3,11 @@
 Syntax highlighting and editing defaults for the current `.contract` language,
 and `$exact-contract`, a problem matcher for the Contract compiler's
 diagnostics. Its only runtime code, `extension.js`, registers `.contract` with
-the TypeScript 7 extension when that is installed, so a project's content mapper
+the TypeScript 7 extension when that is installed and the workspace sets
+`js/ts.contentMappers.enabled`, so a project's content mapper
 (`editors/content-mapper`) answers hover, definition, references, rename and
-errors in a contract opened on its own. It has no dependencies.
+errors in a contract opened on its own. Without that setting it does nothing.
+It has no dependencies.
 
 To package and install from the repository root:
 

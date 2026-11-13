@@ -73,7 +73,7 @@ function declare(vocab) {
 
 export function vocab(ctx) {
   const { HOVER, COMPLETION } = ctx.FEATURE;
-  const elements = (ctx.contract(['symbols', ctx.fileName, '--stdin'])?.elements ?? []).filter(ctx.here);
+  const elements = (ctx.contract(['symbols', ctx.fileName, '--stdin', '--editor'])?.elements ?? []).filter(ctx.here);
   const declared = elements.length && declarations(ctx);
   if (!declared) return;
   ctx.write(declared);

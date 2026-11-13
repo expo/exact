@@ -59,6 +59,9 @@ struct Graph {
     /// What the syntax refused: a reference spelled as one in its scope may
     /// mean it, so it gets no edge.
     hidden: Vec<partial::Shadow>,
+    /// Whether to gather what only an editor reads (`symbols --editor`):
+    /// each definition's `type`, the `shapes` those name, and `elements`.
+    editor: bool,
     /// Each shape a definition's type names, with its body.
     shapes: Shapes,
     /// The one source being read, when each is read on its own: two of them
@@ -177,7 +180,7 @@ impl Graph {
             count += 1;
         }
         // Elements name no declaration, so a `name` query has none.
-        if name.is_none() {
+        if self.editor && name.is_none() {
             out.extend_from_slice(b"],\"elements\":[");
             elements::write(&mut out, sources, &self.elements);
         }
@@ -204,7 +207,9 @@ impl Graph {
             count += 1;
         }
         out.push(b']');
-        types::write(&mut out, sources, &self.shapes);
+        if self.editor {
+            types::write(&mut out, sources, &self.shapes);
+        }
         close(out, errors)
     }
 }
@@ -298,12 +303,25 @@ pub struct PartialSymbols {
 /// value called) has no edge, nor does one to a shape or function the check
 /// refused. When loading stops, each file that parsed is read on its own.
 pub fn symbols_json(path: &Path, name: Option<&str>) -> Result<String, PartialSymbols> {
+    symbols(path, name, false)
+}
+
+/// [`symbols_json`] with what an editor reads (`symbols --editor`): each
+/// definition's `type`, the `shapes` those name and, without `name`, each
+/// view element (`elements`).
+pub fn editor_symbols_json(path: &Path, name: Option<&str>) -> Result<String, PartialSymbols> {
+    symbols(path, name, true)
+}
+
+fn symbols(path: &Path, name: Option<&str>, editor: bool) -> Result<String, PartialSymbols> {
     let nothing = |errors: Vec<CompileError>| PartialSymbols {
         json: close(
-            if name.is_some() {
-                b"{\"definitions\":[],\"references\":[],\"shapes\":[]".to_vec()
-            } else {
-                b"{\"definitions\":[],\"elements\":[],\"references\":[],\"shapes\":[]".to_vec()
+            match (editor, name) {
+                (false, _) => b"{\"definitions\":[],\"references\":[]".to_vec(),
+                (true, Some(_)) => b"{\"definitions\":[],\"references\":[],\"shapes\":[]".to_vec(),
+                (true, None) => {
+                    b"{\"definitions\":[],\"elements\":[],\"references\":[],\"shapes\":[]".to_vec()
+                }
             },
             &errors,
         ),
@@ -340,7 +358,8 @@ pub fn symbols_json(path: &Path, name: Option<&str>) -> Result<String, PartialSy
         Err(all) => {
             let errors = refused.join::<()>(Err(all)).unwrap_err();
             let sources = sources::read_all(path, &src, &root);
-            let json = partial::file_by_file(&sources, &tables).json(&sources, name, &errors);
+            let json =
+                partial::file_by_file(&sources, &tables, editor).json(&sources, name, &errors);
             return Err(PartialSymbols { json, errors });
         }
     };
@@ -377,6 +396,7 @@ pub fn symbols_json(path: &Path, name: Option<&str>) -> Result<String, PartialSy
         whole: errors.is_empty(),
         graph: Graph {
             hidden: partial::shadows(&file, &refused.hidden),
+            editor,
             ..Graph::default()
         },
         members: None,
@@ -700,7 +720,7 @@ impl<'a> Resolver<'a> {
                 ),
                 false => Scope::default(),
             };
-            if self.typed {
+            if self.typed && self.graph.editor {
                 self.member_types(c, ci == 0);
             }
             for p in c.props.iter().chain(&c.injects) {

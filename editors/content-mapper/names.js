@@ -24,7 +24,7 @@ function spelling(ctx, s, text = ctx.content) {
 }
 
 export function names(ctx) {
-  const symbols = ctx.contract(['symbols', ctx.fileName, '--stdin']) ?? {}, { references = [] } = symbols;
+  const symbols = ctx.contract(['symbols', ctx.fileName, '--stdin', '--editor']) ?? {}, { references = [] } = symbols;
   // Files read on their own may each declare a shape of one name: this file's are its own.
   const shapes = Object.fromEntries((symbols.shapes ?? []).filter(s => s.file === undefined || ctx.here(s)).map(s => [s.name, s.type]));
   const contract = s => s.file !== undefined && extname(s.file) === '.contract';

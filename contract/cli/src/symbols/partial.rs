@@ -142,8 +142,15 @@ pub(super) fn declared(file: &File, strings: &Option<Arc<Strings>>) -> Shapes {
 
 /// Each source that parses, resolved on its own and unchecked: what a program
 /// that does not load still declares, with no edge from one file to another.
-pub(super) fn file_by_file(sources: &Sources, strings: &Option<Arc<Strings>>) -> Graph {
-    let mut graph = Graph::default();
+pub(super) fn file_by_file(
+    sources: &Sources,
+    strings: &Option<Arc<Strings>>,
+    editor: bool,
+) -> Graph {
+    let mut graph = Graph {
+        editor,
+        ..Graph::default()
+    };
     let mut read = BTreeSet::new();
     for (id, (path, text)) in sources.paths().iter().zip(&sources.texts).enumerate() {
         // A file two lines named, each read anew; a package's module
