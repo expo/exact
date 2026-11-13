@@ -1155,9 +1155,14 @@ fn app_identity_gate() {
         Default::default(),
         "/",
     ) {
-        Err(RunnerError::AppMismatch { plan, host }) => {
+        Err(RunnerError::AppMismatch { plan, host, fix }) => {
             assert_eq!(plan, "com.exact.other");
             assert_eq!(host, "com.exact.mine");
+            // The refusal names the declaration to change and the id it should say.
+            assert!(
+                fix.contains("`fn app_id`") && fix.contains("return \"com.exact.other\""),
+                "{fix}"
+            );
         }
         Err(other) => panic!("expected AppMismatch, got {other:?}"),
         Ok(_) => panic!("expected AppMismatch, got a boot"),

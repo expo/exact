@@ -704,6 +704,14 @@ impl<D: DataSource> Runner<D> {
             return Err(RunnerError::AppMismatch {
                 plan: plan.app_id.clone(),
                 host: data.app_id().to_string(),
+                fix: format!(
+                    "the app's data crate names {:?} in `fn app_id` (its DataSource), and app.json's app.id is {:?}; \
+                     return {:?} there, or remove that `fn app_id` so the data source takes app.json's id \
+                     (a data crate copied from a sample keeps the sample's)",
+                    data.app_id(),
+                    plan.app_id,
+                    plan.app_id
+                ),
             });
         }
         let roots = plan
