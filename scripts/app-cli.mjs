@@ -7,6 +7,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, rena
 import { constants, tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { noteBunLoaded } from '../js/bake/src/__exact_env.mjs';
+import { parseManifest } from './manifest-text.mjs';
 
 /** The hosts a `test`, `agent` or `verify` may name first. */
 const APP_HOSTS = ['web', 'ios', 'macos', 'mac', 'linux', 'windows', 'android'];
@@ -233,10 +234,10 @@ async function verbRun({ dir, name, game = false, exact2, args }, reply) {
   // arguments after the verb. A game's app.json is optional.
   const manifest = resolve(dir, 'app.json');
   let declared = {};
-  try { if (existsSync(manifest)) declared = JSON.parse(readFileSync(manifest, 'utf8')); }
+  try { if (existsSync(manifest)) declared = parseManifest(readFileSync(manifest, 'utf8')); }
   catch (error) {
-    if (!reply) throw error;
     const message = `${manifest}: ${error.message}`;
+    if (!reply) throw new Error(message);
     console.error(message);
     reply({ code: 'app_json', error: message });
     return 1;

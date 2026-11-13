@@ -28,6 +28,7 @@ import { spawnSync } from '../host/apple/toolchain.mjs';
 import { closeSync, existsSync, mkdirSync, openSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, relative, resolve, sep, toNamespacedPath } from 'node:path';
 import { within } from './paths.mjs';
+import { parseManifest } from './manifest-text.mjs';
 import { constants, homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { BINARYEN, packageGpuWasm, webGpuTools } from '../host/web/stages.mjs';
@@ -560,7 +561,7 @@ export function readManifest(dir, name) {
   const game = gameDefaults(dir);
   if (!existsSync(path) && !game) return fallback;
   let parsed;
-  try { parsed = game ?? JSON.parse(readFileSync(path, 'utf8')); } catch (e) { throw new Error(`${path}: ${e.message}`); }
+  try { parsed = game ?? parseManifest(readFileSync(path, 'utf8')); } catch (e) { throw new Error(`${path}: ${e.message}`); }
   // LLP 1069.008 D4: a device's usage text is derived from its grant, never hand-written.
   const problems = validate(parsed, schema(), '', schema()).map((p) => /^host\.(ios|macos)\.permissions: /.test(p)
     ? `${p.split(':')[0]}: deleted (LLP 1069.008); declare the device in the source's grants as \`device.<name> <strings key>\` (e.g. \`device.microphone purpose.microphone\`) and put the text in strings/<locale>.json`
