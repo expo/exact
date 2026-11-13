@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { appleRunBinary, appleArtifacts, assertAppleIdentity } from '../host/apple/build.mjs';
-import { phone, phoneBridge, forwardedEnv, crashReports } from '../host/apple/devices.mjs';
+import { phone, phoneBridge, phoneStartupFailure, forwardedEnv, crashReports } from '../host/apple/devices.mjs';
 import { resolveApp, executableName, linuxBinary, bakeOutput, bakeTarget } from './app.mjs';
 import { linuxRebuild, nativeBuild, ownVerb, planOverride, rebuildCommand, refuseBuild } from './agent-build.mjs';
 import { refuseStale, refuseBackendOrigin, refuseBinaryBackend, proofProductChanges, unchecked, packagedBuildChanges, depInfoChanges, depInfoNewer, newerThan, bakedSettingChanges } from './agent-launch.mjs';
@@ -119,7 +119,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
     }) : lines.next();
     // An Android launch is adb's round trips (about a second each to an emulator through a tunnel) and the app's cold start.
     const ready = await Promise.race([readyLine, new Promise((_, reject) => {
-      readyTimeout = setTimeout(() => reject(new Error('the app never became ready; ' + hostLines.join('\n'))), android ? 60000 : 20000);
+      readyTimeout = setTimeout(() => reject(new Error('the app never became ready; ' + (hostLines.join('\n') || 'the app printed nothing'))), android ? 60000 : 20000);
     })]);
     clearTimeout(readyTimeout);
     if (!ready.ready) throw new Error('unexpected first line: ' + JSON.stringify(ready));
@@ -171,6 +171,7 @@ export async function openStdio({ host, plan, world, size, app, env: extra = {},
     };
   } catch (e) {
     await close();
+    if (device) throw new Error(phoneStartupFailure(e.message, hostLines), { cause: e });
     throw e;
   } finally {
     clearTimeout(readyTimeout);

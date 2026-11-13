@@ -2,7 +2,7 @@
   "name": "@exact/camera",
   "version": "1.0.0",
   "private": true,
-  "description": "The camera: a viewfinder and Image Capture's photo, over @exact/media-capture's video tracks (LLP 1133.008).",
+  "description": "The camera: a viewfinder and Image Capture's photo, over @exact/media-capture's video tracks, and a photo from the system camera UI (LLP 1133.008).",
   "exports": {
     ".": "./exact.json",
     "./apple": "./apple/exact.json",

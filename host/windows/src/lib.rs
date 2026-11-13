@@ -98,7 +98,7 @@ pub fn run<D: exact_runner::DataSource + Default + 'static>(
 }
 
 /// [`run`] with what the app's build composed: its hatches and its
-/// packages' Windows implementations (`exact_linux::package`, LLP 1133.022
+/// packages' Windows implementations (`exact_painted::package`, LLP 1133.022
 /// D10 item 5). The host owns an 8 MiB thread for the window, runner and
 /// package calls; the caller waits until it exits.
 pub fn run_composed<D: exact_runner::DataSource + Default + 'static>(
@@ -106,7 +106,7 @@ pub fn run_composed<D: exact_runner::DataSource + Default + 'static>(
     window: Window,
     plan: &[u8],
     compat: &str,
-    composed: exact_linux::Composed,
+    composed: exact_painted::Composed,
 ) -> i32 {
     #[cfg(windows)]
     {
@@ -148,7 +148,7 @@ fn on_desktop_stack<T: Send>(body: impl FnOnce() -> T + Send) -> T {
 /// made before the first frame is presented.
 pub fn run_with_hatches<
     D: exact_runner::DataSource + Default + 'static,
-    H: exact_linux::Hatches,
+    H: exact_painted::Hatches,
 >(
     name: &str,
     window: Window,
@@ -156,8 +156,8 @@ pub fn run_with_hatches<
     compat: &str,
     words: &'static [&'static str],
 ) -> i32 {
-    let composed = exact_linux::Composed {
-        hatches: Some(exact_linux::hatches::install::<H>(words)),
+    let composed = exact_painted::Composed {
+        hatches: Some(exact_painted::hatches::install::<H>(words)),
         ..Default::default()
     };
     run_composed::<D>(name, window, plan, compat, composed)
@@ -201,13 +201,13 @@ mod tests {
             )
             .unwrap()
             .encode();
-            let (mut p, error) = exact_linux::Presenter::boot_with(
+            let (mut p, error) = exact_painted::Presenter::boot_with(
                 &plan,
                 (),
                 (400., 300.),
                 1.,
                 Default::default(),
-                exact_linux::presenter::PainterChoice::Cpu,
+                exact_painted::presenter::PainterChoice::Cpu,
             )
             .unwrap();
             assert!(error.is_none(), "{error:?}");
@@ -251,19 +251,19 @@ mod tests {
             .unwrap()
             .encode();
             let boot = || {
-                let (p, error) = exact_linux::Presenter::boot_with(
+                let (p, error) = exact_painted::Presenter::boot_with(
                     &plan,
                     (),
                     (400., 300.),
                     1.,
                     Default::default(),
-                    exact_linux::presenter::PainterChoice::Cpu,
+                    exact_painted::presenter::PainterChoice::Cpu,
                 )
                 .unwrap();
                 assert!(error.is_none(), "{error:?}");
                 p
             };
-            let tap = |p: &mut exact_linux::Presenter<()>, target: &str| {
+            let tap = |p: &mut exact_painted::Presenter<()>, target: &str| {
                 let key = p.host().kernel().find_by_test_id(target)[0];
                 let id = p.host().kernel().node_by_key(key).unwrap().id;
                 p.tap(id).unwrap();

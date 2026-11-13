@@ -7,7 +7,7 @@ mod inline;
 mod paragraphs;
 mod refresh;
 pub(crate) mod values;
-pub use refresh::{bake_app, check_refreshes, entries, source_plan};
+pub use refresh::{bake_app, bake_app_with_warnings, check_refreshes, entries, source_plan};
 
 /// Find the props slot by this name; a route URL may add a preceding router slot.
 pub const PROPS_SLOT: &str = "snapshot_props";

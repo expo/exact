@@ -570,8 +570,9 @@ fn state_looks_are_sheet_rules_for_the_nodes_set() {
 /// token as its property, while the base keeps its own. It is also a rule for
 /// the boundaries below that its colour reaches (`modes.js` marks them
 /// `data-x-lc`), which write the colour around them again: the look's token,
-/// so it resolves in the boundary's modes, the focus's after the hover's. A
-/// look with no `color` has none.
+/// so it resolves in the boundary's modes, the focus's after the hover's,
+/// ranked below the boundary's own look and by position. A look with no
+/// `color` has none.
 #[test]
 fn a_looks_color_is_its_rule_and_reaches_a_boundary_below() {
     let view = "component App\n  view\n    column\n      link href=\"/a\" color=\"surface.card\"\n        :hover\n          color = \"text.primary\"\n        :focus-visible\n          color = \"#123456\"\n        column -exact-mode=\"dark-style=dim\"\n          text \"a\"\n      link href=\"/b\"\n        :hover\n          background-color = \"surface.card\"\n        text \"b\"\n";
@@ -585,17 +586,23 @@ fn a_looks_color_is_its_rule_and_reaches_a_boundary_below() {
         "{own}"
     );
     assert!(out.js.contains("color:var(--x-surface-card"), "{}", out.js);
+    // The holder ranks in `:where()`, and the nearest position repeats its
+    // attribute most, so the boundary's own look and a nearer one win.
+    let near = "[data-x-lc~=\"1:1\"]".repeat(3);
     let hover = below(&format!(
-        "[data-exact-looks=\"1\"]:hover{on} [data-x-lc~=\"1\"]{{color:var(--x-text-primary)!important;}}"
+        ":where(:where(html:not([data-exact-input=touch])) [data-exact-looks=\"1\"]:hover{on}) {near},"
     ));
     below(&format!(
-        "[data-exact-looks=\"1\"][data-exact-held~=hover]{on} [data-x-lc~=\"1\"]{{"
+        ":where(:where(html:not([data-exact-input=touch])) [data-exact-looks=\"1\"]:hover{on}) [data-x-lc~=\"3:1\"]{{color:var(--x-text-primary)!important;}}"
+    ));
+    below(&format!(
+        ":where([data-exact-looks=\"1\"][data-exact-held~=hover]{on}) [data-x-lc~=\"3:1\"]{{"
     ));
     let focus = below(&format!(
-        "[data-exact-looks=\"1\"][data-exact-held~=focus-visible]{on} [data-x-lc~=\"1\"]{{color:rgba(18,52,86,1)!important;}}"
+        ":where([data-exact-looks=\"1\"][data-exact-held~=focus-visible]{on}) [data-x-lc~=\"3:1\"]{{color:rgba(18,52,86,1)!important;}}"
     ));
     assert!(hover < focus, "{css}");
-    assert!(!css.contains("[data-x-lc~=\"2\"]"), "{css}");
+    assert!(!css.contains("[data-x-lc~=\"1:2\"]"), "{css}");
 }
 
 /// LLP 1121 stage 9 B: under a written token colour, a mode boundary below

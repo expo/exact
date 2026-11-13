@@ -247,10 +247,10 @@ export const answer = ${ids === null ? "() => 'Hello'" : "(source: string, [id]:
     expect(status, stdout + stderr).toBe(0);
     const html = readFileSync(resolve(dist, 'index.html'), 'utf8');
     const checkpoint = JSON.parse(html.match(/<script type="application\/vnd\.exact\.checkpoint"[^>]*>(.*?)<\/script>/s)[1]);
-    expect(checkpoint.open ?? []).toEqual(streaming ? ['each'] : []);
     const titleAnswer = ['title', 'title', [], 'Hello'];
-    const listAnswers = ids === null ? [] : [['each', 'item', [], ids.map(id => ({ r: [itemText(id)] }))]];
+    const listAnswers = (ids ?? []).map(id => ['each', 'item', keeps ? [] : [id], { r: [itemText(id)] }]);
     expect(checkpoint.answers).toEqual(titleFirst ? [titleAnswer, ...listAnswers] : [...listAnswers, titleAnswer]);
+    expect(checkpoint.open ?? []).toEqual(streaming ? listAnswers.map((_, i) => i) : []);
     for (const id of ids ?? []) expect(html).toContain(itemText(id));
     browser = await open({ host: 'web', app: dir, webDist: dist, url: server.url.href });
     await browser.clock('settle');

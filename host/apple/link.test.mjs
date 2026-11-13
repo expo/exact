@@ -1,8 +1,11 @@
+import { capturePrivacyManifest } from './privacy.mjs';
 import { test } from 'bun:test';
 import assert from 'node:assert/strict';
-import {copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
+import {copyFileSync, cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join, resolve} from 'node:path';
+import { encodePng } from '../../scripts/png.mjs';
+import { useXcode } from './devices.mjs';
 import { spawnSync } from 'node:child_process';
 import { assertActivityRefusals } from './activities.mjs';
 import { resolveApp } from '../../scripts/app.mjs';
@@ -88,6 +91,7 @@ test.skipIf(process.platform !== 'darwin')('production share extensions keep sou
         assert.match(names, /^[0-9a-f]+ [a-z] /m);
         assert.ok(!existsSync(symbols));
       }
+      run('plutil', ['-lint', join(extension, platform === 'macos' ? 'Contents/Resources/PrivacyInfo.xcprivacy' : 'PrivacyInfo.xcprivacy')]);
       run('codesign', ['--verify', '--strict', extension]);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -113,6 +117,8 @@ test.skipIf(process.platform !== 'darwin')('widget and watch packaging strips pr
       ['watchos', 'watchsimulator', 'arm64-apple-watchos10.0-simulator'], ['macos', 'macosx', 'arm64-apple-macosx14.0']]) {
       const sdk = run('xcrun', ['--sdk', sdkName, '--show-sdk-path']).stdout.trim();
       for (const production of [false, true]) {
+        const diskSpace = platform === 'watchos' && production;
+        writeFileSync(source, 'static int local_value = 42; int answer(void) { return local_value; } int main(void) { return answer() != 42; }');
         const directory = join(dir, `${platform}-${production}`), bundle = join(directory, 'Fixture.app');
         const contents = platform === 'macos' ? join(bundle, 'Contents') : bundle;
         const resources = platform === 'macos' ? join(contents, 'Resources') : contents;
@@ -127,7 +133,7 @@ test.skipIf(process.platform !== 'darwin')('widget and watch packaging strips pr
         run('xcrun', ['--sdk', sdkName, 'clang', '-g', '-target', triple, '-c', source, '-o', object]);
         run('xcrun', ['--sdk', sdkName, 'clang', '-target', triple, object, '-o', original]);
         run('xcrun', ['--sdk', sdkName, 'clang', '-target', triple, '-dynamiclib', object, '-o', join(frameworks, 'libcore.dylib')]);
-        wrapFramework(frameworks, 'libcore.dylib', 'ExactCore', app, platform === 'macos' ? 'MacOSX' : 'WatchSimulator');
+        wrapFramework(frameworks, 'libcore.dylib', 'ExactCore', app, platform === 'macos' ? 'MacOSX' : 'WatchSimulator', { apiManifests: [capturePrivacyManifest(join(dir, 'PrivacyInfo.xcprivacy'))] });
         const core = join(frameworks, 'ExactCore.framework'), entries = [{ kind: 'fixture', families: ['accessoryInline'] }];
         const runApple = (command, args) => {
           if (!args.includes('swiftc')) return run(command, args);
@@ -157,15 +163,31 @@ test.skipIf(process.platform !== 'darwin')('widget and watch packaging strips pr
           assert.ok(!existsSync(`${binary}.dSYM`));
         };
         check(binary, join(symbols, 'ExactWidgets.appex.dSYM'), 'main');
+        run('plutil', ['-lint', join(extension, platform === 'macos' ? 'Contents/Resources/PrivacyInfo.xcprivacy' : 'PrivacyInfo.xcprivacy')]);
         run('codesign', ['--verify', '--strict', extension]);
         if (platform === 'ios') {
           packageAlarmExtension({ ...widgets, alarm: 'FixtureAlarm' });
           check(binary, join(symbols, 'ExactWidgets.appex.dSYM'), 'main');
+          run('plutil', ['-lint', join(extension, 'PrivacyInfo.xcprivacy')]);
           run('codesign', ['--verify', '--strict', extension]);
         }
         if (platform === 'watchos') {
+          writeFileSync(join(dir, 'PrivacyInfo.xcprivacy'), plistFile({ NSPrivacyAccessedAPITypes: [{ NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryDiskSpace', NSPrivacyAccessedAPITypeReasons: ['E174.1'] }],
+            NSPrivacyTracking: true, NSPrivacyTrackingDomains: ['ads.example.com'], NSPrivacyCollectedDataTypes: [{ NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeEmailAddress',
+              NSPrivacyCollectedDataTypeLinked: true, NSPrivacyCollectedDataTypeTracking: false, NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'] }] }));
+          if (diskSpace) {
+            writeFileSync(source, '#include <sys/mount.h>\nstatic int local_value = 42; int answer(void) { struct statfs s; statfs(".", &s); return local_value; } int main(void) { return answer() != 42; }');
+            run('xcrun', ['--sdk', sdkName, 'clang', '-g', '-target', triple, '-c', source, '-o', object]);
+            run('xcrun', ['--sdk', sdkName, 'clang', '-target', triple, object, '-o', original]);
+            run('xcrun', ['--sdk', sdkName, 'clang', '-target', triple, '-dynamiclib', object, '-o', join(core, 'ExactCore')]);
+          }
           copyFileSync(original, join(directory, 'ExactWatch'));
-          packageWatch({ ...widgets, bin: directory, parent: directory, entries: [], sign: path => { if (path !== directory) sign(path); } });
+          packageWatch({ ...widgets, privacyManifests: [capturePrivacyManifest(join(dir, 'PrivacyInfo.xcprivacy'))], bin: directory, parent: directory, entries: [], sign: path => { if (path !== directory) sign(path); } });
+          run('plutil', ['-lint', join(bundle, 'PrivacyInfo.xcprivacy')]);
+          run('plutil', ['-lint', join(core, 'PrivacyInfo.xcprivacy')]);
+          for (const owner of [bundle, core]) assert.deepEqual(JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', join(owner, 'PrivacyInfo.xcprivacy')]).stdout), {
+            NSPrivacyAccessedAPITypes: diskSpace ? [{ NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryDiskSpace', NSPrivacyAccessedAPITypeReasons: ['E174.1'] }] : [],
+          });
           check(join(bundle, 'ExactWatch'), join(symbols, 'ExactWatch.app.dSYM'), 'main');
           check(join(core, 'ExactCore'), join(symbols, 'ExactCore.framework.dSYM'), 'answer');
           run('codesign', ['--verify', '--deep', '--strict', bundle]);
@@ -233,7 +255,7 @@ int main(int argc, char **argv) {
         loadName: 'libgpu.dylib', hasGpu: false, moduleDylibs: [], looseArms: [[true, dylib, web, 'ExactWeb'], [true, rustDylib, rustModules[2], null]],
         hasSvg: true, svgBuilt: rustDylib, svgLoadName: rustModules[0],
         modulesLoadName: modules, modulesBuilt: dylib, canvasGpuBuilt: rustDylib, canvasGpuLoadName: rustModules[1], linkRoot: binDir,
-        bakedCompat: compat, bakedPlan: plan, buildReceipt: { binary: { metadata: {} } }, production, products: ['Fixture'], cleanup: [],
+        bakedCompat: compat, bakedPlan: plan, buildReceipt: { graph: { extensions: {}, contractSources: [] }, binary: { metadata: {} } }, production, products: ['Fixture'], cleanup: [],
       }, { runApple: run, appleArtifacts: () => ({ bundle }), placeAppleArtifact,
         macInfoPlist: () => plistFile({ CFBundleExecutable: 'Fixture', CFBundleIdentifier: app.id, CFBundlePackageType: 'APPL' }),
         copyAppleStaticTrees() {}, writeUsageStrings() {}, receipt: () => '{}', assertAppleIdentity() {},
@@ -501,3 +523,118 @@ test('outside production trust the SDK compiles for iOS 17.0, and the app keeps 
   const launching = { manifest: { launch: ['player'], host: { ios: { minimumOS: '18.0' } } } };
   assert.deepEqual(compiledTargets(launching, 'development'), deploymentTargets(launching), 'launch Swift compiles in the host package at the app minimum');
 });
+
+test.skipIf(process.platform !== 'darwin' || !['clang', 'codesign', 'sips', 'dsymutil', 'nm'].every(tool => Bun.which(tool))).each([false, true])('production iOS bundles keep symbols and owning privacy declarations (disk-space service: %s)', async diskService => {
+  useXcode();
+  const { createHash } = await import('node:crypto');
+  const { assembleIOS } = await import('./bundle.mjs');
+  const { stripProductionExecutable } = await import('./link.mjs');
+  const { shippedReceipt, copyAppleGpuProducts } = await import('./build.mjs');
+  const { wrapFramework, signedGpuProduct, codeDigest, plistFile } = await import('./assets.mjs');
+  const dir = mkdtempSync(resolve(tmpdir(), 'exact-ios-package-'));
+  const run = (cmd, args) => {
+    const r = spawnSync(cmd, args, { encoding: 'utf8' });
+    assert.equal(r.status, 0, `${cmd}: ${r.stderr}`);
+    return r;
+  };
+  try {
+    const source = resolve(dir, 'module.c'), executable = resolve(dir, 'Fixture'), dylib = resolve(dir, 'module.dylib');
+    writeFileSync(source, '#include <sys/stat.h>\nstatic int local_value = 42; int answer(void){struct stat s; stat(".", &s); return local_value;} int main(void){return answer()!=42;}\n');
+    run('clang', ['-g', source, '-o', executable]);
+    run('clang', ['-g', '-dynamiclib', source, '-o', dylib]);
+    assert.match(run('nm', ['-a', dylib]).stdout, / _local_value$/m);
+    const icon = resolve(dir, 'icon.png');
+    writeFileSync(icon, encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
+    const app = { dir, id: 'com.exact.fixture', name: 'Fixture', manifest: {} };
+    const api = (name, reasons) => ({ NSPrivacyAccessedAPIType: `NSPrivacyAccessedAPICategory${name}`, NSPrivacyAccessedAPITypeReasons: reasons });
+    const declarations = { NSPrivacyAccessedAPITypes: [api('DiskSpace', ['E174.1'])], NSPrivacyTracking: true,
+      NSPrivacyTrackingDomains: ['ads.example.com'], NSPrivacyCollectedDataTypes: [{ NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeEmailAddress',
+        NSPrivacyCollectedDataTypeLinked: true, NSPrivacyCollectedDataTypeTracking: false, NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'] }] };
+    writeFileSync(resolve(dir, 'PrivacyInfo.xcprivacy'), plistFile(declarations));
+    const service = resolve(dir, 'service.dylib');
+    writeFileSync(source, diskService ? '#include <sys/mount.h>\nstatic int local_value = 42; int answer(void){struct statfs s; statfs(".", &s); return local_value;}\n' : readFileSync(source));
+    run('clang', ['-g', '-dynamiclib', source, '-o', service]);
+    const libraries = resolve(dir, 'libraries'); mkdirSync(libraries);
+    copyFileSync(dylib, resolve(libraries, 'library.dylib'));
+    wrapFramework(libraries, 'library.dylib', 'FixtureLibrary', app);
+    const library = { placed: resolve(libraries, 'FixtureLibrary.framework'), link: 'FixtureLibrary' };
+    const plan = Buffer.from('fixture'), compat = { embedded: { plan: { sha256: createHash('sha256').update(plan).digest('hex'), bytes: plan.length }, assets: [] } };
+    const pairs = [['libweb.dylib', 'ExactWeb'], ['libmodules.dylib', 'ExactModules'], ['libsvg.dylib', 'ExactSvg'], ['libcanvas.dylib', 'ExactCanvasGpu'], ['libservice.dylib', 'ExactService']];
+    const build = { trust: 'production', linkedPlan: '/private/plan', binary: { sha256: 'binary', inputs: [{ path: '/private/source' }], metadata: {}, privacyManifests: [capturePrivacyManifest(resolve(dir, 'PrivacyInfo.xcprivacy'))] }, products: [{ path: '/private/product' }], graph: { artifacts: [], extensions: {}, contractSources: [] } };
+    writeFileSync(resolve(dir, 'PrivacyInfo.xcprivacy'), plistFile({ NSPrivacyTracking: false }));
+    for (const [production, device, archived] of [[true, true, false], [true, true, true], [true, false, false], [false, true, false]]) {
+      app.manifest = archived ? { icons: [{ src: 'icon.png', sizes: '1024x1024' }] } : {};
+      const binDir = resolve(dir, `${production}-${device}-${archived}`); mkdirSync(binDir);
+      const bin = resolve(binDir, 'ExactClip');
+      copyFileSync(executable, bin);
+      const capture = resolve(binDir, 'capture'); mkdirSync(capture);
+      const gpu = { built: 'gpu.dylib', load: 'libgpu.dylib', framework: 'ExactGpu' };
+      copyFileSync(dylib, resolve(capture, gpu.built));
+      if (production) {
+        const signed = signedGpuProduct(resolve(capture, gpu.built), { framework: gpu.framework, app, privacyManifest: build.binary.privacyManifests[0], platform: device ? 'iPhoneOS' : 'iPhoneSimulator' });
+        cpSync(resolve(signed, '..'), resolve(capture, 'ExactGpu.framework'), { recursive: true });
+      }
+      const gpuSource = resolve(capture, production ? 'ExactGpu.framework/ExactGpu' : gpu.built);
+      run('codesign', ['--force', '--sign', '-', '--timestamp=none', production ? resolve(capture, 'ExactGpu.framework') : gpuSource]);
+      const ipa = archived ? resolve(binDir, 'Archive.ipa') : null;
+      const symbols = stripProductionExecutable(bin, { production, ipa });
+      const bundle = resolve(binDir, 'Fixture.app');
+      const whole = JSON.stringify({ build, target: 'aarch64-apple-ios', development: production ? null : { token: 'kept' } });
+      const clipBin = resolve(binDir, 'clip', 'Clip');
+      mkdirSync(resolve(binDir, 'clip'));
+      copyFileSync(bin, clipBin);
+      const result = assembleIOS({ app, library, paths: { bundle, executable: 'ExactClip', capture }, binDir, bin, device,
+        clipBin, production, distribution: archived, ipa, bakedCompat: compat, bakedPlan: plan, buildReceipt: build,
+        libDir: capture, gpuArtifacts: [gpu], looseArms: [[true, dylib, ...pairs[0]]],
+        modulesBuilt: dylib, modulesLoadName: pairs[1][0], hasSvg: true, svgBuilt: dylib, svgLoadName: pairs[2][0],
+        canvasGpuBuilt: dylib, canvasGpuLoadName: pairs[3][0], serviceDylibs: [{ built: service, load: pairs[4][0], framework: pairs[4][1] }],
+        args: [], unsigned: true, sha1: '-', linkRoot: binDir, sdkName: 'iphoneos' }, {
+        runApple: run, infoPlist: () => plistFile({ CFBundleIdentifier: app.id, CFBundleExecutable: 'ExactClip', CFBundlePackageType: 'APPL' }),
+        copyAppleStaticTrees() {}, writeUsageStrings() {}, assertAppleIdentity() {}, distributionKeys: () => ({}),
+        receipt: () => whole, shippedReceipt, copyAppleGpuProducts, entitlements: () => plistFile({}), appClip: () => ({ id: app.id + '.Clip', name: 'Clip', executable: 'Clip' }),
+      });
+      for (const owner of [bundle, resolve(bundle, 'AppClips/Clip.app'), ...(production ? [...pairs, [null, 'ExactGpu']].map(([, name]) => resolve(bundle, 'Frameworks', `${name}.framework`)) : [])]) {
+        const privacy = resolve(owner, 'PrivacyInfo.xcprivacy'); assert.equal(run('plutil', ['-lint', privacy]).status, 0);
+        const usesDisk = diskService && (owner.endsWith('/ExactService.framework') || (!production && owner.endsWith('.app')));
+        const reasons = [...(usesDisk ? [api('DiskSpace', ['E174.1'])] : []), ...(diskService && owner.endsWith('/ExactService.framework') ? [] : [api('FileTimestamp', ['3B52.1', 'C617.1'])])];
+        assert.deepEqual(JSON.parse(run('plutil', ['-convert', 'json', '-o', '-', privacy]).stdout), {
+          ...(owner.endsWith('.app') ? declarations : {}), NSPrivacyAccessedAPITypes: reasons,
+        }, owner);
+      }
+      const clipBytes = readFileSync(resolve(bundle, 'AppClips/Clip.app/Clip'));
+      assert.equal(codeDigest(clipBytes), codeDigest(readFileSync(device ? bin : clipBin)), 'the clip uses its platform executable, including when the parent is named ExactClip');
+      assert.equal(codeDigest(readFileSync(resolve(bundle, 'ExactClip'))), codeDigest(readFileSync(bin)));
+      if (symbols) {
+        const uuid = path => /UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', path]).stdout)?.[1];
+        assert.ok(uuid(symbols.dsym));
+        assert.equal(uuid(symbols.dsym), uuid(resolve(bundle, 'ExactClip')));
+        assert.equal(uuid(symbols.dsym), uuid(resolve(bundle, 'AppClips/Clip.app/Clip')));
+      }
+      const bundled = readFileSync(resolve(bundle, 'receipt.json'), 'utf8');
+      assert.equal(bundled, production ? shippedReceipt(whole) : whole);
+      if (production) {
+        const sidecar = resolve(binDir, ipa ? 'Archive.receipt.json' : 'ExactClip.receipt.json');
+        assert.equal(readFileSync(sidecar, 'utf8'), whole);
+        assert.equal(result.frameworkSymbols.count, pairs.length + 2);
+        for (const [loose, name] of [...pairs, [null, 'FixtureLibrary']]) {
+          const binary = resolve(bundle, 'Frameworks', `${name}.framework`, name);
+          if (loose) assert.equal(existsSync(resolve(bundle, 'Frameworks', loose)), false);
+          const preserved = ['ExactSvg', 'ExactCanvasGpu', 'FixtureLibrary'].includes(name), names = run('nm', ['-a', binary]).stdout;
+          assert.match(names, / T _answer$/m);
+          assert.equal(/ _local_value$/m.test(names), preserved, `${name} symbol policy`);
+          const symbols = resolve(result.frameworkSymbols.dir, `${name}.framework.dSYM`);
+          assert.equal(/UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', symbols]).stdout)?.[1], /UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', binary]).stdout)?.[1]);
+        }
+        const packageBinary = resolve(bundle, 'Frameworks/FixtureLibrary.framework/FixtureLibrary');
+        assert.equal(codeDigest(readFileSync(packageBinary)), codeDigest(readFileSync(resolve(library.placed, library.link))), 'the package library keeps its linker output');
+        assert.equal(codeDigest(readFileSync(resolve(bundle, 'Frameworks/ExactGpu.framework/ExactGpu'))), codeDigest(readFileSync(gpuSource)), 'the baked GPU digest is preserved');
+        assert.ok(existsSync(resolve(result.frameworkSymbols.dir, 'ExactGpu.framework.dSYM')));
+      } else {
+        assert.equal(result.frameworkSymbols.count, 0);
+        for (const [loose] of pairs) assert.match(run('nm', ['-a', resolve(bundle, 'Frameworks', loose)]).stdout, / _local_value$/m);
+        assert.equal(existsSync(resolve(binDir, 'ExactClip.receipt.json')), false);
+      }
+      run('codesign', ['--verify', '--deep', '--strict', bundle]);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}, 60_000);

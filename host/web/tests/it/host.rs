@@ -209,7 +209,7 @@ fn the_first_batch_creates_the_tree_with_css_from_the_rows() {
         "semantic tags become elements"
     );
     assert!(
-        batch.contains("font-size:24px;font-weight:700;"),
+        batch.contains("font-size:1.5em;font-weight:700;"),
         "CSS from the rows"
     );
     assert!(batch.contains("display:flex;") && batch.contains("flex-direction:column;"));

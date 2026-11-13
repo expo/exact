@@ -756,6 +756,10 @@ impl<const ASSETS: bool> crate::renderer::RendererWithAssets<ASSETS> {
     pub(crate) fn texture_summary(&self) -> String {
         textures::summary(&self.models.textures)
     }
+    /// Device bytes of the delivered textures held, retired ones included.
+    pub(crate) fn texture_bytes(&self) -> u64 {
+        textures::resident_bytes(&self.models.textures)
+    }
     pub(crate) fn residency_work(&self) -> crate::world::assets::Work {
         let (pipelines, textures) = self.asset_work();
         let skin = self.models.skinning.as_ref();
@@ -1427,6 +1431,9 @@ impl<P: crate::Executor> crate::Executor for ModelExecutor<P> {
     }
     fn suspend(&mut self, suspended: bool) {
         self.inner.suspend(suspended);
+    }
+    fn audio_state(&self) -> Option<&'static str> {
+        self.inner.audio_state()
     }
     fn sync(&mut self, world: &exact_game::World, generation: u64, playing: bool, seekable: bool) {
         self.inner.sync(world, generation, playing, seekable);

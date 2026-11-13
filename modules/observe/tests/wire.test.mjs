@@ -1,5 +1,5 @@
 // Observe's web and Apple services against wire.json, the bodies all three services must send.
-// The Linux service runs the same fixture in host/linux/tests/observe.
+// The Linux service runs the same fixture in host/painted/tests/observe.
 // `bun test ./modules/observe/tests/wire.test.mjs`. The Apple half needs swiftc, so it runs on macOS only.
 import { expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';

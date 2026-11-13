@@ -168,7 +168,12 @@ impl Module {
             format,
         );
         target.copy(&mut encoder);
-        gpu.queue.submit([encoder.finish()]);
+        let commands = encoder.finish();
+        let (_, submit_ms) =
+            crate::performance::time(inst.performance.enabled(), || gpu.queue.submit([commands]));
+        if let Some(ms) = submit_ms {
+            inst.performance.submitted(ms);
+        }
         inst.surface.submitted();
         let result = target.read(gpu, &mut out[..len]);
         if presentation_space != ColorSpace::Srgb {

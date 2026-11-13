@@ -7,7 +7,7 @@
 //! the line on a channel the presenter drains (`Presenter::poll_update`).
 //!
 //! Where the store lives: `<data home>/exact/<app id>/update`, the data home
-//! as the app's own directories take it (`exact_linux::picker::xdg_base`),
+//! as the app's own directories take it (`exact_painted::picker::xdg_base`),
 //! and no store without one; `EXACT_UPDATE_DIR` and
 //! `EXACT_UPDATE_ORIGIN` as `exact_update::client` documents, and under
 //! `EXACT_AGENT=1` a fresh temporary directory. The store is opened before
@@ -64,7 +64,7 @@ impl Updates {
     /// binary links no store, the directory cannot be made, or there is no
     /// data directory to put it in and no override names one.
     pub fn open(compat: &str, plan: &[u8], assets: &Path) -> Result<Updates, String> {
-        let base = exact_linux::picker::xdg_base("XDG_DATA_HOME", ".local/share");
+        let base = exact_painted::picker::xdg_base("XDG_DATA_HOME", ".local/share");
         let client = Client::open(base.as_deref(), assets, compat, plan)?;
         Updates::from_client(client)
     }
@@ -414,7 +414,7 @@ mod tests {
                 assert!(updates.prepare_activation().unwrap().is_none());
                 let prepared = updates.prepare_selected().unwrap();
                 assert_eq!(prepared.plan.as_ref(), bytes);
-                let (session, _) = exact_linux::Host::boot(
+                let (session, _) = exact_painted::Host::boot(
                     &bytes,
                     caltrain_data::Caltrain,
                     Box::<exact_kernel::MonospaceMeasurer>::default(),

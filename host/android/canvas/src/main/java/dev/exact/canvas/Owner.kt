@@ -605,10 +605,10 @@ internal object Exact {
         if (o != null) { o.input(); if (o.answer(KEY_WAIT_MS) { Native.pad(index, connected, values, at) }) answered() } else Native.pad(index, connected, values, at)
     }
 
-    fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean) {
+    fun namedKey(code: String, key: String, down: Boolean, repeat: Boolean, shift: Boolean) {
         val o = owner
-        if (o != null) { o.input(); if (o.answer(KEY_WAIT_MS) { Native.namedKey(code, key, down, repeat) }) answered() }
-        else Native.namedKey(code, key, down, repeat)
+        if (o != null) { o.input(); if (o.answer(KEY_WAIT_MS) { Native.namedKey(code, key, down, repeat, shift) }) answered() }
+        else Native.namedKey(code, key, down, repeat, shift)
     }
 
     /** How long a press or release waits for exact2's answer before the frame goes without it: what is left of a

@@ -166,14 +166,14 @@ fn launch_parts() -> Result<String, String> {
             file.canonicalize().map_err(|e| e.to_string())?
         ));
         calls.push_str(&format!(
-            "    {ident}::launch(exact_linux::journal::LaunchContext::new({name:?}, {config:?}, {app:?}, COMPAT));\n"
+            "    {ident}::launch(exact_painted::journal::LaunchContext::new({name:?}, {config:?}, {app:?}, COMPAT));\n"
         ));
     }
     if calls.is_empty() {
         return Ok("fn launch_parts() {}\n".into());
     }
     Ok(format!(
-        "{mods}fn launch_parts() {{\n    let started = std::time::Instant::now();\n{calls}    exact_linux::journal::launch_parts_ran(started.elapsed());\n}}\n"
+        "{mods}fn launch_parts() {{\n    let started = std::time::Instant::now();\n{calls}    exact_painted::journal::launch_parts_ran(started.elapsed());\n}}\n"
     ))
 }
 

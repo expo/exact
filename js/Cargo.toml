@@ -49,7 +49,12 @@ contract = { path = "../contract/cli" }
 exact-kernel = { path = "../kernel" }
 # Holds a database's lock from outside the module (tests/it/storage.rs);
 # the SQLite ibex2-sqlite links, so no second library.
+[target.'cfg(target_vendor = "apple")'.dev-dependencies]
+rusqlite = { version = "0.40.2" }
+
+[target.'cfg(not(target_vendor = "apple"))'.dev-dependencies]
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+
 # The render server uses Unix sockets/poll; direct executor interrupt tests
 # remain platform-independent.
 [target.'cfg(unix)'.dev-dependencies]

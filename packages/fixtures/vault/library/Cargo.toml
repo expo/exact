@@ -1,5 +1,5 @@
 # @fixture/vault's prebuilt library (LLP 1154 §3 item 4): a dynamic library with its own Rust runtime and its own
-# SQLite, built by test/library.mjs (`cargo rustc --crate-type cdylib`) and never part of exact2's workspace.
+# SQLite (the system library on Apple), built by test/library.mjs (`cargo rustc --crate-type cdylib`) and never part of exact2's workspace.
 [package]
 name = "vault"
 version = "1.0.0"
@@ -12,7 +12,10 @@ path = "src/lib.rs"
 test = false
 bench = false
 
-[dependencies]
+[target.'cfg(target_vendor = "apple")'.dependencies]
+rusqlite = { version = "0.40.2" }
+
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [profile.release]

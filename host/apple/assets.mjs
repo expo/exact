@@ -1,3 +1,4 @@
+import { writePrivacyManifest, privacyManifestForBinaries, privacyAPIManifest } from './privacy.mjs';
 // The app's icon and asset catalog, from its manifest, for an Apple bundle
 // (host/apple/build.mjs assembles it).
 import { spawnSync } from './toolchain.mjs';
@@ -502,7 +503,7 @@ export function signingOrder(bundle, compat = null, identity = null) {
 
 /** The Mach-O file type of a thin file, or of a universal file's first
  *  architecture (`mach-o/loader.h`: 2 is `MH_EXECUTE`, 6 `MH_DYLIB`). */
-function machOType(path) {
+export function machOType(path) {
   const read = (at, n) => { const b = Buffer.alloc(n), fd = openSync(path, 'r'); try { return readSync(fd, b, 0, n, at) === n ? b : null; } finally { closeSync(fd); } };
   let head = read(0, 16);
   if (!head) return null;
@@ -644,7 +645,7 @@ export const IOS_RESOURCE_ROOT = 'ExactResources';
  *  trees are declared, and what every bundle holds. One written over the other fails
  *  the build part-way. */
 export function iosExecutableRefusal(manifest, name, key = 'app.name') {
-  const written = [...(manifest.host?.ios?.resources?.length ? [IOS_RESOURCE_ROOT] : []), 'Frameworks', 'Info.plist', 'receipt.json', '_CodeSignature'];
+  const written = [...(manifest.host?.ios?.resources?.length ? [IOS_RESOURCE_ROOT] : []), 'Frameworks', 'Info.plist', 'PrivacyInfo.xcprivacy', 'receipt.json', '_CodeSignature'];
   const taken = written.find(n => n.toLowerCase() === name.toLowerCase());
   if (taken) throw new Error(`app.json's ${key} "${name}" names an iOS executable, which its bundle's own "${taken}" would take the place of: rename it`);
 }
@@ -656,7 +657,7 @@ export const APPLE_STATIC_TREES = ['assets', 'deck', 'shaders', 'exact-metal', '
 /** What the Mac build writes under `Contents/Resources` (bundle.mjs, intents.mjs) beside
  *  the trees an app declares, which may not take one of these places; and a
  *  `<locale>.lproj` for each usage string (`writeUsageStrings`). */
-export const MAC_RESOURCES_WRITTEN = [...APPLE_STATIC_TREES, 'receipt.json', 'Assets.car', 'AppIcon.icns', 'Metadata.appintents'];
+export const MAC_RESOURCES_WRITTEN = [...APPLE_STATIC_TREES, 'receipt.json', 'Assets.car', 'AppIcon.icns', 'Metadata.appintents', 'PrivacyInfo.xcprivacy'];
 
 /** Which file `path` is, read without following a link at its end: its device and
  *  inode. Two directories are never one identity, whatever their names; a name the
@@ -869,7 +870,7 @@ export function singleFramework(framework, output, triple) {
 /** A loose `Frameworks/lib….dylib` as `Frameworks/<name>.framework/<name>`,
  * which is the only form App Store Connect accepts for an embedded library
  * (ITMS-90171, ITMS-90432). The presenter loads either (`embeddedModule` in ExactKit). */
-export function wrapFramework(frameworks, loose, name, app, platform = 'iPhoneOS') {
+export function wrapFramework(frameworks, loose, name, app, platform = 'iPhoneOS', privacy = {}) {
   const from = resolve(frameworks, loose);
   if (!existsSync(from)) return;
   const dir = resolve(frameworks, `${name}.framework`);
@@ -877,6 +878,7 @@ export function wrapFramework(frameworks, loose, name, app, platform = 'iPhoneOS
   renameSync(from, layout.binary);
   run('install_name_tool', ['-id', frameworkInstallName(name, platform), layout.binary], { stdio: 'ignore' });
   writeFileSync(layout.info, plistFile(frameworkInfo(name, app, platform)));
+  writePrivacyManifest(dirname(layout.info), [layout.binary], { mac: platform === 'MacOSX', ...privacy });
 }
 
 /** The Info.plist `wrapFramework` writes. `signedGpuProduct` keys its signed copy on it, so
@@ -913,7 +915,7 @@ export function codeDigest(bytes) {
   return createHash('sha256').update(code() ?? bytes).digest('hex');
 }
 
-export function signedGpuProduct(product, { identity = '-', framework = null, app, platform = 'iPhoneOS', hardened = false } = {}) {
+export function signedGpuProduct(product, { identity = '-', framework = null, app, platform = 'iPhoneOS', hardened = false, privacyManifest = null } = {}) {
   // Cargo puts its own unsigned file back on every build, and a signature
   // carries its signing time: signing in place made the app's bake (which
   // names this product's digest) run on every build. Sign a copy beside it,
@@ -922,7 +924,8 @@ export function signedGpuProduct(product, { identity = '-', framework = null, ap
   const container = resolve(directory, framework ? `${framework}.framework` : basename(product));
   const signed = framework ? resolve(container, framework) : container, record = `${container}.source`;
   const source = JSON.stringify([createHash('sha256').update(readFileSync(product)).digest('hex'), identity ?? '-',
-    hardened, framework, framework ? frameworkInfo(framework, app, platform) : null]);
+    hardened, framework, framework ? frameworkInfo(framework, app, platform) : null,
+    framework ? privacyManifestForBinaries([product], (privacyManifest ? [privacyAPIManifest(privacyManifest)] : []), { mac: platform === 'MacOSX' }) : null]);
   // An ad-hoc signature (`-`: every simulator build) names no certificate
   // to require; asked for one, the verification failed, and the copy was
   // signed again by every build, which reran the app's bake and compile.
@@ -932,7 +935,7 @@ export function signedGpuProduct(product, { identity = '-', framework = null, ap
     mkdirSync(directory, { recursive: true });
     if (framework) rmSync(container, { recursive: true, force: true });
     copyFileSync(product, resolve(directory, basename(product)));
-    if (framework) wrapFramework(directory, basename(product), framework, app, platform);
+    if (framework) wrapFramework(directory, basename(product), framework, app, platform, { apiManifests: privacyManifest ? [privacyManifest] : [] });
     run('codesign', ['--force', '--sign', identity ?? '-', ...(hardened ? ['--options', 'runtime'] : []),
       hardened && identity && identity !== '-' ? '--timestamp' : '--timestamp=none', container], {stdio:'ignore'});
     writeFileSync(record, source);

@@ -275,10 +275,17 @@ final class FrameHealthIOSTests: XCTestCase {
         overlay.setVisible(true)
         overlay.layoutIfNeeded()
         XCTAssertEqual(overlay.card.frame.maxY, bottom, accuracy: 0.5)
+        // A window that leaves the card its 304-point minimum width keeps it, on its edge, and one too short for the
+        // whole card leaves out its toolbar and chart area; a narrower window hides it
+        overlay.frame.size = CGSize(width: 330, height: 400)
+        overlay.layoutIfNeeded()
+        XCTAssertFalse(overlay.card.isHidden)
+        XCTAssertTrue(overlay.bounds.contains(overlay.card.frame), "resizing clamps the card into its own window")
+        XCTAssertEqual(overlay.card.frame.maxY, overlay.bounds.maxY - 8, accuracy: 0.5)
+        XCTAssertTrue(overlay.card.compact)
         overlay.frame.size = CGSize(width: 250, height: 400)
         overlay.layoutIfNeeded()
-        XCTAssertTrue(overlay.bounds.contains(overlay.card.frame), "resizing clamps the card into its own window")
-        XCTAssertTrue(overlay.card.compact, "where the whole card does not fit, it leaves out its charts")
+        XCTAssertTrue(overlay.card.isHidden, "a window narrower than the card's minimum width hides it")
         overlay.hideReadout()
         XCTAssertFalse(overlay.desiredVisible)
         XCTAssertFalse(health.hudVisible)
@@ -945,6 +952,16 @@ final class FrameHealthIOSTests: XCTestCase {
         XCTAssertEqual(moved.corners.topLeft, 12, "the card's top-left corner is away from the screen's")
         XCTAssertLessThan(moved.share.maxX, square.share.maxX, "Share moves in from the rounder corner")
         XCTAssertEqual(moved.close, square.close)
+        // Moved down into the screen's bottom-right corner, the card's bottom-right corner rounds instead, and the text
+        // beside it moves in (FrameHealthMetricsTests)
+        card.moved?(CGPoint(x: overlay.bounds.maxX, y: overlay.bounds.maxY))
+        card.released?(.zero)
+        overlay.layoutIfNeeded()
+        card.layoutIfNeeded()
+        let low = card.layout
+        XCTAssertEqual(low.corners.bottomRight, (card.effectiveRadius(corner: .bottomRight) / card.scale).rounded())
+        XCTAssertGreaterThan(low.corners.bottomRight, 12)
+        XCTAssertEqual(low.corners.topRight, 12)
     }
 
     func testTheCardsFaceShowsItsTitleAndButtons() throws {

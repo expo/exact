@@ -71,8 +71,8 @@ fn an_early_image_or_window_redraw_survives_until_the_next_tick() {
 }
 #[test]
 fn only_direct_ink_devices_prepare_asynchronously() {
-    use exact_linux::presenter::PainterChoice;
-    use exact_linux::presenter::PainterChoice::*;
+    use exact_painted::presenter::PainterChoice;
+    use exact_painted::presenter::PainterChoice::*;
     assert!(direct_device(PainterChoice::from_baked("{}"), None));
     assert!(!direct_device(
         PainterChoice::from_baked(r#"{"painter":"cpu"}"#),
@@ -134,7 +134,7 @@ fn direct_window_blinks_without_a_softbuffer_surface() {
         (160., 80.),
         1.,
         Default::default(),
-        exact_linux::presenter::PainterChoice::Ink,
+        exact_painted::presenter::PainterChoice::Ink,
     )
     .unwrap();
     assert!(warning.is_none());
@@ -282,7 +282,7 @@ fn windowless_app(events: &EventLoop<crate::accessibility::Event>, plan: &[u8]) 
         (160., 80.),
         1.,
         Default::default(),
-        exact_linux::presenter::PainterChoice::Cpu,
+        exact_painted::presenter::PainterChoice::Cpu,
     )
     .unwrap();
     App {
@@ -372,7 +372,7 @@ pub(crate) fn about_to_wait_honors_retry_pending_redraw_and_earlier_timer(
         // A runner wake must win over the presenter's later retry.
         let timed = contract::compile("component App\n  state n = 0\n  action bump\n    n = n + 1\n  task timer mount\n    every(500, bump)\n  view\n    text \"idle\"\n").unwrap().encode();
         let (mut p, _) = Presenter::boot_with(&timed, (), (160., 80.), 1., Default::default(),
-            exact_linux::presenter::PainterChoice::Cpu).unwrap();
+            exact_painted::presenter::PainterChoice::Cpu).unwrap();
         p.frame();
         let wake = p.wake_due_ms().unwrap();
         app.presenter = Some(p);
@@ -438,7 +438,7 @@ fn a_hidden_window_reaches_first_pixel_without_a_present() {
         (160., 80.),
         1.,
         Default::default(),
-        exact_linux::presenter::PainterChoice::Ink,
+        exact_painted::presenter::PainterChoice::Ink,
     )
     .unwrap();
     assert!(warning.is_none());
@@ -486,7 +486,7 @@ fn beforeunload_sees_an_edit_the_native_editor_still_holds() {
         (160., 80.),
         1.,
         Default::default(),
-        exact_linux::presenter::PainterChoice::Ink,
+        exact_painted::presenter::PainterChoice::Ink,
     )
     .unwrap();
     assert!(warning.is_none());

@@ -384,7 +384,7 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     const kept = state.kept ?? {};
     // Re-read with only the kept declarations on, under the same key: the look beneath of what isn't kept, and the
     // node's own images and masks.
-    if (state.rule) hold(el, state, Object.values(kept).join("; "));
+    if (state.rule) hold(el, state, Object.values(kept).join("; "), []);
     const cs = getComputedStyle(el), own = name => el.style.getPropertyValue(name) ? cs.getPropertyValue(name).trim() : "";
     // A transition the read itself started (Firefox's transition styles see the animation, so taking a kept
     // declaration off is a change there) toward the very look beneath the kept one was written from: none of the
@@ -426,6 +426,11 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
         if (transitioned(cs, "color")) next.color = d; else out.push(d);
       } else if (!transitioned(cs, "color")) out.push(`color: color-mix(in srgb, var(--exact-press-color) calc(${p} * 100%), ${cs.color}) !important`);
     }
+    // A boundary below that writes again the colour this node gives it (modes.js `pressBelow`) takes the press's
+    // colour too, as this node's own colour paints it, on this node's progress, inherited (`hold`).
+    const coloured = !!next.color || out.some(d => d.startsWith("color:"));
+    state.below = coloured ? globalThis.exact?.pressBelow?.(el) ?? [] : [];
+    if (state.below.length) out.push("--x-press-paint: var(--exact-press-paint)");
     state.kept = next;
     // The look each kept declaration was written from: carried with it while it is kept (a re-read with it on sees
     // the painted look, not that one), read now only where it was written now.
@@ -466,20 +471,32 @@ export function createInputHandlers({ root, views, retiredViews, ready, inertAnc
     } catch { return null; }
     return sheet;
   };
-  const hold = (el, state, declarations) => {
+  const hold = (el, state, declarations, below = state.below) => {
     drop(state);
     const sheet = declarations && sheetOf(el);
     if (!sheet) return "";
     state.key ??= String(++paintKeys);
-    const at = sheet.insertRule(`#exact-root [data-exact-painting="${state.key}"][data-exact-painting] { ${declarations} }`, sheet.cssRules.length);
-    state.rule = { sheet, rule: sheet.cssRules[at] };
+    const painting = `#exact-root [data-exact-painting="${state.key}"][data-exact-painting]`;
+    const insert = text => sheet.cssRules[sheet.insertRule(text, sheet.cssRules.length)];
+    state.rule = { sheet, rule: insert(`${painting} { ${declarations} }`), below: [] };
+    // Each boundary below it eases from the colour it shows (a look's included; its own rule is off) to the press's,
+    // as written, so a token resolves in the boundary's modes.
+    const pressed = el.style.getPropertyValue("--exact-press-color");
+    below.forEach((b, n) => {
+      const base = getComputedStyle(b).color, mark = `${state.key}.${n}`;
+      if (!base || !pressed) return;
+      b.setAttribute("data-x-pr", mark);
+      state.rule.below.push([b, mark, insert(`${painting} [data-x-pr="${mark}"] { color: color-mix(in srgb, ${pressed} calc(var(--x-press-paint) * 100%), ${base}) !important }`)]);
+    });
     return state.key;
   };
   const drop = state => {
     if (!state.rule) return;
-    const { sheet, rule } = state.rule, at = [...sheet.cssRules].indexOf(rule);
+    const { sheet, rule, below } = state.rule, rules = [...sheet.cssRules];
     state.rule = null;
-    if (at >= 0) sheet.deleteRule(at);
+    const at = [rule, ...below.map(([, , r]) => r)].map(r => rules.indexOf(r)).filter(i => i >= 0).sort((a, b) => b - a);
+    for (const i of at) sheet.deleteRule(i);
+    for (const [b, mark] of below) if (b.getAttribute("data-x-pr") === mark) b.removeAttribute("data-x-pr");
   };
   // The look beneath changed: the ease goes on from where it is, over the rest of its time.
   // `stale`: a sheet, the scheme or a token changed, which no attribute of the node's says.

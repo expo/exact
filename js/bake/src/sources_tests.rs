@@ -1,6 +1,38 @@
 use super::{sources, Scratch};
 
 #[test]
+#[cfg(unix)]
+fn source_capture_skips_module_xcframeworks_with_versioned_slices() {
+    let app = Scratch::new(&std::env::temp_dir()).unwrap();
+    std::fs::write(app.0.join("app.ts"), "export const grants = '';\n").unwrap();
+    let before = sources(&app.0).unwrap();
+    for modules in [
+        "modules/apple",
+        "ios/modules",
+        "macos/modules",
+        "tvos/modules",
+    ] {
+        let framework = app
+            .0
+            .join(modules)
+            .join("Vendor.xcframework/macos-arm64/Vendor.framework");
+        let version = framework.join("Versions/A");
+        std::fs::create_dir_all(version.join("Resources")).unwrap();
+        std::fs::write(version.join("Vendor"), b"binary").unwrap();
+        std::fs::write(version.join("Resources/config.json"), b"{}").unwrap();
+        std::os::unix::fs::symlink("A", framework.join("Versions/Current")).unwrap();
+        for name in ["Vendor", "Resources"] {
+            std::os::unix::fs::symlink(format!("Versions/Current/{name}"), framework.join(name))
+                .unwrap();
+        }
+    }
+    assert_eq!(sources(&app.0).unwrap(), before);
+    // Skipping binary bundles must not admit source links beside them.
+    std::os::unix::fs::symlink("../../app.ts", app.0.join("modules/apple/helper.ts")).unwrap();
+    assert!(sources(&app.0).unwrap_err().contains("source links"));
+}
+
+#[test]
 fn source_capture_names_a_file_above_the_per_file_limit() {
     let app = Scratch::new(&std::env::temp_dir()).unwrap();
     let path = app.0.join("oversized.json");

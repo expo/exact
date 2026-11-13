@@ -15,10 +15,10 @@
 //! reference's fonts (the oracle sets them).
 
 use exact_kernel::PropId;
-use exact_linux::paint::Backend;
-use exact_linux::presenter::top::SurfacePainter;
-use exact_linux::presenter::{Device, PainterChoice, Palette, Presenter, Window, MATERIAL_ROLES};
-use exact_linux::raster::Raster;
+use exact_painted::paint::Backend;
+use exact_painted::presenter::top::SurfacePainter;
+use exact_painted::presenter::{Device, PainterChoice, Palette, Presenter, Window, MATERIAL_ROLES};
+use exact_painted::raster::Raster;
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -98,7 +98,7 @@ fn main() {
         std::process::exit(2);
     };
     // The look the reader shows: Material's column of the schema's metrics.
-    exact_linux::app::show_material_look();
+    exact_painted::app::show_material_look();
     let manifest = read_json(manifest);
     let schemes = read_json(&reference.join("schemes.json"));
     let density = manifest["density"].as_f64().expect("density") as f32;

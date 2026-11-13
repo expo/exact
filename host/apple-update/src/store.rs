@@ -602,8 +602,14 @@ pub fn prepared_delivery(token: u64, compat: &str) -> Option<Delivery> {
         );
     }
     delivery.seq = pinned.selection.generation.seq;
-    // Both an initial running selection and a committed activation are unstaged.
-    delivery.staged = false;
+    // Activation consumes the pending entry. A launch can have another one waiting.
+    if lock(&GENERATIONS)
+        .candidate
+        .as_ref()
+        .is_some_and(|p| p.token == token)
+    {
+        delivery.staged = false;
+    }
     Some(delivery)
 }
 
@@ -824,6 +830,124 @@ mod tests {
             staged: false,
             sunset: None,
             entry: Some("stale-entry".into()),
+        }
+    }
+
+    #[test]
+    fn a_relaunch_preserves_pending_delivery_facts_until_activation() {
+        let _test = lock(&TEST_STORE);
+        let compat = COMPAT.replace("next-launch", "app-decides");
+        let plan = caltrain::build().unwrap().encode();
+        for selected in [false, true] {
+            let base = std::env::temp_dir().join(format!(
+                "exact-apple-pending-{}-{selected}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&base);
+            let mut client = Client::open_at(&base, &base, &compat, &plan, Some(ORIGIN)).unwrap();
+            let stage = |client: &mut Client, seq| {
+                assert!(matches!(
+                    client.check(&mut |url| Ok(if url.ends_with("exact.json") {
+                        head(seq, &plan)
+                    } else {
+                        plan.clone()
+                    })),
+                    exact_update::Outcome::Staged { .. }
+                ));
+            };
+            if selected {
+                stage(&mut client, 1);
+                let candidate = client.prepare_activation().unwrap().unwrap();
+                client.commit_activation(&candidate.generation).unwrap();
+            }
+            stage(&mut client, 2);
+            drop(client);
+            let client = Client::open_at(&base, &base, &compat, &plan, Some(ORIGIN)).unwrap();
+            refresh(&client);
+            *lock(&CLIENT) = Some(client);
+            {
+                let mut g = lock(&GENERATIONS);
+                g.initialized = false;
+                g.live = None;
+                g.candidate = None;
+            }
+            let mut facts = Delivery::default().with_compat(&compat);
+            status_into(&mut facts);
+            if let Some(live) = initial_selection() {
+                facts = prepared_delivery(live.token, &compat).unwrap();
+            }
+            assert_eq!(facts.seq, u64::from(selected));
+            assert!(
+                facts.staged,
+                "a pending update survives a relaunch beside entry zero or a selected entry"
+            );
+            let mut bridge = exact_apple::abi::Bridge::new();
+            bridge.set_delivery(Some(&crate::HOOKS));
+            bridge.input_write(&plan);
+            bridge.prepare_plan_with_delivery(
+                plan.len(),
+                caltrain_data::Caltrain,
+                exact_apple::abi::Hooks::none(),
+                390.0,
+                844.0,
+                Some(facts),
+            );
+            bridge.commit_plan();
+            let read = |bridge: &mut exact_apple::abi::Bridge<caltrain_data::Caltrain>, op| {
+                let request = format!("{{\"op\":\"{op}\"}}");
+                let len = bridge.input_write(request.as_bytes());
+                let count = bridge.agent(len);
+                String::from_utf8(bridge.output_bytes(count as usize).to_vec()).unwrap()
+            };
+            let ready = |bridge: &mut exact_apple::abi::Bridge<caltrain_data::Caltrain>, staged| {
+                let state: serde_json::Value =
+                    serde_json::from_str(&read(bridge, "state")).unwrap();
+                assert_eq!(state["delivery"]["staged"], staged);
+                assert_eq!(read(bridge, "tree").contains("An update is ready"), staged);
+            };
+            ready(&mut bridge, true);
+            let check = |seq| {
+                let (entered, _entered_rx) = std::sync::mpsc::channel();
+                let (release_tx, release) = std::sync::mpsc::channel();
+                release_tx.send(()).unwrap();
+                run_check_with(&StalledTransport {
+                    block_head: true,
+                    entered,
+                    release: Mutex::new(release),
+                    head: head(seq, &plan),
+                    plan: plan.clone(),
+                })
+                .0
+            };
+            assert_eq!(check(2), "current");
+            bridge.sync_delivery();
+            ready(&mut bridge, true);
+            prepare();
+            let token = lock(&GENERATIONS).candidate.as_ref().unwrap().token;
+            let facts = prepared_delivery(token, &compat).unwrap();
+            assert_eq!(facts.seq, 2);
+            assert!(
+                !facts.staged,
+                "the candidate consumes its pending update only on activation"
+            );
+            bridge.input_write(&plan);
+            bridge.prepare_plan_with_delivery(
+                plan.len(),
+                caltrain_data::Caltrain,
+                exact_apple::abi::Hooks::none(),
+                390.0,
+                844.0,
+                Some(facts),
+            );
+            assert_eq!(commit(token), 0);
+            bridge.commit_plan();
+            bridge.sync_delivery();
+            ready(&mut bridge, false);
+            assert!(check(3).starts_with("staged seq 3"));
+            bridge.sync_delivery();
+            ready(&mut bridge, true);
+            *lock(&CLIENT) = None;
+            let _ = std::fs::remove_dir_all(base);
         }
     }
 

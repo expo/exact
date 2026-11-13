@@ -198,6 +198,37 @@ theorem text_err {tables args e} (h : text tables args = .error e) :
   · split at h <;> simp at h; exact .inl ⟨_, h.symm⟩
   · simp at h; exact .inr ⟨_, h.symm⟩
 
+/-- The router's roster entries (LLP 1038), over the program's route table.
+Other names and malformed router arguments retain the roster's unsupported refusal. -/
+def routing (env : Env) (f : String) (args : List Value) : Result Value :=
+  match f, args with
+  | "open", [r, .str l] => Route.verb env.prog.routes r (Route.open env.prog.routes · l)
+  | "push", [r, .str l] => Route.verb env.prog.routes r (Route.push env.prog.routes · l)
+  | "replace", [r, .str l] => Route.verb env.prog.routes r (Route.replace env.prog.routes · l)
+  | "back", [r] => Route.verb env.prog.routes r (.ok ∘ Route.back)
+  | "select", [r, .str n] => Route.verb env.prog.routes r (Route.select · n)
+  | "go", [r, .str l] => Route.verb env.prog.routes r (Route.go env.prog.routes · l)
+  | "stack", [r] => Route.read env.prog.routes r fun x =>
+      Option.some (.list ((Route.stack x).map (Route.entryValue env.prog.routes)))
+  | "top", [r] => Route.read env.prog.routes r fun x => (Route.top x).map (Route.entryValue env.prog.routes)
+  | "depth", [r] => Route.read env.prog.routes r fun x => Option.some (.num (F64.ofNat (Route.depth x)))
+  | "params", [r, .str n] => Route.read env.prog.routes r fun x =>
+      Option.some (.list ((Route.params x n).map .str))
+  | "searchParam", [e, .str n] =>
+    match Route.entryOf env.prog.routes e with
+    | .some en => .ok (.str (Route.searchParam en.url n))
+    | .none => .error (.refused "`searchParam` of a value that is not an entry")
+  | "fragment", [e] =>
+    match Route.entryOf env.prog.routes e with
+    | .some en => .ok (.str en.fragment)
+    | .none => .error (.refused "`fragment` of a value that is not an entry")
+  | "encodeRouteSegment", [.str s] =>
+    match Route.encodeRouteSegment s with
+    | .some t => .ok (.str t)
+    | .none => .error (.refused "a path parameter cannot be empty, `.` or `..`")
+  | "path", .str name :: vs => Route.pathValue env.prog.routes name vs
+  | f, _ => .error (.unsupported s!"roster entry `{f}`")
+
 /-- A roster entry applied to evaluated arguments. `map` and `filter` are
 not here: their callback is evaluated by `eval`. -/
 def stdlib (env : Env) (f : String) (args : List Value) : Result Value :=
@@ -224,33 +255,6 @@ def stdlib (env : Env) (f : String) (args : List Value) : Result Value :=
   | "endsWith", [.str a, .str b] => .ok (.bool (Str.endsWith a b))
   | "trim", [.str s] => .ok (.str (Str.trim s))
   | "encodeURIComponent", [.str s] => .ok (.str (encodeURIComponent s))
-  -- The router (LLP 1038, `Contract.Route`): verbs and reads over the
-  -- program's table.
-  | "open", [r, .str l] => Route.verb env.prog.routes r (Route.open env.prog.routes · l)
-  | "push", [r, .str l] => Route.verb env.prog.routes r (Route.push env.prog.routes · l)
-  | "replace", [r, .str l] => Route.verb env.prog.routes r (Route.replace env.prog.routes · l)
-  | "back", [r] => Route.verb env.prog.routes r (.ok ∘ Route.back)
-  | "select", [r, .str n] => Route.verb env.prog.routes r (Route.select · n)
-  | "go", [r, .str l] => Route.verb env.prog.routes r (Route.go env.prog.routes · l)
-  | "stack", [r] => Route.read env.prog.routes r fun x =>
-      Option.some (.list ((Route.stack x).map (Route.entryValue env.prog.routes)))
-  | "top", [r] => Route.read env.prog.routes r fun x => (Route.top x).map (Route.entryValue env.prog.routes)
-  | "depth", [r] => Route.read env.prog.routes r fun x => Option.some (.num (F64.ofNat (Route.depth x)))
-  | "params", [r, .str n] => Route.read env.prog.routes r fun x =>
-      Option.some (.list ((Route.params x n).map .str))
-  | "searchParam", [e, .str n] =>
-    match Route.entryOf env.prog.routes e with
-    | .some en => .ok (.str (Route.searchParam en.url n))
-    | .none => .error (.refused "`searchParam` of a value that is not an entry")
-  | "fragment", [e] =>
-    match Route.entryOf env.prog.routes e with
-    | .some en => .ok (.str en.fragment)
-    | .none => .error (.refused "`fragment` of a value that is not an entry")
-  | "encodeRouteSegment", [.str s] =>
-    match Route.encodeRouteSegment s with
-    | .some t => .ok (.str t)
-    | .none => .error (.refused "a path parameter cannot be empty, `.` or `..`")
-  | "path", .str name :: vs => Route.pathValue env.prog.routes name vs
   | "join", [.list xs, .str sep] =>
     match xs with
     | [.str s] => .ok (.str s)
@@ -316,7 +320,7 @@ def stdlib (env : Env) (f : String) (args : List Value) : Result Value :=
   | "sin", _ | "cos", _ | "sum", _ | "sortBy", _ | "range", _ | "flat", _
   | "split", _ | "ceil", _ | "round", _ | "parseNumber", _ | "calendarDiff", _ =>
     .error (.type s!"`{f}` of arguments it does not take")
-  | f, _ => .error (.unsupported s!"roster entry `{f}`")
+  | f, vs => routing env f vs
 
 /-- A binary operator other than `and`/`or`, on evaluated operands. `+`
 concatenates two strings and adds two numbers (the compiler picks `Concat`

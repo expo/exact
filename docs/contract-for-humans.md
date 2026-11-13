@@ -1001,7 +1001,13 @@ strings: `width="50%"`, `height="auto"`, `padding-top="env(safe-area-inset-top)"
 `width="calc(100% - 24px)"`, and CSS's `min()`, `max()` and `clamp()` over px,
 percentages, the safe-area insets and viewport lengths: `padding-bottom="clamp(15px,
 env(safe-area-inset-bottom), 60px)"`, `bottom="calc(max(15px,
-env(safe-area-inset-bottom)) + 44px)"`, `width="min(50%, 600px)"`. Supported values
+env(safe-area-inset-bottom)) + 44px)"`, `width="min(50%, 600px)"`. `env()` is the
+screen's safe area; `var(--exact-safe-area-inset-top)` (and `-right`, `-bottom`,
+`-left`) is the one where the box is: inside a route, its bars included, so
+`margin-top="calc(-1 * var(--exact-safe-area-inset-top))"` takes a background up
+under the navigation bar (LLP 1123 D9). A route is cleared of its bars by itself, the
+clearance added to its padding unless that padding reads the inset; `-exact-safe-area`
+on the route turns it off per edge (D3, D4). Supported values
 are property-specific; this is not
 an unrestricted browser stylesheet. The compiler and kernel reject unsupported
 names or values. `line-height=1.5` is a ratio; `line-height="24px"` is fixed.
@@ -1022,10 +1028,12 @@ component App
 The element's own attributes override its class. `class=(selected ? Active :
 Idle)` chooses between two named styles. This is not CSS selector matching, a
 cascade, or a string of multiple class names. Put computed values on the node;
-style bodies are constant. Properties omitted by the selected style revert to
-their defaults rather than keeping the other style's previous value. The one
-host-policy prop a style can hold, `buttonStyle`, must be set in both styles or
-neither.
+style bodies are constant. Style rows omitted by the selected style revert to
+their defaults rather than keeping the other style's previous value. A style
+can also hold the props `backgroundMaterial`, `glassGroup` and `buttonStyle`.
+In a conditional class, each prop must be set in both styles or neither, unless
+the element supplies its own value. Use `backgroundMaterial="none"` to remove
+a material.
 
 Useful property families include flex/block layout; sizes and min/max sizes;
 padding, margin, and gaps; borders and radii; overflow and clipping; text metrics
@@ -1319,7 +1327,18 @@ title, an optional second `text` (a value) or a `column` of two texts (a
 subtitle), and an optional trailing accessory — a `forward-chevron` or
 `checkmark` image, a checkbox or switch `input`, or a `button` holding only
 `image "symbol:info"`. `destructive` draws a row red. Any other row is custom
-and keeps its own views. A section written `background-color="transparent"` has no card: its rows sit on the list's background with no separators or corners, as a profile header does (LLP 1084 §6.2). That literal is the only `background-color` a section takes, and not beside a `class`; a section that gains and loses its card is two sections under `if`.
+and keeps its own views. A row with an authored `height`, `background-color` or
+corner radius also keeps its views, including a row laid out as a column. A
+subtitle column does too when it writes any of those or `min-height`. Authored
+`align-items` or `justify-content` on either a nested column or a row laid out
+as a column keeps its views too. Classes count as authored. Such nested
+columns omit subtitle block padding when lowering can establish that their
+row or column writes a box. Literal values and ternary arms are recognized;
+a `none` arm keeps the platform padding. Other expressions keep that padding
+because they may evaluate to `none`. Write explicit padding to control it.
+The title-to-subtitle gap stays the platform's
+unless you write your own gap. A row's own `min-height` alone still works
+on a standard cell. A section written `background-color="transparent"` has no card: its rows sit on the list's background with no separators or corners, as a profile header does (LLP 1084 §6.2). That literal is the only `background-color` a section takes, and not beside a `class`; a section that gains and loses its card is two sections under `if`.
 
 ```text
 list appearance="auto" listStyle="inset-grouped" flex=1

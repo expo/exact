@@ -125,7 +125,7 @@ impl Failure {
                 DataError::UnknownSource(s)
                 | DataError::BadArguments(s)
                 | DataError::Unavailable(s)
-                | DataError::DeferredAtBake(s)
+                | DataError::DeferredAtBake { message: s, .. }
                 | DataError::Interface(s)
                 | DataError::Overrun(s) => (FailureCode::Error, s.clone(), String::new()),
             },

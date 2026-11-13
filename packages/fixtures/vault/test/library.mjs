@@ -1,5 +1,5 @@
 // @fixture/vault's prebuilt library and the package that declares it (LLP 1154 §3 item 4), built as a package with
-// native code is published: the library (`library/`, a few lines of Rust over rusqlite's bundled SQLite) is compiled as
+// native code is published: the Rust library uses system SQLite on Apple and bundled SQLite elsewhere. It is compiled as
 // a dynamic library for this machine's targets, each target's file is put at a file: URL under `<out>/libraries/`,
 // and a copy of the package at `<out>/package/` declares each by that URL and its SHA-256 in exact.json
 // `native.library`. The checkout's exact.json names no target, so an app built from it is refused by name.
@@ -62,6 +62,8 @@ export function buildLibrary(out) {
     mkdirSync(sim, { recursive: true });
     cdylib('aarch64-apple-ios-sim', join(sim, 'vault'), '-Wl,-install_name,@rpath/vault.framework/vault');
     writeFileSync(join(sim, 'Info.plist'), plist('<key>MinimumOSVersion</key><string>17.0</string>'));
+    cpSync(join(pkg, 'library/PrivacyInfo.xcprivacy'), join(fw, 'Resources/PrivacyInfo.xcprivacy'));
+    cpSync(join(pkg, 'library/PrivacyInfo.xcprivacy'), join(sim, 'PrivacyInfo.xcprivacy'));
     for (const f of [fw, sim]) run('codesign', ['--force', '--sign', '-', f], dir);
     run('xcodebuild', ['-create-xcframework', '-framework', fw, '-framework', sim, '-output', join(dir, 'vault.xcframework')], dir);
     file = join(dir, 'vault.xcframework.zip');

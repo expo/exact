@@ -1,3 +1,4 @@
+import { writePrivacyManifest } from './privacy.mjs';
 // Apple bundle assembly. The build owns compilation and artifact publication.
 // @ref LLP 1126 D2/D8 — an extension is packaged inside its app's cohort.
 import { packageActivityArm, assertActivityRefusals } from './activities.mjs';
@@ -15,7 +16,7 @@ import { appIcon, buildInfo, iosAssets, appleAssets, copyNativeResources, IOS_RE
 import { allows, profile, identity, embeddedProfile } from './devices.mjs';
 import { grantEntitlements } from './presence.mjs';
 import { stripForDistribution, stripProductionExecutable } from './link.mjs';
-import { placeLibrary } from '../../scripts/package-libraries.mjs';
+import { assertLibraryNames, placeLibrary } from '../../scripts/package-libraries.mjs';
 import { fileURLToPath } from 'node:url';
 // The App Intents module the bundle places, built before the executable links it (LLP 1133.023 D8).
 export { buildIntents, shortcutKeys } from './intents.mjs';
@@ -26,7 +27,8 @@ const run = (cmd, args, opts = {}) => {
   if (r.status !== 0) throw new Error(`${cmd} failed (${r.status ?? r.error?.message})${r.stderr?.length ? ': ' + String(r.stderr).trim() : ''}`);
   return r;
 };
-export function assembleMac({intents, shared, library, serviceDylibs, macWidgets, provisioning = null, triple, appleReach, hasWeb, webLoadName, args, app, paths, binDir, libDir, bin, loadName, hasGpu, dylib, moduleDylibs, looseArms, hasSvg, svgLoadName, modulesLoadName, modulesBuilt, svgBuilt, canvasGpuLoadName, canvasGpuBuilt, sha1, linkRoot, swiftc, buildReceipt, development, bakedCompat, rosterKeys, production, distribution, stampSdk, products, composition, sdk, bakedPlan, cleanup}, {runApple, appleArtifacts, macInfoPlist, copyAppleStaticTrees, writeUsageStrings, receipt, shippedReceipt, assertAppleIdentity, placeAppleArtifact, infoPlist, distributionKeys, copyAppleGpuProducts, entitlements}) {
+export function assembleMac({intents, shared, library, moduleLibraries = [], serviceDylibs, macWidgets, provisioning = null, triple, appleReach, hasWeb, webLoadName, args, app, paths, binDir, libDir, bin, loadName, hasGpu, dylib, moduleDylibs, looseArms, hasSvg, svgLoadName, modulesLoadName, modulesBuilt, svgBuilt, canvasGpuLoadName, canvasGpuBuilt, sha1, linkRoot, swiftc, buildReceipt, development, bakedCompat, rosterKeys, production, distribution, stampSdk, products, composition, sdk, bakedPlan, cleanup}, {runApple, appleArtifacts, macInfoPlist, copyAppleStaticTrees, writeUsageStrings, receipt, shippedReceipt, assertAppleIdentity, placeAppleArtifact, infoPlist, distributionKeys, copyAppleGpuProducts, entitlements}) {
+    assertLibraryNames([library, ...moduleLibraries, shared && { placed: shared.framework }].filter(Boolean));
     // `--bundle`'s assembled `.app`, when one was asked for: what `--run`
     // then launches, so the running process has the app's bundle identity —
     // its Info.plist, its document types, its Dock tile (LLP 1033 D2).
@@ -122,23 +124,24 @@ export function assembleMac({intents, shared, library, serviceDylibs, macWidgets
       // Preserve the GPU artifact signatures that the baked receipt names.
       for (const file of [...loaded, ...(canvasGpuBuilt ? [canvasGpuLoadName] : []), ...(modulesBuilt ? [modulesLoadName] : []), ...serviceDylibs.map(svc => svc.load)]) run('codesign', ['--force', '--sign', sha1 ?? '-', '--timestamp=none', resolve(executables, file)], { stdio: 'ignore' });
       copyNativeResources(app, contents, buildReceipt.binary.metadata.nativeResources ?? []);
-      // A package's framework (LLP 1154 D3), where the executable's run path finds it, signed before the bundle.
-      if (library) {
-        const placed = placeLibrary(library, resolve(contents, 'Frameworks'));
-        stripProductionExecutable(resolve(placed, library.link), { production, dsym: resolve(symbols, `${basename(placed)}.dSYM`), strip: false });
+      // Prebuilt frameworks keep their linker output and are signed before the bundle (LLP 1154 D3).
+      for (const lib of [...(library ? [library] : []), ...moduleLibraries]) {
+        const placed = placeLibrary(lib, resolve(contents, 'Frameworks'));
+        stripProductionExecutable(resolve(placed, lib.link), { production, dsym: resolve(symbols, `${basename(placed)}.dSYM`), strip: false });
         run('codesign', ['--force', '--sign', sha1 ?? '-', '--timestamp=none', placed], { stdio: 'ignore' });
       }
       if (shared) {
         const frameworks = resolve(contents, 'Frameworks');
         mkdirSync(frameworks, { recursive: true });
         cpSync(shared.framework, resolve(frameworks, 'ExactCore.framework'), { recursive: true, verbatimSymlinks: true });
+        writePrivacyManifest(resolve(frameworks, 'ExactCore.framework/Resources'), [resolve(frameworks, 'ExactCore.framework/ExactCore')], { mac: true, apiManifests: (buildReceipt.binary.privacyManifests ?? []).slice(0, 1) });
         if (profiles) copyFileSync(profiles.app.path, resolve(contents, 'embedded.provisionprofile'));
         packageWidgets({ app, bundle, shared, directory: linkRoot, sdk, triple, platform: 'macos',
           runApple, production: production || distribution, symbols, profile: profiles?.extension,
           entitlements: macWidgetEntitlements({ app, team, profiles, extension: true }),
           sign: (extension, path) => run('codesign', ['--force', '--sign', sha1, '--timestamp=none', '--entitlements', path, extension], { stdio: 'ignore' }) });
         for (const name of readdirSync(frameworks)) {
-          if (name.endsWith('.framework') && name !== basename(library?.placed ?? '')) stripProductionExecutable(resolve(frameworks, name, basename(name, '.framework')), { production, dsym: resolve(symbols, `${name}.dSYM`) });
+          if (name.endsWith('.framework') && ![library, ...moduleLibraries].some(lib => name === basename(lib?.placed ?? ''))) stripProductionExecutable(resolve(frameworks, name, basename(name, '.framework')), { production, dsym: resolve(symbols, `${name}.dSYM`) });
           run('codesign', ['--force', '--sign', sha1, '--timestamp=none', resolve(frameworks, name)], { stdio: 'ignore' });
         }
       }
@@ -148,6 +151,8 @@ export function assembleMac({intents, shared, library, serviceDylibs, macWidgets
       // A runtime exception's target is checked here, not first at release (LLP 1069.008 D9); a development build signs without the hardened runtime, so with no entitlements.
       helperEntitlements(bundle, app.manifest, bakedCompat, order);
       for (const file of order.filter(file => nativeRoots.some(root => file === root || file.startsWith(root + '/')))) run('codesign', ['--force', '--sign', sha1 ?? '-', '--timestamp=none', file], { stdio: 'ignore' });
+      writePrivacyManifest(resources, [paths.executable, ...loaded, ...(canvasGpuBuilt ? [canvasGpuLoadName] : []), ...(modulesBuilt ? [modulesLoadName] : []), ...serviceDylibs.map(svc => svc.load), ...(hasGpu ? [loadName] : []), ...moduleDylibs.map(m => m.load)].map(name => resolve(executables, name)), { mac: true,
+        manifests: (buildReceipt.binary.privacyManifests ?? []) });
       run('codesign', ['--force', '--sign', sha1 ?? '-', '--timestamp=none', ...(ent ? ['--entitlements', ent] : []), bundle], { stdio: 'ignore' });
       const placed = bundleDestination;
       assertAppleIdentity(app, resolve(executables, paths.executable), bakedCompat.id, shared && resolve(contents, 'Frameworks/ExactCore.framework/ExactCore'));
@@ -158,7 +163,8 @@ export function assembleMac({intents, shared, library, serviceDylibs, macWidgets
     }
     return bundlePath;
 }
-export function assembleIOS({intents, shared, library, serviceDylibs, triple, app, paths, binDir, bin, clipBin, device, development, appleReach, tv, bakedCompat, bakedPlan, ipa, linkRoot, swiftc, buildReceipt, rosterKeys, sdkName, production, distribution, stampSdk, libDir, gpuArtifacts, looseArms, modulesBuilt, modulesLoadName, hasSvg, svgBuilt, svgLoadName, svgFilterBuilt, svgFilterLibraryName, canvasGpuBuilt, canvasGpuLoadName, args, unsigned, prof, ph, sha1, composition, destination, target, sdk, hasGpu, dylib, alarm = null}, {runApple, appleArtifacts, macInfoPlist, copyAppleStaticTrees, writeUsageStrings, receipt, shippedReceipt, assertAppleIdentity, placeAppleArtifact, infoPlist, distributionKeys, copyAppleGpuProducts, entitlements, appClip}) {
+export function assembleIOS({intents, shared, library, moduleLibraries = [], serviceDylibs, triple, app, paths, binDir, bin, clipBin, device, development, appleReach, tv, bakedCompat, bakedPlan, ipa, linkRoot, swiftc, buildReceipt, rosterKeys, sdkName, production, distribution, stampSdk, libDir, gpuArtifacts, looseArms, modulesBuilt, modulesLoadName, hasSvg, svgBuilt, svgLoadName, svgFilterBuilt, svgFilterLibraryName, canvasGpuBuilt, canvasGpuLoadName, args, unsigned, prof, ph, sha1, composition, destination, target, sdk, hasGpu, dylib, alarm = null}, {runApple, appleArtifacts, macInfoPlist, copyAppleStaticTrees, writeUsageStrings, receipt, shippedReceipt, assertAppleIdentity, placeAppleArtifact, infoPlist, distributionKeys, copyAppleGpuProducts, entitlements, appClip}) {
+  assertLibraryNames([library, ...moduleLibraries, shared && { placed: shared.framework }].filter(Boolean));
   // The bundle, assembled from scratch (new inodes, see above), with the app's assets (a phone reads no other
   // machine's paths); ad-hoc signed for a simulator, signed with the team's identity, profile, and entitlements for a phone.
   iosBundleGrants(app.manifest, bakedCompat.inputs?.grantCeiling);
@@ -189,7 +195,7 @@ export function assembleIOS({intents, shared, library, serviceDylibs, triple, ap
   intents?.place(bundle); // LLP 1133.023 D8: the faces' App Intents metadata
   copyAppleGpuProducts(libDir, resolve(bundle, 'Frameworks'), gpuArtifacts, production);
   for (const [has, built, name] of looseArms) if (has) copyFileSync(built, resolve(bundle, 'Frameworks', name));
-  if (library) placeLibrary(library, resolve(bundle, 'Frameworks')); // a package's framework (LLP 1154 D3), signed with the others below
+  for (const lib of [...(library ? [library] : []), ...moduleLibraries]) placeLibrary(lib, resolve(bundle, 'Frameworks')); // signed below (LLP 1154 D3)
   if (modulesBuilt) copyFileSync(modulesBuilt, resolve(bundle, 'Frameworks', modulesLoadName));
   for (const svc of serviceDylibs) copyFileSync(svc.built, resolve(bundle, 'Frameworks', svc.load));
   if (hasSvg) copyFileSync(svgBuilt, resolve(bundle, 'Frameworks', svgLoadName));
@@ -234,6 +240,7 @@ export function assembleIOS({intents, shared, library, serviceDylibs, triple, ap
   const appProfile = device && !unsigned ? provisioned?.app ?? (allows(prof, appRequired) ? prof : profile(ph?.udid, app.id, appRequired)) : null;
   // The clip's profile is for its own App ID, of the app's profile's team, prefix and method, as the extension's is.
   const profiles = { host: () => profile(ph?.udid, `${app.id}.host`, required), clip: () => embeddedProfile(ph?.udid, clip.id, appProfile, [...grantEntitlements({ ...app, clipParent: app.id }, required), 'com.apple.developer.parent-application-identifiers']) };
+  const packageManifests = (buildReceipt.binary.privacyManifests ?? []).slice(1);
   for (const [assembled, kind] of bundles) {
     const id = kind === 'host' ? `${app.id}.host` : kind === 'clip' ? clip.id : app.id, executable = kind === 'host' ? 'ExactHostIOS' : kind === 'clip' ? clip.executable : paths.executable;
     const keptSymbols = ipa || kind !== 'host' ? symbols : resolve(binDir, `${executable}.dSYMs`);
@@ -259,7 +266,7 @@ export function assembleIOS({intents, shared, library, serviceDylibs, triple, ap
       const beside = kind === 'clip' && !device ? clipBin : ipa && kind === 'app' ? ipa.replace(/\.ipa$/, '') : resolve(binDir, executable);
       mkdirSync(dirname(beside), { recursive: true }); writeFileSync(`${beside}.receipt.json`, whole);
       const platform = tv ? (device ? 'AppleTVOS' : 'AppleTVSimulator') : device ? 'iPhoneOS' : 'iPhoneSimulator';
-      for (const [loose, name] of [...looseArms.map(([, , load, framework]) => [load, framework]), [modulesLoadName, 'ExactModules'], [svgLoadName, 'ExactSvg'], [canvasGpuLoadName, 'ExactCanvasGpu'], ...serviceDylibs.map(svc => [svc.load, svc.framework])]) wrapFramework(resolve(assembled, 'Frameworks'), loose, name, app, platform);
+      for (const [loose, name] of [...looseArms.map(([, , load, framework]) => [load, framework]), [modulesLoadName, 'ExactModules'], [svgLoadName, 'ExactSvg'], [canvasGpuLoadName, 'ExactCanvasGpu'], ...serviceDylibs.map(svc => [svc.load, svc.framework])]) wrapFramework(resolve(assembled, 'Frameworks'), loose, name, app, platform, { apiManifests: (buildReceipt.binary.privacyManifests ?? []).slice(0, 1), ...(name === 'ExactModules' ? { modules: true, manifests: packageManifests } : {}) });
     }
     if (shared && kind === 'app' && activityEntries(app).length) packageActivityArm({ app, bundle: assembled, shared, sdk, triple, device, runApple });
     if (shared && kind === 'app') packageWidgets({ app, bundle: assembled, shared, directory: linkRoot, sdk, triple, device, alarm: tv ? null : alarm,
@@ -282,14 +289,24 @@ export function assembleIOS({intents, shared, library, serviceDylibs, triple, ap
       profile: signingProfile ? profile(ph?.udid, widgetId(app)) : null,
       entitlements: entitlements({ ...app, id: widgetId(app), widgetAppId: app.id }, signingProfile?.team, signingProfile?.dev ?? !unsigned, null, { simulator: !device, prefix: signingProfile?.prefix }),
       sign: (extension, ent) => run('codesign', ['--force', '--sign', signingIdentity, '--timestamp=none', ...(device ? ['--entitlements', ent] : []), extension], { stdio: 'ignore' }) });
-    // Swift frameworks are stripped before signing. Rust modules and a package's library keep their linker output:
+    // Swift frameworks are stripped before signing. Rust modules and prebuilt frameworks keep their linker output:
     // Xcode's strip can make Rust dylibs unloadable. GPU frameworks keep their authenticated bytes too.
     // An App Clip's frameworks are the app's bytes: the same dSYMs.
     if (production) for (const f of readdirSync(resolve(assembled, 'Frameworks')).filter(f => f.endsWith('.framework'))) {
       const unstripped = gpuArtifacts.some(m => f === `${m.framework}.framework`)
-        || ['ExactSvg.framework', 'ExactCanvasGpu.framework', basename(library?.placed ?? '')].includes(f);
+        || ['ExactSvg.framework', 'ExactCanvasGpu.framework', basename(library?.placed ?? ''), ...moduleLibraries.map(lib => basename(lib.placed))].includes(f);
       frameworkSaved.set(f, stripForDistribution(resolve(assembled, 'Frameworks', f, basename(f, '.framework')), resolve(keptSymbols, `${f}.dSYM`), { strip: !unstripped }).saved);
     }
+    const loose = [];
+    for (const name of readdirSync(resolve(assembled, 'Frameworks'))) {
+      const file = resolve(assembled, 'Frameworks', name);
+      if (name.endsWith('.dylib')) loose.push(file);
+      else if (name.startsWith('Exact') && name.endsWith('.framework') && name !== basename(library?.placed ?? '') && !gpuArtifacts.some(m => name === `${m.framework}.framework`)) {
+        writePrivacyManifest(file, [resolve(file, basename(name, '.framework'))], { modules: name === 'ExactModules.framework', apiManifests: (buildReceipt.binary.privacyManifests ?? []).slice(0, 1), manifests: name === 'ExactModules.framework' ? packageManifests : [] });
+      }
+    }
+    writePrivacyManifest(assembled, [resolve(assembled, executable), ...loose], {
+      manifests: [...(buildReceipt.binary.privacyManifests ?? []).slice(0, 1), ...(loose.some(file => file.endsWith(modulesLoadName)) ? packageManifests : [])] });
     for (const f of readdirSync(resolve(assembled, 'Frameworks')).filter(f => !gpuArtifacts.some(m => f === (production ? `${m.framework}.framework` : m.load)))) run('codesign', ['--force', '--sign', signingIdentity, '--timestamp=none', resolve(assembled, 'Frameworks', f)], { stdio: 'ignore' });
     if (production) assertArchiveFrameworks(resolve(assembled, 'Frameworks'));
     if (ipa) assertActivityRefusals(assembled, runApple, app, bakedCompat.inputs?.grantCeiling);

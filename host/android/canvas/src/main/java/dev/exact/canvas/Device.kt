@@ -10,7 +10,7 @@ import android.view.accessibility.AccessibilityManager
 /**
  * The device's settings as the app is told them (LLP 1115.001 D3.1): read whole, and told whole in one call
  * ([Native.configure]) before the host boots and again whenever one of them is not what was last told. exact2 does
- * with each what it has a door for (`host/linux/src/presenter/device.rs`).
+ * with each what it has a door for (`host/painted/src/presenter/device.rs`).
  */
 internal data class Device(
     /** Night mode. */
@@ -101,7 +101,7 @@ internal data class Device(
         }
 
         /**
-         * The lines `host/linux/src/paint/dates.rs` reads: the patterns Android's formatter picks for the locale for a
+         * The lines `host/painted/src/paint/dates.rs` reads: the patterns Android's formatter picks for the locale for a
          * medium date, the time on the person's clock with and without seconds, and the two together; the day
          * periods, the zero digit, and the months' and weekdays' names, short and full, and the eras. ICU's, as a
          * Views app's `DateFormat` writes them.

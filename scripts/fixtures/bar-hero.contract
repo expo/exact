@@ -1,0 +1,20 @@
+// LLP 1123 D4, D9 (LocalInsetsIOSTests): a route whose scroller starts at
+// its top, under the navigation bar, opts its top out of the clearance
+// UIKit's inset would give it, so the scroller's first box, a hero with a
+// background, starts at the screen's top under the bar and pads its text
+// below it with the route's own inset. Its bottom keeps its clearance.
+routes nav
+  home "/"
+
+component BarHero
+  view
+    main navigationKey=`${top(nav).id}` width="100%" height="100%"
+      for e in stack(nav) key=e.id
+        column navigationKey=`${e.id}` -exact-safe-area="top" navigationScroll="list" testId="route" position="absolute" inset=0 display="flex" flex-direction="column"
+          header
+            text "Inbox" role="heading" aria-level=1
+          scroll id="list" flex=1 min-height=0 testId="list"
+            column padding-top="var(--exact-safe-area-inset-top)" background-color="-exact-system-orange" testId="hero"
+              text "Hero" padding=16 testId="hero-text"
+            for i in range(30) key=i
+              text `Row ${i}` padding=12

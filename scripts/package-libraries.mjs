@@ -306,6 +306,16 @@ export function prepareLibrary(appDir, target, options) {
   return lib && fetchLibrary(lib, options);
 }
 
+/** Refuse framework names that would overwrite another link input or the host runtime in Frameworks. */
+export function assertLibraryNames(libraries) {
+  const sources = new Map();
+  for (const { placed } of libraries) {
+    const name = basename(placed), previous = sources.get(name);
+    if (previous) throw new Error(`${previous} and ${placed} both place ${name} in Frameworks`);
+    sources.set(name, placed);
+  }
+}
+
 /** Put the fetched library into `dir`: the framework on Apple, the shared object on Linux, each as a new file, so a
  * running process that has the old one mapped keeps its pages (host/apple/bundle.mjs says why). */
 export function placeLibrary(lib, dir) {

@@ -17,6 +17,7 @@ const { unavailable } = chromium();
 const check = need('chrome', unavailable);
 
 const page = `<!doctype html>
+<input id="draft" aria-label="Draft">
 <button id="opener" popovertarget="menu">Message</button>
 <div id="menu" popover role="menu">
   <button id="react" popovertarget="picker">Add Reaction…</button>
@@ -106,6 +107,56 @@ check('a menu row opens its popover from the menu\'s invoker, the menu closes an
   // A press in the picker keeps it open: the menu, now closed, was never its ancestor.
   await press('emoji');
   await until('open()', ['picker']);
+}), 60000);
+
+check('menu focus follows opening and dismissal, while authored focus and light dismissal win', () => inChrome(async (evaluate, press, until, enter) => {
+  const focused = 'document.activeElement.id';
+  await enter('opener');
+  await until(focused, 'react');
+  await enter('more');
+  await until(focused, 'deep');
+  await evaluate(`document.getElementById('submenu').hidePopover()`);
+  await until(focused, 'more');
+  await evaluate(`document.getElementById('menu').hidePopover()`);
+  await until(focused, 'opener');
+
+  await evaluate(`document.getElementById('more').autofocus = true`);
+  await enter('opener');
+  await until('open()', ['menu']);
+  expect(await evaluate(focused)).toBe('more');
+  // A real outside press closes the menu and keeps the control it focused.
+  await evaluate(`document.body.insertAdjacentHTML('beforeend', '<button id="outside">Outside</button>')`);
+  await press('outside');
+  await until('open()', []);
+  expect(await evaluate(focused)).toBe('outside');
+
+  // Without an eligible row the menu itself takes focus, without changing its authored tabindex.
+  await evaluate(`{ const m = document.getElementById('menu'), b = document.getElementById('opener'); m.replaceChildren(); b.focus(); m.showPopover({ source: b }); }`);
+  await until(focused, 'menu');
+  await evaluate(`document.getElementById('menu').hidePopover()`);
+  await until(focused, 'opener');
+  expect(await evaluate(`document.getElementById('menu').getAttribute('tabindex')`)).toBe(null);
+}), 60000);
+
+check('removing an open menu restores its focusable source or prior focus, unless focus moved elsewhere', () => inChrome(async (evaluate, press, until) => {
+  const focused = 'document.activeElement.id';
+  for (const source of ['opener', null, 'plain']) {
+    const options = source ? `{ source: document.getElementById('${source}') }` : '';
+    await evaluate(`{
+      document.getElementById('draft').focus();
+      window.keptMenu = document.getElementById('menu');
+      keptMenu.showPopover(${options});
+    }`);
+    await until(focused, 'react');
+    await evaluate('keptMenu.remove()');
+    await until(focused, source === 'opener' ? 'opener' : 'draft');
+    await evaluate('document.body.appendChild(keptMenu)');
+  }
+  await press('opener');
+  await until(focused, 'react');
+  await evaluate(`{ const plain = document.getElementById('plain'); plain.tabIndex = -1; plain.focus(); keptMenu.remove(); }`);
+  await until(`document.getElementById('opener').hasAttribute('data-exact-open')`, false);
+  expect(await evaluate(focused)).toBe('plain');
 }), 60000);
 
 check('a button is marked open while the popover it opened is open, a submenu\'s row too', () => inChrome(async (evaluate, press, until) => {

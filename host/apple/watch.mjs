@@ -1,3 +1,4 @@
+import { writePrivacyManifest } from './privacy.mjs';
 // @ref LLP 1126.001 WP17 — watch complications use the snapshot driver and their own store.
 import { resolve, relative } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -26,13 +27,15 @@ export function watchSimulator(args) {
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id ?? '')) throw new Error('--watch-sim requires a UDID (names are not accepted)');
   return id;
 }
-export function packageWatch({ bin, bundle, parent, production, symbols, sign, ...widgets }) {
+export function packageWatch({ bin, bundle, parent, production, symbols, sign, privacyManifests = [], ...widgets }) {
   const executable = resolve(bundle, 'ExactWatch');
   copyFileSync(resolve(bin, 'ExactWatch'), executable);
   stripProductionExecutable(executable, { production, dsym: resolve(symbols, 'ExactWatch.app.dSYM') });
   if (widgets.entries.length) packageWidgets({ ...widgets, bundle, production, symbols, sign, platform: 'watchos', device: false });
   const core = resolve(bundle, 'Frameworks/ExactCore.framework');
   stripProductionExecutable(resolve(core, 'ExactCore'), { production, dsym: resolve(symbols, 'ExactCore.framework.dSYM') });
+  writePrivacyManifest(core, [resolve(core, 'ExactCore')], { apiManifests: privacyManifests });
+  writePrivacyManifest(bundle, [executable], { apiManifests: privacyManifests });
   sign(core);
   sign(bundle);
   sign(parent);
@@ -103,7 +106,7 @@ export async function buildWatch(app, args, { runApple, appleArtifacts, appleBui
     runApple('swift', [...executableArgs, '--product', 'ExactWatch'], options);
     const bin = runApple('swift', [...executableArgs, '--show-bin-path'], { ...options, read: true }).stdout.trim();
     packageWatch({ bin, bundle, parent: parent.bundle, app: watch, shared, directory, sdk, triple, entitlements, sign, runApple, production, entries,
-      symbols: resolve(`${parent.binary}.dSYMs`, 'Watch') });
+      privacyManifests: (baked.binary.privacyManifests ?? []).slice(0, 1), symbols: resolve(`${parent.binary}.dSYMs`, 'Watch') });
     writeFileSync(resolve(directory, 'receipt.json'), receipt(app, { platform: 'watchos-simulator', target, sdk, bundle, compatibilityId: baked.compat.id, build: baked }));
     console.log(`host/apple: ${bundle}; watch group ${group}; ${entries.map(e => `${e.kind} [${e.families.join(', ')}]`).join('; ')}`);
     if (args.includes('--no-install')) return;

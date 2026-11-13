@@ -7,6 +7,52 @@ import { resolve } from 'node:path';
 import { buildRust, rustArtifact, prepareRustBundle, publishedSignature, rustAbi, rustBundle, rustCard, rustCards, rustFiles, rustReceipt, tieredBytes, tieredNative } from './rust.mjs';
 import { rustRuntime } from '../host/web/rust-glue.js';
 
+test('the resident Rust baker builds and runs host-dev once for repeated requests', () => {
+  const script = `
+    import assert from 'node:assert/strict';
+    import { mock } from 'bun:test';
+    import { EventEmitter } from 'node:events';
+    import { resolve } from 'node:path';
+    import { PassThrough, Writable } from 'node:stream';
+    import * as processes from 'node:child_process';
+    let builds = 0, starts = 0, requests = 0;
+    const appTarget = resolve('fixture target'), target = resolve(appTarget, 'rust-tools');
+    mock.module('node:child_process', () => ({ ...processes,
+      spawnSync(command, args, options) {
+        assert.equal(command, 'cargo');
+        assert.ok(args.includes('exact-logic-bake'));
+        assert.equal(args[args.indexOf('--profile') + 1], 'host-dev');
+        assert.ok(!args.includes('--release'));
+        assert.equal(options.env.CARGO_TARGET_DIR, target);
+        builds++;
+        return { status: 0, stdout: '', stderr: '' };
+      },
+      spawn(command, args, options) {
+        assert.equal(command, resolve(target, 'host-dev/exact-logic-bake'));
+        assert.deepEqual(args, ['--serve']);
+        assert.equal(options.env.CARGO_TARGET_DIR, target);
+        starts++;
+        const child = new EventEmitter();
+        child.stdout = new PassThrough(); child.stderr = new PassThrough();
+        child.stdin = new Writable({ write(bytes, encoding, done) {
+          assert.deepEqual(JSON.parse(String(bytes)), ['candidate', String(++requests)]);
+          queueMicrotask(() => child.stdout.write('{"ok":true}\\n')); done();
+        } });
+        child.kill = () => { child.stdout.end(); child.stderr.end(); };
+        queueMicrotask(() => child.stdout.write('{"ready":true,"pid":42}\\n'));
+        return child;
+      },
+    }));
+    const { RustBaker } = await import('./scripts/rust.mjs');
+    const baker = new RustBaker({ target: appTarget, workspace: process.cwd() }, {});
+    try { await baker.bake(['candidate', '1']); await baker.bake(['candidate', '2']); }
+    finally { baker.close(); }
+    assert.deepEqual([builds, starts, requests], [1, 1, 2]);
+  `;
+  const result = spawnSync(process.execPath, ['-e', script], { cwd: resolve(import.meta.dir, '..'), encoding: 'utf8', timeout: 10_000 });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+
 test('trapping module cleanup cannot throw through the resident Wasm import', () => {
   const original=globalThis.WebAssembly, log=console.error;
   const memory=new original.Memory({initial:1});

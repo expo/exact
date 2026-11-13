@@ -119,6 +119,7 @@ enum ResetGate {
         "groupFinish(_:now:)": "a grouped reorder finishing as its list goes",
         "media(_:event:payload:now:)": "an old media view's event as it goes",
         "load(_:now:)": "an old image's or frame's load",
+        "atomIconReady(geometryChanged:)": "an old atom icon's load; the new tree's text loads and measures its own",
         "frameNavigation(_:event:record:now:)": "an old web frame's navigation",
         "message(_:_:now:)": "an old web frame's message",
         "dialogClose(_:now:)": "an old dialog closing as its view goes",
@@ -140,6 +141,7 @@ enum ResetGate {
         "segments(_:)": "the posture and viewport segments: the view's `rebooted` tells them again",
         "listMargins(_:)": "UIKit's cell margins: the presenter's reset clears what was told (`RowCells.reset`), and the new rows report their own",
         "groupedMargins(_:)": "UIKit's grouped-card margins: the new tree's grouped lists measure and report their own",
+        "localInsets(_:)": "content owners' local insets (LLP 1123 D9): the navigation's reset clears what was told, and each route and block reports its own as the new tree lays out",
         "resizeBox(_:width:height:)": "a resize grip's drag on the old tree: a restart takes the size back to the plan's, as a reload does the browser's",
         // Never reached while held: their entry points wait for the replay first.
         "dataReady()": "never held: `activateData` holds first and is replayed (.activation), which asks it",

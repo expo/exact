@@ -51,6 +51,12 @@ impl NodeRef<'_> {
         self.arena.inside_neutral_header(self.slot)
     }
 
+    /// A sheet-header symbol whose accessible name is the Neutral web face
+    /// (LLP 1116.020 D2). It keeps the ordinary button's clipping.
+    pub fn is_neutral_sheet_word(&self) -> bool {
+        self.arena.neutral_sheet_word(self.slot)
+    }
+
     /// A direct controlled tab of the neutral sheet, independently of
     /// whether a navigation host projects its tablist or resolves its target.
     pub fn is_neutral_tab(&self) -> bool {

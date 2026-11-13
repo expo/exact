@@ -251,6 +251,9 @@ test('Linux plist tools preserve typed XML and binary bundle metadata and report
     expect(readFileSync(file).subarray(0, 8).toString()).toBe('bplist00');
     expect(JSON.parse(ok(['-convert', 'json', '-o', '-', file]))).toEqual({ CFBundleExecutable: 'App (Exact)', 'key.with.dots': 'kept', Enabled: false, Counts: [1, 2], ExactWidgetTypeScript: true });
     const before = readFileSync(file);
+    const captured = spawnSync(...appleCommand('plutil', ['-convert', 'json', '-o', '-', '-'], { encoding: 'utf8', input: before }, 'linux'));
+    expect(captured.status).toBe(0);
+    expect(captured.stdout).toBe(ok(['-convert', 'json', '-o', '-', file]));
     expect(run(['-extract', 'Missing', 'raw', '-o', '-', file]).status).toBe(1);
     expect(run(['-insert', 'Enabled', '-bool', 'true', file]).status).toBe(1);
     expect(readFileSync(file)).toEqual(before);

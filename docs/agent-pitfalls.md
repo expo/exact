@@ -579,15 +579,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   `tabindex` is now an attribute on every element and module tag's box (LLP
   1088 D7.3), with no DOM-property alias. Fix: write `tabindex` (x2apps paint,
   2026-10-04).
-- **With `viewport-fit="cover"`, route content goes under the native bar.** Cause:
-  the bar's cover is added to the route's padding, but a cover-fit root has no top
-  safe area. Fix: put `env(safe-area-inset-top)` on the route column, not on each
-  authored header. (Signal Clone, build 5.) At the bottom the route keeps the tab bar's
-  cover, so its in-flow content ends above the bar; on iOS 26 a route's last scroller with
-  nothing under it is drawn on under the bar, inset by it, so a list or a full-bleed image
-  runs behind the glass while its end rests above it. Pad the route or the scroller with
-  `env(safe-area-inset-bottom)` for the home indicator: padding on a box between them keeps
-  the scroller above the bar.
+- **Under `viewport-fit="cover"`, a route clears its insets twice.** A route
+  is cleared of its whole safe area, the status bar and the home indicator
+  included (LLP 1123 D3), and the clearance adds to padding that does not read
+  the inset: `env(safe-area-inset-top)` on a header or a box inside the route adds
+  the status bar a second time. Fix: pad the route column itself with
+  `env()` or `var(--exact-safe-area-inset-*)` (credited, so it counts once), drop the
+  inner padding, or opt those edges out with `-exact-safe-area` on the route and keep
+  padding them yourself, as the web needs (`-exact-safe-area="left right"` for a page
+  whose boxes pad the sensor housing). (Signal Clone, build 5; LLP 1123 D3,
+  2026-11-12.)
 - **A banner at the root of a tabbed app stays under the status bar on iOS.** A
   root-level `position="absolute" top=0` box padded with `env(safe-area-inset-top)`
   is drawn at y 0, and one at `top="calc(env(safe-area-inset-top) + 8px)"` at y 8.
@@ -596,13 +597,11 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   bars reach under the status bar, but `env()` stays 0; the host clears each route's
   content of the status bar and its bars instead, by padding the route or by UIKit's
   inset on its scroller (LLP 1123 D1). The same `env()` padding inside a route only
-  seems to work: it adds 0 to that clearance. A box outside every route has no inset
-  to read until LLP 1123 D9's `var(--exact-safe-area-inset-top)` is built. Until
-  then, put the banner in the route that shows it, where the host pads that route's
-  top: an absolutely positioned child at `top=0` then starts below the status bar and
-  any bar. A route whose scroller starts at its top or right under its header is
-  inset by UIKit instead, and a box at its `top=0` is under the bars. (euxy port's
-  "COPY SAVED" notice, 2026-10-21.)
+  seems to work: it adds 0 to that clearance. Fix: pad or place the banner with
+  `var(--exact-safe-area-inset-top)`, which outside every route is the screen's
+  inset and inside a route that route's own, its bars included (LLP 1123 D9):
+  `top="calc(var(--exact-safe-area-inset-top) + 8px)"`. (euxy port's "COPY SAVED"
+  notice, 2026-10-21.)
 
 - **After a relaunch on iOS, a form opens with old values and ignores the fresh answer.**
   While the data module is not ready, a native host (and the wasm web target) can make
@@ -622,7 +621,16 @@ This list holds what the [agent guide](contract-for-agents.md)'s rules don't mak
   (`apps/shelf`'s Progress and Yearly Goal rows), which the sheet keeps 15 from the
   card and the separator, or make the row itself a `column`, which stacks its children
   (LLP 1116 D2); to choose that space write the row's `padding-top`/`padding-bottom`
-  only, which replaces the column's. (Shelf recipe, 2026-10-10.)
+  only, which replaces the column's. A plain column of one or two texts becomes
+  a standard subtitle cell on iOS. An authored height, background colour or
+  corner radius on the row or column keeps its views; a subtitle column's
+  `min-height` does too, as does `align-items` or `justify-content` on either
+  a nested column or a row laid out as a column. Such nested columns get no
+  subtitle block padding for a literal box value or a ternary arm that writes
+  one; a `none` arm keeps the platform padding. Other expressions keep that
+  padding because they may evaluate to `none`; write explicit padding to control it.
+  The platform's interline gap stays. A column with `height=300` and no authored
+  padding or border has a 300 pt border box. Classes count too. (Shelf recipe; grouped tile, #327.)
 - **On iOS, a custom grouped row's leading symbol and line differ from a standard row's
   right to left or at an accessibility size.** Cause: a row the platform's cell can't
   express (a badge before its chevron) is its own views carried into the cell; iOS draws

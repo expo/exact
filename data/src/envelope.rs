@@ -180,7 +180,9 @@ fn error_json(error: &DataError) -> Json {
     let (kind, message) = match error {
         DataError::UnknownSource(m) => ("UnknownSource", m),
         DataError::BadArguments(m) => ("BadArguments", m),
-        DataError::DeferredAtBake(m) => ("DeferredAtBake", m),
+        DataError::DeferredAtBake { message, warning } => {
+            return json!({"kind": "DeferredAtBake", "message": message, "warning": warning});
+        }
         DataError::Unavailable(m) | DataError::Interface(m) => ("Unavailable", m),
         // Transient: a peer that predates it reads it as `Unavailable` (`error_from`'s catch-all).
         DataError::Overrun(m) => ("Overrun", m),
@@ -197,7 +199,10 @@ fn error_from(error: &Json) -> DataError {
     match error["kind"].as_str() {
         Some("UnknownSource") => DataError::UnknownSource(message),
         Some("BadArguments") => DataError::BadArguments(message),
-        Some("DeferredAtBake") => DataError::DeferredAtBake(message),
+        Some("DeferredAtBake") => DataError::DeferredAtBake {
+            message,
+            warning: error["warning"] == Json::Bool(true),
+        },
         Some("Overrun") => DataError::Overrun(message),
         Some("Failed") => match error["code"].as_str().and_then(FailureCode::from_name) {
             Some(code) => {
@@ -488,6 +493,17 @@ mod tests {
             matches!(older, DataError::Unavailable(ref m) if m == why),
             "{older:?}"
         );
+    }
+
+    #[test]
+    fn a_bake_deferral_keeps_its_warning_class_across_the_envelope() {
+        for warning in [false, true] {
+            let error = DataError::DeferredAtBake {
+                message: "deferred call".into(),
+                warning,
+            };
+            assert_eq!(error_from(&error_json(&error)), error);
+        }
     }
 
     #[test]

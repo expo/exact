@@ -50,11 +50,20 @@ char *status_message(OSStatus status) {
   return dup_utf8(text);
 }
 
-NSMutableDictionary *query_for(const char *service, const char *name) {
+// Tests borrow a macOS keychain for one call, without changing process defaults.
+NSMutableDictionary *query_for(const char *service, const char *name, [[maybe_unused]] CFTypeRef keychain) {
   NSMutableDictionary *query = [NSMutableDictionary dictionary];
   query[(__bridge id)kSecClass] = (__bridge id)kSecClassGenericPassword;
   query[(__bridge id)kSecAttrService] = [NSString stringWithUTF8String:service];
   query[(__bridge id)kSecAttrAccount] = [NSString stringWithUTF8String:name];
+#if TARGET_OS_OSX
+  if (keychain != nullptr) {
+    // Add uses kSecUseKeychain; reads, updates and deletion use the search list.
+    query[(__bridge id)kSecUseKeychain] = (__bridge id)keychain;
+    query[(__bridge id)kSecMatchSearchList] = @[(__bridge id)keychain];
+    return query;
+  }
+#endif
   NSBundle *bundle = [NSBundle mainBundle];
   NSString *owner = [bundle objectForInfoDictionaryKey:@"ExactAppIdentifier"];
   NSString *group = [bundle objectForInfoDictionaryKey:@"ExactKeychainAccessGroup"];
@@ -161,12 +170,12 @@ int ibex2_darwin_keychain_prepare(const char *service, char **out_error) {
 }
 
 int ibex2_darwin_keychain_get(const char *service, const char *name, unsigned char **out_value,
-                              size_t *out_len, char **out_error) {
+                              size_t *out_len, char **out_error, CFTypeRef keychain) {
   @autoreleasepool {
     *out_value = nullptr;
     *out_len = 0;
     *out_error = nullptr;
-    NSMutableDictionary *query = query_for(service, name);
+    NSMutableDictionary *query = query_for(service, name, keychain);
     query[(__bridge id)kSecReturnData] = @YES;
     query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
     CFTypeRef result = nullptr;
@@ -192,15 +201,15 @@ int ibex2_darwin_keychain_get(const char *service, const char *name, unsigned ch
 }
 
 int ibex2_darwin_keychain_set(const char *service, const char *name, const unsigned char *value,
-                              size_t len, char **out_error) {
+                              size_t len, char **out_error, CFTypeRef keychain) {
   @autoreleasepool {
     *out_error = nullptr;
     NSData *data = [NSData dataWithBytes:value length:len];
-    NSMutableDictionary *query = query_for(service, name);
+    NSMutableDictionary *query = query_for(service, name, keychain);
     NSDictionary *update = @{(__bridge id)kSecValueData : data};
     OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)query, (__bridge CFDictionaryRef)update);
     if (status == errSecItemNotFound) {
-      NSMutableDictionary *item = query_for(service, name);
+      NSMutableDictionary *item = query_for(service, name, keychain);
       item[(__bridge id)kSecValueData] = data;
 #if TARGET_OS_OSX
       if (item[(__bridge id)kSecUseDataProtectionKeychain])
@@ -217,10 +226,10 @@ int ibex2_darwin_keychain_set(const char *service, const char *name, const unsig
   }
 }
 
-int ibex2_darwin_keychain_forget(const char *service, const char *name, char **out_error) {
+int ibex2_darwin_keychain_forget(const char *service, const char *name, char **out_error, CFTypeRef keychain) {
   @autoreleasepool {
     *out_error = nullptr;
-    OSStatus status = SecItemDelete((__bridge CFDictionaryRef)query_for(service, name));
+    OSStatus status = SecItemDelete((__bridge CFDictionaryRef)query_for(service, name, keychain));
     if (status != errSecSuccess && status != errSecItemNotFound) {
       *out_error = status_message(status);
       return -1;

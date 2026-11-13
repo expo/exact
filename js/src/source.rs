@@ -483,9 +483,9 @@ impl DataSource for Module {
         source: &str,
         args: &[Value],
     ) -> Result<Answer, DataError> {
-        // A resource whose answer the bake's storage refusal ended (an
-        // uncaught `code: 'bake'`) is the device's to answer: that is
-        // `DeferredAtBake` (aab190948), and the runner shows its placeholder.
+        // An uncaught storage or stream-option refusal marked `code: 'bake'`
+        // is the device's to answer: that is `DeferredAtBake` (aab190948),
+        // and the runner shows its placeholder.
         // At bake, an error the source raises itself stays fatal, even after a
         // refusal it caught (kanban2 #5).
         let answer = self.begin(Some(store), Some(target), source, args);

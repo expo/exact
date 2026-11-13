@@ -15,13 +15,13 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { rustPackage, rustOutput, rustInputs, rustCards } from '../../scripts/rust.mjs';
 import { gpuModules, shaderWatchRoots, rustPolicy, rebuildPolicy } from '../../scripts/app.mjs';
-import { webDist, cargoReproducibilityFlags, compilerPaths, developmentBuildEnv, developmentCandidate, devBinRun, pendingBuildInputs, readBuilds, resolveApp } from '../../scripts/app.mjs';
+import { HOST_DEV, webDist, cargoReproducibilityFlags, compilerPaths, developmentBuildEnv, developmentCandidate, devBinRun, pendingBuildInputs, readBuilds, resolveApp } from '../../scripts/app.mjs';
 import { developmentLinks } from '../apple/build.mjs';
 import { acceptsHTML, webRequestURL } from '../../scripts/origin.mjs';
 import { guardFlags } from '../../scripts/help.mjs';
 import { webPortRange } from '../../scripts/agent-launch.mjs';
 import { localInstaller } from './local-install.mjs';
-import { runBuildTree, startupBuilds, stopBuildTree } from './dev-startup.mjs';
+import { claimDevLoop, runBuildTree, startupBuilds, stopBuildTree } from './dev-startup.mjs';
 import { designPath, frameOnlyByTool, tamberServer } from '../../scripts/tamber-server.mjs';
 import { pluginOnLoopback, remoteArgs } from '../../scripts/tamber-remote.mjs'; import { openRemoteCanvas } from '../../scripts/tamber-canvas.mjs';
 import { designDigest, patchDesign } from '../../scripts/tamber-patch.mjs';
@@ -53,7 +53,9 @@ async function freePort(from, host) {
 // loudly if taken; the default moves to a free one.
 const named = argv.includes('--port') ? arg('--port') : process.env.EXACT_PORT || null;
 if (named != null && !(Number.isInteger(Number(named)) && Number(named) >= 1 && Number(named) <= 65535)) { console.error(`${argv.includes('--port') ? '--port' : 'EXACT_PORT'} ${named}: a port number, 1–65535`); process.exit(2); }
+let loopClaim; try { loopClaim = argv.includes('--serve-as') ? null : claimDevLoop(app.dir, argv.includes('--wasm') || app.manifest.game !== undefined ? 'wasm' : 'js'); } catch (error) { console.error(error.message); process.exit(1); }
 const port = named != null || argv.includes('--serve-as') ? Number(named ?? 8765) : await freePort(8765, lan ? '0.0.0.0' : '127.0.0.1');
+loopClaim?.url(`http://127.0.0.1:${port}`);
 if (port !== 8765 && named == null && !webPortRange() && !argv.includes('--serve-as')) console.log(`port 8765 is in use; serving on ${port} (--port <n> or EXACT_PORT picks one)`);
 // `--serve-as <port>` (internal): the resident loop's producers behind the
 // JS loop on that port (host/web-js/dev.mjs forwards a native client's
@@ -702,12 +704,12 @@ function contractGraph() {
   } catch { return { files: new Set(), dirs: new Set(), shallow: [], sources: new Set() }; }
 }
 async function startModuleCompiler() {
-  const built = await phasedAsync('the module producer (exact-js-bake --release; the first run takes a few minutes)', 'cargo', ['build', '-q', '--release', '-p', 'exact-js-bake'], { cwd: root, env: toolingEnv }, child => { dev = child; });
+  const built = await phasedAsync(`the module producer (exact-js-bake --profile ${HOST_DEV}; the first run takes a few minutes)`, 'cargo', ['build', '-q', '--profile', HOST_DEV, '-p', 'exact-js-bake'], { cwd: root, env: toolingEnv }, child => { dev = child; });
   if (stopping || dev !== built.child) return;
   if (built.status !== 0) throw new Error('the module producer did not build');
   const scratch = resolve(app.target, 'module-dev');
   mkdirSync(scratch, { recursive: true });
-  const child = dev = spawn(resolve(app.target, 'release/exact-js-bake'), [app.dir, '--serve'], {
+  const child = dev = spawn(resolve(app.target, HOST_DEV, 'exact-js-bake'), [app.dir, '--serve'], {
     cwd: root, env: toolingEnv, detached: true, stdio: ['pipe', 'pipe', 'pipe'],
   });
   console.log(`compiler pid ${child.pid}`);

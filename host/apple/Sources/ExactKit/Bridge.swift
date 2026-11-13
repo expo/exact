@@ -156,6 +156,21 @@ extension Runtime {
             return read(exact_host_covers(rt, write(bytes)))
         }
     }
+    /// Content owners' local insets (LLP 1123 D9), top right bottom left, under
+    /// one layout: the owner by its root's view, nil for the session root's;
+    /// nil insets take them back.
+    func localInsets(_ owners: [(UInt32?, [CGFloat]?)]) -> Batch {
+        return on {
+            var bytes = Data(capacity: owners.count * 24)
+            for (view, insets) in owners {
+                let kind: UInt32 = (view == nil ? 19 : 17) + (insets == nil ? 1 : 0)
+                for word in [view ?? 0, kind] + (insets ?? [0, 0, 0, 0]).map({ Float($0).bitPattern }) {
+                    withUnsafeBytes(of: word.littleEndian) { bytes.append(contentsOf: $0) }
+                }
+            }
+            return read(exact_host_covers(rt, write(bytes)))
+        }
+    }
     /// The border box a person dragged `view`'s `resize` grip to, under one
     /// layout (`Runner::resize_box`); nil keeps an axis.
     func resizeBox(_ view: UInt32, width: CGFloat?, height: CGFloat?) -> Batch {

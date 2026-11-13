@@ -2,7 +2,7 @@
 // host/web-js/check.js's observations and a capture's pixels): one fixture view per finding class, found on the page in
 // each scheme and absent from a page that has none; and a screenshot shows a transition where it ends, unless filmed.
 import { test, expect } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -12,6 +12,7 @@ import { checkOp, judge, ratio } from '../../scripts/agent-check.mjs';
 import { decodePng, encodePng } from '../../scripts/png.mjs';
 import { serveBuildTree } from './serve.mjs';
 import { fileURLToPath } from 'node:url';
+import { webCompiler } from '../web-js/module.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const compiler = resolve(process.env.CARGO_TARGET_DIR ?? resolve(ROOT, 'target'), 'debug', process.platform === 'win32' ? 'contract.exe' : 'contract');
@@ -619,3 +620,105 @@ test('a screenshot shows a transition where it ends, the clock unmoved; a film\'
     expect([small.w, small.h, png.width, png.height]).toEqual([390, 844, 390, 844]);
   } finally { await session.close(); }
 }, 900000);
+
+test('folded captions over pictures use captured pixels unless their own fill covers the picture', async () => {
+  const source = `component Captions
+  view
+    column background-color="black" color="white" padding=16 gap=16
+      column position="relative" height=48
+        image "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='48'%3E%3Cpath fill='%2300ff00' d='M0 0h400v48H0z'/%3E%3C/svg%3E" position="absolute" inset=0 width="100%" height="100%"
+        column position="relative" testId="caption"
+          text "Caption on a picture"
+      column position="relative" height=48
+        image "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='48'%3E%3Cpath fill='%2300ff00' d='M0 0h400v48H0z'/%3E%3C/svg%3E" position="absolute" inset=0 width="100%" height="100%"
+        column position="relative" background-color="black" testId="opaque-caption"
+          text "Caption on its own fill"
+`;
+  const session = await open({ host: 'web', url: await built('folded-captions', source) });
+  try {
+    const display = await session.carrier.evaluate(`getComputedStyle(document.querySelector('[data-testid="caption"] [data-exact-text]')).display`);
+    expect(display).toBe('contents');
+    const ids = new Map((await session.op({ op: 'tree' })).nodes.map(n => [n.props.testId, n.id]));
+    const obs = await session.op({ op: 'check' });
+    expect(obs.items.find(it => it.text === 'Caption on a picture').bg).toBeUndefined();
+    expect(obs.items.find(it => it.text === 'Caption on its own fill')).toMatchObject({ bg: [0, 0, 0], on: ids.get('opaque-caption') });
+    const runs = (await checkOp(session, ['both'])).check;
+    expect(runs.map(run => run.findings.map(f => [f.text, f.kind]))).toEqual([
+      [['Caption on a picture', 'contrast']], [['Caption on a picture', 'contrast']],
+    ]);
+    for (const run of runs) expect(run.findings[0].detail.bg).toBe('#00ff00');
+  } finally { await session.close(); }
+}, 120_000);
+
+test('Shared Elements keeps Zoom Close painted, observed and usable after repeated flights in both schemes', async () => {
+  if (webCompiler().cmd === 'cargo') throw new Error('build the compiler first: cargo build -p exact-web-js');
+  const root = resolve(import.meta.dir, '../..'), dir = mkdtempSync(resolve(root, 'target/shared-elements-agent-'));
+  let browser, server;
+  try {
+    const build = Bun.spawn([process.execPath, 'host/web-js/build.mjs', 'shared-elements', '--out', dir, '--render', 'none'], {
+      cwd: root, stdout: 'pipe', stderr: 'pipe',
+    });
+    const [status, stdout, stderr] = await Promise.all([build.exited, new Response(build.stdout).text(), new Response(build.stderr).text()]);
+    expect({ status, error: status ? stdout + stderr : '' }).toEqual({ status: 0, error: '' });
+    server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(req) {
+      const path = new URL(req.url).pathname, file = Bun.file(resolve(dir, path === '/' ? 'index.html' : path.slice(1)));
+      return await file.exists() ? new Response(file) : new Response('not found', { status: 404 });
+    } });
+    browser = await open({ host: 'web', app: 'shared-elements', url: server.url.href, size: [420, 780] });
+    const settle = async () => expect((await browser.clock('settle')).settled).toBe(true);
+    const tap = async id => { await browser.tap(id); await settle(); };
+    const scheme = async value => { await browser.prefer({ 'prefers-color-scheme': value }); await settle(); };
+    await settle();
+    for (const appearance of ['light', 'dark', 'light', 'dark']) {
+      await scheme(appearance);
+      await tap('tab-grid'); await tap('open-p1'); await tap('close');
+      await scheme(appearance === 'light' ? 'dark' : 'light');
+      await tap('tab-cards'); await tap('card-c1'); await tap('close-card');
+      await scheme(appearance);
+      await tap('tab-tasks'); await tap('task-t1');
+      await tap('tab-zoom'); await tap('zoom-open-p1');
+      const button = (await browser.op({ op: 'tree' })).nodes.find(n => n.props.testId === 'zoom-close');
+      const bounds = await browser.carrier.evaluate(`(() => {
+        const label = document.querySelector('[data-testid="zoom-close"] [data-exact-text]');
+        const range = document.createRange(); range.selectNodeContents(label);
+        return range.getBoundingClientRect().toJSON();
+      })()`);
+      const shot = resolve(dir, 'zoom.png');
+      await browser.screenshot(shot);
+      const png = decodePng(readFileSync(shot));
+      let ink = 0;
+      for (let y = Math.ceil(bounds.top); y < Math.floor(bounds.bottom); y++) {
+        for (let x = Math.ceil(bounds.left); x < Math.floor(bounds.right); x++) {
+          const i = (y * png.width + x) * 4;
+          if (Math.min(png.data[i], png.data[i + 1], png.data[i + 2]) > 200) ink++;
+        }
+      }
+      expect(ink).toBeGreaterThan(10);
+      const checked = await browser.op({ op: 'check' });
+      expect(checked.items.some(item => item.text === 'Close' && item.of === button.id)).toBe(true);
+      await tap('zoom-close');
+      expect((await browser.op({ op: 'tree' })).nodes.some(n => n.props.testId === 'zoom-close')).toBe(false);
+    }
+    await tap('zoom-open-p1');
+    for (const [style, visible] of [
+      ['label.style.visibility = "hidden"', false],
+      ['button.style.visibility = "hidden"; label.style.visibility = "visible"', true],
+      ['button.style.opacity = "0"', false],
+      ['button.style.display = "none"', false],
+      ['button.style.contentVisibility = "hidden"', false],
+      ['button.inert = true', false],
+      ['label.style.opacity = "0"', true],
+    ]) {
+      await browser.carrier.evaluate(`(() => {
+        const button = document.querySelector('[data-testid="zoom-close"]'), label = button.querySelector('[data-exact-text]');
+        button.style.cssText = ''; button.inert = false; label.style.cssText = '';
+        ${style};
+      })()`);
+      const label = (await browser.op({ op: 'check' })).items.find(item => item.text === 'Close');
+      expect(!!label).toBe(visible);
+      if (label) expect(label.fg[3]).toBe(1);
+    }
+  } finally {
+    await browser?.close(); server?.stop(true); rmSync(dir, { recursive: true, force: true });
+  }
+}, 120_000);

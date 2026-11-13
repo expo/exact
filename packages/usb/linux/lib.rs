@@ -11,9 +11,9 @@
 //!   (five seconds at most), where the text has URBs reaped by a thread with `USBDEVFS_DISCARDURB` for a call let go.
 //! - The painted presenter draws no chooser (D2): `requestDevice` fails `NotSupportedError`.
 //!
-//! The package names only `exact_linux` and `std`, so the ioctls and their structures are declared here.
+//! The package names only `exact_painted` and `std`, so the ioctls and their structures are declared here.
 
-use exact_linux::package::{json, Context, Json, Package, Reply};
+use exact_painted::package::{json, Context, Json, Package, Reply};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::ErrorKind;

@@ -144,7 +144,6 @@ impl<D: DataSource> Host<D> {
         self.repaint_colors(batch, first);
         self.svg.all_dirty();
         let kernel = self.runner.kernel();
-        let env = kernel.env();
         let views: Vec<ViewId> = self.keys.values().copied().collect();
         for view in views {
             let Some(node) = kernel.node(view) else {
@@ -164,6 +163,7 @@ impl<D: DataSource> Host<D> {
             });
             if resolved {
                 let shown = self.shown_paint(motion_node(node.key));
+                let env = kernel.env_of(view);
                 batch.style(view, &style::style_json_presented(&node, &env, &shown).0);
             }
         }

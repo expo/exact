@@ -148,8 +148,8 @@ impl Gen<'_> {
     /// One of the voice table's commands (LLP 1096 D11) or a MIDI message
     /// (LLP 1125 D7): commands to the semantics, compared as issued. The
     /// source is computed (a program here declares no sound, and a literal
-    /// must name one), so the runner drops the voice; the gain and pan are
-    /// computed too, inside their ranges. A list of literal MIDI bytes is
+    /// must name one), so the runner drops the voice; the gain, pan and
+    /// playback rate are computed too, inside their ranges. A list of literal MIDI bytes is
     /// held to MIDI 1.0 by the checker, so the note is computed through
     /// `floor`, which keeps the list computed: the runner's queue drops a
     /// malformed one after the command is issued.
@@ -169,7 +169,7 @@ impl Gen<'_> {
                 let gain = self.expr(env, &Ty::Num, d, false);
                 let rate = self.expr(env, &Ty::Num, d, false);
                 out.push_str(&format!(
-                    "{pad}setSounds(group={group}, gain=min(1, max(0, {gain})), playbackRate={rate})\n"
+                    "{pad}setSounds(group={group}, gain=min(1, max(0, {gain})), playbackRate=min(4, max(0.25, {rate})))\n"
                 ));
             }
             2 => {

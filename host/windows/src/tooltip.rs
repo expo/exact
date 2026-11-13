@@ -3,7 +3,7 @@
 //! https://learn.microsoft.com/windows/win32/controls/tooltip-controls
 #![allow(unsafe_code)]
 use exact_kernel::{NodeKey, PropId};
-use exact_linux::Presenter;
+use exact_painted::Presenter;
 use exact_runner::DataSource;
 
 type Tip = (NodeKey, String);
@@ -239,7 +239,7 @@ mod tests {
                     (300., 200.),
                     1.,
                     Default::default(),
-                    exact_linux::presenter::PainterChoice::Cpu,
+                    exact_painted::presenter::PainterChoice::Cpu,
                 )
                 .unwrap();
                 assert!(error.is_none(), "{error:?}");
@@ -379,7 +379,7 @@ mod tests {
                 (400., 300.),
                 1.,
                 Default::default(),
-                exact_linux::presenter::PainterChoice::Cpu,
+                exact_painted::presenter::PainterChoice::Cpu,
             )
             .unwrap();
             assert!(error.is_none(), "{error:?}");

@@ -478,7 +478,9 @@ pub fn expectations_on(s: &Scripted, rust: &[String]) -> Result<(), String> {
             Item::Expect(e, _) => {
                 let step = steps.get(k).copied().unwrap_or(&[]);
                 let ok = match e {
-                    Expect::State(name, v) => script::state_value(step, name) == Some(v.as_str()),
+                    Expect::State(name, comparison, values) => {
+                        script::state_holds(script::state_value(step, name), *comparison, values)
+                    }
                     Expect::Text(id, v) => step.contains(&format!(
                         "view {} {}",
                         observe::quote(id),

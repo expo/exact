@@ -126,6 +126,7 @@ test('tamber help lists every binding language', () => {
 });
 
 test('each verb\'s help names exactly the flags its script parses, in a short text', () => {
+  assert.match(helpText('android'), /--write-locks/, 'Android authors need the lock-writing command after a graph change');
   // The verbs' scripts and the flags each parses, read as caps.mjs reads them before a push (help-parity.mjs).
   for (const [verb, flags] of scriptFlags(ROOT)) assert.deepEqual([...knownFlags(verb).keys()].sort(), flags, `${verb}: the help's flags (documented and internal) against its script's`);
   for (const verb of Object.keys(HELP)) {
@@ -137,7 +138,7 @@ test('each verb\'s help names exactly the flags its script parses, in a short te
 test('contract help names the build and verify flags with their arguments and restrictions', () => {
   const text = helpText('contract');
   for (const [command, flags] of [
-    ['build', ['[--stdin]', '[-o <file.plan>]', '[--json]', '[--errors-only]', '[--map (requires -o)]', '[--entry <kind> (requires -o; no --map or --stdin)]']],
+    ['build', ['[--stdin]', '[-o <file.plan>]', '[--json]', '[--errors-only]', '[--map (requires -o)]', '[--entry <kind> (requires -o; no --map or --stdin)]', '[--surface terminal (no --entry)]']],
     ['verify', ['[--runner-only]', '[--js]', '[--walks N]', '[--steps M]', '[--walk-seed N]', '[--confirm N]', '[--types]', '[--prove <Module>]']],
   ]) {
     const line = text.split('\n').find(line => line.startsWith(`  ${command} <file.contract>`));

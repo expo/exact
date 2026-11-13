@@ -25,16 +25,16 @@ fn a_test_block_parses_to_the_eight_operations_and_expects() {
     let json = contract::tests_json(&tests);
     assert!(json.starts_with("[{\"name\":\"login\",\"steps\":[{\"op\":\"tap\",\"target\":\"title\",\"form\":\"press\",\"line\":2}"), "{json}");
     assert!(
-        json.contains("{\"op\":\"expect-state\",\"name\":\"attempt\",\"value\":1,\"line\":13}"),
+        json.contains("{\"op\":\"expect-state\",\"name\":\"attempt\",\"comparison\":\"equal\",\"value\":1,\"line\":13}"),
         "{json}"
     );
     assert!(
-        json.contains("{\"op\":\"expect-state\",\"name\":\"picked\",\"value\":null,\"line\":15}"),
+        json.contains("{\"op\":\"expect-state\",\"name\":\"picked\",\"comparison\":\"equal\",\"value\":null,\"line\":15}"),
         "{json}"
     );
     // `[]` is the empty list on the wire too, never `null`.
     assert!(
-        json.contains("{\"op\":\"expect-state\",\"name\":\"tags\",\"value\":[],\"line\":16}"),
+        json.contains("{\"op\":\"expect-state\",\"name\":\"tags\",\"comparison\":\"equal\",\"value\":[],\"line\":16}"),
         "{json}"
     );
     assert!(
@@ -299,7 +299,7 @@ fn a_test_pinches_holds_a_key_and_indexes_state() {
         "{json}"
     );
     assert!(
-        json.contains("{\"op\":\"expect-state\",\"name\":\"items.0\",\"value\":-3,\"line\":8}"),
+        json.contains("{\"op\":\"expect-state\",\"name\":\"items.0\",\"comparison\":\"equal\",\"value\":-3,\"line\":8}"),
         "{json}"
     );
     // `pinch` is not a leftover word on the line (stocks: syntax-expected-newline).
@@ -604,7 +604,7 @@ fn a_test_double_clicks_scrolls_a_list_appends_reloads_and_reads_a_field() {
         "{\"op\":\"tap\",\"target\":\"timeline\",\"form\":\"into\",\"key\":\"s2981\",\"line\":5}",
         "{\"op\":\"type\",\"target\":\"reply\",\"text\":\"agree\",\"append\":true,\"line\":6}",
         "{\"op\":\"reload\",\"line\":7}",
-        "{\"op\":\"expect-state\",\"name\":\"feed.page.next\",\"value\":\"b\",\"line\":9}",
+        "{\"op\":\"expect-state\",\"name\":\"feed.page.next\",\"comparison\":\"equal\",\"value\":\"b\",\"line\":9}",
     ] {
         assert!(json.contains(want), "{want} in {json}");
     }
@@ -625,7 +625,7 @@ fn a_list_position_in_a_state_path_parses() {
     let json = contract::tests_json(&tests);
     assert!(
         json.contains(
-            "{\"op\":\"expect-state\",\"name\":\"cards.0.id\",\"value\":\"a\",\"line\":2}"
+            "{\"op\":\"expect-state\",\"name\":\"cards.0.id\",\"comparison\":\"equal\",\"value\":\"a\",\"line\":2}"
         ),
         "{json}"
     );
@@ -640,7 +640,7 @@ fn a_negative_number_is_an_expect_state_value() {
     ));
     let json = contract::tests_json(&tests);
     assert!(
-        json.contains("{\"op\":\"expect-state\",\"name\":\"offset\",\"value\":-1,\"line\":2}"),
+        json.contains("{\"op\":\"expect-state\",\"name\":\"offset\",\"comparison\":\"equal\",\"value\":-1,\"line\":2}"),
         "{json}"
     );
 }
@@ -1042,4 +1042,44 @@ fn a_perf_block_refuses_the_wall_clock_and_counts_need_a_block() {
     let e = contract::tests("test \"t\"\n  perf\n    clock data\n  expect perf time a == 1\n")
         .unwrap_err();
     assert!(e.message.contains("counts `query"), "{e}");
+}
+
+#[test]
+fn state_steps_compare_numeric_bounds_and_literal_membership() {
+    use contract_syntax::StateComparison as C;
+    let tests = contract::tests("test \"bounds\"\n  expect state offset >= -2\n  expect state offset <= 2\n  expect state rows.0 in 0 -2 2\n  expect state choice in \"ready\" false none []\n").unwrap();
+    let steps = &tests[0].steps;
+    assert!(
+        matches!(&steps[0], Step::ExpectState { comparison: C::AtLeast, value: Expr::Number(n, _), .. } if *n == -2.0)
+    );
+    assert!(matches!(
+        &steps[1],
+        Step::ExpectState {
+            comparison: C::AtMost,
+            ..
+        }
+    ));
+    assert!(
+        matches!(&steps[2], Step::ExpectState { comparison: C::In, value: Expr::List(values, _), .. } if values.len() == 3)
+    );
+    let json: serde_json::Value = serde_json::from_str(&contract::tests_json(&tests)).unwrap();
+    assert_eq!(json[0]["steps"][0]["comparison"], "at-least");
+    assert_eq!(json[0]["steps"][2]["value"], serde_json::json!([0, -2, 2]));
+    assert_eq!(
+        json[0]["steps"][3]["value"],
+        serde_json::json!(["ready", false, null, []])
+    );
+    for line in [
+        "offset >= \"1\"",
+        "offset <= true",
+        "offset in",
+        "offset in 1 + 2",
+        "offset == computed",
+        "offset == [1, 2]",
+    ] {
+        assert!(
+            contract::tests(&format!("test \"bad\"\n  expect state {line}\n")).is_err(),
+            "{line}"
+        );
+    }
 }

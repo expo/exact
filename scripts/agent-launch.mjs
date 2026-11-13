@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { types as utilTypes } from 'node:util';
 import { filesystemLock } from './filesystem.mjs';
 import { boundSettings, settingChanges, settingInputs, settingLines } from '../js/bake/src/__exact_env.mjs';
-import { backendOriginSelection, literalBackendOrigin } from '../js/bake/src/typescript.mjs';
+import { backendOriginSelection, literalBackendOrigin, selectBackendOrigin } from '../js/bake/src/typescript.mjs';
 import { besidePattern } from '../host/web/beside.mjs';
 import { chooseSimulator, phone } from '../host/apple/devices.mjs';
 import { androidDevice } from './agent-android.mjs';
@@ -475,6 +475,15 @@ export async function suiteBrowser(engine = 'chromium', { needs = [], timeout, .
 }
 
 const sharedCdpBrowsers = new Map();
+// Bun's test runner exits without `beforeExit` or `exit`, so a test file's
+// shared browsers close in an `afterAll`. It is registered here, as the file
+// loads, so it runs when the file ends: registered inside `cdpBrowser`, it ran
+// when the `beforeAll` that called it ended (Bun 1.4.2), before the tests.
+// Outside the test runner `afterAll` throws, and nothing is registered.
+try {
+  const { afterAll } = await import('bun:test');
+  afterAll(() => Promise.all([...sharedCdpBrowsers.values()].map(shared => shared.close())), 15000);
+} catch {}
 process.on('beforeExit', async () => {
   try { await Promise.all([...sharedCdpBrowsers.values()].map(shared => shared.close())); }
   catch (error) { console.error(error); process.exitCode = 1; }
@@ -518,8 +527,6 @@ export async function cdpBrowser({ needs = [], args = [] } = {}) {
     // Shared, it must not hold the process open: a pending call's deadline does that while one waits.
     for (const handle of [child, child.stderr, child.stdio[3], child.stdio[4]]) handle.unref?.();
     sharedCdpBrowsers.set(key, shared);
-    // Bun's test runner exits without beforeExit; its file hook can await shutdown.
-    try { const { afterAll } = await import('bun:test'); afterAll(shared.close, 15000); } catch {}
   }
   const shared = sharedCdpBrowsers.get(key), { cdp, lines } = shared;
   let browserContextId;
@@ -554,7 +561,7 @@ export function parseFlags(argv) {
     if (argv[i] === '--json') flags.json = true;
     else if (argv[i] === '--world') flags.world = resolve(value());
     else if (argv[i] === '--plan') flags.plan = resolve(value());
-    else if (argv[i] === '--backend') { const value = argv[++i]; if (!value || value.startsWith('--')) throw new Error('--backend <url>: name the backend origin'); process.env.EXACT_BACKEND_ORIGIN = value; }
+    else if (argv[i] === '--backend') selectBackendOrigin(argv[++i]);
     else if (argv[i] === '--app') flags.app = value();
     else if (argv[i] === '--browser') flags.browser = value();
     else if (argv[i] === '--size') {

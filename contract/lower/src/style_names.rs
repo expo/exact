@@ -267,6 +267,13 @@ pub const STYLE_NAMES: &[(&str, &str, AttrTarget)] = &[
     ("-exact-hit-slop-right", "exact LLP 1061", AttrTarget::Styles(&[StyleId::HitSlopRight])),
     ("-exact-hit-slop-bottom", "exact LLP 1061", AttrTarget::Styles(&[StyleId::HitSlopBottom])),
     ("-exact-hit-slop-left", "exact LLP 1061", AttrTarget::Styles(&[StyleId::HitSlopLeft])),
+    // A content owner's clearance of its chrome, per edge (LLP 1123 D4), and
+    // the safe area where a box is, as an author sets it (D9).
+    ("-exact-safe-area", "exact LLP 1123 D4", AttrTarget::Styles(&[StyleId::SafeArea])),
+    ("--exact-safe-area-inset-top", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetTop])),
+    ("--exact-safe-area-inset-right", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetRight])),
+    ("--exact-safe-area-inset-bottom", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetBottom])),
+    ("--exact-safe-area-inset-left", "exact LLP 1123 D9", AttrTarget::Styles(&[StyleId::LocalInsetLeft])),
     ("z-index", "css CSS 2", AttrTarget::Styles(&[StyleId::ZIndex])),
     ("order", "css CSS Display 3", AttrTarget::Styles(&[StyleId::Order])),
     ("transition", "css CSS Transitions 1", AttrTarget::Styles(&[StyleId::Transition])),

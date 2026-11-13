@@ -183,7 +183,7 @@ thread_local! {
     /// `endow` on the thread shares it, as launches share the Keychain, so a
     /// test reads and writes the same store the bridge does without a
     /// developer's (possibly locked) keychain. The Keychain itself is
-    /// `ibex2`'s `secrets::darwin` test.
+    /// covered by `KeychainMacTests` through the native shim and Security.
     pub(crate) static PLATFORM: std::cell::RefCell<Option<std::sync::Arc<ibex2::secrets::MemoryStore>>> =
         const { std::cell::RefCell::new(None) };
 }

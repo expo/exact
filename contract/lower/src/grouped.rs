@@ -67,7 +67,7 @@ const SUBHEADLINE: &str = "-exact-subheadline";
 
 use crate::metrics::grouped as metric;
 use actions::{action_cell, disclosure};
-use lines::{stack_lines, stack_of_lines, subtitle};
+use lines::{stack_lines, stack_of_lines};
 use title::{title_button, title_face};
 
 /// The style a grouped list's attributes ask for: `None` for any other
@@ -637,7 +637,7 @@ fn section(
     group.push(s("overflow", "hidden", span));
     let mut styled = |n: &Node| {
         Ok(swipe_rows::grouped(n, &|n, swiped| {
-            row(n, !cardless, swiped)
+            row(n, !cardless, swiped, class)
         }))
     };
     let body = rows
@@ -819,14 +819,14 @@ fn s_val(value: &str, span: Span) -> Expr {
 /// carries as a custom row.
 /// A grouped list's row: the sheet's rows, without the look of an element
 /// that yields it to the row (`row_look`).
-pub(crate) fn row(node: &Node, separated: bool, swiped: bool) -> Node {
+pub(crate) fn row(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> Node {
     match crate::row_look::yielded(node) {
-        Some(own) => styled(&own, separated, swiped),
-        None => styled(node, separated, swiped),
+        Some(own) => styled(&own, separated, swiped, class),
+        None => styled(node, separated, swiped, class),
     }
 }
 
-fn styled(node: &Node, separated: bool, swiped: bool) -> Node {
+fn styled(node: &Node, separated: bool, swiped: bool, class: ClassRows<'_>) -> Node {
     let Node::Element {
         tag,
         attrs,
@@ -1075,6 +1075,8 @@ fn styled(node: &Node, separated: bool, swiped: bool) -> Node {
             i,
             last,
             stack,
+            row_attrs: attrs,
+            class,
             lines,
             field,
             titled: titled == Some(k),
@@ -1118,6 +1120,8 @@ struct Place<'a> {
     last: usize,
     /// Whether a `column` here is the row's text stack (`text_stack`).
     stack: bool,
+    row_attrs: &'a [Attr],
+    class: ClassRows<'a>,
     /// Whether a stack of lines here takes the cell's margins (`stacks`).
     lines: bool,
     /// The field beside the row's label, if it is such a row.
@@ -1152,6 +1156,8 @@ fn part(child: &Node, at: Place<'_>, texts: &mut Count) -> Node {
         i,
         last,
         stack,
+        row_attrs,
+        class,
         lines,
         field,
         titled,
@@ -1367,7 +1373,7 @@ fn part(child: &Node, at: Place<'_>, texts: &mut Count) -> Node {
                 vec![n("min-width", 0.0, at)],
             )
         }
-        ("column", _) if stack => subtitle(child),
+        ("column", _) if stack => cell::column(child, row_attrs, class),
         // A column around the title's one text is the title, as a stack of
         // lines is: a text after it is the value at the far edge, not a
         // second title sharing the row's room (grocery-list's quantity

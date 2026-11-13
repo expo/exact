@@ -1,7 +1,9 @@
 // The Apple build's compiled arms, cached by key in a directory every app's build shares.
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, resolve } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
+import { machOType } from './assets.mjs';
+import { xcframeworkSlice } from '../../scripts/package-libraries.mjs';
 
 /** An arm's cached copies (`<key>-<name>`) beyond the three last used for
  * `name`, removed: different arguments (a development build, a production
@@ -87,4 +89,26 @@ export function snapshotSources(files, dir) {
     key: (arg) => authored.get(arg) ?? arg,
     authored: (text) => [...authored].reduce((out, [copy, file]) => out.replaceAll(copy, file), text),
   };
+}
+
+/** The module's xcframework inputs for one destination. Only a Mach-O dylib is embedded;
+ * a static framework or archive is consumed by the link. */
+export function moduleFrameworks(frameworks, target) {
+  const args = [], stamped = [], libraries = [];
+  const walk = dir => readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(resolve(dir, e.name)) : [resolve(dir, e.name)]);
+  for (const fw of frameworks) {
+    const { dir, lib } = xcframeworkSlice(fw, target), framework = lib.LibraryPath.endsWith('.framework');
+    const link = basename(lib.LibraryPath, '.framework'), placed = resolve(dir, lib.LibraryPath);
+    // A hand-composed static slice may hold several archives beside the one its plist names.
+    const files = framework ? [resolve(placed, link)] : readdirSync(dir).filter(f => /^lib.*\.a$/.test(f)).map(f => resolve(dir, f));
+    if (!files.length) throw new Error(`host/apple: ${basename(fw)}'s ${lib.LibraryIdentifier} slice holds no static library (lib*.a) or framework`);
+    const headers = !framework && lib.HeadersPath && existsSync(resolve(dir, lib.HeadersPath)) ? resolve(dir, lib.HeadersPath) : null;
+    args.push(...(framework ? ['-F', dir, '-framework', link] : [...(headers ? ['-I', headers] : []), '-L', dir, ...files.map(f => `-l${basename(f).slice(3, -2)}`)]));
+    stamped.push(...files, ...(headers ? walk(headers) : []));
+    if (framework && machOType(files[0]) === 6) libraries.push({ placed, link });
+  }
+  if (libraries.length) args.push('-Xlinker', '-rpath', '-Xlinker', target.platform === 'macos' ? '@loader_path/../Frameworks' : '@executable_path/Frameworks');
+  // Roster probes run before a bundle exists; only those links may search the input slices.
+  const probeArgs = libraries.flatMap(lib => ['-Xlinker', '-rpath', '-Xlinker', dirname(lib.placed)]);
+  return { args, stamped, libraries, probeArgs };
 }

@@ -600,6 +600,20 @@ export function crashWatch(name, bundle, scope) {
 
 // ---------------------------------------------------------------- a phone: devicectl, a profile, an identity
 
+/** Startup can fail before the app's first line; keep devicectl's evidence and
+ * distinguish a reported lock from a prompt the carrier cannot observe. */
+export function phoneStartupFailure(reason, lines) {
+  const details = [reason, ...lines.filter(line => !reason.includes(line))].join('\n');
+  const silent = lines.length ? '' : '\nthe app printed nothing';
+  if (/FBSOpenApplication[^\n]*\bLocked\b|\breason:\s*Locked\b|(?:device|iPhone|iPad) is locked|\bDeviceLocked\b/i.test(details)) {
+    return `the iPhone is locked: unlock it and run again\n${details}${silent}`;
+  }
+  const prompt = /No route to host|EHOSTUNREACH|waiting for foreground/i.test(details)
+    ? "\nApple's local-network prompt may be waiting on the phone. Allow Local Network there, including a prompt left by another app, then run again."
+    : '';
+  return `${details}${silent}${prompt}\nUnlock the phone and keep the app in the foreground; the phone must reach this Mac on the same LAN.`;
+}
+
 /** One launch, one phone connection; reject other peers before any agent request.
  * The token crosses via the paired device's launch environment, not a public URL. */
 export async function phoneBridge() {

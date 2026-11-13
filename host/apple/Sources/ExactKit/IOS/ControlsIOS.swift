@@ -200,7 +200,10 @@ final class ControlHost: NSObject {
         case "switch": made = ExactSwitch()
         #endif
         case "checkbox": made = ExactCheckbox(frame: .zero)
-        case "radio": made = ExactRadio(frame: .zero) // x2apps survey #2
+        case "radio":
+            let radio = ExactRadio(frame: .zero)
+            radio.owner = node
+            made = radio
         case "button": made = makeNativeButton(node) // LLP 1069.011
         default: made = makeValueControl(kind, node.id)
         }

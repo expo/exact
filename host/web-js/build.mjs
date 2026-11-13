@@ -307,7 +307,8 @@ if (ts && existsSync(webScript) && !/^\s*fn main\(\)\s*\{\s*exact_js_bake::build
 // The check's errors, then its warnings: what `contract build` and a drive's summary read, warnings after refusals.
 const sayWarnings = (warnings) => { for (const warning of warnings ?? []) console.warn(warning); };
 const captured = ts ? await typecheck(!opt('--data')).catch((error) => {
-  console.error(`${error.message ?? error}\nerror: ${app}: app.ts failed the type check every host's build runs`);
+  console.error(error.code === 'backend-selection' ? `error [backend-selection]: ${error.message}`
+    : `${error.message ?? error}\nerror: ${app}: app.ts failed the type check every host's build runs`);
   sayWarnings(error.warnings);
   process.exit(1);
 }) : null;
@@ -351,6 +352,8 @@ async function typecheck(checking) {
       // Nor is what a build in `dist` keeps beside it (`web-build --out dist`: serve.mjs `replaceBuild`, generations.mjs).
       if (top && besideDist(name)) continue;
       if (top && mounts.some(([mount]) => mount === name)) continue;
+      // Native link inputs, fingerprinted by the Apple build, as in js/bake's capture.
+      if (entry.isDirectory() && name.endsWith('.xcframework') && /^(modules|(?:ios|macos|tvos)\/modules)\//.test(relative(appDir, path).split(sep).join('/'))) continue;
       // Links are refused, except a document link outside the static trees
       // (CLAUDE.md → AGENTS.md), as js/bake's capture: no build reads one.
       if (entry.isSymbolicLink()) {
@@ -689,7 +692,7 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   ...(existsSync(resolve(gen, 'markdown.flag')) ? ["import { compileReaders } from './markdown.js';", 'globalThis.__markdown = () => compileReaders(markdownPaths, planResources.map(g => g.r));'] : []),
   "import { viewportFacts } from './facts.js';",
   "import { answers } from './checkpoint.js';",
-  "import { markBars } from './navigation.js';",
+  "import { markBars, routeTitle } from './navigation.js';",
   "import { markRoutes, markDocument } from './document.js';",
   ...(ts ? ["import { install as ts } from './ts-data.js';", "import { unfinishedIO } from './ts-fetch.js';"] : []),
   ...(rust ? ["import { install } from './rust-data.js';"] : []),
@@ -729,17 +732,17 @@ writeFileSync(resolve(gen, 'main-server.js'), [
   '  do await new Promise(r => setTimeout(r, 1)); while (outstanding() && performance.now() < end);',
   '  markBars(document.getElementById("exact-root")); // the bars the glue marks, so their symbols are the size they will be',
   '  markRoutes(document.getElementById("exact-root")); markDocument(); // a hidden route\'s page scroller is off the page',
-  '  return { root: document.rootHTML(), title: Head.headTitle, description: Head.headDescription, image: Head.headImage, canonical: Head.headCanonical, robots: Head.headRobots,',
+  '  return { root: document.rootHTML(), title: Head.headTitle ?? routeTitle(document.getElementById("exact-root")), description: Head.headDescription, image: Head.headImage, canonical: Head.headCanonical, robots: Head.headRobots,',
   // The manifest's origin, against which a crawler's URLs are made absolute (page.rs `page_head`).
-  `    origin: ${JSON.stringify(manifest.app?.origin ?? null)}, status: Head.headStatus ?? null, time: clock.now, answers: answers(planResources, types[2], sourceTypes),`,
+  `    origin: ${JSON.stringify(manifest.app?.origin ?? null)}, status: Head.headStatus ?? null, time: clock.now, ...answers(planResources, types[2], sourceTypes),`,
   // Each resource whose source failed, with its message: the server's log names it (render.mjs), as the page cannot.
   '    failed: Resources.filter(r => r.failed).map(r => `${r.name}: ${r.error}`),',
   // Each pending resource refused storage, by its request (admission.js) or call (ts-data.js), for the log.
   '    refused: Resources.filter(r => r.pending() && (r.ticket?.refused || (r.ticket?.call ?? r.ticket?.ctl)?.refused)).map(r => [r.name, r.ticket.refused ?? (r.ticket.call ?? r.ticket.ctl).refused]),',
-  // `open`: answered resources the client asks again: an open stream, a watch, or a source refused storage in the render;
   // `continuing`: work that outlives the render, whatever it waited for (a page with no status does not wait for an
-  // answered source's I/O): the client asks every answer again (render.mjs `revalidate`).
-  '    pending: Resources.filter(r => r.pending()).map(r => r.name), open: [...new Set(Resources.filter(r => !r.pending() && (r.ticket || data.watchedInRender?.has(r.name) || data.refusedInRender?.has(r.name))).map(r => r.name))], outstanding: outstanding(), continuing: outstanding() || unfinished(), scrollDocument: document.documentElement.hasAttribute("data-scrolldocument"), render: performance.now() - t0,',
+  // answered source's I/O): the client asks every answer again (render.mjs `revalidate`). The answers the client asks
+  // again one at a time are in `answers`' `open` (checkpoint.js).
+  '    pending: Resources.filter(r => r.pending()).map(r => r.name), outstanding: outstanding(), continuing: outstanding() || unfinished(), scrollDocument: document.documentElement.hasAttribute("data-scrolldocument"), render: performance.now() - t0,',
   // What an inferred activation reads (LLP 1048.007 D1): what is still due, the sources read, the viewport's comparisons as the render saw them.
   '    due: clock.timers.length > 0 || Mutations.some(m => m.due < Infinity || m.next < Infinity), activation, zoned: !!globalThis.__exactZone,',
   // Only a TypeScript source is held to no clock and no Math.random (ts-fetch.js): a Rust module's page is never kept.

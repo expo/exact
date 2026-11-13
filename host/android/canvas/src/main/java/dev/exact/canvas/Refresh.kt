@@ -193,7 +193,7 @@ internal class Refresh(context: Context) : FrameLayout(context) {
             canvas.restore()
         }
 
-        /** Material's indeterminate indicator, as `host/linux/src/lower.rs` has Compose move it: in cycles of 1,332
+        /** Material's indeterminate indicator, as `host/painted/src/lower.rs` has Compose move it: in cycles of 1,332
          * ms the head runs 290° ahead of the tail and the tail catches up, each eased, while the arc turns 286°. */
         private fun spinner(canvas: Canvas) {
             stroke.alpha = 255

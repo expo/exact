@@ -4,7 +4,7 @@ export { px, lt, presenceUse } from './presence-bindings.js';
 // Bound exits and layout transitions: presence-bindings.js's probes, which the compiler hands over only when a plan binds one (LLP 1047.002 D1)
 let Probes = null; export function usePresenceBindings(b) { Probes = b; } const presentArm = (view, ...a) => Probes ? Probes.arm(view, ...a) : view; export const presentRows = (row, ...a) => Probes ? Probes.rows(row, ...a) : row;
 import { inOrder, rowKey } from './rows.js';
-import { resourceInspection } from "./resource-inspection.js"; export { canvasColor } from "./said.js";
+import { resourceInspection, retainedAnswer } from "./resource-inspection.js"; export { canvasColor } from "./said.js";
 import { oneActivation, suppressedInvocation, imageEvent, releaseAsset as rel } from "./elements.js"; import { reloadOnGone } from "./generation-reload.js"; import { rt as Link } from "./rt-link.js";
 export { liveTime } from "./live-time.js";
 import { viewChildren, listRow, listItem, syncListItemRoles, listOwner, unwrapListItem, commitGuestOrigin, guestMessageAuthorized, pageGivenFiles, inertAncestor, sheetLeaves, liveById, renderMarkup, reportPlace, onSelection, textField, sourceField, editMenu, settleRadios, installFits, contextAt, scrollDrag } from "./navigation.js"; export { animationClocks, launchLocation } from "./navigation.js"; export { fontFamily } from './font-family.js'; // synced animations (LLP 1055.002, emit.rs `clocks`)
@@ -12,7 +12,7 @@ import { Docs, Head, head, markDocument, projectRoots, openTabs, unopened, tp } 
 let Paint; export function usePaint(pass) { Paint = pass; } export { conforms, eq, equal, Refusal, Failed }; // the compiler installs `Paint` only when a plan can layer boxes
 import * as Ov from "./overlay.js"; import { beatAfter } from "./beat.js"; import { heldAsks, heldReplies, Open, closeLetGo } from "./held.js"; export { heldAsks, heldReplies }; // optimistic writes shown over answers (the runner's writes.rs)
 export const writeRecords = () => Ov.Writes.list.map(w => ({ id: w.id, mutation: w.m.name, landed: !!w.landed })); // the agent's `state.writes`
-let Media = null; export function useMedia(m) { Media = m; } let Traversal = null; export function useTraversal(f) { Traversal = f; } // media.js only where a plan has a `video` or `audio`; router.js's `traversal` only where a plan has routes or a back control (router.js `navigationRoots`): a plan without either never links it (LLP 1047.002 D1)
+let Media = null; export function useMedia(m) { Media = m; } let Traversal = null, Nav = null; export function useTraversal(f, nav = null) { Traversal = f; Nav = nav; } // media.js only where a plan has a `video` or `audio`; router.js's `traversal` and the page's navigation.js (the link a deferred tree update keeps) only where a plan has routes or a back control (router.js `navigationRoots`): a plan without either never links them (LLP 1047.002 D1)
 let Links = null; export function useLinks(l) { Links = l; } // links.js only where a plan binds a link's `href`, `rel` or `target` (LLP 1047.002 D1)
 // The JS runtime is imported by name, so a bundle carries only what its generated plan uses.
 // Semantics kept from the runner (LLP 1005 §6):
@@ -212,7 +212,8 @@ export function commit(f, what = "commit", finished) {
   // What the commit would have sent and did not is refused, whatever stopped its tree update (a hook that threw, a
   // poisoned tree, a tail a view transition never ran): an answer's batches that wait for it too (ts-stream.js).
   let sent = 0; const unrun = why => { for (const go of out.splice(sent)) go.refused?.(why); };
-  const tail = Object.assign(() => { try { return update(); } finally { unrun("its tree update failed"); } }, { unrun: () => unrun("its tree update never ran") });
+  const link = Nav?.holdLink();
+  const tail = Object.assign(() => { try { return link ? Nav.withLink(link, update) : update(); } finally { unrun("its tree update failed"); } }, { unrun: () => unrun("its tree update never ran") });
   const update = () => { // the tree update; inside a view transition when it may hand on a shared element's name (LLP 1013.000 D7)
     for (const f of Before) f();
     Pres?.before({ ops: Probes?.gains() ?? [] }, Views); // presence measures what it tracks, and what may gain the row, before the tree changes (LLP 1063)
@@ -220,6 +221,7 @@ export function commit(f, what = "commit", finished) {
     for (const f of finishes) f(ok);
     settled(true); if (!ok) return Sched?.scan(false), false;
     clock.epoch++; Store.persist();
+    for (const r of Resources) retainedAnswer(r, say);
     while (sent < out.length) out[sent++](); if (Open.size) closeLetGo(inflight, say); for (const c of cmds) command(...c); Sounds.apply?.(cmds); Sounds.midiApply?.(cmds); Sounds.stood?.(); if (!Booting) { autofocus(); Input?.arrive(); } // after its focus commands, as the wasm host (focus.js); then the focus follows the route (input-glue.js; LLP 1115.000 D4.2)
     // An answer's `then` is armed, due now, once however many land: the next advance runs it as its own commit (LLP 1016.001 D3).
     for (const m of landed) if (m.then) { m.due = armedAt(); if (!clock.agent) drive(); }
@@ -242,7 +244,7 @@ const Scrolls = new Map(), Selects = new Set();
 /** What a commit does once its tree is in place: authored scrolls, then the
  * loaded pieces' publications (also after a list's report, list.js). */
 export function settled(inCommit) { drain(); markDocument(); Paint?.flush(); Present?.(); for (const f of After) f(); if (!inCommit && !Booting) autofocus(); } // a list's own mounts (list.js); a commit's scan follows its commands
-let Restoring = false, Booting = false; // `Restoring`: a refused commit's settle over what it put back, which asks nothing. The boot's own offsets are no reader's scroll (the web host hears none: its input opens after them): `scroll` skips one
+let Restoring = false, Booting = false; export const booting = () => Booting; // `Restoring`: a refused commit's settle over what it put back, which asks nothing. The boot's own offsets are no reader's scroll (the web host hears none: its input opens after them): `scroll` skips one
 function drain() {
   for (const [e, o] of Scrolls) for (const name in o) {
     const at = o[name];
@@ -441,12 +443,11 @@ function reply(t, name, source, held, f, next, gone) {
   };
 }
 const revalidated = (name, same) => `${name} answered: ${same ? "equal to its build-time answer" : "replaces its build-time answer"}`; // runner lines.rs
-/** A resource: its value, the arguments it settled with, one ticket in flight. A bake's answer is a first frame: `baked` asks at launch, as a native runner at `data_ready` (LLP 1048.003 D6; feed F24); a document's `kept` was asked for its page, and is asked again when its stream was open (LLP 1048.000 D6). */
-export function res(name, source, args, initial, initialArgs, type, ph, carried = false, member = false) { // `carried`: settled, not a bake to ask again — a dev reload's (checkpoint.js), an `else` row's (emit.rs)
+/** A resource: its value, the arguments it settled with, one ticket in flight. A bake's answer is a first frame: `baked` asks at launch, as a native runner at `data_ready` (LLP 1048.003 D6; feed F24); a document's `kept` was asked for its page, and is asked again when the page lists it as `open`, or when it read the store and the device's store holds the app's own entries; one that read the store is a store reader's (LLP 1048.000 D6). */
+export function res(name, source, args, initial, initialArgs, type, ph, carried = false, kept = keptAnswer(name, source, type)) { // `carried`: settled, not a bake to ask again — a dev reload's (checkpoint.js), an `else` row's (emit.rs); `kept`: the page's answer it starts from, a list element's as each.js finds it
   const ver = sig(0), pend = sig(false), fail = sig(null), cur = sig(false); // `cur`: `current(x)` (LLP 1161.001), its own signal: an answer equal to the placeholder changes no value
-  const kept = !member && checkpoint().kept?.get(name); // a list's checkpoint holds its aggregate; each member asks again
   if (kept) [initialArgs, initial] = kept;
-  const r = { name, source, type, member, value: initial, settled: initialArgs, pending: pend, baked: kept ? READER.has(source) || checkpoint().revalidate || checkpoint().open.has(name) || checkpoint().pending.has(name) : !carried && initialArgs !== undefined, ticket: null, forced: false, rev: false, store: false, origin: 0, marks: [], context: args.context ?? 0 }; // `marks`: the uploads it asked, `context`: how many of its last arguments are its `with` context (uploads.js)
+  const r = { name, source, type, value: initial, settled: initialArgs, pending: pend, baked: kept ? READER.has(source) || checkpoint().revalidate || kept[2] || kept[3] && Store.map.size > 0 : !carried && initialArgs !== undefined, ticket: null, forced: false, rev: false, store: !!kept?.[3], origin: 0, marks: [], context: args.context ?? 0 }; // `marks`: the uploads it asked, `context`: how many of its last arguments are its `with` context (uploads.js)
   Inspections.track(r, !kept && !carried, () => pend.n.v);
   const flag = (s, v, undo) => { if (!eq(s.n.v, v)) { undo?.push([s.n, s.n.v]); write(s.n, v); } }, release = () => { if (r.ticket) { say(`forget ticket ${r.ticket.id} (${name})`); r.ticket = null; } flag(pend, false); }, fails = (args, error, code, reason) => { r.failed = args; r.error = error; r.code = code; r.reason = reason; flag(fail, failure()); release(); say(`resource ${name} failed: ${error}`); Inspections.fail(r); return r.value; }, failure = () => r.failed ? [r.failed, r.code ?? "error", r.error ?? "it failed", r.reason ?? ""] : null; // `fail` holds the message too: a `failure(x)` reader is asked again when only it changes
   const hold = () => {
@@ -1375,7 +1376,7 @@ export function mount(f) {
   });
   // Under the agent, and in a render, the clock is the driver's: no timer runs by itself.
   clock.agent = agentMode(); if (!clock.agent && typeof window !== "undefined") reloadOnGone(window); // (a build kept no more: the page again, once)
-  Store.load();
+  Store.load(); if (Store.map.size && checkpoint().kept) { for (const r of Resources) { if (r.store) { r.baked = true; } } } // Ask again each page answer that read the store when the device's store holds the app's own entries, which the render never had (LLP 1048.000 D6); `res` does so for one made later. A dev reload's carried answers have no page checkpoint, so this rule does not apply to them, as in the runner's carried boot.
   let built = false;
   Adopt = !!(checkpoint().kept && root.firstElementChild);
   // Elapsed time continues from where a render's clock stopped.
@@ -1412,23 +1413,23 @@ export function mount(f) {
   for (const [e, v, c] of shown) if (e.isConnected) { if (e.type === "checkbox" || e.type === "radio") e.checked = c; else if (e.type !== "file") e.value = v; }
   for (const t of early) if (t.target.isConnected) t.type === "click" ? t.target.click() : t.target.dispatchEvent(new Event(t.type, { bubbles: true }));
 }
-/** The page's checkpoint (LLP 1048.000 D6): the answers its document used,
- * by resource name, so a resource admits the rendered value while its
- * arguments match, the open streams among them, and the time the render
- * stopped at. */
+/** The page's checkpoint (LLP 1048.000 D6): the time the render stopped at, and by resource name the `source` and `answers`
+ * its document used, each `[args, value, open, reads]`: one, or a list's elements', where a new element looks first at `next`. */
 let Checkpoint = null, READER = new Set(["exactViewport", "exactPage"]); // a document's answer from the reader's own device was the render's: `res` asks it again, as a bake's (LLP 1048.007 D2)
 export function checkpoint() {
   if (Checkpoint) return Checkpoint;
   Checkpoint = { kept: null };
   const el = typeof document !== "undefined" && document.querySelector('script[type="application/vnd.exact.checkpoint"]');
   if (!el) return Checkpoint;
-  const cp = JSON.parse(el.textContent); Checkpoint.revalidate = !!cp.revalidate; Checkpoint.open = new Set(cp.open); Checkpoint.pending = new Set(cp.pending); // a pending answer is asked again, as an open stream is (LLP 1048.000 D6)
-  Checkpoint.kept = new Map(cp.answers.map(([name, , args, value]) => [name, [value_(args), value_(value)]]));
+  const cp = JSON.parse(el.textContent), open = new Set(cp.open), readers = new Set(cp.readers); Checkpoint.revalidate = !!cp.revalidate; Checkpoint.kept = new Map();
+  cp.answers.forEach(([name, source, args, value], k) => { if (!Checkpoint.kept.has(name)) { Checkpoint.kept.set(name, { source, answers: [], next: 0 }); } Checkpoint.kept.get(name).answers.push([value_(args), value_(value), open.has(k), readers.has(k)]); });
   // A drive starts at zero even when its document was rendered on a wall clock.
   const driven = AGENT_ADMITTED && typeof location !== "undefined" && new URLSearchParams(location.search).has("agent") && !globalThis.__exactRender;
   Checkpoint.time = clock.now = driven ? 0 : cp.time || 0;
   return Checkpoint;
 }
+/** A declared resource's page answer when it names `source` and fits `type` (a list's element's: each.js `keptMember`). */
+function keptAnswer(name, source, type) { const kept = checkpoint().kept?.get(name), answer = kept?.source === source ? kept.answers[0] : undefined; return answer && (!type || conforms(answer[1], type)) ? answer : undefined; }
 /** A checkpoint value (`push_value`, host/web/src/page.rs) as a runtime value: lists and records are arrays, unit and `none` null, `some(v)` v. */
 const value_ = v => v === null || typeof v !== "object" ? v : Array.isArray(v) ? v.map(value_) : "r" in v ? v.r.map(value_) : "s" in v ? value_(v.s) : "n" in v ? Number(v.n) : null;
 // ---------------------------------------------------------------- the roster (runner/src/stdlib.rs)

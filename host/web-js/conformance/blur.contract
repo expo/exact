@@ -1,6 +1,6 @@
 // Synthetic conformance plan: the `blur` command. `blur()` drops the focus,
 // whoever holds it; `blur(id)` drops it only when that node holds it
-// (host/linux presenter, docs/contract-grammar.md#commands). A field that
+// (host/painted presenter, docs/contract-grammar.md#commands). A field that
 // commits on Enter calls `blur()` — the authoring bench's todo row (LLP 1087),
 // which the JavaScript target once left focused. Moving the focus from one
 // field to another runs the first's `blur`, then the second's `focus`, in DOM

@@ -607,6 +607,11 @@ from `setup` means only that the declared assets loaded, not that a frame drew
 (`if !hud.presented` in the view). It changes only at those moments, never per
 frame.
 
+A performance HUD reads the canvas's renderer, memory and audio facts through a
+separate resource, `exactCanvasPerformance("world")`, updated about once a
+second and only while a plan reads it; every field is an option and is `none`
+where the host cannot measure it ([the field list](../docs/contract-for-agents.md)).
+
 `w.emit("won")` separately queues a string for the canvas's `message=` handler.
 Undelivered events save in order but stay outside the simulation hash.
 
@@ -979,7 +984,7 @@ accessibility and controls; the world owns the canvas contents. A HUD button wit
 `action="jump"` holds that `Actions` action while pressed; its `aria-keyshortcuts`
 takes its chord (the key with exactly its modifiers) before the focused world hears
 it and presses the action once per keydown, never on its repeats, moving no focus,
-on every host (the rule `host/linux/src/presenter/shortcuts.rs` states). The bake warns
+on every host (the rule `host/painted/src/presenter/shortcuts.rs` states). The bake warns
 when `Actions` bind the same key. Show touch controls under
 `exactViewport().pointer == "coarse"` ([recipe](recipes/touch-controls.md)). Hosts consume
 declaration data without a build dependency on the engine or gameplay. The GPU

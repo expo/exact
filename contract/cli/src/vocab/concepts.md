@@ -1531,7 +1531,7 @@ component App
 More: apps/svg-gallery/app.contract (each element and attribute, drawn alike on every host but `foreignObject`)
 
 ## safe-area: the notch, the status bar and the home indicator
-names: env, env(), safe-area-inset, safe-area-inset-top, safe-area-inset-bottom, safe-area-inset-left, safe-area-inset-right, SafeAreaView, useSafeAreaInsets, react-native-safe-area-context, safeAreaInsets, notch, home indicator, home-indicator
+names: env, env(), safe-area-inset, safe-area-inset-top, safe-area-inset-bottom, safe-area-inset-left, safe-area-inset-right, SafeAreaView, useSafeAreaInsets, react-native-safe-area-context, safeAreaInsets, notch, home indicator, home-indicator, --exact-safe-area-inset-top, --exact-safe-area-inset-bottom, --exact-safe-area-inset-left, --exact-safe-area-inset-right, bar height, navigation bar height, headerHeight, useHeaderHeight, -exact-safe-area, ignoresSafeArea, contentInsetAdjustmentBehavior
 
 Inside a route, leave it unsaid: the host keeps the route's content clear of the status bar
 and its bars (UIKit's inset on the route's scroller, else the route's padding), and a
@@ -1541,6 +1541,18 @@ under the default `viewport-fit="auto"` it is 0, so `env()` padding inside a rou
 nothing; under the root's `viewport-fit="cover"` it is the device's insets, and a route's
 content goes under the bar unless its column pads `env(safe-area-inset-top)`. On the web it is
 the browser's. `env(-exact-layout-margins-inset-left)` is UIKit's layout margin.
+
+`var(--exact-safe-area-inset-top)` (and `-right`, `-bottom`, `-left`) is the safe area where
+the box is (LLP 1123 D9): inside a route, a tab or a sheet its own, the status bar, the bars
+and a large title included, as UIKit's `safeAreaInsets` and React Navigation's
+`useHeaderHeight` give it; outside every route the screen's, even where `env()` is 0. A
+background under the navigation bar is `margin-top="calc(-1 * var(--exact-safe-area-inset-top))"
+padding-top="var(--exact-safe-area-inset-top)"` on a box at the route's top. A route's
+clearance adds to its own padding unless that padding reads the inset (then the larger
+counts), and `-exact-safe-area="top"` (or `none`, or other edges) on the route turns it off,
+as SwiftUI's `ignoresSafeArea`: a scroller at the route's top then starts under the bar, and
+its first box pads `var(--exact-safe-area-inset-top)` itself. A box may set
+`--exact-safe-area-inset-bottom="0px"` for its subtree.
 
 - A scroller's last row sits its `padding-bottom` above UIKit's inset: subtract the inset
   from the original's gap rather than adding `env(safe-area-inset-bottom)`.

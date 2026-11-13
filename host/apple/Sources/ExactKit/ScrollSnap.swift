@@ -3,7 +3,7 @@
 // scroll that ends rests at. UIKit asks when a drag ends
 // (`IOS/ScrollSnapIOS.swift`), AppKit when a trackpad lifts or a wheel stops
 // (`Mac/ScrollSnapMac.swift`). The Linux family's is
-// `host/linux/src/presenter/snap.rs`, Android's `Scrolling.kt`'s `snapRest`.
+// `host/painted/src/presenter/snap.rs`, Android's `Scrolling.kt`'s `snapRest`.
 import CoreGraphics
 
 enum ScrollSnap {

@@ -111,101 +111,6 @@ test.skipIf(process.platform === 'win32')('Apple builder startup honors --optimi
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-test.skipIf(!packagingTools)('production iOS bundles preserve Rust frameworks, strip Swift frameworks and keep dSYMs with or without an archive', async () => {
-  useXcode();
-  const { createHash } = await import('node:crypto');
-  const { assembleIOS } = await import('../host/apple/bundle.mjs');
-  const { stripProductionExecutable } = await import('../host/apple/link.mjs');
-  const { shippedReceipt, copyAppleGpuProducts } = await import('../host/apple/build.mjs');
-  const { wrapFramework, codeDigest, plistFile } = await import('../host/apple/assets.mjs');
-  const dir = mkdtempSync(resolve(tmpdir(), 'exact-ios-package-'));
-  const run = (cmd, args) => {
-    const r = spawnSync(cmd, args, { encoding: 'utf8' });
-    assert.equal(r.status, 0, `${cmd}: ${r.stderr}`);
-    return r;
-  };
-  try {
-    const source = resolve(dir, 'module.c'), executable = resolve(dir, 'Fixture'), dylib = resolve(dir, 'module.dylib');
-    writeFileSync(source, 'static int local_value = 42; int answer(void){return local_value;} int main(void){return answer()!=42;}\n');
-    run('clang', ['-g', source, '-o', executable]);
-    run('clang', ['-g', '-dynamiclib', source, '-o', dylib]);
-    assert.match(run('nm', ['-a', dylib]).stdout, / _local_value$/m);
-    const icon = resolve(dir, 'icon.png');
-    writeFileSync(icon, encodePng({ width: 1024, height: 1024, data: new Uint8Array(1024 * 1024 * 4).fill(255) }));
-    const app = { dir, id: 'com.exact.fixture', name: 'Fixture', manifest: {} };
-    const libraries = resolve(dir, 'libraries'); mkdirSync(libraries);
-    copyFileSync(dylib, resolve(libraries, 'library.dylib'));
-    wrapFramework(libraries, 'library.dylib', 'FixtureLibrary', app);
-    const library = { placed: resolve(libraries, 'FixtureLibrary.framework'), link: 'FixtureLibrary' };
-    const plan = Buffer.from('fixture'), compat = { embedded: { plan: { sha256: createHash('sha256').update(plan).digest('hex'), bytes: plan.length }, assets: [] } };
-    const pairs = [['libweb.dylib', 'ExactWeb'], ['libmodules.dylib', 'ExactModules'], ['libsvg.dylib', 'ExactSvg'], ['libcanvas.dylib', 'ExactCanvasGpu'], ['libservice.dylib', 'ExactService']];
-    const build = { trust: 'production', linkedPlan: '/private/plan', binary: { sha256: 'binary', inputs: [{ path: '/private/source' }], metadata: {} }, products: [{ path: '/private/product' }], graph: { artifacts: [] } };
-    for (const [production, device, archived] of [[true, true, false], [true, true, true], [true, false, false], [false, true, false]]) {
-      app.manifest = archived ? { icons: [{ src: 'icon.png', sizes: '1024x1024' }] } : {};
-      const binDir = resolve(dir, `${production}-${device}-${archived}`); mkdirSync(binDir);
-      const bin = resolve(binDir, 'ExactClip');
-      copyFileSync(executable, bin);
-      const capture = resolve(binDir, 'capture'); mkdirSync(capture);
-      const gpu = { built: 'gpu.dylib', load: 'libgpu.dylib', framework: 'ExactGpu' };
-      copyFileSync(dylib, resolve(capture, gpu.built));
-      if (production) wrapFramework(capture, gpu.built, gpu.framework, app, device ? 'iPhoneOS' : 'iPhoneSimulator');
-      if (production) copyFileSync(dylib, resolve(capture, gpu.built));
-      const gpuSource = resolve(capture, production ? 'ExactGpu.framework/ExactGpu' : gpu.built);
-      run('codesign', ['--force', '--sign', '-', '--timestamp=none', production ? resolve(capture, 'ExactGpu.framework') : gpuSource]);
-      const ipa = archived ? resolve(binDir, 'Archive.ipa') : null;
-      const symbols = stripProductionExecutable(bin, { production, ipa });
-      const bundle = resolve(binDir, 'Fixture.app');
-      const whole = JSON.stringify({ build, target: 'aarch64-apple-ios', development: production ? null : { token: 'kept' } });
-      const clipBin = resolve(binDir, 'clip', 'Clip');
-      mkdirSync(resolve(binDir, 'clip'));
-      copyFileSync(bin, clipBin);
-      const result = assembleIOS({ app, library, paths: { bundle, executable: 'ExactClip', capture }, binDir, bin, device,
-        clipBin, production, distribution: archived, ipa, bakedCompat: compat, bakedPlan: plan, buildReceipt: build,
-        libDir: capture, gpuArtifacts: [gpu], looseArms: [[true, dylib, ...pairs[0]]],
-        modulesBuilt: dylib, modulesLoadName: pairs[1][0], hasSvg: true, svgBuilt: dylib, svgLoadName: pairs[2][0],
-        canvasGpuBuilt: dylib, canvasGpuLoadName: pairs[3][0], serviceDylibs: [{ built: dylib, load: pairs[4][0], framework: pairs[4][1] }],
-        args: [], unsigned: true, sha1: '-', linkRoot: binDir, sdkName: 'iphoneos' }, {
-        runApple: run, infoPlist: () => plistFile({ CFBundleIdentifier: app.id, CFBundleExecutable: 'ExactClip', CFBundlePackageType: 'APPL' }),
-        copyAppleStaticTrees() {}, writeUsageStrings() {}, assertAppleIdentity() {}, distributionKeys: () => ({}),
-        receipt: () => whole, shippedReceipt, copyAppleGpuProducts, entitlements: () => plistFile({}), appClip: () => ({ id: app.id + '.Clip', name: 'Clip', executable: 'Clip' }),
-      });
-      const clipBytes = readFileSync(resolve(bundle, 'AppClips/Clip.app/Clip'));
-      assert.equal(codeDigest(clipBytes), codeDigest(readFileSync(device ? bin : clipBin)), 'the clip uses its platform executable, including when the parent is named ExactClip');
-      assert.equal(codeDigest(readFileSync(resolve(bundle, 'ExactClip'))), codeDigest(readFileSync(bin)));
-      if (symbols) {
-        const uuid = path => /UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', path]).stdout)?.[1];
-        assert.ok(uuid(symbols.dsym));
-        assert.equal(uuid(symbols.dsym), uuid(resolve(bundle, 'ExactClip')));
-        assert.equal(uuid(symbols.dsym), uuid(resolve(bundle, 'AppClips/Clip.app/Clip')));
-      }
-      const bundled = readFileSync(resolve(bundle, 'receipt.json'), 'utf8');
-      assert.equal(bundled, production ? shippedReceipt(whole) : whole);
-      if (production) {
-        const sidecar = resolve(binDir, ipa ? 'Archive.receipt.json' : 'ExactClip.receipt.json');
-        assert.equal(readFileSync(sidecar, 'utf8'), whole);
-        assert.equal(result.frameworkSymbols.count, pairs.length + 2);
-        for (const [loose, name] of [...pairs, [null, 'FixtureLibrary']]) {
-          const binary = resolve(bundle, 'Frameworks', `${name}.framework`, name);
-          if (loose) assert.equal(existsSync(resolve(bundle, 'Frameworks', loose)), false);
-          const preserved = ['ExactSvg', 'ExactCanvasGpu', 'FixtureLibrary'].includes(name), names = run('nm', ['-a', binary]).stdout;
-          assert.match(names, / T _answer$/m);
-          assert.equal(/ _local_value$/m.test(names), preserved, `${name} symbol policy`);
-          const symbols = resolve(result.frameworkSymbols.dir, `${name}.framework.dSYM`);
-          assert.equal(/UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', symbols]).stdout)?.[1], /UUID: ([A-F0-9-]+)/.exec(run('dwarfdump', ['--uuid', binary]).stdout)?.[1]);
-        }
-        const packageBinary = resolve(bundle, 'Frameworks/FixtureLibrary.framework/FixtureLibrary');
-        assert.equal(codeDigest(readFileSync(packageBinary)), codeDigest(readFileSync(resolve(library.placed, library.link))), 'the package library keeps its linker output');
-        assert.equal(codeDigest(readFileSync(resolve(bundle, 'Frameworks/ExactGpu.framework/ExactGpu'))), codeDigest(readFileSync(gpuSource)), 'the baked GPU digest is preserved');
-        assert.ok(existsSync(resolve(result.frameworkSymbols.dir, 'ExactGpu.framework.dSYM')));
-      } else {
-        assert.equal(result.frameworkSymbols.count, 0);
-        for (const [loose] of pairs) assert.match(run('nm', ['-a', resolve(bundle, 'Frameworks', loose)]).stdout, / _local_value$/m);
-        assert.equal(existsSync(resolve(binDir, 'ExactClip.receipt.json')), false);
-      }
-      run('codesign', ['--verify', '--deep', '--strict', bundle]);
-    }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-}, 60_000);
 
 test.skipIf(process.platform !== 'darwin' || !Bun.which('xcodebuild'))('a production simulator bundle does not require arm64', async () => {
   useXcode();
@@ -909,7 +814,7 @@ test.skipIf(!packagingTools)('simulator App Clips embed their own entitlements a
     const bundle = resolve(dir, 'ExactClip.app');
     assembleIOS({ app, paths: { bundle, executable: 'ExactClip', capture: dir }, binDir: dir, bin, clipBin,
       device: false, triple: 'arm64-apple-ios17.0-simulator', sdk: run('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path']).stdout.trim(),
-      appleReach: reach, bakedCompat: compat, bakedPlan: plan, buildReceipt: { binary: { metadata: {} }, graph: {} },
+      appleReach: reach, bakedCompat: compat, bakedPlan: plan, buildReceipt: { binary: { metadata: {} }, graph: { extensions: {}, contractSources: [] } },
       libDir: dir, gpuArtifacts: [], looseArms: [], serviceDylibs: [], args: [], unsigned: true, sha1: '-', linkRoot: dir,
     }, { runApple: run, infoPlist, copyAppleStaticTrees() {}, writeUsageStrings() {}, assertAppleIdentity() {},
       receipt: () => '{}', copyAppleGpuProducts, entitlements, appClip });

@@ -573,7 +573,7 @@ impl DataSource for Module {
                 | DataError::BadArguments(e)
                 | DataError::UnknownSource(e)
                 | DataError::Interface(e)
-                | DataError::DeferredAtBake(e)
+                | DataError::DeferredAtBake { message: e, .. }
                 | DataError::Overrun(e)
                 | DataError::Failed(_, e, _),
             ) => exact_runner::DrawReply {

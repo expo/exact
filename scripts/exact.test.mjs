@@ -165,6 +165,12 @@ for (const device of [true, false]) {
       runApple(command, args) {
         if (command === 'plutil') return { stdout: JSON.stringify(readPlist(args.at(-1))) };
         assert.equal(command, 'xcrun');
+        if (args.includes('swiftc')) {
+          // Metadata fixtures replace the Swift link but still supply a binary for the privacy scan.
+          const built = spawnSync('clang', ['-x', 'c', '-', '-o', args[args.indexOf('-o') + 1]],
+            { input: 'int main(void) { return 0; }\n', encoding: 'utf8' });
+          assert.equal(built.status, 0, built.stderr);
+        }
         return { stdout: '' };
       }, sign(extension) { signed = extension; } });
     assert.equal(signed, resolve(bundle, 'PlugIns/ExactWidgets.appex'));
@@ -233,7 +239,7 @@ test.skipIf(!tools)('signed GPU framework upgrades refresh metadata before archi
     assert.equal(result.status, 0, result.stderr);
     return result.stdout;
   };
-  const app = { id: 'test.gpu', manifest: {} }, name = 'ExactGpu';
+  const app = { dir, id: 'test.gpu', manifest: {} }, name = 'ExactGpu';
   const source = resolve(dir, 'gpu.c'), product = resolve(dir, 'gpu.dylib');
   writeFileSync(source, 'int gpu_fixture(void){return 42;}\n');
   run('xcrun', ['--sdk', 'iphoneos', 'clang', '-target', 'arm64-apple-ios17.0', '-dynamiclib', source, '-o', product]);
@@ -288,7 +294,7 @@ test('--archive --embed does not stop after embed staging; plain --embed builds 
 });
 
 test.skipIf(!tools)('GPU archives hash the signed framework binary, including declared modules', () => inDir(dir => {
-  const app = { id: 'test.gpu', manifest: {} };
+  const app = { dir, id: 'test.gpu', manifest: {} };
   const digests = new Map();
   const source = resolve(dir, 'gpu.c');
   writeFileSync(source, 'int gpu_fixture(void){return 42;}\n');

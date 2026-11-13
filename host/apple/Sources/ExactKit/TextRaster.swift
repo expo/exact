@@ -247,15 +247,26 @@ struct TextRasterJob {
     /// The bitmap's space and its colours' peak (LLP 1100 D2, D8): extended
     /// sRGB (at half float) for a colour past SDR white, Display P3 for a
     /// wide one, else sRGB.
-    private func format(_ runs: [CTRun]) -> (space: CGColorSpace, headroom: Float, deep: Bool) {
+    static func format(_ paints: some Sequence<NSDictionary>) -> (space: CGColorSpace, headroom: Float, deep: Bool) {
         var wide = false, deep = false, headroom: Float = 0
         // ColorSync round-off at gamut boundaries must not widen ordinary white.
         let outside = { (color: CGColor) in
             color.components?.prefix(3).contains { $0 < -0.00001 || $0 > 1.00001 } == true
         }
-        for run in runs {
-            let attributes = CTRunGetAttributes(run) as NSDictionary
+        for attributes in paints {
             guard attributes[NSAttributedString.Key.exactHidden] as? Bool != true else { continue }
+            if let icon = attributes[NSAttributedString.Key.exactAtomIcon] as? TextAtomIcon,
+               !icon.tinted, let image = icon.image {
+                headroom = max(headroom, RasterImage.headroom(of: image))
+                deep = deep || image.bitsPerComponent > 8 || image.bitmapInfo.contains(.floatComponents)
+                if let space = image.colorSpace {
+                    wide = wide || space == Self.p3
+                    // Other profiles may reach beyond P3. Keep their converted
+                    // components in extended storage rather than clipping them.
+                    deep = deep || CGColorSpaceUsesExtendedRange(space)
+                        || (space != Self.p3 && space != Self.srgb && space != CGColorSpaceCreateDeviceRGB() && space.model != .monochrome)
+                }
+            }
             for key in [NSAttributedString.Key.foregroundColor, .strokeColor, .underlineColor, .strikethroughColor, .exactBackground, .exactShadow] {
                 let value = attributes[key]
                 let cg = Self.paintColor(value)
@@ -383,7 +394,7 @@ struct TextRasterJob {
         let width = Int(pixelWidth), height = Int(pixelHeight)
         // Truncation inserts runs whose paint need not occur in the source.
         let runs = lines.flatMap { CTLineGetGlyphRuns($0) as! [CTRun] }
-        let (space, headroom, deep) = format(runs)
+        let (space, headroom, deep) = Self.format(runs.lazy.map { CTRunGetAttributes($0) as NSDictionary })
         #if os(iOS) || os(tvOS)
         // Color profiles do not change coverage; only paints needing separate colors or HDR keep pixels
         var fallbackReason: UInt8 = 0
@@ -501,6 +512,7 @@ struct TextRasterJob {
             let ink = Self.paintColor(attributes[NSAttributedString.Key.foregroundColor])
             guard let ink, color == nil || color == ink,
                   attributes[NSAttributedString.Key.exactBackground] == nil, attributes[NSAttributedString.Key.exactShadow] == nil,
+                  attributes[NSAttributedString.Key.exactAtomIcon] == nil,
                   attributes[NSAttributedString.Key.shadow] == nil, attributes[NSAttributedString.Key.strokeColor] == nil,
                   ((attributes[NSAttributedString.Key.strokeWidth] as? NSNumber)?.doubleValue ?? 0) == 0,
                   [NSAttributedString.Key.underlineColor, .strikethroughColor].allSatisfy({ key in

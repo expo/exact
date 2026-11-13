@@ -619,11 +619,11 @@ final class FrameHealthCardView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     var layout: FrameHealthCardFace.Layout {
-        .init(width: bounds.width / scale, compact: compact, showsDetails: state.showsDetails, corners: topCorners)
+        .init(width: bounds.width / scale, compact: compact, showsDetails: state.showsDetails, corners: corners)
     }
-    /// The radii of the card's top corners in the face's points, whole: they change only as the card comes to or leaves
+    /// The radii of the card's corners in the face's points, whole: they change only as the card comes to or leaves
     /// a corner of the screen, where it follows the screen's rounding
-    private var topCorners: (topLeft: CGFloat, topRight: CGFloat) = (12, 12)
+    private var corners: (topLeft: CGFloat, topRight: CGFloat, bottomRight: CGFloat, bottomLeft: CGFloat) = (12, 12, 12, 12)
     private func face(_ point: CGPoint) -> CGPoint { CGPoint(x: point.x / scale, y: point.y / scale) }
     private func view(_ rect: CGRect) -> CGRect { rect.applying(CGAffineTransform(scaleX: scale, y: scale)) }
 
@@ -634,14 +634,15 @@ final class FrameHealthCardView: UIView {
             let span = band.band.span
             band.frame = view(CGRect(x: 0, y: span.lowerBound, width: layout.width, height: span.upperBound - span.lowerBound))
         }
-        // Redraw the header only when a top corner's radius changes: UIKit lays the card out again when it moves, with
-        // its corners already for where it is
+        // UIKit lays the card out again when it moves, with its corners already for where it is; the bands beside a
+        // corner whose radius changed draw again (`subject`)
         if #available(iOS 26.0, *) {
-            let corners = (topLeft: (effectiveRadius(corner: .topLeft) / scale).rounded(),
-                           topRight: (effectiveRadius(corner: .topRight) / scale).rounded())
-            if corners != topCorners {
-                topCorners = corners
-                setNeedsDisplay(view(CGRect(x: 0, y: 0, width: layout.width, height: 44)))
+            let radius = { (corner: UIRectCorner) in (self.effectiveRadius(corner: corner) / self.scale).rounded() }
+            let corners = (topLeft: radius(.topLeft), topRight: radius(.topRight), bottomRight: radius(.bottomRight),
+                bottomLeft: radius(.bottomLeft))
+            if corners != self.corners {
+                self.corners = corners
+                setNeedsDisplay()
             }
         }
         layoutDetails()
@@ -663,7 +664,8 @@ final class FrameHealthCardView: UIView {
     private func layoutDetails() {
         guard state.showsDetails, let palette else { return }
         let l = layout, area = view(l.detailsArea)
-        let height = FrameHealthCardFace.detailsHeight(width: l.width, rows: presentation.details, caption: presentation.detailsCaption) * scale
+        let height = FrameHealthCardFace.detailsHeight(width: l.width, rows: presentation.details, caption: presentation.detailsCaption,
+            clearing: l) * scale
         detailsScroll.frame = area
         detailsScroll.backgroundColor = UIColor(cgColor: palette.background)
         detailsScroll.contentSize = CGSize(width: area.width, height: max(area.height, height))
@@ -785,16 +787,16 @@ final class FrameHealthCardView: UIView {
     /// What a band shows: the card's size, scale and palette, and the state it draws.
     private func subject(_ band: FrameHealthCardFace.Band) -> String {
         let s = state, p = presentation, d = { (value: Any?) in String(describing: value) }
-        let common = "\(layout.width) \(scale) \(compact) \(s.showsDetails) \(palettes)"
+        let common = "\(layout.width) \(scale) \(compact) \(s.showsDetails) \(palettes)", bottom = "\(corners.bottomRight) \(corners.bottomLeft)"
         switch band {
-        case .header: return "\(common) \(s.status) \(d(s.pressed)) \(d(s.hovered)) \(topCorners)"
+        case .header: return "\(common) \(s.status) \(d(s.pressed)) \(d(s.hovered)) \(corners.topLeft) \(corners.topRight)"
         case .context: return "\(common) \(s.request) \(s.display)"
         case .figures: return "\(common) \(s.rows) \(s.unit)"
-        case .pacing: return "\(common) \(s.pacing) \(s.pacingName) \(s.pacingWindow)"
+        case .pacing: return "\(common) \(s.pacing) \(s.pacingName) \(s.pacingWindow) \(compact ? bottom : "")"
         case .toolbar: return "\(common) \(s.table) \(d(s.pressed)) \(d(s.hovered))"
         case .charts:
-            return s.table ? "\(common) table \(p.columns) \(p.table) \(p.caption)"
-                : "\(common) \(d(expanded)) \(d(p.input.map { [$0.rateTop, $0.timeTop] })) \(d(p.input?.screen))"
+            return s.table ? "\(common) table \(p.columns) \(p.table) \(p.caption) \(bottom)"
+                : "\(common) \(d(expanded)) \(d(p.input.map { [$0.rateTop, $0.timeTop] })) \(d(p.input?.screen)) \(bottom)"
         }
     }
 
@@ -811,9 +813,10 @@ final class FrameHealthCardView: UIView {
         guard !compact, !state.showsDetails else { return }
         let area = layout.chartArea, p = presentation
         if state.table {
-            FrameHealthCardFace.table(ctx, area, columns: p.columns, rows: p.table, caption: p.caption, palette: palette)
+            FrameHealthCardFace.table(ctx, area, columns: p.columns, rows: p.table, caption: p.caption, palette: palette,
+                within: layout.bottomOutline)
         } else if let input = p.input {
-            FrameHealthCardDrawing.charts(ctx, area, input, expanded: expanded, palette: palette)
+            FrameHealthCardDrawing.charts(ctx, area, input, expanded: expanded, palette: palette, within: layout.bottomOutline)
         }
     }
 

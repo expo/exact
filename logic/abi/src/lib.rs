@@ -618,7 +618,7 @@ fn encode_result(w: &mut Writer, result: Result<Answer, DataError>) {
                 // (an overrun is exact-js's; a Rust module's seam never makes one)
                 DataError::Unavailable(s)
                 | DataError::Interface(s)
-                | DataError::DeferredAtBake(s)
+                | DataError::DeferredAtBake { message: s, .. }
                 | DataError::Overrun(s)
                 | DataError::Failed(_, s, _) => (4, s),
             };

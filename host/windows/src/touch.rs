@@ -4,7 +4,7 @@
 //! where Windows would make mouse input of them
 //! ([WM_POINTERDOWN](https://learn.microsoft.com/windows/win32/inputmsg/wm-pointerdown)):
 //! these events are all the app hears of a touch screen or a pen.
-use exact_linux::{presenter::PointerKind, Presenter};
+use exact_painted::{presenter::PointerKind, Presenter};
 use exact_runner::DataSource;
 
 /// What a pointer message says of a contact (winit's `TouchPhase`).
@@ -138,7 +138,7 @@ mod tests {
             assert!(!from_touch_or_pen(extra as isize), "{extra:#x}");
         }
     }
-    use exact_linux::presenter::PainterChoice;
+    use exact_painted::presenter::PainterChoice;
     use exact_runner::Value;
 
     const APP: &str = "component App

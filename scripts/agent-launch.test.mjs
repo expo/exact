@@ -676,7 +676,7 @@ const other = 'http://127.0.0.1:4400';`;
   expect(next).toContain('net.fetch https://other.example');
   expect(next).toContain("const other = 'http://127.0.0.1:4400'");
   expect(next).toContain("// const origin = 'http://comment'");
-  expect(() => injectBackendOrigin('const origin = compute();', 'http://new', parseSync)).toThrow(/top-level literal/);
+  expect(() => injectBackendOrigin('const origin = compute();', 'http://new', parseSync)).toThrow(/top-level const origin/);
   for (const init of ["'http://127.0.0.1:4400' as const", "('http://127.0.0.1:4400' satisfies string)", '`http://127.0.0.1:4400` as const']) {
     const wrapped = `export const origin = ${init}; export const grants = \`net.fetch \${origin}\`;`;
     expect(literalBackendOrigin(wrapped, parseSync)).toBe('http://127.0.0.1:4400');
@@ -1380,37 +1380,28 @@ test('permission and bind values do not occupy the gallery command word', async 
   }
 });
 
-test('an APK with Maven libraries refuses missing locks before any native build work', async () => {
-  const { androidLockCommand, buildApk } = await import('./agent-android.mjs');
+test('missing Maven locks name the app command and require both lock and verification files', async () => {
+  const { androidLockCommand, mavenLocksPresent } = await import('./agent-android.mjs');
   const dir = mkdtempSync(resolve(tmpdir(), 'exact-maven-')), error = console.error, said = [];
   try {
     console.error = line => said.push(line);
-    mkdirSync(resolve(dir, 'node_modules/@exact'), { recursive: true });
-    symlinkSync(resolve(import.meta.dir, '../packages/in-app-browser'), resolve(dir, 'node_modules/@exact/in-app-browser'), 'dir');
-    writeFileSync(resolve(dir, 'package.json'), JSON.stringify({ dependencies: { '@exact/in-app-browser': '*' } }));
-    writeFileSync(resolve(dir, 'app.ts'), 'import { openBrowser } from "@exact/in-app-browser";');
-    const app = { dir, name: 'shop', crate() { throw new Error('native build reached'); } };
-    for (const game of [false, true]) {
-      app.manifest = game ? { game: {} } : {};
-      expect(buildApk(app, {}, 'release')).toBeNull();
-    }
+    const app = { dir, name: 'shop' }, maven = ['androidx.browser:browser:1.9.0'];
+    expect(mavenLocksPresent(app, maven)).toBe(false);
     const root = resolve(import.meta.dir, '..');
     expect(said.at(-1)).toContain(`by running in '${root}': bun scripts/agent-android.mjs build 'shop' --apk --write-locks, with EXACT_APP_DIR set to '${dir}',`);
-    // An app inside the checkout that is not `apps/<name>` is named by its directory too.
     expect(androidLockCommand({ dir: resolve(root, 'packages/camera/test/fixture'), name: 'fixture' })).toBe(`in '${root}': bun scripts/agent-android.mjs build 'fixture' --apk --write-locks, with EXACT_APP_DIR set to '${resolve(root, 'packages/camera/test/fixture')}'`);
     expect(androidLockCommand({ dir: resolve(root, 'apps/caltrain'), name: 'caltrain' })).toBe(`in '${root}': bun scripts/agent-android.mjs build 'caltrain' --apk --write-locks`);
     writeFileSync(resolve(dir, 'exact.mjs'), '');
-    expect(buildApk(app, {}, 'host-dev')).toBeNull();
+    expect(mavenLocksPresent(app, maven)).toBe(false);
     expect(said.at(-1)).toContain(`by running in '${dir}': bun exact.mjs android --write-locks,`);
     for (const file of ['gradle.lockfile', 'gradle-verification.xml']) {
       writeFileSync(resolve(dir, file), 'locked');
-      if (file === 'gradle.lockfile') expect(buildApk(app, {}, 'release')).toBeNull();
+      if (file === 'gradle.lockfile') expect(mavenLocksPresent(app, maven)).toBe(false);
     }
-    expect(() => buildApk(app, {}, 'release')).toThrow('native build reached');
+    expect(mavenLocksPresent(app, maven)).toBe(true);
     rmSync(resolve(dir, 'gradle.lockfile'));
-    expect(() => buildApk(app, {}, 'release', true)).toThrow('native build reached');
-    writeFileSync(resolve(dir, 'app.ts'), '');
-    expect(() => buildApk(app, {}, 'release')).toThrow('native build reached');
+    expect(mavenLocksPresent(app, maven)).toBe(false);
+    expect(mavenLocksPresent(app, [])).toBe(true);
   } finally { console.error = error; rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -1422,4 +1413,14 @@ test('a widget address carries a configuration of parameter names to values', as
   expect(parsed.argv).toEqual(['ios', 'state']);
   for (const bad of ['three', '[]', '{"categories":3}'])
     expect(() => widgetArguments(['ios', 'widget', 'plan', '--configuration', bad, 'state'])).toThrow('widget --configuration: expected a JSON object');
+});
+
+
+test('a backend flag keeps its source through child builds and an environment override replaces it', async () => {
+  const { backendOriginSelection, selectBackendOrigin } = await import('../js/bake/src/typescript.mjs');
+  const env = {};
+  selectBackendOrigin('https://chosen.example/', env);
+  expect(backendOriginSelection('.', env)).toEqual({ origin: 'https://chosen.example', source: '--backend' });
+  env.EXACT_BACKEND_ORIGIN = 'https://other.example';
+  expect(backendOriginSelection('.', env)).toEqual({ origin: 'https://other.example', source: 'EXACT_BACKEND_ORIGIN' });
 });

@@ -33,6 +33,7 @@ pub struct Skipped {
 pub const HAIRLINE: &str = "var(--exact-hairline, 1px)";
 
 /// The `cssText` for a node's set rows, plus what was skipped.
+/// Keep `em` for the browser: a control's font can differ from the kernel's.
 pub fn css_text(style: &StyleProps, font_names: &[String]) -> (String, Vec<Skipped>) {
     css_text_in(style, font_names, false)
 }
@@ -51,7 +52,11 @@ fn css_text_in(
 ) -> (String, Vec<Skipped>) {
     let authored = |out: &mut String, id| {
         use exact_kernel::style::relative::Unit;
-        let Some((unit, n)) = style.relative.get(id).filter(|_| relative) else {
+        let Some((unit, n)) = style
+            .relative
+            .get(id)
+            .filter(|(unit, _)| relative || *unit == Unit::Em)
+        else {
             return false;
         };
         match unit {
@@ -474,6 +479,9 @@ fn css_text_in(
             // boundary's tuple (LLP 1121 D7): nothing to write, none skipped (F30).
             (StyleId::RotateAxis | StyleId::TranslateZ | StyleId::TranslatePercent, _) => {}
             (StyleId::Mode, _) => {}
+            // @ref LLP 1123 D4 — no host chrome covers a page the browser
+            // lays out: nothing is cleared, so there is nothing to turn off.
+            (StyleId::SafeArea, _) => {}
             // Where a grouped row's separator starts (index.html), and which
             // way a leading symbol moves it, inherited as the direction is.
             (StyleId::Direction, RowValue::Enum(dir)) => {
@@ -768,6 +776,12 @@ fn spell_property(out: &mut String, id: StyleId) {
         StyleId::HitSlopRight => return out.push_str("--exact-hit-slop-right"),
         StyleId::HitSlopBottom => return out.push_str("--exact-hit-slop-bottom"),
         StyleId::HitSlopLeft => return out.push_str("--exact-hit-slop-left"),
+        // @ref LLP 1123 D9 — the safe area where a box is, as an author
+        // sets it: index.html registers each as an inherited length.
+        StyleId::LocalInsetTop => return out.push_str("--exact-safe-area-inset-top"),
+        StyleId::LocalInsetRight => return out.push_str("--exact-safe-area-inset-right"),
+        StyleId::LocalInsetBottom => return out.push_str("--exact-safe-area-inset-bottom"),
+        StyleId::LocalInsetLeft => return out.push_str("--exact-safe-area-inset-left"),
         StyleId::PositionType => return out.push_str("position"),
         StyleId::BackdropFilter => return out.push_str("backdrop-filter"),
         StyleId::SvgMask => return out.push_str("mask"),

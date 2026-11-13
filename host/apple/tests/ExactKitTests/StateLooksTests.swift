@@ -215,6 +215,66 @@ final class StateLooksTests: XCTestCase {
         XCTAssertEqual(mounted.style["text_color"], ink(white))
     }
 
+    /// A view a batch moves out from under a node while its look holds gives
+    /// the look's colour back: at once, as it is no longer below, and the
+    /// look ending later lends it nothing.
+    func testAViewMovedOutGivesTheLookColourBack() throws {
+        let (p, v, below) = try colourFixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 7, "kind": "view", "style": ["text_color": white]],
+            ["op": "roots", "ids": [1, 7]],
+            ["op": "frame", "id": 7, "x": 0.0, "y": 200.0, "w": 200.0, "h": 40.0],
+        ]))
+        p.setHoverPath([v])
+        XCTAssertEqual(below[0].style["text_color"], ink(red))
+        p.apply(wireBatch([["op": "children", "id": 1, "ids": [3, 4]], ["op": "children", "id": 7, "ids": [2]]]))
+        XCTAssertEqual(below[0].style["text_color"], ink(white), "moved out: its own again")
+        p.setHoverPath([])
+        XCTAssertEqual(below[0].style["text_color"], ink(white))
+    }
+
+    /// A mode boundary (`-exact-mode`) writes the colour around it again in
+    /// its own tuple, a value of its own: it and the views below it that
+    /// take it are lent the look's colour, as on the web.
+    func testAModeBoundaryIsLentTheLookColour() throws {
+        let (p, v, _) = try colourFixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 8, "kind": "view", "style": ["text_color": green, "mode": 2, "written": ["mode"]]],
+            ["op": "create", "id": 9, "kind": "text", "props": ["text": "Pinned"], "style": ["text_color": green, "mode": 2]],
+            ["op": "children", "id": 8, "ids": [9]],
+            ["op": "children", "id": 1, "ids": [2, 3, 4, 8]],
+            ["op": "frame", "id": 8, "x": 0.0, "y": 80.0, "w": 200.0, "h": 20.0],
+            ["op": "frame", "id": 9, "x": 0.0, "y": 0.0, "w": 200.0, "h": 20.0],
+        ]))
+        let pin = try XCTUnwrap(p.views[8]), text = try XCTUnwrap(p.views[9])
+        p.setHoverPath([v])
+        XCTAssertEqual([pin.style["text_color"], text.style["text_color"]], [ink(red), ink(red)])
+        p.setHoverPath([])
+        XCTAssertEqual([pin.style["text_color"], text.style["text_color"]], [ink(green), ink(green)])
+    }
+
+    /// A look's `color="unset"` is CSS's `inherit`: the node and the views
+    /// below it that take its colour show the parent's while it holds.
+    func testAnUnsetLookColourIsTheParents() throws {
+        let (p, _) = try fixture()
+        p.apply(wireBatch([
+            ["op": "create", "id": 10, "kind": "view", "style": ["text_color": blue]],
+            ["op": "create", "id": 11, "kind": "view", "style": ["text_color": white, "looks": ["hover": ["text_color": NSNull()]]]],
+            ["op": "create", "id": 12, "kind": "text", "props": ["text": "Kid"], "style": ["text_color": white]],
+            ["op": "children", "id": 10, "ids": [11]],
+            ["op": "children", "id": 11, "ids": [12]],
+            ["op": "roots", "ids": [1, 10]],
+            ["op": "frame", "id": 10, "x": 0.0, "y": 200.0, "w": 200.0, "h": 60.0],
+            ["op": "frame", "id": 11, "x": 0.0, "y": 0.0, "w": 200.0, "h": 40.0],
+            ["op": "frame", "id": 12, "x": 0.0, "y": 0.0, "w": 200.0, "h": 20.0],
+        ]))
+        let node = try XCTUnwrap(p.views[11]), kid = try XCTUnwrap(p.views[12])
+        p.setHoverPath([node])
+        XCTAssertEqual([node.style["text_color"], kid.style["text_color"]], [ink(blue), ink(blue)])
+        p.setHoverPath([])
+        XCTAssertEqual([node.style["text_color"], kid.style["text_color"]], [ink(white), ink(white)])
+    }
+
     /// A re-entrant hover (an ancestor's enter replacing the path) publishes
     /// only the newer path's looks.
     func testAReentrantHoverShowsOnlyTheNewerPathsLooks() throws {

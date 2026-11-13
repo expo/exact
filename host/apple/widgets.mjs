@@ -1,3 +1,4 @@
+import { writePrivacyManifest } from './privacy.mjs';
 // @ref LLP 1126 D2/D8 — one runtime framework, one generated widget bundle.
 import { dirname, resolve } from 'node:path';
 import { mkdirSync, readdirSync, existsSync, writeFileSync, readFileSync, copyFileSync, cpSync, rmSync, renameSync, statSync, lstatSync, utimesSync } from 'node:fs';
@@ -404,6 +405,8 @@ export function packageWidgets({ app, bundle, shared, directory, sdk, triple, de
     cpSync(metadata, resolve(extensionResources, 'Metadata.appintents'), { recursive: true });
   }
   stripProductionExecutable(extensionBinary, { production, dsym: resolve(symbols, 'ExactWidgets.appex.dSYM'), sourceDsym: `${extensionBinary}.dSYM` });
+  writePrivacyManifest(platform === 'macos' ? resolve(extension, 'Contents/Resources') : extension,
+    [platform === 'macos' ? resolve(extension, 'Contents/MacOS/ExactWidgets') : resolve(extension, 'ExactWidgets')], { mac: platform === 'macos' });
   sign(extension, entitlementPath);
 }
 
@@ -444,5 +447,6 @@ export function packageAlarmExtension({ app, bundle, directory, sdk, triple, dev
     '-module-cache-path', extensionModuleCache, ...(!device ? ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__entitlements', '-Xlinker', entitlementPath] : []),
     ...alarmArgs(alarm), source, '-o', resolve(extension, 'ExactWidgets')]);
   stripProductionExecutable(resolve(extension, 'ExactWidgets'), { production, dsym: resolve(symbols, 'ExactWidgets.appex.dSYM'), sourceDsym: resolve(extension, 'ExactWidgets.dSYM') });
+  writePrivacyManifest(extension, [resolve(extension, 'ExactWidgets')]);
   sign(extension, entitlementPath);
 }

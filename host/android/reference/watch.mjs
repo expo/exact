@@ -27,7 +27,7 @@ const stateFile = process.env.EXACT_MATERIAL_STATE ?? join(homedir(), '.cache/ex
 const state = existsSync(stateFile) ? JSON.parse(readFileSync(stateFile, 'utf8')) : { filed: [], checked: null, passing: null };
 const save = () => { mkdirSync(dirname(stateFile), { recursive: true }); writeFileSync(stateFile, JSON.stringify(state, null, 2)); };
 /** What a change must touch for the oracle to run again. */
-const WATCHED = ['host/linux/src/paint/', 'host/linux/src/presenter/', 'host/android/', 'apps/material-specimens/',
+const WATCHED = ['host/painted/src/paint/', 'host/painted/src/presenter/', 'host/android/', 'apps/material-specimens/',
   'kernel/tables/schema.json'];
 const MAVEN = 'https://dl.google.com/android/maven2/androidx/compose';
 

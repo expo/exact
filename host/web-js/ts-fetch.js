@@ -68,7 +68,37 @@ function fetchNow(input, options, protocols) {
   if (answering.mapper || answering.mapperCall) return Promise.reject(new Error(answering.mapper ? "fetch() is unavailable in a socket's mapper: it answers each frame now" : "fetch() is unavailable in a stream's mapper: fetch in the answer that opens the stream"));
   const call = answering.call;
   if (call?.mutation) {
-    if (call.socketConflict || call.socketOps?.length) { call.socketConflict = true; return Promise.reject(new Error(SOCKET_AND_FETCH)); }
+    // An answer in flight may fetch in a later turn though its source sent, as natively (LLP 1016.000 D7, amended
+    // 2026-11-12). The fetch waits for the commit that asked the answer: its refusal takes the frames back, and this too.
+    const later = !call.turn && call.flight && !call.socketConflict && call.socketOps?.length > 0;
+    // A stream's is refused, as it was (a mutation that sent opens none), and refuses nothing the answer goes on to do.
+    if (later && options?.exactStream !== undefined) return Promise.reject(new Error(SOCKET_AND_FETCH));
+    // An answer let go since (while it waited too: this runs again as it is released) fetches nothing, as it sends nothing.
+    if (later && !answers(call)) return Promise.reject(new FetchError('Aborted', 'the answer was let go before this fetch'));
+    if (later && call.stood === false) return Promise.reject(new Error('fetch(): the commit that asked this answer was refused'));
+    if (later && !call.stood) {
+      // The request is the one `fetch` was given: what it reads of its options is read now, as a mutation's always is.
+      let target, init;
+      try {
+        init = options?.exactBodyFrom === undefined && options?.exactBodyTo === undefined ? captured(options) : held(options);
+        // A `Request` is copied: its headers can change and its body be read meanwhile. The signal stays the one
+        // given, since a copy's is another, whose `AbortSignal.timeout` deadline `signalDeadline` does not know.
+        // One whose body was read or is held by a reader cannot be copied. It is a request only when the options
+        // give another body, and is then kept, with its headers as they are now; otherwise it is refused now, as
+        // `fetch` refuses it, whatever its body becomes while this waits. Left unequal to a fetch that did not
+        // wait (LLP 1016.000, the amendment of 2026-11-12): with `exactBodyFrom` or `exactBodyTo`, that fetch
+        // looks at a reader's hold only after its file work, and takes no `body` its options inherit.
+        if (input instanceof Request) {
+          init = Object.assign(init ?? {}, init?.signal === undefined ? { signal: input.signal } : null);
+          if (!input.bodyUsed && !input.body?.locked) target = input.clone();
+          else if (init.body == null) throw new FetchError('Network', 'fetch(): the Request\'s body was read or is locked');
+          else { target = input; if (init.headers === undefined) init.headers = new Headers(input.headers); }
+        } else target = String(input);
+      } catch (e) { return Promise.reject(e); }
+      return new Promise((go, no) => (call.waiting ??= []).push(Object.assign(go, { refused: why => no(new Error(`fetch(): the commit that asked this answer was refused: ${why}`)) })))
+        .then(() => asCall(call, () => fetchNow(target, init, protocols)));
+    }
+    if (!later && (call.socketConflict || call.socketOps?.length)) { call.socketConflict = true; return Promise.reject(new Error(SOCKET_AND_FETCH)); }
     call.fetched = true;
     // A stream only registers with its answer, which ts-data.js then refuses;
     // a body from a file is read after its source returns, and checks then.
@@ -101,6 +131,14 @@ function captured(options) {
   else if (typeof FormData === 'function' && body instanceof FormData) { init.body = new FormData(); for (const [k, v] of body) init.body.append(k, v); }
   return init;
 }
+// What a file's fetch reads of its options when it is called (`fetchOf`), read now: its own fields stay own and
+// the inherited ones inherited, as the check of a file's request tells them apart.
+const INHERITED = ['exactBodyFrom', 'exactBodyTo', 'exactIndependentHttp', 'method', 'body', 'exactStream', 'signal', 'exactTimeout', 'cache'];
+function held(options) {
+  const own = ownWithout(options, []), inherited = {};
+  for (const key of [...INHERITED, 'redirect']) if (!Object.hasOwn(own, key)) inherited[key] = options[key];
+  return Object.assign(Object.create(inherited), own);
+}
 // The origin a fetch carries (LLP 1133.036 D6): its answer's, or, after the answer's first await, where no call is
 // traced, the least privileged of the answers in flight (LLP 1133.002 D12).
 export const activeCall = () => answering.call ?? [...answering.untraced].find(c => !c.settled);
@@ -116,8 +154,7 @@ function fetchOf(input, options, call, protocols) {
       // Keep inherited validation fields inherited, but take their values now.
       const own = ownWithout(options, ['redirect']);
       const inherited = {};
-      for (const key of ['exactBodyFrom', 'exactBodyTo', 'exactIndependentHttp', 'method', 'body', 'exactStream', 'signal', 'exactTimeout', 'cache'])
-        if (!Object.hasOwn(own, key)) inherited[key] = options[key];
+      for (const key of INHERITED) if (!Object.hasOwn(own, key)) inherited[key] = options[key];
       init = Object.assign(Object.create(inherited), own);
       ms = init.exactTimeout;
       if (ms !== undefined && (!Number.isInteger(ms) || ms < 1 || ms > 3600000)) throw new TypeError('exactTimeout must be an integer number of milliseconds from 1 to 3600000');

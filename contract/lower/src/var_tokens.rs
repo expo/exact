@@ -13,6 +13,9 @@
 //!   never ships the fallback (`tamber-unknown-token`, naming the design's
 //!   tokens of the kinds the row takes). The refused row is dropped, so the
 //!   passes after the loader say nothing more of it.
+//! - The host's own custom properties, the safe area where a box is
+//!   (`var(--exact-safe-area-inset-top)`, LLP 1123 D9), are no token: they
+//!   are left for the kernel, which reads them.
 //! - A component's argument, a `fn`'s result and a `derive`'s value that is
 //!   one `var()` naming a token is that token, as a row reads it once the
 //!   component is expanded or the call made. Any other argument is
@@ -453,6 +456,9 @@ fn text(
                 name,
                 fallback,
             } => {
+                if host_property(&name) {
+                    continue;
+                }
                 if !tokens.declares(&name) {
                     return Err(Why::Unknown(name, fallback.is_some()));
                 }
@@ -470,6 +476,14 @@ fn text(
     }
     out.push_str(&text[at..]);
     Ok(Some((out, fallbacks)))
+}
+
+/// Whether `name` (after its `--`) is a custom property the host sets.
+fn host_property(name: &str) -> bool {
+    let prefix = exact_kernel::style::env::LOCAL_PREFIX.trim_start_matches('-');
+    name.strip_prefix(prefix)
+        .and_then(exact_kernel::style::Edge::from_name)
+        .is_some()
 }
 
 /// Each `var(` in `text` outside a quoted string, in order.
@@ -724,6 +738,19 @@ mod tests {
         // A name a template's hole completes.
         let t = tokens(&["ink"]);
         assert_eq!(text("var(--", &t, true, &mut None), Err(Why::Computed));
+    }
+
+    #[test]
+    fn the_hosts_safe_area_is_left_for_the_kernel() {
+        let row = "calc(-1 * var(--exact-safe-area-inset-top)) var(--ink)";
+        assert_eq!(
+            written(row).unwrap().as_deref(),
+            Some("calc(-1 * var(--exact-safe-area-inset-top)) ink")
+        );
+        assert_eq!(
+            written("var(--exact-safe-area-inset-middle)"),
+            Err(Why::Unknown("exact-safe-area-inset-middle".into(), false))
+        );
     }
 
     #[test]

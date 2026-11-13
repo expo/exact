@@ -69,44 +69,6 @@ theorem GoodR.toW {α} {E : Err → Prop} {P : α → Prop} {r : Result α}
   | ok a => exact h
   | error e => exact hE e h (hn e rfl)
 
-/-- Values pairwise of types. -/
-def ValTyL (p : Program) : List Value → List Ty → Prop
-  | [], [] => True
-  | v :: vs, t :: ts => ValTy p v t ∧ ValTyL p vs ts
-  | _, _ => False
-
-section
-variable {p : Program} {v : Value}
-theorem ValTy.num_inv (h : ValTy p v .number) : ∃ f, v = .num f := by cases v <;> simp_all [ValTy]
-theorem ValTy.str_inv (h : ValTy p v .string) : ∃ s, v = .str s := by cases v <;> simp_all [ValTy]
-theorem ValTy.bool_inv (h : ValTy p v .bool) : ∃ b, v = .bool b := by cases v <;> simp_all [ValTy]
-theorem ValTy.list_inv {a} (h : ValTy p v (.list a)) : ∃ xs, v = .list xs ∧ ValTys p xs a := by
-  cases v <;> simp_all [ValTy]
-theorem ValTy.option_inv {a} (h : ValTy p v (.option a)) : v = .none ∨ ∃ w, v = .some w ∧ ValTy p w a := by
-  cases v <;> simp_all [ValTy]
-theorem ValTy.record_inv {s} (h : ValTy p v (.record s)) :
-    ∃ vs sh, v = .record s vs ∧ p.shapes.find? (·.name == s) = .some sh ∧ FieldsTy p vs sh.fields := by
-  cases v <;> simp [ValTy] at h
-  case record s' vs => obtain ⟨rfl, sh, h1, h2⟩ := h; exact ⟨vs, sh, rfl, h1, h2⟩
-theorem ValTyL.nil_inv {vs : List Value} (h : ValTyL p vs []) : vs = [] := by
-  cases vs <;> simp_all [ValTyL]
-theorem ValTyL.cons_inv {vs : List Value} {t ts} (h : ValTyL p vs (t :: ts)) :
-    ∃ w ws, vs = w :: ws ∧ ValTy p w t ∧ ValTyL p ws ts := by
-  cases vs <;> simp_all [ValTyL]
-  exact ⟨_, _, ⟨rfl, rfl⟩, h⟩
-/-- A list literal's items, each of its own type, are of the type they meet in. -/
-theorem ValTyL.unifyAll : ∀ {vs : List Value} {ts : List Ty} {u : Ty},
-    ValTyL p vs ts → Ty.unifyAll ts = .some u → ValTys p vs u
-  | [], [], _, _, _ => trivial
-  | v :: vs, t :: ts, u, h, hu => by
-    simp only [ValTyL] at h
-    simp only [Ty.unifyAll, Option.bind_eq_some_iff] at hu
-    obtain ⟨w, hw, hu⟩ := hu
-    have hle := Ty.unify_le hu
-    exact ⟨h.1.mono hle.1, ValTys.of_mem fun x hx => ((ValTyL.unifyAll h.2 hw).mem x hx).mono hle.2⟩
-  | [], _ :: _, _, h, _ | _ :: _, [], _, h, _ => by simp [ValTyL] at h
-end
-
 theorem display_ok {p : Program} {v : Value} {t : Ty} (h : ValTy p v t) (ht : t.displayable = true) :
     ∃ s, v.display = .ok s := by
   cases t <;> simp [Ty.displayable] at ht
@@ -172,13 +134,13 @@ theorem stdlib_unsupported {env : Env} {p : Program} {name : String} {vs : List 
     simp only [stdlib]; exact text_good
   rw [ite_neg hn] at h
   by_cases hn : name = "frame" ∨ name = "measure"
-  · rcases hn with rfl | rfl <;> simp [stdlib, GoodR, Legit]
+  · rcases hn with rfl | rfl <;> simp [stdlib, routing, GoodR, Legit]
   rw [ite_neg hn] at h
   by_cases hn : name = "toLowerCase" ∨ name = "toUpperCase"
-  · rcases hn with rfl | rfl <;> simp [stdlib, GoodR, Legit]
+  · rcases hn with rfl | rfl <;> simp [stdlib, routing, GoodR, Legit]
   rw [ite_neg hn] at h
   by_cases hn : name = "elementFromPoint"
-  · subst hn; simp [stdlib, GoodR, Legit]
+  · subst hn; simp [stdlib, routing, GoodR, Legit]
   rw [ite_neg hn] at h
   simp at h
 
@@ -268,9 +230,9 @@ theorem read_good {p : Program} {v : Value} {f : Route.Router → Option Value} 
 /-- The router's verbs and reads on values of their types: a value of the
 type `routerTy` gives, or a refusal (a value of the shape `Router` that is
 not a valid router traps). -/
-theorem stdlib_router {env : Env} {p : Program} {name : String} {vs : List Value} {ts : List Ty} {t : Ty}
+theorem routing_good {env : Env} {p : Program} {name : String} {vs : List Value} {ts : List Ty} {t : Ty}
     (hp : env.prog = p) (hr : routeShapesOK p = true) (hv : ValTyL p vs ts) (h : routerTy name ts = .some t) :
-    GoodR (ValTy p · t) (stdlib env name vs) := by
+    GoodR (ValTy p · t) (routing env name vs) := by
   delta routerTy at h
   have hshape : ∀ {w : Value}, ValTy p w (.record "Router") → RouteShapes p :=
     fun hw => RouteShapes.of hr (shapeTys_of_valTy hw)
@@ -284,7 +246,7 @@ theorem stdlib_router {env : Env} {p : Program} {name : String} {vs : List Value
     obtain ⟨_, rfl⟩ := hw'.str_inv
     have H := hshape hw
     subst hp
-    rcases hn with rfl | rfl | rfl | rfl | rfl <;> simp only [stdlib] <;> exact verb_good H hw
+    rcases hn with rfl | rfl | rfl | rfl | rfl <;> simp only [routing] <;> exact verb_good H hw
   rw [ite_neg hn] at h
   by_cases hn : name = "back"
   · subst hn; rw [ite_pos rfl] at h
@@ -294,7 +256,7 @@ theorem stdlib_router {env : Env} {p : Program} {name : String} {vs : List Value
     obtain ⟨w, ws, rfl, hw, hws⟩ := hv.cons_inv; rw [hws.nil_inv]
     have H := hshape hw
     subst hp
-    simp only [stdlib]; exact verb_good H hw
+    simp only [routing]; exact verb_good H hw
   rw [ite_neg hn] at h
   by_cases hn : name = "stack"
   · subst hn; rw [ite_pos rfl] at h
@@ -304,7 +266,7 @@ theorem stdlib_router {env : Env} {p : Program} {name : String} {vs : List Value
     obtain ⟨w, ws, rfl, hw, hws⟩ := hv.cons_inv; rw [hws.nil_inv]
     have H := hshape hw
     subst hp
-    simp only [stdlib]
+    simp only [routing]
     exact read_good fun r w hw' => by simp at hw'; subst hw'; exact entries_ty H _
   rw [ite_neg hn] at h
   by_cases hn : name = "top"
@@ -315,7 +277,7 @@ theorem stdlib_router {env : Env} {p : Program} {name : String} {vs : List Value
     obtain ⟨w, ws, rfl, hw, hws⟩ := hv.cons_inv; rw [hws.nil_inv]
     have H := hshape hw
     subst hp
-    simp only [stdlib]
+    simp only [routing]
     exact read_good fun r w hw' => by
       simp only [Option.map_eq_some_iff] at hw'
       obtain ⟨e, -, rfl⟩ := hw'
@@ -328,7 +290,7 @@ theorem stdlib_router {env : Env} {p : Program} {name : String} {vs : List Value
     obtain ⟨rfl, rfl⟩ := h
     obtain ⟨w, ws, rfl, hw, hws⟩ := hv.cons_inv; rw [hws.nil_inv]
     subst hp
-    simp only [stdlib]
+    simp only [routing]
     exact read_good fun r w hw' => by simp at hw'; subst hw'; simp [ValTy]
   rw [ite_neg hn] at h
   by_cases hn : name = "params"
@@ -340,7 +302,7 @@ theorem stdlib_router {env : Env} {p : Program} {name : String} {vs : List Value
     obtain ⟨w', ws', rfl, hw', hws'⟩ := hws.cons_inv; rw [hws'.nil_inv]
     obtain ⟨_, rfl⟩ := hw'.str_inv
     subst hp
-    simp only [stdlib]
+    simp only [routing]
     refine read_good fun r w hw' => ?_
     simp at hw'; subst hw'
     simp only [ValTy]
@@ -354,22 +316,25 @@ theorem stdlib_router {env : Env} {p : Program} {name : String} {vs : List Value
     next r =>
     obtain ⟨rfl, rfl⟩ := h; obtain ⟨w, ws, rfl, hw, hws⟩ := hv.cons_inv
     obtain ⟨w', ws', rfl, hw', hws'⟩ := hws.cons_inv; rw [hws'.nil_inv]; obtain ⟨_, rfl⟩ := hw'.str_inv
-    simp only [stdlib]; split <;> simp [GoodR, ValTy, Legit]
+    simp only [routing]; split <;> simp [GoodR, ValTy, Legit]
   rw [ite_neg hn] at h
   by_cases hn : name = "fragment"
   · subst hn; rw [ite_pos rfl] at h; split at h <;> simp at h
     next r =>
     obtain ⟨rfl, rfl⟩ := h; obtain ⟨w, ws, rfl, hw, hws⟩ := hv.cons_inv; rw [hws.nil_inv]
-    simp only [stdlib]; split <;> simp [GoodR, ValTy, Legit]
+    simp only [routing]; split <;> simp [GoodR, ValTy, Legit]
   rw [ite_neg hn] at h
   by_cases hn : name = "encodeRouteSegment"
   · subst hn; rw [ite_pos rfl] at h; split at h <;> simp at h
     subst h
     obtain ⟨w, ws, rfl, hw, hws⟩ := hv.cons_inv; rw [hws.nil_inv]
     obtain ⟨_, rfl⟩ := hw.str_inv
-    simp only [stdlib]; split <;> simp [GoodR, ValTy, Legit]
+    simp only [routing]; split <;> simp [GoodR, ValTy, Legit]
   rw [ite_neg hn] at h
-  exact stdlib_unsupported h
+  unfold unsupportedTy at h
+  repeat' split at h
+  all_goals simp_all [routing, GoodR, Legit]
+  all_goals rcases ‹name = _ ∨ name = _› with rfl | rfl <;> simp [routing, GoodR, Legit]
 
 theorem mapM_len_good {α β} {f : α → Result β} : ∀ {xs : List α}, (∀ x ∈ xs, ∃ y, f x = .ok y) →
     GoodR (fun ys => ys.length = xs.length) (xs.mapM f)
@@ -678,7 +643,14 @@ theorem stdlib_good {env : Env} {p : Program} {name : String} {vs : List Value} 
       obtain ⟨s, _, rfl⟩ := List.mem_map.mp hx
       simp [ValTy]
   rw [ite_neg hn] at h
-  exact stdlib_router hp hrs hv h
+  unfold stdlib
+  split <;> (try simp_all [routerTy, unsupportedTy])
+  all_goals first
+    | exact routing_good hp hrs hv h
+    | (repeat' split at h <;> simp_all
+       all_goals first
+         | (subst t; exact formatting_good)
+         | (obtain ⟨-, rfl⟩ := h; exact text_good))
 
 /-! ## Scopes and environments -/
 
@@ -892,7 +864,7 @@ theorem stdlib_path {env : Env} {p : Program} {rn : String} {route : RouteDecl}
     (hr : pathRoute p rn = .some route) (hv : ValTyL p vs ts)
     (hts : ∀ t ∈ ts, (t.le .string || t.le .number) = true) (hlen : vs.length = patternParams route.pattern) :
     GoodR (ValTy p · .string) (stdlib env "path" (.str rn :: vs)) := by
-  simp only [stdlib, hp]
+  simp only [stdlib, routing, hp]
   refine (pathValue_good (route := route) hr ?_ hlen).mono fun w ⟨s, hs⟩ => by subst hs; simp [ValTy]
   intro v hv'
   obtain ⟨t, ht, hvt⟩ := ValTyL.mem hv hts v hv'
@@ -991,6 +963,15 @@ theorem sortByKeys_good {p : Program} {E : Err → Prop} {xs ks : List Value} {a
   simp only [GoodW, ValTy]
   exact ValTys.of_mem fun y hy => hxs.mem y ((sortByKeys_perm hys).mem_iff.mp hy)
 
+theorem routing_notPending (env : Env) (f : String) (args : List Value) : NotPending (routing env f args) := by
+  unfold routing
+  split <;> first
+    | exact verb_notPending _ _ _
+    | exact read_notPending _ _ _
+    | exact pathValue_notPending _ _ _
+    | (split <;> first | exact NotPending.ok _ | exact NotPending.err (by simp))
+    | exact NotPending.err (by simp)
+
 theorem stdlib_notPending (env : Env) (f : String) (args : List Value) : NotPending (stdlib env f args) := by
   unfold stdlib
   split
@@ -1001,9 +982,7 @@ theorem stdlib_notPending (env : Env) (f : String) (args : List Value) : NotPend
     | exact text_notPending _ _
     | exact NotPending.ok _
     | exact NotPending.err (by simp)
-    | exact verb_notPending _ _ _
-    | exact read_notPending _ _ _
-    | exact pathValue_notPending _ _ _
+    | exact routing_notPending _ _ _
     | skip
   all_goals first
     | (cases h : Value.display _ with

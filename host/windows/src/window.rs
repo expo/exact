@@ -1,6 +1,6 @@
 use crate::keyboard::key_names;
 use exact_ink::counters;
-use exact_linux::{
+use exact_painted::{
     app::{self, Config},
     presenter::PointerKind,
     Presenter,
@@ -70,7 +70,7 @@ struct App<D: DataSource> {
     pads_active: bool,
     caret: crate::caret::Caret,
     tooltip: crate::tooltip::Tooltip,
-    edit_menu: Option<exact_linux::presenter::edit_menu::EditMenu>,
+    edit_menu: Option<exact_painted::presenter::edit_menu::EditMenu>,
     ime: crate::ime::InputMethod,
     appearance: crate::appearance::Changes,
     modal: crate::modal::Schedule,
@@ -121,8 +121,8 @@ fn system_theme<D: DataSource>(p: &mut Presenter<D>, theme: Theme) {
     }
 }
 
-fn direct_device(painter: exact_linux::presenter::PainterChoice, device: Option<&str>) -> bool {
-    painter == exact_linux::presenter::PainterChoice::Ink
+fn direct_device(painter: exact_painted::presenter::PainterChoice, device: Option<&str>) -> bool {
+    painter == exact_painted::presenter::PainterChoice::Ink
         && exact_ink::device::direct_d3d11(device).is_some()
 }
 
@@ -139,7 +139,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
     opening: crate::Window,
     plan: &[u8],
     compat: &str,
-    composed: exact_linux::Composed,
+    composed: exact_painted::Composed,
 ) -> i32 {
     if let Some(result) = exact_ink::device::d3d11::startup_watchdog::helper() {
         return result;
@@ -162,8 +162,8 @@ pub(super) fn run<D: DataSource + Default + 'static>(
     }
     let device = std::env::var("EXACT_INK_DEVICE").ok();
     let direct = direct_device(
-        exact_linux::presenter::PainterChoice::from_env(
-            exact_linux::presenter::PainterChoice::from_baked(compat),
+        exact_painted::presenter::PainterChoice::from_env(
+            exact_painted::presenter::PainterChoice::from_baked(compat),
         ),
         device.as_deref(),
     );
@@ -271,7 +271,7 @@ pub(super) fn run<D: DataSource + Default + 'static>(
         instance.set_wake(move || drop(wake.send_event(crate::accessibility::Event::Wake)));
     }
     let wake = proxy.clone();
-    exact_linux::set_event_waker(Some(Arc::new(move || {
+    exact_painted::set_event_waker(Some(Arc::new(move || {
         let _ = wake.send_event(crate::accessibility::Event::Wake);
     })));
     let timer_proxy = proxy.clone();
@@ -337,14 +337,15 @@ pub(super) fn run<D: DataSource + Default + 'static>(
     }
     // A launch from here on is the app's next instance, not this ending one's.
     state.instance.take();
-    exact_linux::set_event_waker(None);
+    exact_painted::set_event_waker(None);
     // However the loop ended (the window closed, a bounded run, a failure): the store's writes, made on a thread of
     // their own, are on disk before the process ends, and what failed is said.
-    if !exact_linux::host::drain_store_writes(std::time::Duration::from_secs(5)) {
+    if !exact_painted::host::drain_store_writes(std::time::Duration::from_secs(5)) {
         eprintln!("exact: the store's writes were not all on disk at exit");
     }
     if let Some(p) = &state.presenter {
-        for line in exact_linux::host::take_store_warnings(p.host().runner().data_ref().app_id()) {
+        for line in exact_painted::host::take_store_warnings(p.host().runner().data_ref().app_id())
+        {
             eprintln!("exact: {line}");
         }
     }
@@ -949,7 +950,7 @@ impl<D: DataSource + Default + 'static> ApplicationHandler<crate::accessibility:
                 p.set_window_active(self.focused);
                 // The window's clock owns time (the timers RFC, D1)
                 p.use_native_timers(true);
-                p.set_live_clock(Some(exact_linux::presenter::wall_since(self.started)));
+                p.set_live_clock(Some(exact_painted::presenter::wall_since(self.started)));
                 if let Some(warning) = warning {
                     eprintln!("exact-windows: {warning}");
                 }

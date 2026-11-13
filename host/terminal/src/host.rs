@@ -1077,7 +1077,7 @@ impl<D: DataSource> Host<D> {
         self.press_with(id, true);
     }
 
-    /// Follow a link as Exact's hosts do (LLP 1038 §7, `host/linux`'s
+    /// Follow a link as Exact's hosts do (LLP 1038 §7, `host/painted`'s
     /// `presenter/links.rs`): a path naming one of the app's routes is a
     /// `navigate` on its navigation root; an `http`, `https`, `mailto` or
     /// `tel` URL leaves the app; anything else goes nowhere.

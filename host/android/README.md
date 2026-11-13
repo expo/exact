@@ -2,12 +2,12 @@
 
 The Kotlin side of Android's Canvas host (LLP 1076 §3.3), in the repository by LLP 1115.001 D2 (Charlie, 2026-10-11).
 
-An app on Android is its Rust, built for `aarch64-linux-android` (`host/linux`: the runner, the kernel, layout, text
-and the paint walk), and this. The Rust records what it paints as an op stream (`host/linux/src/canvas.rs`). The
+An app on Android is its Rust, built for `aarch64-linux-android` (`host/painted`: the runner, the kernel, layout, text
+and the paint walk), and this. The Rust records what it paints as an op stream (`host/painted/src/canvas.rs`). The
 reader replays that stream onto Android's own Canvas: a `RenderNode` for each row, scroller and animated layer,
 hardware bitmaps for pictures, `drawGlyphs` for text the Rust has shaped (below Android 12, the glyphs' outlines:
 "Android 10 and 11", below). The two meet at `dev.exact.canvas.Native`,
-whose methods `exact_linux::canvas_jni!(Data)` defines for an app (`host/linux/src/canvas/jni.rs`). Nothing versions
+whose methods `exact_painted::canvas_jni!(Data)` defines for an app (`host/painted/src/canvas/jni.rs`). Nothing versions
 the stream or those calls, so both sides are built from one commit. The build holds that as far as it can see
 (LLP 1159.002): Gradle runs without file watching, so an edit it was not told of is still read, and the APK is refused
 when the library it packaged does not load what the one the build staged loads. A pair that slips past both shows as
@@ -51,7 +51,7 @@ NDK (`ANDROID_NDK_HOME`, else the newest under the SDK), a JDK (17 or newer) and
    compiles; and the launch theme in its `background_color`, where it names one, under `app/build/<app>/launch/res/`
    ([the launch window](#the-devices-colours-llp-1115001-d4));
 2. builds the app's `android/` crate for `aarch64-linux-android` at `host-dev` (`--release`: at `release` with fat
-   LTO, as a production build links, for measuring). The crate is a cdylib whose source is `exact_linux::canvas_jni!(<the data source>, hatches =
+   LTO, as a production build links, for measuring). The crate is a cdylib whose source is `exact_painted::canvas_jni!(<the data source>, hatches =
    crate::exact_hatches())`, with a build script that bakes the plan and calls `contract::native::android_entry`,
    which writes the app's hatches' install (`hatches.rs`) and the plan's uses (`uses.txt`) beside it; `apps/caltrain/android` is the one to copy for an app whose data is Rust and
    `apps/shelf/android` for one whose data is TypeScript (three files each, and a line in the root `Cargo.toml`'s
@@ -172,7 +172,7 @@ first answer (`library`, after a read of its file) is committed 27 ms after boot
 started** (median of ten; 56 to 65), a few milliseconds after the first frame is displayed (55 ms). Memory is one
 reading each, in each of four sessions, never more than 1 MB apart.
 
-`x_log_journal=1` at launch (exact2's `EXACT_LOG_JOURNAL`, `host/linux/src/canvas/journal.rs`) writes the app's
+`x_log_journal=1` at launch (exact2's `EXACT_LOG_JOURNAL`, `host/painted/src/canvas/journal.rs`) writes the app's
 journal to logcat as the host comes to hold each line, with the milliseconds since boot began: that is how the times
 above were read (`adb logcat -v time`, from ActivityManager's "Start proc" line). Without it nothing is read or
 written.
@@ -207,8 +207,8 @@ launches it under a driver and speaks the agent API's JSON lines to it. `ANDROID
 launch says `agent=<name>`: a socket of that name in the abstract namespace, served only to adb's own user (shell
 or root: any app on the phone can reach an abstract socket). adb forwards it; the carrier's process
 (`agent-android.mjs relay`) carries lines between `agent.mjs`'s stdio carrier and the socket. Each request is one
-call, `Native.agent(line)`, on exact2's thread, into `host/linux/src/canvas/agent.rs`, which hands it to the handler
-the headless carrier uses (`exact_linux::agent::handle`). The drive's `EXACT_AGENT` and `EXACT_AGENT_*` (its store,
+call, `Native.agent(line)`, on exact2's thread, into `host/painted/src/canvas/agent.rs`, which hands it to the handler
+the headless carrier uses (`exact_painted::agent::handle`). The drive's `EXACT_AGENT` and `EXACT_AGENT_*` (its store,
 epoch, locale, seed and fetch faults), and a `--url`'s `EXACT_DEV_PLAN`, reach the app as `x_<name>` launch extras; a launch whose environment does
 not say `EXACT_AGENT=1` answers no request, and a production bake drops that variable (LLP 1069.007 D2).
 
@@ -311,7 +311,7 @@ A finger scrolls. The gesture and its physics are the reader's (`Scrolling.kt`),
 and nothing imitated: the system's touch slop and fling velocities (`ViewConfiguration`), `VelocityTracker`,
 `OverScroller` for the fling, the stretch `EdgeEffect` at the ends, and for the indicator the scrollbar a `View` draws
 and fades by itself. The reader has no dependency for it. exact2 recognizes no scroll: its side is
-`host/linux/src/presenter/scrollers.rs` and `canvas/scroll.rs`.
+`host/painted/src/presenter/scrollers.rs` and `canvas/scroll.rs`.
 
 **The reader moves the scroller, at once, and exact2 catches up.** A scroller whose rows the stream keeps in a node of
 their own (a group: ops 20 and 21) is translated on the UI thread in the frame the finger moved. exact2 is told how
@@ -460,7 +460,7 @@ on every configuration change. A new wallpaper changes the palette; the activity
 (`assetsPaths`), so Android makes it again and its reader, adopting the host that runs, tells the new palette. Both
 schemes are always told: night mode chooses between them in exact2.
 
-**Which of Exact's roles is which** is exact2's to say, in `host/linux/src/presenter/palette.rs`, which has D4's
+**Which of Exact's roles is which** is exact2's to say, in `host/painted/src/presenter/palette.rs`, which has D4's
 table and the four rows it adds. A report paints the page again; a role D4 leaves out (the system hues but red and
 blue) keeps its table pair.
 
@@ -469,7 +469,7 @@ in `AccentColor` as reported, with `AccentColorText` drawn on it (a check, a swi
 the device's `primary` and `onPrimary`. The painter's own blue is desktop Linux's alone, where nothing is reported.
 The controls' shapes are still the desktop painter's (D9).
 
-**A press is Material's ripple** (D9; `host/linux/src/paint/ripple.rs`): on a button, a segment, a field that opens
+**A press is Material's ripple** (D9; `host/painted/src/paint/ripple.rs`): on a button, a segment, a field that opens
 something, a checkbox and a radio (in the 40 dp circle round the mark, from its middle), a list's row and any other
 node that presses (a `press` or a link's `href`) with no pressed look of its own (`:active`, `-exact-press-scale`,
 `pointerdown`). In what scrolls it waits the platform's tap timeout, 100 ms, so a touch a scroller takes sooner shows
@@ -637,6 +637,11 @@ too), and
 next resume when a recreated activity lost the result (LLP 1133.002 D9). Overlapping requests queue in order;
 identical permission sets share a result. `done` receives the set of permission names the platform answered, empty
 when nothing was asked or the result was lost or cancelled. Record a permanent denial only for a name in that set.
+`startActivityForResult(intent, failed, done)` starts an activity over the resumed one and answers its result. Asked
+while the activity shows but is paused, as it is when a permission dialog's answer arrives (before `onResume`), the
+start waits for the resume; the app stopping first ends it. `failed` names why nothing started: `InvalidStateError`
+(no activity showing), `AbortError` (the app stopped first), `NotFoundError` (no app handles the intent),
+`NotAllowedError` (a `SecurityException`) or `UnknownError`. Without `failed`, such a start answers `RESULT_CANCELED`.
 `invoke(handle, handler, args, reply)` runs an app handler on the host's owner thread and delivers its answer on the
 main thread. The activity binds the roster's names as it
 is made (`Native.bindExtensions`). Outside the agent the host binds them as in production; under it, those a drive
@@ -675,7 +680,8 @@ and bound implementations' coordinates (`-Pmaven`), and the graph is held by Gra
   from the app's `gradle-verification.xml`. Gradle reads that file only from the reader's `gradle/`, so the build
   copies it to `gradle/verification-metadata.xml` for the run and takes it away after (ignored by Git), and passes
   `--dependency-verification=strict`. `gradle.properties` leaves verification off for every other build.
-- **Written** once, and again when the app's or a module's coordinates change:
+- **Written** once, and again when the app's or a module's coordinates or the reader's graph changes
+  (adding a date picker brings Compose):
   in the repository directory, `bun scripts/agent-android.mjs build <app> --apk --write-locks` (Gradle's `--write-locks` and
   `--write-verification-metadata sha256`); the app keeps both files with its source. They are written in a Gradle
   user home of their own with nothing resolved in it, as a fresh machine's is: from a warm cache Gradle fetches fewer
@@ -685,7 +691,8 @@ and bound implementations' coordinates (`-Pmaven`), and the graph is held by Gra
   modules or own Kotlin name libraries is refused before Gradle runs. The refusal and `exact add` name the directory and
   command: `in <app dir>: bun exact.mjs android --write-locks` when the app has its own launcher, otherwise
   the repository directory and command above, with `EXACT_APP_DIR` set to the app's directory unless it is
-  `apps/<app>`.
+  `apps/<app>`. A locked build that fails dependency locking or verification names this command;
+  review the dependency change and both regenerated files before committing them.
 
 An app with no Maven libraries resolves as before, unlocked and unverified. Two such builds at once on one checkout
 would share the placed verification file. A library that is not on those repositories stays LLP 1133.001 D9's pinned
@@ -698,7 +705,7 @@ no background of its own, over the container exact2 paints for it. No library: t
 says when its selection moves, which no listener of the class tells. The IME and its composition, autofill's hints,
 the selection handles, the magnifier, the floating toolbar and the spell checker come with the class. A field is an
 `EditText` whether or not it is focused, so nothing shifts when it takes the focus. exact2's side is
-`host/linux/src/fields.rs`, `presenter/hosted.rs` and `canvas/field.rs`.
+`host/painted/src/fields.rs`, `presenter/hosted.rs` and `canvas/field.rs`.
 
 **Desktop Linux hosts nothing.** A shell that hosts fields attaches when it boots the host: Android's reader does at
 `Native.start`, where the JNI finds `Fields.measure` (`canvas::field::attach`). No other host attaches, and with no
@@ -715,11 +722,12 @@ it returns:
     Fields.measure(size px, weight, flags, tracking em, line px, font file, axes, features, text, width px): Long
 
 An `EditText` of that thread's own, never attached, is set as the field is (no background, no padding, no font
-padding, the field's size, weight, slant, tracking, line height, face, axes and OpenType features) and measured;
-the answer is its width, height and first baseline in pixels. A single line is as long as its text; a `textarea`
-wraps at the width offered. Each distinct question is asked once (a form of twenty fields in one font asks two).
-It is no request (D5): that queue is taken after the frame. The container's own insets are still the painter's
-(its border and padding, `field_chrome`); the `EditText` has none.
+padding, the field's size, weight, slant, tracking, line height, face, axes and OpenType features) and measured.
+It is made in the application context with the reading activity's theme: the thread outlives every activity, so the
+field holds none. The answer is its width, height and first baseline in pixels. A single line is as long as its
+text; a `textarea` wraps at the width offered. Each distinct question is asked once (a form of twenty fields in one
+font asks two). It is no request (D5): that queue is taken after the frame. The container's own insets are still the
+painter's (its border and padding, `field_chrome`); the `EditText` has none.
 
 **What exact2 tells** (`Native.fields(): IntArray?`, null while nothing changed; taken with each stream, before the
 stream is drawn). A count, then for each live field, in tree order:
@@ -818,7 +826,8 @@ field through the keyboard request (kind 6, with the field's id): the `EditText`
 shows. A focus that leaves the fields (a press on a button, `blur()`, Done) hides the keyboard and gives the focus
 back to the reader's view, so keys go on to exact2 (`Native.key`). Back closes the keyboard first, which the system
 does itself for an `EditText`: the IME takes Back before the reader's callback. A hardware keyboard types into the
-`EditText`; its Enter is the action key and its Tab the page's.
+`EditText`; its Enter is the action key and its Tab the page's. Off the fields, Tab and Shift+Tab go to exact2 by
+name (`Keys.named`, `Native.namedKey`) and move its focus.
 
 **A field that exact2 takes the focus from gives it up itself.** Two roads led the platform to move the focus on its
 own, both seen with Shelf on a Pixel and both closed in `Fields.kt`. A field that is covered while it holds the focus
@@ -877,7 +886,7 @@ Not built of D8:
 A confirmation and a menu are **windows of the platform's own**, not a layer painted in the page: an alert-shaped
 `alertdialog` is a `Dialog` and a menu popover a `PopupWindow` (`Surfaces.kt`), the framework's classes and no
 library. What is in each window is exact2's picture of Material 3's component. exact2's side is
-`host/linux/src/presenter/top.rs` (what is open, what closes it), `top/shape.rs` (what an authored subtree is) and
+`host/painted/src/presenter/top.rs` (what is open, what closes it), `top/shape.rs` (what an authored subtree is) and
 `top/look.rs` (Material's metrics, measured and painted), with `canvas/surface.rs` for this host.
 
 **Which host has one.** A shell that makes windows says so (`Presenter::serve_windows`, which the Canvas host does as
@@ -1008,7 +1017,7 @@ screenshot here was compared with a reference app's.
 
 ## Sheets and route motion (LLP 1115.001 D10, D12)
 
-The presenter places these routes itself (`host/linux/src/presenter/stage.rs`, drawn by `paint/stage.rs`), on a
+The presenter places these routes itself (`host/painted/src/presenter/stage.rs`, drawn by `paint/stage.rs`), on a
 shell that shows bars; desktop Linux and the headless carrier show a `modal` route as written, with no motion.
 
 **A `modal` route is Material 3's modal bottom sheet** (Compose's `ModalBottomSheet` and `BottomSheetDefaults`): as
@@ -1073,7 +1082,7 @@ not the sheet); a tab switch's fade-through; a `fullscreen` route's own entrance
 A route's `header` is Material 3's **top app bar** and the navigation root's `tablist` is its **navigation bar**
 (`Bars.kt`). Each is a picture exact2 paints, replayed in a `Pane` of its own over the page, as a surface of the top
 layer is replayed in a window of its own: no library, and none of the framework's widgets. exact2's side is
-`kernel/src/bars.rs` (what counts as either), `host/linux/src/bars.rs` (what leaves the page for them),
+`kernel/src/bars.rs` (what counts as either), `host/painted/src/bars.rs` (what leaves the page for them),
 `presenter/bars.rs` (what each says, where it is, what a touch does) and `presenter/bars/look.rs` (Material's
 metrics, measured and painted), with `canvas/surface.rs` for this host.
 
@@ -1211,7 +1220,7 @@ Not built of D11:
 What the reader shows is painted: the page in one view, each bar and each surface of the top layer in a `Pane`. None
 of it said anything to an accessibility service, so TalkBack read an Exact app as one unlabelled view. The reader's
 root (`Root`, `Access.kt`) now answers through an `AccessibilityNodeProvider` whose virtual nodes are exact2's own
-statement of the tree (`host/linux/src/presenter/access.rs`), which reads the kernel's tree as the Apple hosts do.
+statement of the tree (`host/painted/src/presenter/access.rs`), which reads the kernel's tree as the Apple hosts do.
 
 **Why the root, and not the page's view.** The bars are over the page's view and reach outside it (the top app bar
 fills the status bar's area), and the hosted text fields are its siblings, under it. The root holds all three, fills
@@ -1338,7 +1347,7 @@ is the shell's minSdk. The reader is built for Android 10 (its minSdk 29, the ap
 call of a later release is behind a `Build.VERSION.SDK_INT` check (lint's `NewApi` finds none unguarded), and a class
 that names a later release's types is a nested class an older release never loads (`ExactActivity.Back`, `Splash`).
 What Android 10 and 11 do in its place is in `Legacy.kt` and `LegacyGlyphs.kt`, and on the Rust side in
-`host/linux/src/canvas/legacy.rs`; a newer release never enters them. Only an app below Android 12 keeps the Kotlin of
+`host/painted/src/canvas/legacy.rs`; a newer release never enters them. Only an app below Android 12 keeps the Kotlin of
 it (`app/proguard-legacy.pro`); for any other, R8 folds each `SDK_INT` check against the app's minSdk and leaves none.
 The Rust of it (12 KB) is in every app's library: the host's Rust is the same for every app.
 
@@ -1399,7 +1408,7 @@ On a TV:
   roles are Material's baseline scheme (`Palette.read`).
 - **D-pad.** The arrows reach `key` handlers as `ArrowUp`, `ArrowDown`, `ArrowLeft` and `ArrowRight`
   (`Keys.remote`, `Native.namedKey`). Their default action moves the focus by Android's `FocusFinder` rules
-  (`host/linux/src/presenter/remote.rs`).
+  (`host/painted/src/presenter/remote.rs`).
 - **Select.** DPAD_CENTER is heard as `Enter`. It presses the focus, toggles a checkbox or switch, and checks a
   radio.
 - **Back.** Back keeps the phone's order. With no route to go back from, it presses the shown button with
@@ -1507,7 +1516,7 @@ The cut was the smallest one. Left in the reader:
     kept rows among them, so a start after a stop makes the reader again (`ExactActivity.read`) and the host paints
     everything for it; hosted views are made again with it. Nothing is saved for a process the system kills (D15.3).
 - **Only the async lane's second tier builds it** (LLP 1133.002 stage 4): Weatherlight's APK, hourly, which
-  compiles `exact-linux` for the Android target and the reader's Kotlin with a module's. Gradle is in none of the
+  compiles `exact-painted` for the Android target and the reader's Kotlin with a module's. Gradle is in none of the
   six checks.
 - **The shell is a development build**: signed with the debug key. Its one activity turns keys on for
   every app, and gives none an app's own native module (LLP 1024) or a video player, which the benchmark's apps
@@ -1518,7 +1527,7 @@ The cut was the smallest one. Left in the reader:
   tested on a Mac, not seen on a device.
 - **No update store** and no replaced Rust module: the Canvas host has neither, though an app's compatibility
   record is computed as its Linux crate's is, and Caltrain's names both (`store.L` is `A`, `rustMode` is `native`).
-- **No picture from a URL.** The Linux host's pictures are files under the asset root (`host/linux/src/image`), on
+- **No picture from a URL.** The Linux host's pictures are files under the asset root (`host/painted/src/image`), on
   every shell it has: Shelf's covers, which Open Library serves, are the grey box behind them in Discover and a gap on
   a book's page. Nothing of this host's is missing for it; the loader has no door for a remote source.
 - **The benchmark still builds its own copy** of the reader, which no longer matches this repository's JNI names.

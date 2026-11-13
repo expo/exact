@@ -24,12 +24,13 @@ import UserNotifications
 final class NotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationPresenter()
     static var available: Bool {
+        // UserNotifications needs a Launch Services bundle: a sidecar
+        // Info.plist gives a bare executable an identifier, and an XCTest
+        // runner has one too, yet `current()` raises in both.
         #if os(macOS)
-        // A sidecar Info.plist gives a bare executable an identifier, but
-        // UserNotifications still requires a Launch Services app bundle.
         Bundle.main.bundleURL.pathExtension == "app"
         #else
-        Bundle.main.bundleIdentifier != nil
+        ["app", "appex"].contains(Bundle.main.bundleURL.pathExtension)
         #endif
     }
     weak var app: ExactApp?

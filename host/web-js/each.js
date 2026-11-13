@@ -1,10 +1,31 @@
 // A resource over a list on the JS target (LLP 1017.000 P4c, amended 2026-11-04; runner/src/runner/each.rs):
 // `resource r = source(x) for x in list [key=k] as shape S`. Each element has its own resource (`res`), keyed as a
-// row is: an element that joins makes one, which asks; one that leaves lets only its own ticket go, once the commit
-// that dropped it stands; the others go on. `r` reads their values as `S[]` in the list's order, pending or failed
-// when any element's is.
-import { res, memo, scope, end, untracked, sig, write, eq, say, stood, restoring, owner, Resources, Refusal } from "./rt.js";
+// row is: an element that joins makes one, which asks, unless the boot makes it from a page that answered it
+// (`keptMember`); one that leaves lets only its own ticket go, once the commit that dropped it stands; the others go
+// on. `r` reads their values as `S[]` in the list's order, pending or failed when any element's is.
+import { res, memo, scope, end, untracked, sig, write, eq, say, stood, restoring, owner, Resources, Refusal, checkpoint, booting, equal, conforms } from "./rt.js";
 import { join, forget } from "./overlay.js";
+
+/** The page's answer for an element of list `name` at its arguments `args()`, while the runtime boots (LLP 1048.000
+ * D6): an answer at those arguments that still fits. Elements with equal arguments make the same request, so each
+ * takes an answer at those arguments, in the page's order. The page wrote the list's answers in its order, as the boot
+ * makes the elements, so the answer after the last one taken is looked at first, and a scan finds an element the list
+ * moved. With no answer it returns `null`, never `undefined`, which would make `res` look the list's name up as a
+ * declared resource's. */
+function keptMember(name, source, args, type) {
+  const kept = booting() && checkpoint().kept?.get(name);
+  if (kept?.source !== source) {
+    return null;
+  }
+  const at = args();
+  for (let k = 0, n = kept.answers.length, i = kept.next % n; k < n; k++, i = (i + 1) % n) {
+    if (equal(kept.answers[i][0], at) && (!type || conforms(kept.answers[i][1], type))) {
+      kept.next = i + 1;
+      return kept.answers[i];
+    }
+  }
+  return null;
+}
 
 const keyText = v => typeof v === "string" ? "s:" + v : typeof v === "number" ? (Number.isFinite(v) ? "n:" + (v === 0 ? 0 : v) : null) : typeof v === "boolean" ? "b:" + v : null;
 
@@ -27,8 +48,9 @@ export function resEach(name, source, list, key, args, type, elem, zero) {
       let e = members.get(k);
       if (!e && restoring()) continue; // a refused commit's settle asks nothing
       if (!e) {
-        e = untracked(() => { const item = sig(x), e = { item }; e.s = scope(() => { e.g = res(name, source, () => e.left ? r.ticket?.args ?? r.settled : args(item()), undefined, undefined, elem, zero, false, true); }, parent); const r = e.g.r; return e; }); // a leaving element asks nothing more
+        e = untracked(() => { const item = sig(x), e = { item }; e.s = scope(() => { e.g = res(name, source, () => e.left ? r.ticket?.args ?? r.settled : args(item()), undefined, undefined, elem, zero, false, keptMember(name, source, () => args(x), elem)); }, parent); const r = e.g.r; return e; }); // a leaving element asks nothing more
         e.g.r.family = g.r;
+        e.g.r.member = true; // diagnostics key it apart from the other elements (resource-inspection.js `resourceKey`)
         join(e.g.r);
         members.set(k, e);
         // A refused join has no checkpoint to restore and no request to keep.
@@ -55,11 +77,11 @@ export function resEach(name, source, list, key, args, type, elem, zero) {
   g.f = () => (g(), order.some(e => e.g.f()));
   g.e = () => { g(); for (const e of order) { const f = e.g.e(); if (f) return f; } return null; };
   // What a mutation's `refreshes` and the overlay ask of a resource, asked of each element's.
-  g.r = { name, source, each: true,
-    get value() { g(); return order.map(e => e.g.r.value); },
+  // `members`: each element's resource in the list's order, once though its key repeats: those a write over the list
+  // shows in (overlay.js), and whose answers the page's checkpoint holds (checkpoint.js)
+  g.r = { name, source, each: true, members: () => [...new Set(order)].map(e => e.g.r),
     force: undo => each(r => r.force(undo)), touch: undo => each(r => r.touch(undo)),
     reconcile: undo => each(r => r.reconcile(undo)), revise: undo => each(r => r.revise(undo)) };
-  g.r.members = () => { const out = []; each(r => out.push(r)); return out; };
   g.n.resource = g.r;
   return g;
 }

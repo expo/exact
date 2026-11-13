@@ -387,7 +387,7 @@ fn a_generated_painting_hosts_bake_writes_the_apps_hatches_install() {
             .unwrap();
         std::fs::read_to_string(out.join("hatches.rs")).unwrap_or_default()
     };
-    let none = "fn exact_hatches() -> Option<::exact_linux::hatches::Install> {\n    None\n}\n";
+    let none = "fn exact_hatches() -> Option<::exact_painted::hatches::Install> {\n    None\n}\n";
     assert_eq!(write("linux"), none);
     let modules = app.0.join("modules/linux");
     std::fs::create_dir_all(&modules).unwrap();
@@ -395,7 +395,7 @@ fn a_generated_painting_hosts_bake_writes_the_apps_hatches_install() {
     let text = write("windows");
     assert!(
         text.contains(
-            "Some(::exact_linux::hatches::install::<hatches::ExactHatches>(HatchKey::WORDS))"
+            "Some(::exact_painted::hatches::install::<hatches::ExactHatches>(HatchKey::WORDS))"
         ),
         "{text}"
     );

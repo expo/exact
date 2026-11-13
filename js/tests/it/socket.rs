@@ -481,10 +481,10 @@ fn a_mutation_s_stream_takes_no_mapper_replies() {
     );
 }
 
-/// A resource's answer sends its request in its source's call and awaits
-/// the reply; the code after an await runs in the turn that settled it and
-/// sends as that turn's answer: `deliver`'s, which ran the mapper's queue,
-/// or its own fetch's delivery. What it sent stands though it then throws.
+/// A resource's answer sends its request before waiting for the reply.
+/// Its async continuation keeps its answer's context, but native batches
+/// name the answer whose turn stages them: `deliver`, which settles the
+/// queued reply, or `reply`, whose own fetch lands. A later throw keeps them.
 #[test]
 fn an_answer_sends_its_request_and_awaits_the_reply() {
     let (mut r, ticket, side) = boot_both();
@@ -516,9 +516,8 @@ fn an_answer_sends_its_request_and_awaits_the_reply() {
     assert!(journal(&r).contains("the answer threw"));
 }
 
-/// An answer the runner lets go has no more turns: what it sent stays sent,
-/// and the continuation its rejected fetch runs as it is let go runs in no
-/// answer's turn, so its send refuses.
+/// Letting go keeps earlier sends. The async continuation of its rejected
+/// fetch still belongs to the let-go answer, so its send refuses.
 #[test]
 fn an_answer_let_go_sends_nothing_more() {
     let (mut r, ticket) = boot();
@@ -640,28 +639,55 @@ fn a_waiting_mutation_sends_as_an_answer() {
     );
 }
 
-/// Code that resumes from an await resumes as the answer it began in (LLP
-/// 1133.002 D14), whichever turn drains it. A waiting answer that a mapper's
-/// frame settles sends its next request as itself when it is asked again. A
-/// let-go answer has no more turns: its code that another answer's turn
-/// resumes refuses to send, rather than sending as that answer.
+/// The async helper restores the waiting answer's context (LLP 1133.002
+/// D14); a plain `.then` uses the draining turn's context. Native batches
+/// name that turn's answer in either case. Letting go refuses an async
+/// step's sends even when another answer's turn drains it, but does not
+/// bind a plain callback to its former answer.
 #[test]
 fn where_an_answer_s_continuation_runs() {
-    let (mut r, ticket, side) = boot_both();
-    open(&mut r, ticket);
-    open(&mut r, side);
-    let waiting = ask(&mut r, "chain 5");
-    assert_eq!(sends(&mut r), [answer("reply", &["request 5"])]);
-    settle_waiting(&mut r, &waiting[0], ticket, "direct 5 hi");
-    assert_eq!(reply(&r), "chained hi");
-    assert_eq!(sends(&mut r), [answer("reply", &["thanks 5"])]);
+    for (shape, queued, sender) in [
+        ("chain", false, "reply"),
+        ("chain", true, "deliver"),
+        ("then", false, "reply"),
+        ("then", true, "deliver"),
+    ] {
+        let (mut r, ticket, side) = boot_both();
+        open(&mut r, ticket);
+        open(&mut r, side);
+        let waiting = ask(&mut r, &format!("{shape} 5"));
+        assert_eq!(sends(&mut r), [answer("reply", &["request 5"])]);
+        assert_eq!(waiting.len(), 1);
+        let (on, data) = if queued {
+            (side, "reply 5 hi")
+        } else {
+            (ticket, "direct 5 hi")
+        };
+        settle_waiting(&mut r, &waiting[0], on, data);
+        assert_eq!(reply(&r), "chained hi");
+        assert_eq!(sends(&mut r), [answer(sender, &["thanks 5"])]);
 
-    ask(&mut r, "chain 6");
-    assert_eq!(sends(&mut r), [answer("reply", &["request 6"])]);
-    assert!(ask(&mut r, "").is_empty(), "new arguments let it go");
-    frame(&mut r, side, "reply 6 late");
-    assert!(
-        sends(&mut r).is_empty(),
-        "a let-go answer sends nothing more"
-    );
+        ask(&mut r, &format!("{shape} 6"));
+        assert_eq!(sends(&mut r), [answer("reply", &["request 6"])]);
+        assert!(ask(&mut r, "").is_empty(), "new arguments let it go");
+        frame(
+            &mut r,
+            side,
+            if queued {
+                "reply 6 late"
+            } else {
+                "direct 6 late"
+            },
+        );
+        if shape == "chain" {
+            assert!(
+                sends(&mut r).is_empty(),
+                "a let-go async answer cannot send"
+            );
+            let report = frame(&mut r, ticket, "report");
+            assert!(report.ends_with(ONLY), "{report}");
+        } else {
+            assert_eq!(sends(&mut r), [answer("deliver", &["thanks 6"])]);
+        }
+    }
 }

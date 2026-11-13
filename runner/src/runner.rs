@@ -361,6 +361,7 @@ pub struct Runner<D: DataSource> {
     action_binding_origin: std::rc::Rc<()>,
     detached_focus: Vec<(ViewId, FocusPath)>,
     data: D,
+    bake_warnings: Vec<String>,
     kernel: Kernel,
     slots: Vec<Value>,
     derives: Vec<Option<Value>>,
@@ -828,6 +829,7 @@ impl<D: DataSource> Runner<D> {
                 })
                 .collect(),
             tree: None,
+            bake_warnings: Vec::new(),
             reorder_owner: None,
             reorder_ops: Vec::new(),
             reorder_kept: Default::default(),
@@ -971,15 +973,10 @@ impl<D: DataSource> Runner<D> {
         runner.carry_uploads_in(carried.map_or(&[][..], |c| &c.uploads));
         // @ref LLP 1048.000 D6 — a document's answers seed their resources.
         // The device's own store is an input its render never had.
-        let (seeded, open, note) = match seed {
+        let (seeded, again) = match seed {
             Seed::Checkpoint(checkpoint) => runner.seed_checkpoint(checkpoint),
-            _ => (
-                vec![false; runner.plan.resources.len()],
-                Vec::new(),
-                String::new(),
-            ),
+            _ => (vec![false; runner.resources.len()], Vec::new()),
         };
-        let device_state = matches!(seed, Seed::Checkpoint(_)) && runner.has_app_store();
         // Store-reading resources when the data source is not ready (a TypeScript module before
         // its host loads it, LLP 1027 D4): the answer kept from the last launch seeds the first
         // frame if its identifying arguments still match and its value still fits; the compiled
@@ -987,19 +984,11 @@ impl<D: DataSource> Runner<D> {
         // again at `data_ready`.
         let ready = runner.data.ready();
         runner.keeping.on = !private && (!ready || carried.is_some_and(|c| c.keeps_answers));
-        runner.seed_at_boot(&seeded, device_state, ready, private);
-        if ready && device_state {
-            // … and asked now when it can answer, showing the rendered
-            // answer until it does.
-            for (i, &kept) in seeded.iter().enumerate() {
-                if kept && runner.plan.resources[i].reader {
-                    runner.ask_at_launch(i);
-                }
-            }
-        }
-        // An open stream's rendered answer shows until the stream, asked
-        // again, answers: now when its source can, else at `data_ready`.
-        for i in open {
+        runner.seed_at_boot(&seeded, ready, private);
+        // A seeded answer asked again, an open stream's or, on a device with
+        // its own store, a store reader's, shows until it answers: asked now
+        // when its source can answer, else at `data_ready`.
+        for i in again {
             if !ready {
                 runner.resources[i].stale = true;
             } else {
@@ -1012,6 +1001,10 @@ impl<D: DataSource> Runner<D> {
         // A carried boot never takes compiled data: it was baked for the
         // initial state, and the carried state is not that.
         runner.settle(carried.is_none())?;
+        let note = match seed {
+            Seed::Checkpoint(checkpoint) => runner.end_checkpoint_seeding(checkpoint, &seeded),
+            _ => String::new(),
+        };
         runner.journal_kept_seeds();
         runner.init_late_slots(carried)?;
         let now = runner.now_ms;

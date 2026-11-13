@@ -4,6 +4,35 @@
 import ExactKit
 import UIKit
 
+extension GroupedListHost {
+    func radioRow(for radio: NodeView) -> NodeView? {
+        var at = radio.superview
+        while let view = at {
+            if let node = view as? NodeView,
+               let row = lists.values.lazy.compactMap({ $0.rows[node.id] }).first {
+                return row.custom && row.accessory == "radio" && row.target == radio.id ? node : nil
+            }
+            at = view.superview
+        }
+        return nil
+    }
+
+    func selectRadioRow(from node: NodeView, pressing target: NodeView?) -> UInt32? {
+        var at: UIView? = node
+        while let view = at {
+            if let node = view as? NodeView {
+                guard !node.disabled, !node.inert else { return nil }
+                if let list = lists.values.first(where: { $0.rows[node.id] != nil }), let row = list.rows[node.id] {
+                    guard row.custom, row.accessory == "radio", target == nil || target === node else { return nil }
+                    return list.select(row.view) ? row.view : nil
+                }
+            }
+            at = view.superview
+        }
+        return nil
+    }
+}
+
 extension GroupedListView {
     func collectionView(_ view: UICollectionView, shouldSelectItemAt path: IndexPath) -> Bool {
         collectionView(view, shouldHighlightItemAt: path)

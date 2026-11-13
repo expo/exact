@@ -1,3 +1,6 @@
+import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {takeLock} from './build-lock.mjs';
 import {spawn} from 'node:child_process';
 
 /** Whether `exit` settled within a second. */
@@ -93,4 +96,24 @@ export function startupBuilds() {
     },
     handoff(stop) { residentStop = stop; },
   };
+}
+
+/** One frontend of each target per app; the JS loop's resident producer takes no frontend claim. */
+export function claimDevLoop(dir, target) {
+  const state = resolve(dir, '.exact'); mkdirSync(state, {recursive:true});
+  const record = resolve(state, `web-${target}-loop.json`), lock = record + '.lock';
+  let release;
+  try { release = takeLock(lock, {waitMs:0}); }
+  catch (error) {
+    if (error.code !== 'ELOCKED') throw error;
+    let owner = {}, pid = ''; try { owner = JSON.parse(readFileSync(record, 'utf8')); } catch {}
+    try { pid = readFileSync(lock, 'utf8').trim(); } catch {}
+    throw new Error(`this app's ${target} dev loop ${owner.pid === Number(pid) && owner.url ? `already runs at ${owner.url}` : 'is starting'} (pid ${pid || 'unknown'}): stop it or use it`);
+  }
+  let closed = false;
+  const close = () => { if (closed) return; closed = true; process.off('exit', close); rmSync(record, {force:true}); release(); };
+  process.once('exit', close);
+  const url = value => writeFileSync(record, JSON.stringify({pid:process.pid, url:value}));
+  url(null);
+  return {url, close};
 }

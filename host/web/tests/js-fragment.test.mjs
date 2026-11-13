@@ -30,7 +30,7 @@ test('a fragment scrolls for a navigation a landed commit assigns the router, on
     await import(resolve(dir, 'fragment.js')); // loaded, so router.js's own import of it answers in a turn
     rt.routes([['home', '/', null, true, false], ['item', '/item/:id', 0, false, false]]);
     const nav = rt.sig(rt.launch('/item/7#moves'), null, 'nav');
-    rt.router(nav, { apply: op => applied.push(op), project() {}, personScrolls: 0 });
+    rt.router(nav, { apply: op => applied.push(op), project() {}, holdLink() { return null; }, personScrolls: 0 });
     await until(() => asked.length >= 2);
     expect(asked).toEqual([['arm', 'moves', 1], ['scroll', 'moves', 1]]); // the launch's
     const moves = () => rt.x_go(nav(), '/item/7#moves');

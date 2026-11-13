@@ -556,7 +556,7 @@ fn enum_rows_resolve_names_and_others_do_not() {
         // A keyword row (a bit set named by CSS keywords) lists its words too.
         let keywords = matches!(
             id,
-            StyleId::FontVariantNumeric | StyleId::FontVariantLigatures
+            StyleId::FontVariantNumeric | StyleId::FontVariantLigatures | StyleId::SafeArea
         );
         assert_eq!(
             names.is_empty(),

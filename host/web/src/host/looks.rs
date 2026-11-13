@@ -40,44 +40,67 @@ pub fn rules(at: &str, looks: &[(u8, String)]) -> String {
         if *state == LOOK_HOVER {
             rows.push_str("--exact-hover-wash:none!important;--exact-hover-dim:1!important;");
         }
-        holding(&mut out, *state, at, "", &rows);
+        holding(&mut out, *state, at, &rows, str::to_string);
     }
     out
 }
 
-/// Each look's `color` as page rules for the elements `below` selects inside
-/// the element `at` selects, in [`rules`]' order; empty for none. A mode or
-/// `color-scheme` boundary that does not set its own colour (the JS target's
-/// `modes.js` marks it) resolves tokens in its own modes, and writes an
-/// inherited token colour again on itself, which would stop the look's;
-/// written on the boundary, the look's colour reaches its subtree, its token
-/// resolved there.
-pub fn colour_below(at: &str, looks: &[(u8, String)], below: &str) -> String {
-    let (mut out, below) = (String::new(), format!(" {below}"));
+/// How many looks, nearest first, whose colour reaches a boundary `modes.js`
+/// names by position (`data-x-lc="1:M 2:N"`); one further out takes the last.
+pub const LOOK_DEPTH: usize = 3;
+
+/// Each look's `color` as page rules for the boundaries below the element
+/// `at` selects that name look set `set`, in [`rules`]' order; empty for
+/// none. A mode or `color-scheme` boundary that does not set its own colour
+/// (the JS target's `modes.js` marks it) resolves tokens in its own modes,
+/// and writes an inherited token colour again on itself, which would stop
+/// the look's; written on the boundary, the look's colour reaches its
+/// subtree, its token resolved there. As CSS inheritance would have it, the
+/// boundary's own look stands over it (the holder is in `:where()`), and the
+/// nearest look that holds over one further out (a nearer position repeats
+/// its attribute more).
+pub fn colour_below(at: &str, looks: &[(u8, String)], set: usize) -> String {
+    let below: Vec<String> = (1..=LOOK_DEPTH)
+        .map(|k| format!("[data-x-lc~=\"{k}:{set}\"]").repeat(LOOK_DEPTH + 1 - k))
+        .collect();
+    let list = |holder: &str| {
+        (below.iter())
+            .map(|b| format!(":where({holder}) {b}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let mut out = String::new();
     for (state, css) in looks {
         let row = (css.split_terminator(';')).find(|row| row.trim_start().starts_with("color:"));
         if let Some(row) = row {
-            holding(&mut out, *state, at, &below, &format!("{row}!important;"));
+            holding(&mut out, *state, at, &format!("{row}!important;"), list);
         }
     }
     out
 }
 
-/// `rows` as look `state`'s rule on the element `at` selects, or, with
-/// `below` (a descendant combinator and selector), on those it selects inside.
-fn holding(out: &mut String, state: u8, at: &str, below: &str, rows: &str) {
+/// `rows` as look `state`'s rule on what `selector` makes of each selector
+/// of the element `at` selects while the state holds (that selector itself,
+/// for the element's own rule).
+fn holding(out: &mut String, state: u8, at: &str, rows: &str, selector: impl Fn(&str) -> String) {
     // A disabled box says `disabled` (a bool's text; none, or "false", is enabled).
-    let on = format!(":not(:disabled,[disabled]:not([disabled=\"false\"])){below}");
+    let on = ":not(:disabled,[disabled]:not([disabled=\"false\"]))";
     match state {
         // A held state (LLP 1122 D8, `data-exact-held`) is the state's own
         // rule, whatever the pointer (the input glue's `hold`).
         LOOK_HOVER => write!(
             out,
-            "@media (any-hover:hover){{:where(html:not([data-exact-input=touch])) {at}:hover{on}{{{rows}}}}}{at}[data-exact-held~=hover]{on}{{{rows}}}"
+            "@media (any-hover:hover){{{}{{{rows}}}}}{}{{{rows}}}",
+            selector(&format!(
+                ":where(html:not([data-exact-input=touch])) {at}:hover{on}"
+            )),
+            selector(&format!("{at}[data-exact-held~=hover]{on}")),
         ),
         _ => write!(
             out,
-            "{at}:focus-visible{on},{at}[data-exact-held~=focus-visible]{on}{{{rows}}}"
+            "{},{}{{{rows}}}",
+            selector(&format!("{at}:focus-visible{on}")),
+            selector(&format!("{at}[data-exact-held~=focus-visible]{on}")),
         ),
     }
     .expect("a String");

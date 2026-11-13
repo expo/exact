@@ -1343,6 +1343,56 @@ enters the compatibility id. An older bake without the fields answers `""`.
 The web JS build uses these variables at build time and answers `""` for each
 unset variable. No `app.json` version key is defined.
 
+## Apple privacy manifests
+
+Apple builds write `PrivacyInfo.xcprivacy` before signing each app, App Clip,
+watch app, extension and Exact framework. Declarations follow the APIs linked
+into that bundle, so an unused category is omitted. Exact declares:
+
+| Category | Exact's use | Reasons |
+| --- | --- | --- |
+| File timestamps | Metadata for app-container files and documents the person selected | `C617.1`, `3B52.1` |
+| System boot time | Elapsed time between app events and timers | `35F9.1` |
+| User defaults | App-owned settings and registrations | `CA92.1` |
+| Active keyboards | Selecting the enabled emoji keyboard for an emoji input | `54BD.1` |
+
+The motion and altimeter packages also declare `8FFB.1` for converting sensor
+events to timestamps. Other packages declare their own uses beside their Apple
+implementation. The build includes only the packages the app links. Hermes is
+statically linked; its surviving calls are covered in the containing bundle.
+Apple builds use the system SQLite, avoiding the bundled SQLite filesystem-type
+probes, for which no approved disk-space reason applies. Exact declares no
+disk-space use; an unaccounted-for disk-space import fails packaging on
+platforms subject to required-reason reporting.
+
+Put an Apple-format `PrivacyInfo.xcprivacy` beside your `app.json` to add your
+app's declarations. A package puts the same file beside its Apple implementation's
+`exact.json`; a prebuilt framework includes its manifest in its own resources.
+API reasons are merged without duplicates for categories the owning binary uses. Tracking is combined
+with Boolean OR; domains and collected-data purposes are unioned, and linked-data
+and tracking-data flags keep any `true`. An app cannot erase a dependency's
+disclosures. Each supplied reason must be one of Apple's approved codes for its
+category; an unknown code or a code from another category fails the build.
+The files are binary inputs: the build captures their bytes once, including
+absence, and uses that snapshot through packaging. Changing one requires rebuilding and reinstalling, not an
+over-the-air update.
+Only your app's API reasons accompany Exact frameworks (including native modules
+and launch services) and the watch companion. They must cover any additional APIs
+your native code uses. Your tracking and collected-data disclosures stay on the
+app, App Clip and host sample bundles.
+
+Exact itself collects no data and adds no tracking, tracking domains or
+`NSPrivacyCollectedDataTypes`. Your app must declare its own data collection and
+tracking, and any additional reasons for its native code. A tracking-consent
+grant does not infer these declarations. Review the finished manifests against
+[Apple's approved reasons](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype)
+and [privacy-manifest requirements](https://developer.apple.com/documentation/bundleresources/privacy-manifest-files)
+before submitting. Required-reason reporting applies to iOS/iPadOS, tvOS,
+watchOS and visionOS; collected-data reporting applies to all platforms. Mac
+builds also write manifests, under `Contents/Resources` for apps and
+`Versions/A/Resources` for frameworks, following
+[Apple's bundle layout](https://developer.apple.com/documentation/bundleresources/placing-content-in-a-bundle).
+
 ## Open the same development URL on Apple hosts
 
 Start `bun host/web/dev.mjs` and open a printed URL in your browser. Build
@@ -1744,7 +1794,9 @@ answers; `doc:/` handles do not need that store.
 Generated declarations export Ibex2's `Storage` and related types; Rust sources
 can use the same implementations through `ibex2::host`.
 
-A native production build links SQLite only when the app grants `sqlite.open`
+On Apple, SQLite is the OS library, so its SQL version follows the OS. Other
+native hosts bundle the pinned SQLite. A native production build links SQLite
+only when the app grants `sqlite.open`
 or names `"sqlite"` in the manifest's `link` list. Naming it without the grant
 links unused code: adding `sqlite.open` changes the compatibility identity and
 requires a new binary, even when SQLite was linked. Development builds and
@@ -1949,7 +2001,9 @@ logic ABI refuse a request that has it, by name.
 A stream's request is never sent at build, so an option the host refuses on one
 (`exactTimeout` on a stream, `exactIdleTimeout` out of range) does not
 fail a native build: the resource shows its placeholder and fails at launch
-with that error, as on the web. An error the source throws itself still
+with that error, as on the web. The native build warns once per resource and
+refusal, naming the rejected option. Valid streams and ordinary storage or native
+module deferrals produce no warning. An error the source throws itself still
 fails the build.
 
 A long poll, a request the server holds until something changes, says so with
@@ -2261,27 +2315,45 @@ if (source === "request") {
 What each turn of an answer sends goes out in the order it sent it once
 the commit that ran the turn stands, as its fetches do; a refused commit
 takes it back and says so, and nothing the answer does afterwards (a
-value, a failure) takes it back. Natively its turns are its source's call
-and each delivery of its own `fetch` or storage step. Code that resumes
-from an `await` runs in the next turn that drains microtasks (its own
-delivery, or the answer's that settled what it awaited) and sends as that
-turn's answer; a mapper's call drains none, so code a mapper resumes runs
-in the next answer asked, or in none (and its send refuses) when that is
-the waiting answer's own re-ask. Send before the first `await`, or settle
-waiters from an answer. An answer asked again sends again, so key a
-request that must not repeat. On the web build an `async` function's
-steps after an `await` and the answer's own timers are its later turns
-too, and each sends when it ends; a plain `.then` callback outside an
-`async` function runs under no answer there, and its send throws. An
-answer that has given its value has no later turn: a send from code it
-left running throws `InvalidStateError`. What a turn sent while its
-answer's commit had not yet stood waits for it, and is refused, in `logs`,
-if the answer is let go first. An answer
-the runner lets go (new arguments, `refresh`, a newer send, leaving the
-view) sends nothing more as its own; what it sent stays sent. It may also
-`fetch`, though a mutation's synchronous source still may not do both. A
-refused commit's batches are taken back without telling the code, so a
-protocol that awaits a reply times out. Its bounds are a mutation's, over all its turns (`socket answer
+value, a failure) takes it back. Earlier turns' batches precede later
+ones, and frames are never coalesced.
+
+On native hosts and the web JS target, the bundle's async helper restores
+the answer an `async` function began in after every `await` (LLP 1133.002
+D14), whichever answer settled the promise. That answer owns the send's
+permission and bounds. Once it has given its value, failed or been let go,
+its async steps cannot send, even if another answer's turn resumes them.
+
+Natively, microtasks drain in a source's call and each delivery of its own
+`fetch` or storage step. A synchronous mapper's call drains none: a waiter
+it settles resumes when an answer is next asked, including the waiter's
+own re-ask. The async helper restores the waiting answer's context in
+either case. Native socket batches, however, name the answer whose turn
+staged them: if answer B's turn resumes answer A's async step, its send
+uses A's permission and bounds but the batch names B in `logs`. A plain `.then`
+callback has no captured answer: it uses whichever answer's turn drains
+it, including a waiter's own re-ask. With no answer current, its send
+throws. Such a callback left behind by a let-go answer can therefore send
+as another answer whose turn drains it; an async step still belongs to
+the let-go answer and refuses.
+
+On the web JS target, an `async` function's steps after an `await` and the
+answer's own timers are its later turns, and each sends when it ends,
+behind what its source sent. A plain `.then` callback runs under no
+answer there, and its send throws. An answer that has given its value,
+failed or been let go has no later turn: a send from code it left running
+throws `InvalidStateError`. What a turn sent while its answer's commit
+had not yet stood waits for it, and is refused, in `logs`, if the answer
+is let go first.
+
+An answer the runner lets go (new arguments, `refresh`, a newer send,
+leaving the view) sends nothing more as its own; what it sent stays sent.
+An answer asked anew runs its source again, so key a request that must not
+repeat. An answer in flight may also `fetch`, though a mutation's
+synchronous source still may not do both: a mutation whose source sent
+fetches in a later turn (after an `await`). A refused commit's batches are
+taken back without telling the code, so a protocol that awaits a reply
+times out. Its bounds are a mutation's, over all its turns (`socket answer
 exceeds 256 operations`, `… 1 MiB`); overload throws without failing the
 answer. A handle that is not open, or whose socket a mutation's stream
 owns, throws `InvalidStateError`, and so does an operation after the
@@ -3399,6 +3471,13 @@ string, a template or `+` of constants, an array of them `.join('\n')`, or a
 top-level `const` holding one). Numbers keep their type: `1 + 2` is `3`, while
 `'a' + 1 + 2` is `'a12'`. Conditional expressions are refused.
 
+A backend override (`--backend`, `EXACT_BACKEND_ORIGIN` or `.exact/backend-origin`)
+needs one top-level `const origin`, set to a literal http(s) string or a setting
+such as `import.meta.env.API_BASE_URL ?? 'https://api.example'`, and used in
+`net.fetch ${origin}`. Settings are inlined before the override. A refused
+selection names its selector and reports `backend-selection`, including in
+`contract build --json`.
+
 For grants that differ by backend, write an object literal such as
 `export const grants = { 'http://127.0.0.1:4790': ['net.fetch http://127.0.0.1:4790', 'secret.keep fixture-token'], 'https://discord.com': ['net.fetch https://discord.com', 'net.websocket wss://gateway.discord.gg', 'secret.keep discord-token'] };`.
 Keys must be unique string literals naming http(s) origins without credentials,
@@ -3510,6 +3589,11 @@ bare-plan host fixtures. The driver supports `ios --device [--phone <name|udid>]
 the phone connects outward to a temporary Mac-side port with a per-launch token.
 Use a trusted LAN, allow local networking, and keep the app visible;
 `EXACT_AGENT_HOST` overrides the Mac IPv4 address. The carrier is not encrypted.
+The first launch of each bundle id can raise Apple's Local Network prompt. Allow
+it on the phone; the driver cannot answer it, and a prompt left by another app
+can also keep this launch inactive. `No route to host` or `waiting for foreground`
+can mean that prompt is waiting. Unlock the phone before launching. Startup
+failures retain devicectl's lock diagnostics and say when the app printed nothing.
 Android APK drives (`bun exact.mjs agent android`, or `agent.mjs android --reader`) check and wake the screen, dismiss an insecure keyguard, and refuse a secure lock screen: unlock the device and retry; a readiness timeout includes the observed screen state.
 
 The dev page's **Open in native…** link offers an installed-client action and
@@ -3614,7 +3698,7 @@ on macOS or in an iOS list row), the `changed` after this call hands it.
 
 **Linux, Windows and Android paint their own pixels**, so there is no platform
 object to hand over. A hatch there is Rust: one type that implements
-`exact_linux::Hatches` in `modules/linux/*.rs` (or `modules/android/`,
+`exact_painted::Hatches` in `modules/linux/*.rs` (or `modules/android/`,
 `modules/windows/`), named once with `pub type ExactHatches = App;` and
 included by the app's Linux crate (`contract::native::rust_hatch_entry` in its
 `build.rs`, which the Rust-data apps here already call). Its handle carries the
@@ -3878,7 +3962,7 @@ real-socket, wall-clock and toolchain-launching tests are `async lane:`; a test
 may still re-run its own binary to isolate its environment). The sixth compiles
 every crate and target of the workspace and runs none of their tests: without it
 a crate outside `default-members` can stop compiling on `main` while the other
-five pass, as `exact-web-js` and `exact-linux`'s tests did on 2026-10-11. It
+five pass, as `exact-web-js` and `exact-painted`'s tests did on 2026-10-11. It
 needs the pinned Bun first on `PATH` (or named by `BUN`): app crates' build
 scripts run Bun, and under an older one each fails with `Bun <version> is older
 than …`. The async lane runs the first three with

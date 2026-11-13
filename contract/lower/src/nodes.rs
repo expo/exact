@@ -760,6 +760,23 @@ impl Lowerer<'_> {
                 );
             }
         }
+        // @ref LLP 1123 D4 — the opt-out is a content owner's: a route or a
+        // tab panel, whose host clears its chrome. On any other box it would
+        // turn nothing off.
+        if let Some(a) = expanded.iter().find(|a| a.name == "-exact-safe-area") {
+            let owner = expanded.iter().any(|b| {
+                b.name == "navigationKey"
+                    || (b.name == "role"
+                        && matches!(&b.value, contract_syntax::Expr::Str(r, _) if r == "tabpanel"))
+            });
+            if !owner {
+                return err(
+                    "lower-attr-value",
+                    format!("`{}` turns off a content owner's clearance of its chrome, so it goes on a route (a box with `navigationKey`) or a `tabpanel`; elsewhere pad with `var(--exact-safe-area-inset-*)`", a.name),
+                    a.span,
+                );
+            }
+        }
         // @ref LLP 1057.003 C6 — a transform drag needs both halves:
         // the page's geometry and the release. A handle with one is
         // never admitted by any host, so it would sit inert, unsaid.

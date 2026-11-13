@@ -153,12 +153,12 @@ export function suites(repo) {
   for (const app of WEB_APPS) {
     const dir = repo.appNames.get(app);
     if (!dir) continue;
-    out.push({ id: `conform:${app}`, kind: 'conform', app, roots: ['js:host/web-js/conform.mjs', ...appBuild(repo, dir, ['web', 'linux']), 'platform:web', 'platform:linux', 'pkg:exact-web-js', 'pkg:exact-linux', 'pkg:contract'] });
+    out.push({ id: `conform:${app}`, kind: 'conform', app, roots: ['js:host/web-js/conform.mjs', ...appBuild(repo, dir, ['web', 'linux']), 'platform:web', 'platform:linux', 'pkg:exact-web-js', 'pkg:exact-painted', 'pkg:contract'] });
   }
   for (const smoke of PARITY) {
     const app = `${smoke}-gallery`, dir = repo.appNames.get(app);
     if (!dir) continue;
-    out.push({ id: `parity:${smoke}`, kind: 'parity', smoke, app, roots: ['js:scripts/smoke.mjs', `js:scripts/${smoke}parity.mjs`, 'dir:scripts/fixtures', ...appBuild(repo, dir, ['web', 'linux']), 'platform:web', 'platform:linux', 'pkg:exact-web-js', 'pkg:exact-linux', 'pkg:contract'] });
+    out.push({ id: `parity:${smoke}`, kind: 'parity', smoke, app, roots: ['js:scripts/smoke.mjs', `js:scripts/${smoke}parity.mjs`, 'dir:scripts/fixtures', ...appBuild(repo, dir, ['web', 'linux']), 'platform:web', 'platform:linux', 'pkg:exact-web-js', 'pkg:exact-painted', 'pkg:contract'] });
   }
   return out;
 }
@@ -188,7 +188,7 @@ const CONTAINERS = new Set(['apps', 'examples', 'packages', 'host']);
 const PLATFORMS = {
   web: ['host/web', 'host/web-js', 'host/web-capabilities', 'host/web-geometry'],
   apple: ['host/apple', 'host/apple-painted', 'host/apple-update'],
-  linux: ['host/linux', 'host/linux-update', 'host/ink', 'host/svg-raster'],
+  linux: ['host/linux', 'host/painted', 'host/linux-update', 'host/ink', 'host/svg-raster'],
   windows: ['host/windows'], android: ['host/android'], terminal: ['host/terminal'],
 };
 /** A platform's name as a test says it, or as a flag (`--ios`). */
@@ -592,7 +592,7 @@ const CONCAT_MANIFEST = new RegExp(`(?:(include_(?:str|bytes)!)\\(\\s*)?concat!\
  * format string's first `{` (Swift's: its first `\(`), or the path after `env!("CARGO_MANIFEST_DIR")` in a `format!`
  * or `concat!`, from the package's directory (`from: 'package'`), an include's path from the file's own (`from: 'own'`),
  * `call` the function or macro it is passed to (`join`, `include_str!`), `receiver` what that is called on, `prev` the
- * literal just before it in the same list or call chain (`"-p", "exact-linux"`, `.arg("-p").arg("exact-linux")`),
+ * literal just before it in the same list or call chain (`"-p", "exact-painted"`, `.arg("-p").arg("exact-painted")`),
  * `compared` whether it is compared with (`== "x"`, a match arm). An attribute's string is a note (`#[ignore = "…"]`), unless it is `#[path]`'s or
  * `include_str!`'s. They come as `library` and `test` (inside what is under `#[cfg(test)]`), with `mods`, the modules
  * declared (`mod name;`: `{ name, path, test }`, `path` from `#[path]`, `test` when under `#[cfg(test)]`).

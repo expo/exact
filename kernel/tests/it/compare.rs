@@ -358,7 +358,7 @@ fn forms_outside_the_grammar_are_refused_by_name() {
             "em is not supported",
         ),
         ("max(env(safe-area-inset-middle), 1px)", "env() names"),
-        ("max(var(--inset), 1px)", "the functions are"),
+        ("max(var(--inset), 1px)", "one custom property"),
         ("max(attr(x), 1px)", "the functions are"),
         ("max(1px, auto)", "take px"),
         (

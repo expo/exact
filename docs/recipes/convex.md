@@ -62,7 +62,7 @@ component Chat
 - **Shape a result in the same call,** `cx.query`'s fourth argument: `(b) => ({
   tiles: b.cells.map(…) })`. An `async` wrapper makes every change a pending
   frame.
-- **`cx.setAuth(jwt)`** in a mutation's source, after any `fetch` it awaits,
-  never before one (the runner refuses that mutation).
+- **`cx.setAuth(jwt)`** in a mutation's source, after any `fetch` it awaits:
+  a source that does both before its first `await` is refused.
 - **A drive against a real deployment** takes a new `--seed` each
   launch, or Convex answers the second launch's writes without running them.

@@ -34,10 +34,26 @@ export function observe(views, inactive = () => false) {
   const role = (el, prop) => /^var\(--exact-([\w-]+)/.exec(authored(el, prop))?.[1];
   const W = innerWidth, H = innerHeight, r2 = (x) => Math.round(x * 100) / 100;
   const modal = document.querySelector('dialog:modal');
-  const shown = (el, b) => b.width > 0 && b.height > 0
-    && (!el.checkVisibility || el.checkVisibility({ opacityProperty: true, visibilityProperty: true }))
-    && !inertAncestor(el) && !el.closest('[data-exiting]') && (!modal || modal.contains(el)) && !inactive(el);
-  const opacity = (el) => { let o = 1; for (let e = el; e && e !== document.documentElement; e = e.parentElement) o *= Number(getComputedStyle(e).opacity); return o; };
+  // Folded text has line boxes but no element box. Its nearest box controls rendering; its own visibility can
+  // override that box's, as an ordinary descendant's can.
+  const box = el => {
+    if (!el.hasAttribute('data-exact-text') || getComputedStyle(el).display !== 'contents') return el.getBoundingClientRect();
+    const words = document.createRange(); words.selectNodeContents(el);
+    return words.getBoundingClientRect();
+  };
+  const shown = (el, b) => {
+    let rendered = el;
+    if (getComputedStyle(el).display === 'contents') {
+      if (getComputedStyle(el).visibility !== 'visible') return false;
+      do { rendered = rendered.parentElement; } while (rendered && getComputedStyle(rendered).display === 'contents');
+      if (!rendered || getComputedStyle(rendered).contentVisibility === 'hidden') return false;
+    }
+    return b.width > 0 && b.height > 0
+      && (!rendered.checkVisibility || rendered.checkVisibility({ opacityProperty: true, visibilityProperty: rendered === el }))
+      && !inertAncestor(el) && !el.closest('[data-exiting]') && (!modal || modal.contains(el)) && !inactive(el);
+  };
+  const ownOpacity = el => { const s = getComputedStyle(el); return s.display === 'contents' ? 1 : Number(s.opacity); };
+  const opacity = (el) => { let o = 1; for (let e = el; e && e !== document.documentElement; e = e.parentElement) o *= ownOpacity(e); return o; };
   // What paints that a computed colour does not say: a picture, a native widget, a gradient.
   const opaque = (e, s) => /^(img|svg|canvas|video|iframe|picture|object|embed)$/.test(e.localName) || s.backgroundImage !== 'none'
     || (/^(button|input|select|textarea|progress|meter)$/.test(e.localName) && (s.appearance ?? s.webkitAppearance ?? 'none') !== 'none');
@@ -51,7 +67,7 @@ export function observe(views, inactive = () => false) {
     const cx = at.left + at.width / 2, cy = at.top + at.height / 2, chain = [];
     for (let e = el; e; e = e.parentElement) chain.push(e);
     const alpha = []; // each box's opacity times its ancestors'
-    for (let i = chain.length - 1, o = 1; i >= 0; i--) alpha[i] = o *= Number(getComputedStyle(chain[i]).opacity);
+    for (let i = chain.length - 1, o = 1; i >= 0; i--) alpha[i] = o *= ownOpacity(chain[i]);
     const layers = [];
     let by, accent = false, top = null;
     for (let i = 0; i < chain.length; i++) {
@@ -80,8 +96,10 @@ export function observe(views, inactive = () => false) {
       layers.push(canvasColor); top = document.documentElement;
     }
     // A box painted between the text and that fill, not one of its ancestors: an image under a title, a stacked sibling.
-    const stack = document.elementsFromPoint(Math.min(Math.max(cx, 0), W - 1), Math.min(Math.max(cy, 0), H - 1)), from = stack.indexOf(el);
-    if (from >= 0) for (const e of stack.slice(from + 1)) {
+    const stack = document.elementsFromPoint(Math.min(Math.max(cx, 0), W - 1), Math.min(Math.max(cy, 0), H - 1));
+    // A folded text has no hit-test entry. Include its nearest ancestor in the stack: it may be the opaque fill.
+    const anchor = chain.find(e => stack.includes(e));
+    if (anchor) for (const e of stack.slice(stack.indexOf(anchor))) {
       if (e === top) break;
       if (!e.contains(el) && !el.contains(e) && paints(e)) return null;
     }
@@ -109,11 +127,7 @@ export function observe(views, inactive = () => false) {
   };
   // Whether a box holds what a person reads or uses: a control, or a text whose words show. A bare text is
   // `display: contents`, with no box of its own: its words' box is its.
-  const holds = (el) => [...el.querySelectorAll(`[data-exact-text], ${CONTROL}`)].some((e) => {
-    if (getComputedStyle(e).display !== 'contents') return shown(e, e.getBoundingClientRect());
-    const words = document.createRange(); words.selectNodeContents(e);
-    return getComputedStyle(e).visibility === 'visible' && shown(e.parentElement, words.getBoundingClientRect());
-  });
+  const holds = (el) => [...el.querySelectorAll(`[data-exact-text], ${CONTROL}`)].some(e => shown(e, box(e)));
   const fixed = (el, upTo) => { for (let e = el; e && e !== upTo; e = e.parentElement) if (/^(fixed|sticky)$/.test(getComputedStyle(e).position)) return true; return false; };
   const scrolls = (e) => /^(auto|scroll)$/.test(getComputedStyle(e).overflowY) && e.scrollHeight > e.clientHeight + 1;
   // What keeps a box's sideways overflow its own: a box that clips on x, or one that scrolls sideways on purpose (an authored
@@ -179,7 +193,7 @@ export function observe(views, inactive = () => false) {
   const all = [...document.querySelectorAll('#exact-root *')];
   for (const el of all) {
     if (!ids.has(el) || el.namespaceURI !== 'http://www.w3.org/1999/xhtml') continue;
-    const b = el.getBoundingClientRect();
+    const b = box(el);
     if (!shown(el, b)) continue;
     const cs = getComputedStyle(el), item = { id: ids.get(el), x: r2(b.x), y: r2(b.y), w: r2(b.width), h: r2(b.height) };
     // A padded percentage width wider than its parent is a finding wherever the box lies, below the fold too.

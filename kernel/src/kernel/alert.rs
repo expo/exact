@@ -1,4 +1,4 @@
-//! A host-rendered alert title's generated layout item.
+//! Host-owned alert titles, and the popovers open as choosers.
 //!
 //! Neutral's title is CSS generated content: it participates in the alert's
 //! flex layout and scrolling, but is no authored node, wire id or accessibility
@@ -18,6 +18,31 @@ impl crate::NodeRef<'_> {
 }
 
 impl Kernel {
+    /// Call as a popover opens, with whether its source has a layout box (the
+    /// web's `checkVisibility()`), and with `false` as it closes. An opening
+    /// popover of a chooser's shape is a chooser until it closes, whatever
+    /// its content becomes meanwhile, as the web marks `data-exact-chooser`
+    /// only in `beforetoggle`.
+    pub fn set_popover_source_visible(
+        &mut self,
+        view: ViewId,
+        visible: bool,
+    ) -> Result<(), KernelError> {
+        let slot = self
+            .arena
+            .slot_of(view)
+            .ok_or(LayoutError::UnknownView(view))?;
+        let changed = if visible && self.arena.chooser_shape(slot) {
+            self.arena.alert_state.choosers.insert(slot)
+        } else {
+            self.arena.alert_state.choosers.remove(slot)
+        };
+        if changed {
+            self.intrinsic_changed(slot);
+        }
+        Ok(())
+    }
+
     /// Set whether `view` has the host-rendered alert title item. Reasserting
     /// presence refreshes its measurement after label or inherited-text edits.
     pub fn set_alert_prefix(&mut self, view: ViewId, present: bool) -> Result<(), KernelError> {

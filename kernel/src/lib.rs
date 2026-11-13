@@ -87,8 +87,8 @@ pub use handoff::Handoff;
 pub use id::{AxisOffer, Frame, NodeFlags, NodeKey, Offer, ViewId};
 pub use invocation::Invocation;
 pub use kernel::{
-    BlockAxis, BlockMeasure, HostBlock, HostCover, Kernel, NodeRef, PresentedHeight,
-    StickyConstraint,
+    credited_edges, BlockAxis, BlockMeasure, HostBlock, HostCover, Kernel, NodeRef,
+    PresentedHeight, StickyConstraint,
 };
 pub use layout::LayoutReceipt;
 pub use motion::{motion_node, MotionSync};

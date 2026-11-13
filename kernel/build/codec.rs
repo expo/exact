@@ -460,23 +460,25 @@ impl Codec {
 
 /// A keyword row's vocabulary as bits (`schema.json` `keywords`), emitted into
 /// its enum's `impl`: the first value alone is the empty set, a `none` alone is
-/// every `no-` value (CSS `font-variant-ligatures`), and each other value is
+/// every `no-` value (CSS `font-variant-ligatures`), or every value where the
+/// vocabulary has no `no-` one (`-exact-safe-area`), and each other value is
 /// one bit in vocabulary order; repeats, a value with its `no-` form, unknown
 /// words and the empty list are `None`.
-const KEYWORD_BITS: &str = r#"    /// This value's bits: 0 for the first, every `no-` value's for `none`,
-    /// else its own bit. Bits are numbered in vocabulary order, skipping the
+const KEYWORD_BITS: &str = r#"    /// This value's bits: 0 for the first, every `no-` value's for `none`
+    /// (every value's where none is a `no-` one), else its own bit. Bits are numbered in vocabulary order, skipping the
     /// first value and `none`.
     pub fn keyword_bits(self) -> u8 {
         if self as u8 == 0 { return 0; }
-        let (mut bit, mut no) = (0u32, 0u8);
+        let (mut bit, mut no, mut all) = (0u32, 0u8, 0u8);
         for v in &Self::ALL[1..] {
             if v.name() == "none" { continue; }
             let own = 1u8 << bit;
             bit += 1;
             if *v == self { return own; }
             if v.name().starts_with("no-") { no |= own; }
+            all |= own;
         }
-        no
+        if no == 0 { all } else { no }
     }
     /// A space-separated keyword list as a row's bits: the first value and
     /// `none` stand alone; a repeat, a value with its `no-` form and an

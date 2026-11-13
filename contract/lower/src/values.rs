@@ -511,8 +511,12 @@ fn style_value(
                     span,
                 );
             }
-            // @ref LLP 1081 D5 — `--exact-*` names are the web host's own.
-            if v.to_ascii_lowercase().contains("--exact-") {
+            // @ref LLP 1081 D5 — `--exact-*` names are the web host's own,
+            // but for the safe area an author reads (LLP 1123 D9).
+            let read = ["top", "right", "bottom", "left"]
+                .map(|edge| format!("{}{edge}", exact_kernel::style::env::LOCAL_PREFIX));
+            let others = read.iter().fold(v.clone(), |v, name| v.replace(name, ""));
+            if others.to_ascii_lowercase().contains("--exact-") {
                 return err(
                     "lower-attr-value",
                     format!("`--exact-*` names are the host's own; write the author's `-exact-` name: `{}=\"{v}\"`", a.name),

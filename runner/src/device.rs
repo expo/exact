@@ -176,15 +176,19 @@ pub const DEVICES: &[Device] = &[
         tvos: false,
         ..ROW
     },
-    // The camera, `@exact/camera`'s (LLP 1133.008 D6). Its Android features
-    // are declared not required where the permission is (app/build.gradle.kts).
+    // The camera, `@exact/camera`'s (LLP 1133.008 D6). Android's `CAMERA`
+    // comes from opening one in the app (any use of `getUserMedia` under
+    // this line, its `derives`), not from the line alone: the system camera
+    // app needs none, and declared without being held it refuses the app the
+    // camera app (`takePhotoWithCameraApp`), which iOS's usage key, the
+    // line's, asks for. Its Android features are declared not required where
+    // the permission is (app/build.gradle.kts).
     Device {
         name: "camera",
         ios: &["NSCameraUsageDescription"],
         macos: &["NSCameraUsageDescription"],
         hardened: Some("com.apple.security.device.camera"),
         web: Some("camera"),
-        android: &["android.permission.CAMERA"],
         ..ROW
     },
     Device {

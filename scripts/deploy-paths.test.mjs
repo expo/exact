@@ -100,19 +100,19 @@ test('async keeps a failure only when it was not found again and nothing ran to 
   retainSkippedFailures(['optional: failed'], other, {}, new Set(['optional']));
   expect(other.failures).toEqual(['optional: failed']);
   // A check that ran a part keeps the failures of the rest, and those it cannot place, until a run covers them.
-  const was = {'test: -p exact-linux --lib a::b': ['cargo:exact-linux'], 'test: -p exact-kernel --lib c': ['cargo:exact-kernel'], 'glue: d': ['bun:host/web/d.test.mjs'], 'glue: twice': ['bun:a.test.mjs', 'bun:b.test.mjs']};
+  const was = {'test: -p exact-painted --lib a::b': ['cargo:exact-painted'], 'test: -p exact-kernel --lib c': ['cargo:exact-kernel'], 'glue: d': ['bun:host/web/d.test.mjs'], 'glue: twice': ['bun:a.test.mjs', 'bun:b.test.mjs']};
   const part = {checks:{test:{status:0, covers:['cargo:exact-kernel']}, glue:{status:1, covers:['bun:a.test.mjs']}}, failures:['glue: e'], owners:{}};
   retainSkippedFailures([...Object.keys(was), 'glue: exit 1 (see log)'], part, was);
-  expect(part.failures).toEqual(['glue: e', 'test: -p exact-linux --lib a::b', 'glue: d', 'glue: twice', 'glue: exit 1 (see log)']);
+  expect(part.failures).toEqual(['glue: e', 'test: -p exact-painted --lib a::b', 'glue: d', 'glue: twice', 'glue: exit 1 (see log)']);
   expect(part.owners['glue: twice']).toEqual(['bun:a.test.mjs', 'bun:b.test.mjs']);
   // Found again, a failure is not kept a second time; a full run keeps none.
-  const again = {checks:{test:{status:101, covers:['cargo:exact-kernel']}}, failures:['test: -p exact-linux --lib a::b']};
-  retainSkippedFailures(['test: -p exact-linux --lib a::b'], again, was);
-  expect(again.failures).toEqual(['test: -p exact-linux --lib a::b']);
+  const again = {checks:{test:{status:101, covers:['cargo:exact-kernel']}}, failures:['test: -p exact-painted --lib a::b']};
+  retainSkippedFailures(['test: -p exact-painted --lib a::b'], again, was);
+  expect(again.failures).toEqual(['test: -p exact-painted --lib a::b']);
   // Keep what a check that stopped early held (a crate did not compile), whatever parts it was given
-  const stopped = {checks:{test:{status:101, covers:['cargo:exact-kernel'], complete:false}}, failures:['test: exact-linux (lib test) does not compile']};
+  const stopped = {checks:{test:{status:101, covers:['cargo:exact-kernel'], complete:false}}, failures:['test: exact-painted (lib test) does not compile']};
   retainSkippedFailures(['test: -p exact-kernel --lib c'], stopped, was);
-  expect(stopped.failures).toEqual(['test: exact-linux (lib test) does not compile', 'test: -p exact-kernel --lib c']);
+  expect(stopped.failures).toEqual(['test: exact-painted (lib test) does not compile', 'test: -p exact-kernel --lib c']);
   // Judge a run by its own stops, not one kept from an earlier run: a part it finished drops the earlier failures it
   // no longer finds, in either order
   const stop = 'test: exact-web (lib test) does not compile', owned = {...was, [stop]: ['cargo:exact-web']};
@@ -122,7 +122,7 @@ test('async keeps a failure only when it was not found again and nothing ran to 
     expect(later.failures).toEqual([stop]);
   }
   const full = {checks:{test:{status:0}}, failures:[], full:true};
-  retainSkippedFailures(['test: -p exact-linux --lib a::b', 'ios: failed'], full, was);
+  retainSkippedFailures(['test: -p exact-painted --lib a::b', 'ios: failed'], full, was);
   expect(full.failures).toEqual([]);
 });
 
@@ -142,7 +142,7 @@ test("async's changed paths name both of a rename's", () => {
 test('async names the suites of each failure its log attributes', () => {
   const glue = ['bun test v1.4.2 (744846f84) 2x PARALLEL', 'host/web/a.test.mjs:', '(fail) a fails [0.44ms]', './scripts/b.test.mjs:', '(fail) group > b fails [1.20ms]', '(fail) a fails [3ms]', ' 3 fail'].join('\n');
   expect(owners('glue', glue, ['glue: a fails', 'glue: group > b fails'])).toEqual({'glue: a fails': ['bun:host/web/a.test.mjs', 'bun:scripts/b.test.mjs'], 'glue: group > b fails': ['bun:scripts/b.test.mjs']});
-  expect(owners('test', '', ['test: -p exact-linux --lib a::b', 'test: exact-web (lib test) does not compile'])).toEqual({'test: -p exact-linux --lib a::b': ['cargo:exact-linux'], 'test: exact-web (lib test) does not compile': ['cargo:exact-web']});
+  expect(owners('test', '', ['test: -p exact-painted --lib a::b', 'test: exact-web (lib test) does not compile'])).toEqual({'test: -p exact-painted --lib a::b': ['cargo:exact-painted'], 'test: exact-web (lib test) does not compile': ['cargo:exact-web']});
   // Name and own a build script that failed, a binary that failed with no failing test (it crashed) and a Bun file
   // whose code threw outside its tests
   const cargo = ['error: failed to run custom build command for `exact-svg v0.1.0 (/x/svg)`', '     Running unittests src/lib.rs (target/debug/deps/a)',
@@ -162,18 +162,18 @@ test('async names the suites of each failure its log attributes', () => {
 test('async runs a check only for the suites selected, its Rust tests built as a full run builds them', () => {
   const none = asyncLane.nothing();
   expect(asyncLane.checks('new', 'old', none).map(([name]) => name)).toEqual(['build', 'clippy', 'fmt', 'caps', 'boot', 'web-bytes', 'lean', 'vm-extract', 'difftest', 'difftest-js', 'metrics']);
-  const selection = {...none, cargo:['exact-linux'], conform:['caltrain'], ios:true, glue:['./host/web/a.test.mjs'], lane:['a_lane_test']};
+  const selection = {...none, cargo:['exact-painted'], conform:['caltrain'], ios:true, glue:['./host/web/a.test.mjs'], lane:['a_lane_test']};
   const some = asyncLane.checks('new', 'old', selection);
   const step = name => some.find(([n]) => n === name);
   // (The lane's own runner, which a commit it checks may predate.)
   const runner = resolve(import.meta.dir, 'affected.mjs');
-  expect(step('test')[2]).toEqual(expect.arrayContaining(['bun', runner, '--cargo-tests', 'exact-linux']));
-  expect(step('lane').slice(1)).toEqual(['bun', [runner, '--cargo-tests', 'exact-linux', '--', '--ignored', 'a_lane_test']]);
+  expect(step('test')[2]).toEqual(expect.arrayContaining(['bun', runner, '--cargo-tests', 'exact-painted']));
+  expect(step('lane').slice(1)).toEqual(['bun', [runner, '--cargo-tests', 'exact-painted', '--', '--ignored', 'a_lane_test']]);
   for (const name of ['conform', 'conform-firefox', 'conform-webkit']) expect(step(name)[2].slice(0, 3)).toEqual(['host/web-js/conform.mjs', 'caltrain', '--synthetic']);
   expect(step('glue')[2].at(-1)).toContain('./host/web/a.test.mjs');
   for (const name of ['prepare', 'ios']) expect(step(name)).toBeDefined();
   for (const name of ['ios-touch', 'tvos', 'watchos', 'game', 'web-ax-test', 'parity-svg', 'parity-motion']) expect(step(name)).toBeUndefined();
-  expect(asyncLane.covers('test', selection)).toEqual(['cargo:exact-linux']);
+  expect(asyncLane.covers('test', selection)).toEqual(['cargo:exact-painted']);
   expect(asyncLane.covers('conform-webkit', selection)).toEqual(['conform:caltrain']);
   expect(asyncLane.covers('ios', selection)).toBe(null);
   // The iOS classes its test files reach run alone, and a failure of one is that class's

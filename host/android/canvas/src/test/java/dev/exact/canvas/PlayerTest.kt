@@ -1,5 +1,7 @@
 package dev.exact.canvas
 
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.RenderNode
 import java.nio.IntBuffer
@@ -78,5 +80,20 @@ class PlayerTest {
                 assertTrue("$label: the scroller remains recorded", scroller.hasDisplayList())
             }
         }
+    }
+
+    /** SVG's `stroke-miterlimit`, op 13's word after the join: a 28° corner, whose miter is 4.1 widths long, is
+     * bevelled at the initial limit of 4 and mitered at 10, as the other painters draw it. */
+    @Test fun aStrokeTakesItsMiterLimit() {
+        fun tip(limit: Float): Int {
+            val corner = intArrayOf(3, 0, f(10), f(50), 1, f(50), f(40), 1, f(10), f(30))
+            val ops = identity + intArrayOf(13, Color.BLUE, f(8), 0, 0, limit.toRawBits()) + corner
+            val bitmap = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)
+            Player(emptyMap()).apply { width = 80; height = 80 }
+                .replay(Canvas(bitmap), IntBuffer.wrap(ops), 0, ops.size)
+            return bitmap.getPixel(60, 40)
+        }
+        assertEquals(0, tip(4f))
+        assertEquals(Color.BLUE, tip(10f))
     }
 }

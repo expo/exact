@@ -3,9 +3,8 @@
 //! the live host and the document writer use ([`tag_for`], [`props_for`],
 //! [`crate::css::css_text`], [`host_css`]). The web build's JS target compiles a
 //! plan's static rows through this at build, so its stylesheet is this
-//! host's CSS, never a second mapping — but for `rem` and `em`, which it
-//! writes as authored ([`crate::css::css_text_relative`]): the page keeps no
-//! kernel to re-resolve them when a font size changes, and the browser does.
+//! host's CSS, with font-relative lengths retained for the browser to resolve
+//! ([`crate::css::css_text_relative`]).
 
 use super::{browser_kernel, font_names, host_css, in_button, props_for, svg_props, tag_for};
 use exact_kernel::{Kernel, SortedMap, ViewId};

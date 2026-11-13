@@ -178,6 +178,7 @@ pub(crate) fn render_js<D: DataSource + 'static, F: Fn() -> D>(
         viewport_fit: first(exact_kernel::PropId::ViewportFit),
         interactive_widget: first(exact_kernel::PropId::InteractiveWidget),
         head: tree.head(),
+        route_title: exact_web::document::route_title(&tree, tree.roots()),
         keyframes,
         scroll_document: scroll,
         hero_image,

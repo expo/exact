@@ -93,8 +93,10 @@ fn frame(kernel: &mut Kernel, id: u32) -> (f32, f32, f32, f32) {
     (f.x, f.y, f.width, f.height)
 }
 
+/// LLP 1123 D3: the route pads `env(safe-area-inset-top)` itself, so its
+/// padding is credited: the edge is the larger of the two, not their sum.
 #[test]
-fn a_bar_over_the_top_edge_adds_to_the_authored_padding() {
+fn a_padding_that_reads_the_inset_is_credited_not_added() {
     let mut kernel = route();
     kernel.set_env(Env::new(62.0, 0.0, 34.0, 0.0)).unwrap();
     assert_eq!(
@@ -103,14 +105,105 @@ fn a_bar_over_the_top_edge_adds_to_the_authored_padding() {
         "as authored"
     );
     kernel
-        .set_host_cover(2, Some(HostCover::Edges([44.0, 0.0, 0.0, 0.0])))
+        .set_host_cover(2, Some(HostCover::Edges([106.0, 0.0, 0.0, 0.0])))
         .unwrap();
     assert_eq!(
         frame(&mut kernel, 3),
         (0.0, 106.0, 390.0, 52.0),
-        "the bar's 44 below the status bar's 62"
+        "the status bar's 62 and the bar's 44, once"
     );
     assert_eq!(frame(&mut kernel, 4), (0.0, 158.0, 390.0, 686.0));
+    // The padding read back is the author's 62, the clearance's 44 apart
+    let key = kernel.node(2).unwrap().key;
+    assert_eq!(kernel.resolved_padding(key).unwrap().1, 62.0);
+    let pad = |kernel: &mut Kernel, batch, value: StyleValue| {
+        let op = Op::SetStyle {
+            id: 2,
+            patch: Box::new(style(&[(StyleId::PaddingTop, value)])),
+        };
+        kernel.apply(1, batch, &[op]).unwrap();
+        frame(kernel, 3).1
+    };
+    // A plain padding clears nothing: the clearance adds to it, as SwiftUI's
+    // safe area adds to `padding()`.
+    assert_eq!(pad(&mut kernel, 2, StyleValue::Number(16.0)), 122.0);
+    // `max(16px, env())`: at least 16, or the inset (D3's table, row 9).
+    let max = StyleValue::Text("max(16px, env(safe-area-inset-top))".into());
+    assert_eq!(pad(&mut kernel, 3, max), 106.0);
+    // More than the inset: the padding's own.
+    let more = StyleValue::Text("calc(2 * env(safe-area-inset-top))".into());
+    assert_eq!(pad(&mut kernel, 4, more), 124.0);
+    // A percentage resolves at layout, credited the same (10% of 390 is 39).
+    let pct = StyleValue::Text("max(10%, env(safe-area-inset-top))".into());
+    assert_eq!(pad(&mut kernel, 5, pct), 106.0);
+    let pct = StyleValue::Text("max(40%, env(safe-area-inset-top))".into());
+    assert_eq!(pad(&mut kernel, 6, pct), 156.0);
+    // Another edge's inset clears nothing of this one.
+    let bottom = StyleValue::Text("env(safe-area-inset-bottom)".into());
+    assert_eq!(pad(&mut kernel, 7, bottom), 34.0 + 106.0);
+}
+
+/// LLP 1123 D4: `-exact-safe-area` turns an edge's clearance off, and only
+/// that edge's; the padding stays as authored, and the owner reads the
+/// inset through `var(--exact-safe-area-inset-*)` to pad with it itself.
+#[test]
+fn an_owner_opts_an_edge_out_of_its_clearance() {
+    let mut kernel = route();
+    let unpadded = style(&[(StyleId::PaddingTop, StyleValue::Number(0.0))]);
+    let op = Op::SetStyle {
+        id: 2,
+        patch: Box::new(unpadded),
+    };
+    kernel.apply(1, 2, &[op]).unwrap();
+    kernel
+        .set_host_cover(2, Some(HostCover::Edges([106.0, 0.0, 34.0, 0.0])))
+        .unwrap();
+    assert_eq!(frame(&mut kernel, 3).1, 106.0);
+    assert_eq!(frame(&mut kernel, 4).3, 844.0 - 106.0 - 52.0 - 34.0);
+    let off = |kernel: &mut Kernel, batch, value: &str| {
+        let op = Op::SetStyle {
+            id: 2,
+            patch: Box::new(style(&[(
+                StyleId::SafeArea,
+                StyleValue::Text(value.into()),
+            )])),
+        };
+        kernel.apply(1, batch, &[op]).unwrap();
+        (frame(kernel, 3).1, frame(kernel, 4).3)
+    };
+    let top = (0.0, 844.0 - 52.0 - 34.0);
+    assert_eq!(off(&mut kernel, 3, "top"), top, "the top only");
+    assert_eq!(
+        off(&mut kernel, 4, "none"),
+        (0.0, 844.0 - 52.0),
+        "every edge"
+    );
+    let bottom = (106.0, 844.0 - 106.0 - 52.0);
+    assert_eq!(off(&mut kernel, 5, "bottom"), bottom);
+    let auto = (106.0, 844.0 - 106.0 - 52.0 - 34.0);
+    assert_eq!(off(&mut kernel, 6, "auto"), auto);
+    // Off at the top, the route pads the inset it reads itself.
+    kernel
+        .set_local_insets(2, Some([106.0, 0.0, 34.0, 0.0]))
+        .unwrap();
+    let op = Op::SetStyle {
+        id: 2,
+        patch: Box::new(style(&[
+            (StyleId::SafeArea, StyleValue::Text("top".into())),
+            (
+                StyleId::PaddingTop,
+                StyleValue::Text("calc(var(--exact-safe-area-inset-top) + 8px)".into()),
+            ),
+        ])),
+    };
+    kernel.apply(1, 7, &[op]).unwrap();
+    assert_eq!(frame(&mut kernel, 3).1, 114.0);
+    for refused in ["top top", "none top", "middle"] {
+        let mut props = StyleProps::default();
+        let value = StyleValue::Text(refused.into());
+        let set = props.set_dynamic(StyleId::SafeArea, &value);
+        assert!(set.is_err(), "{refused}");
+    }
 }
 
 #[test]
@@ -266,66 +359,20 @@ fn header_padded() -> Kernel {
     kernel
 }
 
+/// LLP 1123 D3: a header the bar replaces is `display: none`, so its
+/// padding neither clears nor is credited, and the route's top clearance is
+/// its whole local top, whatever the header pads.
 #[test]
-fn a_replaced_header_that_cleared_the_status_bar_hands_that_inset_to_the_bar() {
+fn a_replaced_header_neither_clears_nor_is_credited() {
     let mut kernel = header_padded();
     assert_eq!(frame(&mut kernel, 4).1, 114.0, "as authored: 62 + 52");
-    // The host reports the bar's 44 past the status bar, as it does when
-    // the route pads the inset; the list still starts under the bar.
     kernel
-        .set_host_cover(2, Some(HostCover::Edges([44.0, 0.0, 0.0, 0.0])))
+        .set_host_cover(2, Some(HostCover::Edges([106.0, 0.0, 0.0, 0.0])))
         .unwrap();
     kernel.set_host_cover(3, Some(HostCover::Whole)).unwrap();
-    assert_eq!(
-        frame(&mut kernel, 4).1,
-        106.0,
-        "the status bar's 62 and the bar's 44"
-    );
-    // The header's padding changing while it is replaced reaches the route.
-    let unpadded = style(&[(StyleId::PaddingTop, StyleValue::Number(0.0))]);
-    let op = Op::SetStyle {
-        id: 3,
-        patch: Box::new(unpadded),
-    };
-    kernel.apply(2, 3, &[op]).unwrap();
-    assert_eq!(frame(&mut kernel, 4).1, 44.0, "nothing to hand over");
-    let padded = style(&[(
-        StyleId::PaddingTop,
-        StyleValue::Text("env(safe-area-inset-top)".into()),
-    )]);
-    let op = Op::SetStyle {
-        id: 3,
-        patch: Box::new(padded),
-    };
-    kernel.apply(3, 4, &[op]).unwrap();
-    assert_eq!(frame(&mut kernel, 4).1, 106.0);
-    // A new inset (a rotation) reaches the route through the header's.
-    kernel.set_env(Env::new(20.0, 0.0, 0.0, 0.0)).unwrap();
-    assert_eq!(frame(&mut kernel, 4).1, 64.0);
-    // The header given back: laid out as authored again.
-    kernel.set_host_cover(3, None).unwrap();
-    assert_eq!(frame(&mut kernel, 4).1, 20.0 + 44.0 + 52.0);
-}
-
-/// LLP 1001 §2 (2026-10-07): a header padded by a comparison that reads
-/// the top inset cleared it too; one that reads only another inset did not.
-/// The corner-adapted safe area's top is never less than the inset (LLP 1123
-/// D10), so it clears it; the margins' top can lie above the safe area where
-/// an app turns `insetsLayoutMarginsFromSafeArea` off, so it does not.
-#[test]
-fn a_replaced_header_padded_by_a_comparison_of_the_top_inset_hands_it_over() {
-    let mut kernel = header_padded();
-    kernel
-        .set_host_cover(2, Some(HostCover::Edges([44.0, 0.0, 0.0, 0.0])))
-        .unwrap();
-    kernel.set_host_cover(3, Some(HostCover::Whole)).unwrap();
-    for (padding, y) in [
-        ("clamp(0px, env(safe-area-inset-top), 200px)", 106.0),
-        ("max(12px, env(safe-area-inset-bottom))", 44.0),
-        ("env(-exact-safe-area-corners-inset-top)", 106.0),
-        ("max(12px, env(-exact-safe-area-corners-inset-top))", 106.0),
-        ("env(-exact-layout-margins-inset-top)", 44.0),
-    ] {
+    assert_eq!(frame(&mut kernel, 4).1, 106.0, "the route's whole top");
+    let paddings = [(2, "0px"), (3, "calc(env(safe-area-inset-top) + 40px)")];
+    for (batch, padding) in paddings {
         let op = Op::SetStyle {
             id: 3,
             patch: Box::new(style(&[(
@@ -333,9 +380,15 @@ fn a_replaced_header_padded_by_a_comparison_of_the_top_inset_hands_it_over() {
                 StyleValue::Text(padding.into()),
             )])),
         };
-        kernel.apply(2, 3, &[op]).unwrap();
-        assert_eq!(frame(&mut kernel, 4).1, y, "{padding}");
+        kernel.apply(2, batch, &[op]).unwrap();
+        assert_eq!(frame(&mut kernel, 4).1, 106.0, "{padding}");
     }
+    let op = Op::SetChildren {
+        id: 2,
+        children: vec![4],
+    };
+    kernel.apply(2, 4, &[op]).unwrap();
+    assert_eq!(frame(&mut kernel, 4).1, 106.0, "and gone");
 }
 
 #[test]
@@ -352,45 +405,6 @@ fn a_scroller_under_the_bar_takes_no_inset_from_the_header() {
         0.0,
         "the list starts at the top, under the bar"
     );
-}
-
-#[test]
-fn a_route_whose_replaced_header_leaves_takes_back_its_inset() {
-    let mut kernel = header_padded();
-    kernel
-        .set_host_cover(2, Some(HostCover::Edges([44.0, 0.0, 0.0, 0.0])))
-        .unwrap();
-    kernel.set_host_cover(3, Some(HostCover::Whole)).unwrap();
-    assert_eq!(frame(&mut kernel, 4).1, 106.0);
-    // The header goes (an `if`), the bar's cover stays.
-    let op = Op::SetChildren {
-        id: 2,
-        children: vec![4],
-    };
-    kernel.apply(2, 3, &[op]).unwrap();
-    assert_eq!(
-        frame(&mut kernel, 4).1,
-        44.0,
-        "no replaced header, no inset"
-    );
-    let op = Op::SetChildren {
-        id: 2,
-        children: vec![3, 4],
-    };
-    kernel.apply(3, 4, &[op]).unwrap();
-    assert_eq!(frame(&mut kernel, 4).1, 106.0, "and back with it");
-}
-
-#[test]
-fn a_replaced_header_destroyed_outright_leaves_no_inset() {
-    let mut kernel = header_padded();
-    kernel
-        .set_host_cover(2, Some(HostCover::Edges([44.0, 0.0, 0.0, 0.0])))
-        .unwrap();
-    kernel.set_host_cover(3, Some(HostCover::Whole)).unwrap();
-    assert_eq!(frame(&mut kernel, 4).1, 106.0);
-    kernel.apply(2, 3, &[Op::DestroyView { id: 3 }]).unwrap();
-    assert_eq!(frame(&mut kernel, 4).1, 44.0);
 }
 
 /// The route's list (4) as a scroller padded by 16 holding a column (5)
@@ -1113,11 +1127,11 @@ fn a_footer_attached_late_a_clipping_box_and_the_reported_padding() {
     assert_eq!(kernel.cover_bottom(key), 83.0);
 }
 
-/// Round 3 (Astra, Grok): an absolute child at `top: 0` of a route whose top
-/// cover holds its replaced header's inset (`header_inset`) follows that
-/// inset as the header is replaced, its padding changes, and the inset does.
+/// An absolute child at `top: 0` of a covered route is placed past the
+/// route's clearance (the bar ends there), credited or not, and at the
+/// route's own top where the route opts its top out (LLP 1123 D3, D4).
 #[test]
-fn an_absolute_child_follows_the_inset_its_routes_replaced_header_hands_the_bar() {
+fn an_absolute_child_is_placed_past_the_clearance_its_route_keeps() {
     let mut kernel = header_padded();
     let badge = [
         Op::CreateView {
@@ -1141,35 +1155,24 @@ fn an_absolute_child_follows_the_inset_its_routes_replaced_header_hands_the_bar(
     ];
     kernel.apply(1, 3, &badge).unwrap();
     kernel
-        .set_host_cover(2, Some(HostCover::Edges([44.0, 0.0, 0.0, 0.0])))
+        .set_host_cover(2, Some(HostCover::Edges([106.0, 0.0, 0.0, 0.0])))
         .unwrap();
-    assert_eq!(frame(&mut kernel, 5).1, 44.0, "the bar's 44");
     kernel.set_host_cover(3, Some(HostCover::Whole)).unwrap();
-    assert_eq!(
-        frame(&mut kernel, 5).1,
-        106.0,
-        "and the status bar's 62 the header handed it"
-    );
-    let padding = |kernel: &mut Kernel, batch, value| {
+    assert_eq!(frame(&mut kernel, 5).1, 106.0, "the bar's bottom");
+    let route = |kernel: &mut Kernel, batch, row, value: &str| {
         let op = Op::SetStyle {
-            id: 3,
-            patch: Box::new(style(&[(StyleId::PaddingTop, value)])),
+            id: 2,
+            patch: Box::new(style(&[(row, StyleValue::Text(value.into()))])),
         };
         kernel.apply(1, batch, &[op]).unwrap();
+        frame(kernel, 5).1
     };
-    padding(&mut kernel, 4, StyleValue::Number(0.0));
-    assert_eq!(frame(&mut kernel, 5).1, 44.0, "nothing handed over");
-    padding(
-        &mut kernel,
-        5,
-        StyleValue::Text("env(safe-area-inset-top)".into()),
-    );
-    assert_eq!(frame(&mut kernel, 5).1, 106.0);
-    kernel.set_env(Env::new(20.0, 0.0, 0.0, 0.0)).unwrap();
-    assert_eq!(frame(&mut kernel, 5).1, 64.0, "a rotation's new inset");
-    kernel.set_host_cover(3, None).unwrap();
-    assert_eq!(frame(&mut kernel, 5).1, 44.0, "the header given back");
-    // The route's cover cleared (a keyboard ending it above the bars).
+    let env = "env(safe-area-inset-top)";
+    let credited = route(&mut kernel, 4, StyleId::PaddingTop, env);
+    assert_eq!(credited, 106.0, "credited, the bar still ends there");
+    let off = route(&mut kernel, 5, StyleId::SafeArea, "top");
+    assert_eq!(off, 0.0, "opted out");
+    assert_eq!(route(&mut kernel, 6, StyleId::SafeArea, "auto"), 106.0);
     kernel.set_host_cover(2, None).unwrap();
     assert_eq!(frame(&mut kernel, 5).1, 0.0, "placed as written");
 }

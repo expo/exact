@@ -490,12 +490,14 @@
   }
   // The operation in flight's owner, or null.
   function headOwner() { return head ? owner(head.call) : null; }
-  // A fetch's `signal` is watched through Ibex's own abort hooks natively, which no listener can stop; a browser
-  // realm's is the browser's, watched by a listener and checked again when the reply lands. Either ends with the fetch.
+  // Neither Ibex's abort hooks nor a browser's dependent signal can be stopped by a listener on the caller's signal.
   var abortHooks = global.__exact_ibex2_abort_hooks;
   delete global.__exact_ibex2_abort_hooks;
+  // Capture the browser's composition before app code can replace it.
+  var PlatformAbortSignal = global.AbortSignal, composeSignals = PlatformAbortSignal.any;
   function watchAbort(signal, aborted) {
     if (abortHooks) return abortHooks.subscribe(signal, aborted);
+    signal = composeSignals.call(PlatformAbortSignal, [signal]);
     signal.addEventListener("abort", aborted);
     return function () { signal.removeEventListener("abort", aborted); };
   }
@@ -586,7 +588,7 @@
     // A stream's own options, refused (LLP 1016.000 D11): at bake marked as storage's refusal is, so a source that lets it through keeps its placeholder.
     // (The door throws its refusal as a string: marked, it is an Error.)
     var streamOption = init ? init.exactStream : undefined, marks = streamOption !== undefined && !listen && !own && !child;
-    function mark(e) { if (marks && host(12, "bake", "") === "1") { if (!e || typeof e !== "object") e = new Error(String(e)); e.kind = "Unavailable"; e.code = "bake"; } return e; } function optionRefused(e) { return Promise.reject(mark(e)); }
+    function mark(e) { if (marks && host(12, "bake", "") === "1") { if (!e || typeof e !== "object") e = new Error(String(e)); e.kind = "Unavailable"; e.code = "bake"; e.bakeWarning = true; } return e; } function optionRefused(e) { return Promise.reject(mark(e)); }
     if (call.socketConflict || (call.socketOps && call.socketOps.length)) { call.socketConflict = true; return Promise.reject(new Error(SOCKET_AND_FETCH)); }
     var method = init && init.method ? String(init.method).toUpperCase() : "GET";
     var headers = new global.Headers(init && init.headers);
@@ -1055,7 +1057,7 @@
     var message = e && typeof e === "object" && e.message !== undefined ? e.message : e;
     // `reason`: what `failure(x).reason` reads, a string the error carries (the snapback4 driver's refusal code).
     var reason = e && typeof e === "object" && typeof e.reason === "string" ? e.reason : "";
-    return JSON.stringify({ tag: 2, kind: kind, code: e && e.code, failure: failureCode(e), reason: reason, message: String(message) });
+    return JSON.stringify({ tag: 2, kind: kind, code: e && e.code, bakeWarning: e && e.bakeWarning === true, failure: failureCode(e), reason: reason, message: String(message) });
   }
   // A fetch with no live owner is claimed by one waiter (LLP 1162 D2).
   var moduleWide = bytesDoor !== undefined;
@@ -1489,8 +1491,7 @@
     currentCall = p.module ? null : p.call; if (p.module) work.landed(); // an adopted fetch's: its let-go call's steps run as it (the async helper), a plain reaction as no answer
     // Its `AbortSignal.timeout`'s deadline passed on the host: the signal aborts.
     if (o.failed && o.failed.kind === "Timeout" && p.timed) timers.expire(p.signal);
-    // A browser realm's abort listener can be stopped by an earlier one;
-    // the signal itself still says so.
+    // A reply delivered after the signal aborts still rejects with that signal's reason.
     if (p.signal && p.signal.aborted) p.reject(p.signal.reason);
     else if (o.failed) p.reject(new FetchError(o.failed));
     else p.resolve(hostReply(o.response, p.bodyTo, p.head));

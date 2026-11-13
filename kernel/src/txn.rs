@@ -1331,6 +1331,7 @@ fn inherited_after_move(
         invalidate_text(arena, layout, slot);
     }
     invalidate_text_sources(arena, slot);
+    receipt.layout_invalidated |= crate::kernel::owner::moved(arena, layout, slot);
     let after = arena.computed_inherited(slot);
     let changed = before.changed_mask(&after);
     if !changed.is_empty() {

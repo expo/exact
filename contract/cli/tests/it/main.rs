@@ -188,6 +188,7 @@ mod routeless_header;
 mod routes;
 mod row_lookup;
 mod rust_shapes;
+mod safe_area;
 mod scope_review;
 mod scroll_drag;
 mod scroll_grows;
