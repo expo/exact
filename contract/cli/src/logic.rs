@@ -103,11 +103,51 @@ pub fn native_storage_constructor(
     if !linked && required.has(exact_runner::Capability::Sqlite) {
         return Err("Unlinked(\"sqlite\")".into());
     }
+    if linked {
+        if let Some(refused) = shell_without_sqlite() {
+            return Err(refused);
+        }
+    }
     Ok(if linked {
         format!("{{ #[cfg(not(target_arch = \"wasm32\"))] ibex2_sqlite::link(); {constructor} }}")
     } else {
         constructor.to_owned()
     })
+}
+
+/// The build script's own crate, when the entry it generates calls `ibex2_sqlite::link()` but its manifest names no
+/// `ibex2-sqlite`: an app crate written before native apps selected SQLite (2099b23460) declares only its host. rustc
+/// would refuse the entry with E0433 and Cargo's hint to `cargo add` a crates.io crate, where the fix is the SDK's
+/// vendored one (expo/exact-build#147). Only from a build script (`CARGO_CFG_TARGET_ARCH` is a build script's) for a
+/// native target, and a line naming the crate anywhere outside a comment counts, so a doubt never refuses.
+fn shell_without_sqlite() -> Option<String> {
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").ok()?;
+    if arch == "wasm32" {
+        return None;
+    }
+    let manifest =
+        std::path::Path::new(&std::env::var_os("CARGO_MANIFEST_DIR")?).join("Cargo.toml");
+    let text = std::fs::read_to_string(&manifest).ok()?;
+    names_no_sqlite(&text).then(|| sqlite_refusal(&manifest))
+}
+
+fn names_no_sqlite(manifest: &str) -> bool {
+    !manifest
+        .lines()
+        .any(|line| !line.trim_start().starts_with('#') && line.contains("ibex2-sqlite"))
+}
+
+fn sqlite_refusal(manifest: &std::path::Path) -> String {
+    let vendored = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../vendor/ibex/crates/ibex2-sqlite");
+    let vendored = vendored.canonicalize().unwrap_or(vendored);
+    format!(
+        "{}: this native app crate links SQLite storage (ibex2_sqlite::link) but does not depend on ibex2-sqlite. \
+         Run `bun exact.mjs update` in the app, which adds it beside the host crate, or add under [dependencies]: \
+         ibex2-sqlite = {{ path = '{}' }}. Not `cargo add`: the crate is Exact's vendored copy.",
+        manifest.display(),
+        vendored.display()
+    )
 }
 
 /// A Linux app's whole `entry.rs`: [`rust_entry`], its `launch_parts()`, its
@@ -416,6 +456,37 @@ mod tests {
         assert!(super::rust_entry("Data", "data()", "off", &inputs)
             .unwrap()
             .contains("ibex2_sqlite::link();"));
+    }
+
+    #[test]
+    fn a_native_crate_without_ibex2_sqlite_is_named_with_the_fix() {
+        // expo/exact-build#147: an outside app's apple crate from before SQLite was selected.
+        let before = "[package]\nname = \"notes-apple\"\n\n[dependencies]\n# ibex2-sqlite comes later\nexact-apple = { path = \"../exact2/host/apple\" }\n";
+        assert!(super::names_no_sqlite(before));
+        for named in [
+            "ibex2-sqlite = { path = \"../exact2/vendor/ibex/crates/ibex2-sqlite\" }",
+            "ibex2-sqlite.workspace = true",
+            "[dependencies.ibex2-sqlite]",
+            "sql = { package = \"ibex2-sqlite\", path = \"x\" }",
+        ] {
+            assert!(
+                !super::names_no_sqlite(&format!("{before}{named}\n")),
+                "{named}"
+            );
+        }
+        let refused = super::sqlite_refusal(std::path::Path::new("/app/apple/Cargo.toml"));
+        assert!(refused.starts_with("/app/apple/Cargo.toml: "), "{refused}");
+        assert!(
+            refused.contains("bun exact.mjs update")
+                && refused.contains("vendor/ibex/crates/ibex2-sqlite'"),
+            "{refused}"
+        );
+        eprintln!("{refused}");
+        // A test is no build script: the entry is unchanged there.
+        assert!(
+            super::shell_without_sqlite().is_none()
+                || std::env::var_os("CARGO_CFG_TARGET_ARCH").is_some()
+        );
     }
 
     /// The entry gives a data source the manifest's app id, which a source
